@@ -1,0 +1,14 @@
+-- #325: carry the PLAIN-LANGUAGE conversational register across wakes.
+-- The memory digest stored WHAT an agent knew (current_focus / decisions / learnings /
+-- open_threads) but dropped HOW it was talking to the human — tone, register, what the
+-- person already understands. So each wake the agent reverted to internal jargon (bare
+-- task UUIDs, invented shorthand labels like "F2", git SHAs) a non-engineer can't parse,
+-- and conversation quality oscillated. This one nullable column carries that "who am I
+-- talking to + their vocabulary/register + what they already know" slice so the tone
+-- survives across wakes — not only the facts.
+-- Free text (the agent composes it in plain English, same as current_focus). The persona
+-- renderer (notifier.format_persona) surfaces it as a "Who you're talking to" section
+-- ahead of the facts; absent/NULL → the section is simply omitted.
+-- ADD-only, nullable: every existing digest row backfills to NULL (zero behaviour change
+-- until an agent next snapshots). Applied on portal boot by the R1 migration runner (no wipe).
+ALTER TABLE agent_memory_digests ADD COLUMN IF NOT EXISTS audience TEXT;

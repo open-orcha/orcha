@@ -1,0 +1,87 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel an in-progress run for the same ref when a newer commit is pushed,
+# so the runner pool isn't tied up validating stale commits.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    # Self-hosted runner pool on Kedar's Mac (kedar-mac-orcha-NN). Hosted-minutes
+    # billing is exhausted, so CI runs locally for free across multiple runners
+    # in parallel. GitHub Actions `services:` containers are Linux-only and fail
+    # on a macOS runner, so we start postgres with a plain `docker run` step.
+    #
+    # The container name and host port are UNIQUE PER JOB (run id + random port)
+    # so concurrent jobs on the pool don't collide on a fixed name/port, and so
+    # nothing clashes with the live Orcha DB on host 5432.
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ephemeral postgres (unique per job for parallel runs)
+        run: |
+          CONTAINER="orcha-ci-pg-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          docker run -d --name "$CONTAINER" \
+            -e POSTGRES_USER=orcha \
+            -e POSTGRES_PASSWORD=orcha \
+            -e POSTGRES_DB=postgres \
+            -p 127.0.0.1::5432 \
+            postgres:16
+          # discover the random host port docker assigned, and publish the test
+          # DB URLs (pointing at it) to later steps via $GITHUB_ENV.
+          PORT="$(docker port "$CONTAINER" 5432/tcp | head -1 | sed 's/.*://')"
+          {
+            echo "CONTAINER=$CONTAINER"
+            echo "ORCHA_TEST_ADMIN_URL=postgresql://orcha:orcha@localhost:${PORT}/postgres"
+            echo "ORCHA_TEST_DATABASE_URL=postgresql://orcha:orcha@localhost:${PORT}/orcha_test"
+          } >> "$GITHUB_ENV"
+          echo "postgres on host port ${PORT} (container ${CONTAINER})"
+          for i in $(seq 1 30); do
+            if docker exec "$CONTAINER" pg_isready -U orcha >/dev/null 2>&1; then
+              echo "postgres ready after ${i} checks"; exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready in time" >&2
+          docker logs "$CONTAINER" >&2 || true
+          exit 1
+
+      # actions/setup-python is avoided on this self-hosted macOS runner: its
+      # prebuilt CPython from actions/python-versions is non-relocatable and
+      # hardcodes the hosted path /Users/runner/hostedtoolcache (mkdir denied).
+      # Use the machine's Homebrew Python 3.11 in a throwaway venv instead.
+      - name: Create venv with Python 3.11
+        run: |
+          PY="$(command -v python3.11 || echo /opt/homebrew/bin/python3.11)"
+          echo "Using $("$PY" --version) at $PY"
+          rm -rf .ci-venv
+          "$PY" -m venv .ci-venv
+          ./.ci-venv/bin/python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          ./.ci-venv/bin/pip install -r tests/requirements.txt \
+                      -r orcha-cli/orcha_cli/templates/portal/requirements.txt \
+                      pytest-cov
+
+      - name: Run state-machine tests + coverage gate (>=70% of main.py)
+        run: |
+          ./.ci-venv/bin/pytest --cov=main --cov-report=term-missing --cov-fail-under=70
+
+      - name: Coverage summary (PR)
+        if: always()
+        run: |
+          ./.ci-venv/bin/pytest --cov=main --cov-report=term | tail -5 >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Stop ephemeral postgres
+        if: always()
+        run: docker rm -f "${CONTAINER:-noop}" >/dev/null 2>&1 || true

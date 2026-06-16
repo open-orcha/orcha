@@ -1,0 +1,1920 @@
+{
+  "info": {
+    "name": "Orcha API",
+    "_postman_id": "orcha-api-collection-0001",
+    "description": "Orcha human-authoritative multi-agent platform — live API.\n\nAll endpoints below are REAL routes extracted from the deployed portal (main.py). Body shapes are taken from the Pydantic models / verified functional tests — none are invented.\n\n## Setup\nSet the collection variables (Variables tab):\n- baseUrl  : http://localhost:8000\n- cid      : current_container_id (from .claude/orcha.json)\n- aid      : an AI agent's id (e.g. Forge/Page)\n- humanAid : a human agent's id (kind='human') — required for verify\n- tid      : a task id (auto-filled by 'Create task' test script)\n- rid      : a request id (auto-filled by 'Open info request' test script)\n- run_id   : a worker run id (auto-filled by 'Start run' test script)\n- sinceTs  : long-poll cursor (default 0)\n\nSeveral requests run a test-script that captures the returned id into a collection variable so the next call can use it.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "cid",
+      "value": ""
+    },
+    {
+      "key": "aid",
+      "value": ""
+    },
+    {
+      "key": "humanAid",
+      "value": ""
+    },
+    {
+      "key": "tid",
+      "value": ""
+    },
+    {
+      "key": "rid",
+      "value": ""
+    },
+    {
+      "key": "sinceTs",
+      "value": "0"
+    },
+    {
+      "key": "decisionId",
+      "value": ""
+    },
+    {
+      "key": "run_id",
+      "value": ""
+    },
+    {
+      "key": "convId",
+      "value": ""
+    },
+    {
+      "key": "convSessionId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Containers",
+      "item": [
+        {
+          "name": "List containers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get container (agents + tasks snapshot)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}?task_limit=10&request_limit=15",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}"
+              ],
+              "query": [
+                {
+                  "key": "task_limit",
+                  "value": "10",
+                  "description": "ISS-68: cap the trimmed task rows the 5s poll returns (priority order; pass the loaded count). Default 1000."
+                },
+                {
+                  "key": "request_limit",
+                  "value": "15",
+                  "description": "ISS-68: cap the request rows (open→answered→closed). Default 1000."
+                }
+              ]
+            },
+            "description": "The portal's 5s poll snapshot. ISS-68: tasks ship a compact message_summary + plan_message (NOT the full thread — lazy via GET /tasks/{tid}/messages); tasks/requests are priority-ordered + capped by task_limit/request_limit, with task_total/request_total to gate 'load more'."
+          }
+        },
+        {
+          "name": "List tasks (ISS-68 — paginated, priority order)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/tasks?limit=10&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "tasks"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "page size (default 10, max 100)"
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "row offset for 'load more'"
+                },
+                {
+                  "key": "agent",
+                  "value": "{{aid}}",
+                  "description": "scope to an agent's assigned tasks (agent detail)",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "ISS-68 (#167): paginated TRIMMED task rows for lazy list loading. Order: waiting (needs_verification) → in_progress → the rest, then priority, created_at. Drops the full message thread → message_summary {count,last} + plan_message. Returns {tasks,total,has_more}."
+          }
+        },
+        {
+          "name": "List models (D7: create-agent picker source)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/models",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "models"
+              ]
+            },
+            "description": "D7: the curated {id,name} model list the create-agent dropdown renders, plus the default (claude-opus-4-8 / Opus 4.8). No live model-list API exists — this is a maintained constant; the selected id is persisted as agents.model. Includes claude-fable-5 / Fable 5 (limited availability through 2026-06-22); when that entry is removed, agents that chose it auto-fall-back to the default at spawn time (resolve_model) with zero breakage. The notifier now spawns the worker on the selected model via --model (GAP A)."
+          }
+        },
+        {
+          "name": "Terminal config (S3: embedded-terminal ws bridge URL)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/terminal/config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "terminal",
+                "config"
+              ]
+            },
+            "description": "S3 §3b: where the embedded-terminal frontend opens its websocket. The PTY bridge is a SEPARATE host-side server (not a portal route), so the browser connects to ws_url + /api/agents/<aid>/terminal?actor_agent_id=<human>. Override with ORCHA_TERMINAL_WS_URL."
+          }
+        },
+        {
+          "name": "Container snapshot",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/snapshot/{{cid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "snapshot",
+                "{{cid}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Container events",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "events"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set container status (pause/resume/stop)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Sweep expired requests",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/sweep",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "sweep"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reset container (DESTRUCTIVE — wipe all data, keep container)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanAid}}\",\n  \"confirm\": \"REPLACE_WITH_CONTAINER_NAME\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "reset"
+              ]
+            },
+            "description": "DESTRUCTIVE: wipes ALL data in this (1:1:1) container — agents, tasks, requests, decisions, conversations, worker runs, memory digests, events — and recreates a single empty root task. The containers row itself is KEPT (current_container_id stays valid); only its contents are cleared. Doubly gated: actor_agent_id must be kind='human' (403 otherwise), and `confirm` must equal the container's current NAME (400 otherwise). Returns {container_id, root_task_id, deleted:{<table>:<rowcount>}}. In-app counterpart to the CLI `orcha init --force --reset-data` (which instead drops the Postgres volume for a pristine initdb)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Onboarding",
+      "item": [
+        {
+          "name": "Propose roster (SPEC-292 SSE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cid\": \"{{cid}}\",\n  \"goal\": \"Improve my app's first-run onboarding and reduce setup drop-off.\",\n  \"dialogue\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/onboarding/propose",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onboarding",
+                "propose"
+              ]
+            },
+            "description": "SPEC-292: streaming roster proposal endpoint. Returns text/event-stream data frames with event=thinking, then exactly one terminal clarify|roster|error frame, then done. Error code roster_truncated means the forced roster tool output hit the model output limit before parseable JSON was complete; the client should ask the user to narrow the first roster instead of blindly retrying the same request. The roster is only an editable proposal; commit reuses existing POST /api/containers/{cid}/agents and /tasks client-side."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agents",
+      "item": [
+        {
+          "name": "Update agent (PATCH role / system_prompt / alias, human-only)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanId}}\",\n  \"role\": \"updated role\",\n  \"system_prompt\": \"updated prompt\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}"
+              ]
+            },
+            "description": "Edit an agent's role / system_prompt / alias (onboarding + re-profiles). Human-authority gated; partial update (omit a field to leave it unchanged). Editing a human's system_prompt -> 400. Alias rename is 409-guarded on collision and returns alias_rebind_note (it orphans the local CLI binding). Flows through GET /persona + the container read payload (role, prompt_preview). 400 (no fields/bad input) / 403 (non-human) / 404 (unknown) / 409 (alias taken)."
+          }
+        },
+        {
+          "name": "Retire agent (ISS-51, human-only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/retire",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "retire"
+              ]
+            },
+            "description": "ISS-51: retire an agent (actor must be kind='human'). Sets terminated_at + status='terminated' so the container roster (now filtering terminated_at IS NULL) stops listing it. Any task the agent was actively working is released back to 'ready' (thread retained); a task with other active assignees stays in_progress. Idempotent."
+          }
+        },
+        {
+          "name": "Set agent model (B8.1)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/model",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "model"
+              ]
+            },
+            "description": "B8.1: update the LLM model an agent runs on. Persists agents.model (set at registration in D7) and flows through the container read payload. Model must be a curated id (GET /api/models); humans carry no model (400). The notifier now spawns the worker/resident on this model via --model (GAP A). GAP B: on an actual change, the agent's active conversation has its pinned session_id cleared so the next resident boot is COLD and adopts the new model (a warm --resume keeps the old one) — the response returns cold_reset_conversations (the conversation ids reset)."
+          }
+        },
+        {
+          "name": "Get reachability",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/reachability",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "reachability"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set reachability (wake on/off)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"headless_cwd\": \"/Users/kedar/ai_apps/Orcha\",\n  \"wake_enabled\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/reachability",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "reachability"
+              ]
+            },
+            "description": "wake_enabled:false opts the agent out of daemon wakes. Optional tmux_target for live-pane wakes."
+          }
+        },
+        {
+          "name": "Persona",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/persona",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "persona"
+              ]
+            },
+            "description": "Agent's defining system prompt + role for booting a worker AS the agent (notifier --append-system-prompt; pairs with GET /digest). Returns {agent_id, alias, role, kind, model, system_prompt}. `model` is the per-agent selection resolved server-side via resolve_model (retired/unknown id -> DEFAULT_MODEL; humans -> null) so the live terminal spawn surface (orcha use) can pin --model without importing resolve_model. 400 (bad uuid) / 404 (unknown)."
+          }
+        },
+        {
+          "name": "Inbox",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/inbox",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "inbox"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Outbox",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/outbox",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "outbox"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Events",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "events"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Long-poll /wait",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json();",
+                  "if (d && d.ts) { pm.collectionVariables.set('sinceTs', d.ts); }",
+                  "pm.test('returned an event or timeout', () => pm.expect(d).to.have.property('event'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/wait?since_ts={{sinceTs}}&timeout=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "wait"
+              ],
+              "query": [
+                {
+                  "key": "since_ts",
+                  "value": "{{sinceTs}}"
+                },
+                {
+                  "key": "timeout",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Returns the first event newer than since_ts, or {event:'timeout'}. The test script advances sinceTs so re-running pages forward."
+          }
+        },
+        {
+          "name": "Prompt agent (A3: wake with a directed message)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Please re-check the failing test in main.py and report back.\",\n  \"from_agent_id\": \"{{humanId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/prompt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "prompt"
+              ]
+            },
+            "description": "A3: publishes a `prompt` agent_event carrying the message; wake-scan counts it as pending work and the daemon wakes the agent with the message in its worker context. Keystone for B2 (prompt-from-portal) and B12 (poke / reject-loop)."
+          }
+        },
+        {
+          "name": "Claim next assigned ready task",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/next",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "next"
+              ]
+            },
+            "description": "Claims the highest-priority ready task explicitly assigned to this agent. Ready-but-unassigned tasks remain visible in task lists for a human/lead to route; they are not a free claim pool."
+          }
+        },
+        {
+          "name": "Digest — write snapshot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_focus\": \"what I'm working on\",\n  \"decisions\": \"key decisions\",\n  \"learnings\": \"what I learned\",\n  \"open_threads\": \"what's unresolved\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/digest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "digest"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Digest — read latest",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/digest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "digest"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rehydrate brief",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/rehydrate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "rehydrate"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tasks",
+      "item": [
+        {
+          "name": "Create task",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json();",
+                  "const id = d.task_id || d.id || (d.task && d.task.id);",
+                  "if (id) { pm.collectionVariables.set('tid', id); }",
+                  "pm.test('task created', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Postman probe task\",\n  \"definition_of_done\": \"n/a\",\n  \"priority\": 100,\n  \"assignee_alias\": null,\n  \"description\": null,\n  \"depends_on\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "tasks"
+              ]
+            },
+            "description": "Set assignee_alias to claim-on-create (status becomes in_progress). depends_on takes task ids to build the DAG."
+          }
+        },
+        {
+          "name": "Task thread — read messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/messages?limit=20&before=&before_id=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "ISS-68: page size; omit/0 → full thread ASC (unchanged)"
+                },
+                {
+                  "key": "before",
+                  "value": "",
+                  "description": "ISS-68: ISO created_at cursor — return messages older than this (load earlier)",
+                  "disabled": true
+                },
+                {
+                  "key": "before_id",
+                  "value": "",
+                  "description": "ISS-68: id half of the (created_at,id) keyset cursor — pair with `before` to load earlier without dropping same-timestamp rows",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Read the task collaboration thread (ASC). ISS-68: optional cursor pagination — ?limit=N returns the newest N (ASC within the page) plus has_more + next_before; ?before=<iso> loads the earlier page."
+          }
+        },
+        {
+          "name": "Task thread — post message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"author_agent_id\": \"{{aid}}\",\n  \"body\": \"progress note\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "messages"
+              ]
+            },
+            "description": "Only the task's assignee/participant may post (non-participant → 403)."
+          }
+        },
+        {
+          "name": "Mark done (→ needs_verification)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_id\": \"{{aid}}\",\n  \"result\": \"done, ready for human verify\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/done",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "done"
+              ]
+            },
+            "description": "Never auto-completes — goes to needs_verification; a human must verify."
+          }
+        },
+        {
+          "name": "Assign existing task to agent (HUMAN, B5) + wake",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanAid}}\",\n  \"agent_id\": \"{{aid}}\",\n  \"reassign\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "assign"
+              ]
+            },
+            "description": "B5: a human assigns an EXISTING task to an AI agent and wakes them (unblocks O4). Task lands 'ready' (deps met) and a targeted task_assigned event wakes the assignee to claim it via /orcha-next; stays 'pending' if deps unmet. Pass reassign=true to release a different active assignee first (else 409). Root/finished tasks -> 409; assignee must be a live AI agent in the same container."
+          }
+        },
+        {
+          "name": "Verify (HUMAN ONLY) — approve/reject + reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approve\": true,\n  \"feedback\": null,\n  \"actor_agent_id\": \"{{humanAid}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "verify"
+              ]
+            },
+            "description": "actor_agent_id MUST be a kind='human' agent. approve:false + feedback routes the reason to the agent and reopens the task (in_progress)."
+          }
+        },
+        {
+          "name": "Close-implications (downstream impact)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/close-implications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "close-implications"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cancel task (HUMAN force-close, B7/ISS-23)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanAid}}\",\n  \"reason\": \"obsolete — superseded\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "cancel"
+              ]
+            },
+            "description": "B7: a kind=human actor cancels ANY task (status→cancelled); a non-human only one it's assigned to (else 403). reason REQUIRED when a human cancels another agent's task (422 {error:reason_required}) — routed to each owning assignee via the B0 decision_made event. ISS-42 (B12): on a forced cancel each owner is ALSO poked (a directed `prompt` event carrying the reason + closure + next steps) so they don't wake to a dead-end; response includes `owners_poked` (count, 0 when not forced)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Requests (agent↔agent / agent↔human)",
+      "item": [
+        {
+          "name": "List requests (ISS-68 — paginated, status order)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/requests?limit=15&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "requests"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "15",
+                  "description": "page size (default 15, max 100)"
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "row offset for 'load more'"
+                },
+                {
+                  "key": "agent",
+                  "value": "{{aid}}",
+                  "description": "scope to an agent (agent detail in/out lists)",
+                  "disabled": true
+                },
+                {
+                  "key": "direction",
+                  "value": "in",
+                  "description": "with agent: 'in' (addressed to it) | 'out' (raised by it)",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "ISS-68 (#167): paginated request rows for lazy list loading. Order: open → answered → closed, then priority, created_at DESC. Same row shape as the snapshot's requests[]. Returns {requests,total,has_more}."
+          }
+        },
+        {
+          "name": "Open info request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json();",
+                  "const id = d.request_id || d.id || (d.request && d.request.id);",
+                  "if (id) { pm.collectionVariables.set('rid', id); }",
+                  "pm.test('request opened', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requester_agent_id\": \"{{aid}}\",\n  \"target_alias\": \"Forge\",\n  \"type\": \"info\",\n  \"payload\": \"What is the status of X?\",\n  \"priority\": 100,\n  \"expires_minutes\": 60\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "requests"
+              ]
+            },
+            "description": "Omit target_alias/target_agent_id to auto-route to the human. type='task' makes it a task request (use accept-task/reject-task). parent_request_id chains requests."
+          }
+        },
+        {
+          "name": "Respond to request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"responder_agent_id\": \"{{aid}}\",\n  \"response\": \"here is the answer\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/respond",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "respond"
+              ]
+            },
+            "description": "Only the target may respond (else 403). open → answered."
+          }
+        },
+        {
+          "name": "Close request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requester_agent_id\": \"{{aid}}\",\n  \"reason\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "close"
+              ]
+            },
+            "description": "Owner (requester) closes answered → closed (non-answered → 409). B7/ISS-23: a kind=human actor may close ANY request from any non-closed status; non-humans stay owner-only (403). When a human closes another agent's request, reason is REQUIRED (422 {error:reason_required}) and routed to the owner via the B0 decision_made event."
+          }
+        },
+        {
+          "name": "Escalate to human",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"no/poor answer\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/escalate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "escalate"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Convert request → task",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Task from request\",\n  \"definition_of_done\": \"n/a\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/convert-to-task",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "convert-to-task"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Accept task request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"accepted\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/accept-task",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "accept-task"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reject task request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"out of scope\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/reject-task",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "reject-task"
+              ]
+            },
+            "description": "Target rejects a task request (status→rejected, reason recorded). ISS-42 (B12): the requester is ALSO poked (a directed `prompt` event carrying the reason + the three paths forward — re-ask / suggest-agent / escalate) so a rejection isn't a silent dead-end; response includes `requester_poked: true`."
+          }
+        },
+        {
+          "name": "Suggest a new agent (escalation)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"proposed_alias\": \"Newbie\",\n  \"proposed_role\": \"engineering\",\n  \"proposed_prompt\": \"You are Newbie...\",\n  \"rationale\": \"need capacity for X\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/{{rid}}/suggest-agent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{rid}}",
+                "suggest-agent"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Decide agent-suggestion (HUMAN ONLY)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"create\",\n  \"actor_agent_id\": \"{{humanAid}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agent-suggestions/{{rid}}/decide",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agent-suggestions",
+                "{{rid}}",
+                "decide"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wake daemon / admin",
+      "item": [
+        {
+          "name": "Wake-scan (who should wake)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/wake-scan?cooldown=15&min_idle=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "wake-scan"
+              ],
+              "query": [
+                {
+                  "key": "cooldown",
+                  "value": "15"
+                },
+                {
+                  "key": "min_idle",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Returns agents with should_wake, pending_events, resolved transport, and an additive notifications[] ranked wake manifest (rank/type/surface/actor/object_priority/preview) for boot dispatch ordering."
+          }
+        },
+        {
+          "name": "Wake-claim (single-flight lease)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lease_ttl\": 300,\n  \"kind\": \"ephemeral\",\n  \"event\": \"task_assigned\",\n  \"lease_kind\": \"ephemeral\",\n  \"preempt\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/wake-claim",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "wake-claim"
+              ]
+            },
+            "description": "R2.4 single-flight: atomically claims the wake lease. Only the caller that gets the lease should spawn a worker. ISS-69(b): a live-terminal claim (lease_kind='live') may set preempt=true — if an IDLE warm resident holds the lease, the claim is denied with reason 'yield_pending' and a yield request is recorded; the daemon then snapshots + releases the resident so a retry wins. preempt has no effect when the holder is ephemeral or another live terminal (those stay denied)."
+          }
+        },
+        {
+          "name": "Wake-renew (heartbeat a live worker's lease)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lease_ttl\": 180\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/wake-renew",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "wake-renew"
+              ]
+            },
+            "description": "Wake-latency fix: the daemon claims a SHORT lease and renews it each tick while its worker is alive. Only extends an existing lease (never creates one). A crashed/orphaned worker stops being renewed, so its lease lapses fast instead of starving a fresh high-priority event for the full hard-cap. ISS-60(B): a SUCCESSFUL renew also bumps the agent's last_heartbeat_at (the liveness ping) so the orphan-lease reaper can trust heartbeat staleness as death."
+          }
+        },
+        {
+          "name": "Reap orphan leases (ISS-60B backstop)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/reap-orphan-leases?orphan_secs=1260",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "reap-orphan-leases"
+              ],
+              "query": [
+                {
+                  "key": "orphan_secs",
+                  "value": "1260"
+                }
+              ]
+            },
+            "description": "ISS-60(B): heartbeat-keyed orphan-lease reaper (defense-in-depth for ISS-60). Force-releases any LIVE single-flight lease whose agent hasn't produced a liveness heartbeat in orphan_secs (default 1260s > the 1200s watchdog hard-cap). TTL-independent backstop for a lease that outlived its embodiment (daemon restart / externally-spawned resident). SAFE because wake-renew bumps last_heartbeat_at on every keep-alive; NULL heartbeats are never reaped. The daemon polls this each tick. Returns {reaped:[{agent_id,alias,lease_kind,idle_seconds}]}."
+          }
+        },
+        {
+          "name": "Wake-ack (advance delivered cursor)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/wake-ack",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "wake-ack"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Wakes kill-switch (halt ALL wakes)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false,\n  \"actor_agent_id\": \"{{humanAid}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/wakes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "wakes"
+              ]
+            },
+            "description": "enabled:false halts every wake for the container (emergency stop). enabled:true re-enables."
+          }
+        },
+        {
+          "name": "Run pending migrations",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/migrate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "migrate"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Decisions (B0 / G1 shared approval)",
+      "item": [
+        {
+          "name": "Create decision (approve/reject + reason)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json();",
+                  "if (d && d.decision_id) { pm.collectionVariables.set('decisionId', d.decision_id); }",
+                  "pm.test('decision created', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_type\": \"dummy\",\n  \"subject_id\": \"postman-probe\",\n  \"decision\": \"approve\",\n  \"reason\": \"looks good\",\n  \"actor_agent_id\": \"{{humanAid}}\",\n  \"target_agent_id\": \"{{aid}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/decisions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "decisions"
+              ]
+            },
+            "description": "B0/G1 uniform decision. decision=approve|reject; reason REQUIRED on reject (API returns 422 {error:reason_required} otherwise). Persists {decision,reason} and emits a 'decision_made' event to target_agent_id so it sees WHY on next wake. actor_agent_id must be kind=human."
+          }
+        },
+        {
+          "name": "Get decision (audit)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/decisions/{{decisionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "decisions",
+                "{{decisionId}}"
+              ]
+            },
+            "description": "Read back a persisted decision by id (auditable record of {decision,reason,actor,target})."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Worker runs (A2 — wake worker output)",
+      "item": [
+        {
+          "name": "Start run (notifier records a spawned worker → run_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json();",
+                  "const id = d.run_id || d.id || (d.run && d.run.run_id);",
+                  "if (id) { pm.collectionVariables.set('run_id', id); }",
+                  "pm.test('worker run started', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+                  "pm.test('response is the full run row', () => {",
+                  "  pm.expect(d).to.have.property('run_id');",
+                  "  pm.expect(d).to.have.property('agent_id');",
+                  "  pm.expect(d).to.have.property('status');",
+                  "  pm.expect(d).to.have.property('runtime');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wake_kind\": \"ephemeral\",\n  \"wake_event\": \"task_assigned\",\n  \"task_id\": null,\n  \"log_path\": null,\n  \"pid\": 12345,\n  \"runtime\": \"codex\",\n  \"conversation_id\": null,\n  \"conversation_ack_ts\": null,\n  \"last_message_path\": null,\n  \"worktree\": null,\n  \"branch\": null,\n  \"base_cwd\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/runs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "runs"
+              ]
+            },
+            "description": "Start run (notifier records a spawned worker). Body mirrors WorkerRunStart, including Codex conversation recovery metadata. Response is the full worker run row returned by _run_row(), and the test script captures run_id for finish/lines/stream calls."
+          }
+        },
+        {
+          "name": "List an agent's worker runs (newest first; optional ?task_id=)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/runs?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "runs"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "List an agent's worker runs (newest first; optional ?task_id=)"
+          }
+        },
+        {
+          "name": "List an agent's RESIDENT runs + host pids (919050a5 single-flight reap)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/resident-runs?status=running",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "resident-runs"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "running"
+                }
+              ]
+            },
+            "description": "919050a5: resident worker_runs + their host pid so the notifier can os.kill(pid,0)-detect a run whose row says 'running' but whose process is dead, then reap it + release the held resident wake-lease. ?status=running narrows to live-claimed rows. The API runs in Docker and can't see host PIDs, so the liveness decision lives in the host notifier."
+          }
+        },
+        {
+          "name": "Finish run (notifier on reap: exited|killed + captured output)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"exited\",\n  \"exit_code\": 0,\n  \"output\": \"<stream-json text>\",\n  \"diff\": \"<git diff vs origin/main>\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/runs/{{run_id}}/finish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "runs",
+                "{{run_id}}",
+                "finish"
+              ]
+            },
+            "description": "Finish run (notifier on reap: exited|killed + captured output)"
+          }
+        },
+        {
+          "name": "Append run lines (ISS-39: daemon streams stream-json lines → DB)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start_seq\": 1,\n  \"lines\": [\"{\\\"type\\\":\\\"system\\\",\\\"subtype\\\":\\\"init\\\"}\", \"{\\\"type\\\":\\\"assistant\\\"}\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/runs/{{run_id}}/lines",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "runs",
+                "{{run_id}}",
+                "lines"
+              ]
+            },
+            "description": "ISS-39: the daemon (host-side, no mount lag) posts a batch of new stream-json lines for a running worker; the SSE /stream tails the worker_run_lines table instead of the bind-mounted log. Idempotent on (run_id, seq)."
+          }
+        },
+        {
+          "name": "List a task's worker runs (newest first)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{tid}}/runs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{tid}}",
+                "runs"
+              ]
+            },
+            "description": "List a task's worker runs (newest first)"
+          }
+        },
+        {
+          "name": "Stream run (SSE live log tail)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/runs/{{run_id}}/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "runs",
+                "{{run_id}}",
+                "stream"
+              ]
+            },
+            "description": "SSE (text/event-stream): live-tails the worker's stream-json lines from the worker_run_lines table (ISS-39: the daemon posts them; no Docker mount lag). Events: data:{seq,line} per worker line, then a terminal data:{seq,done:true,status} on finish. Open with EventSource."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Conversations (E3 resident-session store)",
+      "item": [
+        {
+          "name": "Start/get conversation (human↔agent)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/conversations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "conversations"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanId}}\"\n}"
+            },
+            "description": "Get-or-create the agent's ACTIVE conversation (a human opens it; ≤1 active per agent). Idempotent. 400 if target isn't an AI agent; 403 if opener isn't human."
+          }
+        },
+        {
+          "name": "Active conversations (resident-manager scan)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/containers/{{cid}}/active-conversations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "containers",
+                "{{cid}}",
+                "active-conversations"
+              ]
+            },
+            "description": "E3 discovery scan for the resident-session manager: every ACTIVE conversation in the container with its last-turn {role, seq}, a pending_human flag (last turn is an unanswered human turn = work for the resident), and the pinned session_id. Off the wake/ack event cursor; the daemon services pending_human conversations whose last_turn_seq exceeds its in-memory cursor. ISS-74: also returns pending_inbox (count of NON-conversation events queued for the conversation's agent past its wake cursor — event_name NOT IN digest_snapshotted/conversation_turn), inbox_messages (the surfaced directed prompt/task_message content — these carry no inbox surface, so the drain must quote them; same batch semantics as wake-scan), and inbox_ack_ts (ack ONLY through the last surfaced directed message, defaulting to the max counted ts when nothing is truncated). A warm resident holds the single-embodiment lease, so the daemon uses these to inject a one-shot inbox-drain turn into the warm session and then advance the cursor. ISS-70: also returns cold_required (bool) — TRUE when the agent's latest memory digest is newer than when its claude session was pinned (session_pinned_at, stamped by POST /conversations/{id}/session), so the daemon forces a one-shot COLD boot to re-inject persona+digest (a cross-embodiment digest the warm --resume would never re-read). FALSE when no session is pinned (the boot is cold anyway); TRUE for a pre-ISS-70 pin with a NULL timestamp. Self-limiting: the cold boot re-pins session_pinned_at=now() so it clears next tick."
+          }
+        },
+        {
+          "name": "Get agent's active conversation + recent turns",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/agents/{{aid}}/conversation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agents",
+                "{{aid}}",
+                "conversation"
+              ]
+            },
+            "description": "Convenience for V1 boot-injection / the panel: active conversation + most-recent turns (oldest→newest). ?limit=N. {conversation:null,turns:[]} if none."
+          }
+        },
+        {
+          "name": "Get conversation",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{convId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{convId}}"
+              ]
+            },
+            "description": "Conversation meta. 404 if unknown."
+          }
+        },
+        {
+          "name": "List turns (ordered, paged)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{convId}}/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{convId}}",
+                "turns"
+              ]
+            },
+            "description": "Ordered turns oldest→newest from ?after_seq=<seq> (exclusive), ?limit=N. For V1 history injection (cache-friendly prefix order) + the portal panel."
+          }
+        },
+        {
+          "name": "Append turn",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{convId}}/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{convId}}",
+                "turns"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"human\",\n  \"author_agent_id\": \"{{humanId}}\",\n  \"content\": \"hello\"\n}"
+            },
+            "description": "Append one turn; server assigns per-conversation seq. A HUMAN turn is persisted then publishes a targeted 'conversation_turn' event (bridge to the resident manager). An AGENT turn (one per stream-json 'result') passes run_id (its worker_run; live stream in worker_run_lines/ISS-39) + meta. 403 role/author integrity; 404 unknown; 409 ended."
+          }
+        },
+        {
+          "name": "Set conversation session_id",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{convId}}/session",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{convId}}",
+                "session"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{convSessionId}}\"\n}"
+            },
+            "description": "Record the claude --session-id so the resident can pin/resume the session across respawns."
+          }
+        },
+        {
+          "name": "End conversation",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{convId}}/end",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{convId}}",
+                "end"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor_agent_id\": \"{{humanId}}\"\n}"
+            },
+            "description": "Mark ended (human closes, or idle reaper). Idempotent; frees the agent's single active-conversation slot."
+          }
+        }
+      ]
+    }
+  ]
+}

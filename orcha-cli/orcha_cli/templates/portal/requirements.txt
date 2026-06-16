@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+psycopg[binary]
+python-multipart   # #301: parse multipart/form-data for task-message file attachment uploads

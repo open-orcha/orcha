@@ -1,0 +1,460 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color-scheme: dark;
+  --bg: #141311;
+  --card: #1d1b18;
+  --text: #efe9df;
+  --border: color-mix(in srgb, currentColor 14%, transparent);
+  --accent: #f0b94b;
+  --ok: #42d98a;
+  --danger: #d9544f;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+main {
+  padding: 1.25rem;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+/* Segmented Cards/List control */
+.view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+main button.view-toggle-btn {
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  padding: 0.22rem 0.7rem;
+  font-size: 0.78rem;
+  opacity: 0.65;
+}
+
+main button.view-toggle-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
+}
+
+main button.view-toggle-btn[aria-pressed='true'] {
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  opacity: 1;
+}
+
+/* Card view: responsive grid of elevated cards */
+.stack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.9rem;
+}
+
+.stack-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.95rem 1.05rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.stack-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, currentColor 22%, transparent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.stack-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.stack-name {
+  font-weight: 600;
+}
+
+.status-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.status-dot-up {
+  background: var(--ok);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent);
+}
+
+.pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pill-running {
+  background: rgba(66, 217, 138, 0.14);
+  color: var(--ok);
+}
+
+.pill-stopped {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  opacity: 0.85;
+}
+
+.pill-attention {
+  background: rgba(240, 185, 75, 0.16);
+  color: var(--accent);
+}
+
+.stack-meta {
+  margin: 0.45rem 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.muted {
+  opacity: 0.62;
+}
+
+.stack-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* List view: compact hairline-separated rows */
+.stack-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.stack-row {
+  padding: 0.55rem 0.9rem;
+  transition: background 0.12s ease;
+}
+
+.stack-row + .stack-row {
+  border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.stack-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.stack-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.stack-row-meta {
+  margin-left: auto;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.stack-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.4rem;
+}
+
+.chip-attention {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(240, 185, 75, 0.16);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+
+/* Base button (shared with the tray popover — unchanged values). */
+button {
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  background: transparent;
+  color: inherit;
+  border-radius: 7px;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Manager-window button refinements (scoped to <main> so .tray-* keeps its look). */
+main button {
+  border-color: color-mix(in srgb, currentColor 22%, transparent);
+  background: rgba(255, 255, 255, 0.03);
+  font: inherit;
+  font-size: 0.84rem;
+  border-radius: 8px;
+  padding: 0.32rem 0.85rem;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+main button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: color-mix(in srgb, currentColor 32%, transparent);
+}
+
+.btn-small {
+  font-size: 0.76rem;
+  padding: 0.18rem 0.6rem;
+}
+
+.stack-error {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+.banner {
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, currentColor 25%, transparent);
+}
+
+.banner-error {
+  border-style: solid;
+  color: var(--danger);
+}
+
+.tray-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 0.9rem;
+  box-sizing: border-box;
+  gap: 0.8rem;
+  background: #1d1b18;
+  color: #efe9df;
+}
+
+.tray-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tray-title {
+  font-weight: 700;
+}
+
+.tray-chip {
+  font-size: 0.72rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tray-ring {
+  width: 150px;
+  height: 150px;
+  margin: 0.4rem auto;
+  border-radius: 50%;
+  border: 5px solid #f0b94b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+}
+
+.tray-ring-clear {
+  border-color: #42d98a;
+}
+
+.tray-ring-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+}
+
+.tray-ring-count {
+  font-size: 2.6rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tray-stacks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tray-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  border: 0;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  border-radius: 9px;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tray-stack-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tray-stack-attention {
+  background: rgba(240, 185, 75, 0.14);
+  box-shadow: inset 2px 0 0 #f0b94b;
+}
+
+.tray-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.tray-dot-up {
+  background: #42d98a;
+}
+
+.tray-stack-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.tray-stack-meta {
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.tray-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tray-icon-button {
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+}
+
+.tray-primary {
+  flex: 1;
+  border: 0;
+  background: #9db98a;
+  color: #1d1b18;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+}
+
+.tray-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tray-items {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tray-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 7px;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.78rem;
+}
+
+.tray-item-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tray-kind-chip {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #f0b94b;
+  background: rgba(240, 185, 75, 0.16);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.tray-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.9;
+}
+
+.tray-more {
+  font-size: 0.72rem;
+  opacity: 0.55;
+  padding: 0.15rem 0.5rem;
+}

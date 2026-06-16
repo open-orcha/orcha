@@ -1,0 +1,119 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Dry-run: build + smoke only — no release, no tap push. Lets us validate the
+  # pipeline before the first real tag (spec §7).
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# gh release create needs contents:write; don't rely on the org default.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Self-hosted Mac pool; Homebrew python3.11 venv (see test.yml for why not
+    # actions/setup-python). tomllib needs 3.11+ — this venv provides it.
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight — release prerequisites present
+        if: github.event_name == 'push'
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          command -v gh >/dev/null || { echo "::error::gh CLI missing on this runner" >&2; exit 1; }
+          [ -n "$TAP_TOKEN" ] || { echo "::error::TAP_GITHUB_TOKEN secret is empty/missing" >&2; exit 1; }
+
+      - name: Create venv
+        run: |
+          PY="$(command -v python3.11 || echo /opt/homebrew/bin/python3.11)"
+          rm -rf .release-venv
+          "$PY" -m venv .release-venv
+          ./.release-venv/bin/pip install --upgrade pip build twine
+
+      - name: Guard — tag must equal pyproject version
+        if: github.event_name == 'push'
+        run: |
+          TAG_V="${GITHUB_REF_NAME#v}"
+          PKG_V="$(./.release-venv/bin/python -c "import tomllib;print(tomllib.load(open('orcha-cli/pyproject.toml','rb'))['project']['version'])")"
+          if [ "$TAG_V" != "$PKG_V" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} != pyproject version ${PKG_V} — bump orcha-cli/pyproject.toml first" >&2
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: |
+          rm -rf dist
+          ./.release-venv/bin/python -m build orcha-cli --outdir dist
+          ./.release-venv/bin/twine check dist/*
+
+      - name: Smoke test the wheel
+        run: |
+          PY="$(command -v python3.11 || echo /opt/homebrew/bin/python3.11)"
+          rm -rf .smoke-venv
+          "$PY" -m venv .smoke-venv
+          ./.smoke-venv/bin/pip install dist/*.whl
+          OUT="$(./.smoke-venv/bin/orcha --version)"
+          PKG_V="$(./.release-venv/bin/python -c "import tomllib;print(tomllib.load(open('orcha-cli/pyproject.toml','rb'))['project']['version'])")"
+          echo "smoke: '$OUT' (want 'orcha $PKG_V')"
+          [ "$OUT" = "orcha $PKG_V" ]
+
+      - name: Extract release notes from CHANGELOG.md
+        if: github.event_name == 'push'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {flag=1; next} /^## \[/ {flag=0} flag' CHANGELOG.md > .release-notes.md
+          if ! [ -s .release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section — add it before tagging" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub release (private repo => release stays private)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Idempotent re-run: a prior partial run may have created the release
+          # already (e.g. tap push failed afterwards) — don't die on re-run.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists — syncing assets"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "orcha $GITHUB_REF_NAME" \
+              --notes-file .release-notes.md
+          fi
+
+      - name: Render + push tap formulae (tracking orcha.rb + frozen orcha@X.Y.Z.rb)
+        if: github.event_name == 'push'
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # rev-list dereferences annotated tags to the commit the formula must pin.
+          REVISION="$(git rev-list -n1 "$GITHUB_REF_NAME")"
+          # Root the token-bearing clone under RUNNER_TEMP (wiped between jobs)
+          # and trap signals too: cancellation SIGTERMs the step before SIGKILL.
+          WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tap.XXXXXX")"
+          trap 'rm -rf "$WORK"' EXIT INT TERM
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Quantal-Labs-AI/homebrew-orcha.git" "$WORK/tap"
+          ./.release-venv/bin/python packaging/homebrew/render_formula.py "$VERSION" "$REVISION" "$WORK/tap/Formula"
+          git -C "$WORK/tap" add Formula
+          if git -C "$WORK/tap" diff --cached --quiet; then
+            echo "tap already at $VERSION — nothing to push (idempotent re-run)"
+          else
+            git -C "$WORK/tap" -c user.name=orcha-release-bot -c user.email=releases@quantal-labs.ai \
+              commit -m "orcha ${VERSION}"
+            git -C "$WORK/tap" push origin HEAD:main
+          fi
+
+      - name: Clean up workspace
+        if: always()
+        run: rm -rf .release-venv .smoke-venv dist .release-notes.md

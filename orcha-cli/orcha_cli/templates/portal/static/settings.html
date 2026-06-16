@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orcha · Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/styles.css">
+<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<style>
+  /* settings-specific layout — reuses styles.css tokens, no new color literals */
+  .set-wrap { max-width: 760px; }
+  .set-intro { margin: 2px 2px 20px; }
+  .set-intro h1 { font-size: 20px; font-weight: 740; letter-spacing: -.02em; }
+  .set-intro p { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.55; max-width: 64ch; }
+
+  .set-card .card-b { padding: 18px 20px; }
+  .set-card .lead { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: -2px 0 16px; }
+
+  /* status banner (ok / warn / err / muted) — built from the same soft tokens
+     used by .attn-card / callouts so it stays theme-correct. */
+  .sc-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 16px; }
+  .sc-banner .bt { display: flex; align-items: center; gap: 9px; font-size: 13px; line-height: 1.45; }
+  .sc-banner .bt svg { width: 17px; height: 17px; flex: none; }
+  .sc-banner.ok   { background: var(--ok-soft);   border-color: var(--ok-line); }
+  .sc-banner.ok .bt svg   { color: var(--ok); }
+  .sc-banner.warn { background: var(--warn-soft); border-color: var(--warn-line); }
+  .sc-banner.warn .bt svg { color: var(--warn); }
+  .sc-banner.err  { background: var(--danger-soft); border-color: var(--danger-line); }
+  .sc-banner.err .bt svg  { color: var(--danger); }
+  .sc-banner.muted .bt { color: var(--muted); }
+  .sc-banner .masked { margin-left: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
+    color: var(--text-2); background: var(--surface-3); border: 1px solid var(--border); border-radius: 7px; padding: 3px 8px; }
+
+  .sc-row { display: flex; gap: 8px; align-items: stretch; }
+  .sc-inp { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 10px;
+    color: var(--text); font: 13px "JetBrains Mono", ui-monospace, monospace; padding: 10px 12px; outline: none; }
+  .sc-inp::placeholder { color: var(--faint); font-family: Inter, system-ui, sans-serif; }
+  .sc-inp:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+  .sc-row .iconbtn { flex: none; }
+
+  .sc-hint { font-size: 11.5px; color: var(--faint); min-height: 16px; margin: 7px 2px 0; line-height: 1.4; }
+  .sc-hint code { font-size: 11px; }
+  .sc-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  .sc-result { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+    font-size: 12.5px; line-height: 1.4; border: 1px solid var(--border); }
+  .sc-result svg { width: 16px; height: 16px; flex: none; }
+  .sc-result.ok  { background: var(--ok-soft);     border-color: var(--ok-line); }
+  .sc-result.ok svg  { color: var(--ok); }
+  .sc-result.err { background: var(--danger-soft); border-color: var(--danger-line); }
+  .sc-result.err svg { color: var(--danger); }
+
+  /* per-use-case model rows (SPEC-SETTINGS §2) — token-reuse only, no color literals. */
+  .uc-list { display: flex; flex-direction: column; gap: 12px; }
+  .uc-row { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding: 14px 16px; }
+  .uc-title { font-size: 13.5px; font-weight: 640; letter-spacing: -.01em; }
+  .uc-purpose { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 3px; }
+  .uc-controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 13px; }
+  .uc-sel { display: flex; flex-direction: column; gap: 4px; }
+  .uc-sel > span { font-size: 11px; color: var(--faint); }
+  .uc-sel select { background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 9px;
+    color: var(--text); font: 13px Inter, system-ui, sans-serif; padding: 8px 10px; outline: none; min-width: 150px; }
+  .uc-sel select:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+  .uc-sel select:disabled { opacity: .55; cursor: not-allowed; }
+  .uc-default { color: var(--faint); font-size: 11.5px; margin-left: auto; align-self: flex-end; padding-bottom: 9px; }
+  .uc-foot { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
+  .uc-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .uc-dot.on { background: var(--ok); }
+  .uc-dot.off { background: var(--faint); }
+  .uc-state-txt { font-size: 12px; color: var(--text-2); }
+  .uc-reset { margin-left: auto; }
+  .uc-note { font-size: 11.5px; color: var(--faint); margin-top: 9px; line-height: 1.45; }
+
+  .set-savebar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+  .set-savebar .saved { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
+  .set-savebar .saved svg { width: 15px; height: 15px; color: var(--ok); }
+  .set-err { color: var(--danger); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="content">
+      <div class="set-wrap">
+
+        <div class="set-intro">
+          <h1>Settings</h1>
+          <p>Workspace-level configuration. The Anthropic API key below powers Orcha's
+             universal LLM client (#290) — the direct-API calls behind guided onboarding and
+             wake triage — separate from each agent's own embodiment model.</p>
+        </div>
+
+        <div class="card set-card">
+          <div class="card-h"><h2>Anthropic API key</h2></div>
+          <div class="card-b">
+            <div class="lead">Stored encrypted on this workspace and used for the universal
+              client. The <code>ORCHA_LLM_API_KEY</code> environment variable takes
+              precedence — a key set here is used only when no env key is present.</div>
+            <div id="keyCard"></div>
+          </div>
+        </div>
+
+        <div class="card set-card">
+          <div class="card-h"><h2>Universal model selection</h2></div>
+          <div class="card-b">
+            <div class="lead">Pick which model powers each non-agent task. These are direct-API
+              calls (the universal client, #290), separate from each agent's own embodiment model.
+              A use-case left on its shipped default uses the model Orcha ships with.</div>
+            <div id="modelRows"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/data.js"></script>
+<script src="/assets/settings.js"></script>
+</body>
+</html>

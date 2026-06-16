@@ -1,0 +1,265 @@
+import { app, BrowserWindow, ipcMain, nativeImage, Notification, shell } from 'electron'
+import path from 'node:path'
+import { parseDeepLink } from './deepLink'
+import { listStacks } from './discovery'
+import { startStack, stopStack } from './lifecycle'
+import { fetchStackAttention } from './attention'
+import { AttentionPoller } from './attentionPoller'
+import { createTray, type TrayController } from './tray'
+import { buildStatus, writeStatusFile } from './statusFile'
+import type { AttentionItem, BridgeError, IpcResult, Stack } from '../shared/types'
+
+// Runtime name for everything Electron derives it from (userData path, dialogs).
+// The macOS app-menu TITLE still reads the bundle's Info.plist ("Electron" in dev);
+// it becomes "Orcha" when packaging (electron-builder productName) lands post-#238.
+app.setName('Orcha')
+
+// Widgets deep-link back into the app: orcha://open?project=<compose project>&path=<portal path>
+app.setAsDefaultProtocolClient('orcha')
+
+let managerWindow: BrowserWindow | null = null
+const portalWindows = new Map<string, BrowserWindow>()
+let tray: TrayController | null = null
+let poller: AttentionPoller | null = null
+
+function createManagerWindow(): void {
+  managerWindow = new BrowserWindow({
+    width: 760,
+    height: 560,
+    title: 'Orcha',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    managerWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    managerWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
+  }
+  // The manager renderer never navigates; deny everything (bridge must not ride a navigation).
+  managerWindow.webContents.on('will-navigate', (event) => event.preventDefault())
+  managerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  managerWindow.on('closed', () => {
+    managerWindow = null
+  })
+}
+
+/** Open-or-focus: reuse the existing manager window when it's still alive. */
+function showManagerWindow(): void {
+  if (managerWindow && !managerWindow.isDestroyed()) {
+    managerWindow.show()
+    managerWindow.focus()
+    return
+  }
+  createManagerWindow()
+}
+
+/** Frameless tray popover; hidden until the tray click positions it. */
+function createPopoverWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 360,
+    height: 480,
+    show: false,
+    frame: false,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#tray`)
+  } else {
+    win.loadFile(path.join(__dirname, '../renderer/index.html'), { hash: 'tray' })
+  }
+  win.webContents.on('will-navigate', (event) => event.preventDefault())
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  return win
+}
+
+async function openPortalByProject(project: string, path?: string): Promise<void> {
+  try {
+    const stacks = await listStacks()
+    const stack = stacks.find((s) => s.project === project)
+    if (stack && stack.running && stack.apiPort !== null) openPortalWindow(stack, path)
+  } catch {
+    // Docker down or discovery hiccup at click time — nothing sensible to open.
+  }
+}
+
+function showAttentionNotification(item: AttentionItem): void {
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title: `Orcha — ${item.projectShort}`, body: item.title })
+  // macOS refuses Notification Center registration for ad-hoc-signed binaries
+  // (UNErrorDomain error 1) — keep delivery failures visible. Dev fix:
+  // desktop/scripts/sign-dev-electron.sh (packaged builds are properly signed).
+  n.on('failed', (_e, error) =>
+    console.error('[orcha-desktop] notification delivery failed:', item.id, error)
+  )
+  n.on('click', () => void openPortalByProject(item.project, item.path))
+  n.show()
+}
+
+function openPortalWindow(stack: Stack, path = '/'): void {
+  const url = `http://localhost:${stack.apiPort}${path}`
+  const existing = portalWindows.get(stack.project)
+  if (existing && !existing.isDestroyed()) {
+    existing.loadURL(url)
+    existing.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 800,
+    title: `Orcha — ${stack.projectShort}`,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+  })
+  win.loadURL(url)
+  // Portal content may link out (docs, repos): keep same-origin navigation in-window,
+  // push everything else to the system browser.
+  const portalOrigin = `http://localhost:${stack.apiPort}`
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(`${portalOrigin}/`)) {
+      event.preventDefault()
+      void shell.openExternal(url)
+    }
+  })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!url.startsWith(`${portalOrigin}/`)) {
+      void shell.openExternal(url)
+      return { action: 'deny' }
+    }
+    return { action: 'allow' }
+  })
+  // The portal page's own <title> ("Orcha · Dashboard") would overwrite the window
+  // title — keep the project name in front so multiple portals stay distinguishable.
+  win.webContents.on('page-title-updated', (event, pageTitle) => {
+    event.preventDefault()
+    win.setTitle(`${stack.projectShort} · ${pageTitle.replace(/^Orcha\s*·\s*/, '')}`)
+  })
+  win.on('closed', () => {
+    portalWindows.delete(stack.project)
+  })
+  portalWindows.set(stack.project, win)
+}
+
+/** Wrap a handler so structured BridgeErrors survive IPC (thrown Errors get
+ *  flattened to strings by ipcMain.handle — so we return IpcResult instead).
+ *  Unknown rejections are normalized to INTERNAL so the renderer always gets
+ *  a `code` (and internals never leak across the boundary). */
+function asResult<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
+  return fn().then(
+    (data) => ({ ok: true as const, data }),
+    (err: unknown) => {
+      if (err && typeof err === 'object' && 'code' in err) {
+        return { ok: false as const, ...(err as BridgeError) }
+      }
+      console.error('[orcha-desktop] unexpected handler rejection:', err)
+      return { ok: false as const, code: 'INTERNAL' as const }
+    }
+  )
+}
+
+/** Validate a renderer-supplied project name against the live discovery snapshot. */
+async function requireKnownStack(project: string): Promise<Stack> {
+  const stacks = await listStacks()
+  const stack = stacks.find((s) => s.project === project)
+  if (!stack) throw { code: 'UNKNOWN_STACK' } as const
+  return stack
+}
+
+app.whenReady().then(() => {
+  ipcMain.handle('orcha:listStacks', () => asResult(() => listStacks()))
+
+  ipcMain.handle('orcha:startStack', (_event, project: string) =>
+    asResult(async () => {
+      const stack = await requireKnownStack(project)
+      await startStack(stack.project)
+    })
+  )
+
+  ipcMain.handle('orcha:stopStack', (_event, project: string) =>
+    asResult(async () => {
+      const stack = await requireKnownStack(project)
+      await stopStack(stack.project)
+    })
+  )
+
+  ipcMain.handle('orcha:openPortal', (_event, project: string, path?: unknown) =>
+    asResult(async () => {
+      const stack = await requireKnownStack(project)
+      if (!stack.running || stack.apiPort === null) throw { code: 'UNKNOWN_STACK' } as const
+      // Renderer-supplied path: require a single leading slash (no protocol-relative
+      // // and no /\ — URL parsers treat backslash as a segment separator too).
+      const safePath = typeof path === 'string' && /^\/(?![/\\])/.test(path) ? path : '/'
+      openPortalWindow(stack, safePath)
+    })
+  )
+
+  ipcMain.handle('orcha:listAttention', () => asResult(async () => poller?.current() ?? []))
+
+  ipcMain.handle('orcha:openManager', () => asResult(async () => showManagerWindow()))
+
+  ipcMain.handle('orcha:quitApp', () => asResult(async () => app.quit()))
+
+  // Dev dock icon (packaged builds carry it in the bundle). app.getAppPath() = desktop/.
+  if (process.platform === 'darwin' && app.dock) {
+    const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png'))
+    if (!icon.isEmpty()) app.dock.setIcon(icon)
+  }
+
+  tray = createTray({
+    onOpenManager: showManagerWindow,
+    createPopover: createPopoverWindow,
+    onTestNotification: () =>
+      showAttentionNotification({
+        project: 'orcha-test',
+        projectShort: 'orcha',
+        kind: 'health',
+        id: `test:${Date.now()}`,
+        title: 'Test notification — Notification Center delivery works',
+        path: '/'
+      })
+  })
+  poller = new AttentionPoller({
+    listStacks,
+    fetchStackAttention,
+    notify: showAttentionNotification,
+    onUpdate: (items, stacks, details) => {
+      tray?.update(items.length)
+      void writeStatusFile(buildStatus(stacks, items, details, new Date()))
+    }
+  })
+  poller.start()
+
+  createManagerWindow()
+  app.on('activate', () => {
+    showManagerWindow()
+  })
+
+  // Widget tap-through: validate the orcha:// link, then reuse the notification
+  // click path (discovery re-checks the project before any window opens).
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    const target = parseDeepLink(url)
+    if (target) void openPortalByProject(target.project, target.path)
+  })
+})
+
+app.on('window-all-closed', () => {
+  // Tray app: stay alive on macOS; quit elsewhere (v1.1 is macOS-first).
+  if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  poller?.stop()
+  tray?.destroy()
+})

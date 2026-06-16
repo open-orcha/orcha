@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orcha · Requests</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/styles.css">
+<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<style>
+  /* ISS-38: bound the list to the viewport so it scrolls independently of the detail —
+     lets a deeplinked row scrollIntoView WITHOUT scrolling the page away from the request
+     detail. Without this (303+ requests) the sticky aside grows taller than the screen. */
+  .rlist-card { padding: 9px; max-height: calc(100vh - 92px); overflow-y: auto; }
+  .rlist-card .rh { padding: 9px 9px 8px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
+  .filters { display: flex; gap: 5px; padding: 0 6px 8px; flex-wrap: wrap; }
+  .filters button { border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font: inherit;
+    font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer; transition: .12s; }
+  .filters button:hover { color: var(--text); }
+  .filters button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+  .qrow { display: flex; flex-direction: column; gap: 7px; padding: 11px 11px; border-radius: 11px; cursor: pointer;
+    border: 1px solid transparent; transition: background .12s, border-color .12s; width: 100%; text-align: left;
+    background: transparent; font: inherit; color: inherit; }
+  .qrow:hover { background: var(--hover); }
+  .qrow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
+  .qrow .flow { display: flex; align-items: center; gap: 7px; font-weight: 620; font-size: 13px; }
+  .qrow .pv { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+  .qrow .bot { display: flex; align-items: center; gap: 7px; }
+  .flowbig { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .flowbig .node { display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--surface-2); font-weight: 650; font-size: 13.5px; text-decoration: none; }
+  .flowbig .arrow svg { width: 22px; height: 22px; color: var(--faint); }
+  .chain { display: flex; flex-direction: column; gap: 0; }
+  .chain .clink { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 11px; background: var(--surface-2); cursor: pointer; transition: border-color .12s; width: 100%; text-align: left; font: inherit; color: inherit; }
+  .chain .clink:hover { border-color: var(--accent-line); }
+  .chain .clink.cur { border-color: var(--accent-line); background: var(--accent-soft); }
+  .chain .rail { width: 2px; height: 14px; background: var(--border); margin-left: 23px; }
+  .chain .clink .cf { flex: 1; min-width: 0; font-size: 12.5px; }
+  .chain .clink .cf .ttl { font-weight: 620; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chain .clink .cf .sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .payload { font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-wrap; }
+  .answer { border-left: 2px solid var(--ok); padding: 4px 0 4px 13px; color: var(--text-2); font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; }
+  .answer.rej { border-left-color: var(--danger); }
+  .ans-in { width: 100%; min-height: 90px; resize: vertical; background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px; padding: 11px 13px; font: inherit; font-size: 13.5px; line-height: 1.55; outline: none; }
+  .ans-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="content">
+      <div class="split wide">
+        <aside class="card rlist-card stick" id="rlist"></aside>
+        <main id="detailMain"></main>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/data.js"></script>
+<script>
+(function () {
+  const O = window.Orcha;
+  const $ = (id) => document.getElementById(id);
+  const D = () => window.ORCHA;
+
+  const _dlReq = new URLSearchParams(location.search).get("req");
+  let sel = _dlReq || null;
+  // ISS-38: a deeplink (?req=) / explicit select must scroll the list to the picked row,
+  // else (303+ requests) you land on the detail with the selection invisibly off-screen.
+  // One-shot — cleared after the next list paint so the 3s poll never yanks scroll.
+  let pendingScroll = !!_dlReq;
+  let filter = "all";
+  let answering = false;   // inline answer box open (ISS-53: its repaint is deferred while typing)
+  // ISS-68 PR-3: render-cap the (priority-ordered) list to the top-N + "Load more"; a client-side
+  // reveal over the unbounded snapshot (deeplinked detail still resolves). Resets on filter switch.
+  let reqsShown = 15;
+  const REQS_PAGE = 15;
+
+  const FILTERS = [
+    { k: "all", label: "All" }, { k: "open", label: "Open" }, { k: "answered", label: "Answered" },
+    { k: "escalated", label: "Escalations" }, { k: "task", label: "Task reqs" },
+  ];
+  function reqs() { return D().requests || []; }
+  function matches(r) {
+    if (filter === "all") return true;
+    if (filter === "escalated") return r.to === "human" || isToHuman(r);
+    if (filter === "task") return r.type === "task";
+    if (filter === "answered") return r.status === "answered";
+    if (filter === "open") return r.status === "open";
+    return true;
+  }
+  // Use the SHARED detector: it resolves target_id -> kind==="human" (any human, not just
+  // the first by creation order) + handles a null/picked-human target (review P2).
+  function isToHuman(r) { return O.isToHuman(r); }
+  const childrenOf = (id) => reqs().filter((r) => r.in_service_of === id);
+  function partyLabel(name) { return name === "human" ? "you" : name; }
+  function firstSel() { const rs = reqs(); return (rs.find((r) => r.status === "open") || rs[0] || {}).id || null; }
+
+  // ISS-83: requests carry no frontend sort — they arrive in backend order (status open→answered→
+  // other, then priority, then created_at DESC). Re-sort here to inject a recency band: a request
+  // created OR answered within ~12h floats to the top of its status group regardless of priority,
+  // then falls back to the same priority/newest-first order. Slotted BELOW status to keep open-first.
+  const REQ_STATUS_RANK = { open: 0, answered: 1 };   // mirror backend ORDER BY (else -> 2)
+  function reqRank(r) { return REQ_STATUS_RANK[r.status] ?? 2; }
+  // ISS-331: status rank (open→answered→other) stays the OUTER key; the shared sort control picks
+  // the within-status key (time|priority) + direction, superseding the ISS-83 recency-band float.
+  const SORT_NAME = "requests";
+  function reqAcc() { return { bucket: reqRank, time: (r) => Date.parse(r.created_at || "") || 0, prio: (r) => r.priority }; }
+  function reqSorted(list) {
+    return list.slice().sort(O.sortComparator(SORT_NAME, reqAcc()));
+  }
+
+  /* ---------- list ---------- */
+  function renderList() {
+    const open = reqs().filter((r) => r.status === "open").length;
+    let html = `<div class="rh">${O.icon("requests", "")}Requests · ${open} open<span class="grow" style="flex:1"></span>${O.sortControlHtml(SORT_NAME)}</div>
+      <div class="filters">${FILTERS.map((f) => `<button class="${f.k === filter ? "on" : ""}" data-f="${f.k}">${f.label}</button>`).join("")}</div>`;
+    const list = reqSorted(reqs().filter(matches));
+    const head = list.slice(0, reqsShown);
+    // ISS-38: the render cap is a UI window, not a filter — a deeplinked (?req=) / selected
+    // request beyond the window must still appear so it's reachable AND scroll-anchorable in the
+    // list (else you'd have to "Load more" your way to item #250). Append it past the window.
+    const shown = (sel && list.some((r) => r.id === sel) && !head.some((r) => r.id === sel))
+      ? head.concat(list.find((r) => r.id === sel)) : head;
+    html += shown.length ? shown.map((r) => {
+      const escd = isToHuman(r) && r.status === "open";
+      const fa = O.agentByAlias(r.from), ta = O.agentByAlias(r.to);
+      return `<button class="qrow ${r.id === sel ? "sel" : ""}" data-id="${O.esc(r.id)}">
+        <span class="flow">${O.avatar(r.from, fa ? fa.kind : "ai", "sm")}<span>${O.esc(r.from)}</span>
+          <span class="faint">${O.icon("arrow", "")}</span>
+          ${O.avatar(r.to, r.to === "human" ? "human" : (ta ? ta.kind : "ai"), "sm")}<span>${O.esc(partyLabel(r.to))}</span></span>
+        <span class="pv">${O.esc(O.trunc(r.payload, 84))}</span>
+        <span class="bot">${O.pill(escd ? "escalated" : r.status)}<span class="tag">${O.esc(r.type)}</span>
+          ${r.chain_depth ? '<span class="tag" style="color:var(--info)">↳ chain</span>' : ""}
+          <span class="prio ${r.priority<=20?'p-hi':r.priority<=40?'p-md':''}" style="margin-left:auto">P${O.esc(r.priority)}</span></span>
+      </button>`;
+    }).join("") : '<div class="none" style="margin:6px">No requests match this filter.</div>';
+    if (list.length > head.length) {   // count the window (head), not the appended deeplink row
+      html += `<button class="btn subtle" style="width:calc(100% - 12px);margin:8px 6px 4px" data-loadmore>Load more · ${head.length} of ${list.length}</button>`;
+    }
+    O.patch($("rlist"), html);
+    if (pendingScroll) {   // ISS-38: anchor the deeplinked/selected row (one-shot)
+      pendingScroll = false;
+      const row = $("rlist").querySelector(".qrow.sel");
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  /* ---------- request chain ---------- */
+  function chainView(r) {
+    const seq = [];
+    let cur = r;
+    while (cur && cur.in_service_of) { const p = reqs().find((x) => x.id === cur.in_service_of); if (!p) break; seq.unshift(p); cur = p; }
+    seq.push(r);
+    childrenOf(r.id).forEach((c) => seq.push(c));
+    if (seq.length < 2) return "";
+    let html = `<div class="field" style="margin-bottom:18px"><div class="lbl">${O.icon("link", "")}Request chain · in service of</div><div class="chain">`;
+    seq.forEach((x, i) => {
+      html += `<button class="clink ${x.id === r.id ? "cur" : ""}" data-id="${O.esc(x.id)}">
+        ${O.pill(isToHuman(x) && x.status === "open" ? "escalated" : x.status)}
+        <span class="cf"><span class="ttl">${O.esc(x.from)} → ${O.esc(partyLabel(x.to))}</span>
+          <span class="sub">${O.esc(O.trunc(x.payload, 70))}</span></span>
+        ${x.chain_depth ? `<span class="tag" style="color:var(--info)">depth ${O.esc(x.chain_depth)}</span>` : '<span class="tag">root</span>'}</button>`;
+      if (i < seq.length - 1) html += '<div class="rail"></div>';
+    });
+    return html + "</div></div>";
+  }
+
+  /* ---------- actions: conditional on the acting human's ROLE (real endpoint gating) ---------- */
+  function actionsFor(r) {
+    if (r.status === "closed" || r.status === "converted_to_task") {
+      const tl = r.task_link && r.task_link.task_id;
+      return `<div class="none" style="text-align:left;padding:14px">This request is ${O.esc(r.status.replace(/_/g, " "))}.
+        ${tl ? "Spawned " + O.taskLink(tl) : "No further action."}</div>`;
+    }
+    const h = O.actingHuman();
+    if (!h) return `<div class="none" style="text-align:left;padding:14px">Pick an acting human (top-right) to arbitrate this request.</div>`;
+    const isTarget = String(r.target_id) === String(h.id) || (r.to === "human");
+    const isRequester = String(r.requester_id) === String(h.id);
+    const btns = [];
+    if (isTarget && r.status === "open") btns.push(`<button class="btn approve" data-act="answer">${O.icon("check", "")}Answer</button>`);
+    if (isRequester && r.status === "answered") btns.push(`<button class="btn subtle" data-act="convert">${O.icon("convert", "")}Convert to task</button>`);
+    if (isRequester && (r.status === "open" || r.status === "answered")) btns.push(`<button class="btn subtle" data-act="escalate">${O.icon("flag", "")}Escalate to human</button>`);
+    btns.push(`<button class="btn ghost" data-act="close">Close</button>`);
+    let html = `<div class="wrap-g" id="reqacts" data-req="${O.esc(r.id)}">${btns.join("")}</div>
+      <div class="acting-note" style="margin-top:10px;color:var(--muted);font-size:11.5px">${O.avatar(h.alias, "human", "sm")}&nbsp;Arbitrating as ${O.esc(h.alias)} — answer (if it's yours), convert, escalate, or close. Every action is logged.</div>`;
+    if (answering && isTarget && r.status === "open") {
+      html += `<div style="margin-top:14px">
+        <textarea id="ansIn" class="ans-in" placeholder="Type your answer — ${O.esc(r.from)} sees it verbatim on the next wake."></textarea>
+        <div style="display:flex;gap:9px;margin-top:10px">
+          <button class="btn approve" data-act="send-answer">${O.icon("check", "")}Send answer</button>
+          <button class="btn subtle" data-act="cancel-answer">Cancel</button>
+        </div></div>`;
+    }
+    return html;
+  }
+
+  /* ---------- detail ---------- */
+  function renderDetail(force) {
+    const r = reqs().find((x) => x.id === sel);
+    if (!r) { O.patch($("detailMain"), '<div class="card pad"><div class="none">Request not found.</div></div>', force); return; }
+    const escd = isToHuman(r) && r.status === "open";
+    const fa = O.agentByAlias(r.from), ta = O.agentByAlias(r.to);
+
+    let html = `<div class="card pad" style="margin-bottom:18px">
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div class="flowbig">
+          <a class="node" href="/agents?agent=${encodeURIComponent(r.from)}" style="color:inherit">${O.avatar(r.from, fa ? fa.kind : "ai", "sm")}${O.esc(r.from)}</a>
+          <span class="arrow">${O.icon("arrow", "")}</span>
+          <a class="node" href="${r.to === "human" ? "#" : "/agents?agent=" + encodeURIComponent(r.to)}" style="color:inherit">${O.avatar(r.to, r.to === "human" ? "human" : (ta ? ta.kind : "ai"), "sm")}${O.esc(partyLabel(r.to))}</a>
+        </div>
+        ${O.pill(escd ? "escalated" : r.status, "lg")}
+      </div>
+      <div class="row" style="gap:10px;margin-top:14px;flex-wrap:wrap">
+        <span class="tag">${O.esc(r.type)} request</span>
+        <span class="prio ${r.priority<=20?'p-hi':r.priority<=40?'p-md':''}">Priority ${O.esc(r.priority)}</span>
+        <span class="muted" style="font-size:12.5px">· opened ${r.created_at ? O.relTime(r.created_at) : "—"}</span>
+        ${r.task_link && r.task_link.task_id ? `<span class="muted" style="font-size:12.5px">· in service of</span> ${O.taskLink(r.task_link.task_id)}` : ""}
+        ${escd ? `<span class="tag" style="color:var(--danger);margin-left:auto">${O.icon("flag", "")}escalated to you</span>` : ""}
+      </div>
+    </div>`;
+
+    html += chainView(r);
+
+    html += `<div class="card pad" style="margin-bottom:18px">
+      <div class="field" style="margin-bottom:18px"><div class="lbl">${O.icon("dot", "")}Payload</div><div class="payload">${O.linkify(r.payload)}</div></div>
+      ${r.response ? `<div class="field" style="margin-bottom:18px"><div class="lbl" style="color:var(--ok)">${O.icon("check", "")}Answer · from ${O.esc(partyLabel(r.to))}</div><div class="answer">${O.linkify(r.response)}</div></div>` : ""}
+      ${r.rejection_reason ? `<div class="field" style="margin-bottom:18px"><div class="lbl" style="color:var(--danger)">${O.icon("x", "")}Rejected — reason</div><div class="answer rej">${O.linkify(r.rejection_reason)}</div></div>` : ""}
+      <div class="field"><div class="lbl">${O.icon("shield", "")}Your move</div>${actionsFor(r)}</div>
+    </div>`;
+
+    // only (re)wire when patch actually replaced the DOM (see tasks.html note).
+    if (O.patch($("detailMain"), html, force)) wire(r);
+  }
+
+  /* ---------- wiring + real POSTs ---------- */
+  function postJSON(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  }
+  function wire(r) {
+    $("detailMain").querySelectorAll(".chain .clink[data-id]").forEach((c) => c.addEventListener("click", () => select(c.dataset.id)));
+    // ISS-79: the inline answer prompt's "Send answer"/"Cancel" buttons render as siblings
+    // OUTSIDE #reqacts, so a box-scoped query left them unwired — clicking Send was a no-op
+    // (no submit, no /respond call). Wire every data-act control in the detail pane instead.
+    const acts = $("detailMain").querySelectorAll("[data-act]");
+    if (!acts.length) return;
+    acts.forEach((b) => b.addEventListener("click", () => onAction(b.dataset.act, r)));
+    const ai = $("ansIn"); if (ai) ai.focus();
+  }
+  function onAction(act, r) {
+    const h = O.actingHuman();
+    if (!h) { O.toast("Pick an acting human (top-right) first.", "danger"); return; }
+    if (act === "answer") { answering = true; renderDetail(); return; }
+    if (act === "cancel-answer") {
+      // clear+blur the box so the ISS-53 dirty-input guard doesn't block the cancel repaint
+      const ai = $("ansIn"); if (ai) { ai.value = ""; ai.blur(); }
+      answering = false; renderDetail(); return;
+    }
+    if (act === "send-answer") {
+      const v = ($("ansIn").value || "").trim(); if (!v) return;
+      const ai = $("ansIn");
+      postJSON("/api/requests/" + encodeURIComponent(r.id) + "/respond", { responder_agent_id: h.id, response: v })
+        .then((res) => { O.toast(res.ok ? "Answer sent to " + r.from : "Failed (" + res.status + ")", res.ok ? "ok" : "danger");
+          // clear+blur the answer box so the dirty-input guard doesn't block the repaint
+          if (res.ok) { if (ai) { ai.value = ""; ai.blur(); } answering = false; renderList(); renderDetail(); } });
+      return;
+    }
+    if (act === "escalate") {
+      O.modal({ title: "Escalate to a human?", desc: "Re-targets this request to the human authority. Only the requester can escalate.",
+        primary: "Escalate", onPrimary: () => { O.closeModal();
+          postJSON("/api/requests/" + encodeURIComponent(r.id) + "/escalate", { requester_agent_id: h.id })
+            .then((res) => { O.toast(res.ok ? "Escalated to human" : "Failed (" + res.status + ")", res.ok ? "ok" : "danger"); if (res.ok) { renderList(); renderDetail(); } }); } });
+      return;
+    }
+    if (act === "convert") {
+      O.modal({ title: "Convert to a task", desc: "Spawn a tracked task from this answered request — assigned, with a definition of done.",
+        body: `<div class="field" style="margin-bottom:12px"><div class="lbl">Title</div><input id="ctT" class="ans-in" style="min-height:0" value="${O.esc("From request: " + O.trunc(r.payload, 48))}"></div>
+          <div class="field" style="margin-bottom:12px"><div class="lbl">Definition of done</div><textarea id="ctDod" class="ans-in" style="min-height:60px" placeholder="When is this task done?"></textarea></div>
+          <div class="field"><div class="lbl">Assign to</div><select id="ctA" class="ans-in" style="min-height:0">${(D().agents || []).filter((a) => a.kind === "ai").map((a) => `<option>${O.esc(a.alias)}</option>`).join("")}</select></div>`,
+        primary: "Create task", approve: true,
+        onPrimary: () => { const title = ($("ctT").value || "").trim(), dod = ($("ctDod").value || "").trim(), assignee = $("ctA").value;
+          if (!title || !dod) { O.toast("Title and definition of done are required.", "danger"); return; }
+          O.closeModal();
+          postJSON("/api/requests/" + encodeURIComponent(r.id) + "/convert-to-task", { requester_agent_id: h.id, title, definition_of_done: dod, assignee_alias: assignee })
+            .then((res) => { O.toast(res.ok ? "Task created from request" : "Failed (" + res.status + ")", res.ok ? "ok" : "danger"); if (res.ok) { renderList(); renderDetail(); } }); } });
+      return;
+    }
+    if (act === "close") {
+      O.modal({ title: "Close this request?", desc: "Marks it resolved. " + r.from + " sees it closed on the next sync. A reason is required if it isn't yours.",
+        body: `<textarea id="clR" class="ans-in" style="min-height:64px" placeholder="Reason (required when closing someone else's request)…"></textarea>`,
+        primary: "Close request", danger: true,
+        onPrimary: () => { const reason = ($("clR").value || "").trim(); O.closeModal();
+          postJSON("/api/requests/" + encodeURIComponent(r.id) + "/close", { requester_agent_id: h.id, reason: reason || undefined })
+            .then((res) => { O.toast(res.ok ? "Request closed" : (res.status === 422 ? "A reason is required to close another agent's request." : "Failed (" + res.status + ")"), res.ok ? "ok" : "danger"); if (res.ok) { renderList(); renderDetail(); } }); } });
+      return;
+    }
+  }
+
+  /* ---------- selection ---------- */
+  function select(id) {
+    if (id === sel) return;
+    sel = id; answering = false; pendingScroll = true;   // ISS-38: keep the picked row anchored in view
+    const u = new URL(location.href); u.searchParams.set("req", id); history.replaceState(null, "", u);
+    renderList(); renderDetail(true); window.scrollTo({ top: 0 });   // ISS-57: force the detail swap past the selection/input guard
+  }
+  $("rlist").addEventListener("click", (ev) => {
+    if (ev.target.closest(".sortctl")) return;   // ISS-331: handled by wireSortControl below
+    if (ev.target.closest("[data-loadmore]")) { reqsShown += REQS_PAGE; renderList(); return; }
+    const f = ev.target.closest("[data-f]"); if (f) { filter = f.dataset.f; reqsShown = REQS_PAGE; renderList(); return; }
+    const b = ev.target.closest("[data-id]"); if (b) select(b.dataset.id);
+  });
+  // ISS-331: re-sort on control change (single delegated binding on the stable list container)
+  O.wireSortControl($("rlist"), () => renderList());
+
+  /* ---------- boot ---------- */
+  function render() {
+    if (!D() || !D().container) return;
+    if (!sel || !reqs().some((r) => r.id === sel)) sel = firstSel();
+    O.mountShell("requests", { title: "Requests", ctx: reqs().length + " requests · " + D().container.name });
+    renderList(); renderDetail();
+  }
+  window.OrchaData.start(render, 3000);
+})();
+</script>
+</body>
+</html>

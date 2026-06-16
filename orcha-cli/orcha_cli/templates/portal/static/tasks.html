@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orcha · Tasks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/styles.css">
+<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<style>
+  /* task list (left, sticky) — gate / thread / reason styles come from the shared system */
+  .tlist-card { padding: 9px; }
+  .tlist-card .rh { padding: 9px 9px 4px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
+  .tgrp { padding: 11px 9px 3px 9px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--faint); display: flex; align-items: center; gap: 7px; }
+  .tgrp .ln { flex: 1; height: 1px; background: var(--border); }
+  .trow { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: 11px; cursor: pointer;
+    border: 1px solid transparent; transition: background .12s, border-color .12s; width: 100%; text-align: left;
+    background: transparent; font: inherit; color: inherit; }
+  .trow:hover { background: var(--hover); }
+  .trow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
+  .trow .grow { flex: 1; min-width: 0; }
+  .trow .tt { font-weight: 620; font-size: 13px; line-height: 1.3; }
+  .trow .tm { display: flex; align-items: center; gap: 7px; margin-top: 5px; }
+  .trow .tm .t2 { color: var(--faint); font-size: 11px; }
+  .thead h1 { font-size: 21px; font-weight: 740; letter-spacing: -.02em; line-height: 1.25; margin: 0; }
+  .reply-in { flex: 1; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 9px 12px; font: inherit; font-size: 13px; outline: none; }
+  .reply-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+  /* SPEC-4 protocol panel */
+  .proto { border: 1px solid var(--border); border-radius: 15px; background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 18px; }
+  .proto > .ph { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); cursor: pointer; flex-wrap: wrap; }
+  .proto.collapsed > .ph { border-bottom: 0; }
+  .proto > .ph .ttl { font-size: 14px; font-weight: 680; display: flex; align-items: center; gap: 8px; }
+  .proto > .ph .ttl svg { width: 15px; height: 15px; color: var(--accent); }
+  .proto > .ph .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .proto > .ph .grow { flex: 1; }
+  .proto > .ph .chev { transition: transform .15s; color: var(--muted); display: inline-flex; }
+  .proto.collapsed > .ph .chev { transform: rotate(-90deg); }
+  .pchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; white-space: nowrap;
+    padding: 3px 9px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); }
+  .pchip .lbl { color: var(--faint); font-weight: 650; }
+  .pchip.aut { color: var(--warn); border-color: var(--warn-line); background: var(--warn-soft); }
+  .proto .pb { padding: 6px 16px 16px; display: grid; gap: 2px; }
+  .proto.collapsed .pb { display: none; }
+  .prow { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); align-items: start; }
+  .prow:last-child { border-bottom: 0; }
+  .prow .k { color: var(--faint); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 650; padding-top: 2px; }
+  .prow .v { font-size: 13.5px; font-weight: 560; line-height: 1.5; }
+  .prow .v.notes { font-weight: 450; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+  .prow .v .arrowchain { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+  .proto.editing .prow .v { display: none; }
+  .prow .edit { display: none; }
+  .proto.editing .prow .edit { display: block; }
+  .prow input, .prow textarea { width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 8px 11px; font: inherit; font-size: 13px; outline: none; }
+  .prow input:focus, .prow textarea:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+  .prow textarea { min-height: 64px; resize: vertical; }
+  .proto .pf { display: none; justify-content: flex-end; gap: 10px; padding: 0 16px 16px; }
+  .proto.editing .pf { display: flex; }
+  .proto.editing .ph .editbtn { display: none; }
+  .empty-proto { color: var(--faint); font-size: 13px; padding: 14px 16px; }
+  /* #301: attachment composer (paperclip + drag-drop + staging tray) */
+  .reply-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .reply-wrap.dragover { outline: 2px dashed var(--accent-line); outline-offset: 3px; border-radius: 11px; }
+  .reply-row { display: flex; align-items: center; gap: 8px; }
+  .attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+    flex: 0 0 auto; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--muted); cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+  .attach-btn:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .attach-btn svg { width: 16px; height: 16px; }
+  .attach-tray { display: flex; flex-wrap: wrap; gap: 8px; }
+  .attach-tray:empty { display: none; }
+  .att-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 230px; padding: 5px 8px;
+    border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; }
+  .att-chip .thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: 0 0 auto;
+    background: var(--surface-3); }
+  .att-chip .ic { width: 28px; height: 28px; border-radius: 6px; flex: 0 0 auto; display: inline-flex;
+    align-items: center; justify-content: center; background: var(--surface-3); color: var(--muted); }
+  .att-chip .ic svg { width: 15px; height: 15px; }
+  .att-chip .meta { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .att-chip .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .att-chip .sz { color: var(--faint); font-size: 10.5px; }
+  .att-chip .rm { flex: 0 0 auto; cursor: pointer; color: var(--faint); border: 0; background: none; font-size: 15px;
+    line-height: 1; padding: 0 2px; }
+  .att-chip .rm:hover { color: var(--danger); }
+  .att-chip.uploading { opacity: .6; }
+  .att-chip.failed { border-color: var(--danger-line, var(--danger)); }
+  /* in-thread rendered attachments (read view) */
+  .msg-atts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+  .msg-atts .att-img { max-width: 200px; max-height: 150px; border-radius: 9px; border: 1px solid var(--border);
+    cursor: zoom-in; display: block; object-fit: cover; }
+  .msg-atts .att-file { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; color: var(--text); text-decoration: none; }
+  .msg-atts .att-file:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+  .msg-atts .att-file svg { width: 15px; height: 15px; color: var(--muted); flex: 0 0 auto; }
+  .msg-atts .att-file .sz { color: var(--faint); font-size: 10.5px; }
+  /* lightbox */
+  .att-lightbox { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.82); display: flex;
+    align-items: center; justify-content: center; padding: 32px; cursor: zoom-out; }
+  .att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="content">
+      <div class="split wide">
+        <aside class="card tlist-card stick" id="tlist"></aside>
+        <main>
+          <div id="detailMain"></div>
+          <div id="runsWrap"></div>
+        </main>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/data.js"></script>
+<script>
+(function () {
+  const O = window.Orcha;
+  const $ = (id) => document.getElementById(id);
+  const D = () => window.ORCHA;
+
+  let sel = new URLSearchParams(location.search).get("task") || null;
+  // ISS-68: per-task FULL-thread cache (the snapshot ships only a message_summary now). Keyed by
+  // task id so it survives the 3s repaint (mapSnapshot rebuilds task objects each poll). Refetched
+  // when the summary count outgrows the cached thread (a new message landed).
+  const threadCache = {};
+  const threadLoading = {};
+  // #301: attachment staging for the composer. Files upload immediately on pick/drop/paste; each
+  // staged entry holds its real server ref once done. Reset when the selected task changes. Survives
+  // no-op 3s repaints (O.patch only re-runs wire() on actual DOM change) and is re-rendered from this
+  // array inside wire() when the detail DOM IS rebuilt.
+  let staged = [];          // [{key, name, size, kind, status:'uploading'|'done'|'failed', ref?}]
+  let stagedTask = null;
+  let stagedSeq = 0;
+  function maybeLoadThread(t) {
+    const want = (t.message_summary && t.message_summary.count) || 0;
+    const have = (threadCache[t.id] || []).length;
+    if (threadLoading[t.id] || have >= want) return;   // nothing to load / already current
+    threadLoading[t.id] = true;
+    window.OrchaData.threadOf(t.id)
+      .then((thread) => { threadCache[t.id] = thread; threadLoading[t.id] = false; if (sel === t.id) renderDetail(); })
+      .catch(() => { threadLoading[t.id] = false; });
+  }
+  // optimistic one-shot: tasks acted on THIS session (plan decided / verified). Suppress the
+  // gate immediately so the 3s repaint can't double-submit before the snapshot reflects it.
+  // Pruned once the task leaves the actionable set (mirrors D2/ISS-41); plan_decision is the
+  // DURABLE gate so a decided plan stays a decided-note across reload.
+  const acted = new Set();
+  // SPEC-4 protocol panel: per-task UI state (collapse/edit/draft) keyed by task id. detailMain is
+  // patched as one unit on the 3s tick, so collapse/edit can't live only in CSS classes — they must
+  // be persisted here and baked into the rendered string each tick. `draft` holds the in-progress
+  // edit field values (captured on input) so a blurred mid-edit repaint doesn't lose typed text.
+  const protoUI = {};   // tid -> { collapsed:bool, editing:bool, draft:{review_chain,handoff_to,autonomy,notes}|null }
+  // ISS-68 PR-3: the list shows the top-N priority-ordered tasks + a "Load more" that reveals the
+  // next page. A client-side render cap over the (unbounded) snapshot — not a windowed fetch — so a
+  // deeplinked/selected task beyond the cap still renders in the detail pane (there's no single-task
+  // GET to back a windowed list). Sticky for the page lifetime; a fresh nav reloads at 10 (Kedar: ok).
+  let tasksShown = 10;
+  const TASKS_PAGE = 10;
+  let stopRuns = null, runsTask = null, runsSig = "", runsToken = 0;
+
+  const ORDER = { needs_verification: 0, in_progress: 1, ready: 2, blocked: 3, pending: 4, completed: 5, cancelled: 6, failed: 3 };
+  const GRP = [
+    { k: "needs_verification", label: "Needs verification" },
+    { k: "in_progress", label: "In progress" },
+    { k: "ready", label: "Ready" },
+    { k: "pending", label: "Pending (blocked on deps)" },
+    { k: "blocked", label: "Blocked" },
+    { k: "failed", label: "Failed" },
+    { k: "completed", label: "Done" },
+    { k: "cancelled", label: "Cancelled" },
+  ];
+
+  function planMsgOf(t) {  // ISS-68: prefer the snapshot's plan_message (thread-free); fall back to an expanded thread
+    if (t && t.plan_message) return { body: t.plan_message.body, from: t.plan_message.author_alias || null, at: t.plan_message.at, is_human: false };
+    const m = (t.thread || []).filter((x) => !x.is_human); return m.length ? m[0] : null;
+  }
+  function pendingPlan(t) { return t.status === "in_progress" && !t.plan_decision && !!planMsgOf(t); }
+  function firstSel() {
+    const ts = D().tasks || [];
+    return (ts.find((t) => t.status === "needs_verification") || ts.find((t) => pendingPlan(t)) || ts[0] || {}).id || null;
+  }
+  // ISS-37: deterministic order — status, then priority, then time. Without the time
+  // tiebreaker, same-status/same-priority tasks fell back to the snapshot's arbitrary
+  // array order (re-shuffled every 3s repaint → "order is random"). created_at is the one
+  // timestamp every task carries; newest-first so fresh work surfaces within a group.
+  function timeKey(t) { return Date.parse(t.created_at || "") || 0; }
+  // ISS-83: a task touched within ~12h (created, started, completed, or last-posted) floats to
+  // the TOP of its status group regardless of priority, then falls back to the priority/time sort.
+  // Slotted BELOW status so the status grouping stays intact (no task jumps groups).
+  function recencyBandOf(t) {
+    const last = t.message_summary && t.message_summary.last;
+    return O.recencyBand(t.created_at, t.started_at, t.completed_at, last && last.created_at);
+  }
+  // ISS-331: status grouping (ORDER) stays the OUTER key; the shared sort control (O.sortComparator)
+  // picks the within-group key (time|priority) + direction. The explicit choice supersedes the
+  // ISS-83 recency-band float (recencyBandOf retained for potential group-header copy).
+  const SORT_NAME = "tasks";
+  function sortAcc() { return { bucket: (t) => (ORDER[t.status] ?? 9), time: timeKey, prio: (t) => t.priority }; }
+  function sorted() {
+    return (D().tasks || []).slice().sort(O.sortComparator(SORT_NAME, sortAcc()));
+  }
+
+  /* ---------- task list ---------- */
+  function trowHtml(t) {
+    const who = t.assignee, a = O.agentByAlias(who);
+    return `<button class="trow ${t.id === sel ? "sel" : ""}" data-id="${O.esc(t.id)}">
+      ${O.glyph(O.statusClass(t.status))}
+      <span class="grow">
+        <span class="tt">${t.is_root ? '<span class="tag root" style="margin-right:5px">root</span>' : ""}${O.esc(t.title)}</span>
+        <span class="tm">${who ? O.avatar(who, a ? a.kind : "ai", "sm") : ""}<span class="t2">${O.esc(who || "unassigned")}</span>
+          <span class="prio ${t.priority<=20?'p-hi':t.priority<=40?'p-md':''}" style="margin-left:auto">P${O.esc(t.priority)}</span></span>
+      </span></button>`;
+  }
+  function renderList() {
+    const all = sorted();
+    // ISS-68 PR-3: cap to the top-N (priority order), then group THAT subset so the groups stay
+    // consistent with what's shown; "Load more" reveals the next page.
+    const ts = all.slice(0, tasksShown);
+    const grouped = new Set();
+    // New-Task affordance — human authority only (POST .../tasks resolves the acting human as
+    // created_by). Disabled (not hidden) with a hint when no human is the acting authority.
+    const canCreate = !!O.actingHuman();
+    let html = `<div class="rh"><span class="row" style="gap:7px;align-items:center">${O.icon("tasks", "")}Tasks · grouped by status</span><span class="grow" style="flex:1"></span>`
+      + `${O.sortControlHtml(SORT_NAME)}`
+      + `<button class="btn approve sm" data-newtask ${canCreate ? "" : "disabled"} title="${canCreate ? "Create a new task" : "Pick an acting human (top-right) to create tasks"}" style="letter-spacing:0;text-transform:none;margin-left:7px">${O.icon("plus", "")}New</button></div>`;
+    GRP.forEach((g) => {
+      const items = ts.filter((t) => t.status === g.k);
+      if (!items.length) return;
+      items.forEach((t) => grouped.add(t.id));
+      html += `<div class="tgrp"><span>${g.label}</span><span class="ln"></span><span>${items.length}</span></div>`;
+      html += items.map(trowHtml).join("");
+    });
+    // catch-all: any status not in GRP still shows (never silently drop a task)
+    const other = ts.filter((t) => !grouped.has(t.id));
+    if (other.length) {
+      html += `<div class="tgrp"><span>Other</span><span class="ln"></span><span>${other.length}</span></div>`;
+      html += other.map(trowHtml).join("");
+    }
+    if (all.length > ts.length) {
+      html += `<button class="btn subtle" style="width:calc(100% - 12px);margin:10px 6px 4px" data-loadmore>Load more · ${ts.length} of ${all.length}</button>`;
+    }
+    O.patch($("tlist"), html);
+  }
+
+  /* ---------- detail (snapshot sections, re-rendered every tick) ---------- */
+  function renderDetail(force) {
+    const t = (D().tasks || []).find((x) => x.id === sel);
+    if (!t) { O.patch($("detailMain"), '<div class="card pad"><div class="none">Task not found.</div></div>', force); return; }
+    const who = t.assignee, a = O.agentByAlias(who);
+
+    let html = `<div class="card pad thead" style="margin-bottom:18px">
+      <div class="row" style="align-items:flex-start;gap:13px">
+        <div class="grow">
+          <h1>${t.is_root ? '<span class="tag root" style="margin-right:8px;vertical-align:middle">root</span>' : ""}${O.esc(t.title)}</h1>
+          <div class="row" style="gap:10px;margin-top:10px;flex-wrap:wrap">
+            ${O.pill(t.status, "lg")}
+            <span class="prio ${t.priority<=20?'p-hi':t.priority<=40?'p-md':''}">Priority ${O.esc(t.priority)}</span>
+            <span class="muted" style="font-size:12.5px">·</span>
+            <span class="muted" style="font-size:12.5px">assignee</span> ${who ? O.agentLink(who) : "—"}
+          </div>
+        </div>
+      </div>
+      ${t.description ? `<div class="field" style="margin-top:16px;padding-top:15px;border-top:1px solid var(--border)"><div class="lbl">Description</div><div class="tx">${O.esc(t.description)}</div></div>` : ""}
+      <div class="field" style="margin-top:14px"><div class="lbl">Definition of done</div><div class="dod">${O.esc(t.definition_of_done || "—")}</div></div>
+      ${t.result ? `<div class="field" style="margin-top:14px"><div class="lbl">Result</div><div class="tx">${O.linkify(t.result)}</div></div>` : ""}
+    </div>`;
+
+    /* the human-authority gate — plan-approval (B10) OR verify (Epic B), never a dead-end */
+    html += gateSurface(t);
+
+    /* SPEC-4 — per-task hand-off protocol, directly under the gate / above Assignment:
+       what's the decision (gate) -> what are the rules (protocol) -> who's on it (assignment) */
+    html += protocolSurface(t);
+
+    /* collaboration thread + reply — ISS-68: the snapshot only carries a message_summary now,
+       so the FULL thread is lazy-fetched on select (threadCache) and rendered when it lands. */
+    maybeLoadThread(t);
+    const msgs = threadCache[t.id] || [];
+    const summaryCount = (t.message_summary && t.message_summary.count) || 0;
+    const loading = !!threadLoading[t.id] && !msgs.length;
+    const count = msgs.length || summaryCount;
+    html += `<div class="card" style="margin-bottom:18px">
+      <div class="card-h"><h3>Thread</h3><span class="count">${count ? "(" + count + ")" : ""}</span>
+        <span class="grow"></span><span class="muted" style="font-size:11.5px">append-only · agents + you</span></div>
+      <div class="card-b" style="padding:16px 18px">
+        ${msgs.length ? `<div class="thread">${msgs.map(msgRow).join("")}</div>`
+          : (loading ? '<div class="none">Loading thread…</div>'
+                     : (summaryCount ? '<div class="none">Loading thread…</div>' : '<div class="none">No messages yet.</div>'))}
+        <div id="replyWrap" class="reply-wrap" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <div class="reply-row">
+            ${humanAvatar()}
+            <button type="button" class="attach-btn" id="attachBtn" title="Attach files (or drag-drop / paste)" aria-label="Attach files">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <input id="attachInput" type="file" multiple accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.log,.json" style="display:none">
+            <input id="reply" class="reply-in" placeholder="Add a comment… (drag, paste or attach files)">
+            <button class="btn subtle" id="replyBtn" data-task="${O.esc(t.id)}">Post</button>
+          </div>
+          <div id="attachTray" class="attach-tray"></div>
+        </div>
+      </div></div>`;
+
+    /* O4 — human authority to (re)assign + wake an agent on this task (Forge B5) */
+    html += assignSurface(t);
+
+    /* B7 — human authority to force-close a non-root, non-terminal task */
+    if (!t.is_root && t.status !== "completed" && t.status !== "cancelled") {
+      html += `<div class="card" style="margin-bottom:18px"><div class="card-h"><h3>Close task</h3>
+        <span class="grow"></span><span class="muted" style="font-size:11.5px">human authority</span></div>
+        <div class="card-b" style="padding:14px 16px" id="cancelWrap" data-task="${O.esc(t.id)}">
+          <p class="muted" style="font-size:12.5px;margin:0 0 11px">Force-close this task and unblock anything waiting on it. A reason is recorded and routed to ${O.esc(who || "the assignee")}.</p>
+          <textarea id="cancelReason" class="reply-in" style="width:100%;min-height:60px;resize:vertical" placeholder="Reason (recommended)…"></textarea>
+          <div style="margin-top:10px"><button class="btn danger" data-act="cancel">${O.icon("x","")}Close task…</button></div>
+        </div></div>`;
+    }
+
+    // only (re)wire when patch actually replaced the DOM — a deferred/unchanged repaint
+    // keeps the existing nodes + listeners, so re-wiring would stack duplicate handlers.
+    if (O.patch($("detailMain"), html, force)) wire(t);
+  }
+
+  /* ---------- gate (plan-approval + verify), gated on plan_decision (ISS-41) ---------- */
+  function gateSurface(t) {
+    // decided plan -> quiet decided-note, never a live re-approve, suppressed across reload
+    if (t.status === "in_progress" && t.plan_decision) {
+      const pd = t.plan_decision, ok = pd.decision === "approve";
+      return `<div class="card pad" style="margin-bottom:18px;border-color:var(--border)">
+        <div class="row" style="gap:11px"><span style="color:var(--${ok?'ok':'danger'})">${O.icon(ok?'check':'x','')}</span>
+          <div class="grow"><div style="font-weight:680;font-size:14px">Plan ${ok ? "approved" : "rejected"}</div>
+            <div class="muted" style="font-size:12.5px;margin-top:2px">${ok ? "" : ""}${pd.actor ? "by " + O.esc(pd.actor) : ""}${pd.at ? " · " + O.relTime(pd.at) : ""}${pd.reason ? " — " + O.esc(O.trunc(pd.reason, 140)) : ""}</div></div>
+        </div></div>`;
+    }
+    if (acted.has(t.id)) return "";   // optimistic: just acted this session, snapshot catching up
+    const isPlan = pendingPlan(t);
+    const isVerify = t.status === "needs_verification";
+    if (!isPlan && !isVerify) return "";
+    const pm = isPlan ? planMsgOf(t) : null;
+    const disabled = O.actingHuman() ? "" : "disabled";
+    return `<div class="gate" id="gate-${O.esc(t.id)}" data-task="${O.esc(t.id)}" data-kind="${isPlan ? "plan" : "verify"}" data-author="${O.esc(isPlan && O.agentByAlias(pm.from) ? O.agentByAlias(pm.from).id : "")}" style="margin-bottom:18px">
+      <div class="gh"><span class="badge">${O.icon(isPlan ? "shield" : "check", "")}${isPlan ? "Plan awaiting your approval" : "Awaiting verification"}</span>
+        <span class="grow"></span>
+        <span class="acting-note">${humanAvatar()}${actorName() ? "acting as " + O.esc(actorName()) + " · " : ""}logged to the audit trail</span></div>
+      <div class="gb">
+        <div class="field"><div class="lbl">${O.icon("dot", "")}${isPlan ? "Proposed plan — full text" : "Result claimed by " + O.esc(who(t))}</div>
+          <div class="tx" style="white-space:pre-wrap;max-height:300px;overflow-y:auto">${O.linkify(isPlan ? (pm.body || "") : (t.result || "—"))}</div></div>
+        <div class="field" style="margin-top:14px"><div class="lbl">${O.icon("check", "")}Definition of done</div>
+          <div class="dod">${O.esc(t.definition_of_done || "—")}</div></div>
+        <div class="actions">
+          <button class="btn approve" data-act="approve" ${disabled}>${O.icon("check", "")}${isPlan ? "Approve plan" : "Accept"}</button>
+          <button class="btn ghost" data-act="reject" ${disabled}>${isPlan ? "Request changes…" : "Reject…"}</button>
+          <span class="acting-note">${isPlan ? "Approving lets " + O.esc(who(t)) + " execute." : "Rejecting returns the task to " + O.esc(who(t)) + "."}</span>
+        </div>
+        <div class="reason" id="reason-${O.esc(t.id)}">
+          <textarea id="rt-${O.esc(t.id)}" placeholder="Why are you ${isPlan ? "requesting changes" : "rejecting"}? Required — ${O.esc(who(t))} sees this verbatim on the next wake."></textarea>
+          <div class="hint">${O.icon("flag", "")} A typed reason is required to ${isPlan ? "reject the plan" : "reject"}.</div>
+          <div style="display:flex;gap:9px;margin-top:11px">
+            <button class="btn danger" data-act="confirm-reject" id="cr-${O.esc(t.id)}" disabled>Submit ${isPlan ? "rejection" : "rejection"}</button>
+            <button class="btn subtle" data-act="cancel-reject">Cancel</button>
+          </div>
+        </div>
+      </div></div>`;
+  }
+  function who(t) { return t.assignee || "the assignee"; }
+
+  /* ---------- SPEC-4 protocol panel — collapsible hand-off rules on the task itself ----------
+     Reads `t.protocol` (Ledger: tasks.protocol JSONB {review_chain,handoff_to,autonomy,notes},
+     all optional free-text; null when unset). [Edit] is human-authority only -> PATCH
+     /api/tasks/{tid}/protocol (partial merge, echoes the full merged protocol). */
+  function protoEmpty(p) { return !p || (!p.review_chain && !p.handoff_to && !p.autonomy && !p.notes); }
+  function protocolSurface(t) {
+    const st = protoUI[t.id] || (protoUI[t.id] = { collapsed: false, editing: false, draft: null });
+    const p = t.protocol || {};
+    const canEdit = !!O.actingHuman();
+    // EMPTY + not editing: container-defaults note; "Set protocol" only for the acting human.
+    if (protoEmpty(t.protocol) && !st.editing) {
+      return `<div class="proto" id="proto-${O.esc(t.id)}" data-task="${O.esc(t.id)}">
+        <div class="ph"><span class="ttl">${O.icon("shield", "")}Protocol</span><span class="grow"></span>
+          ${canEdit ? `<button class="btn ghost sm" data-pact="set">Set protocol</button>` : ""}</div>
+        <div class="empty-proto">No protocol set — using container defaults.</div></div>`;
+    }
+    const d = st.editing ? (st.draft || {}) : p;
+    const chips = (!st.editing && (p.handoff_to || p.autonomy)) ? `<div class="chips">
+        ${p.handoff_to ? `<span class="pchip"><span class="lbl">hand-off</span>${O.esc(p.handoff_to)}</span>` : ""}
+        ${p.autonomy ? `<span class="pchip aut">${O.esc(O.trunc(String(p.autonomy).split(" · ")[0], 28))}</span>` : ""}
+      </div>` : "";
+    const cls = "proto" + (st.collapsed && !st.editing ? " collapsed" : "") + (st.editing ? " editing" : "");
+    const row = (label, key, isNotes) => {
+      const display = key === "review_chain"
+        ? `<span class="arrowchain">${O.esc(p.review_chain || "—")}</span>`
+        : key === "handoff_to"
+          ? `${O.esc(p.handoff_to || "—")}${p.handoff_to ? ` <span class="muted" style="font-weight:450">— return here first</span>` : ""}`
+          : key === "notes"
+            ? O.linkify(p.notes || "—")
+            : O.esc(p[key] || "—");
+      const input = isNotes
+        ? `<textarea data-pfield="${key}">${O.esc(d[key] || "")}</textarea>`
+        : `<input data-pfield="${key}" value="${O.esc(d[key] || "")}">`;
+      return `<div class="prow"><span class="k">${label}</span>
+        <span class="v${isNotes ? " notes" : ""}">${display}</span>
+        <div class="edit">${input}</div></div>`;
+    };
+    return `<div class="${cls}" id="proto-${O.esc(t.id)}" data-task="${O.esc(t.id)}">
+      <div class="ph">
+        <span class="ttl">${O.icon("shield", "")}Protocol</span>
+        ${chips}
+        <span class="grow"></span>
+        ${canEdit ? `<button class="btn ghost sm editbtn" data-pact="edit">Edit</button>` : ""}
+        <span class="chev" data-pact="toggle">${O.icon("chev", "")}</span>
+      </div>
+      <div class="pb">
+        ${row("Review chain", "review_chain", false)}
+        ${row("Hand-off to", "handoff_to", false)}
+        ${row("Autonomy", "autonomy", false)}
+        ${row("Notes", "notes", true)}
+      </div>
+      <div class="pf"><button class="btn ghost sm" data-pact="cancel">Cancel</button><button class="btn sm approve" data-pact="save">Save protocol</button></div>
+    </div>`;
+  }
+
+  /* O4 — assign-from-detail + wake (Forge B5: POST /api/tasks/{tid}/assign). Shown only when
+     the task is assignable; B5 refuses root + finished tasks (409), so we hide it there. */
+  function assignSurface(t) {
+    const TERMINAL = ["completed", "needs_verification", "cancelled"];
+    if (t.is_root || TERMINAL.indexOf(t.status) >= 0) return "";
+    const ais = (D().agents || []).filter((x) => x.kind === "ai");
+    if (!ais.length) return "";
+    const cur = t.assignee;
+    const opts = ais.map((x) => `<option value="${O.esc(x.id)}"${x.alias === cur ? " selected" : ""}>${O.esc(x.alias)}${x.alias === cur ? " (current)" : ""}</option>`).join("");
+    return `<div class="card" style="margin-bottom:18px" id="assignWrap" data-task="${O.esc(t.id)}">
+      <div class="card-h"><h3>Assignment</h3><span class="grow"></span><span class="muted" style="font-size:11.5px">human authority · wakes the agent</span></div>
+      <div class="card-b" style="padding:14px 16px">
+        <p class="muted" style="font-size:12.5px;margin:0 0 11px">Assign this task to an agent and wake them to start.${cur ? " Reassigning releases " + O.esc(cur) + "." : ""}</p>
+        <div class="row" style="gap:9px;align-items:center;flex-wrap:wrap">
+          <select id="assignSel" class="reply-in" style="max-width:260px">${opts}</select>
+          <button class="btn approve" data-act="assign">${O.icon("arrow", "")}Assign &amp; wake</button>
+        </div>
+      </div></div>`;
+  }
+
+  // #301: human-readable byte size for chips/file rows.
+  function fmtSize(n) {
+    n = +n || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+  const FILE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+  // #301: render a message's attachments (read view). Images → inline thumbnail (click = lightbox);
+  // everything else → a download chip. esc() the name; the url is a same-origin /api path.
+  function attRow(a) {
+    const url = O.esc(a.url || "");
+    const nm = O.esc(a.name || a.id || "file");
+    if (a.kind === "image") {
+      return `<img class="att-img" src="${url}" alt="${nm}" title="${nm}" loading="lazy" data-lightbox="${url}">`;
+    }
+    return `<a class="att-file" href="${url}" target="_blank" rel="noopener" download>${FILE_ICON}
+      <span>${nm}</span><span class="sz">${fmtSize(a.size)}</span></a>`;
+  }
+
+  function msgRow(m) {
+    const sys = !m.from || m.from === "system";
+    const a = O.agentByAlias(m.from);
+    const atts = (m.attachments || []).length
+      ? `<div class="msg-atts">${m.attachments.map(attRow).join("")}</div>` : "";
+    return `<div class="msg ${m.is_human ? "human" : sys ? "system" : ""}">
+      ${sys ? '<span class="av sm" style="background:var(--surface-3);color:var(--muted)">›</span>' : O.avatar(m.from, a ? a.kind : "ai", "sm")}
+      <div class="body">
+        <div class="mh"><span class="nm">${sys ? "system" : O.esc(m.from)}</span>
+          ${a && !sys ? O.kindBadge(a.kind) : ""}<span class="when">${m.at ? O.relTime(m.at) : ""}</span></div>
+        <div class="bubble">${O.linkify(m.body)}</div>
+        ${atts}
+      </div></div>`;
+  }
+
+  /* ---------- acting human helpers ---------- */
+  function actor() { return O.actingHuman(); }
+  function actorName() { const h = actor(); return h ? h.alias : ""; }
+  function humanAvatar() { const h = actor(); return h ? O.avatar(h.alias, "human", "sm") : ""; }
+  function actorOrWarn() { const h = actor(); if (!h) O.toast("Pick an acting human (top-right) first.", "danger"); return h; }
+
+  /* ---------- wiring + real POSTs ---------- */
+  function postJSON(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  }
+  function patchJSON(url, body) {
+    return fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  }
+  // O4: confirm + POST the assignment. Copy matches Forge's B5 reassign policy — a plain
+  // assign when free, a release-and-reassign confirm when someone else is already on it.
+  function doAssign(t) {
+    const h = actorOrWarn(); if (!h) return;
+    const sel = $("assignSel"); if (!sel || !sel.value) return;
+    const agentId = sel.value;
+    const ai = (D().agents || []).find((x) => x.id === agentId);
+    const alias = ai ? ai.alias : "the agent";
+    // The /assign endpoint is the AUTHORITY on assignment state — B5 handles the
+    // same-assignee case idempotently, races, AND multiple prior active assignees. We do
+    // NOT pre-decide from the snapshot's single display alias (t.assignee = assignees[0],
+    // possibly stale): just confirm intent, POST reassign=false, and let a 409 drive the
+    // reassign flow (review P2). Never short-circuit the request client-side.
+    O.modal({
+      title: "Assign task?",
+      desc: "Assign to " + alias + "? This wakes them to start the task.",
+      primary: "Assign & wake", approve: true,
+      onPrimary: () => { O.closeModal(); postAssign(t, h.id, agentId, alias, false); },
+    });
+  }
+  function postAssign(t, actorId, agentId, alias, reassign) {
+    postJSON("/api/tasks/" + encodeURIComponent(t.id) + "/assign", { actor_agent_id: actorId, agent_id: agentId, reassign: reassign })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, d })).catch(() => ({ ok: r.ok, status: r.status, d: {} })))
+      .then(({ ok, status, d }) => {
+        if (ok) {
+          const nm = d.alias || alias;
+          let msg = d.woke ? "Woke " + nm + " to start the task"
+                  : d.status === "pending" ? "Assigned to " + nm + " — starts when dependencies clear"
+                  : "Assigned to " + nm;
+          if (d.released_prior && d.released_prior.length) msg += " · previous assignee released";
+          O.toast(msg, "ok");
+          renderList(); renderDetail();
+          return;
+        }
+        // race: client thought it was free but B5 sees a different active assignee -> offer reassign
+        if (status === 409 && !reassign && /different active assignee/i.test(d.detail || "")) {
+          O.modal({ title: "Reassign task?", desc: "This task already has a different active assignee. Reassign to " + alias + "? They'll be released.",
+            primary: "Reassign & wake", approve: true, onPrimary: () => { O.closeModal(); postAssign(t, actorId, agentId, alias, true); } });
+          return;
+        }
+        O.toast("Assign failed (" + status + ")" + (d.detail ? ": " + d.detail : ""), "danger");
+      });
+  }
+
+  /* ---------- create-task (human authority) — POST /api/containers/{cid}/tasks ----------
+     The enabler so a human can create+assign from the portal (then test assign->wake).
+     created_by resolves the acting human server-side via created_by_agent_id. */
+  function openNewTaskModal() {
+    const h = actorOrWarn(); if (!h) return;
+    const cid = D().container && D().container.id;
+    if (!cid) { O.toast("No container loaded.", "danger"); return; }
+    const ais = (D().agents || []).filter((x) => x.kind === "ai");
+    const aOpts = `<option value="">— Unassigned —</option>`
+      + ais.map((x) => `<option value="${O.esc(x.alias)}">${O.esc(x.alias)}</option>`).join("");
+    // depends_on: optional multi-select of NON-terminal tasks (a finished task as a blocker is
+    // meaningless; the server validates UUIDs but we keep the list scoped + readable).
+    const TERMINAL = ["completed", "cancelled"];
+    const deps = (D().tasks || []).filter((t) => TERMINAL.indexOf(t.status) < 0);
+    const dOpts = deps.map((t) => `<option value="${O.esc(t.id)}">${O.esc(O.trunc(t.title, 70))}</option>`).join("");
+    const body = `
+      <div class="field"><div class="lbl">${O.icon("dot", "")}Title <span style="color:var(--danger)">*</span></div>
+        <input id="nt_title" class="reply-in" style="width:100%" placeholder="Short, action-oriented title" maxlength="200"></div>
+      <div class="field" style="margin-top:12px"><div class="lbl">Description</div>
+        <textarea id="nt_desc" class="reply-in" style="width:100%;min-height:64px;resize:vertical" placeholder="Optional — context, links, scope"></textarea></div>
+      <div class="field" style="margin-top:12px"><div class="lbl">${O.icon("check", "")}Definition of done <span style="color:var(--danger)">*</span></div>
+        <textarea id="nt_dod" class="reply-in" style="width:100%;min-height:64px;resize:vertical" placeholder="What must be true for this task to be considered complete"></textarea></div>
+      <div class="row" style="gap:12px;margin-top:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 120px"><div class="lbl">Priority</div>
+          <input id="nt_pri" class="reply-in" type="number" value="100" min="1" style="width:100%" title="Lower = higher priority"></div>
+        <div class="field" style="flex:1;min-width:180px"><div class="lbl">Assignee</div>
+          <select id="nt_assignee" class="reply-in" style="width:100%">${aOpts}</select></div>
+      </div>
+      ${dOpts ? `<div class="field" style="margin-top:12px"><div class="lbl">Depends on <span class="muted" style="font-weight:450;text-transform:none;letter-spacing:0">— optional; ⌘/Ctrl-click to multi-select</span></div>
+        <select id="nt_deps" class="reply-in" multiple size="4" style="width:100%">${dOpts}</select></div>` : ""}
+      <div class="hint" id="nt_err" style="display:none;color:var(--danger);font-size:12px;margin-top:10px"></div>`;
+    O.modal({
+      title: "New task",
+      desc: "Created by " + h.alias + " (you) and logged to the audit trail.",
+      body,
+      primary: "Create task", approve: true,
+      onOpen: (ov) => { const ti = ov.querySelector("#nt_title"); if (ti) ti.focus(); },
+      onPrimary: (ov) => submitNewTask(ov, cid, h.id),
+    });
+  }
+
+  function submitNewTask(ov, cid, humanId) {
+    const val = (id) => { const el = ov.querySelector(id); return el ? el.value.trim() : ""; };
+    const title = val("#nt_title"), dod = val("#nt_dod");
+    const err = ov.querySelector("#nt_err");
+    const fail = (m) => { if (err) { err.textContent = m; err.style.display = "block"; } };
+    if (!title) return fail("Title is required.");
+    if (!dod) return fail("Definition of done is required.");
+    let priority = parseInt(val("#nt_pri"), 10); if (!Number.isFinite(priority)) priority = 100;
+    const assignee_alias = (ov.querySelector("#nt_assignee") || {}).value || null;
+    const depsEl = ov.querySelector("#nt_deps");
+    const depends_on = depsEl ? Array.from(depsEl.selectedOptions).map((o) => o.value) : [];
+    const btn = ov.querySelector("#__mp"); if (btn) { btn.disabled = true; btn.textContent = "Creating…"; }
+    postJSON("/api/containers/" + encodeURIComponent(cid) + "/tasks", {
+      title, description: val("#nt_desc") || null, definition_of_done: dod,
+      priority, created_by_agent_id: humanId,
+      assignee_alias: assignee_alias || undefined, depends_on,
+    })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, d })).catch(() => ({ ok: r.ok, status: r.status, d: {} })))
+      .then(({ ok, status, d }) => {
+        if (ok) {
+          O.closeModal();
+          const where = d.status === "pending" ? " — starts when dependencies clear"
+            : d.assignee_alias ? " · assigned to " + d.assignee_alias : "";
+          O.toast("Task created" + where, "ok");
+          // Don't repaint now — the new task isn't in the local snapshot yet, so renderDetail()
+          // would flash "Task not found". Set sel; the 3s poll's render() picks it up (the task
+          // now exists server-side, so render()'s validity check preserves this selection).
+          if (d.task_id) sel = d.task_id;
+          return;
+        }
+        if (btn) { btn.disabled = false; btn.textContent = "Create task"; }
+        fail("Create failed (" + status + ")" + (d.detail ? ": " + (typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail)) : ""));
+      })
+      .catch(() => { if (btn) { btn.disabled = false; btn.textContent = "Create task"; } fail("Create failed — network error."); });
+  }
+
+  /* ---------- #301: attachment staging tray ---------- */
+  const ACCEPT_EXT = ["png","jpg","jpeg","gif","webp","pdf","txt","md","csv","log","json"];
+  const IMG_EXT = ["png","jpg","jpeg","gif","webp"];
+  const extOf = (n) => (String(n||"").split(".").pop() || "").toLowerCase();
+  function renderTray() {
+    const tray = $("attachTray"); if (!tray) return;
+    tray.innerHTML = staged.map((s) => {
+      const cls = s.status === "uploading" ? " uploading" : s.status === "failed" ? " failed" : "";
+      const thumb = (s.status === "done" && s.ref && s.ref.kind === "image")
+        ? `<img class="thumb" src="${O.esc(s.ref.url)}" alt="">`
+        : `<span class="ic">${FILE_ICON}</span>`;
+      const sub = s.status === "uploading" ? "uploading…" : s.status === "failed" ? "failed" : fmtSize(s.size);
+      return `<span class="att-chip${cls}">${thumb}<span class="meta">
+        <span class="nm">${O.esc(s.name)}</span><span class="sz">${sub}</span></span>
+        <button type="button" class="rm" data-rm="${s.key}" title="Remove">×</button></span>`;
+    }).join("");
+    tray.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => {
+      staged = staged.filter((s) => String(s.key) !== b.getAttribute("data-rm")); renderTray();
+    }));
+  }
+  function uploadFiles(tid, files) {
+    Array.from(files || []).forEach((f) => {
+      if (!ACCEPT_EXT.includes(extOf(f.name))) { O.toast("Unsupported file type: " + f.name, "danger"); return; }
+      const key = ++stagedSeq;
+      const entry = { key, name: f.name, size: f.size, kind: IMG_EXT.includes(extOf(f.name)) ? "image" : "file", status: "uploading" };
+      staged.push(entry); renderTray();
+      const fd = new FormData(); fd.append("file", f, f.name);
+      fetch("/api/tasks/" + encodeURIComponent(tid) + "/attachments", { method: "POST", body: fd })
+        .then((r) => r.ok ? r.json() : r.json().then((d) => Promise.reject(d.detail || ("HTTP " + r.status))))
+        .then((ref) => { entry.status = "done"; entry.ref = ref; entry.size = ref.size; entry.kind = ref.kind; renderTray(); })
+        .catch((err) => { entry.status = "failed"; renderTray(); O.toast("Upload failed: " + (err || f.name), "danger"); });
+    });
+  }
+  function wireAttach(t) {
+    const btn = $("attachBtn"), fin = $("attachInput"), wrap = $("replyWrap"), inp = $("reply");
+    if (btn && fin) {
+      btn.addEventListener("click", () => fin.click());
+      fin.addEventListener("change", () => { uploadFiles(t.id, fin.files); fin.value = ""; });
+    }
+    if (wrap) {
+      ["dragenter","dragover"].forEach((e) => wrap.addEventListener(e, (ev) => { ev.preventDefault(); wrap.classList.add("dragover"); }));
+      ["dragleave","drop"].forEach((e) => wrap.addEventListener(e, (ev) => { ev.preventDefault(); if (e !== "dragleave" || ev.target === wrap) wrap.classList.remove("dragover"); }));
+      wrap.addEventListener("drop", (ev) => { if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length) uploadFiles(t.id, ev.dataTransfer.files); });
+    }
+    if (inp) inp.addEventListener("paste", (ev) => {
+      const items = ev.clipboardData && ev.clipboardData.files;
+      if (items && items.length) { uploadFiles(t.id, items); }   // pasted image/file → stage (don't block text paste)
+    });
+    renderTray();
+  }
+
+  function wire(t) {
+    // #301: reset the staging tray when the selected task changes (a fresh composer).
+    if (stagedTask !== t.id) { staged = []; stagedTask = t.id; }
+    wireAttach(t);
+    const rb = $("replyBtn");
+    if (rb) rb.addEventListener("click", () => {
+      const inp = $("reply"), v = (inp.value || "").trim();
+      const done = staged.filter((s) => s.status === "done");
+      const pending = staged.some((s) => s.status === "uploading");
+      if (pending) { O.toast("Wait for uploads to finish", "danger"); return; }
+      if (!v && !done.length) return;   // #301: allow attachment-only posts
+      // #271: ATTRIBUTE the human comment with the acting human's id. The server no longer
+      // treats a NULL author as human (that was the spoof hole) — it derives is_human from
+      // agents.kind, so an unattributed post now renders as a neutral 'system' message. A human
+      // (kind='human') is a container member, so the id passes the membership guard and renders
+      // correctly as human. Require an acting human first (parity with the other actions).
+      const h = actorOrWarn(); if (!h) return;
+      const atts = done.map((s) => ({ id: s.ref.id, name: s.ref.name }));
+      postJSON("/api/tasks/" + encodeURIComponent(t.id) + "/messages",
+               { body: v, author_agent_id: h.id, attachments: atts.length ? atts : undefined })
+        .then((r) => { O.toast(r.ok ? "Comment posted" : "Failed (" + r.status + ")", r.ok ? "ok" : "danger");
+          if (r.ok) { inp.value = ""; inp.blur(); staged = []; renderTray(); renderDetail(); } });
+    });
+    const gate = $("gate-" + t.id);
+    if (gate) wireGate(gate, t);
+    wireProtocol(t);
+    const aw = $("assignWrap");
+    if (aw) aw.querySelector('[data-act="assign"]').addEventListener("click", () => doAssign(t));
+    const cw = $("cancelWrap");
+    if (cw) cw.querySelector('[data-act="cancel"]').addEventListener("click", () => {
+      const h = actorOrWarn(); if (!h) return;
+      const reason = ($("cancelReason").value || "").trim();
+      O.modal({ title: "Close this task?", desc: "Force-closes the task and unblocks anything waiting on it. Logged with your identity.",
+        primary: "Close task", approve: false, onPrimary: () => {
+          O.closeModal();
+          postJSON("/api/tasks/" + encodeURIComponent(t.id) + "/cancel", { actor_agent_id: h.id, reason: reason || undefined })
+            .then((r) => { O.toast(r.ok ? "Task closed" : "Failed (" + r.status + ")", r.ok ? "ok" : "danger");
+              if (r.ok) { const cr = $("cancelReason"); if (cr) { cr.value = ""; cr.blur(); } acted.add(t.id); renderList(); renderDetail(); } });
+        } });
+    });
+  }
+  function wireGate(gate, t) {
+    const kind = gate.dataset.kind, authorId = gate.dataset.author;
+    const ta = $("rt-" + t.id), cr = $("cr-" + t.id), reasonBox = $("reason-" + t.id);
+    if (ta) ta.addEventListener("input", () => { cr.disabled = !ta.value.trim(); });
+    gate.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
+      const act = b.dataset.act;
+      if (act === "approve") {
+        const h = actorOrWarn(); if (!h) return;
+        // ISS-59: a plan approval may carry an OPTIONAL answer/guidance to the agent (decision
+        // `reason` → its next wake + the task thread via ISS-48). Verify-complete stays a plain confirm.
+        O.modal({
+          title: kind === "plan" ? "Approve this plan?" : "Accept this task?",
+          desc: kind === "plan" ? who(t) + " will be cleared to execute. Optionally answer/guide below — it's sent with the approval." : "Marks the task completed and unblocks anything waiting on it. Logged with your identity.",
+          primary: kind === "plan" ? "Approve plan" : "Accept", approve: true,
+          body: kind === "plan" ? '<textarea id="ans-' + O.esc(t.id) + '" class="ans-in" style="min-height:64px" placeholder="Answer / additional info for the agent (optional)"></textarea>' : undefined,
+          onPrimary: () => { const el = kind === "plan" ? document.getElementById("ans-" + t.id) : null; O.closeModal(); submit(true, el ? (el.value || "") : ""); },
+        });
+      } else if (act === "reject") {
+        reasonBox.classList.add("show"); if (ta) ta.focus();
+      } else if (act === "cancel-reject") {
+        reasonBox.classList.remove("show"); if (ta) { ta.value = ""; cr.disabled = true; }
+      } else if (act === "confirm-reject") {
+        const reason = (ta.value || "").trim(); if (!reason) return;
+        submit(false, reason);
+      }
+    }));
+    function submit(approve, reason) {
+      const h = actorOrWarn(); if (!h) return;
+      const done = (r) => { O.toast(r.ok ? (kind === "plan" ? (approve ? "Plan approved" : "Changes requested") : (approve ? "Accepted · completed" : "Rejected — returned"))
+                                        : "Failed (" + r.status + ")", r.ok ? "ok" : "danger");
+        // clear+blur the reason field so the dirty-input guard doesn't block the repaint
+        if (r.ok) { if (ta) { ta.value = ""; ta.blur(); } acted.add(t.id); renderList(); renderDetail(); } };
+      if (kind === "plan") {
+        postJSON("/api/decisions", { subject_type: "plan_approval", subject_id: t.id, decision: approve ? "approve" : "reject",
+          reason: reason || undefined, actor_agent_id: h.id, target_agent_id: authorId || undefined }).then(done);
+      } else {
+        postJSON("/api/tasks/" + encodeURIComponent(t.id) + "/verify", { approve, actor_agent_id: h.id, feedback: approve ? undefined : reason }).then(done);
+      }
+    }
+  }
+
+  /* SPEC-4 — wire the protocol panel: collapse on header, edit/set/cancel/save, draft capture. */
+  function wireProtocol(t) {
+    const box = $("proto-" + t.id);
+    if (!box) return;
+    const st = protoUI[t.id] || (protoUI[t.id] = { collapsed: false, editing: false, draft: null });
+    const ph = box.querySelector(".ph");
+    if (ph) ph.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;   // buttons handle their own action
+      if (st.editing) return;                    // header is inert while editing
+      st.collapsed = !st.collapsed; renderDetail(true);
+    });
+    box.querySelectorAll("[data-pact]").forEach((b) => {
+      const act = b.dataset.pact;
+      if (act === "toggle") return;              // chev collapse handled by the header click
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (act === "edit" || act === "set") {
+          const h = actorOrWarn(); if (!h) return;
+          const p = t.protocol || {};
+          st.draft = { review_chain: p.review_chain || "", handoff_to: p.handoff_to || "", autonomy: p.autonomy || "", notes: p.notes || "" };
+          st.editing = true; st.collapsed = false; renderDetail(true);
+        } else if (act === "cancel") {
+          st.editing = false; st.draft = null; renderDetail(true);
+        } else if (act === "save") {
+          saveProtocol(t);
+        }
+      });
+    });
+    // keep the draft in sync with typed input so a blurred mid-edit repaint doesn't lose text
+    box.querySelectorAll("[data-pfield]").forEach((el) => el.addEventListener("input", () => {
+      if (!st.draft) st.draft = {};
+      st.draft[el.dataset.pfield] = el.value;
+    }));
+  }
+  function saveProtocol(t) {
+    const h = actorOrWarn(); if (!h) return;
+    const st = protoUI[t.id]; if (!st) return;
+    const box = $("proto-" + t.id);
+    const get = (k) => { const el = box && box.querySelector('[data-pfield="' + k + '"]'); return el ? el.value : ((st.draft || {})[k] || ""); };
+    // PARTIAL merge (Ledger contract): send all four; omitted keys would preserve, "" clears a key.
+    const body = { actor_agent_id: h.id, review_chain: get("review_chain"), handoff_to: get("handoff_to"), autonomy: get("autonomy"), notes: get("notes") };
+    const saveBtn = box && box.querySelector('[data-pact="save"]');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+    patchJSON("/api/tasks/" + encodeURIComponent(t.id) + "/protocol", body)
+      .then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, d })).catch(() => ({ ok: r.ok, status: r.status, d: {} })))
+      .then(({ ok, status, d }) => {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save protocol"; }
+        if (ok) {
+          st.editing = false; st.draft = null;
+          // 200 echoes {task_id, protocol:{full merged}} — stamp it locally so the panel re-renders
+          // immediately; the next snapshot poll confirms it via data.js.
+          if (d && d.protocol) { const lt = (D().tasks || []).find((x) => x.id === t.id); if (lt) lt.protocol = d.protocol; }
+          O.toast("Protocol saved", "ok");
+          renderDetail(true);
+          return;
+        }
+        O.toast("Save failed (" + status + ")" + (d.detail ? ": " + (typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail)) : ""), "danger");
+      })
+      .catch(() => { if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save protocol"; } O.toast("Save failed — network error.", "danger"); });
+  }
+
+  /* ---------- worker runs (live feed) — shared engine, fetched per task ---------- */
+  function renderRuns(force) {
+    const t = (D().tasks || []).find((x) => x.id === sel);
+    if (!t) { $("runsWrap").innerHTML = ""; return; }
+    const myToken = ++runsToken;
+    fetch("/api/tasks/" + encodeURIComponent(t.id) + "/runs").then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d) => {
+        if (myToken !== runsToken || sel !== t.id) return;
+        const runs = Array.isArray(d) ? d : (d.runs || []);
+        const sig = runs.map((x) => (x.run_id || x.id) + ":" + x.status).join("|");
+        if (!force && t.id === runsTask && sig === runsSig) return;
+        runsTask = t.id; runsSig = sig;
+        if (stopRuns) { stopRuns(); stopRuns = null; }
+        const live = runs.some((x) => x.status === "running");
+        $("runsWrap").innerHTML = `<div class="card">
+          <div class="card-h"><h3>Runs &amp; diffs</h3><span class="grow"></span>
+            ${live ? '<span class="live accent"><span class="d"></span>live</span>' : '<span class="muted" style="font-size:11.5px">'+runs.length+' run'+(runs.length===1?"":"s")+'</span>'}</div>
+          <div class="card-b" style="padding:13px 14px">
+            ${runs.length ? runs.map((r) => O.runCard(r)).join("") : '<div class="none">No runs yet — appears when a worker wakes for this task.</div>'}
+          </div></div>`;
+        stopRuns = O.activateRuns(runs);
+      })
+      .catch(() => { if (myToken === runsToken && t.id !== runsTask) { runsTask = t.id; runsSig = "";
+        $("runsWrap").innerHTML = '<div class="card"><div class="card-h"><h3>Runs &amp; diffs</h3></div><div class="card-b" style="padding:14px"><div class="none">Run feed unavailable.</div></div></div>'; } });
+  }
+
+  /* ---------- selection ---------- */
+  function select(id) {
+    if (id === sel) return;
+    sel = id;
+    const u = new URL(location.href); u.searchParams.set("task", id); history.replaceState(null, "", u);
+    if (stopRuns) { stopRuns(); stopRuns = null; }
+    runsTask = null; runsSig = "";
+    renderList(); renderDetail(true); renderRuns(true);   // ISS-57: force the detail swap past the selection/input guard
+    window.scrollTo({ top: 0 });
+  }
+  $("tlist").addEventListener("click", (ev) => {
+    if (ev.target.closest(".sortctl")) return;   // ISS-331: handled by wireSortControl below
+    if (ev.target.closest("[data-newtask]")) { openNewTaskModal(); return; }
+    if (ev.target.closest("[data-loadmore]")) { tasksShown += TASKS_PAGE; renderList(); return; }
+    const b = ev.target.closest("[data-id]"); if (b) select(b.dataset.id);
+  });
+  // ISS-331: re-sort on control change (single delegated binding on the stable list container)
+  O.wireSortControl($("tlist"), () => renderList());
+
+  /* #301: image lightbox — delegated click (bound once). An in-thread image thumbnail opens a
+     full-size overlay; click anywhere (or Esc) closes it. */
+  document.addEventListener("click", (ev) => {
+    const img = ev.target.closest("[data-lightbox]"); if (!img) return;
+    const url = img.getAttribute("data-lightbox"); if (!url) return;
+    const box = document.createElement("div"); box.className = "att-lightbox";
+    box.innerHTML = `<img src="${O.esc(url)}" alt="">`;
+    const close = () => box.remove();
+    box.addEventListener("click", close);
+    document.addEventListener("keydown", function onKey(e) { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } });
+    document.body.appendChild(box);
+  });
+
+  /* ---------- boot ---------- */
+  function render() {
+    if (!D() || !D().container) return;
+    if (!sel || !(D().tasks || []).some((t) => t.id === sel)) sel = firstSel();
+    O.mountShell("tasks", { title: "Tasks", ctx: (D().tasks || []).length + " tasks · " + D().container.name });
+    renderList(); renderDetail();
+    if (sel) renderRuns(false);
+  }
+  window.OrchaData.start(render, 3000);
+})();
+</script>
+</body>
+</html>

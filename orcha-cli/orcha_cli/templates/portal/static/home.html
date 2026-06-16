@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orcha · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/styles.css">
+<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<style>
+  /* dashboard-specific layout */
+  .dash-grid { display: grid; grid-template-columns: minmax(0,1fr) 372px; gap: 18px; align-items: start; }
+  @media (max-width: 1080px) { .dash-grid { grid-template-columns: 1fr; } }
+
+  .ctxbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 18px; margin-bottom: 22px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm); }
+  .ctxbar .nm { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .ctxbar .desc { color: var(--muted); font-size: 12.5px; max-width: 60ch; }
+  .ctxbar .sep { width: 1px; height: 26px; background: var(--border); }
+  .ctxbar .stat { display: flex; flex-direction: column; gap: 1px; }
+  .ctxbar .stat .n { font-size: 16px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1; }
+  .ctxbar .stat .l { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+
+  /* first-run get-started CTA (empty workspace — no AI agents) */
+  .onb-cta { display: flex; align-items: center; gap: 16px; padding: 18px 20px; margin-bottom: 22px; border-radius: 15px;
+    background: linear-gradient(180deg, var(--accent-soft), transparent); border: 1px solid var(--accent-line); box-shadow: var(--shadow-sm); }
+  .onb-cta .oic { width: 46px; height: 46px; border-radius: 13px; flex: none; display: grid; place-items: center;
+    background: var(--accent); color: var(--accent-ink); }
+  .onb-cta .oic svg { width: 23px; height: 23px; }
+  .onb-cta .body { flex: 1; min-width: 0; }
+  .onb-cta .t1 { font-size: 16px; font-weight: 740; letter-spacing: -.01em; }
+  .onb-cta .t2 { color: var(--muted); font-size: 13px; margin-top: 3px; line-height: 1.5; }
+
+  /* action queue */
+  .hero-h { display: flex; align-items: center; gap: 11px; margin: 2px 2px 14px; }
+  .hero-h .t { font-size: 18px; font-weight: 720; letter-spacing: -.02em; }
+  .hero-h .badge { background: var(--warn); color: #1c1304; font-weight: 800; font-size: 12px; border-radius: 999px;
+    min-width: 22px; height: 22px; padding: 0 7px; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+  .hero-h .sub { color: var(--muted); font-size: 13px; }
+
+  .aq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; margin-bottom: 30px; }
+  .aq-empty { color: var(--muted); font-size: 13px; padding: 14px 2px; }
+  .aq { display: flex; flex-direction: column; gap: 11px; padding: 16px 17px; border-radius: 15px;
+    background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm); position: relative; overflow: hidden; }
+  .aq::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  .aq.plan::before { background: var(--amber); }
+  .aq.verify::before { background: var(--warn); }
+  .aq.esc::before { background: var(--danger); }
+  .aq .type { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 750;
+    letter-spacing: .05em; text-transform: uppercase; }
+  .aq.plan .type { color: var(--amber); } .aq.verify .type { color: var(--warn); } .aq.esc .type { color: var(--danger); }
+  .aq .type svg { width: 14px; height: 14px; }
+  .aq .ttl { font-size: 15px; font-weight: 680; line-height: 1.3; letter-spacing: -.01em; }
+  .aq .who { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+  .aq .ctx { color: var(--text-2); font-size: 12.5px; line-height: 1.5; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+  .aq .ctx .lbl { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 650; display: block; margin-bottom: 3px; }
+  .aq .acts { display: flex; gap: 8px; margin-top: auto; padding-top: 3px; flex-wrap: wrap; }
+
+  /* kanban */
+  .kanban { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 13px; }
+  @media (max-width: 1180px) { .kanban { grid-template-columns: repeat(2, 1fr); } }
+  .kcol { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; }
+  .kcol .kh { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
+  .kcol .kh .ct { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+  .kcol .kb { padding: 9px; display: flex; flex-direction: column; gap: 8px; min-height: 50px; max-height: 460px; overflow: auto; }
+  .kcard { display: flex; flex-direction: column; gap: 8px; padding: 11px 12px; border-radius: 11px; background: var(--surface-2);
+    border: 1px solid var(--border); cursor: pointer; transition: border-color .12s, transform .06s; }
+  .kcard:hover { border-color: var(--accent-line); transform: translateY(-1px); }
+  .kcard .kt { font-size: 12.5px; font-weight: 620; line-height: 1.35; }
+  .kcard .kf { display: flex; align-items: center; gap: 8px; }
+  .kcard .kf .prio { margin-left: auto; }
+
+  /* activity */
+  .act-list { display: flex; flex-direction: column; max-height: 540px; overflow: auto; }
+  .act { display: flex; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--border); align-items: flex-start; }
+  .act:last-child { border-bottom: 0; }
+  .act .body { flex: 1; min-width: 0; }
+  .act .top { display: flex; align-items: center; gap: 7px; }
+  .act .nm { font-size: 12.5px; font-weight: 650; }
+  .act .when { margin-left: auto; color: var(--faint); font-size: 11px; white-space: nowrap; }
+  .act .ty { font-size: 9.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 5px; }
+  .act .txt { font-size: 12.5px; color: var(--text-2); margin-top: 2px; line-height: 1.45; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="content">
+
+      <div class="ctxbar" id="ctxbar"></div>
+
+      <div id="onbCta"></div>
+
+      <section id="needs">
+        <div class="hero-h">
+          <span class="t">Needs your attention</span>
+          <span class="badge tnum" id="aqBadge">0</span>
+          <span class="sub">Plans to approve and tasks to verify — one click from acting. Nothing ships on an agent's say-so.</span>
+        </div>
+        <div class="aq-grid" id="aqGrid"></div>
+      </section>
+
+      <div class="dash-grid">
+        <div class="card">
+          <div class="card-h">
+            <h2>Agents at a glance</h2><span class="count" id="agCount"></span>
+            <span class="grow"></span>
+            <a class="seeall" href="/onboarding?new=1">+ New agent</a>
+            <a class="seeall" href="/agents" style="margin-left:12px">All agents ↗</a>
+          </div>
+          <div class="card-b flush" style="overflow-x:auto">
+            <table class="tbl" id="agTbl"></table>
+          </div>
+        </div>
+
+        <div class="card stick">
+          <div class="card-h">
+            <h2>Live activity</h2>
+            <span class="grow"></span>
+            <span class="live accent"><span class="d"></span>live</span>
+          </div>
+          <div class="card-b"><div class="act-list" id="actList"></div></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Tasks by status</h2><span class="ln"></span>
+        <a class="seeall" href="/tasks">Open tasks ↗</a></div>
+      <div class="kanban" id="kanban"></div>
+
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/data.js"></script>
+<script>
+(function () {
+  const O = window.Orcha;
+  const $ = (id) => document.getElementById(id);
+  const D = () => window.ORCHA;
+  // P2: tasks acted on THIS session (plan approved/rejected, or verified). Suppress
+  // their action-queue cards immediately so the 3s repaint can't re-submit before the
+  // snapshot reflects the decision (mirrors B10's one-shot per-task cache). This set
+  // ONLY bridges the post-decision → snapshot-catches-up window: renderQueue() prunes
+  // an id the moment the task leaves the actionable set, so a later reject→rework cycle
+  // that returns the SAME id to needs_verification is NOT hidden forever (review P2:173).
+  // To re-decide a plan intentionally, use the full B10 gate on the Tasks page.
+  const d2Acted = new Set();
+
+  /* ---- context strip ---- */
+  function renderCtx() {
+    const c = D().container; if (!c) return;
+    const openReq = O.requests().filter((r) => r.status === "open").length;
+    O.patch($("ctxbar"), `
+      <div style="display:flex;align-items:center;gap:11px">${O.pill(c.status === "active" ? "working" : c.status, "lg")}</div>
+      <div class="sep"></div>
+      <div style="min-width:0">
+        <div class="nm">${O.esc(c.name)}</div>
+        <div class="desc">${O.esc(c.description || "—")}</div>
+      </div>
+      <div class="grow"></div>
+      <div class="stat"><span class="n">${O.agents().length}</span><span class="l">Agents</span></div>
+      <div class="sep"></div>
+      <div class="stat"><span class="n">${O.tasks().length}</span><span class="l">Tasks</span></div>
+      <div class="sep"></div>
+      <div class="stat"><span class="n">${openReq}</span><span class="l">Open req</span></div>
+      <div class="sep"></div>
+      <div class="stat"><span class="n" style="color:${c.wakes_enabled === false ? "var(--danger)" : "var(--ok)"}">${c.wakes_enabled === false ? "Paused" : "Running"}</span><span class="l">Autonomy</span></div>`);
+  }
+
+  /* ---- first-run CTA: surface "Get started" when there are no AI agents yet
+     (the human authority is registered, but no AI teammate exists). Links to the
+     /onboarding wizard. Hidden the moment an AI agent exists — never breaks the
+     populated dashboard. ---- */
+  function renderOnbCta() {
+    const noAi = O.agents().filter((a) => a.kind !== "human").length === 0;
+    O.patch($("onbCta"), noAi ? `<div class="onb-cta">
+      <span class="oic">${O.icon("spark", "")}</span>
+      <div class="body">
+        <div class="t1">Get started — set up your workspace</div>
+        <div class="t2">No AI agents yet. Create your first agent (or capture tasks) in the guided first-run flow.</div>
+      </div>
+      <a class="btn" href="/onboarding">${O.icon("arrow", "")}Get started</a>
+    </div>` : "");
+  }
+
+  /* ---- action queue (THE hero): plans to approve + tasks to verify + escalations ---- */
+  function planText(t) {  // ISS-68: thread-free via plan_message; thread fallback if expanded
+    if (t.plan_message) return t.plan_message.body || "";
+    const m = (t.thread || []).filter((x) => !x.is_human);
+    return m.length ? m[0].body : "";
+  }
+  function planAuthor(t) {
+    if (t.plan_message) return t.plan_message.author_alias || (t.assignees || [])[0];
+    const m = (t.thread || []).filter((x) => !x.is_human);
+    return m.length ? (m[0].from || (t.assignees || [])[0]) : (t.assignees || [])[0];
+  }
+  function renderQueue() {
+    const aq = O.attnItems();
+    // Prune suppression: drop any acted id the snapshot no longer shows as actionable
+    // (its decision/status has landed). Keeps the suppression scoped to the stale window,
+    // never permanent — so a reworked task returning to the queue reappears (review P2:173).
+    const actionable = new Set([...aq.plans, ...aq.verifs].map((t) => t.id));
+    for (const id of [...d2Acted]) if (!actionable.has(id)) d2Acted.delete(id);
+    const plans = aq.plans.filter((t) => !d2Acted.has(t.id));
+    const verifs = aq.verifs.filter((t) => !d2Acted.has(t.id));
+    $("aqBadge").textContent = plans.length + verifs.length + aq.escs.length;
+    const cards = [];
+    plans.forEach((t) => {
+      const who = planAuthor(t), a = O.agentByAlias(who) || {};
+      // P1: show the FULL plan body in the scrollable .ctx — a human must review the
+      // whole proposal before approving (B10 invariant), not a 600-char summary.
+      cards.push(`<div class="aq plan">
+        <span class="type">${O.icon("shield", "")}Plan approval</span>
+        <div class="ttl">${O.esc(t.title)}</div>
+        <div class="who">${O.agentLink(who)}<span>·</span><span class="tag model">${O.esc(a.model || "—")}</span></div>
+        <div class="ctx"><span class="lbl">Proposed plan — full text</span>${O.linkify(planText(t))}</div>
+        <div class="acts" data-kind="plan" data-task="${O.esc(t.id)}" data-author="${O.esc((O.agentByAlias(who) || {}).id || "")}">
+          <button class="btn sm approve" data-act="approve">${O.icon("shield", "")}Approve plan</button>
+          <button class="btn sm danger" data-act="reject">Reject…</button>
+          <a class="btn sm ghost" href="/tasks?task=${encodeURIComponent(t.id)}">Open task</a>
+        </div></div>`);
+    });
+    verifs.forEach((t) => {
+      const who = (t.assignees || [])[0], a = O.agentByAlias(who) || {};
+      cards.push(`<div class="aq verify">
+        <span class="type">${O.icon("check", "")}Verify task</span>
+        <div class="ttl">${O.esc(t.title)}</div>
+        <div class="who">${who ? O.agentLink(who) : "—"}<span>·</span><span class="tag model">${O.esc(a.model || "—")}</span><span>·</span><span>${O.relTime(t.started_at)}</span></div>
+        <div class="ctx"><span class="lbl">Definition of done</span>${O.esc(t.definition_of_done || "—")}</div>
+        <div class="acts" data-kind="verify" data-task="${O.esc(t.id)}">
+          <button class="btn sm approve" data-act="approve">${O.icon("check", "")}Accept</button>
+          <button class="btn sm danger" data-act="reject">Reject…</button>
+          <a class="btn sm ghost" href="/tasks?task=${encodeURIComponent(t.id)}">Open task</a>
+        </div></div>`);
+    });
+    aq.escs.forEach((r) => {
+      cards.push(`<div class="aq esc">
+        <span class="type">${O.icon("flag", "")}Escalation</span>
+        <div class="ttl">${O.esc(O.trunc(r.payload || "", 96))}</div>
+        <div class="who">${O.agentLink(r.from)}<span>${O.icon("arrow", "")}</span><span>you</span><span>·</span><span>${O.relTime(r.created_at)}</span></div>
+        <div class="ctx"><span class="lbl">Blocks</span>${r.task_link ? O.esc(r.task_link.title || "—") : "—"}</div>
+        <div class="acts">
+          <a class="btn sm" href="/requests?req=${encodeURIComponent(r.id)}">${O.icon("arrow", "")}Resolve</a>
+          <a class="btn sm ghost" href="/requests?req=${encodeURIComponent(r.id)}">Open request</a>
+        </div></div>`);
+    });
+    O.patch($("aqGrid"), cards.length ? cards.join("") : '<div class="aq-empty">✓ Nothing needs you right now.</div>');
+  }
+
+  // inline approve/reject (delegated — survives the 3s patch). Reuses the B0 decision
+  // contract for plans and the verify endpoint for tasks; both require the acting human.
+  async function postJSON(url, body) {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let j = null; try { j = await r.json(); } catch (e) {}
+    return { ok: r.ok, status: r.status, body: j };
+  }
+  function actorOrWarn() {
+    const h = O.actingHuman();
+    if (!h) { O.toast("Pick who you are (top-right) first.", "danger"); return null; }
+    return h;
+  }
+  function doPlan(taskId, authorId, approve) {
+    const h = actorOrWarn(); if (!h) return;
+    const send = (reason) => postJSON("/api/decisions", {
+      subject_type: "plan_approval", subject_id: taskId, decision: approve ? "approve" : "reject",
+      reason: reason || undefined, actor_agent_id: h.id, target_agent_id: authorId || undefined,
+    }).then((res) => {
+      O.toast(res.ok ? (approve ? "Plan approved — routed to the agent." : "Plan rejected — reason sent.")
+                     : "Failed (" + res.status + ")", res.ok ? "ok" : "danger");
+      if (res.ok) { d2Acted.add(taskId); renderQueue(); }   // P2: suppress this card now
+    });
+    if (approve) {
+      // ISS-59: approving may carry an OPTIONAL answer/guidance that reaches the agent — the
+      // decision `reason` is routed to its next wake + posted to the task thread (ISS-48).
+      O.modal({ title: "Approve plan", desc: "Optionally answer the agent's questions or add guidance — it's sent to the agent with the approval.", primary: "Approve plan", approve: true,
+        body: '<textarea id="ans" class="ta" placeholder="Answer / additional info for the agent (optional)"></textarea>',
+        onPrimary: () => { const v = (document.getElementById("ans") || {}).value || ""; send(v).then(O.closeModal); } });
+      return;
+    }
+    O.modal({ title: "Reject plan", desc: "Your reason routes to the agent.", primary: "Confirm reject", danger: true,
+      body: '<textarea id="rzn" class="ta" placeholder="Why are you rejecting? (required)"></textarea>',
+      onPrimary: () => { const v = (document.getElementById("rzn") || {}).value || "";
+        if (!v.trim()) { O.toast("A reason is required to reject.", "danger"); return; }
+        send(v).then(O.closeModal); } });
+  }
+  function doVerify(taskId, approve) {
+    const h = actorOrWarn(); if (!h) return;
+    const send = (feedback) => postJSON("/api/tasks/" + encodeURIComponent(taskId) + "/verify", {
+      approve, actor_agent_id: h.id, feedback: approve ? undefined : (feedback || ""),
+    }).then((res) => {
+      O.toast(res.ok ? (approve ? "Accepted — task completed." : "Rejected — sent back with feedback.")
+                     : "Failed (" + res.status + ")", res.ok ? "ok" : "danger");
+      if (res.ok) { d2Acted.add(taskId); renderQueue(); }   // P2: suppress this card now
+    });
+    if (approve) return send();
+    O.modal({ title: "Reject task", desc: "Feedback is posted to the task and pushed to the agent.", primary: "Confirm reject", danger: true,
+      body: '<textarea id="rzn" class="ta" placeholder="What needs fixing? (required)"></textarea>',
+      onPrimary: () => { const v = (document.getElementById("rzn") || {}).value || "";
+        if (!v.trim()) { O.toast("A reason is required to reject.", "danger"); return; }
+        send(v).then(O.closeModal); } });
+  }
+  $("aqGrid").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-act]"); if (!b) return;
+    const acts = b.closest(".acts"); if (!acts) return;
+    const approve = b.getAttribute("data-act") === "approve";
+    if (acts.getAttribute("data-kind") === "plan") doPlan(acts.getAttribute("data-task"), acts.getAttribute("data-author"), approve);
+    else doVerify(acts.getAttribute("data-task"), approve);
+  });
+
+  /* ---- agents at a glance ---- */
+  // #340: friendly, plain-language label for a live worker run that carries no 'working'
+  // task row (conversation turn / inbox drain). Keyed on wake_event; humanizes any
+  // unmapped event so a new wake reason still reads as words, not a raw enum.
+  const RUN_LABELS = {
+    conversation_turn: "In conversation", request_answered: "Handling a reply",
+    request_created: "Handling a request", request_closed: "Wrapping up a request",
+    task_message: "On a task thread", checkpoint_respawn: "Checking in",
+    auto_wake: "Auto-wake check", task_request_accepted: "Picked up a task",
+    task_verified: "Verifying a task", live_terminal: "Live terminal",
+    task_assigned: "Starting a task", decision_made: "Acting on a decision", prompt: "Working",
+  };
+  function runLabel(ar) {
+    if (!ar) return null;
+    if (ar.has_conversation) return RUN_LABELS.conversation_turn;
+    return RUN_LABELS[ar.wake_event] || (ar.wake_event ? ar.wake_event.replace(/_/g, " ") : "Working");
+  }
+  // #340 (scope sharpened, Kedar live-test): the Activity label is DRIVEN by the agent's LIVE
+  // worker run, NOT the persistent task-claim. current_task is an agent_tasks 'working' row
+  // cleared only on /orcha-done, so it diverges from live reality (a stale claim would show its
+  // task while the agent is actually answering a request / running a checkpoint, and a task-less
+  // conversation/drain run would show blank). So: a live run wins — its worked task's title when
+  // it IS a task, else a plain-language wake-event label; fall back to the persistent assigned
+  // task ONLY when no run is live; else em-dash. Returns {text, isTask} | null.
+  function activity(a) {
+    const ar = a.active_run;
+    if (ar) {
+      if (ar.task_id) {
+        const title = ar.task_title || (a.current_task && a.current_task.title) || "On a task";
+        return { text: O.trunc(title, 32), isTask: true };
+      }
+      return { text: runLabel(ar), isTask: false };
+    }
+    const ct = a.current_task;
+    if (ct && ct.task_id) return { text: O.trunc(ct.title || "", 32), isTask: true };
+    return null;
+  }
+  function renderAgents() {
+    const ags = O.agents();
+    $("agCount").textContent = `(${ags.length})`;
+    O.patch($("agTbl"), `<thead><tr>
+      <th>Agent</th><th>Status</th><th>Activity</th><th>Model</th><th>Wake</th><th>Active</th></tr></thead>
+      <tbody>${ags.map((a) => {
+        const act = activity(a);
+        return `<tr class="clickable" onclick="location.href='/agents?agent=${encodeURIComponent(a.alias)}'">
+          <td><div class="row">${O.avatar(a.alias, a.kind)}<div><div class="t1">${O.esc(a.alias)}</div><div class="t2">${O.esc(a.role || "—")}</div></div></div></td>
+          <td>${O.pill(a.status)}</td>
+          <td>${act ? (act.isTask
+                  ? `<span class="t1" style="font-weight:550;font-size:12.5px">${O.esc(act.text)}</span>`
+                  : `<span class="t2" style="font-style:italic">${O.esc(act.text)}</span>`)
+                : '<span class="t2">—</span>'}</td>
+          <td>${a.model ? `<span class="tag model">${O.esc(a.model)}</span>` : '<span class="t2">—</span>'}</td>
+          <td>${a.kind === "human" ? '<span class="t2">—</span>' : (a.wake_enabled ? '<span class="tag wake-on">on</span>' : '<span class="tag wake-off">off</span>')}</td>
+          <td class="t2 num">${O.relTime(a.last_active)}</td>
+        </tr>`;
+      }).join("")}</tbody>`);
+  }
+
+  /* ---- live activity (snapshot-derived: recent thread posts + request responses).
+     /api/containers/{cid}/events is an SSE of escalations only, not a feed — so we
+     synthesize from the data we already poll, friendly timestamps, newest first. ---- */
+  const TYC = { post: "var(--text)", decision: "var(--amber)", request: "var(--info)", answer: "var(--ok)" };
+  const TYBG = { post: "var(--surface-2)", decision: "var(--warn-soft)", request: "var(--info-soft)", answer: "var(--ok-soft)" };
+  function activityEvents() {
+    const out = [];
+    // ISS-68: the snapshot no longer ships full threads — synthesize task activity from each
+    // task's message_summary.last (the most recent post per task), which is all a top-14
+    // newest-first feed needs anyway. Falls back to an expanded thread if one is present.
+    O.tasks().forEach((t) => {
+      const thread = t.thread || [];
+      if (thread.length) {
+        thread.forEach((m) => out.push({
+          who: m.is_human ? "human" : (m.from || "—"), kind: m.is_human ? "decision" : "post",
+          text: O.trunc(m.body || "", 120), at: m.at, link: "/tasks?task=" + encodeURIComponent(t.id),
+        }));
+        return;
+      }
+      const last = t.message_summary && t.message_summary.last;
+      if (last) out.push({
+        who: last.is_human ? "human" : (last.author_alias || "—"), kind: last.is_human ? "decision" : "post",
+        text: O.trunc(last.body || "", 120), at: last.created_at, link: "/tasks?task=" + encodeURIComponent(t.id),
+      });
+    });
+    O.requests().forEach((r) => {
+      out.push({ who: r.from, kind: "request", text: O.trunc(r.payload || "", 110), at: r.created_at, link: "/requests?req=" + encodeURIComponent(r.id) });
+      if (r.responded_at) out.push({ who: r.to, kind: "answer", text: O.trunc(r.response || "", 110), at: r.responded_at, link: "/requests?req=" + encodeURIComponent(r.id) });
+    });
+    return out.filter((e) => e.at).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 14);
+  }
+  function renderActivity() {
+    const evs = activityEvents();
+    O.patch($("actList"), evs.length ? evs.map((e) => {
+      const a = O.agentByAlias(e.who);
+      return `<a class="act" href="${e.link}" style="color:inherit">
+        ${O.avatar(e.who, a ? a.kind : "human", "sm")}
+        <div class="body">
+          <div class="top"><span class="nm">${O.esc(e.who)}</span>
+            <span class="ty" style="color:${TYC[e.kind]};background:${TYBG[e.kind]}">${O.esc(e.kind)}</span>
+            <span class="when">${O.relTime(e.at)}</span></div>
+          <div class="txt">${O.esc(e.text)}</div>
+        </div></a>`;
+    }).join("") : '<div class="none" style="padding:14px;font-size:12.5px">No activity yet.</div>');
+  }
+
+  /* ---- tasks by status kanban ---- */
+  const COLS = [
+    { key: "needs", label: "Needs verify", cls: "s-attn", match: (t) => t.status === "needs_verification" },
+    { key: "work", label: "In progress", cls: "s-working", match: (t) => t.status === "in_progress" },
+    { key: "ready", label: "Ready", cls: "s-ready", match: (t) => t.status === "ready" || t.status === "pending" },
+    { key: "blocked", label: "Blocked", cls: "s-bad", match: (t) => t.status === "blocked" || t.status === "failed" },
+    { key: "done", label: "Done", cls: "s-done", match: (t) => t.status === "completed" || t.status === "cancelled" },
+  ];
+  function renderKanban() {
+    O.patch($("kanban"), COLS.map((col) => {
+      const items = O.tasks().filter(col.match).filter((t) => !t.is_root);
+      return `<div class="kcol">
+        <div class="kh"><span class="pill ${col.cls}" style="border:0;background:transparent;padding:0;gap:7px">${O.glyph(col.cls)}<span style="font-size:12.5px;font-weight:650;color:var(--text)">${col.label}</span></span><span class="ct">${items.length}</span></div>
+        <div class="kb">${items.length ? items.map((t) => {
+          const who = (t.assignees || [])[0], a = O.agentByAlias(who);
+          return `<div class="kcard" onclick="location.href='/tasks?task=${encodeURIComponent(t.id)}'">
+            <div class="kt">${O.esc(t.title)}</div>
+            <div class="kf">${who ? O.avatar(who, a ? a.kind : "ai", "sm") : ""}<span class="t2" style="font-size:11.5px">${O.esc(who || "unassigned")}</span>
+              <span class="prio ${t.priority <= 20 ? "p-hi" : t.priority <= 40 ? "p-md" : ""}">P${O.esc(t.priority)}</span></div>
+          </div>`;
+        }).join("") : '<div class="none" style="padding:14px;font-size:12px">None</div>'}</div>
+      </div>`;
+    }).join(""));
+  }
+
+  /* ---- boot: live snapshot on the 3s cadence; every section repaints via Orcha.patch
+     (scroll + text-selection safe). ---- */
+  function render() {
+    if (!D() || !D().container) return;
+    O.mountShell("home", { title: "Dashboard", ctx: D().container.name });
+    renderOnbCta(); renderCtx(); renderQueue(); renderAgents(); renderActivity(); renderKanban();
+  }
+  window.OrchaData.start(render, 3000);
+})();
+</script>
+</body>
+</html>

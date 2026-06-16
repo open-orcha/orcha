@@ -1,0 +1,51 @@
+name: OrchaWidgets
+options:
+  bundleIdPrefix: ai.quantal
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: N2597TV587
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.9"
+targets:
+  OrchaWidgets:
+    type: application
+    platform: macOS
+    sources: [HostApp]
+    info:
+      path: HostApp/Info.plist
+      properties:
+        CFBundleDisplayName: Orcha Widgets
+        LSApplicationCategoryType: public.app-category.developer-tools
+        CFBundleShortVersionString: "1.2"
+        CFBundleVersion: "3"
+        CFBundleIconFile: AppIcon
+    entitlements:
+      path: HostApp/OrchaWidgets.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [N2597TV587.orcha]
+    dependencies:
+      - target: OrchaStatusWidget
+        embed: true
+  OrchaStatusWidget:
+    type: app-extension
+    platform: macOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.quantal.OrchaWidgets.OrchaStatusWidget
+    sources: [Widget]
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Orcha
+        CFBundleShortVersionString: "1.2"
+        CFBundleVersion: "3"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widget/OrchaStatusWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [N2597TV587.orcha]

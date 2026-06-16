@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orcha · Agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/styles.css">
+<link rel="stylesheet" href="/assets/vendor/xterm.css">
+<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<style>
+  /* roster (left, sticky) */
+  /* ISS-38: bound the roster to the viewport so it scrolls independently of the detail —
+     lets a deeplinked (?agent=) row scrollIntoView WITHOUT scrolling the page away from
+     the agent detail. Harmless while the roster is short; correct as it grows. */
+  .roster-card { padding: 9px; max-height: calc(100vh - 92px); overflow-y: auto; }
+  .roster-card .rh { padding: 9px 9px 7px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
+  /* align-items:flex-start so the avatar + status glyph sit at the top when the role
+     wraps to a 2nd line; the row has no fixed height, so it grows with its content. */
+  .rrow { display: flex; align-items: flex-start; gap: 11px; padding: 9px 10px; border-radius: 11px; cursor: pointer;
+    border: 1px solid transparent; transition: background .12s, border-color .12s; width: 100%; text-align: left;
+    background: transparent; font: inherit; color: inherit; }
+  .rrow:hover { background: var(--hover); }
+  .rrow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
+  /* stack name (line 1) over role (line 2) */
+  .rrow .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .rrow .nm { font-weight: 650; font-size: 13.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* role on its own line, wrapping to AT MOST 2 lines then ellipsis */
+  .rrow .rl { color: var(--faint); font-size: 11.5px; line-height: 1.3; overflow: hidden;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+  /* ISS-71/ISS-69(a): roster badge for an agent holding its single-flight embodiment lease.
+     The KIND is colour-coded so a held lease is legible at a glance: live terminal (teal),
+     resident conversation (violet), ephemeral task (amber). */
+  .rrow .rlive { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; align-self: center; font-size: 10px; font-weight: 700;
+    color: #1fc7cd; background: rgba(31,199,205,.12); border: 1px solid rgba(31,199,205,.3); border-radius: 999px; padding: 2px 7px; }
+  .rrow .rlive .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
+  .rrow .rlive.resident { color: #b794f6; background: rgba(183,148,246,.12); border-color: rgba(183,148,246,.3); }
+  .rrow .rlive.ephemeral { color: #e6a23c; background: rgba(230,162,60,.12); border-color: rgba(230,162,60,.3); }
+
+  /* detail header */
+  .ahead { display: flex; align-items: center; gap: 16px; }
+  .ahead .who h1 { font-size: 22px; font-weight: 740; letter-spacing: -.02em; display: flex; align-items: center; gap: 10px; margin: 0; }
+  .ahead .who .role { color: var(--muted); font-size: 13px; margin-top: 3px; }
+
+  /* gate callout (decoupled from agent status — ISS-36) */
+  .gatecard { padding: 14px 16px; margin-bottom: 18px; border-radius: 14px; }
+  .gatecard.attn { border: 1px solid var(--warn-line); background: linear-gradient(180deg, var(--warn-soft), transparent 90px); }
+  .gatecard.decided { border: 1px solid var(--border); background: var(--surface-2); }
+  .gatecard .row { display: flex; align-items: center; gap: 11px; }
+  .gatecard .ttl { font-weight: 680; font-size: 14px; }
+  .gatecard .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .gatecard .dnote { font-size: 12.5px; color: var(--text-2); }
+  .gatecard .dnote b { color: var(--text); }
+
+  /* conversation panel (S1) */
+  .conv { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface);
+    box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden; }
+  .conv-h { display: flex; align-items: center; gap: 11px; padding: 12px 15px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .conv-h .conv-who { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .conv-h .cn { font-weight: 680; font-size: 14px; }
+  .conv-h .cr { color: var(--faint); font-size: 11.5px; }
+  .presence { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; padding: 4px 10px;
+    border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .presence .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .presence.p-working { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .presence.p-working .d { animation: pulse 1.4s infinite; }
+  .presence.p-replied { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+  .presence.p-waking { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+  .presence.p-offline { color: var(--faint); }
+  /* busy = holding another (task) lease; your message is queued. Amber, steady dot (not the
+     accent pulse) so it reads as "occupied elsewhere" rather than "working on you". */
+  .presence.p-busy { color: var(--amber); background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 30%, var(--border)); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .conv-list { display: flex; flex-direction: column; gap: 14px; padding: 16px; max-height: 460px; overflow-y: auto; }
+  .turn { display: flex; gap: 9px; align-items: flex-start; }
+  .turn.human { flex-direction: row-reverse; }
+  .turn .tb { max-width: 78%; }
+  .turn .tmeta { font-size: 10.5px; color: var(--faint); font-weight: 600; margin-bottom: 4px; display: flex; gap: 7px; }
+  .turn.human .tmeta { justify-content: flex-end; }
+  .turn .tmeta .tt { color: var(--faint); font-weight: 400; }
+  .turn .tx { font-size: 13.5px; line-height: 1.55; padding: 9px 13px; border-radius: 13px; white-space: pre-wrap;
+    background: var(--surface-2); border: 1px solid var(--border); }
+  .turn.human .tx { background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 26%, var(--border)); }
+  /* rich markdown rendering for conversation messages (Orcha.mdText) */
+  .tx.md strong { font-weight: 700; }
+  .tx.md em { font-style: italic; }
+  .tx.md .md-code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 5px; border-radius: 5px;
+    background: var(--bg); border: 1px solid var(--border); }
+  .tx.md .md-pre { margin: 7px 0; padding: 9px 11px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
+    overflow: auto; white-space: pre; }
+  .tx.md .md-pre code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
+  .tx.md .md-h { display: block; font-weight: 700; margin: 3px 0; }
+  .tx.md .md-li { display: block; padding-left: 15px; position: relative; }
+  .tx.md .md-li::before { content: "•"; position: absolute; left: 3px; color: var(--muted); }
+  .tx.md .md-table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; overflow-x: auto; max-width: 100%; }
+  .tx.md .md-table th, .tx.md .md-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; vertical-align: top; }
+  .tx.md .md-table th { background: var(--surface-2); font-weight: 650; }
+  .tx.md .md-table tr:nth-child(even) td { background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
+  .turn details { margin-top: 6px; } .turn .work-sum { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+  .turn .log { margin-top: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); max-height: 240px; overflow: auto; }
+  .conv-thinking { display: inline-flex; gap: 5px; align-items: center; padding: 11px 14px; border-radius: 13px;
+    background: var(--surface-2); border: 1px solid var(--border); }
+  .conv-thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: convblink 1.2s infinite; }
+  .conv-thinking span:nth-child(2) { animation-delay: .2s; } .conv-thinking span:nth-child(3) { animation-delay: .4s; }
+  /* honest "your message is queued" notice shown instead of fake thinking dots when busy */
+  .conv-queued { display: inline-flex; gap: 8px; align-items: center; padding: 11px 14px; border-radius: 13px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+    background: color-mix(in oklab, var(--amber) 8%, var(--surface-2)); border: 1px solid color-mix(in oklab, var(--amber) 22%, var(--border)); }
+  .conv-queued svg { flex: 0 0 auto; color: var(--amber); }
+  @keyframes convblink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .gcard { border-radius: 12px; padding: 11px 13px; border: 1px solid var(--warn-line); background: var(--warn-soft); }
+  .gcard.ask { border-color: var(--accent-line); background: var(--accent-soft); }
+  .gcard .gh { font-weight: 660; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+  .gcard .gpre { margin: 8px 0 0; font-size: 11.5px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; overflow: auto; max-height: 140px; }
+  .gcard .gnote { color: var(--muted); font-size: 11px; margin-top: 7px; }
+  .conv-composer { position: relative; display: flex; gap: 9px; align-items: flex-end; padding: 12px 14px; border-top: 1px solid var(--border); }
+  .conv-in { flex: 1; resize: none; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 11px; padding: 10px 13px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; max-height: 160px; }
+  .conv-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+  .slash { position: absolute; bottom: calc(100% - 4px); left: 14px; right: 14px; background: var(--raised); border: 1px solid var(--border);
+    border-radius: 11px; box-shadow: var(--shadow-lg); overflow: hidden; max-height: 220px; overflow-y: auto; z-index: 5; }
+  .slash .si { padding: 8px 13px; font-size: 12.5px; font-family: "JetBrains Mono", ui-monospace, monospace; cursor: pointer; }
+  .slash .si.on, .slash .si:hover { background: var(--accent-soft); color: var(--accent); }
+  .conv-note { padding: 0 14px 12px; color: var(--faint); font-size: 11px; }
+
+  /* #337: conversation attachment composer + rendered attachments (parity with #330 task threads) */
+  .conv.dragover { outline: 2px dashed var(--accent-line); outline-offset: -4px; }
+  .conv-attach { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+    flex: 0 0 auto; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--muted); cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+  .conv-attach:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .conv-attach:disabled { opacity: .5; cursor: not-allowed; }
+  .conv-attach svg { width: 16px; height: 16px; }
+  .conv-tray { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 4px; }
+  .conv-tray:empty { display: none; }
+  .conv-tray .att-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 230px; padding: 5px 8px;
+    border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; }
+  .conv-tray .att-chip .thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: 0 0 auto; background: var(--surface-3); }
+  .conv-tray .att-chip .ic { width: 28px; height: 28px; border-radius: 6px; flex: 0 0 auto; display: inline-flex;
+    align-items: center; justify-content: center; background: var(--surface-3); color: var(--muted); }
+  .conv-tray .att-chip .ic svg { width: 15px; height: 15px; }
+  .conv-tray .att-chip .meta { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .conv-tray .att-chip .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-tray .att-chip .sz { color: var(--faint); font-size: 10.5px; }
+  .conv-tray .att-chip .rm { flex: 0 0 auto; cursor: pointer; color: var(--faint); border: 0; background: none;
+    font-size: 15px; line-height: 1; padding: 0 2px; }
+  .conv-tray .att-chip .rm:hover { color: var(--danger); }
+  .conv-tray .att-chip.uploading { opacity: .6; }
+  .conv-tray .att-chip.failed { border-color: var(--danger-line, var(--danger)); }
+  /* in-thread rendered attachments (read view) */
+  .msg-atts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+  .msg-atts .att-img { max-width: 200px; max-height: 150px; border-radius: 9px; border: 1px solid var(--border);
+    cursor: zoom-in; display: block; object-fit: cover; }
+  .msg-atts .att-file { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; color: var(--text); text-decoration: none; }
+  .msg-atts .att-file:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+  .msg-atts .att-file svg { width: 15px; height: 15px; color: var(--muted); flex: 0 0 auto; }
+  .msg-atts .att-file .sz { color: var(--faint); font-size: 10.5px; }
+  /* lightbox */
+  .att-lightbox { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.82); display: flex;
+    align-items: center; justify-content: center; padding: 32px; cursor: zoom-out; }
+  .att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+
+  /* persona */
+  .persona-pre { font-size: 13.5px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; }
+  .persona-full { margin-top: 10px; padding-top: 11px; border-top: 1px solid var(--border); font-size: 13px;
+    line-height: 1.6; color: var(--text-2); white-space: pre-wrap; font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .persona-expand { margin-top: 10px; }
+
+  /* controls (human-only) */
+  .ctrl { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border);
+    border-radius: 11px; background: var(--surface-2); }
+  .ctrl .grow { flex: 1; min-width: 0; }
+  .ctrl .lbl { font-size: 12.5px; font-weight: 600; }
+  .ctrl .desc { font-size: 11.5px; color: var(--muted); }
+  .seg { display: inline-flex; background: var(--surface-3); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+    padding: 4px 11px; border-radius: 6px; cursor: pointer; }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); }
+  .seg button:disabled { cursor: not-allowed; opacity: .55; }
+  .ctrl.model-ctrl { flex-direction: column; align-items: stretch; gap: 9px; }
+  .ctrl.model-ctrl .grow { width: 100%; }
+  .ctrl.model-ctrl .seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+    gap: 2px; width: 100%; max-width: none; }
+  .ctrl.model-ctrl .seg button { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 720px) {
+    .ctrl { flex-direction: column; align-items: stretch; }
+    .ctrl .seg { align-self: flex-start; }
+    .ctrl.model-ctrl .seg { align-self: stretch; grid-template-columns: 1fr; }
+  }
+  /* wake — READ-ONLY badge (per-agent toggle is a Forge fast-follow) */
+  .wakebadge { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; padding: 5px 11px;
+    border-radius: 999px; border: 1px solid var(--border); }
+  .wakebadge.on { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+  .wakebadge.off { color: var(--muted); background: var(--surface-3); }
+  .wakebadge .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  /* memory digest */
+  .digest { display: grid; gap: 13px; }
+  .digest [data-more] { justify-self: start; }   /* keep the "Show more" pill compact in the grid */
+  .digest .focus { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 11px;
+    padding: 12px 14px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+  .digest .focus .lbl, .dgroup .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+  .dgroup .lbl { color: var(--faint); }
+  .dgroup ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+  .dgroup li { font-size: 13px; line-height: 1.45; color: var(--text-2); padding-left: 18px; position: relative; }
+  .dgroup li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--muted); }
+  .dgroup.thr li::before { background: var(--warn); }
+
+  /* all-tasks deeplink chips (ISS-33 revalidation: every task reachable, any status) */
+  .tchips-wrap { margin-top: 4px; padding-top: 11px; border-top: 1px solid var(--border); }
+  .tchips-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: 7px; }
+  .tchips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .tchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 11.5px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); text-decoration: none; max-width: 220px; }
+  .tchip:hover { border-color: var(--accent-line); color: var(--text); }
+  .tchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* requests in/out */
+  .rqrow { display: flex; align-items: flex-start; gap: 11px; padding: 12px 13px; border: 1px solid var(--border);
+    border-radius: 12px; background: var(--surface-2); color: inherit; text-decoration: none; }
+  .rqrow:hover { border-color: var(--accent-line); }
+  .rqrow .body { flex: 1; min-width: 0; }
+  .rqrow .top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
+  .rqrow .pl { font-size: 13px; line-height: 1.5; color: var(--text-2); }
+  .rqrow .ans { margin-top: 8px; border-left: 2px solid var(--ok); padding: 3px 0 3px 11px; color: var(--muted); font-size: 12.5px; }
+
+  /* ISS-63: collapsible Current-task / Incoming / Outgoing widgets (chevron in the card header,
+     state remembered in localStorage) so the worker-progress feed is quickly reachable. */
+  .collapse-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+    border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+    cursor: pointer; flex: 0 0 auto; transition: transform .15s, color .12s, border-color .12s; }
+  .collapse-btn:hover { color: var(--text); border-color: var(--accent-line); }
+  .collapse-btn svg { width: 15px; height: 15px; }
+  .card.collapsed .collapse-btn { transform: rotate(-90deg); }   /* chevron points right when collapsed */
+  /* !important: Current-task / Incoming / Outgoing card bodies carry an inline `display:flex`, which
+     (being inline) outranks a plain stylesheet rule — so only Memory digest (no inline display)
+     collapsed. A stylesheet !important beats a normal inline style, restoring collapse on all cards. */
+  .card.collapsed .card-b { display: none !important; }
+  /* S3 §3b "Pair in terminal" — docked beside the conversation (reference design lifted) */
+  .conv-wrap { display: grid; grid-template-columns: minmax(0,1fr); gap: 16px; align-items: start; }
+  .conv-wrap.paired { grid-template-columns: minmax(0,1fr) minmax(380px, 470px); }
+  @media (max-width: 1180px) { .conv-wrap.paired { grid-template-columns: 1fr; } }
+  #convPair { white-space: nowrap; }
+  .term-slot:empty { display: none; }
+  .term { position: relative; display: flex; flex-direction: column; height: 560px; background: #0a0e14; border: 1px solid #1e2733;
+    border-radius: 15px; overflow: hidden; box-shadow: var(--shadow-sm); }
+  .term-h { display: flex; align-items: center; gap: 10px; padding: 10px 13px; background: #11161f; border-bottom: 1px solid #1c2533; }
+  .term-h .lights { display: flex; gap: 6px; } .term-h .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .term-h .lights .r { background: #f6757e; } .term-h .lights .y { background: #f5b13d; } .term-h .lights .g { background: #38d39a; }
+  .term-h .ttl { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; color: #8b98ae; }
+  .term-h .pairtag { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 650; color: #1fc7cd;
+    background: rgba(31,199,205,.1); border: 1px solid rgba(31,199,205,.3); border-radius: 999px; padding: 3px 9px; }
+  .term-h .pairtag .d { width: 6px; height: 6px; border-radius: 50%; background: #1fc7cd; animation: pulse 1.4s infinite; }
+  .term-h .term-actions { margin-left: auto; display: flex; gap: 6px; }
+  .term-h .x { width: 28px; height: 28px; border-radius: 8px; border: 1px solid #283242; background: transparent;
+    color: #8b98ae; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+  .term-h .x:hover { color: #f6757e; border-color: rgba(246,117,126,.4); } .term-h .x svg { width: 15px; height: 15px; }
+  /* the maximize toggle stays teal on hover (only Close is destructive-red) */
+  .term-h .x.term-max:hover { color: #1fc7cd; border-color: rgba(31,199,205,.4); }
+  .term-body { flex: 1; min-height: 0; overflow: hidden; padding: 10px 12px; background: #0b0e14; }
+  .term-body .term-xterm { height: 100%; }
+  .term-body .xterm { height: 100%; }
+  .term-saving { position: absolute; inset: 0; background: rgba(10,14,20,.86); backdrop-filter: blur(2px); display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #d5d9e0; }
+  .term-saving .ring { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #1c2533; border-top-color: #1fc7cd; animation: spin 0.8s linear infinite; }
+  .term-saving .st { font-size: 13px; font-weight: 600; } .term-saving .sub { font-size: 12px; color: #8b98ae; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* visible failure state (bridge down / busy / denied) — no silent flash-and-die */
+  .term-error { position: absolute; inset: 0; background: #0b0e14; display: flex; align-items: center; gap: 12px;
+    padding: 22px 24px; color: #d5d9e0; }
+  .term-error svg { width: 22px; height: 22px; flex: 0 0 auto; color: #f5b13d; }
+  .term-error .st { font-size: 13.5px; font-weight: 650; margin-bottom: 4px; }
+  .term-error .sub { font-size: 12px; color: #8b98ae; line-height: 1.5; white-space: pre-wrap; }
+  /* ISS-84 #244: corrective-action buttons under a preflight failure (install / sign-in / retry) */
+  .term-error .te-cta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  /* ISS-84 #244: install-hint code chip inside the "not installed" pre-gate modal */
+  .pf-hint { margin: 2px 0; }
+  .pf-hint code { display: block; padding: 10px 12px; background: #0b0e14; border: 1px solid #1c2533;
+    border-radius: 8px; font-size: 12px; color: #d5d9e0; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  /* conversation lock banner (§3b vice-versa): shown when the agent is in a live terminal */
+  .conv-lock { display: flex; align-items: center; gap: 9px; padding: 11px 16px; font-size: 12.5px; font-weight: 600;
+    color: var(--accent); background: var(--accent-soft); border-top: 1px solid var(--accent-line); }
+  .conv-in:disabled { opacity: .5; cursor: not-allowed; }
+  /* only dim/disable the composer when the lock banner is actually VISIBLE — a sibling
+     selector still matches a [hidden] .conv-lock, so without :not([hidden]) every (unlocked)
+     composer would get pointer-events:none and be unusable (review P1). */
+  .conv-lock:not([hidden]) + .conv-composer { opacity: .55; pointer-events: none; }
+
+  /* ISS-65: maximize the Conversation or the Embedded Terminal into a large overlay.
+     We toggle a class on the EXISTING panel (never reparent the live xterm / composer),
+     so all wiring + the open websocket survive. A backdrop + Escape restore the dock. */
+  .max-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(4,8,14,.62); backdrop-filter: blur(3px); }
+  .conv.maximized, .term.maximized { position: fixed; inset: 3vh 3vw; z-index: 160; margin: 0;
+    height: auto; max-height: none; box-shadow: var(--shadow-lg); }
+  .conv.maximized { display: flex; flex-direction: column; }
+  .conv.maximized .conv-list { max-height: none; flex: 1 1 auto; }   /* the thread grows to fill */
+  .conv-h .conv-max { flex: 0 0 auto; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="content">
+      <div class="split wide">
+        <aside class="card roster-card stick" id="roster"></aside>
+        <main>
+          <div id="convWrap"></div>
+          <div id="detailMain"></div>
+          <div id="runsWrap"></div>
+        </main>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/data.js"></script>
+<script src="/assets/conversation.js"></script>
+<!-- S3 embedded terminal: vendored xterm.js + fit addon, then the OrchaTerm module -->
+<script src="/assets/vendor/xterm.js"></script>
+<script src="/assets/vendor/addon-fit.js"></script>
+<script src="/assets/terminal.js"></script>
+<script>
+(function () {
+  const O = window.Orcha;
+  const $ = (id) => document.getElementById(id);
+  const D = () => window.ORCHA;
+
+  // selection (deeplinkable via ?agent=) + per-agent async caches (persona/digest/runs
+  // are NOT in the snapshot — fetched lazily on select, keyed by agent id).
+  const _dlAgent = new URLSearchParams(location.search).get("agent");
+  let sel = _dlAgent || null;
+  // ISS-38: a deeplink (?agent=) / explicit select must scroll the roster to the picked
+  // row, else on a long roster you land on the detail with the selection invisibly
+  // off-screen. One-shot — cleared after the next roster paint so the 3s tick never yanks scroll.
+  let pendingScroll = !!_dlAgent;
+  // ISS-68 PR-3: agent-detail section caps — tasks 10, incoming/outgoing requests 5 each — with a
+  // per-section "Load more". Client-side reveal over the snapshot-filtered rows; reset on agent switch.
+  const TASKS_CAP = 10, REQ_CAP = 5, DIGEST_CAP = 6;
+  let tasksShown = TASKS_CAP, riShown = REQ_CAP, roShown = REQ_CAP;
+  let digestShown = DIGEST_CAP;   // ISS-68-style render cap over the digest's decisions/learnings/threads
+  const personaFull = {};   // id -> full system_prompt (lazy, on Expand)
+  const personaOpen = {};   // id -> bool (expanded?)
+  const digestCache = {};   // id -> {digest} | {loading}
+  let stopRuns = null;      // teardown for the live runs streams
+  let runsAgent = null;     // which agent the runsWrap currently shows
+  let runsSig = "";         // signature of the rendered run set (rebuild only on change)
+  let runsToken = 0;        // guards against stale async runs responses across selects
+
+  // ISS-63: the Current-task / Incoming / Outgoing widgets push the worker-progress feed far
+  // down the page. Let the human COLLAPSE them; remember the choice across reloads (localStorage,
+  // shared by all agents — a layout preference, not per-agent state).
+  const COLLAPSE_KEY = "orcha:agentWidgetCollapse";
+  let collapsed = {};
+  try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}") || {}; } catch (e) { collapsed = {}; }
+  function isCollapsed(k) { return !!collapsed[k]; }
+  function toggleCollapse(k) {
+    collapsed[k] = !collapsed[k];
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed)); } catch (e) {}
+    renderDetailMain();
+  }
+  // a chevron toggle for a collapsible card header (delegated click via #detailMain).
+  function collapseBtn(k) {
+    return `<button class="collapse-btn" data-collapse="${O.esc(k)}" title="${isCollapsed(k) ? "Expand" : "Collapse"}" aria-label="toggle">${O.icon("chev", "")}</button>`;
+  }
+
+  // The model control sends the curated MODEL ID (POST /model only accepts ids) while
+  // displaying the friendly name. Seeded with the backend's curated list so the control
+  // renders correctly pre-fetch; GET /api/models is the source of truth (picks up new ids).
+  let MODELS = [
+    { id: "claude-opus-4-8", name: "Opus 4.8", runtime: "claude" },
+    { id: "claude-sonnet-4-6", name: "Sonnet 4.6", runtime: "claude" },
+    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", runtime: "claude" },
+    { id: "gpt-5.5", name: "GPT-5.5", runtime: "codex" },
+    { id: "gpt-5.4", name: "GPT-5.4", runtime: "codex" },
+    { id: "gpt-5.4-mini", name: "GPT-5.4 mini", runtime: "codex" },
+    { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", runtime: "codex" },
+  ];
+  fetch("/api/models").then((r) => r.ok ? r.json() : null)
+    .then((d) => { if (d && Array.isArray(d.models) && d.models.length) { MODELS = d.models; renderDetailMain(); } })
+    .catch(() => {});
+
+  const MODEL_RUNTIMES = [
+    { id: "claude", name: "Claude" },
+    { id: "codex", name: "Codex" },
+  ];
+  const modelRuntimeFilters = {};
+  function modelRuntimeOf(modelId) {
+    const m = MODELS.find((x) => x.id === modelId);
+    if (m && m.runtime) return String(m.runtime).toLowerCase() === "codex" ? "codex" : "claude";
+    return String(modelId || "").startsWith("gpt-") ? "codex" : "claude";
+  }
+  function modelRuntimeName(runtime) {
+    return runtime === "codex" ? "Codex" : "Claude";
+  }
+  function modelsForRuntime(runtime) {
+    const wanted = runtime === "codex" ? "codex" : "claude";
+    return MODELS.filter((m) => modelRuntimeOf(m.id) === wanted);
+  }
+  function modelRuntimeForAgent(a) {
+    const saved = modelRuntimeFilters[a.id];
+    if (saved && modelsForRuntime(saved).length) return saved;
+    return modelRuntimeOf(a.model);
+  }
+
+  /* ---------- snapshot-derived helpers ---------- */
+  function agentTasks(alias) { return O.tasks().filter((t) => (t.assignees || []).indexOf(alias) >= 0); }
+  function planMsgOf(t) {  // ISS-68: prefer the snapshot's plan_message (thread-free); fall back to an expanded thread
+    if (t && t.plan_message) return { body: t.plan_message.body, from: t.plan_message.author_alias || null, at: t.plan_message.at, is_human: false };
+    const m = (t.thread || []).filter((x) => !x.is_human); return m.length ? m[0] : null;
+  }
+  function reqIn(alias) { return O.requests().filter((r) => r.to === alias); }
+  function reqOut(alias) { return O.requests().filter((r) => r.from === alias); }
+  // ISS-331: the shared sort control drives all three agent-detail lists (current tasks, incoming,
+  // outgoing). Accessors mirror the Tasks/Requests pages: status rank is the OUTER key, the chosen
+  // key (time|priority) sorts within it. Each list persists its own choice under a distinct name.
+  const TASK_RANK = { needs_verification: 0, in_progress: 1, ready: 2, pending: 4, blocked: 3, failed: 3, completed: 5, cancelled: 6 };
+  function taskSortAcc() { return { bucket: (t) => (TASK_RANK[t.status] ?? 9), time: (t) => Date.parse(t.created_at || "") || 0, prio: (t) => t.priority }; }
+  const REQ_RANK = { open: 0, answered: 1 };
+  function reqSortAcc() { return { bucket: (r) => (REQ_RANK[r.status] ?? 2), time: (r) => Date.parse(r.created_at || "") || 0, prio: (r) => r.priority }; }
+  function firstAlias() {
+    const ai = O.agents().find((a) => a.kind !== "human");
+    return (ai || O.agents()[0] || {}).alias || null;
+  }
+  // ISS-68 PR-3: per-section "Load more" affordance (rendered only when more rows exist than shown).
+  function moreBtn(kind, shown, total) {
+    return total > shown ? `<button class="btn sm ghost" style="align-self:flex-start;margin-top:4px" data-more="${kind}">Load more · ${shown} of ${total}</button>` : "";
+  }
+
+  /* ---------- roster ---------- */
+  function renderRoster() {
+    const ags = O.agents();
+    // ISS-71 caveat (Forge): an agent with a backgrounded live terminal holds its single-flight
+    // lease (can't be woken, no other terminal) until closed — surface it so it isn't invisible.
+    const liveSet = (window.OrchaTerm ? OrchaTerm.liveAgentIds() : []);
+    O.patch($("roster"), `<div class="rh">${O.icon("agents", "")}Roster · ${ags.length}<span style="flex:1"></span><a href="/onboarding?new=1" style="color:var(--accent);font-weight:650;text-transform:none;letter-spacing:0">+ New</a></div>` +
+      ags.map((a) => `<button class="rrow ${a.alias === sel ? "sel" : ""}" data-alias="${O.esc(a.alias)}">
+        ${O.avatar(a.alias, a.kind, "")}
+        <span class="grow"><span class="nm">${O.esc(a.alias)}</span><span class="rl">${O.esc(a.role)}</span></span>
+        ${embodBadge(a, liveSet)}
+        ${O.glyph(O.statusClass(a.status))}
+      </button>`).join(""));
+    if (pendingScroll) {   // ISS-38: anchor the deeplinked/selected row (one-shot)
+      pendingScroll = false;
+      const row = $("roster").querySelector(".rrow.sel");
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+  }
+  // ISS-69(a): surface the agent's single-embodiment lease in the roster. A live terminal held in
+  // THIS browser is the strongest signal ("live"); otherwise fall back to the read payload's
+  // `embodiment` so a resident conversation / ephemeral task held anywhere is still legible. idle → none.
+  const EMBOD_LBL = { live: "live", resident: "in convo", ephemeral: "task" };
+  const EMBOD_TITLE = {
+    live: "In a live terminal — busy and can't be woken until the terminal closes",
+    resident: "In a live conversation — busy until the conversation yields or ends",
+    ephemeral: "Running a task — busy until the task completes",
+  };
+  function embodBadge(a, liveSet) {
+    const kind = (liveSet.indexOf(a.id) >= 0) ? "live" : O.leaseOf(a);
+    if (!kind || kind === "idle") return "";
+    return `<span class="rlive ${kind}" title="${O.esc(EMBOD_TITLE[kind] || "")}"><span class="d"></span>${EMBOD_LBL[kind] || kind}</span>`;
+  }
+
+  /* ---------- detail (snapshot sections — re-rendered every 3s tick) ---------- */
+  function renderDetailMain(force) {
+    const a = O.agentByAlias(sel);
+    if (!a) { O.patch($("detailMain"), '<div class="card pad"><div class="none">Agent not found.</div></div>', force); return; }
+    const mine = agentTasks(a.alias).sort(O.sortComparator("agent-tasks", taskSortAcc()));
+    const current = mine.filter((t) => t.status === "in_progress" || t.status === "needs_verification");
+    const selectedRuntime = modelRuntimeForAgent(a);
+    const visibleModels = modelsForRuntime(selectedRuntime);
+
+    let html = "";
+
+    /* header */
+    html += `<div class="card pad" style="margin-bottom:18px">
+      <div class="ahead">
+        ${O.avatar(a.alias, a.kind, "lg")}
+        <div class="who grow">
+          <h1>${O.esc(a.alias)} ${O.kindBadge(a.kind)}</h1>
+          <div class="role">${O.esc(a.role)}</div>
+        </div>
+        ${O.pill(a.status, "lg")}
+      </div>
+      <div class="meta" style="margin-top:16px;padding-top:15px;border-top:1px solid var(--border)">
+        ${a.model ? `<div><span class="k">Model</span><span class="v">${O.esc(a.model)}</span></div>` : ""}
+        <div><span class="k">Last active</span><span class="v">${a.last_active ? O.relTime(a.last_active) : "—"}</span></div>
+        <div><span class="k">Origin</span><span class="v">${a.kind === "human" ? "Human authority" : "Human-created"}</span></div>
+        <div><span class="k">Agent ID</span><span class="v mono">${O.esc(O.shortId(a.id))}</span></div>
+      </div>
+    </div>`;
+
+    /* gate callout — surfaced REGARDLESS of agent status (ISS-36), gated on plan_decision (ISS-41) */
+    html += gateCallout(a, mine);
+
+    /* conversation (S1) is mounted into #convWrap (a sibling of #detailMain) so the 3s
+       Orcha.patch repaint here never wipes the composer — see render()/select(). */
+
+    /* persona + controls */
+    html += `<div class="g2" style="margin-bottom:18px">
+      <div class="card">
+        <div class="card-h"><h3>${a.kind === "human" ? "Role" : "Persona"}</h3></div>
+        <div class="card-b" style="padding:14px 16px">
+          <div class="persona-pre">${O.esc(a.prompt_preview || a.role || "—")}${(a.prompt_preview && a.prompt_preview.length >= 160) ? "…" : ""}</div>
+          ${a.kind !== "human" ? personaExpandBlock(a) : ""}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Controls</h3><span class="grow"></span><span class="muted" style="font-size:11.5px">human-only</span></div>
+        <div class="card-b" style="padding:13px 14px;display:flex;flex-direction:column;gap:10px">
+          ${a.kind === "human" ? '<div class="none" style="padding:16px">This is you — the human authority. No wake controls.</div>' : `
+          <div class="ctrl"><div class="grow"><div class="lbl">Provider</div><div class="desc">Claude Code or Codex</div></div>
+            <div class="seg" id="modelRuntimeSeg" data-agent="${O.esc(a.id)}" aria-label="Model provider">${MODEL_RUNTIMES.map((r)=>`<button type="button" class="${r.id===selectedRuntime?'on':''}" data-runtime="${O.esc(r.id)}" aria-pressed="${r.id===selectedRuntime?'true':'false'}" ${O.actingHuman() && modelsForRuntime(r.id).length ? "" : "disabled"}>${O.esc(r.name)}</button>`).join("")}</div></div>
+          <div class="ctrl model-ctrl"><div class="grow"><div class="lbl">Model</div><div class="desc">Which ${O.esc(modelRuntimeName(selectedRuntime))} model this agent wakes as</div></div>
+            <div class="seg" id="modelSeg" data-agent="${O.esc(a.id)}" data-runtime="${O.esc(selectedRuntime)}" aria-label="${O.esc(modelRuntimeName(selectedRuntime))} model">${visibleModels.length ? visibleModels.map((m)=>`<button type="button" class="${m.id===a.model?'on':''}" data-model="${O.esc(m.id)}" aria-pressed="${m.id===a.model?'true':'false'}" title="${O.esc(m.name)}" ${O.actingHuman()?"":"disabled"}>${O.esc(m.name)}</button>`).join("") : '<span class="none" style="padding:4px 9px">No models</span>'}</div></div>
+          <div class="ctrl"><div class="grow"><div class="lbl">Wake</div><div class="desc">Daemon may wake this agent on pending work</div></div>
+            <span class="wakebadge ${a.wake_enabled?'on':'off'}"><span class="d"></span>${a.wake_enabled?"Enabled":"Disabled"}</span></div>
+          <div class="ctrl"><div class="grow"><div class="lbl">Auto-wake</div><div class="desc">Clock-driven heartbeat — wake on a fixed cadence even with no pending work</div></div>
+            <div class="seg" id="awakeSeg" data-agent="${O.esc(a.id)}" aria-label="Auto-wake interval">${awakePresets(a.auto_wake_interval_secs).map((p)=>`<button type="button" class="${p.secs===(a.auto_wake_interval_secs!=null?a.auto_wake_interval_secs:null)?'on':''}" data-awake="${p.secs==null?'null':p.secs}" aria-pressed="${p.secs===(a.auto_wake_interval_secs!=null?a.auto_wake_interval_secs:null)?'true':'false'}" ${O.actingHuman()?"":"disabled"}>${O.esc(p.label)}</button>`).join("")}</div></div>`}
+        </div>
+      </div>
+    </div>`;
+
+    /* current task + memory digest */
+    html += `<div class="g2" style="margin-bottom:18px">
+      <div class="card${isCollapsed("currentTask") ? " collapsed" : ""}">
+        <div class="card-h"><h3>Current task</h3><span class="count">${current.length ? "· " + current.length : ""}</span><span class="grow"></span>${O.sortControlHtml("agent-tasks")}${collapseBtn("currentTask")}</div>
+        <div class="card-b" style="padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+          ${current.length ? current.map((t) => `<a class="lrow" style="border:1px solid var(--border)" href="/tasks?task=${encodeURIComponent(t.id)}">
+            <div class="grow"><div class="t1">${t.is_root?'<span class="tag root" style="margin-right:6px">root</span>':''}${O.esc(t.title)}</div>
+              <div class="t2">${O.esc(O.trunc(t.definition_of_done, 64))}</div></div>${O.pill(t.status)}</a>`).join("")
+            : '<div class="none">No task in progress.</div>'}
+          ${mine.length ? `<div class="tchips-wrap"><div class="tchips-lbl">All tasks · ${mine.length}</div>
+            <div class="tchips">${mine.slice(0, tasksShown).map((t) => `<a class="tchip" href="/tasks?task=${encodeURIComponent(t.id)}" title="${O.esc(t.title)}">${O.glyph(O.statusClass(t.status))}<span>${O.esc(O.trunc(t.title, 30))}</span></a>`).join("")}</div>
+            ${moreBtn("tasks", Math.min(tasksShown, mine.length), mine.length)}</div>` : ""}
+        </div>
+      </div>
+      <div class="card${isCollapsed("memoryDigest") ? " collapsed" : ""}">
+        <div class="card-h"><h3>Memory digest</h3><span class="grow"></span><span class="muted" style="font-size:11.5px">where it left off</span>${collapseBtn("memoryDigest")}</div>
+        <div class="card-b" style="padding:13px 14px">${digestBlock(a)}</div>
+      </div>
+    </div>`;
+
+    /* requests in/out (ISS-38) */
+    const ri = reqIn(a.alias).sort(O.sortComparator("agent-req-in", reqSortAcc()));
+    const ro = reqOut(a.alias).sort(O.sortComparator("agent-req-out", reqSortAcc()));
+    html += `<div class="g2" style="margin-bottom:18px">
+      <div class="card${isCollapsed("incomingReq") ? " collapsed" : ""}"><div class="card-h"><h3>Incoming requests</h3><span class="count">(${ri.length})</span><span class="grow"></span>${O.sortControlHtml("agent-req-in")}${collapseBtn("incomingReq")}</div>
+        <div class="card-b" style="padding:12px 14px;display:flex;flex-direction:column;gap:9px">
+          ${ri.length ? ri.slice(0, riShown).map((r)=>reqMini(r, "from", r.from)).join("") + moreBtn("ri", Math.min(riShown, ri.length), ri.length) : '<div class="none">No incoming requests.</div>'}</div></div>
+      <div class="card${isCollapsed("outgoingReq") ? " collapsed" : ""}"><div class="card-h"><h3>Outgoing requests</h3><span class="count">(${ro.length})</span><span class="grow"></span>${O.sortControlHtml("agent-req-out")}${collapseBtn("outgoingReq")}</div>
+        <div class="card-b" style="padding:12px 14px;display:flex;flex-direction:column;gap:9px">
+          ${ro.length ? ro.slice(0, roShown).map((r)=>reqMini(r, "to", r.to)).join("") + moreBtn("ro", Math.min(roShown, ro.length), ro.length) : '<div class="none">No outgoing requests.</div>'}</div></div>
+    </div>`;
+
+    O.patch($("detailMain"), html, force);
+
+    // wire the model segmented control (delegated, human-only)
+    const runtimeSeg = $("modelRuntimeSeg");
+    if (runtimeSeg) runtimeSeg.addEventListener("click", onModelRuntimeClick);
+    const seg = $("modelSeg");
+    if (seg) seg.addEventListener("click", onModelClick);
+    const awakeSeg = $("awakeSeg");
+    if (awakeSeg) awakeSeg.addEventListener("click", onAwakeClick);
+    // wire persona Expand
+    const px = $("personaExpandBtn");
+    if (px) px.addEventListener("click", () => togglePersona(a));
+  }
+
+  /* ---------- gate callout (ISS-33/36 + ISS-41 plan_decision gating) ---------- */
+  function gateCallout(a, mine) {
+    // verify gate: any owned task awaiting human verification (status-independent of the agent).
+    const verify = mine.find((t) => t.status === "needs_verification");
+    // plan gate: an in-progress task whose agent posted a plan...
+    const planTask = mine.find((t) => t.status === "in_progress" && planMsgOf(t));
+    if (planTask) {
+      if (!planTask.plan_decision) {
+        // undecided -> live approval lives on the Tasks gate (one authoritative surface).
+        return calloutCard("attn", "shield", "Plan awaiting your approval",
+          `${O.esc(planTask.title)} — surfaced regardless of ${O.esc(a.alias)}'s status.`,
+          planTask.id, "Review plan");
+      }
+      // decided -> ISS-41: quiet decided-note, never a live re-approve; suppressed across reload.
+      const pd = planTask.plan_decision;
+      const verb = pd.decision === "approve" ? "approved" : "rejected";
+      const when = pd.at ? O.relTime(pd.at) : "";
+      return `<div class="gatecard decided"><div class="row">
+        <span style="color:var(--${pd.decision === "approve" ? "ok" : "danger"})">${O.icon(pd.decision === "approve" ? "check" : "x", "")}</span>
+        <div class="grow"><div class="ttl">Plan ${O.esc(verb)}</div>
+          <div class="dnote">"${O.esc(O.trunc(planTask.title, 80))}" — ${O.esc(verb)}${pd.actor ? " by <b>" + O.esc(pd.actor) + "</b>" : ""}${when ? " · " + O.esc(when) : ""}.${pd.reason ? " " + O.esc(O.trunc(pd.reason, 120)) : ""}</div></div>
+        <a class="btn sm ghost" href="/tasks?task=${encodeURIComponent(planTask.id)}">Open task ${O.icon("arrow","")}</a>
+      </div></div>`;
+    }
+    if (verify) {
+      return calloutCard("attn", "check", "Task awaiting verification",
+        `${O.esc(verify.title)} — surfaced regardless of ${O.esc(a.alias)}'s status.`,
+        verify.id, "Verify");
+    }
+    return "";
+  }
+  function calloutCard(cls, ic, ttl, sub, taskId, cta) {
+    return `<div class="gatecard ${cls}"><div class="row">
+      <span style="color:var(--warn)">${O.icon(ic, "")}</span>
+      <div class="grow"><div class="ttl">${ttl}</div><div class="sub">${sub}</div></div>
+      <a class="btn sm" href="/tasks?task=${encodeURIComponent(taskId)}">${cta} ${O.icon("arrow","")}</a>
+    </div></div>`;
+  }
+
+  /* ---------- persona expand (lazy /persona) ---------- */
+  function personaExpandBlock(a) {
+    const open = !!personaOpen[a.id];
+    let block = `<div class="persona-expand"><button class="btn sm ghost" id="personaExpandBtn">${open ? "Hide full prompt" : "Expand full prompt"}</button></div>`;
+    if (open) {
+      const full = personaFull[a.id];
+      block += `<div class="persona-full">${full === undefined ? "Loading…" : O.esc(full || "(no system prompt)")}</div>`;
+    }
+    return block;
+  }
+  function togglePersona(a) {
+    personaOpen[a.id] = !personaOpen[a.id];
+    if (personaOpen[a.id] && personaFull[a.id] === undefined) {
+      fetch("/api/agents/" + encodeURIComponent(a.id) + "/persona")
+        .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+        .then((d) => { personaFull[a.id] = d.system_prompt || ""; renderDetailMain(); })
+        .catch(() => { personaFull[a.id] = ""; renderDetailMain(); });
+    }
+    renderDetailMain();
+  }
+
+  /* ---------- memory digest (lazy /digest) ---------- */
+  function digestBlock(a) {
+    if (a.kind === "human") return '<div class="none">Humans don\'t rehydrate — no digest.</div>';
+    const c = digestCache[a.id];
+    if (c === undefined || c.loading) return '<div class="none">Loading digest…</div>';
+    const d = c.digest;
+    if (!d) return '<div class="none">No digest yet — this agent hasn\'t snapshotted.</div>';
+    const norm = (items) => (items || []).map((x) => (x && typeof x === "object") ? (x.text || JSON.stringify(x)) : String(x)).filter(Boolean);
+    // ISS-68 PR-3 render cap: keep the digest compact by default so the worker-run feed below
+    // stays reachable. The cap is a budget over the FLATTENED decisions→learnings→threads list
+    // (Current focus always shows); "Show more" (delegated [data-more=digest]) reveals the rest,
+    // and select() resets digestShown on agent switch. Pairs with the card's collapse chevron.
+    const groups = [
+      { label: "Recent decisions", arr: norm(d.decisions), thr: false },
+      { label: "Learnings", arr: norm(d.learnings), thr: false },
+      { label: "Open threads", arr: norm(d.open_threads), thr: true },
+    ];
+    const total = groups.reduce((n, g) => n + g.arr.length, 0);
+    let remaining = digestShown;
+    const groupHtml = groups.map((g) => {
+      if (!g.arr.length) return "";
+      const take = g.arr.slice(0, Math.max(0, remaining));
+      remaining -= g.arr.length;
+      if (!take.length) return "";
+      return `<div class="dgroup ${g.thr ? "thr" : ""}"><div class="lbl">${g.label}</div><ul>${take.map((s) => `<li>${O.esc(s)}</li>`).join("")}</ul></div>`;
+    }).join("");
+    return `<div class="digest">
+      ${d.current_focus ? `<div class="focus"><div class="lbl">${O.icon("dot","")}Current focus</div>${O.esc(d.current_focus)}</div>` : ""}
+      ${groupHtml}
+      ${moreBtn("digest", Math.min(digestShown, total), total)}
+    </div>`;
+  }
+  function fetchDigest(a) {
+    if (a.kind === "human" || digestCache[a.id] !== undefined) return;
+    digestCache[a.id] = { loading: true };
+    fetch("/api/agents/" + encodeURIComponent(a.id) + "/digest")
+      .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d) => { digestCache[a.id] = { digest: d.digest || null }; renderDetailMain(); })
+      .catch(() => { digestCache[a.id] = { digest: null }; renderDetailMain(); });
+  }
+
+  /* ---------- requests mini-row (ISS-38 deeplink to served route) ---------- */
+  function reqMini(r, dir, who) {
+    return `<a class="rqrow" href="/requests?req=${encodeURIComponent(r.id)}">
+      <div class="body">
+        <div class="top">${O.pill(r.escalated ? "escalated" : r.status)}
+          <span class="tag">${O.esc(r.type)}</span>
+          <span class="muted" style="font-size:11.5px">${dir} <b style="color:var(--text-2)">${O.esc(who)}</b></span>
+          ${r.chain_depth ? '<span class="tag" style="color:var(--info)">↳ chain '+O.esc(r.chain_depth)+'</span>' : ''}
+          <span class="muted" style="font-size:11px;margin-left:auto">${r.created_at ? O.relTime(r.created_at) : ""}</span></div>
+        <div class="pl">${O.esc(O.trunc(r.payload, 120))}</div>
+        ${r.response ? `<div class="ans">${O.esc(O.trunc(r.response, 110))}</div>` : ""}
+      </div></a>`;
+  }
+
+  /* ---------- auto-wake control (#300: PATCH /api/agents/{id}/auto-wake) ----------
+     Clock-driven heartbeat cadence. Off (null) + a few presets; the backend floor is 60s
+     and editing is HUMAN-AUTHORITY gated (only a registered human may change wake policy),
+     so the control is disabled until an acting human is picked. If the agent already carries
+     a non-preset value (set via API), it's surfaced as an extra honest chip so the live
+     state is never hidden behind "none of these are on". */
+  const AWAKE_PRESETS = [
+    { secs: null, label: "Off" },
+    { secs: 300, label: "5m" },
+    { secs: 900, label: "15m" },
+    { secs: 3600, label: "1h" },
+  ];
+  function fmtInterval(secs) {
+    if (secs == null) return "Off";
+    if (secs % 3600 === 0) return (secs / 3600) + "h";
+    if (secs % 60 === 0) return (secs / 60) + "m";
+    return secs + "s";
+  }
+  // presets for the current value: the fixed set, plus a dynamic chip if the live cadence
+  // isn't one of them (so an API-set 10m never renders as a silently-unselected "Off").
+  function awakePresets(current) {
+    if (current == null || AWAKE_PRESETS.some((p) => p.secs === current)) return AWAKE_PRESETS;
+    return AWAKE_PRESETS.concat([{ secs: current, label: fmtInterval(current) }]);
+  }
+  function onAwakeClick(ev) {
+    const b = ev.target.closest("[data-awake]"); if (!b || b.disabled) return;
+    const seg = b.closest("#awakeSeg"); const aid = seg && seg.dataset.agent;
+    const h = O.actingHuman();
+    if (!aid || !h) { O.toast("Pick an acting human first.", "danger"); return; }
+    const interval = b.dataset.awake === "null" ? null : parseInt(b.dataset.awake, 10);
+    const a = O.agentById(aid); if (!a) return;
+    const prev = a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : null;
+    if (interval === prev) return;                 // no-op (re-click of the active chip)
+    a.auto_wake_interval_secs = interval;          // optimistic; reconciled by the next snapshot
+    renderDetailMain(true);
+    fetch("/api/agents/" + encodeURIComponent(aid) + "/auto-wake", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor_agent_id: h.id, interval_secs: interval }),
+    }).then((r) => {
+      if (!r.ok) { a.auto_wake_interval_secs = prev; renderDetailMain(true);   // revert on failure
+        O.toast("Auto-wake change failed (" + r.status + ")", "danger"); return; }
+      O.toast(interval == null ? "Auto-wake off" : ("Auto-wake every " + fmtInterval(interval)), "ok");
+    }).catch((e) => { a.auto_wake_interval_secs = prev; renderDetailMain(true);
+      O.toast("Auto-wake change failed: " + e.message, "danger"); });
+  }
+
+  /* ---------- model control (POST /api/agents/{id}/model) ---------- */
+  function onModelRuntimeClick(ev) {
+    const b = ev.target.closest("[data-runtime]"); if (!b || b.disabled) return;
+    const seg = b.closest("#modelRuntimeSeg"); const aid = seg && seg.dataset.agent;
+    const h = O.actingHuman();
+    if (!aid || !h) { O.toast("Pick an acting human first.", "danger"); return; }
+    const runtime = b.dataset.runtime === "codex" ? "codex" : "claude";
+    modelRuntimeFilters[aid] = runtime;
+    renderDetailMain(true);
+  }
+
+  function onModelClick(ev) {
+    const b = ev.target.closest("[data-model]"); if (!b || b.disabled) return;
+    const seg = b.closest("#modelSeg"); const aid = seg && seg.dataset.agent;
+    const h = O.actingHuman();
+    if (!aid || !h) { O.toast("Pick an acting human first.", "danger"); return; }
+    const model = b.dataset.model;   // the curated id (POST /model only accepts ids)
+    const name = (MODELS.find((m) => m.id === model) || {}).name || model;
+    modelRuntimeFilters[aid] = modelRuntimeOf(model);
+    seg.querySelectorAll("[data-model]").forEach((x) => {
+      x.classList.remove("on");
+      x.setAttribute("aria-pressed", "false");
+    });
+    b.classList.add("on");
+    b.setAttribute("aria-pressed", "true");
+    fetch("/api/agents/" + encodeURIComponent(aid) + "/model", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    }).then((r) => O.toast(r.ok ? ("Model → " + name) : ("Failed (" + r.status + ")"), r.ok ? "ok" : "danger"))
+      .catch((e) => O.toast("Failed: " + e.message, "danger"));
+  }
+
+  /* ---------- worker runs (live feed) — built on agent change / run-set change ---------- */
+  function renderRuns(force) {
+    const a = O.agentByAlias(sel);
+    if (!a) { $("runsWrap").innerHTML = ""; return; }
+    const myToken = ++runsToken;
+    fetch("/api/agents/" + encodeURIComponent(a.id) + "/runs")
+      .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d) => {
+        if (myToken !== runsToken || sel !== a.alias) return;   // a newer select superseded us
+        const runs = Array.isArray(d) ? d : (d.runs || []);
+        const sig = runs.map((x) => (x.run_id || x.id) + ":" + x.status).join("|");
+        if (!force && a.alias === runsAgent && sig === runsSig) return;   // nothing changed; keep live streams
+        runsAgent = a.alias; runsSig = sig;
+        if (stopRuns) { stopRuns(); stopRuns = null; }
+        const live = runs.some((x) => x.status === "running");
+        $("runsWrap").innerHTML = `<div class="card">
+          <div class="card-h"><h3>Worker runs</h3><span class="grow"></span>
+            ${live ? '<span class="live accent"><span class="d"></span>live stream</span>' : '<span class="muted" style="font-size:11.5px">'+runs.length+' run'+(runs.length===1?"":"s")+'</span>'}</div>
+          <div class="card-b" style="padding:13px 14px">
+            <p class="muted" style="font-size:12.5px;margin:0 0 12px">Each wake is a fresh headless worker — classified into 9 event types, collapsible by section. ${O.esc(a.alias)} is one continuous agent across all of them.</p>
+            ${runs.length ? runs.map((r) => O.runCard(r)).join("") : '<div class="none">No worker runs yet.</div>'}
+          </div></div>`;
+        stopRuns = O.activateRuns(runs);
+      })
+      .catch(() => {
+        if (myToken !== runsToken) return;
+        if (a.alias !== runsAgent) { runsAgent = a.alias; runsSig = ""; $("runsWrap").innerHTML =
+          '<div class="card"><div class="card-h"><h3>Worker runs</h3></div><div class="card-b" style="padding:14px"><div class="none">Run feed unavailable.</div></div></div>'; }
+      });
+  }
+
+  /* ---------- conversation panel (S1) — mounted in #convWrap, remounted on agent change ---------- */
+  let convAgent = null;
+  function mountConv(a) {
+    if (!window.OrchaConvo) return;
+    if (!a || a.kind === "human") { if (convAgent !== null) { OrchaConvo.teardown(); convAgent = null; } return; }
+    if (a.id === convAgent) return;   // already mounted for this agent (don't remount each tick)
+    convAgent = a.id;
+    OrchaConvo.mount($("convWrap"), a.id);
+  }
+
+  /* S3 §3b terminal moved INTO the conversation panel ("Pair in terminal") — see
+     conversation.js (togglePair/termShell/onTermState). agents.html just hosts the
+     conversation; OrchaTerm (terminal.js) is the shared engine. */
+
+  /* ---------- selection ---------- */
+  function select(alias) {
+    if (alias === sel) return;
+    sel = alias; pendingScroll = true;   // ISS-38: keep the picked roster row anchored in view
+    tasksShown = TASKS_CAP; riShown = REQ_CAP; roShown = REQ_CAP; digestShown = DIGEST_CAP;   // ISS-68 PR-3: reset section caps
+    const u = new URL(location.href); u.searchParams.set("agent", alias); history.replaceState(null, "", u);
+    if (stopRuns) { stopRuns(); stopRuns = null; }
+    runsAgent = null; runsSig = "";
+    renderRoster(); renderDetailMain(true);   // ISS-57: force the detail swap past the selection/input guard
+    const a = O.agentByAlias(sel); if (a) { fetchDigest(a); mountConv(a); }
+    renderRuns(true);
+    window.scrollTo({ top: 0 });
+  }
+
+  // roster clicks are delegated once (the roster element persists across patches).
+  $("roster").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-alias]"); if (b) select(b.dataset.alias);
+  });
+  // ISS-63: collapse-toggle clicks delegated once on the stable #detailMain (its innerHTML is
+  // patched every tick, but the element itself persists, so one listener survives the repaints).
+  $("detailMain").addEventListener("click", (ev) => {
+    if (ev.target.closest(".sortctl")) return;   // ISS-331: handled by wireSortControl below
+    const b = ev.target.closest("[data-collapse]"); if (b) toggleCollapse(b.dataset.collapse);
+  });
+  // ISS-331: re-sort the three agent-detail lists on any sort-control change (one delegated
+  // binding on the persistent #detailMain handles all three controls; force past the repaint guard)
+  O.wireSortControl($("detailMain"), () => renderDetailMain(true));
+
+  // ISS-68 PR-3: per-section "Load more" — delegated once on the persistent #detailMain (its inner
+  // HTML is re-patched each tick, so a stable parent listener survives the repaint).
+  $("detailMain").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-more]"); if (!b) return;
+    const k = b.dataset.more;
+    if (k === "tasks") tasksShown += TASKS_CAP;
+    else if (k === "ri") riShown += REQ_CAP;
+    else if (k === "ro") roShown += REQ_CAP;
+    else if (k === "digest") digestShown += DIGEST_CAP;
+    renderDetailMain();
+  });
+
+  /* ---------- boot ---------- */
+  function render() {
+    if (!D() || !D().container) return;
+    if (!sel || !O.agentByAlias(sel)) sel = firstAlias();
+    O.mountShell("agents", { title: "Agents", ctx: O.agents().length + " agents · " + D().container.name });
+    renderRoster();
+    renderDetailMain();
+    const a = O.agentByAlias(sel);
+    if (a) { fetchDigest(a); renderRuns(false); mountConv(a); }
+  }
+  window.OrchaData.start(render, 3000);
+})();
+</script>
+</body>
+</html>
