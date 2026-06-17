@@ -664,20 +664,6 @@ the smoking gun.
 | Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then `rm -rf .orcha .claude && orcha init` in the target project. |
 | Agent hallucinated an endpoint that doesn't exist | skill briefing didn't enumerate capabilities clearly | tell the agent which Phase the system is at; the register-agent briefing now lists "NOT IN PHASE 1" — direct the agent back to it |
 
----
-
-## What's next (Phase 4+)
-
-- **Phase 4** — Task DAG: incremental readiness propagation already wired in
-  `/api/tasks/{tid}/verify`. Transitive cycle rejection on edge insert was
-  scoped out — see [closed open-orcha/orcha#4](https://github.com/open-orcha/orcha/issues/4)
-  for the rationale (humans are the only edge-builders by design).
-- **Phase 5** — Portal write actions (approve/reject buttons, reassign,
-  reprioritise — instead of `/orcha-*` slash commands).
-- **Phase 6** — Tighter guardrails (max-tasks ceiling, finer turn budgets,
-  per-tab auto-yield).
-- **Phase 7** — Remote / multi-user (auth, per-container rooms, deployable
-  cloud variant).
 
 ---
 
