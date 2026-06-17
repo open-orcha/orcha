@@ -47,11 +47,21 @@ that ship with it. End users don't read this repo; they install it once and run
 
 ### Install the CLI
 
-**Homebrew** (recommended) — installs the `orcha` command-line tool:
+**Homebrew** (recommended) — installs the `orcha` command-line tool.
+
+One-line install (Homebrew taps the repo for you automatically):
 
 ```bash
-brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
 brew install open-orcha/orcha/orcha
+orcha --version
+```
+
+Or tap first, then install with the short name — handy if you'll be running
+other `orcha` formula commands later:
+
+```bash
+brew tap open-orcha/orcha
+brew install orcha
 orcha --version
 ```
 
