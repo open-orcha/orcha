@@ -112,8 +112,8 @@ create a key, **load $20 of credit**, and drop it in your environment:
    ```
 
 > **Trust me — $20 will go a long way, easily a couple of months** of normal
-> use. You can top up later if you ever run low; there's no subscription to
-> manage.
+> use, **and it'll save you a ton of tokens.** You can top up later if you ever
+> run low; there's no subscription to manage.
 
 ### First run
 
