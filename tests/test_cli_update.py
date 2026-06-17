@@ -242,7 +242,7 @@ def test_brew_upgrade_happy_path_runs_tap_qualified_upgrade(monkeypatch):
 
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
     assert cli._brew_upgrade("orcha") is True
-    assert ran["cmd"] == ["/opt/homebrew/bin/brew", "upgrade", "quantal-labs-ai/orcha/orcha"]
+    assert ran["cmd"] == ["/opt/homebrew/bin/brew", "upgrade", "open-orcha/orcha/orcha"]
 
 
 # ----------------------------------------------------------- --no-bridge vs REAL cmd_upgrade

@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-11
 **Status:** approved (design); implementation pending
-**Tracking:** [Orcha#17 — Publish orcha-cli to PyPI for one-line install](https://github.com/Quantal-Labs-AI/Orcha/issues/17)
+**Tracking:** [Orcha#17 — Publish orcha-cli to PyPI for one-line install](https://github.com/open-orcha/orcha/issues/17)
 **Branch:** `feat/homebrew-distribution`
 
 ## Goal
@@ -26,14 +26,14 @@ path to downgrade. Docker Desktop remains the only prerequisite we cannot remove
 
 | Thing | Name |
 |---|---|
-| Tap repo (**private**) | `Quantal-Labs-AI/homebrew-orcha` |
-| Tap setup (once) | `brew tap quantal-labs-ai/orcha git@github.com:Quantal-Labs-AI/homebrew-orcha.git` |
-| User install | `brew install quantal-labs-ai/orcha/orcha` |
+| Tap repo (**private**) | `open-orcha/homebrew-orcha` |
+| Tap setup (once) | `brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git` |
+| User install | `brew install open-orcha/orcha/orcha` |
 | Installed command | `orcha` (unchanged) |
-| Artifact source | git tag of the private `Quantal-Labs-AI/Orcha` repo (no PyPI while private) |
+| Artifact source | git tag of the private `open-orcha/orcha` repo (no PyPI while private) |
 
 The formula depends on `python@3.13`, clones the source repo at the release
-tag (`url "git@github.com:Quantal-Labs-AI/Orcha.git", tag:, revision:`), and
+tag (`url "git@github.com:open-orcha/orcha.git", tag:, revision:`), and
 pip-installs `orcha-cli/` (plus the single pinned `websockets` resource from
 public PyPI) into an isolated keg virtualenv — Homebrew installs Python
 invisibly; the user never sees it. The formula's `caveats` block states the
@@ -71,7 +71,7 @@ documented in the tap README. Anyone outside the org simply can't fetch.
 
 ## 3. Install / upgrade / downgrade semantics
 
-**Install** — `brew install quantal-labs-ai/orcha/orcha`. Done.
+**Install** — `brew install open-orcha/orcha/orcha`. Done.
 
 **Upgrade** — two layers, one command:
 - CLI: `brew upgrade orcha`.
@@ -81,7 +81,7 @@ documented in the tap README. Anyone outside the org simply can't fetch.
   installs and only *prints guidance* for packaged installs. **Change:** detect
   a Homebrew-managed install (the resolved `orcha` executable lives under
   `$(brew --prefix)/Cellar/orcha…`), run
-  `brew upgrade quantal-labs-ai/orcha/orcha`, and re-exec `orcha update
+  `brew upgrade open-orcha/orcha/orcha`, and re-exec `orcha update
   --no-self`, exactly mirroring the editable-install path. Net effect: **one
   command (`orcha update`) upgrades CLI + project templates + portal + DB.**
 - If `brew upgrade` fails (offline, etc.): warn and continue with current code,
@@ -91,7 +91,7 @@ documented in the tap README. Anyone outside the org simply can't fetch.
 
 ```
 brew uninstall orcha
-brew install quantal-labs-ai/orcha/orcha@0.2.1
+brew install open-orcha/orcha/orcha@0.2.1
 ```
 
 Versioned formulae declare `conflicts_with "orcha"` so the two can't coexist.
@@ -120,7 +120,7 @@ untouched and FT-DEPLOY-4 is unaffected.
 
 - **README:** lead with the brew tap + install one-liner; technical
   alternative while private is uv from git
-  (`uv tool install --from "git+ssh://git@github.com/Quantal-Labs-AI/Orcha.git#subdirectory=orcha-cli" orcha-cli`);
+  (`uv tool install --from "git+ssh://git@github.com/open-orcha/orcha.git#subdirectory=orcha-cli" orcha-cli`);
   move the clone/editable/cache-clean dance into a new **`CONTRIBUTING.md`**
   (including the uv wheel-cache footgun note from issue #17).
 - **`CHANGELOG.md`:** Keep-a-Changelog format; the release workflow extracts
@@ -130,7 +130,7 @@ untouched and FT-DEPLOY-4 is unaffected.
 
 ## 6. One-time manual prerequisites (human, not CI)
 
-1. Create the `Quantal-Labs-AI/homebrew-orcha` repo (**private**).
+1. Create the `open-orcha/homebrew-orcha` repo (**private**).
 2. Add the `TAP_GITHUB_TOKEN` secret (fine-grained PAT, contents:write on the
    tap repo only) to this repo.
 3. Ensure the tap-CI self-hosted runner's SSH key can read both private repos.
@@ -178,7 +178,7 @@ untouched and FT-DEPLOY-4 is unaffected.
 Designed so going public is additive, not a rework:
 
 1. Make the tap repo public (tap command shortens to
-   `brew tap quantal-labs-ai/orcha`; installs need no GitHub access).
+   `brew tap open-orcha/orcha`; installs need no GitHub access).
 2. Add the PyPI publish step to `publish.yml` (Trusted Publisher OIDC,
    `pypi` environment) — the build + smoke-test steps it needs already run on
    every release. Package name `orcha-cli` (free; `orcha` taken — verified

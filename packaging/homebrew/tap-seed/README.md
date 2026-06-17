@@ -1,14 +1,14 @@
 # homebrew-orcha — private tap for the `orcha` CLI
 
-**Access = Quantal-Labs-AI org membership + a working GitHub SSH key**
+**Access = open-orcha org membership + a working GitHub SSH key**
 (`ssh -T git@github.com` should greet you). Formulae fetch the private source
 repo over SSH; there are no tokens to configure.
 
 ## Install
 
 ```bash
-brew tap quantal-labs-ai/orcha git@github.com:Quantal-Labs-AI/homebrew-orcha.git
-brew install quantal-labs-ai/orcha/orcha
+brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
+brew install open-orcha/orcha/orcha
 ```
 
 Docker Desktop (or OrbStack/Colima) is required before `orcha init` — the
@@ -33,7 +33,7 @@ Every release leaves a frozen formula behind:
 
 ```bash
 brew uninstall orcha
-brew install quantal-labs-ai/orcha/orcha@0.2.0
+brew install open-orcha/orcha/orcha@0.2.0
 ```
 
 `orcha update` will NOT auto-upgrade a versioned install (it's treated as a
@@ -47,12 +47,12 @@ The frozen formula conflicts with the tracking one, so uninstall it first:
 
 ```bash
 brew uninstall orcha@0.2.0
-brew install quantal-labs-ai/orcha/orcha
+brew install open-orcha/orcha/orcha
 ```
 
 ## Maintenance
 
 `Formula/*.rb` are **generated** by the
-[Orcha release workflow](https://github.com/Quantal-Labs-AI/Orcha/blob/main/.github/workflows/publish.yml).
+[Orcha release workflow](https://github.com/open-orcha/orcha/blob/main/.github/workflows/publish.yml).
 Don't edit them here — change `packaging/homebrew/` in the main repo and cut a
 release.

@@ -2,10 +2,10 @@ class {{CLASS_NAME}} < Formula
   include Language::Python::Virtualenv
 
   desc "Human-authoritative multi-agent orchestration for Claude Code"
-  homepage "https://github.com/Quantal-Labs-AI/Orcha"
+  homepage "https://github.com/open-orcha/orcha"
   # Private repo: git-over-SSH — the installer's GitHub org access IS the auth.
   # `revision` pins the exact commit (the git-source equivalent of a sha256).
-  url "git@github.com:Quantal-Labs-AI/Orcha.git",
+  url "git@github.com:open-orcha/orcha.git",
       using:    :git,
       tag:      "v{{VERSION}}",
       revision: "{{REVISION}}"

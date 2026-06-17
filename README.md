@@ -57,7 +57,7 @@ share the same container scope via that `.claude/orcha.json`.
   `depends_on_id → task_id`. Readiness propagation, the verification gate, and
   parallel execution all assume acyclicity. *Currently only self-loops are
   blocked at the DB; transitive-cycle rejection was scoped out
-  (see [closed Quantal-Labs-AI/Orcha#4](https://github.com/Quantal-Labs-AI/Orcha/issues/4))
+  (see [closed open-orcha/orcha#4](https://github.com/open-orcha/orcha/issues/4))
   because humans are the only edge-builders by design and an accidental cycle
   produces a visible deadlock that's trivial to fix.*
 - **Agent-to-agent communication is NOT required to be acyclic.** Two agents
@@ -404,8 +404,8 @@ Tested on macOS (Apple Silicon, Darwin 25.x). Linux should work; Windows unteste
 One-time tap (private repo — your GitHub org SSH access is the auth):
 
 ```bash
-brew tap quantal-labs-ai/orcha git@github.com:Quantal-Labs-AI/homebrew-orcha.git
-brew install quantal-labs-ai/orcha/orcha
+brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
+brew install open-orcha/orcha/orcha
 ```
 
 Verify:
@@ -418,8 +418,8 @@ orcha --help
 Upgrade with `brew upgrade orcha` — or just run `orcha update` inside a
 project: it upgrades the CLI via brew, then the project's templates, portal,
 and DB in one shot. Downgrade via the frozen per-release formulae
-(`brew install quantal-labs-ai/orcha/orcha@<version>`); details in the
-[tap README](https://github.com/Quantal-Labs-AI/homebrew-orcha).
+(`brew install open-orcha/orcha/orcha@<version>`); details in the
+[tap README](https://github.com/open-orcha/homebrew-orcha).
 
 Hacking on Orcha itself (editable install from a clone)? See
 [CONTRIBUTING.md](./CONTRIBUTING.md).
@@ -670,7 +670,7 @@ the smoking gun.
 
 - **Phase 4** — Task DAG: incremental readiness propagation already wired in
   `/api/tasks/{tid}/verify`. Transitive cycle rejection on edge insert was
-  scoped out — see [closed Quantal-Labs-AI/Orcha#4](https://github.com/Quantal-Labs-AI/Orcha/issues/4)
+  scoped out — see [closed open-orcha/orcha#4](https://github.com/open-orcha/orcha/issues/4)
   for the rationale (humans are the only edge-builders by design).
 - **Phase 5** — Portal write actions (approve/reject buttons, reassign,
   reprioritise — instead of `/orcha-*` slash commands).

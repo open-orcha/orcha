@@ -14,9 +14,9 @@ missing.
 
 ### Added
 - `orcha --version`.
-- Private Homebrew distribution: `brew tap quantal-labs-ai/orcha
-  git@github.com:Quantal-Labs-AI/homebrew-orcha.git && brew install
-  quantal-labs-ai/orcha/orcha`. Python arrives as a hidden brew dependency.
+- Private Homebrew distribution: `brew tap open-orcha/orcha
+  git@github.com:open-orcha/homebrew-orcha.git && brew install
+  open-orcha/orcha/orcha`. Python arrives as a hidden brew dependency.
 - `orcha update` self-upgrades a Homebrew-managed CLI (`brew upgrade`) before
   updating the project — one command for CLI + templates + portal + DB.
   Versioned installs (`orcha@X.Y.Z`) are treated as pins and never moved.

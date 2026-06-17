@@ -6,7 +6,7 @@ End users install via the private Homebrew tap (see README). For working on
 the CLI itself, install from your clone:
 
 ```bash
-git clone git@github.com:Quantal-Labs-AI/Orcha.git ~/src/orcha
+git clone git@github.com:open-orcha/orcha.git ~/src/orcha
 uv tool install --from ~/src/orcha/orcha-cli orcha-cli
 ```
 

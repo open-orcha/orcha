@@ -25,7 +25,7 @@ jobs:
         # brew only audits/installs formulae that live inside a tap directory,
         # so symlink the checkout into brew's Taps tree for the duration.
         run: |
-          TAP_DIR="$(brew --repository)/Library/Taps/quantal-labs-ai/homebrew-orcha"
+          TAP_DIR="$(brew --repository)/Library/Taps/open-orcha/homebrew-orcha"
           mkdir -p "$(dirname "$TAP_DIR")"
           rm -rf "$TAP_DIR"
           ln -s "$GITHUB_WORKSPACE" "$TAP_DIR"
@@ -33,7 +33,7 @@ jobs:
       - name: Audit
         # plain audit (not --strict): --strict rejects non-public URLs, and the
         # formula URL is intentionally git-over-SSH while the repo is private.
-        run: brew audit --tap quantal-labs-ai/orcha || true
+        run: brew audit --tap open-orcha/orcha || true
 
       - name: Install from source + smoke test
         run: |
@@ -43,12 +43,12 @@ jobs:
             echo "no formulae yet — skipping install (first release not cut)"
             exit 0
           fi
-          brew install --build-from-source quantal-labs-ai/orcha/orcha
+          brew install --build-from-source open-orcha/orcha/orcha
           "$(brew --prefix)/bin/orcha" --version
 
       - name: Clean up
         if: always()
         run: |
           brew uninstall --force orcha || true
-          TAP_DIR="$(brew --repository)/Library/Taps/quantal-labs-ai/homebrew-orcha"
+          TAP_DIR="$(brew --repository)/Library/Taps/open-orcha/homebrew-orcha"
           [ -L "$TAP_DIR" ] && rm -f "$TAP_DIR" || true
