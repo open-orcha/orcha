@@ -3,9 +3,7 @@
 **Human-authoritative multi-agent orchestration as Claude Code slash commands.**
 Multiple Claude Code sessions collaborate on a high-level objective through a
 shared Postgres database; the human holds standing authority (approve,
-reprioritise, reassign, arbitrate) over every subtask. See
-[`orcha-design.md`](./orcha-design.md) for the principles, schema, request
-state machine, and phased plan.
+reprioritise, reassign, arbitrate) over every subtask.
 
 This repo is **the Orcha tool source** — the installable CLI, the per-project
 backing service (FastAPI + Postgres), and the slash-command skill templates
@@ -91,9 +89,9 @@ share the same container scope via that `.claude/orcha.json`.
 verification gate, container lifecycle, the agent-to-agent **info + task**
 request bus (Phase 3), server-sent-event push (`/wait` + SSE), the **Epic A
 wake daemon** (`orcha notifier` wakes idle agents out-of-band), and **Epic C**
-per-agent continuity (`orcha rehydrate`/`snapshot`, `/orcha-snapshot`). See the
-phase history in [`orcha-design.md`](./orcha-design.md) and "What's next" below
-for the remaining roadmap (portal write-actions, tighter guardrails, remote).
+per-agent continuity (`orcha rehydrate`/`snapshot`, `/orcha-snapshot`). See
+"What's next" below for the remaining roadmap (portal write-actions, tighter
+guardrails, remote).
 
 Lifecycle (host shell):
 - `orcha init [--objective "..." --as <YourName>]` — bootstrap a project with
@@ -575,7 +573,6 @@ orcha/                                   # this repo
 │           ├── migrations/              # 001_init.sql … 010_wake_kind_ephemeral.sql
 │           ├── portal/{Dockerfile, requirements.txt, main.py, static/}
 │           └── skills/                  # all ~27 orcha-*.md slash-command templates
-├── orcha-design.md                      # principles, schema, runtime model
 └── README.md                            # you are here
 ```
 
@@ -670,8 +667,6 @@ the smoking gun.
 ---
 
 ## What's next (Phase 4+)
-
-Per [`orcha-design.md`](./orcha-design.md) §9:
 
 - **Phase 4** — Task DAG: incremental readiness propagation already wired in
   `/api/tasks/{tid}/verify`. Transitive cycle rejection on edge insert was
