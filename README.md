@@ -47,15 +47,19 @@ that ship with it. End users don't read this repo; they install it once and run
 
 ### Install the CLI
 
-<!-- HOMEBREW: replace the commented block below with the real `brew tap` + `brew install` commands once the open-orcha tap repo is published. -->
-**Homebrew** — _coming soon (once the tap is configured):_
+**Homebrew** (recommended) — installs the `orcha` command-line tool:
 
 ```bash
-# brew tap open-orcha/orcha
-# brew install orcha
+brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
+brew install open-orcha/orcha/orcha
+orcha --version
 ```
 
-**From source** (works today):
+This installs **only the CLI**. Orcha's web portal isn't a separate download —
+it starts automatically as a Docker container the first time you run
+`orcha init` in a project (see [First run](#first-run) below).
+
+**From source** (for hacking on Orcha itself):
 
 ```bash
 git clone git@github.com:open-orcha/orcha.git
@@ -64,10 +68,18 @@ pip install ./orcha-cli
 orcha --version
 ```
 
-### Desktop app (optional)
+### Mac desktop app (optional)
 
-<!-- NPM: add the published npm install/run instructions here once configured. -->
-_Packaged npm instructions coming soon._ To build and run it from source today:
+Most people don't need this — the CLI plus the web portal cover the whole
+workflow. The desktop app is **not** installed through Homebrew (there's no
+cask); if you want the native Mac app, download it directly:
+
+- **GitHub Releases** — latest `.dmg` / `.zip`:
+  <https://github.com/open-orcha/orcha/releases/latest>
+- The **Download** button on the Orcha website (same build)
+
+The current Mac build is unsigned, so on first launch right-click the app →
+**Open** to get past macOS Gatekeeper. To build it from source instead:
 
 ```bash
 cd desktop
