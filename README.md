@@ -97,6 +97,24 @@ npm install
 npm run dev      # or: npm run build
 ```
 
+### Add your Anthropic API key
+
+Orcha's agents run on Claude, so they need an Anthropic API key. The lowest-lift
+way to get going — and the one we recommend for onboarding and handoffs — is to
+create a key, **load $20 of credit**, and drop it in your environment:
+
+1. Go to [console.anthropic.com](https://console.anthropic.com/), create an API
+   key, and add **$20** of credit under **Billing**.
+2. Set it in your shell (add to `~/.zshrc` or `~/.bashrc` to make it stick):
+
+   ```bash
+   export ORCHA_LLM_API_KEY="sk-ant-..."   # or: ANTHROPIC_API_KEY
+   ```
+
+> **Trust me — $20 will go a long way, easily a couple of months** of normal
+> use. You can top up later if you ever run low; there's no subscription to
+> manage.
+
 ### First run
 
 In any project you want to orchestrate:
