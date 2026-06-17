@@ -102,9 +102,11 @@ other red is a real regression** — investigate before opening/approving a PR.
 Report the local `pytest` result verbatim (e.g. `738 passed, 1 failed` with the failure being
 the accepted-red above) in **every PR body**.
 
-**CI-red is not, by itself, a merge block.** CI runs on a self-hosted pool on Kedar's Mac and
-hosted minutes are exhausted, so CI can be billing-/flake-red while the code is fine. The
-local "N passed" is the trustworthy signal; CI is advisory.
+Since the repo is public, CI runs on **GitHub-hosted `ubuntu-latest` runners** (free + unlimited
+for public repos) — so CI is authoritative, not advisory. Still report the local `pytest` result
+in the PR body. Note that a few macOS-only tests (e.g. notifier daemon process-vetting, which
+relies on macOS `ps` semantics) are `skipif`-guarded to skip on Linux CI; they still run locally
+on a Mac, which is where that code actually runs in production.
 
 ---
 

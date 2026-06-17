@@ -113,6 +113,12 @@ def test_prune_leaves_unclassifiable_bindings(tmp_path):
 
 # ---------- #255: stop the daemon bound to the OLD container ----------
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="Identity-vets the daemon via macOS `ps -o command=`/state semantics and relies on "
+           "zombie-state exit detection; the notifier only runs on macOS in production, so this "
+           "is not validated on Linux CI runners.",
+)
 def test_stop_daemon_for_container_signals_and_clears_pidfile(monkeypatch, tmp_path):
     """TEETH (#255): a live daemon recorded for the OLD container is SIGTERM'd and its pidfile
     removed. Mutation: skip the kill in `stop_daemon_for_container` → the proc stays alive →
