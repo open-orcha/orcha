@@ -1,18 +1,7 @@
-import { execFile } from 'node:child_process'
 import type { Stack } from '../shared/types'
+import { dockerExec, type Exec, type ExecResult } from './dockerExec'
 
-export interface ExecResult {
-  stdout: string
-}
-export type Exec = (cmd: string, args: string[]) => Promise<ExecResult>
-
-const defaultExec: Exec = (cmd, args) =>
-  new Promise((resolve, reject) => {
-    execFile(cmd, args, { encoding: 'utf8' }, (err, stdout) => {
-      if (err) reject(err)
-      else resolve({ stdout })
-    })
-  })
+const defaultExec: Exec = dockerExec
 
 const PS_FORMAT = '{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}'
 

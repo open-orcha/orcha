@@ -1,17 +1,6 @@
-import { execFile } from 'node:child_process'
+import { dockerExec, type Exec } from './dockerExec'
 
-export interface ExecResult {
-  stdout: string
-}
-export type Exec = (cmd: string, args: string[]) => Promise<ExecResult>
-
-const defaultExec: Exec = (cmd, args) =>
-  new Promise((resolve, reject) => {
-    execFile(cmd, args, { encoding: 'utf8' }, (err, stdout, stderr) => {
-      if (err) reject(Object.assign(err, { stderr }))
-      else resolve({ stdout })
-    })
-  })
+const defaultExec: Exec = dockerExec
 
 // Belt-and-braces: main/index.ts also validates against the discovery snapshot;
 // this guard makes lifecycle safe in isolation (argv is never renderer-controlled
