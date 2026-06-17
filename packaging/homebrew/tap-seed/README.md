@@ -1,14 +1,19 @@
-# homebrew-orcha — private tap for the `orcha` CLI
+# homebrew-orcha — Homebrew tap for the `orcha` CLI
 
-**Access = open-orcha org membership + a working GitHub SSH key**
-(`ssh -T git@github.com` should greet you). Formulae fetch the private source
-repo over SSH; there are no tokens to configure.
+Public tap. No GitHub account, SSH key, or token required — the formula fetches
+the source over HTTPS.
 
 ## Install
 
 ```bash
-brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
-brew install open-orcha/orcha/orcha
+brew install open-orcha/orcha/orcha   # one line; taps automatically
+```
+
+or, equivalently:
+
+```bash
+brew tap open-orcha/orcha
+brew install orcha
 ```
 
 Docker Desktop (or OrbStack/Colima) is required before `orcha init` — the
