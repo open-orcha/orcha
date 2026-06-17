@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-11
 **Status:** implemented on `feat/desktop-app` (v1 + v1.1); packaging deferred post-#238
-**Tracking:** [Orcha#237 — Desktop app shell for Orcha](https://github.com/Quantal-Labs-AI/Orcha/issues/237)
+**Tracking:** [Orcha#237 — Desktop app shell for Orcha](https://github.com/open-orcha/orcha/issues/237)
 **Branch:** `feat/desktop-app` (cut from `main`; independent of the un-merged
 distribution PR #238)
 

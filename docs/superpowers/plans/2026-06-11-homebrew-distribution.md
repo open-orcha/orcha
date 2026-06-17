@@ -4,7 +4,7 @@
 
 **Goal:** Ship the `orcha` CLI through a private Homebrew tap with clean install/upgrade/downgrade, per the approved spec at `docs/superpowers/specs/2026-06-11-homebrew-distribution-design.md`.
 
-**Architecture:** The formula in a private tap (`Quantal-Labs-AI/homebrew-orcha`) installs the CLI from a git tag of the private source repo over SSH, with Python as a hidden brew dependency. A tag-driven GitHub workflow builds + smoke-tests the wheel, creates a GitHub Release, and pushes regenerated formulae (tracking `orcha.rb` + frozen `orcha@X.Y.Z.rb`) to the tap. `orcha update` learns to self-upgrade brew-managed installs. No PyPI while private (§10 of the spec covers the later flip).
+**Architecture:** The formula in a private tap (`open-orcha/homebrew-orcha`) installs the CLI from a git tag of the private source repo over SSH, with Python as a hidden brew dependency. A tag-driven GitHub workflow builds + smoke-tests the wheel, creates a GitHub Release, and pushes regenerated formulae (tracking `orcha.rb` + frozen `orcha@X.Y.Z.rb`) to the tap. `orcha update` learns to self-upgrade brew-managed installs. No PyPI while private (§10 of the spec covers the later flip).
 
 **Tech Stack:** Python 3.10+ (CLI), hatchling (build), pytest (tests), GitHub Actions on the existing self-hosted Mac runner pool, Homebrew formula DSL (Ruby, generated — never hand-edited).
 
@@ -53,7 +53,7 @@ cp LICENSE orcha-cli/LICENSE
 installs slash-command skills so multiple Claude Code sessions collaborate on
 one objective under standing human authority.
 
-- Source, full README, issues: <https://github.com/Quantal-Labs-AI/Orcha>
+- Source, full README, issues: <https://github.com/open-orcha/orcha>
 - Requires Docker Desktop (or OrbStack/Colima).
 
 Quick start:
@@ -74,7 +74,7 @@ description = "Orcha: human-authoritative multi-agent orchestration via Claude C
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Quantal Labs AI" }]
+authors = [{ name = "Orcha contributors" }]
 requires-python = ">=3.10"
 # S3 §3b: the host-side live-terminal PTY/websocket bridge (`orcha terminal-bridge`) needs a
 # websocket server. Imported lazily, so the rest of the CLI still runs if it's not yet installed.
@@ -90,9 +90,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Quantal-Labs-AI/Orcha"
-Issues = "https://github.com/Quantal-Labs-AI/Orcha/issues"
-Changelog = "https://github.com/Quantal-Labs-AI/Orcha/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/open-orcha/orcha"
+Issues = "https://github.com/open-orcha/orcha/issues"
+Changelog = "https://github.com/open-orcha/orcha/blob/main/CHANGELOG.md"
 
 [project.scripts]
 orcha = "orcha_cli.__main__:main"
@@ -319,7 +319,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ### Task 4: Brew-aware `orcha update` phase 0
 
-Today phase 0 self-reinstalls editable installs and only prints guidance for packaged ones. Add a third arm: brew-managed → `brew upgrade quantal-labs-ai/orcha/orcha` → re-exec `orcha update --no-self`, mirroring the editable path. Versioned kegs (`orcha@X.Y.Z`) are a deliberate user pin — never auto-upgraded.
+Today phase 0 self-reinstalls editable installs and only prints guidance for packaged ones. Add a third arm: brew-managed → `brew upgrade open-orcha/orcha/orcha` → re-exec `orcha update --no-self`, mirroring the editable path. Versioned kegs (`orcha@X.Y.Z`) are a deliberate user pin — never auto-upgraded.
 
 **Files:**
 - Modify: `orcha-cli/orcha_cli/__main__.py` (`_reinstall_cli` neighborhood ~line 632; phase 0 of `cmd_update` ~line 668-688)
@@ -405,14 +405,14 @@ def _brew_upgrade(keg: str) -> bool:
     explicit user pin — refuse so `orcha update` never silently moves a downgrade."""
     if "@" in keg:
         print(f"[orcha] host CLI is pinned to versioned formula {keg} — skipping "
-              "self-upgrade (brew install quantal-labs-ai/orcha/orcha to track releases).")
+              "self-upgrade (brew install open-orcha/orcha/orcha to track releases).")
         return False
     brew = shutil.which("brew")
     if not brew:
         print("[orcha] warn: Homebrew install detected but `brew` is not on PATH; "
               "upgrade manually with `brew upgrade orcha`.", file=sys.stderr)
         return False
-    cmd = [brew, "upgrade", f"quantal-labs-ai/orcha/{keg}"]
+    cmd = [brew, "upgrade", f"open-orcha/orcha/{keg}"]
     print(f"[orcha] upgrading host CLI via Homebrew\n        $ {' '.join(cmd)}")
     try:
         return subprocess.run(cmd).returncode == 0
@@ -571,10 +571,10 @@ class {{CLASS_NAME}} < Formula
   include Language::Python::Virtualenv
 
   desc "Human-authoritative multi-agent orchestration for Claude Code"
-  homepage "https://github.com/Quantal-Labs-AI/Orcha"
+  homepage "https://github.com/open-orcha/orcha"
   # Private repo: git-over-SSH — the installer's GitHub org access IS the auth.
   # `revision` pins the exact commit (the git-source equivalent of a sha256).
-  url "git@github.com:Quantal-Labs-AI/Orcha.git",
+  url "git@github.com:open-orcha/orcha.git",
       using:    :git,
       tag:      "v{{VERSION}}",
       revision: "{{REVISION}}"
@@ -712,15 +712,15 @@ The tap repo is pure derived artifact: `Formula/` is owned by the release workfl
 ```markdown
 # homebrew-orcha — private tap for the `orcha` CLI
 
-**Access = Quantal-Labs-AI org membership + a working GitHub SSH key**
+**Access = open-orcha org membership + a working GitHub SSH key**
 (`ssh -T git@github.com` should greet you). Formulae fetch the private source
 repo over SSH; there are no tokens to configure.
 
 ## Install
 
 ```bash
-brew tap quantal-labs-ai/orcha git@github.com:Quantal-Labs-AI/homebrew-orcha.git
-brew install quantal-labs-ai/orcha/orcha
+brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
+brew install open-orcha/orcha/orcha
 ```
 
 Docker Desktop (or OrbStack/Colima) is required before `orcha init` — the
@@ -745,7 +745,7 @@ Every release leaves a frozen formula behind:
 
 ```bash
 brew uninstall orcha
-brew install quantal-labs-ai/orcha/orcha@0.2.0
+brew install open-orcha/orcha/orcha@0.2.0
 ```
 
 `orcha update` will NOT auto-upgrade a versioned install (it's treated as a
@@ -756,7 +756,7 @@ fine against the newer (additive) schema; a true schema rollback is
 ## Maintenance
 
 `Formula/*.rb` are **generated** by the
-[Orcha release workflow](https://github.com/Quantal-Labs-AI/Orcha/blob/main/.github/workflows/publish.yml).
+[Orcha release workflow](https://github.com/open-orcha/orcha/blob/main/.github/workflows/publish.yml).
 Don't edit them here — change `packaging/homebrew/` in the main repo and cut a
 release.
 ```
@@ -788,7 +788,7 @@ jobs:
         # brew only audits/installs formulae that live inside a tap directory,
         # so symlink the checkout into brew's Taps tree for the duration.
         run: |
-          TAP_DIR="$(brew --repository)/Library/Taps/quantal-labs-ai/homebrew-orcha"
+          TAP_DIR="$(brew --repository)/Library/Taps/open-orcha/homebrew-orcha"
           mkdir -p "$(dirname "$TAP_DIR")"
           rm -rf "$TAP_DIR"
           ln -s "$GITHUB_WORKSPACE" "$TAP_DIR"
@@ -796,25 +796,25 @@ jobs:
       - name: Audit
         # plain audit (not --strict): --strict rejects non-public URLs, and the
         # formula URL is intentionally git-over-SSH while the repo is private.
-        run: brew audit --tap quantal-labs-ai/orcha || true
+        run: brew audit --tap open-orcha/orcha || true
 
       - name: Install from source + smoke test
         run: |
-          brew install --build-from-source quantal-labs-ai/orcha/orcha
+          brew install --build-from-source open-orcha/orcha/orcha
           "$(brew --prefix)/bin/orcha" --version
 
       - name: Clean up
         if: always()
         run: |
           brew uninstall --force orcha || true
-          rm -f "$(brew --repository)/Library/Taps/quantal-labs-ai/homebrew-orcha"
+          rm -f "$(brew --repository)/Library/Taps/open-orcha/homebrew-orcha"
 ```
 
 - [ ] **Step 3: Create `packaging/homebrew/bootstrap_tap.sh`:**
 
 ```bash
 #!/usr/bin/env bash
-# One-time bootstrap of the PRIVATE tap repo Quantal-Labs-AI/homebrew-orcha.
+# One-time bootstrap of the PRIVATE tap repo open-orcha/homebrew-orcha.
 # Seeds README + CI only — Formula/ is owned by the release workflow, which
 # pushes rendered formulae on every vX.Y.Z tag (so the tap stays installable
 # only after the first release exists).
@@ -824,7 +824,7 @@ jobs:
 # exists; the seed push is a plain commit (no force).
 set -euo pipefail
 
-ORG="Quantal-Labs-AI"
+ORG="open-orcha"
 TAP_REPO="homebrew-orcha"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -895,9 +895,9 @@ missing.
 
 ### Added
 - `orcha --version`.
-- Private Homebrew distribution: `brew tap quantal-labs-ai/orcha
-  git@github.com:Quantal-Labs-AI/homebrew-orcha.git && brew install
-  quantal-labs-ai/orcha/orcha`. Python arrives as a hidden brew dependency.
+- Private Homebrew distribution: `brew tap open-orcha/orcha
+  git@github.com:open-orcha/homebrew-orcha.git && brew install
+  open-orcha/orcha/orcha`. Python arrives as a hidden brew dependency.
 - `orcha update` self-upgrades a Homebrew-managed CLI (`brew upgrade`) before
   updating the project — one command for CLI + templates + portal + DB.
   Versioned installs (`orcha@X.Y.Z`) are treated as pins and never moved.
@@ -1092,13 +1092,13 @@ jobs:
           # rev-list dereferences annotated tags to the commit the formula must pin.
           REVISION="$(git rev-list -n1 "$GITHUB_REF_NAME")"
           WORK="$(mktemp -d)"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Quantal-Labs-AI/homebrew-orcha.git" "$WORK/tap"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/open-orcha/homebrew-orcha.git" "$WORK/tap"
           ./.release-venv/bin/python packaging/homebrew/render_formula.py "$VERSION" "$REVISION" "$WORK/tap/Formula"
           git -C "$WORK/tap" add Formula
           if git -C "$WORK/tap" diff --cached --quiet; then
             echo "tap already at $VERSION — nothing to push (idempotent re-run)"
           else
-            git -C "$WORK/tap" -c user.name=orcha-release-bot -c user.email=releases@quantal-labs.ai \
+            git -C "$WORK/tap" -c user.name=orcha-release-bot -c user.email=orcha-release-bot@users.noreply.github.com \
               commit -m "orcha ${VERSION}"
             git -C "$WORK/tap" push origin HEAD:main
           fi
@@ -1148,8 +1148,8 @@ README leads with the brew install (spec §5); the local-clone/editable/cache-cl
 One-time tap (private repo — your GitHub org SSH access is the auth):
 
 ```bash
-brew tap quantal-labs-ai/orcha git@github.com:Quantal-Labs-AI/homebrew-orcha.git
-brew install quantal-labs-ai/orcha/orcha
+brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
+brew install open-orcha/orcha/orcha
 ```
 
 Verify:
@@ -1162,8 +1162,8 @@ orcha --help
 Upgrade with `brew upgrade orcha` — or just run `orcha update` inside a
 project: it upgrades the CLI via brew, then the project's templates, portal,
 and DB in one shot. Downgrade via the frozen per-release formulae
-(`brew install quantal-labs-ai/orcha/orcha@<version>`); details in the
-[tap README](https://github.com/Quantal-Labs-AI/homebrew-orcha).
+(`brew install open-orcha/orcha/orcha@<version>`); details in the
+[tap README](https://github.com/open-orcha/homebrew-orcha).
 
 Hacking on Orcha itself (editable install from a clone)? See
 [CONTRIBUTING.md](./CONTRIBUTING.md).
@@ -1180,7 +1180,7 @@ End users install via the private Homebrew tap (see README). For working on
 the CLI itself, install from your clone:
 
 ```bash
-git clone git@github.com:Quantal-Labs-AI/Orcha.git ~/src/orcha
+git clone git@github.com:open-orcha/orcha.git ~/src/orcha
 uv tool install --from ~/src/orcha/orcha-cli orcha-cli
 ```
 
@@ -1291,7 +1291,7 @@ gh pr create --title "Private Homebrew distribution for orcha-cli (Orcha#17)" --
 
 Closes the distribution half of #17 (PyPI deferred to the going-public flip — spec §10):
 
-- **Install:** private tap — `brew tap quantal-labs-ai/orcha git@github.com:Quantal-Labs-AI/homebrew-orcha.git && brew install quantal-labs-ai/orcha/orcha`. Python is a hidden brew dep; org SSH access is the auth.
+- **Install:** private tap — `brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git && brew install open-orcha/orcha/orcha`. Python is a hidden brew dep; org SSH access is the auth.
 - **Upgrade:** `brew upgrade orcha`, or just `orcha update` — phase 0 now self-upgrades brew-managed installs (mirrors the editable path) before updating templates/portal/DB.
 - **Downgrade:** every release pushes a frozen `orcha@X.Y.Z` formula; versioned installs are treated as pins (`orcha update` won't move them). Forward-only-migration caveat documented in formula caveats + tap README.
 - **Release pipeline:** tag `vX.Y.Z` → version guard → build + wheel smoke → GitHub Release (notes from CHANGELOG) → render+push tap formulae. `workflow_dispatch` = dry-run.

@@ -103,13 +103,13 @@ jobs:
           # and trap signals too: cancellation SIGTERMs the step before SIGKILL.
           WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tap.XXXXXX")"
           trap 'rm -rf "$WORK"' EXIT INT TERM
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Quantal-Labs-AI/homebrew-orcha.git" "$WORK/tap"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/open-orcha/homebrew-orcha.git" "$WORK/tap"
           ./.release-venv/bin/python packaging/homebrew/render_formula.py "$VERSION" "$REVISION" "$WORK/tap/Formula"
           git -C "$WORK/tap" add Formula
           if git -C "$WORK/tap" diff --cached --quiet; then
             echo "tap already at $VERSION — nothing to push (idempotent re-run)"
           else
-            git -C "$WORK/tap" -c user.name=orcha-release-bot -c user.email=releases@quantal-labs.ai \
+            git -C "$WORK/tap" -c user.name=orcha-release-bot -c user.email=orcha-release-bot@users.noreply.github.com \
               commit -m "orcha ${VERSION}"
             git -C "$WORK/tap" push origin HEAD:main
           fi

@@ -6,7 +6,7 @@
 installs slash-command skills so multiple Claude Code sessions collaborate on
 one objective under standing human authority.
 
-- Source, full README, issues: <https://github.com/Quantal-Labs-AI/Orcha>
+- Source, full README, issues: <https://github.com/open-orcha/orcha>
 - Requires Docker Desktop (or OrbStack/Colima).
 
 Quick start:

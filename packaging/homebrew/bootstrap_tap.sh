@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time bootstrap of the PRIVATE tap repo Quantal-Labs-AI/homebrew-orcha.
+# One-time bootstrap of the PRIVATE tap repo open-orcha/homebrew-orcha.
 # Seeds README + CI only — Formula/ is owned by the release workflow, which
 # pushes rendered formulae on every vX.Y.Z tag (so the tap stays installable
 # only after the first release exists).
@@ -9,7 +9,7 @@
 # exists; the seed push is a plain commit (no force).
 set -euo pipefail
 
-ORG="Quantal-Labs-AI"
+ORG="open-orcha"
 TAP_REPO="homebrew-orcha"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 command -v gh >/dev/null || { echo "error: gh (GitHub CLI) is required and must be authenticated" >&2; exit 1; }

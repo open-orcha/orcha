@@ -1006,15 +1006,15 @@ def _brew_upgrade(keg: str) -> bool:
     if "@" in keg:
         print(f"[orcha] host CLI is pinned to versioned formula {keg} — skipping "
               f"self-upgrade (to track releases again: brew uninstall {keg} && "
-              "brew install quantal-labs-ai/orcha/orcha).")
+              "brew install open-orcha/orcha/orcha).")
         return False
     brew = shutil.which("brew")
     if not brew:
         print("[orcha] warn: Homebrew install detected but `brew` is not on PATH; "
               "fix your PATH (or reinstall Homebrew), then "
-              "`brew upgrade quantal-labs-ai/orcha/orcha`.", file=sys.stderr)
+              "`brew upgrade open-orcha/orcha/orcha`.", file=sys.stderr)
         return False
-    cmd = [brew, "upgrade", f"quantal-labs-ai/orcha/{keg}"]
+    cmd = [brew, "upgrade", f"open-orcha/orcha/{keg}"]
     print(f"[orcha] upgrading host CLI via Homebrew\n        $ {' '.join(cmd)}")
     try:
         return subprocess.run(cmd).returncode == 0
