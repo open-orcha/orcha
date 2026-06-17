@@ -12,6 +12,82 @@ that ship with it. End users don't read this repo; they install it once and run
 
 ---
 
+## Tech stack
+
+| Layer | Built with |
+|---|---|
+| **CLI** (`orcha`) | Python ≥ 3.10 |
+| **Backing service / API** | FastAPI + Uvicorn (Python), Pydantic |
+| **Database** | PostgreSQL 16 |
+| **Runtime** | Docker + Docker Compose — one isolated stack per project |
+| **Web dashboard** | Vanilla HTML / CSS / JS, with xterm.js for the live terminal |
+| **Desktop app** (optional) | Electron + React 19 + TypeScript (Vite) |
+| **macOS widget** (optional) | Swift (WidgetKit) |
+| **Agent layer** | Claude Code slash-command skills |
+
+---
+
+## Installation
+
+> **Docker is required.** Orcha runs its Postgres database and web portal as
+> containers, so install and start a container runtime first —
+> [Docker Desktop](https://www.docker.com/products/docker-desktop/),
+> [OrbStack](https://orbstack.dev/), or [Colima](https://github.com/abiosoft/colima)
+> all work.
+
+### Prerequisites
+
+| Tool | Why | Needed by |
+|---|---|---|
+| **Docker** (Desktop / OrbStack / Colima) | runs Postgres + the portal | everyone |
+| **Python ≥ 3.10** | runs the `orcha` CLI | everyone |
+| **Claude Code** | where the slash commands run | everyone |
+| **Node.js + npm** | builds the desktop app | optional desktop app only |
+| **Xcode** | builds the macOS widget | optional widget only |
+
+### Install the CLI
+
+<!-- HOMEBREW: replace the commented block below with the real `brew tap` + `brew install` commands once the open-orcha tap repo is published. -->
+**Homebrew** — _coming soon (once the tap is configured):_
+
+```bash
+# brew tap open-orcha/orcha
+# brew install orcha
+```
+
+**From source** (works today):
+
+```bash
+git clone git@github.com:open-orcha/orcha.git
+cd orcha
+pip install ./orcha-cli
+orcha --version
+```
+
+### Desktop app (optional)
+
+<!-- NPM: add the published npm install/run instructions here once configured. -->
+_Packaged npm instructions coming soon._ To build and run it from source today:
+
+```bash
+cd desktop
+npm install
+npm run dev      # or: npm run build
+```
+
+### First run
+
+In any project you want to orchestrate:
+
+```bash
+orcha init --objective "Ship the thing" --as <YourName>
+```
+
+This brings up the project's Docker stack and registers you as the first human.
+See [How it works](#how-it-works-30-second-tour) below for the full tour.
+
+---
+
 ## How it works (30-second tour)
 
 1. You install a tiny CLI once: `orcha`.
