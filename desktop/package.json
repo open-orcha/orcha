@@ -1,15 +1,18 @@
 {
   "name": "orcha-desktop",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Orcha Desktop — stack manager for orcha-* Docker stacks (Orcha#237)",
   "main": "./out/main/index.js",
+  "author": "Orcha",
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "dist:mac": "electron-vite build && electron-builder --mac --universal",
+    "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64"
   },
   "license": "MIT",
   "dependencies": {
@@ -25,6 +28,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "^42.4.1",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^6.0.0-beta.1",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",

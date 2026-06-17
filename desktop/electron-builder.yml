@@ -1,0 +1,44 @@
+appId: io.openorcha.desktop
+productName: Orcha
+copyright: Copyright © 2026 Orcha
+
+# What goes inside the .app bundle. electron-vite emits everything to out/;
+# the renderer bundles its own deps, and main/preload have no external runtime
+# deps, so we only ship out/ + package.json (electron-builder needs the latter
+# to resolve "main").
+files:
+  - out/**/*
+  - package.json
+
+directories:
+  output: dist
+  buildResources: resources
+
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.png
+  # Ad-hoc (unsigned) build — no Apple Developer ID required. Gatekeeper will
+  # warn on first open; users right-click → Open, or run the documented
+  # xattr/quarantine-clear step. Set DEVELOPMENT identity / notarization here
+  # when a Developer ID cert is available.
+  identity: null
+  target:
+    - dmg
+    - zip
+
+# Preserve the orcha:// deep-link protocol the widget uses to open the app.
+protocols:
+  - name: Orcha
+    schemes:
+      - orcha
+
+dmg:
+  # Standard drag-to-Applications layout.
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
