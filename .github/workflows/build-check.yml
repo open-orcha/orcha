@@ -13,25 +13,25 @@ concurrency:
 
 jobs:
   build:
-    # Self-hosted Mac pool; Homebrew python3.11 in a throwaway venv —
-    # actions/setup-python is non-relocatable on these runners (see test.yml).
-    runs-on: self-hosted
+    # GitHub-hosted runner: free + unlimited minutes for public repos.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Build sdist + wheel, twine check, wheel smoke test
         run: |
-          PY="$(command -v python3.11 || echo /opt/homebrew/bin/python3.11)"
-          rm -rf .build-venv dist
-          "$PY" -m venv .build-venv
-          ./.build-venv/bin/pip install --upgrade pip build twine
-          ./.build-venv/bin/python -m build orcha-cli --outdir dist
-          ./.build-venv/bin/twine check dist/*
-          rm -rf .smoke-venv
-          "$PY" -m venv .smoke-venv
+          python -m pip install --upgrade pip build twine
+          python -m build orcha-cli --outdir dist
+          twine check dist/*
+          python -m venv .smoke-venv
           ./.smoke-venv/bin/pip install dist/*.whl
           ./.smoke-venv/bin/orcha --version
 
-      - name: Clean up venvs
+      - name: Clean up
         if: always()
-        run: rm -rf .build-venv .smoke-venv dist
+        run: rm -rf .smoke-venv dist
