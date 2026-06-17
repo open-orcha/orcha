@@ -1,6 +1,6 @@
 {
   "name": "orcha-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Orcha Desktop — stack manager for orcha-* Docker stacks (Orcha#237)",
   "main": "./out/main/index.js",
   "author": "Orcha",
