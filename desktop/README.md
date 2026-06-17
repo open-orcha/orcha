@@ -28,9 +28,41 @@ npm run dev            # add "-- --watch" to hot-restart main-process changes
 ## Dev-mode caveats
 
 - The macOS app-menu title says "Electron" — it comes from the dev binary's
-  Info.plist and becomes "Orcha" when the app is packaged.
-- Packaging/signing/DMG/auto-update are deferred until the Homebrew release
-  pipeline (#238) ships; until then the app is dev-run only.
+  Info.plist and becomes "Orcha" in the packaged build (see below).
+
+## Packaging a distributable Mac app
+
+Packaging is driven by [electron-builder](https://www.electron.build/),
+configured in `electron-builder.yml` (appId `io.openorcha.desktop`,
+productName `Orcha`, the `orcha://` deep-link protocol, and the app icon).
+
+```bash
+npm install
+npm run dist:mac          # universal (Intel + Apple Silicon) .dmg + .zip
+# or, for a faster local build that only targets this machine's arch:
+npm run dist:mac:arm64
+```
+
+Outputs land in `desktop/dist/` (gitignored):
+
+- `Orcha-<version>-universal.dmg` — drag-to-Applications installer
+- `Orcha-<version>-universal-mac.zip` — zip of `Orcha.app` (used by the
+  Homebrew cask/formula)
+
+The version comes from `package.json`'s `version` field — bump it there before
+a release and tag the matching `vX.Y.Z` on the GitHub Release.
+
+**Signing:** builds are currently **ad-hoc (unsigned)** — `mac.identity` is
+`null` in `electron-builder.yml`, so no Apple Developer ID is required.
+Gatekeeper will warn on first open; users either right-click the app →
+**Open**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Orcha.app
+```
+
+When a Developer ID certificate is available, set the identity in
+`electron-builder.yml` and add notarization to ship a Gatekeeper-clean build.
 
 ## Desktop widget
 
