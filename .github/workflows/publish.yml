@@ -2,7 +2,11 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    # CLI releases only. MUST stay `cli-v*`, NOT `v*`: the Mac desktop app ships
+    # from this same repo on bare `vX.Y.Z` tags (e.g. v1.0.0, v1.0.1), so a `v*`
+    # trigger would fire this CLI publish on every app release. Keep the two tag
+    # namespaces disjoint.
+    tags: ["cli-v*"]
   # Dry-run: build + smoke only — no release, no tap push. Lets us validate the
   # pipeline before the first real tag (spec §7).
   workflow_dispatch:
@@ -41,7 +45,7 @@ jobs:
       - name: Guard — tag must equal pyproject version
         if: github.event_name == 'push'
         run: |
-          TAG_V="${GITHUB_REF_NAME#v}"
+          TAG_V="${GITHUB_REF_NAME#cli-v}"
           PKG_V="$(./.release-venv/bin/python -c "import tomllib;print(tomllib.load(open('orcha-cli/pyproject.toml','rb'))['project']['version'])")"
           if [ "$TAG_V" != "$PKG_V" ]; then
             echo "::error::tag ${GITHUB_REF_NAME} != pyproject version ${PKG_V} — bump orcha-cli/pyproject.toml first" >&2
@@ -68,14 +72,14 @@ jobs:
       - name: Extract release notes from CHANGELOG.md
         if: github.event_name == 'push'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${GITHUB_REF_NAME#cli-v}"
           awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {flag=1; next} /^## \[/ {flag=0} flag' CHANGELOG.md > .release-notes.md
           if ! [ -s .release-notes.md ]; then
             echo "::error::CHANGELOG.md has no '## [${VERSION}]' section — add it before tagging" >&2
             exit 1
           fi
 
-      - name: Create GitHub release (private repo => release stays private)
+      - name: Create GitHub release (public repo => release is public)
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,7 +100,7 @@ jobs:
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${GITHUB_REF_NAME#cli-v}"
           # rev-list dereferences annotated tags to the commit the formula must pin.
           REVISION="$(git rev-list -n1 "$GITHUB_REF_NAME")"
           # Root the token-bearing clone under RUNNER_TEMP (wiped between jobs)

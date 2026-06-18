@@ -5,7 +5,7 @@ frozen Formula/orcha@X.Y.Z.rb (the downgrade target). Pure stdlib — used by
 
 Usage: render_formula.py VERSION REVISION OUT_DIR
   VERSION   release version, X.Y.Z (no leading v)
-  REVISION  full 40-char commit sha the vX.Y.Z tag points at
+  REVISION  full 40-char commit sha the cli-vX.Y.Z tag points at
   OUT_DIR   directory to write orcha.rb and orcha@X.Y.Z.rb into
 """
 import pathlib

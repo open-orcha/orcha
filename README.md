@@ -1,5 +1,7 @@
 # Orcha
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20740087.svg)](https://doi.org/10.5281/zenodo.20740087)
+
 **Human-authoritative multi-agent orchestration as Claude Code slash commands.**
 Multiple Claude Code sessions collaborate on a high-level objective through a
 shared Postgres database; the human holds standing authority (approve,
@@ -47,15 +49,29 @@ that ship with it. End users don't read this repo; they install it once and run
 
 ### Install the CLI
 
-<!-- HOMEBREW: replace the commented block below with the real `brew tap` + `brew install` commands once the open-orcha tap repo is published. -->
-**Homebrew** — _coming soon (once the tap is configured):_
+**Homebrew** (recommended) — installs the `orcha` command-line tool.
+
+One-line install (Homebrew taps the repo for you automatically):
 
 ```bash
-# brew tap open-orcha/orcha
-# brew install orcha
+brew install open-orcha/orcha/orcha
+orcha --version
 ```
 
-**From source** (works today):
+Or tap first, then install with the short name — handy if you'll be running
+other `orcha` formula commands later:
+
+```bash
+brew tap open-orcha/orcha
+brew install orcha
+orcha --version
+```
+
+This installs **only the CLI**. Orcha's web portal isn't a separate download —
+it starts automatically as a Docker container the first time you run
+`orcha init` in a project (see [First run](#first-run) below).
+
+**From source** (for hacking on Orcha itself):
 
 ```bash
 git clone git@github.com:open-orcha/orcha.git
@@ -64,16 +80,42 @@ pip install ./orcha-cli
 orcha --version
 ```
 
-### Desktop app (optional)
+### Mac desktop app (optional)
 
-<!-- NPM: add the published npm install/run instructions here once configured. -->
-_Packaged npm instructions coming soon._ To build and run it from source today:
+Most people don't need this — the CLI plus the web portal cover the whole
+workflow. The desktop app is **not** installed through Homebrew (there's no
+cask); if you want the native Mac app, download it directly:
+
+- **GitHub Releases** — latest `.dmg` / `.zip`:
+  <https://github.com/open-orcha/orcha/releases/latest>
+- The **Download** button on the Orcha website (same build)
+
+The current Mac build is unsigned, so on first launch right-click the app →
+**Open** to get past macOS Gatekeeper. To build it from source instead:
 
 ```bash
 cd desktop
 npm install
 npm run dev      # or: npm run build
 ```
+
+### Add your Anthropic API key
+
+Orcha's agents run on Claude, so they need an Anthropic API key. The lowest-lift
+way to get going — and the one we recommend for onboarding and handoffs — is to
+create a key, **load $20 of credit**, and drop it in your environment:
+
+1. Go to [console.anthropic.com](https://console.anthropic.com/), create an API
+   key, and add **$20** of credit under **Billing**.
+2. Set it in your shell (add to `~/.zshrc` or `~/.bashrc` to make it stick):
+
+   ```bash
+   export ORCHA_LLM_API_KEY="sk-ant-..."   # or: ANTHROPIC_API_KEY
+   ```
+
+> **Trust me — $20 will go a long way, easily a couple of months** of normal
+> use, **and it'll save you a ton of tokens.** You can top up later if you ever
+> run low; there's no subscription to manage.
 
 ### First run
 
@@ -740,6 +782,32 @@ the smoking gun.
 | Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then `rm -rf .orcha .claude && orcha init` in the target project. |
 | Agent hallucinated an endpoint that doesn't exist | skill briefing didn't enumerate capabilities clearly | tell the agent which Phase the system is at; the register-agent briefing now lists "NOT IN PHASE 1" — direct the agent back to it |
 
+
+---
+
+## Citing Orcha
+
+If you use Orcha in your research or build on it, please cite the archived
+release. Each version is permanently archived on Zenodo with its own DOI:
+
+> Kedar Haldankar. *Orcha: Human-authoritative multi-agent orchestration.*
+> Zenodo, 2026. https://doi.org/10.5281/zenodo.20740087
+
+BibTeX:
+
+```bibtex
+@software{haldankar_orcha_2026,
+  author    = {Haldankar, Kedar},
+  title     = {Orcha: Human-authoritative multi-agent orchestration},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20740087},
+  url       = {https://doi.org/10.5281/zenodo.20740087}
+}
+```
+
+The DOI above resolves to the latest release. To cite a specific version, use
+that version's DOI from the [Zenodo record](https://doi.org/10.5281/zenodo.20740087).
 
 ---
 

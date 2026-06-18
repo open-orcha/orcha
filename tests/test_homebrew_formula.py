@@ -1,4 +1,4 @@
-"""Formula rendering for the private Homebrew tap (spec:
+"""Formula rendering for the public Homebrew tap (spec:
 docs/superpowers/specs/2026-06-11-homebrew-distribution-design.md §1-§3).
 The release workflow renders a tracking `orcha.rb` plus a frozen
 `orcha@X.Y.Z.rb` per release; these tests pin the contract."""
@@ -28,7 +28,9 @@ def test_class_name_versioned_follows_brew_at_convention():
 def test_tracking_formula_pins_tag_and_revision_no_leftover_placeholders():
     out = rf.render("0.2.0", SHA, versioned=False)
     assert "class Orcha < Formula" in out
-    assert 'tag:      "v0.2.0"' in out
+    # CLI tags live in their own `cli-v*` namespace (the Mac app uses bare `v*`
+    # on this same repo); the formula must pin the prefixed tag.
+    assert 'tag:      "cli-v0.2.0"' in out
     assert f'revision: "{SHA}"' in out
     assert 'version "0.2.0"' in out
     assert "conflicts_with" not in out

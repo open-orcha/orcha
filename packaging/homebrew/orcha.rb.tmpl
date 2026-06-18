@@ -3,11 +3,13 @@ class {{CLASS_NAME}} < Formula
 
   desc "Human-authoritative multi-agent orchestration for Claude Code"
   homepage "https://github.com/open-orcha/orcha"
-  # Private repo: git-over-SSH — the installer's GitHub org access IS the auth.
-  # `revision` pins the exact commit (the git-source equivalent of a sha256).
-  url "git@github.com:open-orcha/orcha.git",
+  # Public repo: fetched over HTTPS, no auth required. `revision` pins the exact
+  # commit (the git-source equivalent of a tarball sha256) so the build is
+  # reproducible and tamper-evident. Tag is `cli-vX.Y.Z` (the CLI's own tag
+  # namespace; the Mac app uses bare `vX.Y.Z` on this same repo).
+  url "https://github.com/open-orcha/orcha.git",
       using:    :git,
-      tag:      "v{{VERSION}}",
+      tag:      "cli-v{{VERSION}}",
       revision: "{{REVISION}}"
   version "{{VERSION}}"
   license "MIT"
