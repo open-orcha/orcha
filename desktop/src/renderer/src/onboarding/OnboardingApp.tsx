@@ -71,7 +71,7 @@ export default function OnboardingApp() {
             <button onClick={() => void createProject()}>Create project</button>
           </>
         )}
-        {error && <div className="banner error">{error}</div>}
+        {error && <div className="banner banner-error">{error}</div>}
       </div>
     )
   }

@@ -10,6 +10,15 @@ files:
   - out/**/*
   - package.json
 
+# The onboarding flow lays down a project's Orcha stack from these templates
+# (compose, migrations, portal, skills, prefs) WITHOUT the orcha CLI installed.
+# They are copied from the CLI at build time (scripts/copy-orcha-templates.mjs,
+# run by the predist hooks) and shipped here so templatesRoot() resolves them at
+# Contents/Resources/orcha-templates (= process.resourcesPath) in the packaged app.
+extraResources:
+  - from: resources/orcha-templates
+    to: orcha-templates
+
 directories:
   output: dist
   buildResources: resources

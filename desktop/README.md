@@ -25,6 +25,42 @@ npm run dev            # add "-- --watch" to hot-restart main-process changes
 
 `npm test` (vitest), `npm run typecheck`, `npm run build`.
 
+## Onboarding & New Project
+
+The app can provision a brand-new Orcha project end-to-end — no terminal, no
+Homebrew, no `orcha` CLI. On first launch with **zero** `orcha-*` stacks the
+onboarding wizard opens automatically; otherwise use **File → New Project**
+(Cmd+N) or the **Create your first project** button on the empty manager.
+
+The wizard runs Docker **preflight** (detects the daemon, auto-starts Docker
+Desktop and polls if it's down), lets you pick a folder, then **provisions
+natively** — it reimplements `orcha init`'s orchestration in the main process
+(`src/main/initEngine.ts`) over template assets copied from the CLI at build
+time into `resources/orcha-templates/` (`scripts/copy-orcha-templates.mjs`, run
+by the `prebuild`/`predist` hooks; byte-parity enforced by
+`templates.parity.test.ts`). It renders the compose file, lays down
+migrations/portal/skills + a `.orcha/.env` secret, runs `docker compose up -d
+--build`, waits for the portal, creates the container and registers the first
+human, then hands off to the portal's `/onboarding` roster wizard. Host
+notifier/bridge daemons are **not** started by the app (run `orcha up` in a
+terminal if you need them). The same engine powers upgrade (ports preserved, no
+data wipe) and reset-data (explicit `down -v` first).
+
+### Onboarding (manual smoke — requires real Docker)
+
+These cannot run in CI (they need a real Docker daemon and a packaged build):
+
+1. With Docker running and zero `orcha-*` stacks, `npm run dev` → the wizard
+   opens automatically. Preflight shows Docker ok → Continue → choose an empty
+   folder → Create project. Watch the streamed compose-up log; on success the
+   portal `/onboarding` window opens.
+2. Stop Docker; relaunch `npm run dev` → preflight reports the daemon down and
+   attempts to auto-start Docker, polling up to ~60s.
+3. File → New Project (Cmd+N) on a folder that already has `.orcha/` →
+   `inspectFolder` reports it initialized (no clobber).
+4. `npm run dist:mac` → install the DMG → first launch with no stacks opens the
+   wizard end-to-end (the bundled `orcha-templates` ship via `extraResources`).
+
 ## Dev-mode caveats
 
 - The macOS app-menu title says "Electron" — it comes from the dev binary's
