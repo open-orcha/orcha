@@ -1,5 +1,6 @@
 # Orcha
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20753153.svg)](https://doi.org/10.5281/zenodo.20753153)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20740087.svg)](https://doi.org/10.5281/zenodo.20740087)
 
 **Human-authoritative multi-agent orchestration as Claude Code slash commands.**
