@@ -11,6 +11,10 @@
     "start": "electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "copy:templates": "node scripts/copy-orcha-templates.mjs",
+    "prebuild": "node scripts/copy-orcha-templates.mjs",
+    "predist:mac": "node scripts/copy-orcha-templates.mjs",
+    "predist:mac:arm64": "node scripts/copy-orcha-templates.mjs",
     "dist:mac": "electron-vite build && electron-builder --mac --universal",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64"
   },
