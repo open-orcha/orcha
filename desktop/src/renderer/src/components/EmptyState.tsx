@@ -1,7 +1,10 @@
 export default function EmptyState() {
   return (
     <div className="banner">
-      No orcha stacks yet — run <code>orcha init</code> in a project to create one.
+      <p>No orcha stacks yet.</p>
+      <button onClick={() => void window.orchaDesktop.openOnboarding()}>
+        Create your first project
+      </button>
     </div>
   )
 }
