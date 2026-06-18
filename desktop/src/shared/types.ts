@@ -19,10 +19,89 @@ export type BridgeError =
   | { code: 'COMPOSE_FAILED'; stderr: string }
   | { code: 'UNKNOWN_STACK' }
   | { code: 'INTERNAL' }
+  // ---- onboarding / provisioning ----
+  | { code: 'DOCKER_NOT_INSTALLED' }
+  | { code: 'DOCKER_START_TIMEOUT' }
+  | { code: 'PORT_UNAVAILABLE' }
+  | { code: 'TEMPLATES_MISSING' }
+  | { code: 'ALREADY_INITIALIZED' }
+  | { code: 'PORTAL_TIMEOUT' }
+  | { code: 'CONTAINER_EXISTS' }
+  | { code: 'PROVISION_FAILED'; step: ProvisionStep; stderr: string }
 
 /** Discriminated IPC result — structured errors survive the IPC boundary
  *  (thrown Errors get flattened to message strings by ipcMain.handle). */
 export type IpcResult<T> = { ok: true; data: T } | ({ ok: false } & BridgeError)
+
+// ---- Onboarding / provisioning ----
+
+export type ProvisionMode = 'init' | 'upgrade' | 'reset'
+
+export type ProvisionStep =
+  | 'preflight'
+  | 'render-compose'
+  | 'copy-templates'
+  | 'compose-up'
+  | 'wait-portal'
+  | 'create-container'
+  | 'register-human'
+  | 'start-daemons'
+
+export type ProgressEvent =
+  | { runId: string; step: ProvisionStep; status: 'start' | 'ok' | 'skip' }
+  | { runId: string; step: ProvisionStep; status: 'log'; line: string }
+  | {
+      runId: string
+      step: ProvisionStep
+      status: 'fail'
+      code: BridgeError['code']
+      detail: string
+    }
+
+export interface ProvisionOptions {
+  /** Absolute, canonical path to the project folder (folder must already exist). */
+  folder: string
+  mode: ProvisionMode
+  /** Project name; defaults to the sanitized folder basename when omitted. */
+  name?: string
+  /** Container objective; defaults to the folder basename when omitted. */
+  objective?: string
+  /** First human's alias; defaults to $USER or 'operator'. */
+  alias?: string
+}
+
+export interface ProvisionResult {
+  project: string
+  apiPort: number
+  /** Warnings from non-fatal steps (human/daemon), shown but not failing. */
+  warnings: string[]
+}
+
+export type DockerState = 'ok' | 'not-installed' | 'daemon-down' | 'app-translocated'
+
+export interface PreflightReport {
+  docker: DockerState
+  /** True after a successful auto-start of Docker Desktop. */
+  autoStarted: boolean
+  /** Human-readable next-step hint when docker !== 'ok'. */
+  hint: string | null
+}
+
+export type FolderMode = 'existing' | 'new-blank' | 'reconnect'
+
+export interface FolderState {
+  /** True when the folder already contains .orcha/docker-compose.yml. */
+  initialized: boolean
+  writable: boolean
+  /** Sanitized project name derived from the folder basename. */
+  suggestedName: string
+}
+
+export interface FolderChoice {
+  /** Absolute canonical path of the chosen (or to-be-created) folder. */
+  folder: string
+  mode: FolderMode
+}
 
 /** The full surface the preload bridge exposes as window.orchaDesktop.
  *  Rejections are BridgeError objects (the preload re-throws ok:false results). */
@@ -34,6 +113,15 @@ export interface OrchaDesktopApi {
   listAttention(): Promise<AttentionItem[]>
   openManager(): Promise<void>
   quitApp(): Promise<void>
+  // onboarding:
+  preflight(): Promise<PreflightReport>
+  pickFolder(mode: FolderMode): Promise<FolderChoice | null>
+  inspectFolder(folder: string): Promise<FolderState>
+  provision(opts: ProvisionOptions): Promise<ProvisionResult>
+  openOnboarding(): Promise<void>
+  openOnboardingPortal(project: string): Promise<void>
+  /** Subscribe to provision progress; returns an unsubscribe fn. */
+  onProvisionProgress(cb: (e: ProgressEvent) => void): () => void
 }
 
 /** One thing waiting on the human, surfaced in tray/popover/notifications/cards. */
