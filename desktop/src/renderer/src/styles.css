@@ -458,3 +458,65 @@ main button:hover:not(:disabled) {
   opacity: 0.55;
   padding: 0.15rem 0.5rem;
 }
+
+/* Onboarding wizard (#onboarding window) */
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.6rem;
+  box-sizing: border-box;
+  min-height: 100vh;
+}
+
+.onboarding h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.onboarding label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.onboarding input {
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+
+.provision-log {
+  list-style: none;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.provision-log li {
+  padding: 0.12rem 0;
+  white-space: pre-wrap;
+}
+
+.provision-log li[data-status='ok'] {
+  color: var(--ok);
+}
+
+.provision-log li[data-status='fail'] {
+  color: var(--danger);
+}
+
+.provision-log li[data-status='skip'] {
+  opacity: 0.55;
+}
