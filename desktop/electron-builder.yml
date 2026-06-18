@@ -17,11 +17,18 @@ directories:
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.png
-  # Ad-hoc (unsigned) build — no Apple Developer ID required. Gatekeeper will
-  # warn on first open; users right-click → Open, or run the documented
-  # xattr/quarantine-clear step. Set DEVELOPMENT identity / notarization here
-  # when a Developer ID cert is available.
-  identity: null
+  # Signed with a Developer ID Application certificate and notarized by Apple,
+  # so Gatekeeper opens the app on a normal double-click — no right-click→Open
+  # or xattr/quarantine workaround needed. Credentials are supplied via
+  # environment variables and are NEVER committed:
+  #   CSC_LINK / CSC_KEY_PASSWORD ............ the .p12 cert + its password
+  #   APPLE_API_KEY / _KEY_ID / _ISSUER ...... App Store Connect key (notarize)
+  # See scripts/dist-mac-signed.sh, which sources .env.signing.local (gitignored).
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  notarize: true
   target:
     - dmg
     - zip

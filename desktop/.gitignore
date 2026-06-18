@@ -1,3 +1,5 @@
 node_modules/
 out/
 dist/
+# Local signing/notarization secrets — never commit.
+.env.signing.local
