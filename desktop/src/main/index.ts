@@ -1,5 +1,9 @@
-import { app, BrowserWindow, ipcMain, nativeImage, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell } from 'electron'
 import path from 'node:path'
+import net from 'node:net'
+import os from 'node:os'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { parseDeepLink } from './deepLink'
 import { listStacks } from './discovery'
 import { startStack, stopStack } from './lifecycle'
@@ -7,7 +11,80 @@ import { fetchStackAttention } from './attention'
 import { AttentionPoller } from './attentionPoller'
 import { createTray, type TrayController } from './tray'
 import { buildStatus, writeStatusFile } from './statusFile'
-import type { AttentionItem, BridgeError, IpcResult, Stack } from '../shared/types'
+import { dockerExec } from './dockerExec'
+import { preflight } from './preflight'
+import { inspectFolder } from './folderModes'
+import { templatesRoot } from './templates'
+import { provision, type EngineDeps, type EngineFs } from './initEngine'
+import { showOnboardingWindow, onboardingWebContents } from './onboardingWindow'
+import { buildAppMenuTemplate } from './appMenu'
+import type {
+  AttentionItem,
+  BridgeError,
+  FolderMode,
+  IpcResult,
+  ProgressEvent,
+  ProvisionOptions,
+  Stack
+} from '../shared/types'
+
+/** Real-fs adapter for the provision engine (the engine injects this for testability). */
+const nodeEngineFs: EngineFs = {
+  readFile: (p) => readFileSync(p, 'utf8'),
+  writeFile: (p, c) => writeFileSync(p, c),
+  copyTree: (src, dst) => cpSync(src, dst, { recursive: true }),
+  mkdirp: (p) => void mkdirSync(p, { recursive: true }),
+  chmod: (p, mode) => chmodSync(p, mode),
+  exists: (p) => existsSync(p)
+}
+
+/** Find a free TCP port at/after `start` (async — the OS owns the truth). */
+function pickPort(start: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const tryPort = (p: number, attemptsLeft: number): void => {
+      if (attemptsLeft <= 0) {
+        reject({ code: 'PORT_UNAVAILABLE' } as const)
+        return
+      }
+      const s = net.createServer()
+      s.once('error', () => tryPort(p + 1, attemptsLeft - 1))
+      s.once('listening', () => s.close(() => resolve(p)))
+      s.listen(p, '127.0.0.1')
+    }
+    tryPort(start, 100)
+  })
+}
+
+/** fetch→JSON with HTTP errors carrying `status` (so the engine maps 409→CONTAINER_EXISTS). */
+async function fetchJson(url: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
+  const res = await fetch(url, {
+    method: init?.method ?? 'GET',
+    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+    body: init?.body ? JSON.stringify(init.body) : undefined
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw Object.assign(new Error(`HTTP ${res.status} ${text.slice(0, 500)}`), { status: res.status })
+  }
+  const ct = res.headers.get('content-type') ?? ''
+  return ct.includes('application/json') ? res.json() : undefined
+}
+
+/** Build the engine deps. Ports are reserved per-run in the provision handler and
+ *  injected via `findFreePort`; the default here is a harmless identity it overrides. */
+function engineDeps(): EngineDeps {
+  return {
+    exec: dockerExec,
+    fetchJson,
+    fs: nodeEngineFs,
+    templatesRoot,
+    findFreePort: (start: number) => start,
+    readComposeTemplate: () =>
+      readFileSync(path.join(templatesRoot(), 'docker-compose.yml.j2'), 'utf8'),
+    genSecret: () => randomBytes(32).toString('base64url'),
+    user: os.userInfo().username || 'operator'
+  }
+}
 
 // Runtime name for everything Electron derives it from (userData path, dialogs).
 // The macOS app-menu TITLE still reads the bundle's Info.plist ("Electron" in dev);
@@ -210,6 +287,58 @@ app.whenReady().then(() => {
 
   ipcMain.handle('orcha:quitApp', () => asResult(async () => app.quit()))
 
+  // ---- onboarding ----
+
+  ipcMain.handle('orcha:preflight', () => asResult(() => preflight()))
+
+  ipcMain.handle('orcha:pickFolder', (_event, mode: FolderMode) =>
+    asResult(async () => {
+      const result = await dialog.showOpenDialog({
+        properties: mode === 'new-blank' ? ['openDirectory', 'createDirectory'] : ['openDirectory']
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      return { folder: result.filePaths[0], mode }
+    })
+  )
+
+  ipcMain.handle('orcha:inspectFolder', (_event, folder: string) =>
+    asResult(async () => inspectFolder(folder))
+  )
+
+  ipcMain.handle('orcha:provision', (_event, opts: ProvisionOptions) =>
+    asResult(async () => {
+      // Reserve three free ports up-front (async); the engine reads them via a sync lookup
+      // keyed by the CLI's scan-start constants (5432/8000/8765).
+      const [db, api, bridge] = await Promise.all([pickPort(5432), pickPort(8000), pickPort(8765)])
+      const reserved: Record<number, number> = { 5432: db, 8000: api, 8765: bridge }
+      const deps: EngineDeps = {
+        ...engineDeps(),
+        findFreePort: (start: number) => reserved[start] ?? start
+      }
+      return provision(
+        opts,
+        (e: ProgressEvent) => onboardingWebContents()?.send('orcha:provision:progress', e),
+        deps
+      )
+    })
+  )
+
+  ipcMain.handle('orcha:openOnboarding', () => asResult(async () => showOnboardingWindow()))
+
+  ipcMain.handle('orcha:openOnboardingPortal', (_event, project: string) =>
+    asResult(async () => {
+      // Reuse the portal-open path: discover the just-created stack and open /onboarding.
+      const stacks = await listStacks()
+      const stack = stacks.find((s) => s.project === project)
+      if (stack && stack.running && stack.apiPort !== null) openPortalWindow(stack, '/onboarding')
+    })
+  )
+
+  // App menu with File → New Project (the app had no application menu before).
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(buildAppMenuTemplate({ onNewProject: showOnboardingWindow }))
+  )
+
   // Dev dock icon (packaged builds carry it in the bundle). app.getAppPath() = desktop/.
   if (process.platform === 'darwin' && app.dock) {
     const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png'))
@@ -241,6 +370,14 @@ app.whenReady().then(() => {
   poller.start()
 
   createManagerWindow()
+  // First-run: if there are no orcha-* stacks, open the onboarding wizard on top.
+  void listStacks()
+    .then((stacks) => {
+      if (stacks.length === 0) showOnboardingWindow()
+    })
+    .catch(() => {
+      // Docker down at launch — the manager shows its DockerDownBanner; don't force the wizard.
+    })
   app.on('activate', () => {
     showManagerWindow()
   })
