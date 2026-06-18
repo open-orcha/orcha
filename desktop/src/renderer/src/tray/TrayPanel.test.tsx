@@ -26,7 +26,9 @@ beforeEach(() => {
     openPortal: vi.fn().mockResolvedValue(undefined),
     listAttention: vi.fn().mockResolvedValue(items),
     openManager: vi.fn().mockResolvedValue(undefined),
-    quitApp: vi.fn().mockResolvedValue(undefined)
+    quitApp: vi.fn().mockResolvedValue(undefined),
+    checkDependencies: vi.fn().mockResolvedValue({ ready: true }),
+    newWorkspace: vi.fn().mockResolvedValue(undefined)
   }
 })
 

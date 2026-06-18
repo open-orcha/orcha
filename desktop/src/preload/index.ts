@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AttentionItem, IpcResult, OrchaDesktopApi, Stack } from '../shared/types'
+import type {
+  AttentionItem,
+  BootstrapStatus,
+  IpcResult,
+  OrchaDesktopApi,
+  Stack,
+  WorkspaceResult
+} from '../shared/types'
 
 /** Unwrap IpcResult: ok:false becomes a typed rejection (the BridgeError object). */
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -18,7 +25,9 @@ const api: OrchaDesktopApi = {
   openPortal: (project, path) => invoke<void>('orcha:openPortal', project, path),
   listAttention: () => invoke<AttentionItem[]>('orcha:listAttention'),
   openManager: () => invoke<void>('orcha:openManager'),
-  quitApp: () => invoke<void>('orcha:quitApp')
+  quitApp: () => invoke<void>('orcha:quitApp'),
+  checkDependencies: () => invoke<BootstrapStatus>('orcha:checkDependencies'),
+  newWorkspace: () => invoke<WorkspaceResult>('orcha:newWorkspace')
 }
 
 contextBridge.exposeInMainWorld('orchaDesktop', api)

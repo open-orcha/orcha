@@ -4,7 +4,11 @@ import os from 'node:os'
 export interface ExecResult {
   stdout: string
 }
-export type Exec = (cmd: string, args: string[]) => Promise<ExecResult>
+export interface ExecOptions {
+  /** Working directory for the child process (e.g. the folder `orcha init` runs in). */
+  cwd?: string
+}
+export type Exec = (cmd: string, args: string[], opts?: ExecOptions) => Promise<ExecResult>
 
 /** macOS apps launched from Finder (LaunchServices) inherit a minimal PATH that
  *  omits where Docker installs its CLI, so a bare `docker` call fails with ENOENT
@@ -22,13 +26,14 @@ export function dockerPath(env: NodeJS.ProcessEnv = process.env, home: string = 
   return [...candidates, ...existing].filter((p, i, a) => p && a.indexOf(p) === i).join(':')
 }
 
-/** Shared docker invoker with a Finder-safe PATH. `err.stderr` is populated on failure. */
-export const dockerExec: Exec = (cmd, args) =>
+/** Shared CLI invoker with a Finder-safe PATH (docker, brew, orcha all install into the
+ *  same locations dockerPath() restores). `err.stderr` is populated on failure. */
+export const dockerExec: Exec = (cmd, args, opts) =>
   new Promise((resolve, reject) => {
     execFile(
       cmd,
       args,
-      { encoding: 'utf8', env: { ...process.env, PATH: dockerPath() } },
+      { encoding: 'utf8', env: { ...process.env, PATH: dockerPath() }, cwd: opts?.cwd },
       (err, stdout, stderr) => {
         if (err) reject(Object.assign(err, { stderr }))
         else resolve({ stdout })

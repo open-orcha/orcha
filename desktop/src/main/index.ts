@@ -1,4 +1,13 @@
-import { app, BrowserWindow, ipcMain, nativeImage, Notification, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  Notification,
+  shell
+} from 'electron'
 import path from 'node:path'
 import { parseDeepLink } from './deepLink'
 import { listStacks } from './discovery'
@@ -7,7 +16,16 @@ import { fetchStackAttention } from './attention'
 import { AttentionPoller } from './attentionPoller'
 import { createTray, type TrayController } from './tray'
 import { buildStatus, writeStatusFile } from './statusFile'
-import type { AttentionItem, BridgeError, IpcResult, Stack } from '../shared/types'
+import { checkDependencies, installPlan } from './bootstrap'
+import { createWorkspace } from './workspace'
+import type {
+  AttentionItem,
+  BootstrapStatus,
+  BridgeError,
+  IpcResult,
+  Stack,
+  WorkspaceResult
+} from '../shared/types'
 
 // Runtime name for everything Electron derives it from (userData path, dialogs).
 // The macOS app-menu TITLE still reads the bundle's Info.plist ("Electron" in dev);
@@ -168,6 +186,100 @@ function asResult<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
   )
 }
 
+/** Pick a folder for a new workspace (the OS picker lets the user make one inline). */
+async function pickWorkspaceDir(): Promise<string | null> {
+  const res = await dialog.showOpenDialog({
+    title: 'New Orcha Workspace',
+    message: 'Choose an empty folder for your new Orcha project',
+    buttonLabel: 'Create Workspace',
+    properties: ['openDirectory', 'createDirectory']
+  })
+  if (res.canceled || res.filePaths.length === 0) return null
+  return res.filePaths[0]
+}
+
+/** File → New Workspace: pick a folder, run `orcha init` there, nudge the user to the manager.
+ *  Rejects {code:'WORKSPACE_CANCELLED'} when the picker is dismissed (callers treat it as a no-op). */
+async function newWorkspaceFlow(): Promise<WorkspaceResult> {
+  const dir = await pickWorkspaceDir()
+  if (dir === null) throw { code: 'WORKSPACE_CANCELLED' } as const
+  const ws = await createWorkspace(dir)
+  // The poller picks the new stack up on its next tick; surface it now so the user isn't left
+  // staring at an unchanged window.
+  if (Notification.isSupported()) {
+    new Notification({
+      title: 'Orcha — workspace created',
+      body: `${ws.projectShort} is starting up; it'll appear in the manager shortly.`
+    }).show()
+  }
+  showManagerWindow()
+  return ws
+}
+
+/** Menu-triggered variant: same flow, but surface failures as a native dialog (there's no
+ *  renderer round-trip to show them). Cancellation is a silent no-op. */
+async function runNewWorkspaceFromMenu(): Promise<void> {
+  try {
+    await newWorkspaceFlow()
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    if (code === 'WORKSPACE_CANCELLED') return
+    const detail =
+      code === 'WORKSPACE_INIT_FAILED'
+        ? `orcha init failed:\n\n${(err as { stderr?: string }).stderr ?? '(no output)'}`
+        : 'Could not create the workspace. Is the Orcha CLI installed and Docker running?'
+    dialog.showMessageBox({ type: 'error', message: 'New Workspace failed', detail })
+  }
+}
+
+/** Install the application menu, adding File → New Workspace (⌘N) to the standard macOS chrome. */
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin'
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac ? [{ role: 'appMenu' as const }] : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Workspace…',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => void runNewWorkspaceFromMenu()
+        },
+        { type: 'separator' as const },
+        isMac ? { role: 'close' as const } : { role: 'quit' as const }
+      ]
+    },
+    { role: 'editMenu' as const },
+    { role: 'windowMenu' as const }
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+/** First-launch guidance: if a hard dependency (Orcha CLI or Docker itself) is missing, show
+ *  the exact install commands and STOP. We deliberately do not run system-software installers
+ *  for the user — that's destructive/irreversible and stays a human-confirmed action. A merely
+ *  stopped Docker daemon is transient and doesn't warrant a startup dialog. */
+async function maybeShowSetupGuidance(): Promise<void> {
+  let status: BootstrapStatus
+  try {
+    status = await checkDependencies()
+  } catch {
+    return // detection itself shouldn't block startup
+  }
+  const hardMissing = !status.cli.installed || !status.docker.installed
+  if (!hardMissing) return
+  const steps = installPlan(status)
+  const detail = steps
+    .map((s) => `• ${s.label}\n    ${s.command}\n    ${s.docsUrl}`)
+    .join('\n\n')
+  void dialog.showMessageBox({
+    type: 'info',
+    message: 'Finish setting up Orcha',
+    detail: `Orcha needs a couple of tools before it can create workspaces. Run these in Terminal:\n\n${detail}`,
+    buttons: ['OK']
+  })
+}
+
 /** Validate a renderer-supplied project name against the live discovery snapshot. */
 async function requireKnownStack(project: string): Promise<Stack> {
   const stacks = await listStacks()
@@ -210,6 +322,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('orcha:quitApp', () => asResult(async () => app.quit()))
 
+  ipcMain.handle('orcha:checkDependencies', () => asResult(() => checkDependencies()))
+
+  ipcMain.handle('orcha:newWorkspace', () => asResult(() => newWorkspaceFlow()))
+
   // Dev dock icon (packaged builds carry it in the bundle). app.getAppPath() = desktop/.
   if (process.platform === 'darwin' && app.dock) {
     const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png'))
@@ -240,7 +356,9 @@ app.whenReady().then(() => {
   })
   poller.start()
 
+  buildAppMenu()
   createManagerWindow()
+  void maybeShowSetupGuidance()
   app.on('activate', () => {
     showManagerWindow()
   })
