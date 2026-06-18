@@ -1,5 +1,7 @@
 # Orcha
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20740087.svg)](https://doi.org/10.5281/zenodo.20740087)
+
 **Human-authoritative multi-agent orchestration as Claude Code slash commands.**
 Multiple Claude Code sessions collaborate on a high-level objective through a
 shared Postgres database; the human holds standing authority (approve,
@@ -780,6 +782,32 @@ the smoking gun.
 | Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then `rm -rf .orcha .claude && orcha init` in the target project. |
 | Agent hallucinated an endpoint that doesn't exist | skill briefing didn't enumerate capabilities clearly | tell the agent which Phase the system is at; the register-agent briefing now lists "NOT IN PHASE 1" — direct the agent back to it |
 
+
+---
+
+## Citing Orcha
+
+If you use Orcha in your research or build on it, please cite the archived
+release. Each version is permanently archived on Zenodo with its own DOI:
+
+> Kedar Haldankar. *Orcha: Human-authoritative multi-agent orchestration.*
+> Zenodo, 2026. https://doi.org/10.5281/zenodo.20740087
+
+BibTeX:
+
+```bibtex
+@software{haldankar_orcha_2026,
+  author    = {Haldankar, Kedar},
+  title     = {Orcha: Human-authoritative multi-agent orchestration},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20740087},
+  url       = {https://doi.org/10.5281/zenodo.20740087}
+}
+```
+
+The DOI above resolves to the latest release. To cite a specific version, use
+that version's DOI from the [Zenodo record](https://doi.org/10.5281/zenodo.20740087).
 
 ---
 
