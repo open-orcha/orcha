@@ -32,7 +32,16 @@ describe('App', () => {
       openPortal: vi.fn(),
       listAttention: vi.fn().mockResolvedValue([]),
       openManager: vi.fn(),
-      quitApp: vi.fn()
+      quitApp: vi.fn(),
+      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+      pickFolder: vi.fn().mockResolvedValue(null),
+      inspectFolder: vi
+        .fn()
+        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+      openOnboarding: vi.fn().mockResolvedValue(undefined),
+      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
+      onProvisionProgress: vi.fn().mockReturnValue(() => {})
     }
     render(<App />)
     expect(await screen.findByText('demo')).toBeInTheDocument()
@@ -46,7 +55,16 @@ describe('App', () => {
       openPortal: vi.fn(),
       listAttention: vi.fn().mockResolvedValue([]),
       openManager: vi.fn(),
-      quitApp: vi.fn()
+      quitApp: vi.fn(),
+      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+      pickFolder: vi.fn().mockResolvedValue(null),
+      inspectFolder: vi
+        .fn()
+        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+      openOnboarding: vi.fn().mockResolvedValue(undefined),
+      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
+      onProvisionProgress: vi.fn().mockReturnValue(() => {})
     }
     render(<App />)
     expect(await screen.findByText(/Docker isn't running/)).toBeInTheDocument()
@@ -60,7 +78,16 @@ describe('App', () => {
       openPortal: vi.fn(),
       listAttention: vi.fn().mockResolvedValue([]),
       openManager: vi.fn(),
-      quitApp: vi.fn()
+      quitApp: vi.fn(),
+      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+      pickFolder: vi.fn().mockResolvedValue(null),
+      inspectFolder: vi
+        .fn()
+        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+      openOnboarding: vi.fn().mockResolvedValue(undefined),
+      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
+      onProvisionProgress: vi.fn().mockReturnValue(() => {})
     }
     render(<App />)
     expect(await screen.findByText(/No orcha stacks yet/)).toBeInTheDocument()
@@ -74,7 +101,16 @@ describe('App', () => {
       openPortal: vi.fn(),
       listAttention: vi.fn().mockResolvedValue([]),
       openManager: vi.fn(),
-      quitApp: vi.fn()
+      quitApp: vi.fn(),
+      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+      pickFolder: vi.fn().mockResolvedValue(null),
+      inspectFolder: vi
+        .fn()
+        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+      openOnboarding: vi.fn().mockResolvedValue(undefined),
+      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
+      onProvisionProgress: vi.fn().mockReturnValue(() => {})
     }
     render(<App />)
     expect(await screen.findByTestId('stack-card')).toBeInTheDocument()
@@ -96,7 +132,16 @@ describe('App', () => {
       openPortal: vi.fn(),
       listAttention: vi.fn().mockResolvedValue([]),
       openManager: vi.fn(),
-      quitApp: vi.fn()
+      quitApp: vi.fn(),
+      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+      pickFolder: vi.fn().mockResolvedValue(null),
+      inspectFolder: vi
+        .fn()
+        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+      openOnboarding: vi.fn().mockResolvedValue(undefined),
+      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
+      onProvisionProgress: vi.fn().mockReturnValue(() => {})
     }
     render(<App />)
     await screen.findByTestId('stack-card')
@@ -117,7 +162,16 @@ describe('App', () => {
       openPortal: vi.fn(),
       listAttention: vi.fn().mockResolvedValue([]),
       openManager: vi.fn(),
-      quitApp: vi.fn()
+      quitApp: vi.fn(),
+      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+      pickFolder: vi.fn().mockResolvedValue(null),
+      inspectFolder: vi
+        .fn()
+        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+      openOnboarding: vi.fn().mockResolvedValue(undefined),
+      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
+      onProvisionProgress: vi.fn().mockReturnValue(() => {})
     }
     render(<App />)
     expect(await screen.findByTestId('stack-row')).toBeInTheDocument()
