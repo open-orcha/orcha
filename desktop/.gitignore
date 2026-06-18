@@ -3,3 +3,4 @@ out/
 dist/
 # Local signing/notarization secrets — never commit.
 .env.signing.local
+resources/orcha-templates/
