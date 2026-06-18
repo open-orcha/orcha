@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use Orcha in your research or build on it, please cite it as below."
+title: "Orcha: Human-authoritative multi-agent orchestration"
+abstract: >-
+  Orcha coordinates multiple Claude Code agents on a shared objective through a
+  Postgres-backed coordination layer, with a human holding standing authority
+  (approve, reprioritise, reassign, arbitrate) over every subtask.
+type: software
+authors:
+  - family-names: Haldankar
+    given-names: Kedar
+repository-code: "https://github.com/open-orcha/orcha"
+url: "https://openorcha.io"
+license: MIT
+doi: 10.5281/zenodo.20740087
+date-released: 2026-06-18
