@@ -16,7 +16,19 @@ import { fetchStackAttention } from './attention'
 import { AttentionPoller } from './attentionPoller'
 import { createTray, type TrayController } from './tray'
 import { buildStatus, writeStatusFile } from './statusFile'
-import { checkDependencies, installPlan } from './bootstrap'
+import { checkDependencies } from './bootstrap'
+import {
+  BootstrapCancelled,
+  dockerCommand,
+  homebrewInstallCommand,
+  homebrewPrepCommand,
+  isOsascriptCancel,
+  osascriptAdmin,
+  planBootstrap,
+  runGuidedBootstrap,
+  type InstallStepPlan
+} from './installers'
+import { dockerExec } from './dockerExec'
 import { createWorkspace } from './workspace'
 import type {
   AttentionItem,
@@ -246,6 +258,8 @@ function buildAppMenu(): void {
           click: () => void runNewWorkspaceFromMenu()
         },
         { type: 'separator' as const },
+        { label: 'Set Up Orcha…', click: () => void runGuidedSetup() },
+        { type: 'separator' as const },
         isMac ? { role: 'close' as const } : { role: 'quit' as const }
       ]
     },
@@ -255,29 +269,150 @@ function buildAppMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-/** First-launch guidance: if a hard dependency (Orcha CLI or Docker itself) is missing, show
- *  the exact install commands and STOP. We deliberately do not run system-software installers
- *  for the user — that's destructive/irreversible and stays a human-confirmed action. A merely
- *  stopped Docker daemon is transient and doesn't warrant a startup dialog. */
-async function maybeShowSetupGuidance(): Promise<void> {
+/** Run a command as the current user with the Finder-safe PATH (so brew/colima/orcha resolve
+ *  after install). A login shell (`bash -lc`) also picks up Homebrew's shellenv. */
+function runAsUser(cmd: string): Promise<void> {
+  return dockerExec('/bin/bash', ['-lc', cmd]).then(() => undefined)
+}
+
+/** Run a command with macOS's NATIVE admin authentication — the password / Touch ID popup the
+ *  user expects ("that's Apple, not Orcha"). A dismissed popup surfaces as BootstrapCancelled so
+ *  the caller reports a cancellation rather than a failure. */
+async function runAsAdmin(stepName: InstallStepPlan['name'], cmd: string): Promise<void> {
+  try {
+    await dockerExec('osascript', ['-e', osascriptAdmin(cmd)])
+  } catch (err) {
+    if (isOsascriptCancel(err)) throw new BootstrapCancelled(stepName)
+    throw err
+  }
+}
+
+/** Actually perform one confirmed install step. Homebrew is special: it refuses to run as root,
+ *  so we do the one privileged action (creating + chowning its prefix) via the native admin popup,
+ *  then run the official installer as the user — it finds the prefix ready and needs no more
+ *  elevation. Docker (Colima) and the CLI install through Homebrew as the user, no popup. */
+async function performInstall(step: InstallStepPlan, status: BootstrapStatus): Promise<void> {
+  switch (step.name) {
+    case 'homebrew':
+      await runAsAdmin('homebrew', homebrewPrepCommand())
+      await runAsUser(homebrewInstallCommand())
+      return
+    case 'docker':
+      await runAsUser(dockerCommand(status))
+      return
+    case 'cli':
+      await runAsUser(step.command)
+      return
+  }
+}
+
+/** Show the per-step consent dialog. Continue → proceed; Cancel → stop the whole run (kedar's
+ *  explicit instruction: tell them about the popup and ask before installing, for every step). */
+async function confirmStep(step: InstallStepPlan): Promise<boolean> {
+  const res = await dialog.showMessageBox({
+    type: 'question',
+    message: step.title,
+    detail: step.consentMessage,
+    buttons: ['Continue', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1
+  })
+  return res.response === 0
+}
+
+/** Guided first-run setup: detect what's missing, get one "Set everything up" yes, then walk the
+ *  user through installing each piece with an explicit confirm + the native macOS popup. Stops
+ *  cleanly on any cancel/failure and offers Retry. Reachable from the menu and shown on first
+ *  launch when a hard dependency (CLI or Docker) is missing. We never self-run installers without
+ *  these explicit confirmations. */
+/** On launch, only interrupt with the setup flow when a hard dependency (Orcha CLI or Docker
+ *  itself) is missing. A merely-stopped daemon is transient and shouldn't pop a dialog at startup. */
+async function maybeRunSetupOnLaunch(): Promise<void> {
+  let status: BootstrapStatus
+  try {
+    status = await checkDependencies()
+  } catch {
+    return
+  }
+  if (status.cli.installed && status.docker.installed) return
+  await runGuidedSetup()
+}
+
+async function runGuidedSetup(): Promise<void> {
   let status: BootstrapStatus
   try {
     status = await checkDependencies()
   } catch {
     return // detection itself shouldn't block startup
   }
-  const hardMissing = !status.cli.installed || !status.docker.installed
-  if (!hardMissing) return
-  const steps = installPlan(status)
-  const detail = steps
-    .map((s) => `• ${s.label}\n    ${s.command}\n    ${s.docsUrl}`)
-    .join('\n\n')
-  void dialog.showMessageBox({
+  const steps = planBootstrap(status)
+  if (steps.length === 0) {
+    void dialog.showMessageBox({
+      type: 'info',
+      message: 'Orcha is ready',
+      detail: 'Everything Orcha needs is already installed.'
+    })
+    return
+  }
+
+  const intro = await dialog.showMessageBox({
     type: 'info',
-    message: 'Finish setting up Orcha',
-    detail: `Orcha needs a couple of tools before it can create workspaces. Run these in Terminal:\n\n${detail}`,
-    buttons: ['OK']
+    message: 'Set up Orcha',
+    detail:
+      'Orcha needs a few tools before it can create workspaces:\n\n' +
+      steps.map((s) => `• ${s.title}`).join('\n') +
+      '\n\nOrcha will install them one at a time and ask you before each. Some steps show macOS’s ' +
+      'own password or fingerprint prompt — that’s Apple asking, not Orcha.',
+    buttons: ['Set everything up', 'Not now'],
+    defaultId: 0,
+    cancelId: 1
   })
+  if (intro.response !== 0) return
+
+  const outcome = await runGuidedBootstrap(status, {
+    confirm: confirmStep,
+    perform: (step) => performInstall(step, status)
+  })
+
+  if (outcome.result === 'completed') {
+    const after = await checkDependencies().catch(() => status)
+    void dialog.showMessageBox(
+      after.ready
+        ? { type: 'info', message: 'Orcha is set up', detail: 'You can now create a workspace with File → New Workspace.' }
+        : {
+            type: 'info',
+            message: 'Almost there',
+            detail:
+              'The installs finished. If Orcha still isn’t ready, open the app again — Docker can ' +
+              'take a moment to start.'
+          }
+    )
+    return
+  }
+  if (outcome.result === 'cancelled') {
+    const res = await dialog.showMessageBox({
+      type: 'info',
+      message: 'Setup paused',
+      detail: `You cancelled before “${outcome.title}”. Nothing was left half-installed — you can pick up where you left off.`,
+      buttons: ['Retry', 'Later'],
+      defaultId: 0,
+      cancelId: 1
+    })
+    if (res.response === 0) await runGuidedSetup()
+    return
+  }
+  if (outcome.result === 'failed') {
+    const res = await dialog.showMessageBox({
+      type: 'error',
+      message: `“${outcome.title}” didn’t finish`,
+      detail:
+        `${outcome.error}\n\nYou can try again, or run this yourself in Terminal:\n\n${outcome.command}`,
+      buttons: ['Retry', 'Later'],
+      defaultId: 0,
+      cancelId: 1
+    })
+    if (res.response === 0) await runGuidedSetup()
+  }
 }
 
 /** Validate a renderer-supplied project name against the live discovery snapshot. */
@@ -358,7 +493,7 @@ app.whenReady().then(() => {
 
   buildAppMenu()
   createManagerWindow()
-  void maybeShowSetupGuidance()
+  void maybeRunSetupOnLaunch()
   app.on('activate', () => {
     showManagerWindow()
   })
