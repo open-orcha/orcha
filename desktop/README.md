@@ -38,10 +38,15 @@ productName `Orcha`, the `orcha://` deep-link protocol, and the app icon).
 
 ```bash
 npm install
-npm run dist:mac          # universal (Intel + Apple Silicon) .dmg + .zip
+./scripts/dist-mac-signed.sh   # signed + notarized universal .dmg + .zip
 # or, for a faster local build that only targets this machine's arch:
 npm run dist:mac:arm64
 ```
+
+`dist-mac-signed.sh` loads signing credentials from `.env.signing.local` and
+then runs `npm run dist:mac` (universal Intel + Apple Silicon). Running
+`npm run dist:mac` directly works too, but only signs/notarizes if those
+environment variables are already set.
 
 Outputs land in `desktop/dist/` (gitignored):
 
@@ -52,17 +57,23 @@ Outputs land in `desktop/dist/` (gitignored):
 The version comes from `package.json`'s `version` field — bump it there before
 a release and tag the matching `vX.Y.Z` on the GitHub Release.
 
-**Signing:** builds are currently **ad-hoc (unsigned)** — `mac.identity` is
-`null` in `electron-builder.yml`, so no Apple Developer ID is required.
-Gatekeeper will warn on first open; users either right-click the app →
-**Open**, or clear the quarantine flag:
+**Signing & notarization:** release builds are **signed with a Developer ID
+Application certificate and notarized by Apple**, so Gatekeeper opens the app on
+a normal double-click — no right-click→Open and no `xattr` quarantine
+workaround. This is configured in `electron-builder.yml` (`hardenedRuntime`,
+`entitlements`, `notarize: true`).
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Orcha.app
-```
+Credentials are supplied through environment variables and are **never
+committed**:
 
-When a Developer ID certificate is available, set the identity in
-`electron-builder.yml` and add notarization to ship a Gatekeeper-clean build.
+- `CSC_LINK` / `CSC_KEY_PASSWORD` — the Developer ID `.p12` and its password.
+- `APPLE_API_KEY` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER` — an App Store
+  Connect API key used by `notarytool`.
+
+Copy `.env.signing.example` to `.env.signing.local` (gitignored), fill in the
+paths, and build via `./scripts/dist-mac-signed.sh`. Notarization uploads the
+app to Apple's notary service and waits for the malware scan, so a clean build
+takes a few minutes and needs network access.
 
 ## Desktop widget
 
