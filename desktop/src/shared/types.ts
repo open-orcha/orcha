@@ -107,6 +107,9 @@ export interface PrereqProbe {
   orcha: boolean
   /** `claude` (Claude Code) resolves on PATH. */
   claude: boolean
+  /** `codex` (OpenAI Codex CLI) resolves on PATH. Either claude or codex satisfies the
+   *  "AI coding agent" requirement. */
+  codex: boolean
   /** An Anthropic API key is available to the agent worker. */
   apiKey: boolean
 }

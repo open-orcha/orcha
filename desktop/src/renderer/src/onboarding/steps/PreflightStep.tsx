@@ -1,33 +1,45 @@
 import { useEffect, useState } from 'react'
-import type { InstallProgress, PreflightReport, Prereq, PrereqProbe } from '../../../../shared/types'
+import type { InstallProgress, PreflightReport, PrereqProbe } from '../../../../shared/types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
-import { AlertCircle, CheckCircle2, Circle, Download, Loader2, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Circle, ExternalLink, Loader2 } from 'lucide-react'
 
-const DOCKER_DOWNLOAD_URL = 'https://www.docker.com/products/docker-desktop/'
+const LINKS = {
+  homebrew: 'https://brew.sh',
+  docker: 'https://www.docker.com/products/docker-desktop/',
+  claudeCode: 'https://www.anthropic.com/claude-code'
+}
 
-/** The host tools Orcha needs, in install order, with plain-language labels. */
-const PREREQS: { id: Prereq; label: string }[] = [
-  { id: 'homebrew', label: 'Homebrew (installs the rest)' },
-  { id: 'dockerEngine', label: 'Docker engine' },
-  { id: 'orcha', label: 'Orcha helper' },
-  { id: 'claude', label: 'Claude Code' },
-  { id: 'apiKey', label: 'Anthropic API key' }
+/** Tools the user must install themselves before Orcha can run agents. Orcha does NOT install
+ *  these — each has its own installer / sign-in — it just checks for them and gates Continue.
+ *  The one thing Orcha installs is its own CLI helper (handled separately, on Continue). */
+const REQUIREMENTS: { key: 'homebrew' | 'docker' | 'ai'; label: string; how: string; url: string }[] = [
+  { key: 'homebrew', label: 'Homebrew', how: 'Get Homebrew (brew.sh)', url: LINKS.homebrew },
+  {
+    key: 'docker',
+    label: 'Docker',
+    how: 'Get Docker Desktop (or OrbStack) and start it',
+    url: LINKS.docker
+  },
+  {
+    key: 'ai',
+    label: 'Claude Code or Codex',
+    how: 'Get Claude Code and sign in',
+    url: LINKS.claudeCode
+  }
 ]
-
-type RowStatus = 'ok' | 'missing' | 'running' | 'failed'
 
 export default function PreflightStep({ onContinue }: { onContinue: () => void }) {
   const [report, setReport] = useState<PreflightReport | null>(null)
   const [probe, setProbe] = useState<PrereqProbe | null>(null)
   const [checking, setChecking] = useState(true)
   const [installing, setInstalling] = useState(false)
-  const [running, setRunning] = useState<Partial<Record<Prereq, RowStatus>>>({})
   const [lastLine, setLastLine] = useState('')
-  const [installError, setInstallError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const check = (): void => {
     setChecking(true)
+    setError(null)
     void Promise.all([window.orchaDesktop.preflight(), window.orchaDesktop.probePrereqs()]).then(
       ([r, p]) => {
         setReport(r)
@@ -38,111 +50,111 @@ export default function PreflightStep({ onContinue }: { onContinue: () => void }
   }
   useEffect(() => check(), [])
 
-  // Live install progress from the main process.
+  // Live install progress (only the Orcha helper install streams here).
   useEffect(
     () =>
       window.orchaDesktop.onInstallProgress((e: InstallProgress) => {
-        if (e.status === 'log') {
-          setLastLine(e.line)
-          return
-        }
-        const map: Record<typeof e.status, RowStatus> = {
-          start: 'running',
-          ok: 'ok',
-          skip: 'missing',
-          fail: 'failed'
-        }
-        setRunning((prev) => ({ ...prev, [e.id]: map[e.status] }))
+        if (e.status === 'log') setLastLine(e.line)
       }),
     []
   )
 
-  const dockerOk = report?.docker === 'ok'
-  const allReady = !!probe && PREREQS.every((p) => probe[p.id]) && dockerOk
-  const missingCount = probe ? PREREQS.filter((p) => !probe[p.id]).length : 0
+  // Is a given requirement satisfied? Docker uses the daemon-up preflight (it also auto-starts
+  // Docker); the AI agent is satisfied by EITHER Claude Code or Codex.
+  const have = (key: 'homebrew' | 'docker' | 'ai'): boolean => {
+    if (key === 'docker') return report?.docker === 'ok'
+    if (key === 'ai') return !!probe && (probe.claude || probe.codex)
+    return !!probe?.homebrew
+  }
+  const ready = !!probe && !!report && REQUIREMENTS.every((r) => have(r.key))
 
-  async function install(): Promise<void> {
+  // Continue installs the Orcha helper (the only thing we install) if it's missing, then moves
+  // on. If it's already present we go straight through.
+  async function continueOn(): Promise<void> {
+    if (probe?.orcha) return onContinue()
     setInstalling(true)
-    setInstallError(null)
-    setRunning({})
+    setError(null)
     setLastLine('')
     try {
       const res = await window.orchaDesktop.installPrereqs()
-      if (!res.ok) setInstallError(`Couldn’t finish installing (${res.failedAt}). ${res.detail}`)
+      if (!res.ok) {
+        setError(`Couldn’t install the Orcha helper (${res.detail}). You can try again.`)
+        return
+      }
+      onContinue()
     } catch {
-      setInstallError('The setup couldn’t run. Please try again.')
+      setError('Couldn’t install the Orcha helper. Please try again.')
     } finally {
       setInstalling(false)
-      check() // re-probe so the checklist + Continue reflect reality
     }
-  }
-
-  function rowStatus(id: Prereq): RowStatus {
-    if (installing && running[id]) return running[id] as RowStatus
-    return probe?.[id] ? 'ok' : 'missing'
   }
 
   return (
     <div className="flex flex-col gap-4 animate-slide-in">
       <h2 className="text-lg font-semibold">What Orcha needs</h2>
       <p className="text-sm text-text/70">
-        Orcha needs a few free tools to run agents on this Mac. We can install whatever’s missing
-        for you — you’ll be asked for your Mac password once and your Anthropic API key once.
+        Orcha needs these free tools on your Mac before it can run agents. Install any that aren’t
+        checked off, then click Re-check. Orcha installs its own helper for you.
       </p>
 
-      <Card className="flex flex-col gap-2 text-sm">
+      <Card className="flex flex-col gap-3 text-sm">
         {checking && !probe ? (
           <span className="flex items-center gap-2 text-text/70">
             <Loader2 className="h-4 w-4 animate-spin text-accent" /> Checking what’s installed…
           </span>
         ) : (
-          PREREQS.map((p) => {
-            const s = rowStatus(p.id)
+          REQUIREMENTS.map((r) => {
+            const ok = have(r.key)
             return (
-              <span key={p.id} className="flex items-center gap-2">
-                {s === 'ok' ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
-                ) : s === 'running' ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
-                ) : s === 'failed' ? (
-                  <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+              <div key={r.key} className="flex items-start gap-2">
+                {ok ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
                 ) : (
-                  <Circle className="h-4 w-4 shrink-0 text-text/30" />
+                  <Circle className="mt-0.5 h-4 w-4 shrink-0 text-text/30" />
                 )}
-                <span className={s === 'ok' ? 'text-text' : 'text-text/70'}>{p.label}</span>
-              </span>
+                <div className="flex flex-col gap-0.5">
+                  <span className={ok ? 'text-text' : 'text-text/70'}>{r.label}</span>
+                  {!ok && (
+                    <button
+                      type="button"
+                      className="flex w-fit items-center gap-1 text-xs text-accent hover:underline"
+                      onClick={() => void window.orchaDesktop.openExternal(r.url)}
+                    >
+                      {r.how} <ExternalLink className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
             )
           })
         )}
       </Card>
 
+      {installing && (
+        <p className="flex items-center gap-2 text-sm text-text/70">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" /> Installing the Orcha helper…
+        </p>
+      )}
       {installing && lastLine && (
         <p className="truncate font-mono text-xs text-text/50" title={lastLine}>
           {lastLine}
         </p>
       )}
-      {installError && <p className="text-sm text-red-500">{installError}</p>}
-      {!installing && !dockerOk && report?.hint && <p className="text-sm text-text/70">{report.hint}</p>}
+      {error && (
+        <p className="flex items-start gap-2 text-sm text-red-500">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+        </p>
+      )}
+      {!ready && !checking && report?.docker !== 'ok' && report?.hint && (
+        <p className="text-sm text-text/70">{report.hint}</p>
+      )}
 
       <div className="flex flex-wrap gap-2">
-        {!allReady && (
-          <Button disabled={installing || checking} onClick={() => void install()}>
-            {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {installing ? 'Installing…' : `Install ${missingCount} for me`}
-          </Button>
-        )}
-        {!installing && probe && !probe.dockerEngine && (
-          <Button variant="outline" onClick={() => void window.orchaDesktop.openExternal(DOCKER_DOWNLOAD_URL)}>
-            <Download className="h-4 w-4" />
-            Get Docker Desktop
-          </Button>
-        )}
-        {report && !allReady && (
-          <Button variant="outline" disabled={checking || installing} onClick={check}>
-            Re-check
-          </Button>
-        )}
-        <Button disabled={!dockerOk || installing} onClick={onContinue}>
+        <Button variant="outline" disabled={checking || installing} onClick={check}>
+          Re-check
+        </Button>
+        <Button disabled={!ready || checking || installing} onClick={() => void continueOn()}>
+          {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Continue
         </Button>
       </div>
