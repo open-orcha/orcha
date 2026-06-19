@@ -54,11 +54,75 @@ const portalWindows = new Map<string, BrowserWindow>()
 let tray: TrayController | null = null
 let poller: AttentionPoller | null = null
 
+/** The Orcha mark, for dialogs, notifications, and windows. In dev the running bundle is plain
+ *  Electron, so without passing this explicitly every prompt shows Electron's logo, not Orcha's.
+ *  Resolved once from the same resources/icon.png the dock uses; undefined if it can't be read so
+ *  callers fall back to the OS default rather than a blank icon. */
+let appIconResolved = false
+let cachedAppIcon: Electron.NativeImage | undefined
+function appIcon(): Electron.NativeImage | undefined {
+  if (!appIconResolved) {
+    const img = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png'))
+    cachedAppIcon = img.isEmpty() ? undefined : img
+    appIconResolved = true
+  }
+  return cachedAppIcon
+}
+
+/** Show a small indeterminate progress window while a slow install step runs, then guarantee it
+ *  closes. Homebrew/Docker downloads take minutes with no terminal in sight, so without this the
+ *  app looks frozen after the user clicks Continue. Frameless + non-focusable so it never steals
+ *  focus from macOS's own password prompt, which the privileged step shows on top of it. */
+async function withInstallProgress<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const win = new BrowserWindow({
+    width: 380,
+    height: 130,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    title: 'Orcha',
+    icon: appIcon(),
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+  })
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; height: 100vh; display: flex; align-items: center; gap: 16px;
+      padding: 0 24px; box-sizing: border-box;
+      font: 13px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText; }
+    .spinner { width: 22px; height: 22px; flex: none; border-radius: 50%;
+      border: 3px solid color-mix(in srgb, CanvasText 20%, transparent);
+      border-top-color: CanvasText; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .label { line-height: 1.35; }
+    .sub { opacity: 0.6; font-size: 12px; }
+  </style></head><body>
+    <div class="spinner"></div>
+    <div><div class="label">${label}</div><div class="sub">This can take a few minutes — you can leave this open.</div></div>
+  </body></html>`
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  try {
+    return await fn()
+  } finally {
+    if (!win.isDestroyed()) win.close()
+  }
+}
+
+/** Plain-language caption for the in-progress window, per install step. */
+function progressLabel(step: InstallStepPlan): string {
+  if (step.name === 'homebrew') return 'Installing Homebrew…'
+  if (step.name === 'docker') return 'Setting up Docker…'
+  return 'Installing the Orcha CLI…'
+}
+
 function createManagerWindow(): void {
   managerWindow = new BrowserWindow({
     width: 760,
     height: 560,
     title: 'Orcha',
+    icon: appIcon(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -100,6 +164,7 @@ function createPopoverWindow(): BrowserWindow {
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
+    icon: appIcon(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -129,7 +194,7 @@ async function openPortalByProject(project: string, path?: string): Promise<void
 
 function showAttentionNotification(item: AttentionItem): void {
   if (!Notification.isSupported()) return
-  const n = new Notification({ title: `Orcha — ${item.projectShort}`, body: item.title })
+  const n = new Notification({ title: `Orcha — ${item.projectShort}`, body: item.title, icon: appIcon() })
   // macOS refuses Notification Center registration for ad-hoc-signed binaries
   // (UNErrorDomain error 1) — keep delivery failures visible. Dev fix:
   // desktop/scripts/sign-dev-electron.sh (packaged builds are properly signed).
@@ -152,6 +217,7 @@ function openPortalWindow(stack: Stack, path = '/'): void {
     width: 1100,
     height: 800,
     title: `Orcha — ${stack.projectShort}`,
+    icon: appIcon(),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
   })
   win.loadURL(url)
@@ -223,7 +289,8 @@ async function newWorkspaceFlow(): Promise<WorkspaceResult> {
   if (Notification.isSupported()) {
     new Notification({
       title: 'Orcha — workspace created',
-      body: `${ws.projectShort} is starting up; it'll appear in the manager shortly.`
+      body: `${ws.projectShort} is starting up; it'll appear in the manager shortly.`,
+      icon: appIcon()
     }).show()
   }
   showManagerWindow()
@@ -242,7 +309,7 @@ async function runNewWorkspaceFromMenu(): Promise<void> {
       code === 'WORKSPACE_INIT_FAILED'
         ? `orcha init failed:\n\n${(err as { stderr?: string }).stderr ?? '(no output)'}`
         : 'Could not create the workspace. Is the Orcha CLI installed and Docker running?'
-    dialog.showMessageBox({ type: 'error', message: 'New Workspace failed', detail })
+    dialog.showMessageBox({ type: 'error', icon: appIcon(), message: 'New Workspace failed', detail })
   }
 }
 
@@ -355,6 +422,7 @@ async function performInstall(
 async function confirmStep(step: InstallStepPlan): Promise<boolean> {
   const res = await dialog.showMessageBox({
     type: 'question',
+    icon: appIcon(),
     message: step.title,
     detail: step.consentMessage,
     buttons: ['Continue', 'Cancel'],
@@ -394,6 +462,7 @@ async function runGuidedSetup(): Promise<void> {
   if (steps.length === 0) {
     void dialog.showMessageBox({
       type: 'info',
+      icon: appIcon(),
       message: 'Orcha is ready',
       detail: 'Everything Orcha needs is already installed.'
     })
@@ -402,6 +471,7 @@ async function runGuidedSetup(): Promise<void> {
 
   const intro = await dialog.showMessageBox({
     type: 'info',
+    icon: appIcon(),
     message: 'Set up Orcha',
     detail:
       'Orcha needs a few tools before it can create workspaces:\n\n' +
@@ -418,7 +488,7 @@ async function runGuidedSetup(): Promise<void> {
     status,
     {
       confirm: confirmStep,
-      perform: (step) => performInstall(step, status, arch)
+      perform: (step) => withInstallProgress(progressLabel(step), () => performInstall(step, status, arch))
     },
     arch
   )
@@ -427,9 +497,10 @@ async function runGuidedSetup(): Promise<void> {
     const after = await checkDependencies().catch(() => status)
     void dialog.showMessageBox(
       after.ready
-        ? { type: 'info', message: 'Orcha is set up', detail: 'You can now create a workspace with File → New Workspace.' }
+        ? { type: 'info', icon: appIcon(), message: 'Orcha is set up', detail: 'You can now create a workspace with File → New Workspace.' }
         : {
             type: 'info',
+            icon: appIcon(),
             message: 'Almost there',
             detail:
               'The installs finished. If Orcha still isn’t ready, open the app again — Docker can ' +
@@ -441,6 +512,7 @@ async function runGuidedSetup(): Promise<void> {
   if (outcome.result === 'cancelled') {
     const res = await dialog.showMessageBox({
       type: 'info',
+      icon: appIcon(),
       message: 'Setup paused',
       detail: `You cancelled before “${outcome.title}”. Nothing was left half-installed — you can pick up where you left off.`,
       buttons: ['Retry', 'Later'],
@@ -453,6 +525,7 @@ async function runGuidedSetup(): Promise<void> {
   if (outcome.result === 'failed') {
     const res = await dialog.showMessageBox({
       type: 'error',
+      icon: appIcon(),
       message: `“${outcome.title}” didn’t finish`,
       detail:
         `${outcome.error}\n\nYou can try again, or run this yourself in Terminal:\n\n${outcome.command}`,
@@ -512,8 +585,8 @@ app.whenReady().then(() => {
 
   // Dev dock icon (packaged builds carry it in the bundle). app.getAppPath() = desktop/.
   if (process.platform === 'darwin' && app.dock) {
-    const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png'))
-    if (!icon.isEmpty()) app.dock.setIcon(icon)
+    const icon = appIcon()
+    if (icon) app.dock.setIcon(icon)
   }
 
   tray = createTray({
