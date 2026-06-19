@@ -36,12 +36,16 @@ const api: OrchaDesktopApi = {
   pickFolder: (mode: FolderMode) => invoke<FolderChoice | null>('orcha:pickFolder', mode),
   inspectFolder: (folder: string) => invoke<FolderState>('orcha:inspectFolder', folder),
   provision: (opts: ProvisionOptions) => invoke<ProvisionResult>('orcha:provision', opts),
-  openOnboarding: () => invoke<void>('orcha:openOnboarding'),
   openOnboardingPortal: (project: string) => invoke<void>('orcha:openOnboardingPortal', project),
   onProvisionProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: ProgressEvent): void => cb(payload)
     ipcRenderer.on('orcha:provision:progress', listener)
     return () => ipcRenderer.removeListener('orcha:provision:progress', listener)
+  },
+  onNavigate: (cb) => {
+    const listener = (_e: IpcRendererEvent, target: 'onboarding' | 'manager'): void => cb(target)
+    ipcRenderer.on('orcha:navigate', listener)
+    return () => ipcRenderer.removeListener('orcha:navigate', listener)
   }
 }
 

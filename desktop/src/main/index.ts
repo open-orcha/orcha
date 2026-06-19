@@ -16,7 +16,6 @@ import { preflight } from './preflight'
 import { inspectFolder } from './folderModes'
 import { templatesRoot } from './templates'
 import { provision, type EngineDeps, type EngineFs } from './initEngine'
-import { showOnboardingWindow, onboardingWebContents } from './onboardingWindow'
 import { buildAppMenuTemplate } from './appMenu'
 import type {
   AttentionItem,
@@ -132,6 +131,11 @@ function showManagerWindow(): void {
     return
   }
   createManagerWindow()
+}
+
+/** Send a one-way message to the (single) manager window if it's alive. */
+function sendToManager(channel: string, payload: unknown): void {
+  if (managerWindow && !managerWindow.isDestroyed()) managerWindow.webContents.send(channel, payload)
 }
 
 /** Frameless tray popover; hidden until the tray click positions it. */
@@ -317,13 +321,11 @@ app.whenReady().then(() => {
       }
       return provision(
         opts,
-        (e: ProgressEvent) => onboardingWebContents()?.send('orcha:provision:progress', e),
+        (e: ProgressEvent) => sendToManager('orcha:provision:progress', e),
         deps
       )
     })
   )
-
-  ipcMain.handle('orcha:openOnboarding', () => asResult(async () => showOnboardingWindow()))
 
   ipcMain.handle('orcha:openOnboardingPortal', (_event, project: string) =>
     asResult(async () => {
@@ -334,9 +336,17 @@ app.whenReady().then(() => {
     })
   )
 
-  // App menu with File → New Project (the app had no application menu before).
+  // App menu with File → New Project. Onboarding lives inside the manager window now,
+  // so New Project focuses it and asks the renderer to switch to onboarding mode.
   Menu.setApplicationMenu(
-    Menu.buildFromTemplate(buildAppMenuTemplate({ onNewProject: showOnboardingWindow }))
+    Menu.buildFromTemplate(
+      buildAppMenuTemplate({
+        onNewProject: () => {
+          showManagerWindow()
+          sendToManager('orcha:navigate', 'onboarding')
+        }
+      })
+    )
   )
 
   // Dev dock icon (packaged builds carry it in the bundle). app.getAppPath() = desktop/.
@@ -369,15 +379,9 @@ app.whenReady().then(() => {
   })
   poller.start()
 
+  // One window. The renderer decides whether to show onboarding (zero stacks) or
+  // the manager from its own listStacks() — no second window, no force-open here.
   createManagerWindow()
-  // First-run: if there are no orcha-* stacks, open the onboarding wizard on top.
-  void listStacks()
-    .then((stacks) => {
-      if (stacks.length === 0) showOnboardingWindow()
-    })
-    .catch(() => {
-      // Docker down at launch — the manager shows its DockerDownBanner; don't force the wizard.
-    })
   app.on('activate', () => {
     showManagerWindow()
   })

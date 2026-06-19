@@ -118,10 +118,11 @@ export interface OrchaDesktopApi {
   pickFolder(mode: FolderMode): Promise<FolderChoice | null>
   inspectFolder(folder: string): Promise<FolderState>
   provision(opts: ProvisionOptions): Promise<ProvisionResult>
-  openOnboarding(): Promise<void>
   openOnboardingPortal(project: string): Promise<void>
   /** Subscribe to provision progress; returns an unsubscribe fn. */
   onProvisionProgress(cb: (e: ProgressEvent) => void): () => void
+  /** Subscribe to main→renderer navigation requests (e.g. File→New Project). */
+  onNavigate(cb: (target: 'onboarding' | 'manager') => void): () => void
 }
 
 /** One thing waiting on the human, surfaced in tray/popover/notifications/cards. */
