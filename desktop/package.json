@@ -6,9 +6,11 @@
   "author": "Orcha",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-orcha-templates.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "pretest": "node scripts/copy-orcha-templates.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "copy:templates": "node scripts/copy-orcha-templates.mjs",

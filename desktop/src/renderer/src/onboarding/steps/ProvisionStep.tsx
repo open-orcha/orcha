@@ -1,5 +1,6 @@
 import type { ProgressEvent } from '../../../../shared/types'
 import { Card } from '../../ui/Card'
+import { Button } from '../../ui/Button'
 import { Check, Loader2, X } from 'lucide-react'
 
 const STEP_LABELS: Record<string, string> = {
@@ -9,17 +10,21 @@ const STEP_LABELS: Record<string, string> = {
   'wait-portal': 'Wait for portal',
   'create-container': 'Create container',
   'register-human': 'Register you',
-  'start-daemons': 'Start daemons'
+  'start-daemons': 'Start the agent worker'
 }
 
 export default function ProvisionStep({
   events,
   done,
-  error
+  error,
+  warnings = [],
+  onContinue
 }: {
   events: ProgressEvent[]
   done: boolean
   error: string | null
+  warnings?: string[]
+  onContinue?: () => void
 }) {
   // Latest status per step.
   const status = new Map<string, string>()
@@ -51,6 +56,24 @@ export default function ProvisionStep({
         })}
       </Card>
       {error && <Card className="border-danger/40 text-sm text-danger">{error}</Card>}
+      {done && warnings.length > 0 && (
+        <Card className="flex flex-col gap-3 border-warning/40 text-sm">
+          <span className="font-medium">Your project is ready — one thing to know:</span>
+          <ul className="flex flex-col gap-2 text-text/80">
+            {warnings.map((w, i) => (
+              <li key={i} className="flex gap-2">
+                <span aria-hidden>•</span>
+                <span>{w}</span>
+              </li>
+            ))}
+          </ul>
+          {onContinue && (
+            <div className="flex justify-end">
+              <Button onClick={onContinue}>Continue to portal</Button>
+            </div>
+          )}
+        </Card>
+      )}
       {logs.length > 0 && (
         <details className="text-xs text-text/50">
           <summary className="cursor-pointer">Build log</summary>

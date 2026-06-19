@@ -67,7 +67,7 @@ describe('provision — init mode', () => {
       'create-container',
       'register-human'
     ])
-    // start-daemons is honestly skipped — the desktop app can't run host CLI daemons.
+    // With no startWorker dep injected, start-daemons is skipped (worker start is opt-in).
     const skipped = steps(events).filter(([, s]) => s === 'skip').map(([st]) => st)
     expect(skipped).toContain('start-daemons')
 
@@ -81,6 +81,33 @@ describe('provision — init mode', () => {
 
     // every event carries a runId
     expect(events.every((e) => typeof e.runId === 'string' && e.runId.length > 0)).toBe(true)
+  })
+
+  it('start-daemons reports ok when the injected startWorker succeeds', async () => {
+    const startWorker = vi.fn().mockResolvedValue({ started: true })
+    const d = deps({ startWorker })
+    ;(d.fetchJson as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ container_id: 'c1' })
+      .mockResolvedValueOnce({ agent_id: 'h1' })
+    const events: ProgressEvent[] = []
+    const res = await provision({ folder: '/proj', mode: 'init', name: 'demo' }, (e) => events.push(e), d)
+    expect(startWorker).toHaveBeenCalledWith('/proj')
+    expect(steps(events).filter(([, s]) => s === 'ok').map(([st]) => st)).toContain('start-daemons')
+    expect(res.warnings).toEqual([])
+  })
+
+  it('start-daemons skips and surfaces the reason when the worker cannot start', async () => {
+    const startWorker = vi.fn().mockResolvedValue({ started: false, reason: 'Orcha helper not installed' })
+    const d = deps({ startWorker })
+    ;(d.fetchJson as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ container_id: 'c1' })
+      .mockResolvedValueOnce({ agent_id: 'h1' })
+    const events: ProgressEvent[] = []
+    const res = await provision({ folder: '/proj', mode: 'init', name: 'demo' }, (e) => events.push(e), d)
+    expect(steps(events).filter(([, s]) => s === 'skip').map(([st]) => st)).toContain('start-daemons')
+    expect(res.warnings).toContain('Orcha helper not installed')
   })
 
   it('maps a 409 on container create to CONTAINER_EXISTS', async () => {
