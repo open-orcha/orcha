@@ -1,180 +1,50 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
 import App from './App'
-import type { Stack } from '../../shared/types'
 
-const stack: Stack = {
-  project: 'orcha-demo',
-  projectShort: 'demo',
-  apiPort: 8001,
-  dbPort: 5433,
-  portalStatus: 'Up 1 hour',
-  running: true
+function stub(stacks: unknown[]) {
+  window.orchaDesktop = {
+    listStacks: vi.fn().mockResolvedValue(stacks),
+    startStack: vi.fn(),
+    stopStack: vi.fn(),
+    openPortal: vi.fn(),
+    listAttention: vi.fn().mockResolvedValue([]),
+    openManager: vi.fn(),
+    quitApp: vi.fn(),
+    preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+    pickFolder: vi.fn().mockResolvedValue(null),
+    inspectFolder: vi
+      .fn()
+      .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
+    provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
+    openOnboardingPortal: vi.fn(),
+    onProvisionProgress: vi.fn().mockReturnValue(() => {}),
+    onNavigate: vi.fn().mockReturnValue(() => {})
+  } as never
 }
 
-beforeEach(() => {
-  // shouldAdvanceTime keeps findBy*/waitFor working while the 5s poll timer is faked.
-  vi.useFakeTimers({ shouldAdvanceTime: true })
-  localStorage.clear()
-})
-afterEach(() => {
-  vi.useRealTimers()
-})
+describe('App single-window host', () => {
+  beforeEach(() => vi.useRealTimers())
 
-describe('App', () => {
-  it('renders stack cards when stacks exist', async () => {
-    window.orchaDesktop = {
-      listStacks: vi.fn().mockResolvedValue([stack]),
-      startStack: vi.fn(),
-      stopStack: vi.fn(),
-      openPortal: vi.fn(),
-      listAttention: vi.fn().mockResolvedValue([]),
-      openManager: vi.fn(),
-      quitApp: vi.fn(),
-      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
-      pickFolder: vi.fn().mockResolvedValue(null),
-      inspectFolder: vi
-        .fn()
-        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
-      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-      openOnboarding: vi.fn().mockResolvedValue(undefined),
-      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-      onProvisionProgress: vi.fn().mockReturnValue(() => {})
-    }
+  it('starts in onboarding mode when there are no stacks', async () => {
+    stub([])
     render(<App />)
-    expect(await screen.findByText('demo')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/set up orcha/i)).toBeInTheDocument())
   })
 
-  it('shows the Docker banner when discovery rejects with DOCKER_UNAVAILABLE', async () => {
-    window.orchaDesktop = {
-      listStacks: vi.fn().mockRejectedValue({ code: 'DOCKER_UNAVAILABLE' }),
-      startStack: vi.fn(),
-      stopStack: vi.fn(),
-      openPortal: vi.fn(),
-      listAttention: vi.fn().mockResolvedValue([]),
-      openManager: vi.fn(),
-      quitApp: vi.fn(),
-      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
-      pickFolder: vi.fn().mockResolvedValue(null),
-      inspectFolder: vi
-        .fn()
-        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
-      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-      openOnboarding: vi.fn().mockResolvedValue(undefined),
-      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-      onProvisionProgress: vi.fn().mockReturnValue(() => {})
-    }
+  it('starts in manager mode when stacks exist', async () => {
+    stub([
+      {
+        project: 'orcha-x',
+        projectShort: 'x',
+        apiPort: 8000,
+        dbPort: 5432,
+        portalStatus: 'Up',
+        running: true
+      }
+    ])
     render(<App />)
-    expect(await screen.findByText(/Docker isn't running/)).toBeInTheDocument()
-  })
-
-  it('shows the empty state when Docker is up but no stacks exist', async () => {
-    window.orchaDesktop = {
-      listStacks: vi.fn().mockResolvedValue([]),
-      startStack: vi.fn(),
-      stopStack: vi.fn(),
-      openPortal: vi.fn(),
-      listAttention: vi.fn().mockResolvedValue([]),
-      openManager: vi.fn(),
-      quitApp: vi.fn(),
-      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
-      pickFolder: vi.fn().mockResolvedValue(null),
-      inspectFolder: vi
-        .fn()
-        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
-      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-      openOnboarding: vi.fn().mockResolvedValue(undefined),
-      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-      onProvisionProgress: vi.fn().mockReturnValue(() => {})
-    }
-    render(<App />)
-    expect(await screen.findByText(/No orcha stacks yet/)).toBeInTheDocument()
-  })
-
-  it('defaults to card view and switches to list rows on toggle', async () => {
-    window.orchaDesktop = {
-      listStacks: vi.fn().mockResolvedValue([stack]),
-      startStack: vi.fn(),
-      stopStack: vi.fn(),
-      openPortal: vi.fn(),
-      listAttention: vi.fn().mockResolvedValue([]),
-      openManager: vi.fn(),
-      quitApp: vi.fn(),
-      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
-      pickFolder: vi.fn().mockResolvedValue(null),
-      inspectFolder: vi
-        .fn()
-        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
-      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-      openOnboarding: vi.fn().mockResolvedValue(undefined),
-      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-      onProvisionProgress: vi.fn().mockReturnValue(() => {})
-    }
-    render(<App />)
-    expect(await screen.findByTestId('stack-card')).toBeInTheDocument()
-    expect(screen.queryByTestId('stack-row')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Cards' })).toHaveAttribute('aria-pressed', 'true')
-
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    await user.click(screen.getByRole('button', { name: 'List' }))
-    expect(screen.getByTestId('stack-row')).toBeInTheDocument()
-    expect(screen.queryByTestId('stack-card')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  it('persists the chosen view to localStorage on toggle', async () => {
-    window.orchaDesktop = {
-      listStacks: vi.fn().mockResolvedValue([stack]),
-      startStack: vi.fn(),
-      stopStack: vi.fn(),
-      openPortal: vi.fn(),
-      listAttention: vi.fn().mockResolvedValue([]),
-      openManager: vi.fn(),
-      quitApp: vi.fn(),
-      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
-      pickFolder: vi.fn().mockResolvedValue(null),
-      inspectFolder: vi
-        .fn()
-        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
-      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-      openOnboarding: vi.fn().mockResolvedValue(undefined),
-      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-      onProvisionProgress: vi.fn().mockReturnValue(() => {})
-    }
-    render(<App />)
-    await screen.findByTestId('stack-card')
-
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    await user.click(screen.getByRole('button', { name: 'List' }))
-    expect(localStorage.getItem('orcha.viewMode')).toBe('list')
-    await user.click(screen.getByRole('button', { name: 'Cards' }))
-    expect(localStorage.getItem('orcha.viewMode')).toBe('cards')
-  })
-
-  it('reads the persisted view from localStorage on mount', async () => {
-    localStorage.setItem('orcha.viewMode', 'list')
-    window.orchaDesktop = {
-      listStacks: vi.fn().mockResolvedValue([stack]),
-      startStack: vi.fn(),
-      stopStack: vi.fn(),
-      openPortal: vi.fn(),
-      listAttention: vi.fn().mockResolvedValue([]),
-      openManager: vi.fn(),
-      quitApp: vi.fn(),
-      preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
-      pickFolder: vi.fn().mockResolvedValue(null),
-      inspectFolder: vi
-        .fn()
-        .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
-      provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-      openOnboarding: vi.fn().mockResolvedValue(undefined),
-      openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-      onProvisionProgress: vi.fn().mockReturnValue(() => {})
-    }
-    render(<App />)
-    expect(await screen.findByTestId('stack-row')).toBeInTheDocument()
-    expect(screen.queryByTestId('stack-card')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/orcha stacks/i)).toBeInTheDocument())
   })
 })

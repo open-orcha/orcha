@@ -51,14 +51,17 @@ describe('OnboardingWizard', () => {
   })
 
   it('ignores progress events from a stale run id', async () => {
-    let cb: ((e: { runId: string; step: string; status: string; line?: string }) => void) | null = null
-    ;(window.orchaDesktop.onProvisionProgress as ReturnType<typeof vi.fn>).mockImplementation((f) => {
-      cb = f
-      return () => {}
-    })
+    type ProgressCb = (e: { runId: string; step: string; status: string; line?: string }) => void
+    const holder: { cb: ProgressCb | null } = { cb: null }
+    ;(window.orchaDesktop.onProvisionProgress as ReturnType<typeof vi.fn>).mockImplementation(
+      (f: ProgressCb) => {
+        holder.cb = f
+        return () => {}
+      }
+    )
     render(<OnboardingWizard onDone={vi.fn()} />)
     await waitFor(() => expect(window.orchaDesktop.onProvisionProgress).toHaveBeenCalled())
-    cb?.({ runId: 'stale', step: 'compose-up', status: 'log', line: 'noise' })
+    holder.cb?.({ runId: 'stale', step: 'compose-up', status: 'log', line: 'noise' })
     expect(screen.queryByText(/noise/)).not.toBeInTheDocument()
   })
 })

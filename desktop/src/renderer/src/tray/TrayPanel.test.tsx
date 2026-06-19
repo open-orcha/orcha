@@ -33,9 +33,9 @@ beforeEach(() => {
       .fn()
       .mockResolvedValue({ initialized: false, writable: true, suggestedName: 'x' }),
     provision: vi.fn().mockResolvedValue({ project: 'orcha-x', apiPort: 8000, warnings: [] }),
-    openOnboarding: vi.fn().mockResolvedValue(undefined),
     openOnboardingPortal: vi.fn().mockResolvedValue(undefined),
-    onProvisionProgress: vi.fn().mockReturnValue(() => {})
+    onProvisionProgress: vi.fn().mockReturnValue(() => {}),
+    onNavigate: vi.fn().mockReturnValue(() => {})
   }
 })
 
