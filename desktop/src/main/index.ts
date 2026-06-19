@@ -328,6 +328,13 @@ app.whenReady().then(() => {
     })
   )
 
+  ipcMain.handle('orcha:openExternal', (_event, url: unknown) =>
+    asResult(async () => {
+      // Allowlist https only — the renderer can't be tricked into opening file:// or app schemes.
+      if (typeof url === 'string' && /^https:\/\//.test(url)) await shell.openExternal(url)
+    })
+  )
+
   // App menu with File → New Project. Onboarding lives inside the manager window now,
   // so New Project focuses it and asks the renderer to switch to onboarding mode.
   Menu.setApplicationMenu(
