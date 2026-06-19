@@ -70,6 +70,15 @@ describe('provision — init mode', () => {
     // start-daemons is honestly skipped — the desktop app can't run host CLI daemons.
     const skipped = steps(events).filter(([, s]) => s === 'skip').map(([st]) => st)
     expect(skipped).toContain('start-daemons')
+
+    // The shared python modules (secret_box/llm_util/digest_curate) must be copied INTO
+    // .orcha/portal so the portal container can `import secret_box`. Without this the portal
+    // crashes with ModuleNotFoundError and wait-portal times out. (mirrors CLI _install_llm_util)
+    const treeCopies = (d.fs.copyTree as ReturnType<typeof vi.fn>).mock.calls as Array<[string, string]>
+    expect(
+      treeCopies.some(([src, dst]) => src.endsWith('portal-shared') && dst.endsWith('/.orcha/portal'))
+    ).toBe(true)
+
     // every event carries a runId
     expect(events.every((e) => typeof e.runId === 'string' && e.runId.length > 0)).toBe(true)
   })

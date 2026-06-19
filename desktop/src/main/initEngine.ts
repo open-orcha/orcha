@@ -107,6 +107,12 @@ export async function provision(
   const root = deps.templatesRoot()
   fs.copyTree(path.join(root, 'migrations'), path.join(orchaDir, 'migrations'))
   fs.copyTree(path.join(root, 'portal'), path.join(orchaDir, 'portal'))
+  // The portal container does `import secret_box` / `import llm_util` / `import digest_curate`
+  // (they sit next to main.py). Those modules live OUTSIDE templates/ in the CLI (orcha_cli/),
+  // so the build copies them into resources/orcha-templates/portal-shared/; merge them into
+  // the deployed portal/ here. Without this the portal crashes ModuleNotFoundError on startup
+  // and wait-portal times out. (mirrors the CLI's _install_llm_util.)
+  fs.copyTree(path.join(root, 'portal-shared'), path.join(orchaDir, 'portal'))
   // .env secret (mirrors _ensure_secret_key): write only if absent.
   const envFile = path.join(orchaDir, '.env')
   if (!fs.exists(envFile)) {
