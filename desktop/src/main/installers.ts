@@ -22,20 +22,62 @@ export interface InstallStepPlan {
   needsAdmin: boolean
 }
 
-/** The Homebrew install is a non-interactive run of the official installer. We run it AS THE USER
- *  (Homebrew refuses to run as root) after a separate admin step pre-creates its prefix — see
- *  homebrewPrepCommand.
+/** Where Homebrew lives for each chip. Apple Silicon keeps the brew git checkout AT the prefix
+ *  (/opt/homebrew); Intel keeps the prefix at /usr/local but the checkout under /usr/local/Homebrew
+ *  with brew symlinked into /usr/local/bin (which is already on the default PATH). */
+export function homebrewLayout(arch: string = process.arch): {
+  prefix: string
+  repo: string
+  brewBin: string
+} {
+  if (arch === 'arm64') {
+    return { prefix: '/opt/homebrew', repo: '/opt/homebrew', brewBin: '/opt/homebrew/bin/brew' }
+  }
+  return { prefix: '/usr/local', repo: '/usr/local/Homebrew', brewBin: '/usr/local/bin/brew' }
+}
+
+/** Install Homebrew via its OFFICIAL MANUAL method — a plain `git clone` of the brew repo into the
+ *  prefix — rather than the curl|bash `install.sh`.
  *
- *  On Apple Silicon we force the installer to run natively with `arch -arm64`. The official
- *  installer chooses its prefix from the architecture it sees: an un-forced run that happens to be
- *  translated under Rosetta detects x86_64, installs the Intel build under /usr/local, and then
- *  dies with "Bad CPU type in executable" when its bundled Ruby can't run. Pinning to arm64 lays
- *  down the correct build under /opt/homebrew — matching the prefix homebrewPrepCommand prepares.
- *  Intel Macs only run x86, so they need no flag. `arch` MUST be the true hardware arch (see
- *  detectMacArch in index.ts), not process.arch — which Rosetta misreports as x64. */
+ *  Why not install.sh: on macOS it runs an UNCONDITIONAL `execute_sudo chown -R … $REPOSITORY`,
+ *  and under `NONINTERACTIVE=1` that probes sudo with `sudo -n` (no prompt). An admin who has not
+ *  recently typed their password has no cached credential, so `sudo -n` fails and the installer
+ *  aborts with "Need sudo access on macOS (… needs to be an Administrator)!" — even though they ARE
+ *  an admin. Pre-creating the prefix can't avoid it (the chown is unconditional). So install.sh
+ *  cannot run fully unattended on macOS without the user typing a password into a terminal.
+ *
+ *  The manual clone needs ZERO sudo: homebrewPrepCommand has already created and chowned the prefix
+ *  to the user via the one native popup, so the user owns everything brew touches. We run this whole
+ *  command under the true hardware arch (see userShellArgv) so a Rosetta-translated app can't pull
+ *  down the Intel build and die with "Bad CPU type". On Intel we also symlink brew onto PATH. */
 export function homebrewInstallCommand(arch: string = process.arch): string {
-  const native = arch === 'arm64' ? 'arch -arm64 ' : ''
-  return `NONINTERACTIVE=1 ${native}/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+  const { repo, brewBin } = homebrewLayout(arch)
+  const parts = [`git clone https://github.com/Homebrew/brew ${repo}`]
+  // Intel keeps the checkout under /usr/local/Homebrew, so expose `brew` on the default PATH.
+  if (arch !== 'arm64') parts.push(`ln -sf ${repo}/bin/brew ${brewBin}`)
+  // First run downloads the matching (native) portable-ruby and primes the formula API cache.
+  parts.push(`${brewBin} update --force --quiet`)
+  // Apple Silicon's bin dir is not on the default PATH; add brew to the user's login shell so it
+  // also works in their own Terminal (our app already finds it via dockerPath). Guarded so re-runs
+  // don't duplicate the line; best-effort so it can never fail the install.
+  if (arch === 'arm64') {
+    parts.push(
+      `(grep -qs 'brew shellenv' ~/.zprofile || echo 'eval "$(${brewBin} shellenv)"' >> ~/.zprofile) || true`
+    )
+  }
+  return parts.join(' && ')
+}
+
+/** Run user-level shell commands under the Mac's TRUE architecture. If the Electron app is itself
+ *  translated under Rosetta on Apple Silicon, every child it spawns inherits the x86 slice — so a
+ *  bare `brew` would run as Intel, install the wrong build, and hit "Bad CPU type in executable".
+ *  Pinning the login shell to `arch -arm64` makes brew/colima — and everything they spawn — run
+ *  natively. Intel Macs have only the x86 slice, so they need no flag. Returns the argv pair for
+ *  child_process so quoting never round-trips through a second shell. */
+export function userShellArgv(cmd: string, arch: string = process.arch): [string, string[]] {
+  return arch === 'arm64'
+    ? ['arch', ['-arm64', '/bin/bash', '-lc', cmd]]
+    : ['/bin/bash', ['-lc', cmd]]
 }
 
 /** Normalise the Mac's CPU to the two values the Homebrew prefix logic cares about, from the output
@@ -46,13 +88,16 @@ export function macArchFromSysctl(sysctlOut: string): 'arm64' | 'x64' {
   return sysctlOut.trim() === '1' ? 'arm64' : 'x64'
 }
 
-/** Homebrew's installer normally uses sudo to create and chown its prefix. To surface macOS's
- *  OWN native popup (password + Touch ID) rather than a tty sudo prompt, we do that one privileged
- *  step ourselves via `do shell script with administrator privileges`, then run the installer as
- *  the user — it finds the prefix ready and needs no further elevation.
+/** The ONE privileged step: create and hand the Homebrew directories to the user, via macOS's own
+ *  native popup (`do shell script with administrator privileges` — password + Touch ID). After this
+ *  the user owns everything the manual install (homebrewInstallCommand) writes, so the clone and
+ *  every later `brew` run need no sudo at all — which is the whole point: it lets us avoid the
+ *  installer's unattended-sudo abort while still never letting Orcha see the password.
  *
- *  Apple Silicon installs to /opt/homebrew; Intel uses /usr/local. We chown to the invoking user
- *  in the `admin` group (the macOS default primary group for admin accounts). */
+ *  Apple Silicon owns the whole dedicated /opt/homebrew prefix. Intel must NOT chown all of
+ *  /usr/local (it is shared with other software), so we create+own only Homebrew's own dirs under
+ *  it — the same set Homebrew itself would chown — including /usr/local/bin for the brew symlink.
+ *  We chown to the invoking user in the `admin` group (the default primary group for admin accounts). */
 export function homebrewPrepCommand(
   arch: string = process.arch,
   user: string = os.userInfo().username
@@ -60,12 +105,20 @@ export function homebrewPrepCommand(
   if (arch === 'arm64') {
     return `mkdir -p /opt/homebrew && chown -R ${user}:admin /opt/homebrew`
   }
-  // Intel: only Homebrew's own subdirectories under /usr/local — never chown all of /usr/local.
+  // Intel: Homebrew's own subdirectories under /usr/local only — never chown all of /usr/local.
   const dirs = [
     '/usr/local/Homebrew',
+    '/usr/local/bin',
+    '/usr/local/etc',
+    '/usr/local/include',
+    '/usr/local/lib',
+    '/usr/local/opt',
+    '/usr/local/sbin',
+    '/usr/local/share',
+    '/usr/local/var',
     '/usr/local/Cellar',
     '/usr/local/Caskroom',
-    '/usr/local/var/homebrew'
+    '/usr/local/Frameworks'
   ]
   return `mkdir -p ${dirs.join(' ')} && chown -R ${user}:admin ${dirs.join(' ')}`
 }

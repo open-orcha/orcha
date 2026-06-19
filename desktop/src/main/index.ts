@@ -27,6 +27,7 @@ import {
   osascriptAdmin,
   planBootstrap,
   runGuidedBootstrap,
+  userShellArgv,
   type InstallStepPlan
 } from './installers'
 import { dockerExec } from './dockerExec'
@@ -271,9 +272,22 @@ function buildAppMenu(): void {
 }
 
 /** Run a command as the current user with the Finder-safe PATH (so brew/colima/orcha resolve
- *  after install). A login shell (`bash -lc`) also picks up Homebrew's shellenv. */
-function runAsUser(cmd: string): Promise<void> {
-  return dockerExec('/bin/bash', ['-lc', cmd]).then(() => undefined)
+ *  after install). A login shell (`bash -lc`) also picks up Homebrew's shellenv. Pinned to the
+ *  Mac's true arch (userShellArgv) so a Rosetta-translated app can't run brew as Intel. */
+function runAsUser(cmd: string, arch: string): Promise<void> {
+  const [file, args] = userShellArgv(cmd, arch)
+  return dockerExec(file, args).then(() => undefined)
+}
+
+/** Homebrew's manual install (git clone) and its third-party taps need git, which on macOS comes
+ *  from the Command Line Developer Tools. `xcode-select -p` exits non-zero when they're absent. */
+async function commandLineToolsPresent(): Promise<boolean> {
+  try {
+    await dockerExec('xcode-select', ['-p'])
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Run a command with macOS's NATIVE admin authentication — the password / Touch ID popup the
@@ -301,12 +315,12 @@ async function detectMacArch(): Promise<string> {
   }
 }
 
-/** Actually perform one confirmed install step. Homebrew is special: it refuses to run as root,
- *  so we do the one privileged action (creating + chowning its prefix) via the native admin popup,
- *  then run the official installer as the user — it finds the prefix ready and needs no more
- *  elevation. Both the prefix prep and the installer are pinned to the same hardware arch so they
- *  agree on /opt/homebrew (Apple Silicon) vs /usr/local (Intel). Docker (Colima) and the CLI
- *  install through Homebrew as the user, no popup. */
+/** Actually perform one confirmed install step. Homebrew is special: the one privileged action
+ *  (creating + chowning its prefix) goes through the native admin popup, then the manual install
+ *  (git clone) runs as the user — it owns the prefix, so it needs no further elevation and never
+ *  trips the installer's unattended-sudo abort. Both prep and install are pinned to the same
+ *  hardware arch so they agree on /opt/homebrew (Apple Silicon) vs /usr/local (Intel). Docker
+ *  (Colima) and the CLI install through Homebrew as the user, no popup. */
 async function performInstall(
   step: InstallStepPlan,
   status: BootstrapStatus,
@@ -314,14 +328,24 @@ async function performInstall(
 ): Promise<void> {
   switch (step.name) {
     case 'homebrew':
+      if (!(await commandLineToolsPresent())) {
+        // Kick off Apple's own installer dialog, then ask the user to finish it and retry — git
+        // (needed by the clone and by Homebrew taps) ships with the Command Line Tools.
+        await dockerExec('xcode-select', ['--install']).catch(() => {})
+        throw new Error(
+          'macOS needs to finish installing its Command Line Developer Tools first. A system ' +
+            'dialog should have appeared — click Install, wait for it to complete, then choose ' +
+            '“Set Up Orcha…” again.'
+        )
+      }
       await runAsAdmin('homebrew', homebrewPrepCommand(arch))
-      await runAsUser(homebrewInstallCommand(arch))
+      await runAsUser(homebrewInstallCommand(arch), arch)
       return
     case 'docker':
-      await runAsUser(dockerCommand(status))
+      await runAsUser(dockerCommand(status), arch)
       return
     case 'cli':
-      await runAsUser(step.command)
+      await runAsUser(step.command, arch)
       return
   }
 }

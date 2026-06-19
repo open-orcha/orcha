@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   planBootstrap,
   homebrewInstallCommand,
+  homebrewLayout,
   homebrewPrepCommand,
   macArchFromSysctl,
+  userShellArgv,
   dockerCommand,
   cliInstallCommand,
   osascriptAdmin,
@@ -69,21 +71,51 @@ describe('planBootstrap', () => {
 })
 
 describe('command construction', () => {
-  it('runs the official Homebrew installer non-interactively', () => {
-    expect(homebrewInstallCommand('arm64')).toMatch(/NONINTERACTIVE=1/)
-    expect(homebrewInstallCommand('arm64')).toMatch(/install\.sh/)
+  it('installs Homebrew with the official MANUAL method (git clone), never the sudo-bound install.sh', () => {
+    // install.sh runs an unconditional `execute_sudo chown -R … $REPOSITORY`; under NONINTERACTIVE
+    // that is `sudo -n`, which aborts for any admin without a cached credential ("Need sudo access").
+    // The manual clone into the user-owned prefix needs zero sudo.
+    const cmd = homebrewInstallCommand('arm64')
+    expect(cmd).toMatch(/git clone https:\/\/github\.com\/Homebrew\/brew \/opt\/homebrew/)
+    expect(cmd).not.toMatch(/install\.sh/)
+    expect(cmd).not.toMatch(/NONINTERACTIVE/)
+    expect(cmd).not.toMatch(/sudo/)
   })
 
-  it('forces the native arm64 build on Apple Silicon so Rosetta can’t install the Intel one', () => {
-    // Without `arch -arm64`, a translated launch installs the x86 build under /usr/local and dies
-    // with "Bad CPU type in executable" on the bundled Ruby.
-    expect(homebrewInstallCommand('arm64')).toMatch(/arch -arm64 \/bin\/bash/)
+  it('clones into /opt/homebrew on Apple Silicon and adds it to the login shell', () => {
+    const cmd = homebrewInstallCommand('arm64')
+    expect(cmd).toMatch(/\/opt\/homebrew\/bin\/brew update --force --quiet/)
+    expect(cmd).toMatch(/brew shellenv/) // /opt/homebrew/bin is not on the default PATH
+    expect(cmd).not.toMatch(/ln -sf/) // checkout IS the prefix — no symlink needed
   })
 
-  it('adds no arch flag on Intel (x86 is the only build it can run)', () => {
+  it('on Intel clones under /usr/local/Homebrew and symlinks brew onto the default PATH', () => {
     const cmd = homebrewInstallCommand('x64')
-    expect(cmd).not.toMatch(/arch -/)
-    expect(cmd).toMatch(/NONINTERACTIVE=1 \/bin\/bash/)
+    expect(cmd).toMatch(/git clone https:\/\/github\.com\/Homebrew\/brew \/usr\/local\/Homebrew/)
+    expect(cmd).toMatch(/ln -sf \/usr\/local\/Homebrew\/bin\/brew \/usr\/local\/bin\/brew/)
+    expect(cmd).not.toMatch(/shellenv/) // /usr/local/bin is already on the default PATH
+  })
+
+  it('maps each chip to its standard Homebrew layout', () => {
+    expect(homebrewLayout('arm64')).toEqual({
+      prefix: '/opt/homebrew',
+      repo: '/opt/homebrew',
+      brewBin: '/opt/homebrew/bin/brew'
+    })
+    expect(homebrewLayout('x64')).toEqual({
+      prefix: '/usr/local',
+      repo: '/usr/local/Homebrew',
+      brewBin: '/usr/local/bin/brew'
+    })
+  })
+
+  it('runs user commands under arch -arm64 on Apple Silicon so a translated app can’t run brew as Intel', () => {
+    expect(userShellArgv('brew install x', 'arm64')).toEqual([
+      'arch',
+      ['-arm64', '/bin/bash', '-lc', 'brew install x']
+    ])
+    // Intel has only the x86 slice — no flag, just the login shell.
+    expect(userShellArgv('brew install x', 'x64')).toEqual(['/bin/bash', ['-lc', 'brew install x']])
   })
 
   it('reads the true CPU from sysctl hw.optional.arm64 (Rosetta-proof)', () => {
@@ -92,21 +124,16 @@ describe('command construction', () => {
     expect(macArchFromSysctl('')).toBe('x64') // key absent on Intel
   })
 
-  it('pairs the arm64 installer with the arm64 prefix so install and prep agree', () => {
-    // The bug that broke the wife’s laptop: prep owned one prefix while the installer used the other.
-    expect(homebrewInstallCommand('arm64')).toMatch(/arch -arm64/)
-    expect(homebrewPrepCommand('arm64', 'kedar')).toMatch(/\/opt\/homebrew/)
-  })
-
   it('pre-creates /opt/homebrew on Apple Silicon and chowns to the user', () => {
     expect(homebrewPrepCommand('arm64', 'kedar')).toBe(
       'mkdir -p /opt/homebrew && chown -R kedar:admin /opt/homebrew'
     )
   })
 
-  it('on Intel never chowns all of /usr/local — only Homebrew’s own dirs', () => {
+  it('on Intel never chowns all of /usr/local — only Homebrew’s own dirs, incl bin for the symlink', () => {
     const cmd = homebrewPrepCommand('x64', 'kedar')
     expect(cmd).toMatch(/usr\/local\/Homebrew/)
+    expect(cmd).toMatch(/\/usr\/local\/bin/) // brew symlink target must be user-owned
     expect(cmd).not.toMatch(/chown -R kedar:admin \/usr\/local(\s|$)/)
   })
 
