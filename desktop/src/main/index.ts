@@ -283,6 +283,8 @@ async function pickWorkspaceDir(): Promise<string | null> {
 async function newWorkspaceFlow(): Promise<WorkspaceResult> {
   const dir = await pickWorkspaceDir()
   if (dir === null) throw { code: 'WORKSPACE_CANCELLED' } as const
+  // Wake Docker (and install anything missing) for the user — no Terminal required.
+  await ensureDockerReady()
   const ws = await createWorkspace(dir)
   // The poller picks the new stack up on its next tick; surface it now so the user isn't left
   // staring at an unchanged window.
@@ -306,9 +308,12 @@ async function runNewWorkspaceFromMenu(): Promise<void> {
     const code = (err as { code?: string }).code
     if (code === 'WORKSPACE_CANCELLED') return
     const detail =
-      code === 'WORKSPACE_INIT_FAILED'
-        ? `orcha init failed:\n\n${(err as { stderr?: string }).stderr ?? '(no output)'}`
-        : 'Could not create the workspace. Is the Orcha CLI installed and Docker running?'
+      code === 'DOCKER_START_FAILED'
+        ? 'Orcha couldn’t start the Docker engine. Open the app again in a minute — Docker can ' +
+          'take a little while to wake up — or restart your Mac if it keeps happening.'
+        : code === 'WORKSPACE_INIT_FAILED'
+          ? `orcha init failed:\n\n${(err as { stderr?: string }).stderr ?? '(no output)'}`
+          : 'Could not create the workspace. Is the Orcha CLI installed and Docker running?'
     dialog.showMessageBox({ type: 'error', icon: appIcon(), message: 'New Workspace failed', detail })
   }
 }
@@ -380,6 +385,55 @@ async function detectMacArch(): Promise<string> {
   } catch {
     return process.arch === 'arm64' ? 'arm64' : 'x64'
   }
+}
+
+/** Is the Docker daemon reachable right now? `docker info` exits non-zero when the engine is
+ *  installed but asleep — the same signal bootstrap's detection uses. */
+async function dockerDaemonUp(): Promise<boolean> {
+  try {
+    await dockerExec('docker', ['info', '--format', '{{.ServerVersion}}'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Poll until the Docker daemon answers or we give up. `colima start` blocks until its VM is up,
+ *  but Docker Desktop/OrbStack return immediately and warm up in the background — so we poll either
+ *  way rather than trusting the start command's exit. */
+async function waitForDockerUp(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await dockerDaemonUp()) return true
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  return dockerDaemonUp()
+}
+
+/** Make the machine ready for `orcha init` WITHOUT sending the user to Terminal — the whole point
+ *  of "make it simpler". The app runs everything with a PATH that already resolves brew/colima/
+ *  limactl (dockerPath), which is exactly what a bare user shell lacks, so it can do what the user
+ *  couldn't. Three cases:
+ *   - engine missing entirely → run the full guided install (consent + native password popup);
+ *   - engine installed but asleep → just start it behind a spinner (no install, no password —
+ *     starting a local engine the user already has needs neither), then wait for it to answer;
+ *   - already up → nothing.
+ *  Throws {code:'DOCKER_START_FAILED'} when the engine won't come up, so callers show a plain
+ *  message instead of a raw CLI traceback. */
+async function ensureDockerReady(): Promise<void> {
+  let status = await checkDependencies().catch(() => null)
+  if (status && !status.docker.installed) {
+    await runGuidedSetup()
+    status = await checkDependencies().catch(() => status)
+  }
+  if (!status || !status.docker.installed || status.docker.running === true) return
+  const ready = status
+  const arch = await detectMacArch()
+  const up = await withInstallProgress('Starting Docker…', async () => {
+    await runAsUser(dockerCommand(ready), arch).catch(() => {})
+    return waitForDockerUp(90_000)
+  })
+  if (!up) throw { code: 'DOCKER_START_FAILED' } as const
 }
 
 /** Actually perform one confirmed install step. Homebrew is special: the one privileged action
