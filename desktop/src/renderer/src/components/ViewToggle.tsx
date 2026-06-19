@@ -1,28 +1,29 @@
+import { cn } from '../ui/cn'
+
 export type ViewMode = 'cards' | 'list'
 
-interface Props {
+export default function ViewToggle({
+  view,
+  onChange
+}: {
   view: ViewMode
-  onChange: (view: ViewMode) => void
-}
-
-/** Segmented Cards/List control for the manager header. */
-export default function ViewToggle({ view, onChange }: Props) {
+  onChange: (mode: ViewMode) => void
+}) {
   return (
-    <div className="view-toggle" role="group" aria-label="View mode">
-      <button
-        className="view-toggle-btn"
-        aria-pressed={view === 'cards'}
-        onClick={() => onChange('cards')}
-      >
-        <span aria-hidden="true">⊞</span> Cards
-      </button>
-      <button
-        className="view-toggle-btn"
-        aria-pressed={view === 'list'}
-        onClick={() => onChange('list')}
-      >
-        <span aria-hidden="true">☰</span> List
-      </button>
+    <div className="inline-flex rounded-lg border border-border p-0.5" role="group" aria-label="View mode">
+      {(['cards', 'list'] as const).map((mode) => (
+        <button
+          key={mode}
+          aria-pressed={view === mode}
+          onClick={() => onChange(mode)}
+          className={cn(
+            'rounded-md px-3 py-1 text-sm capitalize transition-colors duration-[var(--duration-base)]',
+            view === mode ? 'bg-card text-text' : 'text-text/50 hover:text-text'
+          )}
+        >
+          {mode}
+        </button>
+      ))}
     </div>
   )
 }
