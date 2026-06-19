@@ -21,6 +21,12 @@ export interface EngineFs {
 
 export type FetchJson = (url: string, init?: { method?: string; body?: unknown }) => Promise<unknown>
 
+/** Best-effort start of the host-side agent worker (the orcha CLI's notifier daemon,
+ *  which is what actually spawns `claude -p` runs). Returns started=false with a
+ *  plain-language reason when a prerequisite is missing — never throws (worker startup
+ *  is non-fatal to provisioning). Optional so unit tests can omit it. */
+export type StartWorker = (folder: string) => Promise<{ started: boolean; reason?: string }>
+
 export interface EngineDeps {
   exec: Exec
   fetchJson: FetchJson
@@ -30,6 +36,7 @@ export interface EngineDeps {
   readComposeTemplate: () => string
   genSecret: () => string
   user: string
+  startWorker?: StartWorker
   waitPortalTimeoutMs?: number
   waitPortalPollMs?: number
 }
@@ -217,12 +224,23 @@ export async function provision(
     }
   }
 
-  // 7. start daemons — the desktop app cannot run the host CLI daemons (Python
-  //    processes the CLI spawns). The stack + container + portal (incl. its
-  //    in-container workers) are fully provisioned, which is what onboarding needs.
-  //    Emit 'skip' honestly — we did not start anything here — and surface a warning.
-  emit('start-daemons', 'skip')
-  warnings.push('Host notifier/bridge daemons are started by the CLI; the desktop app relies on the portal. Run `orcha up` in a terminal if you need the host daemons.')
+  // 7. start the agent worker — the thing that actually RUNS agents is a host-side
+  //    `claude -p` spawned by the orcha CLI's notifier daemon; the Docker stack only
+  //    runs the portal + db (nothing in-container runs an agent). Provisioning the
+  //    portal alone leaves assigned tasks with no worker to pick them up, so start the
+  //    host worker here (best-effort, non-fatal). When a prerequisite is missing the
+  //    dep returns a plain-language reason we surface as a warning instead of failing.
+  if (deps.startWorker) {
+    emit('start-daemons', 'start')
+    const res = await deps.startWorker(opts.folder)
+    emit('start-daemons', res.started ? 'ok' : 'skip')
+    // A reason can accompany either outcome: not-started (CLI missing) OR started-with-caveat
+    // (daemon up but Claude Code/API key not yet configured, so runs would still stall).
+    if (res.reason) warnings.push(res.reason)
+  } else {
+    emit('start-daemons', 'skip')
+    warnings.push('Host notifier/bridge daemons are started by the CLI; the desktop app relies on the portal. Run `orcha up` in a terminal if you need the host daemons.')
+  }
 
   return { project, apiPort, warnings }
 }

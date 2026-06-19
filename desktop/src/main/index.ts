@@ -16,6 +16,7 @@ import { preflight } from './preflight'
 import { inspectFolder } from './folderModes'
 import { templatesRoot } from './templates'
 import { provision, type EngineDeps, type EngineFs } from './initEngine'
+import { startHostWorker, nodeHostWorkerDeps } from './hostWorker'
 import { resetStack } from './resetEngine'
 import { buildAppMenuTemplate } from './appMenu'
 import type {
@@ -63,10 +64,25 @@ function engineDeps(): EngineDeps {
     fs: nodeEngineFs,
     templatesRoot,
     findFreePort: (start: number) => start,
-    readComposeTemplate: () =>
-      readFileSync(path.join(templatesRoot(), 'docker-compose.yml.j2'), 'utf8'),
+    readComposeTemplate: () => {
+      const composePath = path.join(templatesRoot(), 'docker-compose.yml.j2')
+      if (!existsSync(composePath)) {
+        // The template assets are gitignored and copied in by scripts/copy-orcha-templates.mjs
+        // (run via predev/prebuild/predist). If they're missing the raw error is a bare
+        // "ENOENT"; replace it with something a non-engineer can act on.
+        throw new Error(
+          'App assets are missing (bundled Orcha templates not found). ' +
+            'In a dev checkout run `npm run build` (or `npm run copy:templates`) before launching; ' +
+            'in a packaged build this means the .app was built incorrectly.'
+        )
+      }
+      return readFileSync(composePath, 'utf8')
+    },
     genSecret: () => randomBytes(32).toString('base64url'),
-    user: os.userInfo().username || 'operator'
+    user: os.userInfo().username || 'operator',
+    // After the portal is up, start the host-side agent worker (orcha CLI notifier) so
+    // assigned tasks actually run — without this the portal opens but nothing picks up work.
+    startWorker: (folder) => startHostWorker(folder, nodeHostWorkerDeps)
   }
 }
 

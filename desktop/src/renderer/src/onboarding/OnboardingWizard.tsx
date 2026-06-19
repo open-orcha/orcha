@@ -16,7 +16,14 @@ export default function OnboardingWizard({ onDone }: { onDone: () => void }) {
   const [provisioning, setProvisioning] = useState(false)
   const [done, setDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<string[]>([])
+  const [project, setProject] = useState<string | null>(null)
   const { events } = useProvisionStream(null)
+
+  async function openPortalAndFinish(proj: string) {
+    await window.orchaDesktop.openOnboardingPortal(proj)
+    onDone()
+  }
 
   async function create(name: string, objective: string) {
     if (!choice) return
@@ -26,8 +33,14 @@ export default function OnboardingWizard({ onDone }: { onDone: () => void }) {
     try {
       const res = await window.orchaDesktop.provision({ folder: choice.folder, mode: 'init', name, objective })
       setDone(true)
-      await window.orchaDesktop.openOnboardingPortal(res.project)
-      onDone()
+      setProject(res.project)
+      // If something needs the user's attention (e.g. the agent worker couldn't start),
+      // pause on a plain-language note rather than silently whisking them to the portal.
+      if (res.warnings.length > 0) {
+        setWarnings(res.warnings)
+      } else {
+        await openPortalAndFinish(res.project)
+      }
     } catch (err) {
       const be = err as BridgeError
       setError('stderr' in be ? be.stderr : be.code)
@@ -55,7 +68,15 @@ export default function OnboardingWizard({ onDone }: { onDone: () => void }) {
         {step === 2 && (
           <DetailsStep suggestedName={suggestedName} onBack={() => setStep(1)} onCreate={create} />
         )}
-        {step === 3 && <ProvisionStep events={events} done={done && !provisioning} error={error} />}
+        {step === 3 && (
+          <ProvisionStep
+            events={events}
+            done={done && !provisioning}
+            error={error}
+            warnings={warnings}
+            onContinue={project ? () => openPortalAndFinish(project) : undefined}
+          />
+        )}
       </div>
     </main>
   )
