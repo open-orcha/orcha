@@ -82,13 +82,17 @@ export function dockerEngineStep(): InstallStep {
   }
 }
 
-/** The orcha CLI from the public tap (the `user/repo/formula` shorthand auto-taps). */
+/** The orcha CLI from the public tap. The `user/repo/formula` shorthand does NOT auto-tap a
+ *  third-party tap — `brew install open-orcha/orcha/orcha` errors with "requires the tap
+ *  open-orcha/orcha" — so we tap it explicitly first, then install. */
 export function orchaCliStep(): InstallStep {
   return {
     id: 'orcha',
     title: 'Orcha helper',
     detail: 'The small command-line helper that launches your agents.',
-    actions: [{ kind: 'user', script: 'brew install open-orcha/orcha/orcha' }]
+    actions: [
+      { kind: 'user', script: 'brew tap open-orcha/orcha && brew install open-orcha/orcha/orcha' }
+    ]
   }
 }
 

@@ -4,6 +4,7 @@ import {
   adminOsascriptArgs,
   homebrewPrefix,
   homebrewStep,
+  orchaCliStep,
   planInstall,
   runInstall,
   type InstallDeps
@@ -54,6 +55,17 @@ describe('homebrewStep', () => {
     expect(step.actions[0].script).toContain('/usr/local/bin')
     expect(step.actions[0].script).toContain('/usr/local/Homebrew')
     expect(step.actions[1].script).toMatch(/NONINTERACTIVE=1/)
+  })
+})
+
+describe('orchaCliStep', () => {
+  it('taps the formula repo BEFORE installing (user/repo/formula does not auto-tap)', () => {
+    const step = orchaCliStep()
+    const script = step.actions[0].script
+    expect(script).toContain('brew tap open-orcha/orcha')
+    expect(script).toContain('brew install open-orcha/orcha/orcha')
+    // tap must come before install
+    expect(script.indexOf('brew tap')).toBeLessThan(script.indexOf('brew install'))
   })
 })
 
