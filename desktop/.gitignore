@@ -4,3 +4,5 @@ dist/
 # Local signing/notarization secrets — never commit.
 .env.signing.local
 resources/orcha-templates/
+electron-builder.local.yml
+dist-local/
