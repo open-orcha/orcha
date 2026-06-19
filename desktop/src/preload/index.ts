@@ -37,6 +37,7 @@ const api: OrchaDesktopApi = {
   inspectFolder: (folder: string) => invoke<FolderState>('orcha:inspectFolder', folder),
   provision: (opts: ProvisionOptions) => invoke<ProvisionResult>('orcha:provision', opts),
   openOnboardingPortal: (project: string) => invoke<void>('orcha:openOnboardingPortal', project),
+  openExternal: (url: string) => invoke<void>('orcha:openExternal', url),
   onProvisionProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: ProgressEvent): void => cb(payload)
     ipcRenderer.on('orcha:provision:progress', listener)

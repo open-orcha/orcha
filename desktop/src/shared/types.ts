@@ -119,6 +119,8 @@ export interface OrchaDesktopApi {
   inspectFolder(folder: string): Promise<FolderState>
   provision(opts: ProvisionOptions): Promise<ProvisionResult>
   openOnboardingPortal(project: string): Promise<void>
+  /** Open an https URL in the user's default browser (e.g. the Docker download page). */
+  openExternal(url: string): Promise<void>
   /** Subscribe to provision progress; returns an unsubscribe fn. */
   onProvisionProgress(cb: (e: ProgressEvent) => void): () => void
   /** Subscribe to main→renderer navigation requests (e.g. File→New Project). */
