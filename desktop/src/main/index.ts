@@ -31,7 +31,7 @@ import {
   type InstallStepPlan
 } from './installers'
 import { dockerExec } from './dockerExec'
-import { createWorkspace } from './workspace'
+import { createWorkspace, readableInitError } from './workspace'
 import type {
   AttentionItem,
   BootstrapStatus,
@@ -312,7 +312,9 @@ async function runNewWorkspaceFromMenu(): Promise<void> {
         ? 'Orcha couldn’t start the Docker engine. Open the app again in a minute — Docker can ' +
           'take a little while to wake up — or restart your Mac if it keeps happening.'
         : code === 'WORKSPACE_INIT_FAILED'
-          ? `orcha init failed:\n\n${(err as { stderr?: string }).stderr ?? '(no output)'}`
+          ? `Docker couldn’t start the workspace:\n\n${readableInitError(
+              (err as { stderr?: string }).stderr ?? ''
+            ) || '(no output)'}`
           : 'Could not create the workspace. Is the Orcha CLI installed and Docker running?'
     dialog.showMessageBox({ type: 'error', icon: appIcon(), message: 'New Workspace failed', detail })
   }
