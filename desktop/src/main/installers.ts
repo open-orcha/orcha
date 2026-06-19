@@ -82,16 +82,26 @@ export function dockerEngineStep(): InstallStep {
   }
 }
 
-/** The orcha CLI from the public tap. The `user/repo/formula` shorthand does NOT auto-tap a
- *  third-party tap — `brew install open-orcha/orcha/orcha` errors with "requires the tap
- *  open-orcha/orcha" — so we tap it explicitly first, then install. */
+/** The orcha CLI from the public tap. Two gotchas the command guards against:
+ *  1. The `user/repo/formula` shorthand does NOT auto-tap a third-party tap — bare
+ *     `brew install open-orcha/orcha/orcha` errors with "requires the tap open-orcha/orcha" — so
+ *     we tap explicitly first.
+ *  2. Newer Homebrew refuses to load a formula from an un-trusted third-party tap ("Refusing to
+ *     load formula … from untrusted tap"), which silently sinks the install during onboarding;
+ *     Homebrew itself points the user at `brew trust open-orcha/orcha`, so we run that before
+ *     installing. It's stderr-silenced and `|| true`-guarded so older Homebrew — which has no
+ *     `trust` subcommand and needs none — isn't broken by the unknown command. */
 export function orchaCliStep(): InstallStep {
   return {
     id: 'orcha',
     title: 'Orcha helper',
     detail: 'The small command-line helper that launches your agents.',
     actions: [
-      { kind: 'user', script: 'brew tap open-orcha/orcha && brew install open-orcha/orcha/orcha' }
+      {
+        kind: 'user',
+        script:
+          'brew tap open-orcha/orcha && (brew trust open-orcha/orcha 2>/dev/null || true) && brew install open-orcha/orcha/orcha'
+      }
     ]
   }
 }

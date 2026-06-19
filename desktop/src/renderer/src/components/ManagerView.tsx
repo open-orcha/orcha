@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AttentionItem, Stack } from '../../../shared/types'
 import StackList from './StackList'
 import DockerDownBanner from './DockerDownBanner'
+import HelperMissingBanner from './HelperMissingBanner'
 import EmptyState from './EmptyState'
 import ViewToggle, { type ViewMode } from './ViewToggle'
 
@@ -60,17 +61,24 @@ export default function ManagerView({ onCreate }: { onCreate: () => void }) {
         <div className="rounded-xl border border-border bg-card p-4 text-sm text-text/60">Loading…</div>
       )}
       {view.kind === 'dockerDown' && <DockerDownBanner />}
-      {view.kind === 'ready' &&
-        (view.stacks.length === 0 ? (
-          <EmptyState onCreate={onCreate} />
-        ) : (
-          <StackList
-            stacks={view.stacks}
-            attentionCounts={countsByProject(view.attention)}
-            view={viewMode}
-            onChanged={() => void refresh()}
-          />
-        ))}
+      {view.kind === 'ready' && (
+        <>
+          {/* A reinstall (or a first install on a Mac that already had stacks) can leave the helper
+              missing while a workspace exists — onboarding is skipped in that case, so surface it
+              here with a one-click reinstall. Self-hides when the helper is present. */}
+          <HelperMissingBanner />
+          {view.stacks.length === 0 ? (
+            <EmptyState onCreate={onCreate} />
+          ) : (
+            <StackList
+              stacks={view.stacks}
+              attentionCounts={countsByProject(view.attention)}
+              view={viewMode}
+              onChanged={() => void refresh()}
+            />
+          )}
+        </>
+      )}
     </main>
   )
 }
