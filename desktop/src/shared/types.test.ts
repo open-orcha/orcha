@@ -30,9 +30,9 @@ describe('shared onboarding types', () => {
       'pickFolder',
       'inspectFolder',
       'provision',
-      'openOnboarding',
       'openOnboardingPortal',
-      'onProvisionProgress'
+      'onProvisionProgress',
+      'onNavigate'
     ]
     expect(keys.length).toBeGreaterThan(0)
   })
