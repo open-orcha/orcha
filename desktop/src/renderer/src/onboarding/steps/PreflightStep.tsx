@@ -2,18 +2,32 @@ import { useEffect, useState } from 'react'
 import type { InstallProgress, PreflightReport, PrereqProbe } from '../../../../shared/types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
-import { AlertCircle, CheckCircle2, Circle, ExternalLink, Loader2 } from 'lucide-react'
+import { AlertCircle, Check, CheckCircle2, Circle, Copy, ExternalLink, Loader2 } from 'lucide-react'
 
 const LINKS = {
   homebrew: 'https://brew.sh',
   docker: 'https://www.docker.com/products/docker-desktop/',
-  claudeCode: 'https://www.anthropic.com/claude-code'
+  claudeCodeDocs: 'https://docs.anthropic.com/en/docs/claude-code/setup',
+  codexDocs: 'https://developers.openai.com/codex/cli'
 }
+
+/** A copy-able Terminal command shown for a requirement the user installs themselves. */
+type InstallCommand = { name: string; cmd: string; doc: string }
 
 /** Tools the user must install themselves before Orcha can run agents. Orcha does NOT install
  *  these — each has its own installer / sign-in — it just checks for them and gates Continue.
- *  The one thing Orcha installs is its own CLI helper (handled separately, on Continue). */
-const REQUIREMENTS: { key: 'homebrew' | 'docker' | 'ai'; label: string; how: string; url: string }[] = [
+ *  The one thing Orcha installs is its own CLI helper (handled separately, on Continue).
+ *
+ *  `url` → a single "get it" link (Homebrew, Docker). `commands` → copy-able CLI install lines
+ *  shown inline (the AI coding agent), so the user installs the CLI directly instead of being
+ *  sent to a marketing/download page. */
+const REQUIREMENTS: {
+  key: 'homebrew' | 'docker' | 'ai'
+  label: string
+  how?: string
+  url?: string
+  commands?: InstallCommand[]
+}[] = [
   { key: 'homebrew', label: 'Homebrew', how: 'Get Homebrew (brew.sh)', url: LINKS.homebrew },
   {
     key: 'docker',
@@ -23,11 +37,54 @@ const REQUIREMENTS: { key: 'homebrew' | 'docker' | 'ai'; label: string; how: str
   },
   {
     key: 'ai',
-    label: 'Claude Code or Codex',
-    how: 'Get Claude Code and sign in',
-    url: LINKS.claudeCode
+    label: 'Claude Code or Codex (install one)',
+    commands: [
+      {
+        name: 'Claude Code',
+        cmd: 'npm install -g @anthropic-ai/claude-code',
+        doc: LINKS.claudeCodeDocs
+      },
+      { name: 'Codex', cmd: 'npm install -g @openai/codex', doc: LINKS.codexDocs }
+    ]
   }
 ]
+
+/** One CLI install line: tool name, a copy-able command, and a docs link. */
+function CommandLine({ name, cmd, doc }: InstallCommand): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    void navigator.clipboard.writeText(cmd).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-text/70">{name}</span>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 truncate rounded bg-text/5 px-2 py-1 font-mono text-xs text-text">
+          {cmd}
+        </code>
+        <button
+          type="button"
+          title="Copy command"
+          className="flex items-center gap-1 text-xs text-accent hover:underline"
+          onClick={copy}
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+        <button
+          type="button"
+          className="flex items-center gap-1 text-xs text-text/50 hover:underline"
+          onClick={() => void window.orchaDesktop.openExternal(doc)}
+        >
+          Docs <ExternalLink className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function PreflightStep({ onContinue }: { onContinue: () => void }) {
   const [report, setReport] = useState<PreflightReport | null>(null)
@@ -112,13 +169,23 @@ export default function PreflightStep({ onContinue }: { onContinue: () => void }
                 ) : (
                   <Circle className="mt-0.5 h-4 w-4 shrink-0 text-text/30" />
                 )}
-                <div className="flex flex-col gap-0.5">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className={ok ? 'text-text' : 'text-text/70'}>{r.label}</span>
-                  {!ok && (
+                  {!ok && r.commands && (
+                    <div className="flex flex-col gap-2">
+                      <span className="text-xs text-text/50">
+                        Run one of these in Terminal, then click Re-check:
+                      </span>
+                      {r.commands.map((c) => (
+                        <CommandLine key={c.name} {...c} />
+                      ))}
+                    </div>
+                  )}
+                  {!ok && r.url && (
                     <button
                       type="button"
                       className="flex w-fit items-center gap-1 text-xs text-accent hover:underline"
-                      onClick={() => void window.orchaDesktop.openExternal(r.url)}
+                      onClick={() => void window.orchaDesktop.openExternal(r.url!)}
                     >
                       {r.how} <ExternalLink className="h-3 w-3" />
                     </button>
