@@ -70,7 +70,7 @@ describe('orchaCliStep', () => {
 })
 
 describe('planInstall', () => {
-  const all: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: true, claude: true, apiKey: true }
+  const all: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: true, claude: true, codex: true, apiKey: true }
   const opts = { arch: 'arm64', user: 'alice' }
 
   it('returns nothing when everything is already present', () => {
@@ -78,7 +78,7 @@ describe('planInstall', () => {
   })
 
   it('emits only the missing steps, in dependency order (Homebrew first)', () => {
-    const probe: PrereqProbe = { homebrew: false, dockerEngine: false, orcha: false, claude: false, apiKey: false }
+    const probe: PrereqProbe = { homebrew: false, dockerEngine: false, orcha: false, claude: false, codex: false, apiKey: false }
     expect(planInstall(probe, opts).map((s) => s.id)).toEqual([
       'homebrew',
       'dockerEngine',
@@ -89,7 +89,7 @@ describe('planInstall', () => {
   })
 
   it('skips Homebrew/engine when present but still installs the CLIs + key', () => {
-    const probe: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: false, claude: false, apiKey: false }
+    const probe: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: false, claude: false, codex: false, apiKey: false }
     expect(planInstall(probe, opts).map((s) => s.id)).toEqual(['orcha', 'claude', 'apiKey'])
   })
 })

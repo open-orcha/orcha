@@ -124,17 +124,19 @@ function whichHostTool(cmd: string): Promise<string | null> {
 }
 
 async function probePrereqs(): Promise<PrereqProbe> {
-  const [brew, docker, orcha, claude] = await Promise.all([
+  const [brew, docker, orcha, claude, codex] = await Promise.all([
     whichHostTool('brew'),
     whichHostTool('docker'),
     whichHostTool('orcha'),
-    whichHostTool('claude')
+    whichHostTool('claude'),
+    whichHostTool('codex')
   ])
   return {
     homebrew: !!brew,
     dockerEngine: !!docker,
     orcha: !!orcha,
     claude: !!claude,
+    codex: !!codex,
     apiKey: !!process.env.ANTHROPIC_API_KEY || existsSync(apiKeyFile())
   }
 }
@@ -436,7 +438,13 @@ app.whenReady().then(() => {
   ipcMain.handle('orcha:installPrereqs', () =>
     asResult(async (): Promise<InstallResult> => {
       const probe = await probePrereqs()
-      const steps = planInstall(probe, { arch: os.arch(), user: os.userInfo().username || 'operator' })
+      // The desktop app installs ONE thing for the user: the Orcha CLI helper. Homebrew,
+      // Docker, and an AI coding agent (Claude Code / Codex) are hard requirements the user
+      // installs themselves — the onboarding step shows them and gates Continue on them.
+      const steps = planInstall(probe, {
+        arch: os.arch(),
+        user: os.userInfo().username || 'operator'
+      }).filter((s) => s.id === 'orcha')
       if (steps.length === 0) return { ok: true, completed: [] }
       return runInstall(steps, {
         runUser: runUserInstall,
