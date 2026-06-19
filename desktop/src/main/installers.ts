@@ -24,9 +24,26 @@ export interface InstallStepPlan {
 
 /** The Homebrew install is a non-interactive run of the official installer. We run it AS THE USER
  *  (Homebrew refuses to run as root) after a separate admin step pre-creates its prefix — see
- *  homebrewPrepCommand. */
-export function homebrewInstallCommand(): string {
-  return 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+ *  homebrewPrepCommand.
+ *
+ *  On Apple Silicon we force the installer to run natively with `arch -arm64`. The official
+ *  installer chooses its prefix from the architecture it sees: an un-forced run that happens to be
+ *  translated under Rosetta detects x86_64, installs the Intel build under /usr/local, and then
+ *  dies with "Bad CPU type in executable" when its bundled Ruby can't run. Pinning to arm64 lays
+ *  down the correct build under /opt/homebrew — matching the prefix homebrewPrepCommand prepares.
+ *  Intel Macs only run x86, so they need no flag. `arch` MUST be the true hardware arch (see
+ *  detectMacArch in index.ts), not process.arch — which Rosetta misreports as x64. */
+export function homebrewInstallCommand(arch: string = process.arch): string {
+  const native = arch === 'arm64' ? 'arch -arm64 ' : ''
+  return `NONINTERACTIVE=1 ${native}/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+}
+
+/** Normalise the Mac's CPU to the two values the Homebrew prefix logic cares about, from the output
+ *  of `sysctl -n hw.optional.arm64`. That key reads "1" on Apple Silicon even when the asking
+ *  process is translated under Rosetta — which is exactly why we ask the hardware instead of
+ *  trusting process.arch. Anything else (including the sysctl key being absent on Intel) is x64. */
+export function macArchFromSysctl(sysctlOut: string): 'arm64' | 'x64' {
+  return sysctlOut.trim() === '1' ? 'arm64' : 'x64'
 }
 
 /** Homebrew's installer normally uses sudo to create and chown its prefix. To surface macOS's
@@ -78,14 +95,14 @@ const MAYBE_POPUP_NOTE =
   'This runs through Homebrew and usually will not need your password, but if macOS asks, that ' +
   'prompt is Apple’s, not Orcha’s.'
 
-function homebrewStep(): InstallStepPlan {
+function homebrewStep(arch: string): InstallStepPlan {
   return {
     name: 'homebrew',
     title: 'Install Homebrew',
     consentMessage:
       'Next, Orcha will install Homebrew — the macOS package manager it uses to install ' +
       `everything else.\n\n${APPLE_POPUP_NOTE}\n\nInstall Homebrew now?`,
-    command: homebrewInstallCommand(),
+    command: homebrewInstallCommand(arch),
     needsAdmin: true
   }
 }
@@ -129,9 +146,12 @@ function cliStep(): InstallStepPlan {
 /** The ordered set of confirmed steps needed to make this machine ready, derived from a read-only
  *  dependency snapshot. Empty when nothing needs doing. Homebrew is sequenced first because the
  *  Docker and CLI installs run through it. */
-export function planBootstrap(status: BootstrapStatus): InstallStepPlan[] {
+export function planBootstrap(
+  status: BootstrapStatus,
+  arch: string = process.arch
+): InstallStepPlan[] {
   const steps: InstallStepPlan[] = []
-  if (!status.homebrew.installed) steps.push(homebrewStep())
+  if (!status.homebrew.installed) steps.push(homebrewStep(arch))
   if (!status.docker.installed) steps.push(dockerInstallStep(status))
   else if (status.docker.running === false) steps.push(dockerStartStep(status))
   if (!status.cli.installed) steps.push(cliStep())
@@ -181,9 +201,10 @@ export interface BootstrapDriver {
 
 export async function runGuidedBootstrap(
   status: BootstrapStatus,
-  driver: BootstrapDriver
+  driver: BootstrapDriver,
+  arch: string = process.arch
 ): Promise<BootstrapOutcome> {
-  const steps = planBootstrap(status)
+  const steps = planBootstrap(status, arch)
   if (steps.length === 0) return { result: 'nothing_to_do' }
   for (const step of steps) {
     const proceed = await driver.confirm(step)

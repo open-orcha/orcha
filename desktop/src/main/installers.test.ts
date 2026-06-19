@@ -3,6 +3,7 @@ import {
   planBootstrap,
   homebrewInstallCommand,
   homebrewPrepCommand,
+  macArchFromSysctl,
   dockerCommand,
   cliInstallCommand,
   osascriptAdmin,
@@ -69,8 +70,32 @@ describe('planBootstrap', () => {
 
 describe('command construction', () => {
   it('runs the official Homebrew installer non-interactively', () => {
-    expect(homebrewInstallCommand()).toMatch(/NONINTERACTIVE=1/)
-    expect(homebrewInstallCommand()).toMatch(/install\.sh/)
+    expect(homebrewInstallCommand('arm64')).toMatch(/NONINTERACTIVE=1/)
+    expect(homebrewInstallCommand('arm64')).toMatch(/install\.sh/)
+  })
+
+  it('forces the native arm64 build on Apple Silicon so Rosetta can’t install the Intel one', () => {
+    // Without `arch -arm64`, a translated launch installs the x86 build under /usr/local and dies
+    // with "Bad CPU type in executable" on the bundled Ruby.
+    expect(homebrewInstallCommand('arm64')).toMatch(/arch -arm64 \/bin\/bash/)
+  })
+
+  it('adds no arch flag on Intel (x86 is the only build it can run)', () => {
+    const cmd = homebrewInstallCommand('x64')
+    expect(cmd).not.toMatch(/arch -/)
+    expect(cmd).toMatch(/NONINTERACTIVE=1 \/bin\/bash/)
+  })
+
+  it('reads the true CPU from sysctl hw.optional.arm64 (Rosetta-proof)', () => {
+    expect(macArchFromSysctl('1\n')).toBe('arm64')
+    expect(macArchFromSysctl('0\n')).toBe('x64')
+    expect(macArchFromSysctl('')).toBe('x64') // key absent on Intel
+  })
+
+  it('pairs the arm64 installer with the arm64 prefix so install and prep agree', () => {
+    // The bug that broke the wife’s laptop: prep owned one prefix while the installer used the other.
+    expect(homebrewInstallCommand('arm64')).toMatch(/arch -arm64/)
+    expect(homebrewPrepCommand('arm64', 'kedar')).toMatch(/\/opt\/homebrew/)
   })
 
   it('pre-creates /opt/homebrew on Apple Silicon and chowns to the user', () => {

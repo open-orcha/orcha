@@ -23,6 +23,7 @@ import {
   homebrewInstallCommand,
   homebrewPrepCommand,
   isOsascriptCancel,
+  macArchFromSysctl,
   osascriptAdmin,
   planBootstrap,
   runGuidedBootstrap,
@@ -287,15 +288,34 @@ async function runAsAdmin(stepName: InstallStepPlan['name'], cmd: string): Promi
   }
 }
 
+/** Ask the hardware which CPU this Mac has, so we install the matching Homebrew build. We read
+ *  `sysctl -n hw.optional.arm64` rather than process.arch because a translated (Rosetta) launch
+ *  reports x64 even on an Apple Silicon machine — which would install the Intel build and then fail
+ *  with "Bad CPU type in executable". Falls back to process.arch if sysctl is unavailable. */
+async function detectMacArch(): Promise<string> {
+  try {
+    const { stdout } = await dockerExec('sysctl', ['-n', 'hw.optional.arm64'])
+    return macArchFromSysctl(stdout)
+  } catch {
+    return process.arch === 'arm64' ? 'arm64' : 'x64'
+  }
+}
+
 /** Actually perform one confirmed install step. Homebrew is special: it refuses to run as root,
  *  so we do the one privileged action (creating + chowning its prefix) via the native admin popup,
  *  then run the official installer as the user — it finds the prefix ready and needs no more
- *  elevation. Docker (Colima) and the CLI install through Homebrew as the user, no popup. */
-async function performInstall(step: InstallStepPlan, status: BootstrapStatus): Promise<void> {
+ *  elevation. Both the prefix prep and the installer are pinned to the same hardware arch so they
+ *  agree on /opt/homebrew (Apple Silicon) vs /usr/local (Intel). Docker (Colima) and the CLI
+ *  install through Homebrew as the user, no popup. */
+async function performInstall(
+  step: InstallStepPlan,
+  status: BootstrapStatus,
+  arch: string
+): Promise<void> {
   switch (step.name) {
     case 'homebrew':
-      await runAsAdmin('homebrew', homebrewPrepCommand())
-      await runAsUser(homebrewInstallCommand())
+      await runAsAdmin('homebrew', homebrewPrepCommand(arch))
+      await runAsUser(homebrewInstallCommand(arch))
       return
     case 'docker':
       await runAsUser(dockerCommand(status))
@@ -345,7 +365,8 @@ async function runGuidedSetup(): Promise<void> {
   } catch {
     return // detection itself shouldn't block startup
   }
-  const steps = planBootstrap(status)
+  const arch = await detectMacArch()
+  const steps = planBootstrap(status, arch)
   if (steps.length === 0) {
     void dialog.showMessageBox({
       type: 'info',
@@ -369,10 +390,14 @@ async function runGuidedSetup(): Promise<void> {
   })
   if (intro.response !== 0) return
 
-  const outcome = await runGuidedBootstrap(status, {
-    confirm: confirmStep,
-    perform: (step) => performInstall(step, status)
-  })
+  const outcome = await runGuidedBootstrap(
+    status,
+    {
+      confirm: confirmStep,
+      perform: (step) => performInstall(step, status, arch)
+    },
+    arch
+  )
 
   if (outcome.result === 'completed') {
     const after = await checkDependencies().catch(() => status)
