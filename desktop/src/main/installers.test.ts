@@ -67,6 +67,16 @@ describe('orchaCliStep', () => {
     // tap must come before install
     expect(script.indexOf('brew tap')).toBeLessThan(script.indexOf('brew install'))
   })
+
+  it('trusts the tap between tap and install, guarded for older brew without the subcommand', () => {
+    const script = orchaCliStep().actions[0].script
+    expect(script).toContain('brew trust open-orcha/orcha')
+    // trust must sit AFTER the tap and BEFORE the install
+    expect(script.indexOf('brew tap')).toBeLessThan(script.indexOf('brew trust'))
+    expect(script.indexOf('brew trust')).toBeLessThan(script.indexOf('brew install'))
+    // and must not abort the chain on an older brew that lacks `trust`
+    expect(script).toContain('|| true')
+  })
 })
 
 describe('planInstall', () => {
