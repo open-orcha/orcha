@@ -13,6 +13,8 @@ export interface StackActions {
   toggleLabel: string
   openPortal: () => void
   toggleStack: () => void
+  /** Destructively delete the stack (down -v + image + on-disk files). Gated by the caller's modal. */
+  resetStack: () => void
 }
 
 export default function useStackActions(stack: Stack, onChanged: () => void): StackActions {
@@ -47,6 +49,7 @@ export default function useStackActions(stack: Stack, onChanged: () => void): St
         : 'Start',
     openPortal: () => void run(() => api.openPortal(stack.project)),
     toggleStack: () =>
-      void run(() => (stack.running ? api.stopStack(stack.project) : api.startStack(stack.project)))
+      void run(() => (stack.running ? api.stopStack(stack.project) : api.startStack(stack.project))),
+    resetStack: () => void run(() => api.resetStack(stack.project))
   }
 }

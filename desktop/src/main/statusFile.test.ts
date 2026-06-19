@@ -9,7 +9,8 @@ const stack: Stack = {
   apiPort: 8001,
   dbPort: 5435,
   portalStatus: 'Up 4 hours',
-  running: true
+  running: true,
+  folder: null
 }
 const item: AttentionItem = {
   project: 'orcha-quantal-ehr',

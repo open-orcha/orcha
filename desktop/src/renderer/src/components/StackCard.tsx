@@ -1,5 +1,8 @@
+import { useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import type { Stack } from '../../../shared/types'
 import useStackActions from './useStackActions'
+import ConfirmResetModal from './ConfirmResetModal'
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
@@ -12,10 +15,9 @@ interface Props {
 }
 
 export default function StackCard({ stack, attentionCount = 0, onChanged }: Props) {
-  const { busy, error, portalDisabled, toggleLabel, openPortal, toggleStack } = useStackActions(
-    stack,
-    onChanged
-  )
+  const { busy, error, portalDisabled, toggleLabel, openPortal, toggleStack, resetStack } =
+    useStackActions(stack, onChanged)
+  const [confirming, setConfirming] = useState(false)
 
   return (
     <Card className="flex flex-col gap-3" data-testid="stack-card">
@@ -32,6 +34,17 @@ export default function StackCard({ stack, attentionCount = 0, onChanged }: Prop
           {stack.running ? 'running' : 'stopped'}
         </Badge>
         {attentionCount > 0 && <Badge>needs attention · {attentionCount}</Badge>}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto text-text/50 hover:text-danger"
+          disabled={busy}
+          aria-label={`Delete and reset ${stack.projectShort}`}
+          title="Delete & reset"
+          onClick={() => setConfirming(true)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
       </div>
       <div className="text-xs text-text/50">
         {stack.running && stack.apiPort !== null ? (
@@ -51,6 +64,17 @@ export default function StackCard({ stack, attentionCount = 0, onChanged }: Prop
         </Button>
       </div>
       {error && <div className="text-xs text-danger">{error}</div>}
+      {confirming && (
+        <ConfirmResetModal
+          project={stack.project}
+          busy={busy}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            resetStack()
+          }}
+        />
+      )}
     </Card>
   )
 }

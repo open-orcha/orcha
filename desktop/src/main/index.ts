@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { parseDeepLink } from './deepLink'
 import { listStacks } from './discovery'
@@ -16,6 +16,7 @@ import { preflight } from './preflight'
 import { inspectFolder } from './folderModes'
 import { templatesRoot } from './templates'
 import { provision, type EngineDeps, type EngineFs } from './initEngine'
+import { resetStack } from './resetEngine'
 import { buildAppMenuTemplate } from './appMenu'
 import type {
   AttentionItem,
@@ -255,6 +256,18 @@ app.whenReady().then(() => {
     asResult(async () => {
       const stack = await requireKnownStack(project)
       await stopStack(stack.project)
+    })
+  )
+
+  ipcMain.handle('orcha:resetStack', (_event, project: string) =>
+    asResult(async () => {
+      // Validate against the live snapshot to get the on-disk folder; the engine re-guards the name.
+      const stack = await requireKnownStack(project)
+      await resetStack(stack.project, stack.folder, {
+        exec: dockerExec,
+        rmrf: (p) => rmSync(p, { recursive: true, force: true }),
+        rmFile: (p) => rmSync(p, { force: true })
+      })
     })
   )
 

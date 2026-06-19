@@ -11,7 +11,8 @@ const runningStack: Stack = {
   apiPort: 8001,
   dbPort: 5435,
   portalStatus: 'Up 4 hours',
-  running: true
+  running: true,
+  folder: null
 }
 
 const stoppedStack: Stack = {
@@ -27,6 +28,7 @@ beforeEach(() => {
     listStacks: vi.fn().mockResolvedValue([]),
     startStack: vi.fn().mockResolvedValue(undefined),
     stopStack: vi.fn().mockResolvedValue(undefined),
+    resetStack: vi.fn().mockResolvedValue(undefined),
     openPortal: vi.fn().mockResolvedValue(undefined),
     listAttention: vi.fn().mockResolvedValue([]),
     openManager: vi.fn(),
