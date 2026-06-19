@@ -9,7 +9,8 @@ const stackUp: Stack = {
   apiPort: 8001,
   dbPort: 5433,
   portalStatus: 'Up 1 hour',
-  running: true
+  running: true,
+  folder: null
 }
 const stackDown: Stack = { ...stackUp, running: false, apiPort: null, portalStatus: 'Exited (0)' }
 

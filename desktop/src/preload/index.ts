@@ -28,6 +28,7 @@ const api: OrchaDesktopApi = {
   startStack: (project) => invoke<void>('orcha:startStack', project),
   stopStack: (project) => invoke<void>('orcha:stopStack', project),
   openPortal: (project, path) => invoke<void>('orcha:openPortal', project, path),
+  resetStack: (project) => invoke<void>('orcha:resetStack', project),
   listAttention: () => invoke<AttentionItem[]>('orcha:listAttention'),
   openManager: () => invoke<void>('orcha:openManager'),
   quitApp: () => invoke<void>('orcha:quitApp'),

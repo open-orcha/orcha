@@ -12,6 +12,9 @@ export interface Stack {
   portalStatus: string
   /** True iff portalStatus starts with "Up". */
   running: boolean
+  /** Absolute project root on disk (parent of .orcha), from the compose working_dir label;
+   *  null when the label is absent. Used by Delete & reset to clean on-disk artifacts. */
+  folder: string | null
 }
 
 export type BridgeError =
@@ -110,6 +113,9 @@ export interface OrchaDesktopApi {
   startStack(project: string): Promise<void>
   stopStack(project: string): Promise<void>
   openPortal(project: string, path?: string): Promise<void>
+  /** Destructively delete a stack: down -v + remove its portal image + on-disk Orcha files.
+   *  Irreversible; the renderer gates it behind a type-to-confirm prompt. */
+  resetStack(project: string): Promise<void>
   listAttention(): Promise<AttentionItem[]>
   openManager(): Promise<void>
   quitApp(): Promise<void>

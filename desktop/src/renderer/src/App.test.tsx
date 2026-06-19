@@ -8,6 +8,7 @@ function stub(stacks: unknown[]) {
     listStacks: vi.fn().mockResolvedValue(stacks),
     startStack: vi.fn(),
     stopStack: vi.fn(),
+    resetStack: vi.fn(),
     openPortal: vi.fn(),
     listAttention: vi.fn().mockResolvedValue([]),
     openManager: vi.fn(),
@@ -42,7 +43,8 @@ describe('App single-window host', () => {
         apiPort: 8000,
         dbPort: 5432,
         portalStatus: 'Up',
-        running: true
+        running: true,
+        folder: null
       }
     ])
     render(<App />)

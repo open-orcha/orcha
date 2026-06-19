@@ -11,7 +11,8 @@ const stack: Stack = {
   apiPort: 8001,
   dbPort: 5435,
   portalStatus: 'Up 4 hours',
-  running: true
+  running: true,
+  folder: null
 }
 const items: AttentionItem[] = [
   { project: 'orcha-quantal-ehr', projectShort: 'quantal-ehr', kind: 'task_verify', id: 't1', title: 'Verify foundation layer', path: '/tasks?task=t1' },
@@ -23,6 +24,7 @@ beforeEach(() => {
     listStacks: vi.fn().mockResolvedValue([stack]),
     startStack: vi.fn(),
     stopStack: vi.fn(),
+    resetStack: vi.fn(),
     openPortal: vi.fn().mockResolvedValue(undefined),
     listAttention: vi.fn().mockResolvedValue(items),
     openManager: vi.fn().mockResolvedValue(undefined),

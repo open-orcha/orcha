@@ -1,5 +1,8 @@
+import { useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import type { Stack } from '../../../shared/types'
 import useStackActions from './useStackActions'
+import ConfirmResetModal from './ConfirmResetModal'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
 import { cn } from '../ui/cn'
@@ -12,10 +15,9 @@ interface Props {
 
 /** Compact single-line row for the list view; same actions as StackCard. */
 export default function StackRow({ stack, attentionCount = 0, onChanged }: Props) {
-  const { busy, error, portalDisabled, toggleLabel, openPortal, toggleStack } = useStackActions(
-    stack,
-    onChanged
-  )
+  const { busy, error, portalDisabled, toggleLabel, openPortal, toggleStack, resetStack } =
+    useStackActions(stack, onChanged)
+  const [confirming, setConfirming] = useState(false)
 
   return (
     <li
@@ -41,9 +43,31 @@ export default function StackRow({ stack, attentionCount = 0, onChanged }: Props
           <Button size="sm" variant="outline" disabled={busy} onClick={toggleStack}>
             {toggleLabel}
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-text/50 hover:text-danger"
+            disabled={busy}
+            aria-label={`Delete and reset ${stack.projectShort}`}
+            title="Delete & reset"
+            onClick={() => setConfirming(true)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       </div>
       {error && <div className="text-xs text-danger">{error}</div>}
+      {confirming && (
+        <ConfirmResetModal
+          project={stack.project}
+          busy={busy}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            resetStack()
+          }}
+        />
+      )}
     </li>
   )
 }
