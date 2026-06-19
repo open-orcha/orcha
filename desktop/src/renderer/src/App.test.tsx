@@ -14,6 +14,11 @@ function stub(stacks: unknown[]) {
     openManager: vi.fn(),
     quitApp: vi.fn(),
     preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+    probePrereqs: vi
+      .fn()
+      .mockResolvedValue({ homebrew: true, dockerEngine: true, orcha: true, claude: true, apiKey: true }),
+    installPrereqs: vi.fn().mockResolvedValue({ ok: true, completed: [] }),
+    onInstallProgress: vi.fn().mockReturnValue(() => {}),
     pickFolder: vi.fn().mockResolvedValue(null),
     inspectFolder: vi
       .fn()

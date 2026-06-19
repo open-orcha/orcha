@@ -7,7 +7,7 @@ import FolderStep from './steps/FolderStep'
 import DetailsStep from './steps/DetailsStep'
 import ProvisionStep from './steps/ProvisionStep'
 
-const STEPS = ['Docker', 'Folder', 'Details', 'Create']
+const STEPS = ['Setup', 'Folder', 'Details', 'Create']
 
 export default function OnboardingWizard({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0)

@@ -4,9 +4,12 @@ import type {
   FolderChoice,
   FolderMode,
   FolderState,
+  InstallProgress,
+  InstallResult,
   IpcResult,
   OrchaDesktopApi,
   PreflightReport,
+  PrereqProbe,
   ProgressEvent,
   ProvisionOptions,
   ProvisionResult,
@@ -34,6 +37,13 @@ const api: OrchaDesktopApi = {
   quitApp: () => invoke<void>('orcha:quitApp'),
   // onboarding:
   preflight: () => invoke<PreflightReport>('orcha:preflight'),
+  probePrereqs: () => invoke<PrereqProbe>('orcha:probePrereqs'),
+  installPrereqs: () => invoke<InstallResult>('orcha:installPrereqs'),
+  onInstallProgress: (cb) => {
+    const listener = (_e: IpcRendererEvent, payload: InstallProgress): void => cb(payload)
+    ipcRenderer.on('orcha:install:progress', listener)
+    return () => ipcRenderer.removeListener('orcha:install:progress', listener)
+  },
   pickFolder: (mode: FolderMode) => invoke<FolderChoice | null>('orcha:pickFolder', mode),
   inspectFolder: (folder: string) => invoke<FolderState>('orcha:inspectFolder', folder),
   provision: (opts: ProvisionOptions) => invoke<ProvisionResult>('orcha:provision', opts),

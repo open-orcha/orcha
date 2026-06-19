@@ -90,6 +90,55 @@ export interface PreflightReport {
   hint: string | null
 }
 
+// ---- Prerequisites / auto-install ----
+
+/** The host-side tools Orcha needs that the Docker stack can't provide. Agents run as a
+ *  host `claude -p` process launched by the orcha CLI, so a fresh Mac needs all of these
+ *  before assigned tasks actually run. */
+export type Prereq = 'homebrew' | 'dockerEngine' | 'orcha' | 'claude' | 'apiKey'
+
+/** What's already present on this Mac. Each false → one install step. */
+export interface PrereqProbe {
+  /** `brew` resolves on PATH. */
+  homebrew: boolean
+  /** A `docker` CLI resolves on PATH (Colima, Docker Desktop, or OrbStack). */
+  dockerEngine: boolean
+  /** `orcha` CLI resolves on PATH. */
+  orcha: boolean
+  /** `claude` (Claude Code) resolves on PATH. */
+  claude: boolean
+  /** An Anthropic API key is available to the agent worker. */
+  apiKey: boolean
+}
+
+/** A single shell command in an install step. `admin` actions run as root via the native
+ *  macOS password / Touch ID popup; `user` actions run as the logged-in user. */
+export interface InstallAction {
+  kind: 'user' | 'admin'
+  script: string
+}
+
+/** One installable prerequisite, in plain language, plus the commands that install it.
+ *  `apiKey` carries no actions — it's handled by prompting for + storing the key. */
+export interface InstallStep {
+  id: Prereq
+  /** Short plain-English name shown to a non-engineer. */
+  title: string
+  /** One line on what it is / why it's needed (shown before installing). */
+  detail: string
+  actions: InstallAction[]
+}
+
+/** Streamed install progress (main → renderer). */
+export type InstallProgress =
+  | { id: Prereq; status: 'start' | 'ok' | 'skip'; title: string }
+  | { id: Prereq; status: 'log'; line: string }
+  | { id: Prereq; status: 'fail'; title: string; detail: string }
+
+export type InstallResult =
+  | { ok: true; completed: Prereq[] }
+  | { ok: false; completed: Prereq[]; failedAt: Prereq; detail: string }
+
 export type FolderMode = 'existing' | 'new-blank' | 'reconnect'
 
 export interface FolderState {
@@ -121,6 +170,15 @@ export interface OrchaDesktopApi {
   quitApp(): Promise<void>
   // onboarding:
   preflight(): Promise<PreflightReport>
+  /** Check which host prerequisites (Homebrew, Docker engine, orcha, Claude Code, API key)
+   *  are already installed. */
+  probePrereqs(): Promise<PrereqProbe>
+  /** Install whatever prerequisites are missing, guided by native dialogs (one Mac-password
+   *  prompt for Homebrew's folder, one prompt for the API key). Streams progress via
+   *  onInstallProgress; resolves with what completed / where it stopped. */
+  installPrereqs(): Promise<InstallResult>
+  /** Subscribe to install progress; returns an unsubscribe fn. */
+  onInstallProgress(cb: (e: InstallProgress) => void): () => void
   pickFolder(mode: FolderMode): Promise<FolderChoice | null>
   inspectFolder(folder: string): Promise<FolderState>
   provision(opts: ProvisionOptions): Promise<ProvisionResult>
