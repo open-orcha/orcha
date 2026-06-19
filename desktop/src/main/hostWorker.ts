@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import os from 'node:os'
 import { dockerPath } from './dockerExec'
 
@@ -9,10 +9,20 @@ import { dockerPath } from './dockerExec'
 
 const STDERR_TAIL = 400
 
-/** PATH for locating the host CLIs (`orcha`, `claude`). Extends the Finder-safe docker
- *  PATH with the usual brew / npm-global / pipx / Claude-Code install locations, since a
- *  Finder-launched .app inherits a minimal PATH that omits all of them. Pure + testable. */
-export function hostToolPath(env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
+/** PATH for locating the host CLIs (`orcha`, `claude`) AND the tools they in turn need
+ *  (`node` for Claude Code, `git`, `npm`). Extends the Finder-safe docker PATH with the
+ *  user's real login-shell PATH (`loginPath`) plus the usual brew / npm-global / pipx /
+ *  Claude-Code locations as a fallback. A Finder-launched .app inherits a minimal PATH
+ *  that omits all of these — and crucially, the `orcha up` we spawn passes THIS PATH to
+ *  the notifier daemon, which freezes it for every agent worker it later spawns. If a
+ *  worker can't find `claude`/`node` it dies silently ("no reaction at all"), so the
+ *  login-shell PATH (where the user actually installed those tools) is what makes
+ *  app-launched runs behave like a Terminal `orcha up`. Pure + testable. */
+export function hostToolPath(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+  loginPath: string | null = null
+): string {
   const extra = [
     `${home}/.local/bin`, // pipx (orcha), uv tools
     `${home}/.claude/local`, // Claude Code native installer
@@ -20,8 +30,31 @@ export function hostToolPath(env: NodeJS.ProcessEnv = process.env, home: string 
     '/opt/homebrew/bin', // already in dockerPath, but harmless to re-list
     '/usr/local/bin'
   ]
+  const login = loginPath ? loginPath.split(':') : []
   const base = dockerPath(env, home).split(':')
-  return [...base, ...extra].filter((p, i, a) => p && a.indexOf(p) === i).join(':')
+  // login-shell dirs first: a user who runs nvm/volta/asdf has node (and the npm-global
+  // claude) under a versioned home dir none of the hardcoded fallbacks above can guess.
+  return [...login, ...base, ...extra].filter((p, i, a) => p && a.indexOf(p) === i).join(':')
+}
+
+/** Impure: ask the user's LOGIN shell for the PATH a Terminal would have, so app-launched
+ *  `orcha up` inherits the same tool locations (nvm/volta/asdf/custom) the user installed
+ *  into. Best-effort — returns null on any failure (no shell, timeout, weird output) and
+ *  the caller degrades to the hardcoded fallback list. `-ilc` runs the interactive+login
+ *  rc files where PATH is actually exported; `printf %s` keeps the output free of newlines. */
+export function loginShellPath(): string | null {
+  try {
+    const shell = process.env.SHELL || '/bin/zsh'
+    const out = execFileSync(shell, ['-ilc', 'printf %s "$PATH"'], {
+      encoding: 'utf8',
+      timeout: 4000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    const trimmed = out.trim()
+    return trimmed && trimmed.includes('/') ? trimmed : null
+  } catch {
+    return null
+  }
 }
 
 export interface WorkerProbe {
@@ -85,8 +118,14 @@ export async function startHostWorker(folder: string, deps: HostWorkerDeps): Pro
   return workerStartResult({ orchaFound: true, claudeFound: !!claude, upError })
 }
 
-/** Production deps: real `which` + `orcha up` via execFile, with the host-tool PATH. */
+/** Production deps: real `which` + `orcha up` via execFile, with the host-tool PATH that
+ *  includes the user's login-shell PATH. Resolved lazily (getter) so importing this module
+ *  — e.g. in unit tests — never spawns a login shell; it runs once, when we actually start
+ *  a worker. The notifier daemon `orcha up` launches inherits this PATH for its workers. */
 export const nodeHostWorkerDeps: HostWorkerDeps = {
+  get pathEnv() {
+    return hostToolPath(process.env, os.homedir(), loginShellPath())
+  },
   which: (cmd, pathEnv) =>
     new Promise((resolve) => {
       execFile('/usr/bin/which', [cmd], { env: { ...process.env, PATH: pathEnv } }, (err, stdout) =>

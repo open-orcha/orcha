@@ -10,6 +10,15 @@ describe('hostToolPath', () => {
     expect(p).toContain('/usr/bin') // preserves the inherited PATH
     expect(new Set(p).size).toBe(p.length) // no duplicates
   })
+
+  it('merges the login-shell PATH (where nvm/volta node + claude actually live), de-duped', () => {
+    const login = '/Users/x/.nvm/versions/node/v20/bin:/opt/homebrew/bin:/usr/bin'
+    const p = hostToolPath({ PATH: '/usr/bin' }, '/Users/x', login).split(':')
+    expect(p).toContain('/Users/x/.nvm/versions/node/v20/bin') // would be missing without login PATH
+    expect(p[0]).toBe('/Users/x/.nvm/versions/node/v20/bin') // login dirs take precedence
+    expect(p).toContain('/Users/x/.local/bin') // hardcoded fallbacks still present
+    expect(new Set(p).size).toBe(p.length) // still de-duped across login + base + extras
+  })
 })
 
 describe('workerStartResult (pure messaging)', () => {
