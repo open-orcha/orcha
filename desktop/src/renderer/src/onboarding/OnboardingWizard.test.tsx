@@ -15,6 +15,11 @@ beforeEach(() => {
     openManager: vi.fn(),
     quitApp: vi.fn(),
     preflight: vi.fn().mockResolvedValue({ docker: 'ok', autoStarted: false, hint: null }),
+    probePrereqs: vi
+      .fn()
+      .mockResolvedValue({ homebrew: true, dockerEngine: true, orcha: true, claude: true, apiKey: true }),
+    installPrereqs: vi.fn().mockResolvedValue({ ok: true, completed: [] }),
+    onInstallProgress: vi.fn().mockReturnValue(() => {}),
     pickFolder: vi.fn().mockResolvedValue({ folder: '/tmp/demo', mode: 'existing' }),
     inspectFolder: vi.fn().mockResolvedValue({ initialized: false, writable: true, suggestedName: 'demo' }),
     provision: vi.fn().mockResolvedValue({ project: 'orcha-demo', apiPort: 8001, warnings: [] }),

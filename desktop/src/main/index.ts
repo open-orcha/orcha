@@ -3,6 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import { execFile, spawn } from 'node:child_process'
 import { parseDeepLink } from './deepLink'
 import { listStacks } from './discovery'
 import { startStack, stopStack } from './lifecycle'
@@ -16,14 +17,17 @@ import { preflight } from './preflight'
 import { inspectFolder } from './folderModes'
 import { templatesRoot } from './templates'
 import { provision, type EngineDeps, type EngineFs } from './initEngine'
-import { startHostWorker, nodeHostWorkerDeps } from './hostWorker'
+import { startHostWorker, nodeHostWorkerDeps, hostToolPath } from './hostWorker'
 import { resetStack } from './resetEngine'
 import { buildAppMenuTemplate } from './appMenu'
+import { adminOsascriptArgs, planInstall, runInstall } from './installers'
 import type {
   AttentionItem,
   BridgeError,
   FolderMode,
+  InstallResult,
   IpcResult,
+  PrereqProbe,
   ProgressEvent,
   ProvisionOptions,
   Stack
@@ -84,6 +88,122 @@ function engineDeps(): EngineDeps {
     // assigned tasks actually run — without this the portal opens but nothing picks up work.
     startWorker: (folder) => startHostWorker(folder, nodeHostWorkerDeps)
   }
+}
+
+// ---- Prerequisites: probe + guided auto-install ----------------------------------------
+// A fresh Mac has none of the host tools that actually run agents (Homebrew, the Docker
+// engine, the orcha CLI, Claude Code, an API key). These helpers detect what's missing and
+// install it behind native dialogs — the pure plan/orchestration lives in ./installers.
+
+/** Where the Anthropic API key is stored (this Mac only). Loaded into the process env on
+ *  startup so the orcha worker we spawn inherits it; never written to the user's shell. */
+function apiKeyFile(): string {
+  return path.join(app.getPath('userData'), 'anthropic-api-key')
+}
+
+/** Load a previously-saved API key into the env so spawned `orcha up` → `claude` can see it. */
+function loadApiKeyIntoEnv(): void {
+  try {
+    const f = apiKeyFile()
+    if (!process.env.ANTHROPIC_API_KEY && existsSync(f)) {
+      const key = readFileSync(f, 'utf8').trim()
+      if (key) process.env.ANTHROPIC_API_KEY = key
+    }
+  } catch {
+    // A missing/unreadable key file just means "no key yet" — the worker reports it plainly.
+  }
+}
+
+/** `which <cmd>` against the host-tool PATH (the Finder-launched .app's PATH omits brew etc.). */
+function whichHostTool(cmd: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('/usr/bin/which', [cmd], { env: { ...process.env, PATH: hostToolPath() } }, (err, stdout) =>
+      resolve(err ? null : stdout.trim() || null)
+    )
+  })
+}
+
+async function probePrereqs(): Promise<PrereqProbe> {
+  const [brew, docker, orcha, claude] = await Promise.all([
+    whichHostTool('brew'),
+    whichHostTool('docker'),
+    whichHostTool('orcha'),
+    whichHostTool('claude')
+  ])
+  return {
+    homebrew: !!brew,
+    dockerEngine: !!docker,
+    orcha: !!orcha,
+    claude: !!claude,
+    apiKey: !!process.env.ANTHROPIC_API_KEY || existsSync(apiKeyFile())
+  }
+}
+
+/** Run an install command as the logged-in user, streaming output lines. NONINTERACTIVE +
+ *  no-auto-update keep Homebrew from prompting / blocking on a missing TTY. */
+function runUserInstall(script: string, onLine: (line: string) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('/bin/bash', ['-c', script], {
+      env: { ...process.env, PATH: hostToolPath(), NONINTERACTIVE: '1', HOMEBREW_NO_AUTO_UPDATE: '1' }
+    })
+    let tail = ''
+    const onData = (buf: Buffer): void => {
+      const text = buf.toString()
+      tail = (tail + text).slice(-2000)
+      for (const line of text.split('\n')) {
+        const t = line.trim()
+        if (t) onLine(t)
+      }
+    }
+    child.stdout.on('data', onData)
+    child.stderr.on('data', onData)
+    child.on('error', reject)
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(Object.assign(new Error(`exited ${code}`), { stderr: tail.trim() }))
+    )
+  })
+}
+
+/** Run a privileged command via the native macOS admin (Touch ID / password) popup. A
+ *  user-cancelled popup rejects with osascript's "User canceled. (-128)". */
+function runAdminInstall(script: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile('osascript', adminOsascriptArgs(script), (err, _stdout, stderr) =>
+      err ? reject(Object.assign(err, { stderr: stderr || (err as Error).message })) : resolve()
+    )
+  })
+}
+
+/** Prompt for the Anthropic API key with a native, masked text field; null if cancelled. */
+function promptApiKey(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const args = [
+      '-e',
+      'try',
+      '-e',
+      'set k to text returned of (display dialog "Paste your Anthropic API key (starts with sk-ant-). It is stored only on this Mac." default answer "" with hidden answer with title "Orcha" buttons {"Cancel", "Save"} default button "Save")',
+      '-e',
+      'return k',
+      '-e',
+      'on error',
+      '-e',
+      'return "__CANCELLED__"',
+      '-e',
+      'end try'
+    ]
+    execFile('osascript', args, (err, stdout) => {
+      if (err) return resolve(null)
+      const v = stdout.trim()
+      resolve(!v || v === '__CANCELLED__' ? null : v)
+    })
+  })
+}
+
+async function persistApiKey(key: string): Promise<void> {
+  const f = apiKeyFile()
+  mkdirSync(path.dirname(f), { recursive: true })
+  writeFileSync(f, key, { mode: 0o600 })
+  process.env.ANTHROPIC_API_KEY = key
 }
 
 // Runtime name for everything Electron derives it from (userData path, dialogs).
@@ -259,6 +379,9 @@ async function requireKnownStack(project: string): Promise<Stack> {
 }
 
 app.whenReady().then(() => {
+  // Make a saved API key visible to any worker we spawn this session.
+  loadApiKeyIntoEnv()
+
   ipcMain.handle('orcha:listStacks', () => asResult(() => listStacks()))
 
   ipcMain.handle('orcha:startStack', (_event, project: string) =>
@@ -307,6 +430,23 @@ app.whenReady().then(() => {
   // ---- onboarding ----
 
   ipcMain.handle('orcha:preflight', () => asResult(() => preflight()))
+
+  ipcMain.handle('orcha:probePrereqs', () => asResult(() => probePrereqs()))
+
+  ipcMain.handle('orcha:installPrereqs', () =>
+    asResult(async (): Promise<InstallResult> => {
+      const probe = await probePrereqs()
+      const steps = planInstall(probe, { arch: os.arch(), user: os.userInfo().username || 'operator' })
+      if (steps.length === 0) return { ok: true, completed: [] }
+      return runInstall(steps, {
+        runUser: runUserInstall,
+        runAdmin: runAdminInstall,
+        promptSecret: promptApiKey,
+        persistApiKey,
+        onProgress: (e) => sendToManager('orcha:install:progress', e)
+      })
+    })
+  )
 
   ipcMain.handle('orcha:pickFolder', (_event, mode: FolderMode) =>
     asResult(async () => {
