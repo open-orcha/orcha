@@ -1,6 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell } from 'electron'
 import path from 'node:path'
-import net from 'node:net'
 import os from 'node:os'
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
@@ -12,6 +11,7 @@ import { AttentionPoller } from './attentionPoller'
 import { createTray, type TrayController } from './tray'
 import { buildStatus, writeStatusFile } from './statusFile'
 import { dockerExec } from './dockerExec'
+import { dockerPublishedPorts, pickFreePort } from './portPicker'
 import { preflight } from './preflight'
 import { inspectFolder } from './folderModes'
 import { templatesRoot } from './templates'
@@ -37,22 +37,6 @@ const nodeEngineFs: EngineFs = {
   exists: (p) => existsSync(p)
 }
 
-/** Find a free TCP port at/after `start` (async — the OS owns the truth). */
-function pickPort(start: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const tryPort = (p: number, attemptsLeft: number): void => {
-      if (attemptsLeft <= 0) {
-        reject({ code: 'PORT_UNAVAILABLE' } as const)
-        return
-      }
-      const s = net.createServer()
-      s.once('error', () => tryPort(p + 1, attemptsLeft - 1))
-      s.once('listening', () => s.close(() => resolve(p)))
-      s.listen(p, '127.0.0.1')
-    }
-    tryPort(start, 100)
-  })
-}
 
 /** fetch→JSON with HTTP errors carrying `status` (so the engine maps 409→CONTAINER_EXISTS). */
 async function fetchJson(url: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
@@ -311,9 +295,17 @@ app.whenReady().then(() => {
 
   ipcMain.handle('orcha:provision', (_event, opts: ProvisionOptions) =>
     asResult(async () => {
-      // Reserve three free ports up-front (async); the engine reads them via a sync lookup
-      // keyed by the CLI's scan-start constants (5432/8000/8765).
-      const [db, api, bridge] = await Promise.all([pickPort(5432), pickPort(8000), pickPort(8765)])
+      // Reserve three DISTINCT free host ports the engine reads via a sync lookup keyed by
+      // the CLI's scan-start constants (5432/8000/8765). We must exclude ports Docker has
+      // already published: a host listen on 0.0.0.0:<p> can succeed while docker-proxy owns
+      // it, so the host probe alone misses the collision (#port-collision). We also feed each
+      // chosen port back into the exclusion set so db/api/bridge never pick the same port.
+      const taken = await dockerPublishedPorts()
+      const db = await pickFreePort(5432, { dockerPorts: taken })
+      taken.add(db)
+      const api = await pickFreePort(8000, { dockerPorts: taken })
+      taken.add(api)
+      const bridge = await pickFreePort(8765, { dockerPorts: taken })
       const reserved: Record<number, number> = { 5432: db, 8000: api, 8765: bridge }
       const deps: EngineDeps = {
         ...engineDeps(),
