@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20753153.svg)](https://doi.org/10.5281/zenodo.20753153)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20740087.svg)](https://doi.org/10.5281/zenodo.20740087)
-[![build](https://github.com/open-orcha/orcha/actions/workflows/build-check.yml/badge.svg)](https://github.com/open-orcha/orcha/actions/workflows/build-check.yml)
+[![build](https://img.shields.io/github/actions/workflow/status/open-orcha/orcha/test.yml?branch=main&label=build)](https://github.com/open-orcha/orcha/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/github/license/open-orcha/orcha)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/open-orcha/orcha)](https://github.com/open-orcha/orcha/releases/latest)
 
