@@ -907,7 +907,9 @@ def test_spawn_headless_codex_uses_app_fallback_when_not_on_path(monkeypatch, tm
             self.pid = 1
 
     monkeypatch.setattr(notifier.shutil, "which", lambda x: None)
-    monkeypatch.setattr(notifier, "_CODEX_EXEC_FALLBACKS", (str(codex),))
+    # _CODEX_EXEC_FALLBACKS lives in the notifier.config leaf module (issue #29);
+    # _resolve_runtime_executable reads it from there, so patch it at its home.
+    monkeypatch.setattr(notifier.config, "_CODEX_EXEC_FALLBACKS", (str(codex),))
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     sent, _, proc = notifier.spawn_headless(
         str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
