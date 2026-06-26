@@ -3148,8 +3148,8 @@ def agent_next(aid: str):
         _require_kind(cur, aid, ("ai",))
         _reject_if_retired(cur, aid)   # ISS-51 [P1]: a retired agent can't claim work
         _require_container_active(cur, str(ag["container_id"]), aid)   # GH #24: no claiming work on a paused/stopped container
-        if ag["turns_used"] >= ag["turn_budget"]:
-            raise HTTPException(429, f"turn budget exhausted ({ag['turns_used']}/{ag['turn_budget']})")
+        # GH #39: the turn_budget gate is removed — an assigned+ready task on an active
+        # container is always claimable. turns_used stays as informational telemetry only.
         cid = str(ag["container_id"])
 
         # Issue #11: exclude the root task. Root is a sentinel for container
@@ -4088,14 +4088,15 @@ def active_conversations(cid: str):
             r["pending_human"] = (r["last_turn_role"] == "human")
             r["pending_inbox"] = r["pending_inbox"] or 0
             # #266: is a clock-driven auto-wake due for this resident's agent? Identical interlocks to
-            # wake_scan — opt-in (interval set), under the cost ceiling (turns_used<turn_budget), and the
-            # cadence has elapsed since the last wake of any kind (NULL last_woken_at => never woken => due).
+            # wake_scan — opt-in (interval set) and the cadence has elapsed since the last wake of any
+            # kind (NULL last_woken_at => never woken => due). GH #39: the turns_used<turn_budget cost
+            # ceiling is removed; turns_used no longer gates wakes.
             # The daemon uses this to idle-yield a warm-but-between-turns resident so the ephemeral clock
             # wake can fire; a mid-turn resident is skipped daemon-side (awaiting_result), never here.
             _auto_iv = r["auto_wake_interval_secs"]
             _ssw = r["_secs_since_woken"]
             r["auto_wake_due"] = bool(
-                _auto_iv is not None and r["turns_used"] < r["turn_budget"]
+                _auto_iv is not None
                 and (_ssw is None or _ssw >= _auto_iv))
             r.pop("turns_used", None)
             r.pop("turn_budget", None)
@@ -4257,8 +4258,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
     (heartbeat older than `min_idle`, or never beat) AND it isn't inside the per-agent
     `cooldown` window. Wakes are fully suppressed while the container is paused
     (respects /orcha-pause). #266: the auto-wake term is per-agent opt-in
-    (auto_wake_interval_secs, NULL=off), gated on turns_used<turn_budget, and fires off
-    the last_woken_at clock — see the auto_wake_due computation below.
+    (auto_wake_interval_secs, NULL=off) and fires off the last_woken_at clock — see the
+    auto_wake_due computation below. (GH#39 removed the turns_used<turn_budget gate.)
     """
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
@@ -4384,18 +4385,16 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             is_idle = (idle_seconds is None) or (idle_seconds >= min_idle)
             # #266: clock-driven auto-wake — a recurring heartbeat poll, due when the interval has
             # elapsed since the last wake of ANY kind (last_woken_at, NULL=never => due immediately).
-            # Three interlocks, ALL reusing existing state (no parallel counter): (1) opt-in only
-            # (interval IS NOT NULL); (2) gated on the single cost ceiling turns_used<turn_budget, so
-            # a pure clock wake stops at budget while a REAL event/task wake (below) still fires — a
-            # human asking is not autonomous spend; (3) it's only ONE more OR-term into has_work, so it
-            # adds a wake reason only when there's otherwise nothing pending, and last_woken_at resets
-            # on every wake-ack so a busy agent is never also clock-woken. lease/idle/cooldown gates
-            # below apply unchanged (the 60s floor >> 15s cooldown / 30s min_idle => never conflicts).
+            # Two interlocks, ALL reusing existing state (no parallel counter): (1) opt-in only
+            # (interval IS NOT NULL); (2) it's only ONE more OR-term into has_work, so it adds a wake
+            # reason only when there's otherwise nothing pending, and last_woken_at resets on every
+            # wake-ack so a busy agent is never also clock-woken. lease/idle/cooldown gates below apply
+            # unchanged (the 60s floor >> 15s cooldown / 30s min_idle => never conflicts).
+            # GH #39: the turns_used<turn_budget cost ceiling that previously gated clock wakes is removed.
             auto_interval = a["auto_wake_interval_secs"]
-            under_budget = a["turns_used"] < a["turn_budget"]
             secs_since_woken = a["secs_since_woken"]
             auto_wake_due = bool(
-                auto_interval is not None and under_budget
+                auto_interval is not None
                 and (secs_since_woken is None or secs_since_woken >= auto_interval))
             has_work = pending > 0 or len(auto_tasks) > 0 or auto_wake_due
             wake_enabled = a["wake_enabled"]
@@ -7178,8 +7177,9 @@ def _agent_claim_blocked(cur, aid: str) -> bool:
     """#23 / Gate PR#274: True when `/api/agents/{aid}/next` would REFUSE to hand this agent a
     task right now for a reason unrelated to task availability. It mirrors the three agent-level
     preconditions agent_next enforces before claiming: a paused/stopped container (409 via
-    _require_container_active), a retired agent (409 via _reject_if_retired, terminated_at set),
-    or an exhausted turn budget (429, turns_used >= turn_budget).
+    _require_container_active) or a retired agent (409 via _reject_if_retired, terminated_at set).
+    GH #39: the turn-budget precondition (429, turns_used >= turn_budget) is removed from agent_next,
+    so it is no longer mirrored here.
 
     `_assigned_ready_task` answers 'is there ready work' (task-level, lockstep with the wake-scan
     query). This answers the orthogonal 'could THIS agent claim it right now' (agent-level,
@@ -7193,7 +7193,7 @@ def _agent_claim_blocked(cur, aid: str) -> bool:
     long-poll; a 409/429 here would wrongly fail the /wait itself instead of just declining the
     shortcut)."""
     cur.execute(
-        """SELECT a.turns_used, a.turn_budget, a.terminated_at, c.status AS container_status
+        """SELECT a.terminated_at, c.status AS container_status
            FROM agents a JOIN containers c ON c.id = a.container_id
            WHERE a.id = %s""",
         (aid,),
@@ -7204,8 +7204,6 @@ def _agent_claim_blocked(cur, aid: str) -> bool:
     if row["container_status"] != "active":      # _require_container_active → 409
         return True
     if row["terminated_at"] is not None:         # _reject_if_retired → 409
-        return True
-    if row["turns_used"] >= row["turn_budget"]:  # turn budget exhausted → 429
         return True
     return False
 
