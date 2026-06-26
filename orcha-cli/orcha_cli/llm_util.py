@@ -63,11 +63,14 @@ MODEL_HAIKU = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-6"
 MODEL_OPUS = "claude-opus-4-8"
 
-# xAI Grok family. Confirm ids against https://docs.x.ai/docs/models — the PROVIDER_CATALOG
-# row below is the single edit point for what the Settings page offers under "xAI".
-MODEL_GROK_4 = "grok-4"
-MODEL_GROK_4_FAST = "grok-4-fast"
-MODEL_GROK_3_MINI = "grok-3-mini"
+# xAI Grok family (current ids per https://docs.x.ai/developers/models). grok-4.3 is xAI's
+# recommended general text model; the grok-4.20-0309 pair are the reasoning / non-reasoning
+# variants. NOTE: the older grok-4 / grok-4-fast / grok-3-mini slugs were RETIRED (they now
+# redirect to grok-4.3 — see the May-15 retirement guide), so they are deliberately not listed.
+# The PROVIDER_CATALOG row below is the single edit point for what Settings offers under "xAI".
+MODEL_GROK_4_3 = "grok-4.3"
+MODEL_GROK_4_20_REASONING = "grok-4.20-0309-reasoning"
+MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
 
 
 # ------------------------------------------------------------------- catalog (#294)
@@ -86,9 +89,9 @@ PROVIDER_CATALOG: list[dict] = [
         {"id": MODEL_OPUS, "name": "Opus 4.8"},
     ]},
     {"id": "xai", "name": "xAI", "available": True, "models": [
-        {"id": MODEL_GROK_4, "name": "Grok 4"},
-        {"id": MODEL_GROK_4_FAST, "name": "Grok 4 Fast"},
-        {"id": MODEL_GROK_3_MINI, "name": "Grok 3 Mini"},
+        {"id": MODEL_GROK_4_3, "name": "Grok 4.3"},
+        {"id": MODEL_GROK_4_20_REASONING, "name": "Grok 4.20 (reasoning)"},
+        {"id": MODEL_GROK_4_20_NONREASONING, "name": "Grok 4.20 (non-reasoning)"},
     ]},
     {"id": "openai", "name": "OpenAI", "available": False, "models": []},
     {"id": "gemini", "name": "Gemini", "available": False, "models": []},
