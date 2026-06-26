@@ -957,6 +957,31 @@ def _provider_api_key(cur, cid: str, provider: str) -> Optional[str]:
         return None
 
 
+def _provider_key_enc(cur, cid: str, provider: str) -> Optional[str]:
+    """Return the SEALED key blob (ciphertext) for (container, provider), or None — NEVER the
+    plaintext. Safe to hand to the host daemon over the loopback wake-scan API: the blob alone is
+    not a usable credential (the master key lives off-row in ORCHA_SECRET_KEY). The daemon, which
+    shares ORCHA_SECRET_KEY on the same host, unseals it locally — so triage/ack can use a
+    Settings-stored provider key without any plaintext crossing the wire."""
+    try:
+        row = _provider_stored_row(cur, cid, provider)
+        return row["key_enc"] if row else None
+    except Exception:
+        return None
+
+
+def _effective_use_case_provider(model_override: Optional[dict], use_case_key: str) -> str:
+    """The provider a use-case actually runs on: the human's per-container override if set, else
+    the #290 shipped default for that use-case. Drives which provider's stored key the daemon needs."""
+    if isinstance(model_override, dict) and model_override.get("provider"):
+        return model_override["provider"]
+    try:
+        import llm_util  # noqa: PLC0415 (dual-context import, see top of file)
+    except ImportError:
+        from orcha_cli import llm_util
+    return llm_util.resolve_spec(use_case_key).provider
+
+
 def _attachment_extracted_text(scope: str, owner_id: str, stored_name: str,
                                path: Optional[pathlib.Path], *, api_key: Optional[str] = None) -> str:
     """Return cached OCR text for an image/PDF ref, computing it once from disk when possible.
@@ -4481,6 +4506,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
         # surfaced so the daemon composes a routine-handoff acknowledgement on the configured cheap
         # model — symmetric with triage_model, same advisory/fail-open posture downstream.
         ack_model = _resolve_use_case_model(cur, cid, "ack")
+        # The SEALED stored key for whichever provider triage/ack actually run on (override else the
+        # #290 default). Ciphertext only — the daemon unseals it locally with the shared
+        # ORCHA_SECRET_KEY, so a Settings-stored xAI key reaches the wake paths with no plaintext on
+        # the wire. None when no key is stored (the daemon then falls back to its env keys).
+        triage_key_enc = _provider_key_enc(cur, cid, _effective_use_case_provider(triage_model, "triage"))
+        ack_key_enc = _provider_key_enc(cur, cid, _effective_use_case_provider(ack_model, "ack"))
         cur.execute(
             """SELECT a.id, a.alias, a.model, a.last_heartbeat_at, a.turns_used, a.turn_budget,
                       a.auto_wake_interval_secs,
@@ -4696,6 +4727,9 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             "autonomy_level": autonomy_level,
             # #294: the configured 'triage' model for #288 wake-suppression (null = #290 default).
             "triage_model": triage_model,
+            # The SEALED key blob for the triage/ack provider (ciphertext; null if none stored).
+            # The daemon unseals locally — Settings-stored provider keys reach the wake paths.
+            "triage_key_enc": triage_key_enc, "ack_key_enc": ack_key_enc,
             # #307: the configured 'ack' model for T2 cheap-act (null = #290 default Haiku).
             "ack_model": ack_model, "candidates": candidates}
 
