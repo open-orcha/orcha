@@ -578,7 +578,7 @@
     const result = tr
       ? `<div class="sc-result ${tr.ok ? "ok" : "err"}">${icon(tr.ok ? "check" : "x", "")}<span>${esc(tr.ok ? ("Key is valid — " + k.name + " accepted it.") : (tr.detail || "Key was rejected."))}</span></div>`
       : "";
-    return `<div class="pk-card" data-provider="${esc(p)}"><div class="uc-title">${nm}</div>${banner}${editor}${result}</div>`;
+    return `<div class="pk-card" data-provider="${esc(p)}">${banner}${editor}${result}</div>`;
   }
 
   function renderProviderKeys(force) {
