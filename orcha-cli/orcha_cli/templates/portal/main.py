@@ -914,11 +914,45 @@ def _write_cached_attachment_text(scope: str, owner_id: str, stored_name: str, t
 
 
 def _container_llm_key(cur, cid: str) -> Optional[str]:
-    """Resolve the Orcha-managed LLM key for a container (env override > encrypted DB > None)."""
+    """Resolve the Orcha-managed LLM key for a container (env override > encrypted DB > None).
+    Anthropic-scoped: vision/curation (the non-overridable use-cases that call this) always run
+    on Anthropic. Provider-overridable use-cases resolve via _provider_api_key instead."""
     try:
         cur.execute("SELECT llm_api_key_enc FROM containers WHERE id=%s", (cid,))
         row = cur.fetchone()
         return secret_box.resolve_llm_key(row["llm_api_key_enc"] if row else None)
+    except Exception:
+        return None
+
+
+def _provider_stored_row(cur, cid: str, provider: str):
+    """The stored-key row for one (container, provider), or None. The Anthropic key lives in
+    containers.llm_api_key_enc (migration 020 — kept as-is); every OTHER provider lives in
+    container_provider_keys (migration 027). Columns are aliased to a uniform
+    {key_enc, key_hint, set_at} so callers don't branch on provider."""
+    if provider == "anthropic":
+        cur.execute(
+            "SELECT llm_api_key_enc AS key_enc, llm_api_key_hint AS key_hint, "
+            "llm_api_key_set_at AS set_at FROM containers WHERE id=%s",
+            (cid,),
+        )
+        row = cur.fetchone()
+        return row if (row and row["key_enc"]) else None
+    cur.execute(
+        "SELECT key_enc, key_hint, set_at FROM container_provider_keys "
+        "WHERE container_id=%s AND provider=%s",
+        (cid, provider),
+    )
+    return cur.fetchone()
+
+
+def _provider_api_key(cur, cid: str, provider: str) -> Optional[str]:
+    """Resolve the usable plaintext key for (container, provider): env override
+    (ORCHA_LLM_API_KEY) > stored+unsealed key for THIS provider > None. The provider-scoped
+    sibling of _container_llm_key, for use-cases whose provider a human can override (#290 catalog)."""
+    try:
+        row = _provider_stored_row(cur, cid, provider)
+        return secret_box.resolve_llm_key(row["key_enc"] if row else None)
     except Exception:
         return None
 
@@ -2809,6 +2843,171 @@ def test_container_llm_key(cid: str, body: LlmKeyTest):
         return {"ok": False, "detail": str(e)[:300]}
 
 
+# ---------- container settings: per-PROVIDER LLM keys (multi-provider, follow-on to #294 Item 1) ----------
+# Migration 020's single key is Anthropic-only; with >1 live provider (#290 catalog: Anthropic +
+# xAI/Grok) a use-case pointed at xAI needs an xAI key. These routes manage ONE key per available
+# catalog provider, uniformly for the SETTINGS page — the Anthropic key still lives in its own
+# column (the /settings/llm-key routes above remain), other providers in container_provider_keys.
+# Same discipline as /settings/llm-key: human-gated writes, never return plaintext, 503 w/o master key.
+
+def _available_provider(provider: str) -> Optional[dict]:
+    """The catalog entry for `provider` if it's an AVAILABLE provider, else None."""
+    try:
+        import llm_util
+    except ImportError:
+        from orcha_cli import llm_util
+    return next((p for p in llm_util.PROVIDER_CATALOG
+                 if p["id"] == provider and p["available"]), None)
+
+
+def _ping_provider_key(provider: str, candidate: str) -> dict:
+    """Server-side credential ping against `provider`'s API using its cheapest catalog model and a
+    1-token request. Returns {ok, detail}; a 401/bad-key is ok=False, never a 500."""
+    try:
+        import llm_util
+    except ImportError:
+        from orcha_cli import llm_util
+    p = _available_provider(provider)
+    if not p or not p["models"]:
+        return {"ok": False, "detail": f"provider '{provider}' has no testable catalog model"}
+    spec = llm_util.ModelSpec(provider=provider, model=p["models"][0]["id"],
+                              max_tokens=1, timeout_s=10.0)
+    try:
+        prov = llm_util.get_provider(provider)
+        prov.complete(spec=spec, system=None,
+                      messages=[{"role": "user", "content": "ping"}], api_key=candidate)
+        return {"ok": True, "detail": f"key accepted by the {p['name']} API"}
+    except llm_util.LLMError as e:
+        return {"ok": False, "detail": str(e)[:300]}
+
+
+@app.get("/api/containers/{cid}/settings/provider-keys", status_code=200)
+def list_container_provider_keys(cid: str):
+    """One key-status entry per AVAILABLE catalog provider, for the SETTINGS key cards. NEVER
+    returns a secret — only a masked 'sk-...1234' hint + source (env override shadows stored).
+    Read-only/open, like GET /settings/providers."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    try:
+        import llm_util
+    except ImportError:
+        from orcha_cli import llm_util
+    env_override = os.environ.get("ORCHA_LLM_API_KEY")
+    keys = []
+    with db_cursor() as (_, cur):
+        _require_container(cur, cid)
+        for p in llm_util.PROVIDER_CATALOG:
+            if not p["available"]:
+                continue
+            row = _provider_stored_row(cur, cid, p["id"])
+            if env_override:
+                entry = {"configured": True, "source": "env",
+                         "masked": _mask_llm_key(secret_box.last4(env_override)), "set_at": None}
+            elif row:
+                entry = {"configured": True, "source": "db",
+                         "masked": _mask_llm_key(row["key_hint"]), "set_at": row["set_at"]}
+            else:
+                entry = {"configured": False, "source": None, "masked": None, "set_at": None}
+            entry.update({"provider": p["id"], "name": p["name"]})
+            keys.append(entry)
+    return {"keys": keys}
+
+
+@app.put("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
+def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
+    """Seal + store the key for one provider. HUMAN-AUTHORITY gated + audit-logged. Anthropic
+    writes its legacy column; other providers upsert container_provider_keys. 503 w/o ORCHA_SECRET_KEY."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if not _available_provider(provider):
+        raise HTTPException(400, f"'{provider}' is not an available catalog provider")
+    key = body.api_key.strip()
+    if not key:
+        raise HTTPException(400, "api_key must not be blank")
+    with db_cursor() as (conn, cur):
+        _require_kind(cur, body.actor_agent_id, ("human",))
+        _require_container(cur, cid)
+        if not secret_box.master_key_present():
+            raise HTTPException(
+                503,
+                "encrypted key storage is disabled: ORCHA_SECRET_KEY is not set in the portal "
+                "environment. Set it to store a key, or use the ORCHA_LLM_API_KEY env override.",
+            )
+        sealed = secret_box.seal(key)
+        hint = secret_box.last4(key)
+        if provider == "anthropic":
+            cur.execute(
+                "UPDATE containers SET llm_api_key_enc=%s, llm_api_key_hint=%s, llm_api_key_set_at=now() "
+                "WHERE id=%s",
+                (sealed, hint, cid),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO container_provider_keys (container_id, provider, key_enc, key_hint, set_at) "
+                "VALUES (%s, %s, %s, %s, now()) "
+                "ON CONFLICT (container_id, provider) DO UPDATE SET "
+                "key_enc=EXCLUDED.key_enc, key_hint=EXCLUDED.key_hint, set_at=now()",
+                (cid, provider, sealed, hint),
+            )
+        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_set",
+                  {"provider": provider, "hint": hint})
+        conn.commit()
+    return {"configured": True, "source": "db", "provider": provider, "masked": _mask_llm_key(hint)}
+
+
+@app.delete("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
+def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
+    """Remove one provider's stored key (resolution falls back to env override, else none).
+    HUMAN-AUTHORITY gated + audit-logged."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if not _available_provider(provider):
+        raise HTTPException(400, f"'{provider}' is not an available catalog provider")
+    with db_cursor() as (conn, cur):
+        _require_kind(cur, body.actor_agent_id, ("human",))
+        _require_container(cur, cid)
+        if provider == "anthropic":
+            cur.execute(
+                "UPDATE containers SET llm_api_key_enc=NULL, llm_api_key_hint=NULL, "
+                "llm_api_key_set_at=NULL WHERE id=%s",
+                (cid,),
+            )
+        else:
+            cur.execute(
+                "DELETE FROM container_provider_keys WHERE container_id=%s AND provider=%s",
+                (cid, provider),
+            )
+        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_cleared",
+                  {"provider": provider})
+        conn.commit()
+    env_override = os.environ.get("ORCHA_LLM_API_KEY")
+    if env_override:
+        return {"configured": True, "source": "env", "provider": provider,
+                "masked": _mask_llm_key(secret_box.last4(env_override))}
+    return {"configured": False, "source": None, "provider": provider, "masked": None}
+
+
+@app.post("/api/containers/{cid}/settings/provider-keys/{provider}/test", status_code=200)
+def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
+    """Credential ping against `provider`'s API. HUMAN-AUTHORITY gated. With `api_key` -> test that
+    candidate (pre-save); without -> test the currently-resolved key for this provider."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if not _available_provider(provider):
+        raise HTTPException(400, f"'{provider}' is not an available catalog provider")
+    with db_cursor() as (conn, cur):
+        _require_kind(cur, body.actor_agent_id, ("human",))
+        _require_container(cur, cid)
+        if body.api_key and body.api_key.strip():
+            candidate: Optional[str] = body.api_key.strip()
+        else:
+            candidate = _provider_api_key(cur, cid, provider)
+    if not candidate:
+        return {"ok": False,
+                "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset"}
+    return _ping_provider_key(provider, candidate)
+
+
 # ---------- container settings: per-use-case universal-client model selection (#294) ----------
 # The SETTINGS model picker (SPEC-SETTINGS §2). Two GETs feed the page — the catalog of providers
 # +models (/providers) and the current per-use-case selections layered over shipped defaults
@@ -2951,14 +3150,12 @@ def propose_onboarding_roster(body: ProposeBody):
 
     with db_cursor() as (_, cur):
         _require_container(cur, body.cid)
-        cur.execute("SELECT llm_api_key_enc FROM containers WHERE id=%s", (body.cid,))
-        row = cur.fetchone()
         model_override = _resolve_use_case_model(cur, body.cid, "onboarding")
-
-    config = {"onboarding": model_override} if model_override else None
-    spec = llm_util.resolve_spec("onboarding", config=config)
-    stored_key = row["llm_api_key_enc"] if row else None
-    api_key = secret_box.resolve_llm_key(stored_key)
+        config = {"onboarding": model_override} if model_override else None
+        spec = llm_util.resolve_spec("onboarding", config=config)
+        # Resolve the key for the SELECTED provider (the onboarding use-case may be overridden to
+        # xAI etc. in Settings), not a single Anthropic key. env override > stored provider key > None.
+        api_key = _provider_api_key(cur, body.cid, spec.provider)
     try:
         resolved_key = llm_util.resolve_api_key(spec.provider, explicit=api_key)
     except llm_util.LLMError:
