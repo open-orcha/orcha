@@ -473,31 +473,36 @@ window.Orcha = (function () {
       const actingHTML = who
         ? `${avatar(who.alias, "human", "sm")}${esc(who.alias)}`
         : `<span class="muted">no human registered</span>`;
+      // Two logical lines: identity/search/alerts, then the controls. They sit on one row when
+      // the topbar is wide and collapse to two balanced rows when it's too narrow to fit (CSS).
       topbar.innerHTML = `
-        <div class="crumbs">
-          <span class="page">${esc(opts.title || "")}</span>
-          ${opts.ctx ? `<span class="ctx">${opts.ctx}</span>` : ""}
+        <div class="tb-line tb-line-1">
+          <div class="crumbs">
+            <span class="page">${esc(opts.title || "")}</span>
+            ${opts.ctx ? `<span class="ctx">${opts.ctx}</span>` : ""}
+          </div>
+          <div class="search">
+            ${icon("search", "")}
+            <input id="globalSearch" placeholder="Search agents, tasks, requests…" spellcheck="false" autocomplete="off">
+            <span class="kbd">/</span>
+          </div>
+          <a class="attn-pill" id="attnPill" href="/#needs" title="Notifications — approvals, verifications & activity" aria-haspopup="true">
+            ${icon("bell", "bell")}<span>Needs you</span><span class="n tnum">${a.count}</span>
+          </a>
         </div>
-        <div class="grow"></div>
-        <div class="search">
-          ${icon("search", "")}
-          <input id="globalSearch" placeholder="Search agents, tasks, requests…" spellcheck="false" autocomplete="off">
-          <span class="kbd">/</span>
-        </div>
-        <a class="attn-pill" id="attnPill" href="/#needs" title="Notifications — approvals, verifications & activity" aria-haspopup="true">
-          ${icon("bell", "bell")}<span>Needs you</span><span class="n tnum">${a.count}</span>
-        </a>
-        <div class="aut-wrap" id="autWrap">
-          <span class="aut-lab">autonomy</span>
-          <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy"></div>
-        </div>
-        <div class="acting" title="You are the human authority on this container">
-          <span class="lbl">acting as</span>
-          <span class="who" id="actingWho">${actingHTML}</span>
-        </div>
-        <button class="iconbtn" id="themeBtn" title="Theme: ${currentTheme()} — click to cycle">
-          ${icon("sun", "sun")}${icon("moon", "moon")}
-        </button>`;
+        <div class="tb-line tb-line-2">
+          <div class="aut-wrap" id="autWrap">
+            <span class="aut-lab">autonomy</span>
+            <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy"></div>
+          </div>
+          <div class="acting" title="You are the human authority on this container">
+            <span class="lbl">acting as</span>
+            <span class="who" id="actingWho">${actingHTML}</span>
+          </div>
+          <button class="iconbtn" id="themeBtn" title="Theme: ${currentTheme()} — click to cycle">
+            ${icon("sun", "sun")}${icon("moon", "moon")}
+          </button>
+        </div>`;
       const tb = document.getElementById("themeBtn");
       if (tb) tb.addEventListener("click", cycleTheme);
       // SPEC-1: ensure the paused micro-banner element sits between topbar and content,
