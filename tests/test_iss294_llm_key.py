@@ -163,11 +163,14 @@ async def test_stored_value_is_sealed_not_plaintext(client, container, make_agen
     hid = await _human(make_agent)
     await client.put(f"/api/containers/{container['id']}/settings/llm-key",
                      json={"actor_agent_id": hid, "api_key": KEY})
-    rows = db.execute("SELECT llm_api_key_enc, llm_api_key_hint FROM containers WHERE id=%s",
+    # Unified storage (migration 027): the Anthropic key lives in container_provider_keys now,
+    # provider='anthropic' — not the retired containers.llm_api_key_enc column.
+    rows = db.execute("SELECT key_enc, key_hint FROM container_provider_keys "
+                      "WHERE container_id=%s AND provider='anthropic'",
                       (container["id"],))
-    enc = rows[0]["llm_api_key_enc"]
+    enc = rows[0]["key_enc"]
     assert enc.startswith("v1:") and KEY not in enc        # at-rest value is sealed, not the key
-    assert rows[0]["llm_api_key_hint"] == "1234"
+    assert rows[0]["key_hint"] == "1234"
 
 
 @pytest.mark.asyncio

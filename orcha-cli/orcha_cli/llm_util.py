@@ -50,11 +50,27 @@ log = logging.getLogger("orcha.llm")
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
 
+# xAI (Grok) is a SEPARATE, independent provider from OpenAI — different company, servers, and
+# key (XAI_API_KEY). Its API merely adopts the same request/response JSON layout that OpenAI's
+# "Chat Completions" API popularised (a de-facto industry format many providers reuse). So
+# GrokProvider talks to xAI's own endpoint below, formatting requests in that shared layout;
+# it translates this module's normalised (Anthropic-shaped) request/response to/from it.
+XAI_BASE_URL = "https://api.x.ai/v1"
+
 # Model ids (latest Claude family as of 2026-01). Cheap triage model vs. capable onboarding
 # model. v1 hardcodes these; #294 settings make them config-swappable per use-case later.
 MODEL_HAIKU = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-6"
 MODEL_OPUS = "claude-opus-4-8"
+
+# xAI Grok family (current ids per https://docs.x.ai/developers/models). grok-4.3 is xAI's
+# recommended general text model; the grok-4.20-0309 pair are the reasoning / non-reasoning
+# variants. NOTE: the older grok-4 / grok-4-fast / grok-3-mini slugs were RETIRED (they now
+# redirect to grok-4.3 — see the May-15 retirement guide), so they are deliberately not listed.
+# The PROVIDER_CATALOG row below is the single edit point for what Settings offers under "xAI".
+MODEL_GROK_4_3 = "grok-4.3"
+MODEL_GROK_4_20_REASONING = "grok-4.20-0309-reasoning"
+MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
 
 
 # ------------------------------------------------------------------- catalog (#294)
@@ -71,6 +87,11 @@ PROVIDER_CATALOG: list[dict] = [
         {"id": MODEL_HAIKU, "name": "Haiku 4.5"},
         {"id": MODEL_SONNET, "name": "Sonnet 4.6"},
         {"id": MODEL_OPUS, "name": "Opus 4.8"},
+    ]},
+    {"id": "xai", "name": "xAI", "available": True, "models": [
+        {"id": MODEL_GROK_4_3, "name": "Grok 4.3"},
+        {"id": MODEL_GROK_4_20_REASONING, "name": "Grok 4.20 (reasoning)"},
+        {"id": MODEL_GROK_4_20_NONREASONING, "name": "Grok 4.20 (non-reasoning)"},
     ]},
     {"id": "openai", "name": "OpenAI", "available": False, "models": []},
     {"id": "gemini", "name": "Gemini", "available": False, "models": []},
@@ -219,6 +240,7 @@ def resolve_api_key(provider: str, *, explicit: Optional[str] = None) -> str:
         return orcha_key
     fallback_env = {
         "anthropic": "ANTHROPIC_API_KEY",
+        "xai": "XAI_API_KEY",
         "openai": "OPENAI_API_KEY",
         "gemini": "GEMINI_API_KEY",
     }.get(provider)
@@ -307,6 +329,191 @@ class AnthropicProvider(Provider):
                 yield ev
 
 
+# ------------------------------------ Chat Completions format translation (xAI/Grok)
+#
+# "Chat Completions format" here means the request/response JSON layout OpenAI popularised and
+# that OTHER, unrelated providers (xAI/Grok in this case) chose to adopt — a wire-format
+# convention, NOT a dependency on or call to OpenAI. The `_openai_` in these helper names refers
+# to that format, not the company. They translate the module's normalised (Anthropic-shaped)
+# request/response to/from that layout; GrokProvider then sends it to xAI's own servers.
+
+
+def _to_openai_tools(tools: Optional[list[dict]]) -> Optional[list[dict]]:
+    """Anthropic tool ({name, description, input_schema}) -> Chat Completions function tool."""
+    if not tools:
+        return None
+    return [{"type": "function", "function": {
+        "name": t.get("name"),
+        "description": t.get("description", ""),
+        "parameters": t.get("input_schema", {}),
+    }} for t in tools]
+
+
+def _to_openai_tool_choice(tool_choice: Optional[dict]) -> Optional[Any]:
+    """Anthropic {"type":"tool","name":N} (a FORCED specific call) -> Chat Completions
+    {"type":"function","function":{"name":N}}. Anything else falls back to "auto"."""
+    if not tool_choice:
+        return None
+    if tool_choice.get("type") == "tool" and tool_choice.get("name"):
+        return {"type": "function", "function": {"name": tool_choice["name"]}}
+    return "auto"
+
+
+def _to_openai_message(m: dict) -> dict:
+    """Translate one normalised message. Plain-string content passes through; Anthropic content
+    blocks (used by describe_image) map to Chat Completions multimodal parts. PDF 'document'
+    blocks have no Chat Completions equivalent and are dropped (describe_image fails open to "")."""
+    role = m.get("role", "user")
+    content = m.get("content")
+    if isinstance(content, str):
+        return {"role": role, "content": content}
+    parts: list[dict] = []
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "text":
+            parts.append({"type": "text", "text": block.get("text", "")})
+        elif btype == "image":
+            src = block.get("source") or {}
+            if src.get("type") == "base64":
+                uri = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                parts.append({"type": "image_url", "image_url": {"url": uri}})
+    return {"role": role, "content": parts}
+
+
+def _to_openai_messages(system: Optional[str], messages: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    if system:
+        out.append({"role": "system", "content": system})
+    out.extend(_to_openai_message(m) for m in messages)
+    return out
+
+
+def _normalise_openai_response(raw: dict) -> dict:
+    choices = raw.get("choices") or []
+    msg = (choices[0].get("message") if choices else {}) or {}
+    text = msg.get("content")
+    tool_calls: list[dict] = []
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function") or {}
+        args = fn.get("arguments")
+        try:
+            parsed = json.loads(args) if isinstance(args, str) and args else (args or {})
+        except json.JSONDecodeError:
+            parsed = {}
+        tool_calls.append({"name": fn.get("name"),
+                           "input": parsed if isinstance(parsed, dict) else {}})
+    usage = raw.get("usage") or {}
+    return {
+        "text": text if isinstance(text, str) else "",
+        "tool_calls": tool_calls,
+        "usage": {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        },
+        "stop_reason": choices[0].get("finish_reason") if choices else None,
+    }
+
+
+def _normalise_openai_stream_event(sse: dict, state: dict) -> Iterator[dict]:
+    """Map one Chat Completions stream chunk to zero+ normalised events. That format streams a
+    tool call's name only in its first ``tool_calls`` delta and the arguments as later fragments,
+    and signals
+    completion via ``finish_reason`` (not a per-block stop) — so we synthesise ``tool_stop`` for
+    every open block when the finish chunk lands, matching collect_tool_call's expectations."""
+    usage = sse.get("usage")
+    if usage:
+        ev = {"type": "usage"}
+        if usage.get("completion_tokens") is not None:
+            ev["output_tokens"] = usage.get("completion_tokens", 0)
+        if state.get("finish_reason"):
+            ev["stop_reason"] = state["finish_reason"]
+        yield ev
+    for choice in sse.get("choices") or []:
+        delta = choice.get("delta") or {}
+        text = delta.get("content")
+        if text:
+            yield {"type": "text_delta", "text": text}
+        for tc in delta.get("tool_calls") or []:
+            idx = tc.get("index", 0)
+            fn = tc.get("function") or {}
+            if idx not in state["tools"]:
+                state["tools"][idx] = True
+                yield {"type": "tool_start", "index": idx, "name": fn.get("name"), "id": tc.get("id")}
+            args = fn.get("arguments")
+            if args:
+                yield {"type": "tool_input_delta", "index": idx, "partial_json": args}
+        fr = choice.get("finish_reason")
+        if fr:
+            state["finish_reason"] = fr
+            for idx in sorted(state["tools"]):
+                if idx not in state["closed"]:
+                    state["closed"].add(idx)
+                    yield {"type": "tool_stop", "index": idx}
+
+
+def _flush_openai_stream(state: dict) -> Iterator[dict]:
+    """Close any tool block that streamed without a finish_reason (defensive — a truncated
+    stream). Idempotent with the finish-chunk close above via the ``closed`` set."""
+    for idx in sorted(state["tools"]):
+        if idx not in state["closed"]:
+            state["closed"].add(idx)
+            yield {"type": "tool_stop", "index": idx}
+
+
+class GrokProvider(Provider):
+    """Live provider over xAI's Grok API, using only urllib. xAI is independent of OpenAI; its
+    API just uses the same Chat Completions request/response format (see the translation helpers
+    above), so this talks to xAI's own endpoint/key formatted in that shared layout.
+
+    Vision (describe_image) is best-effort: images ride as ``image_url`` data-URIs;
+    PDFs have no Chat Completions equivalent, so describe_image fails open to "" for them.
+    """
+
+    name = "xai"
+
+    def __init__(self, base_url: Optional[str] = None) -> None:
+        # ORCHA_XAI_BASE_URL lets ops point at a proxy/gateway without code changes.
+        self.base_url = (base_url or os.environ.get("ORCHA_XAI_BASE_URL") or XAI_BASE_URL).rstrip("/")
+
+    def _headers(self, api_key: str) -> dict:
+        return {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+
+    def _body(self, *, spec: ModelSpec, system, messages, tools, tool_choice, stream: bool) -> dict:
+        body: dict[str, Any] = {
+            "model": spec.model,
+            "max_tokens": spec.max_tokens,
+            "messages": _to_openai_messages(system, messages),
+        }
+        ot = _to_openai_tools(tools)
+        if ot:
+            body["tools"] = ot
+        tc = _to_openai_tool_choice(tool_choice)
+        if tc is not None:
+            body["tool_choice"] = tc
+        if stream:
+            body["stream"] = True
+            body["stream_options"] = {"include_usage": True}  # else usage is omitted from the stream
+        return body
+
+    def complete(self, *, spec, system, messages, tools=None, tool_choice=None, api_key):
+        body = self._body(spec=spec, system=system, messages=messages, tools=tools,
+                          tool_choice=tool_choice, stream=False)
+        raw = _http_post_json(self.base_url + "/chat/completions", self._headers(api_key), body,
+                              timeout_s=spec.timeout_s)
+        return _normalise_openai_response(raw)
+
+    def stream(self, *, spec, system, messages, tools=None, tool_choice=None, api_key):
+        body = self._body(spec=spec, system=system, messages=messages, tools=tools,
+                          tool_choice=tool_choice, stream=True)
+        state: dict[str, Any] = {"tools": {}, "closed": set(), "finish_reason": None}
+        for sse in _http_post_sse(self.base_url + "/chat/completions", self._headers(api_key), body,
+                                  timeout_s=spec.timeout_s):
+            for ev in _normalise_openai_stream_event(sse, state):
+                yield ev
+        for ev in _flush_openai_stream(state):
+            yield ev
+
+
 class _StubProvider(Provider):
     """OpenAI / Gemini placeholders: present in the registry, behind the SAME interface, so a
     caller can select them via config — but the transport is not wired yet. They raise a clear
@@ -326,6 +533,7 @@ class _StubProvider(Provider):
 # providers directly (keeps the swap-in point for tests / future providers in one place).
 _PROVIDERS: dict[str, Callable[[], Provider]] = {
     "anthropic": AnthropicProvider,
+    "xai": GrokProvider,
     "openai": lambda: _StubProvider("openai"),
     "gemini": lambda: _StubProvider("gemini"),
 }
