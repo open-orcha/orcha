@@ -19,8 +19,8 @@ const APP_JS = fs.readFileSync(path.join(PORTAL, "app.js"), "utf8");
 const DATA_JS = fs.readFileSync(path.join(PORTAL, "data.js"), "utf8");
 const AGENTS_HTML = fs.readFileSync(path.join(PORTAL, "agents.html"), "utf8");
 
-const SCRIPTS = AGENTS_HTML.match(/<script>\s*\(function \(\)\s*\{[\s\S]*?\}\)\(\);\s*<\/script>/g) || [];
-const AGENTS_JS = SCRIPTS[SCRIPTS.length - 1].replace(/^<script>/, "").replace(/<\/script>$/, "");
+const SCRIPTS = AGENTS_HTML.match(/<script\b[^>]*>\s*\(function \(\)\s*\{[\s\S]*?\}\)\(\);\s*<\/script\s*>/gi) || [];
+const AGENTS_JS = SCRIPTS[SCRIPTS.length - 1].replace(/^<script\b[^>]*>/i, "").replace(/<\/script\s*>$/i, "");
 
 let failures = 0;
 function assert(cond, msg) {
