@@ -329,6 +329,59 @@ DEFAULT_MODEL = "claude-opus-4-8"
 _MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
 _MODELS_BY_ID = {m["id"]: m for m in AVAILABLE_MODELS}
 
+# Transparency: the exact launch flags the host daemon passes to each runtime's CLI when it
+# spawns a wake worker, surfaced READ-ONLY under the dashboard Controls card so a human can see
+# HOW an agent runs (not just which model). Keyed by runtime ("claude"/"codex").
+# This MIRRORS notifier.spawn_headless's argv — tests/test_worker_flags_parity.py drives that
+# function's dry-run and asserts every `static` flag below appears verbatim in what is really
+# launched, so the display can never silently drift. Flag semantics:
+#   static=True   — passed on EVERY spawn of this runtime (the parity test enforces it).
+#   dynamic=True  — passed with a per-spawn value (model id, persona, output path).
+#   set=False     — a flag Orcha does NOT pass; documented so the omission is VISIBLE rather
+#                   than invisible. The reasoning-effort gap (#241) is the live example.
+WORKER_LAUNCH_FLAGS = {
+    "claude": [
+        {"flag": "--model <id>", "label": "Model", "dynamic": True,
+         "detail": "Boots the worker on this agent's selected model."},
+        {"flag": "--append-system-prompt <persona + memory digest>", "label": "Persona + memory",
+         "dynamic": True,
+         "detail": "Injects the agent's persona and where-it-left-off memory digest."},
+        {"flag": "--output-format stream-json", "label": "Streaming JSON output", "static": True,
+         "detail": "Emits live newline-delimited JSON events so each wake is tailable and diagnosable."},
+        {"flag": "--include-partial-messages", "label": "Live token deltas", "static": True,
+         "detail": "Streams token/thinking deltas mid-turn so the stall watchdog can tell a "
+                   "working agent from a hung one."},
+        {"flag": "--verbose", "label": "Verbose log", "static": True,
+         "detail": "Full event detail in the per-wake log (required by streaming JSON output)."},
+        {"flag": "--dangerously-skip-permissions", "label": "Permission prompts skipped",
+         "static": True,
+         "detail": "A daemon-spawned worker has no terminal to approve prompts; humans still gate "
+                   "real outcomes via verify."},
+        {"flag": "(none — CLI default)", "label": "Reasoning effort", "set": False,
+         "detail": "Not set by Orcha — the worker runs at the Claude CLI's own default. A per-agent "
+                   "control is tracked in issue #241."},
+    ],
+    "codex": [
+        {"flag": "exec", "label": "Headless exec mode", "static": True,
+         "detail": "Codex's non-interactive automation entrypoint."},
+        {"flag": "--model <id>", "label": "Model", "dynamic": True,
+         "detail": "Boots the worker on this agent's selected model."},
+        {"flag": "--json", "label": "Streaming JSON output", "static": True,
+         "detail": "Tailable JSONL event stream — the same property the portal expects from Claude."},
+        {"flag": "--dangerously-bypass-approvals-and-sandbox", "label": "Approvals + sandbox bypassed",
+         "static": True,
+         "detail": "Runs non-interactively with no approval prompts or sandbox; humans still gate "
+                   "real outcomes via verify."},
+        {"flag": "--skip-git-repo-check", "label": "Skip git-repo check", "static": True,
+         "detail": "Don't refuse to run when the working directory isn't a git repo."},
+        {"flag": "--output-last-message <path>", "label": "Capture final message", "dynamic": True,
+         "detail": "Writes the worker's last message to a file the portal reads back."},
+        {"flag": "(none — CLI default)", "label": "Reasoning effort", "set": False,
+         "detail": "Not set by Orcha — the worker runs at the Codex CLI's own default. A per-agent "
+                   "control is tracked in issue #241."},
+    ],
+}
+
 
 def resolve_model(model: Optional[str]) -> str:
     """Map a PERSISTED agents.model choice to the model id to actually spawn with.
@@ -2657,8 +2710,11 @@ def list_container_requests(cid: str, limit: int = 15, offset: int = 0,
 def list_models():
     """D7: the curated model list the create-agent picker renders ({id, name}) plus
     the default. There is no live model-list API from the CLI — this is a maintained
-    constant. B8's dropdown reads this; the selected id is persisted as agents.model."""
-    return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL}
+    constant. B8's dropdown reads this; the selected id is persisted as agents.model.
+    `worker_flags` is the per-runtime launch-flag breakdown the Controls card renders
+    read-only when a model is selected (see WORKER_LAUNCH_FLAGS)."""
+    return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL,
+            "worker_flags": WORKER_LAUNCH_FLAGS}
 
 
 @app.post("/api/containers/{cid}/status", status_code=200)

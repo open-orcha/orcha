@@ -190,6 +190,22 @@
     .ctrl .seg { align-self: flex-start; }
     .ctrl.model-ctrl .seg { align-self: stretch; grid-template-columns: 1fr; }
   }
+  /* launch flags — READ-ONLY breakdown of how the daemon spawns this runtime's worker */
+  .ctrl.flags-ctrl { flex-direction: column; align-items: stretch; gap: 9px; }
+  .ctrl.flags-ctrl .grow { width: 100%; }
+  .flaglist { display: flex; flex-direction: column; gap: 6px; }
+  .flagrow { padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-3); }
+  .flagrow.unset { border-style: dashed; }
+  .flagtop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .flaglbl { font-size: 12px; font-weight: 650; }
+  .flagraw { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+  .flagrow.unset .flagraw { color: var(--danger); }
+  .flagtag { font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
+    color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+  .flagtag.dyn { color: var(--accent); }
+  .flagrow.unset .flagtag { color: var(--danger); border-color: var(--danger-line, var(--border)); }
+  .flagdesc { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
   /* wake — READ-ONLY badge (per-agent toggle is a Forge fast-follow) */
   .wakebadge { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; padding: 5px 11px;
     border-radius: 999px; border: 1px solid var(--border); }
@@ -383,8 +399,16 @@
     { id: "gpt-5.4-mini", name: "GPT-5.4 mini", runtime: "codex" },
     { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", runtime: "codex" },
   ];
+  // Per-runtime launch flags shown read-only under Controls. /api/models is the source
+  // of truth (mirrors the daemon's spawn argv, parity-tested server-side); empty until
+  // the fetch lands, so the row just appears a moment after first paint.
+  let WORKER_FLAGS = {};
   fetch("/api/models").then((r) => r.ok ? r.json() : null)
-    .then((d) => { if (d && Array.isArray(d.models) && d.models.length) { MODELS = d.models; renderDetailMain(); } })
+    .then((d) => { if (d) {
+      if (Array.isArray(d.models) && d.models.length) MODELS = d.models;
+      if (d.worker_flags) WORKER_FLAGS = d.worker_flags;
+      renderDetailMain();
+    } })
     .catch(() => {});
 
   const MODEL_RUNTIMES = [
@@ -520,6 +544,12 @@
             <div class="seg" id="modelRuntimeSeg" data-agent="${O.esc(a.id)}" aria-label="Model provider">${MODEL_RUNTIMES.map((r)=>`<button type="button" class="${r.id===selectedRuntime?'on':''}" data-runtime="${O.esc(r.id)}" aria-pressed="${r.id===selectedRuntime?'true':'false'}" ${O.actingHuman() && modelsForRuntime(r.id).length ? "" : "disabled"}>${O.esc(r.name)}</button>`).join("")}</div></div>
           <div class="ctrl model-ctrl"><div class="grow"><div class="lbl">Model</div><div class="desc">Which ${O.esc(modelRuntimeName(selectedRuntime))} model this agent wakes as</div></div>
             <div class="seg" id="modelSeg" data-agent="${O.esc(a.id)}" data-runtime="${O.esc(selectedRuntime)}" aria-label="${O.esc(modelRuntimeName(selectedRuntime))} model">${visibleModels.length ? visibleModels.map((m)=>`<button type="button" class="${m.id===a.model?'on':''}" data-model="${O.esc(m.id)}" aria-pressed="${m.id===a.model?'true':'false'}" title="${O.esc(m.name)}" ${O.actingHuman()?"":"disabled"}>${O.esc(m.name)}</button>`).join("") : '<span class="none" style="padding:4px 9px">No models</span>'}</div></div>
+          <div class="ctrl flags-ctrl"><div class="grow"><div class="lbl">Launch flags</div><div class="desc">How the daemon runs this ${O.esc(modelRuntimeName(selectedRuntime))} worker · read-only</div></div>
+            <div class="flaglist">${(WORKER_FLAGS[selectedRuntime] || []).length
+              ? (WORKER_FLAGS[selectedRuntime]).map((f)=>`<div class="flagrow${f.set===false?' unset':''}">
+                  <div class="flagtop"><span class="flaglbl">${O.esc(f.label)}</span><code class="flagraw">${O.esc(f.flag)}</code>${f.set===false?'<span class="flagtag">not set</span>':(f.dynamic?'<span class="flagtag dyn">per-agent</span>':'')}</div>
+                  <div class="flagdesc">${O.esc(f.detail)}</div></div>`).join("")
+              : '<div class="none" style="padding:8px 10px">Loading…</div>'}</div></div>
           <div class="ctrl"><div class="grow"><div class="lbl">Wake</div><div class="desc">Daemon may wake this agent on pending work</div></div>
             <span class="wakebadge ${a.wake_enabled?'on':'off'}"><span class="d"></span>${a.wake_enabled?"Enabled":"Disabled"}</span></div>
           <div class="ctrl"><div class="grow"><div class="lbl">Auto-wake</div><div class="desc">Clock-driven heartbeat — wake on a fixed cadence even with no pending work</div></div>
