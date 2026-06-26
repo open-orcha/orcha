@@ -917,27 +917,13 @@ def _container_llm_key(cur, cid: str) -> Optional[str]:
     """Resolve the Orcha-managed LLM key for a container (env override > encrypted DB > None).
     Anthropic-scoped: vision/curation (the non-overridable use-cases that call this) always run
     on Anthropic. Provider-overridable use-cases resolve via _provider_api_key instead."""
-    try:
-        cur.execute("SELECT llm_api_key_enc FROM containers WHERE id=%s", (cid,))
-        row = cur.fetchone()
-        return secret_box.resolve_llm_key(row["llm_api_key_enc"] if row else None)
-    except Exception:
-        return None
+    return _provider_api_key(cur, cid, "anthropic")
 
 
 def _provider_stored_row(cur, cid: str, provider: str):
-    """The stored-key row for one (container, provider), or None. The Anthropic key lives in
-    containers.llm_api_key_enc (migration 020 — kept as-is); every OTHER provider lives in
-    container_provider_keys (migration 027). Columns are aliased to a uniform
-    {key_enc, key_hint, set_at} so callers don't branch on provider."""
-    if provider == "anthropic":
-        cur.execute(
-            "SELECT llm_api_key_enc AS key_enc, llm_api_key_hint AS key_hint, "
-            "llm_api_key_set_at AS set_at FROM containers WHERE id=%s",
-            (cid,),
-        )
-        row = cur.fetchone()
-        return row if (row and row["key_enc"]) else None
+    """The stored-key row for one (container, provider), or None. ALL providers — Anthropic
+    included — live in container_provider_keys (migration 027); the legacy
+    containers.llm_api_key_enc columns are retired (backfilled by 027, no longer read)."""
     cur.execute(
         "SELECT key_enc, key_hint, set_at FROM container_provider_keys "
         "WHERE container_id=%s AND provider=%s",
@@ -2763,18 +2749,14 @@ def get_container_llm_key(cid: str):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
-        cur.execute(
-            "SELECT llm_api_key_enc, llm_api_key_hint, llm_api_key_set_at FROM containers WHERE id=%s",
-            (cid,),
-        )
-        row = cur.fetchone()
+        row = _provider_stored_row(cur, cid, "anthropic")  # unified table (migration 027)
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
     if env_override:
         return {"configured": True, "source": "env",
                 "masked": _mask_llm_key(secret_box.last4(env_override)), "set_at": None}
-    if row and row["llm_api_key_enc"]:
+    if row and row["key_enc"]:
         return {"configured": True, "source": "db",
-                "masked": _mask_llm_key(row["llm_api_key_hint"]), "set_at": row["llm_api_key_set_at"]}
+                "masked": _mask_llm_key(row["key_hint"]), "set_at": row["set_at"]}
     return {"configured": False, "source": None, "masked": None, "set_at": None}
 
 
@@ -2799,13 +2781,16 @@ def put_container_llm_key(cid: str, body: LlmKeyUpdate):
             )
         sealed = secret_box.seal(key)
         hint = secret_box.last4(key)
+        # Unified table (migration 027): Anthropic is just provider='anthropic' here now.
         cur.execute(
-            "UPDATE containers SET llm_api_key_enc=%s, llm_api_key_hint=%s, llm_api_key_set_at=now() "
-            "WHERE id=%s",
-            (sealed, hint, cid),
+            "INSERT INTO container_provider_keys (container_id, provider, key_enc, key_hint, set_at) "
+            "VALUES (%s, 'anthropic', %s, %s, now()) "
+            "ON CONFLICT (container_id, provider) DO UPDATE SET "
+            "key_enc=EXCLUDED.key_enc, key_hint=EXCLUDED.key_hint, set_at=now()",
+            (cid, sealed, hint),
         )
         log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_set",
-                  {"hint": hint})
+                  {"provider": "anthropic", "hint": hint})
         conn.commit()
     return {"configured": True, "source": "db", "masked": _mask_llm_key(hint)}
 
@@ -2820,11 +2805,11 @@ def delete_container_llm_key(cid: str, body: LlmKeyActor):
         _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
         cur.execute(
-            "UPDATE containers SET llm_api_key_enc=NULL, llm_api_key_hint=NULL, llm_api_key_set_at=NULL "
-            "WHERE id=%s",
+            "DELETE FROM container_provider_keys WHERE container_id=%s AND provider='anthropic'",
             (cid,),
         )
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_cleared", None)
+        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_cleared",
+                  {"provider": "anthropic"})
         conn.commit()
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
     if env_override:
@@ -2847,9 +2832,7 @@ def test_container_llm_key(cid: str, body: LlmKeyTest):
         if body.api_key and body.api_key.strip():
             candidate: Optional[str] = body.api_key.strip()
         else:
-            cur.execute("SELECT llm_api_key_enc FROM containers WHERE id=%s", (cid,))
-            row = cur.fetchone()
-            candidate = secret_box.resolve_llm_key(row["llm_api_key_enc"] if row else None)
+            candidate = _provider_api_key(cur, cid, "anthropic")  # unified table (migration 027)
     if not candidate:
         return {"ok": False,
                 "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset"}
@@ -2960,20 +2943,14 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
             )
         sealed = secret_box.seal(key)
         hint = secret_box.last4(key)
-        if provider == "anthropic":
-            cur.execute(
-                "UPDATE containers SET llm_api_key_enc=%s, llm_api_key_hint=%s, llm_api_key_set_at=now() "
-                "WHERE id=%s",
-                (sealed, hint, cid),
-            )
-        else:
-            cur.execute(
-                "INSERT INTO container_provider_keys (container_id, provider, key_enc, key_hint, set_at) "
-                "VALUES (%s, %s, %s, %s, now()) "
-                "ON CONFLICT (container_id, provider) DO UPDATE SET "
-                "key_enc=EXCLUDED.key_enc, key_hint=EXCLUDED.key_hint, set_at=now()",
-                (cid, provider, sealed, hint),
-            )
+        # Unified table (migration 027) — every provider, Anthropic included, upserts here.
+        cur.execute(
+            "INSERT INTO container_provider_keys (container_id, provider, key_enc, key_hint, set_at) "
+            "VALUES (%s, %s, %s, %s, now()) "
+            "ON CONFLICT (container_id, provider) DO UPDATE SET "
+            "key_enc=EXCLUDED.key_enc, key_hint=EXCLUDED.key_hint, set_at=now()",
+            (cid, provider, sealed, hint),
+        )
         log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_set",
                   {"provider": provider, "hint": hint})
         conn.commit()
@@ -2991,17 +2968,11 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
     with db_cursor() as (conn, cur):
         _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
-        if provider == "anthropic":
-            cur.execute(
-                "UPDATE containers SET llm_api_key_enc=NULL, llm_api_key_hint=NULL, "
-                "llm_api_key_set_at=NULL WHERE id=%s",
-                (cid,),
-            )
-        else:
-            cur.execute(
-                "DELETE FROM container_provider_keys WHERE container_id=%s AND provider=%s",
-                (cid, provider),
-            )
+        # Unified table (migration 027) — clear the row for any provider, Anthropic included.
+        cur.execute(
+            "DELETE FROM container_provider_keys WHERE container_id=%s AND provider=%s",
+            (cid, provider),
+        )
         log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_cleared",
                   {"provider": provider})
         conn.commit()
