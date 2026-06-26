@@ -10,8 +10,8 @@ one key per AVAILABLE catalog provider:
   * POST   /api/containers/{cid}/settings/provider-keys/{provider}/test -> credential ping
 
 Covers: catalog-scoped listing, per-provider isolation (an xAI key never shows as Anthropic and
-vice-versa), Anthropic still routing to its legacy column, human-gating, availability + master-key
-validation, env-override shadowing, and the /test ping (provider monkeypatched — no live network).
+vice-versa), Anthropic stored in the same unified table (migration 027), human-gating, availability
++ master-key validation, env-override shadowing, and the /test ping (provider monkeypatched).
 
 Same committed-isolation harness as the other route suites (conftest applies every migration,
 including 027).
@@ -73,9 +73,9 @@ async def test_put_xai_then_get_is_isolated_from_anthropic(client, container, ma
 
 
 @pytest.mark.asyncio
-async def test_anthropic_put_uses_legacy_route_and_column(client, container, make_agent, monkeypatch):
-    """An Anthropic key set via the legacy /settings/llm-key route surfaces in the unified
-    provider-keys list — proving anthropic still routes to its own column, read uniformly."""
+async def test_anthropic_put_via_llm_key_route_surfaces_in_unified_list(client, container, make_agent, monkeypatch):
+    """An Anthropic key set via the /settings/llm-key route surfaces in the unified provider-keys
+    list — proving Anthropic now lives in container_provider_keys too (migration 027), read uniformly."""
     monkeypatch.delenv("ORCHA_LLM_API_KEY", raising=False)
     monkeypatch.setenv("ORCHA_SECRET_KEY", "route-master-key")
     hid = await _human(make_agent)
