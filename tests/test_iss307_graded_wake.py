@@ -178,7 +178,7 @@ def test_handoff_ack_malformed_missing_ack_escalates():
 # ===========================================================================================
 
 def _fake_llm(decision=None, raise_exc=None):
-    def handoff_ack(text, *, config=None):
+    def handoff_ack(text, *, config=None, api_key=None):
         if raise_exc:
             raise raise_exc
         return decision

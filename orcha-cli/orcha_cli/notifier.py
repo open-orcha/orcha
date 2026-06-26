@@ -118,18 +118,67 @@ try:
 except ImportError:
     _digest_curate = None
 
+# Per-provider wake-path keys: the portal carries the SEALED stored key for the triage/ack provider
+# on the wake-scan; the daemon unseals it locally with ORCHA_SECRET_KEY (shared, same host) so a
+# Settings-stored xAI key reaches triage/ack with no plaintext on the wire. Bound to None if absent
+# so the daemon simply degrades to its env keys (ORCHA_LLM_API_KEY / XAI_API_KEY).
+try:
+    from orcha_cli import secret_box as _secret_box
+except ImportError:
+    _secret_box = None
 
-def _triage_wake(event_text: str, *, config: Optional[dict] = None) -> dict:
+
+def _load_master_key_from_env_file() -> None:
+    """Make ORCHA_SECRET_KEY available to the daemon so it can unseal wake-path provider keys.
+
+    The CLI persists the master key to <project>/.orcha/.env (see __main__._ensure_secret_key), but
+    `orcha up` brings the daemon up without exporting it (only Compose reads that file). So if it's
+    not already in the env, read it from .orcha/.env relative to the daemon's cwd (the project root
+    ensure_daemon spawns it in). Best-effort: any failure leaves the daemon on its env keys."""
+    if os.environ.get("ORCHA_SECRET_KEY"):
+        return
+    try:
+        env_file = pathlib.Path.cwd() / ".orcha" / ".env"
+        if not env_file.is_file():
+            return
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("ORCHA_SECRET_KEY="):
+                val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if val:
+                    os.environ["ORCHA_SECRET_KEY"] = val
+                return
+    except Exception:
+        return
+
+
+def _unseal_scan_key(scan: Optional[dict], field: str) -> Optional[str]:
+    """Unseal a wake-scan's sealed provider-key blob (`triage_key_enc` / `ack_key_enc`) into a
+    usable plaintext key, or None. Env override (ORCHA_LLM_API_KEY) still wins via resolve_llm_key.
+    Fails SOFT to None (→ the call falls back to env keys / fails open) on any decrypt error."""
+    blob = (scan or {}).get(field)
+    if _secret_box is None:
+        return None
+    try:
+        return _secret_box.resolve_llm_key(blob)
+    except Exception:
+        return None
+
+
+def _triage_wake(event_text: str, *, config: Optional[dict] = None, api_key: Optional[str] = None) -> dict:
     """#288 Tier-1 hook — delegate to the #290 universal client. FAIL-OPEN to wake if the module
     is somehow unavailable (cannot suppress on infra error); triage_wake itself also fails open.
 
     #294: `config` is the {"triage": {provider, model}} override resolved server-side and carried
     on the wake-scan response, so an operator can tune WHICH model triages (cost vs. accuracy).
     None ⇒ #290's shipped default (Haiku). The override is advisory: llm_util.resolve_spec falls
-    back to the default on any missing/partial config."""
+    back to the default on any missing/partial config.
+
+    `api_key` is the unsealed per-provider key from the wake-scan (see _unseal_scan_key) so a
+    Settings-stored key (e.g. xAI) is used; None ⇒ llm_util's own env fallback applies."""
     if _llm_util is None:
         return {"wake": True, "reason": "llm_util unavailable — fail-open"}
-    return _llm_util.triage_wake(event_text, config=config)
+    return _llm_util.triage_wake(event_text, config=config, api_key=api_key)
 
 
 def _triage_config_from_scan(scan: dict) -> Optional[dict]:
@@ -248,7 +297,8 @@ def _log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
 
 
 def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
-                    quiet: bool, ack_config: Optional[dict] = None) -> bool:
+                    quiet: bool, ack_config: Optional[dict] = None,
+                    ack_api_key: Optional[str] = None) -> bool:
     """#307 T2: complete a routine handoff on the CHEAP substrate via the agent's EXISTING routes,
     WITHOUT a spawn. Returns True iff the handoff was acked + the cursor advanced; False ESCALATES
     (the caller full-boots) on any of: no cheap client, a missing target id, the model declining
@@ -262,7 +312,8 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
     if _llm_util is None:
         return False                       # no cheap substrate → escalate
     try:
-        decision = _llm_util.handoff_ack(verdict.get("text") or "", config=ack_config)
+        decision = _llm_util.handoff_ack(verdict.get("text") or "", config=ack_config,
+                                         api_key=ack_api_key)
     except Exception:
         return False                       # fail-closed → escalate
     line = (decision.get("text") or "").strip() if isinstance(decision, dict) else ""
@@ -2287,11 +2338,15 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
     # CONFIGURED model — the efficiency hook (tune what an event costs to evaluate). Container-wide,
     # so it's resolved once per scan, not per candidate.
     _triage_config = _triage_config_from_scan(scan)
-    _scan_triage_fn = (lambda text: _triage_wake(text, config=_triage_config))
+    # Unseal the per-provider triage key the portal carried (sealed) on the scan, so triage runs on
+    # the Settings-stored key for the configured provider (e.g. xAI). None ⇒ llm_util env fallback.
+    _triage_key = _unseal_scan_key(scan, "triage_key_enc")
+    _scan_triage_fn = (lambda text: _triage_wake(text, config=_triage_config, api_key=_triage_key))
     # #307 graded-wake: the per-container 'ack' model override (None => #290 Haiku default) + the
     # container autonomy gate, resolved once per scan. T2 cheap-acts ONLY at autonomy_level='full';
     # at the default the daemon logs the would-be saving (#284) and full-boots — no behaviour change.
     _ack_config = _ack_config_from_scan(scan)
+    _ack_key = _unseal_scan_key(scan, "ack_key_enc")
     _autonomy_level = scan.get("autonomy_level")
     _t2_enabled = (_autonomy_level == "full")
     for cand in scan.get("candidates", []):
@@ -2330,7 +2385,7 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                 # full autonomy; otherwise LOG the would-be saving (#284) and fall through to the
                 # full boot, so prod behaviour is byte-identical until full autonomy is chosen.
                 acted = (_apply_wake_act(api_base, cand, event, verdict,
-                                         quiet=quiet, ack_config=_ack_config)
+                                         quiet=quiet, ack_config=_ack_config, ack_api_key=_ack_key)
                          if _t2_enabled else False)
                 _log_graded_wake(verdict, _autonomy_level, acted)
                 if acted:
@@ -4047,6 +4102,10 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
 def cmd_notifier(args) -> None:
     import signal
     cwd = pathlib.Path.cwd()
+    # Make ORCHA_SECRET_KEY available so the daemon can unseal wake-path provider keys carried
+    # (sealed) on the wake-scan. `orcha up` brings the daemon up without exporting it, so load it
+    # from <project>/.orcha/.env here (best-effort; absent ⇒ daemon stays on its env keys).
+    _load_master_key_from_env_file()
 
     # ISS-22 explicit operator verbs (NOT hooks — never auto-fired in a managed embodiment, so
     # they are not gated on ORCHA_HEADLESS_WORKER/ORCHA_LIVE the way --ensure is). Scoped to the
