@@ -2084,24 +2084,28 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             continue
         # ISS-45: a stalled-looking worker can be log-silent yet ALIVE — waiting on an in-flight
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
-        # returns) or backing off on a rate limit. Don't STALL-kill it: that SIGKILLed
-        # legitimately-working workers mid-task, losing the result + the C1 digest. Under the soft
-        # cap a log-silent-but-live worker is exempt; PAST the cap we no longer trust "looks
-        # alive" — persistent silence then is a runaway, so the exemption stays cap-bounded (this
-        # keeps the hard-cap teeth for a genuinely-hung in-flight tool — the ISS-45 backstop).
-        if stalled and not over_cap and _worker_is_live(w.get("log_path")):
+        # returns) or backing off on a rate limit. Compute liveness ONCE here; reused by the
+        # exemption, the checkpoint gate, and the kill diagnostic below.
+        is_live = _worker_is_live(w.get("log_path"))
+        # Under the soft cap a log-silent-but-live worker is simply LEFT ALONE — don't STALL-kill it:
+        # that SIGKILLed legitimately-working workers mid-task, losing the result + the C1 digest.
+        if stalled and not over_cap and is_live:
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}) log-silent but ALIVE "
                       f"(in-flight tool / rate-limit backoff) — not stall-killing")
             continue
-        # ISS-76 (#194): reaching here NOT stalled means the log is still GROWING but the worker has
-        # merely crossed the soft hard cap (the only way `not stalled` survives the early
-        # `if not (stalled or over_cap): continue` is `over_cap`). That is a genuine long task, not
-        # a runaway — the old code SIGKILLed it mid-work. CHECKPOINT it (graceful snapshot → C1
-        # digest) and respawn a FRESH worker on the same worktree so it continues with a clean
-        # context window. Bounded by HARD_CAP_RESPAWN_MAX: once a task has rolled over the cap that
-        # many times without finishing it's treated as a runaway and falls through to the kill.
-        if not stalled and w.get("respawn_ctx") and w.get("respawns", 0) < HARD_CAP_RESPAWN_MAX:
+        # CHECKPOINT-and-respawn (graceful snapshot → C1 digest → fresh worker on the SAME worktree),
+        # bounded by HARD_CAP_RESPAWN_MAX, for a past-cap worker that is NOT a runaway:
+        #   * ISS-76 (#194): still GROWING (`not stalled`; the only way that survives the early
+        #     `if not (stalled or over_cap): continue` is `over_cap`) — a genuine long task; OR
+        #   * GH#49: STALLED but PROVABLY ALIVE past the cap (`over_cap and is_live`) — log-silent on
+        #     a long EXTERNAL job (e.g. a 16-min `xcodebuild test`) holding an unanswered tool_use.
+        #     The old code hard-killed exactly this case mid-run, losing the C1 digest and leaving
+        #     the successor to restart the whole suite from zero. Checkpointing preserves the digest
+        #     (so the successor learns a run was in flight) while the respawn budget still caps a
+        #     genuinely-hung in-flight tool — past HARD_CAP_RESPAWN_MAX it falls through to the kill.
+        respawnable = bool(w.get("respawn_ctx")) and w.get("respawns", 0) < HARD_CAP_RESPAWN_MAX
+        if respawnable and (not stalled or (over_cap and is_live)):
             _checkpoint_and_respawn(api_base, aid, w, live_workers, quiet)
             continue
         # genuinely stalled, or the hard-cap backstop tripped → kill. ISS-45: GRACEFUL (SIGTERM
@@ -2123,7 +2127,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             "stall_threshold": stall_secs,
             "last_progress_ts": lpts,
             "over_cap": over_cap,
-            "worker_is_live": _worker_is_live(lp),
+            "worker_is_live": is_live,
             "last_event_type": _last_event_type(lp),
         }
         _kill_worker(proc, graceful=True)
@@ -2160,8 +2164,10 @@ HARD_CAP_MIN_SECS = 1200.0
 # losing the work. Instead reap_workers gracefully checkpoints it (SessionEnd → C1 digest) and
 # respawns a FRESH worker on the SAME worktree so the task continues with a clean context window
 # + the just-written digest. This bounds how many times one task may roll over the cap before it
-# is treated as a runaway and reaped — the preserved hard-cap backstop. A genuinely STALLED (log-
-# silent, not live) worker is still killed immediately at any age; only progressing workers respawn.
+# is treated as a runaway and reaped — the preserved hard-cap backstop. GH#49: a STALLED but
+# PROVABLY-ALIVE worker past the cap (log-silent on a long external job, holding an unanswered
+# tool_use) is checkpoint-respawned too, under the same budget — only a stalled worker that is NOT
+# live (no in-flight tool / rate-limit backoff) is killed outright.
 HARD_CAP_RESPAWN_MAX = 3
 
 # Wake-latency fix: the single-flight LEASE is now decoupled from the hard cap. The daemon
