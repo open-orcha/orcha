@@ -4361,7 +4361,7 @@ def get_persona(aid: str):
 
 
 @app.get("/api/agents/{aid}/protocol")
-def get_agent_protocol(aid: str):
+def get_agent_protocol(aid: str, task_id: Optional[str] = None):
     """#326 (A1): the RULES the waking agent must read FRESH every wake — the protocol of its
     currently in_progress task (SPEC-4 per-task working agreement: review_chain / handoff_to /
     autonomy / notes), human-authored and human-edit-only (PATCH /api/tasks/{tid}/protocol).
@@ -4371,24 +4371,41 @@ def get_agent_protocol(aid: str):
     knew), this is read ahead of / independent of the digest so a human edit takes effect on the
     very next wake. The notifier (format_persona) injects it above the digest on every wake.
 
-    Returns {task_id, title, protocol} for the one in_progress task assigned to this agent
-    (one-task-in-progress is enforced elsewhere), or {protocol: null} when none — so a cold/idle
-    wake simply carries no protocol section."""
+    GH #56 (Point 3, FLAG 2a part d): an explicit `task_id` hint — the originating_task_id the
+    wake is consuming an answer ON BEHALF OF (notifier reads it off the request_answered event and
+    threads it through) — keys the protocol load off the STORED LINK instead of the fragile "one
+    in_progress task" guess. That guess serves the WRONG protocol to an agent juggling several
+    in-progress tasks; the link removes that risk. The hint is honored only when the agent actually
+    participates in that task (looser participant check), so a stale/foreign id can never leak a
+    protocol; otherwise we fall back to the in_progress guess.
+
+    Returns {task_id, title, protocol} for the resolved task, or {protocol: null} when none — so a
+    cold/idle wake simply carries no protocol section."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        _require_agent(cur, aid)
-        cur.execute(
-            """SELECT t.id, t.title, t.protocol
-               FROM tasks t
-               JOIN agent_tasks at ON at.task_id = t.id
-               WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
-                 AND t.status='in_progress' AND t.is_root = false
-               ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
-               LIMIT 1""",
-            (aid,),
-        )
-        row = cur.fetchone()
+        agent = _require_agent(cur, aid)
+        row = None
+        # GH #56: prefer the explicit originating-task link when supplied AND the agent participates
+        # in it (so a wrong/foreign id can never serve someone else's protocol). Falls through to the
+        # in_progress guess on a null/invalid/non-participating hint.
+        if task_id and _valid_uuid(task_id) and _agent_participates_in_task(
+                cur, str(agent["container_id"]), aid, task_id):
+            cur.execute(
+                "SELECT id, title, protocol FROM tasks WHERE id=%s AND is_root=false", (task_id,))
+            row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                """SELECT t.id, t.title, t.protocol
+                   FROM tasks t
+                   JOIN agent_tasks at ON at.task_id = t.id
+                   WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+                     AND t.status='in_progress' AND t.is_root = false
+                   ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
+                   LIMIT 1""",
+                (aid,),
+            )
+            row = cur.fetchone()
     if not row or not row["protocol"]:
         return {"task_id": str(row["id"]) if row else None, "protocol": None}
     return {"task_id": str(row["id"]), "title": row["title"], "protocol": row["protocol"]}
@@ -4580,6 +4597,29 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                     cur, aid, a["delivered_ts"], max_ts)
                 notifications, notifications_truncated = _wake_notification_manifest(
                     cur, aid, a["delivered_ts"])
+                # GH #56 (Point 3 / FLAG 2a part b): if no directed-message task claimed the wake,
+                # attach it to the originating task of the newest pending answer. A `request_answered`
+                # event (the requester's own ask coming back) carries `originating_task_id` — the task
+                # the requester was working on when it asked (respond_request / the Point 5 backstop
+                # both stamp it). Surfacing it as wake_task_id makes run-attribution stamp the run
+                # against THAT task (activity shows on its thread) and lets the protocol load key off
+                # the link. Null/taskless asks (originating_task_id absent) leave wake_task_id None —
+                # unchanged behaviour. Only set when the linked task is still live (not deleted).
+                if wake_task_id is None:
+                    cur.execute(
+                        """SELECT payload FROM agent_events
+                           WHERE event_key=%s AND ts > %s AND event_name='request_answered'
+                             AND payload->>'originating_task_id' IS NOT NULL
+                           ORDER BY ts DESC, id DESC LIMIT 1""",
+                        (aid, a["delivered_ts"]),
+                    )
+                    _ans = cur.fetchone()
+                    if _ans:
+                        _otid = (_ans["payload"] or {}).get("originating_task_id")
+                        if _otid:
+                            cur.execute("SELECT 1 FROM tasks WHERE id=%s", (_otid,))
+                            if cur.fetchone():
+                                wake_task_id = _otid
             else:
                 prompt_messages, wake_task_id, ack_through_ts = [], None, max_ts
                 notifications, notifications_truncated = [], False
@@ -5876,6 +5916,43 @@ def serve_conversation_attachment(conv_id: str, stored_name: str):
         headers={"Content-Disposition": disposition, "X-Content-Type-Options": "nosniff"})
 
 
+def _backstop_stranded_request(cur, container_id, tid):
+    """GH #56 (Point 5): the safety net that keeps a request loop from silently stranding. The
+    PRIMARY close-the-loop path is the accepter reporting back by hand (the auto-injected Point 4.4
+    report-back note tells it to). This net only catches the case where the accepter's spawned task
+    reaches a terminal state (needs_verification / completed) while its originating request is STILL
+    'accepted' — i.e. the agent finished but never reported back. We auto-answer the request so the
+    requester wakes on its originating_task_id and reads the result anyway.
+
+    DESIGN INTENT (kedar): this should RARELY fire. We log_event an `auto_answered` audit row each
+    time it does, with backstop=true on the wake event, so a leaking primary path is observable
+    (count the backstop fires vs total answers). A reviewer can grep for it.
+
+    Returns the list of request ids it auto-answered (usually empty)."""
+    cur.execute(
+        """SELECT id, requester_id, originating_task_id, type FROM requests
+           WHERE spawned_task_id=%s AND status='accepted' FOR UPDATE""", (tid,))
+    stranded = cur.fetchall()
+    fired = []
+    for req in stranded:
+        rid = str(req["id"])
+        note = (f"[auto-answered by the #56 backstop] the accepter's task {tid} reached a terminal "
+                f"state without an explicit report-back. See that task for the result/output.")
+        cur.execute(
+            "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
+            (note, rid))
+        _publish_event(cur, str(container_id), str(req["requester_id"]), "request_answered",
+                       {"request_id": rid, "preview": note[:120],
+                        "originating_task_id": (str(req["originating_task_id"])
+                                                if req["originating_task_id"] else None),
+                        "backstop": True})
+        log_event(cur, container_id, "system", None, "request", rid, "auto_answered",
+                  {"reason": "backstop: accepter task reached terminal state while request "
+                             "still 'accepted' (no report-back)", "task_id": str(tid)})
+        fired.append(rid)
+    return fired
+
+
 def _complete_and_unblock(cur, container_id, tid):
     """#298: the SHARED completion mechanics used by BOTH the human /verify (approve branch) and
     the full-autonomy /done path. Extracted so the two cannot drift — a single edit here changes
@@ -5885,6 +5962,11 @@ def _complete_and_unblock(cur, container_id, tid):
     root. It does NOT emit the verified / task_verified audit + wake events — each caller owns its
     own audit trail (a human verification vs an engine auto-completion are different events).
     Returns the list of newly-unblocked downstream task ids."""
+    # GH #56 (Point 5): if THIS task was the accepter's spawned task and its originating request is
+    # still 'accepted' (forgot to report back), auto-answer it now so the loop never strands. Covers
+    # both completion routes that funnel through here (full-autonomy /done and the human /verify
+    # approve branch). Usually a no-op (the request was already answered by the report-back).
+    _backstop_stranded_request(cur, container_id, tid)
     cur.execute(
         "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,))
     # unblock downstream tasks whose deps are now all completed
@@ -5996,6 +6078,11 @@ def mark_done(tid: str, body: TaskDone):
             "UPDATE tasks SET status='needs_verification', result=%s::jsonb WHERE id=%s",
             (result_json, tid),
         )
+        # GH #56 (Point 5): plan/pr autonomy parks the task at needs_verification (the full branch
+        # above auto-completes via _complete_and_unblock, which runs the same backstop). If this is
+        # an accepter's spawned task and its originating request is still 'accepted', auto-answer it
+        # so the requester's loop closes even when the accepter forgot the report-back.
+        _backstop_stranded_request(cur, t["container_id"], tid)
         bump_agent(cur, body.agent_id)
         recompute_agent_status(cur, body.agent_id)
         log_event(cur, t["container_id"], "ai", body.agent_id, "task", tid,

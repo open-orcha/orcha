@@ -25,7 +25,11 @@ async def test_accept_task_spawns_and_assigns(client, make_agent, make_request, 
 async def test_accept_task_carries_protocol_into_spawned_task(client, make_agent, make_request, db):
     """GH #55: a task request may carry a `protocol` block (rides in the request's `detail`
     JSONB). On accept, the spawned task's protocol is populated from it — so the accepter reads
-    the loop rules on the very wake this accept triggers, with NO follow-up PATCH."""
+    the loop rules on the very wake this accept triggers, with NO follow-up PATCH.
+
+    GH #56 (Point 4.4): the carried fields ride verbatim, EXCEPT `notes`, onto which accept now
+    APPENDS a report-back instruction (so the accepter learns to report back from the protocol it
+    reads every wake). The original notes are preserved as the prefix."""
     a = await make_agent("a", "eng")
     b = await make_agent("b", "eng")
     task = _task_payload()
@@ -43,12 +47,17 @@ async def test_accept_task_carries_protocol_into_spawned_task(client, make_agent
     assert proto["review_chain"] == "b -> a -> human"
     assert proto["handoff_to"] == "a"
     assert proto["autonomy"] == "ship small fixes"
-    assert proto["notes"] == "loop until clean"
+    # GH #56 Point 4.4: original notes preserved as prefix, report-back appended.
+    assert proto["notes"].startswith("loop until clean")
+    assert "REPORT BACK" in proto["notes"]
+    assert req["request_id"] in proto["notes"]
 
 
-async def test_accept_task_without_protocol_leaves_it_null(client, make_agent, make_request, db):
-    """GH #55: a task request with no protocol spawns a task whose protocol stays NULL —
-    the create-time block is strictly opt-in, unchanged from the pre-#55 behavior."""
+async def test_accept_task_without_protocol_injects_report_back(client, make_agent, make_request, db):
+    """GH #56 (Point 4.4): a task request with no protocol still spawns a task whose protocol
+    carries the auto-injected report-back instruction in `notes` (so the accepter learns to report
+    back). No other fields are set — only `notes` is populated. The report-back is decoupled from
+    /orcha-done and names the request to post back to."""
     a = await make_agent("a", "eng")
     b = await make_agent("b", "eng")
     req = await make_request(a["agent_id"], "build X", target_alias="b",
@@ -57,7 +66,12 @@ async def test_accept_task_without_protocol_leaves_it_null(client, make_agent, m
                           json={"responder_agent_id": b["agent_id"], "note": "on it"})
     assert r.status_code == 200, r.text
     rows = db.execute("SELECT protocol FROM tasks WHERE id=%s", (r.json()["spawned_task_id"],))
-    assert rows[0]["protocol"] is None, "no protocol on the request → NULL on the task"
+    proto = rows[0]["protocol"]
+    assert proto is not None and "REPORT BACK" in proto["notes"]
+    assert req["request_id"] in proto["notes"]
+    assert "orcha-done" in proto["notes"].lower()  # explicitly decoupled from /orcha-done
+    # only notes is populated — the other SPEC-4 fields stay unset
+    assert not proto.get("review_chain") and not proto.get("handoff_to")
 
 
 async def test_accept_task_idempotent_no_duplicate_task(client, make_agent, make_request, db):

@@ -288,7 +288,7 @@ def _wire_tick(monkeypatch, scan, *, ack_decision):
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "build_wake_prompt", lambda c: "PROMPT")
     monkeypatch.setattr(notifier, "derive_wake_event", lambda c: "task_verified")
-    monkeypatch.setattr(notifier, "_build_persona", lambda api, aid: None)
+    monkeypatch.setattr(notifier, "_build_persona", lambda api, aid, **k: None)
     monkeypatch.setattr(notifier, "_triage_wake", lambda text, config=None: {"wake": True, "reason": "note"})
     monkeypatch.setattr(notifier, "_llm_util", _fake_llm(ack_decision))
     spawns = []
