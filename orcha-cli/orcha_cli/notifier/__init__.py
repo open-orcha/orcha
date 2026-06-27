@@ -363,164 +363,9 @@ def _suppress_wake(api_base: str, cand: dict, event, suppress: dict, *, quiet: b
 
 
 # ---------- config ----------
-
-RUNTIME_CLAUDE = "claude"
-RUNTIME_CODEX = "codex"
-ORCHA_CLAUDE_EXEC = "ORCHA_CLAUDE_EXEC"
-ORCHA_CODEX_EXEC = "ORCHA_CODEX_EXEC"
-_CODEX_EXEC_FALLBACKS = (
-    "/Applications/Codex.app/Contents/Resources/codex",
-    "/opt/homebrew/bin/codex",
-    "/usr/local/bin/codex",
-    "~/.local/bin/codex",
-)
-
-
-def _normalize_runtime(runtime: Optional[str]) -> str:
-    return RUNTIME_CODEX if runtime == RUNTIME_CODEX else RUNTIME_CLAUDE
-
-
-def _runtime_executable(runtime: Optional[str]) -> str:
-    return "codex" if _normalize_runtime(runtime) == RUNTIME_CODEX else "claude"
-
-
-def _executable_override(env_var: str) -> Optional[str]:
-    override = os.environ.get(env_var)
-    if not override:
-        return None
-    if shutil.which(override):
-        return override
-    p = pathlib.Path(override).expanduser()
-    return str(p) if p.is_file() and os.access(p, os.X_OK) else None
-
-
-def _resolve_runtime_executable(runtime: Optional[str]) -> Optional[str]:
-    runtime = _normalize_runtime(runtime)
-    leaf = _runtime_executable(runtime)
-    override = _executable_override(ORCHA_CODEX_EXEC if runtime == RUNTIME_CODEX else ORCHA_CLAUDE_EXEC)
-    if override:
-        return override
-    if shutil.which(leaf):
-        return leaf
-    if runtime == RUNTIME_CODEX:
-        for candidate in _CODEX_EXEC_FALLBACKS:
-            p = pathlib.Path(candidate).expanduser()
-            if p.is_file() and os.access(p, os.X_OK):
-                return str(p)
-    return None
-
-
-def _codex_prompt(prompt: str, system_prompt: Optional[str]) -> str:
-    if not system_prompt:
-        return prompt
-    return f"{system_prompt.strip()}\n\n## Orcha Wake Instruction\n{prompt}"
-
-
-def _runtime_extra_flags(runtime: Optional[str], flags: Optional[str]) -> list[str]:
-    """Carry user-supplied headless flags, dropping Claude-only permission flags for Codex."""
-    extra = flags.split() if flags else []
-    if _normalize_runtime(runtime) != RUNTIME_CODEX:
-        return extra
-    filtered: list[str] = []
-    skip_next = False
-    for flag in extra:
-        if skip_next:
-            skip_next = False
-            continue
-        if flag == "--dangerously-skip-permissions":
-            continue
-        if flag == "--permission-mode":
-            skip_next = True
-            continue
-        if flag.startswith("--permission-mode="):
-            continue
-        filtered.append(flag)
-    return filtered
-
-def _load_config(cwd: pathlib.Path) -> dict:
-    cfg = cwd / ".claude" / "orcha.json"
-    if not cfg.exists():
-        sys.exit(
-            "error: no .claude/orcha.json in CWD. Run the notifier from the project "
-            "root (where `orcha init`/`orcha connect` was run)."
-        )
-    return json.loads(cfg.read_text())
-
-
-def _api_and_cid(cwd: pathlib.Path, api_override: Optional[str],
-                 cid_override: Optional[str]) -> tuple[str, str]:
-    # Both overrides supplied → don't require a project config file (lets the
-    # daemon run from anywhere, e.g. a systemd unit or the demo harness).
-    if api_override and cid_override:
-        return api_override.rstrip("/"), cid_override
-    cfg = _load_config(cwd)
-    api_base = (api_override or cfg.get("api_base_url") or "").rstrip("/")
-    cid = cid_override or cfg.get("current_container_id")
-    if not api_base:
-        sys.exit("error: api_base_url missing from .claude/orcha.json")
-    if not cid:
-        sys.exit("error: no container_id — pass --container or set current_container_id "
-                 "in .claude/orcha.json (run /orcha-container).")
-    return api_base, cid
-
-
-def _get_json(url: str, timeout: float = 8.0) -> Optional[dict]:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
-        return None
-
-
-def _probe_container(api_base: str, cid: str) -> str:
-    """Does this API actually know this container? 'ok' | 'missing' (definitive HTTP 404)
-    | 'unreachable' (API down/booting). _get_json can't distinguish a 404 from a dead API —
-    this can, and ONLY a definitive 404 should make the daemon refuse to start.
-
-    Why it matters: a daemon bound to a container its API doesn't know is a permanent no-op
-    that still LOOKS alive in ps. The 2026-06-10 postmortem found stale orcha.json files
-    pointing at OTHER projects' API ports after a stack reshuffle — those daemons would idle
-    forever, deepening the which-daemon-is-which confusion during an incident."""
-    url = f"{api_base}/api/containers/{cid}/wake-scan?cooldown=15&min_idle=30"
-    try:
-        with urllib.request.urlopen(url, timeout=8.0) as resp:
-            resp.read()
-        return "ok"
-    except urllib.error.HTTPError as e:
-        # 404 = the API answered and doesn't know the container. Any other HTTP error
-        # means the API is alive — not grounds to refuse.
-        return "missing" if e.code == 404 else "ok"
-    except (urllib.error.URLError, ValueError, OSError):
-        return "unreachable"
-
-
-def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode(), method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
-        return None
-
-
-def _extract_attachment_text(attachments, api_base: Optional[str] = None) -> dict:
-    """#338 Codex image->text. Read upload/validation-time cached OCR text from attachment refs and
-    return ``{attachment-id: text}`` for the feed renderer. ``api_base`` is kept for compatibility
-    with the first-pass call sites/tests, but this helper deliberately performs NO network fetch
-    and NO LLM call — cached text is the single source so task-thread and conversation wakes do not
-    re-OCR per turn. FAIL-OPEN: malformed refs simply omit that id."""
-    out: dict = {}
-    for a in attachments or []:
-        if not isinstance(a, dict):
-            continue
-        aid = a.get("id")
-        text = (a.get("extracted_text") or "").strip()
-        if text:
-            out[aid] = text
-    return out
+# Runtime resolution, project-config loading, and the HTTP JSON helpers now live
+# in the leaf module `.config` and are re-imported at the bottom of this file so
+# the flat `orcha_cli.notifier.<name>` surface is preserved.
 
 
 # ---------- wake prompt ----------
@@ -634,49 +479,6 @@ def build_wake_prompt(cand: dict) -> str:
 # and the wake prompt are one and the same again.
 
 
-def build_resident_sidecar_drain_prompt(alias: Optional[str], inbox: int,
-                                        messages: Optional[list] = None) -> str:
-    """#247 B3 (§5.2 warm-zone): the LEAN one-shot prompt for a warm-resident DRAIN SIDECAR. Pure.
-
-    Distinct from build_wake_prompt (the ephemeral wake) in TWO deliberate ways:
-      1. It is spawned in a SEPARATE session/cwd while the warm conversation lease is STILL HELD —
-         so it can drain the queued NON-conversation backlog without the ISS-78 context-bleed (the
-         removed in-session drain fed task reasoning into the next human turn) AND without yielding
-         the lease (which the A2 idle-yield did, defeating the §5.1 warm-zone hold).
-      2. It OMITS task auto-start. A warm conversation embodiment is already live for this agent;
-         claiming + working a task here would be a SECOND concurrent embodiment, violating the
-         Kedar-locked §3 ONE-EMBODIMENT contract. So: drain notifications/requests only, then EXIT.
-
-    Gate P1b: `prompt`/`task_message`/`task_assigned` events carry content with NO inbox surface —
-    surfacing the text is the ONLY delivery path (same as build_wake_prompt / wake_scan). So the
-    caller threads the bounded directed-message batch (active-conversations' `inbox_messages`) in
-    here and we quote it VERBATIM — otherwise the cursor-ack (P1a) would mark these delivered while
-    silently dropping their content. The cursor is acked ONLY after this sidecar has run with them.
-    """
-    who = alias or "agent"
-    n = f"{inbox} queued inbox event(s)" if inbox else "queued inbox events"
-    # P1b: directed messages have no other inbox surface — quote each so the sidecar acts on it
-    # specifically (mirrors build_wake_prompt's A3 surfacing) before its content is acked away.
-    directed = ""
-    msgs = [m for m in (messages or []) if m]
-    if msgs:
-        quoted = " ".join(f'(message {i + 1}) "{m}"' for i, m in enumerate(msgs))
-        directed = (f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — these carry content "
-                    f"with no other inbox surface, so handle {'them' if len(msgs) > 1 else 'it'} "
-                    f"specifically: {quoted}.")
-    return (
-        f"[orcha wake · drain sidecar] {who}: {n} piled up while your live conversation session is "
-        f"held WARM.{directed} You are a ONE-SHOT DRAIN worker: clear the FULL non-conversation backlog, then "
-        f"EXIT — do NOT enter the `/orcha-listen` long-poll watch loop (it never returns and piles "
-        f"up stuck workers). Steps: (1) drain the ENTIRE inbox — handle ALL your open requests AND "
-        f"ack ALL unacked events, repeating until your inbox is EMPTY (don't stop after the first "
-        f"item; that strands the rest). (2) Do NOT claim or start a task via `/orcha-next` and do "
-        f"NOT begin code work — a warm conversation session is already live for you, so starting "
-        f"task work here would be a second concurrent embodiment. If answering a request would "
-        f"require real task work, leave it for that task's own worker; answer what you can without "
-        f"code and move on. (3) Once the inbox is empty, STOP and exit. Never self-certify — stop "
-        f"at needs_verification and let a human verify."
-    )
 
 
 # ---------- transports (host-side side-effects) ----------
@@ -728,95 +530,10 @@ def send_tmux(target: str, prompt: str, dry_run: bool) -> tuple[bool, str]:
 # requirement, not polish. This rides the persona on EVERY wake (independent of whether a digest
 # exists) because the digest only ever carried WHAT the agent knew — never HOW to talk to a
 # person — so each wake the agent reverted to internal jargon a non-engineer can't parse.
-HUMAN_COMMS_GUARDRAIL = (
-    "## Talking to humans (plain-language guardrail — applies to every message you send a person)\n"
-    "Orcha is run by non-engineers. Before any message leaves to a human, make it readable to them:\n"
-    "- No bare UUIDs, invented shorthand labels (F1/F2, B3), or git SHAs unless the human used them "
-    "first. Name what a thing IS in plain English; put an id in parentheses only if it's actually "
-    "useful to them.\n"
-    "- Lead with the answer, then the why. Keep it short — a sentence or two, not a structured "
-    "report — unless they asked for depth.\n"
-    "- Match how they talk to you. If you're unsure what they already understand, default to plain "
-    "over precise."
-)
 
 
-def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
-    """#326 (A1): render the per-task protocol (GET /agents/{aid}/protocol → {protocol:{...}})
-    as the standing-RULES section. `protocol` is the response dict; its `protocol` key is the
-    SPEC-4 JSONB {review_chain, handoff_to, autonomy, notes} (any subset). Returns None when no
-    rules are set so an idle/cold wake carries no protocol section."""
-    p = (protocol or {}).get("protocol")
-    if not p:
-        return None
-    lines = ["## Standing protocol (your task's working agreement — the RULES, read FRESH every "
-             "wake ahead of your notes; a human edits these and they apply on your very next wake):"]
-    for label, key in (("Review chain", "review_chain"), ("Hand off to", "handoff_to"),
-                       ("Autonomy", "autonomy"), ("Notes", "notes")):
-        v = p.get(key)
-        if v:
-            if not isinstance(v, str):
-                v = json.dumps(v, ensure_ascii=False)
-            lines.append(f"- {label}: {v}")
-    return "\n".join(lines) if len(lines) > 1 else None
 
 
-def format_persona(persona: Optional[dict], digest: Optional[dict],
-                   protocol: Optional[dict] = None) -> Optional[str]:
-    """Pure: assemble the --append-system-prompt text so a headless worker boots AS the
-    agent. `persona` is GET /persona ({system_prompt,...}); `digest` is GET /digest
-    ({digest: {...}|null}); `protocol` is GET /agents/{aid}/protocol ({protocol:{...}|null});
-    any may be None. Returns the text, or None if nothing.
-
-    This is what makes the spawned `claude -p` answer with the agent's judgment +
-    reasoning continuity instead of as a generic Claude — persona from Epic A, the
-    'where you left off' digest from Epic C.
-
-    #325: when we're booting as a real agent (persona present) we always append the
-    plain-language HUMAN_COMMS_GUARDRAIL, and — if the digest carried an `audience` slice
-    — surface "Who you're talking to" AHEAD of the facts so the conversational register
-    is set before the work state.
-
-    #326 (A1): the task's standing protocol (RULES) rides AHEAD of / independent of the digest —
-    it is human-authored and read fresh every wake, so an edit takes effect on the next wake. It
-    lands after the guardrail and before the digest (rules frame the work before the recalled facts).
-    """
-    parts = []
-    if persona and persona.get("system_prompt"):
-        parts.append(persona["system_prompt"].strip())
-    # #325: standing guardrail rides whenever we're actually booting as an agent.
-    if parts:
-        parts.append(HUMAN_COMMS_GUARDRAIL)
-    # #326 (A1): RULES (protocol) ahead of the digest — read fresh every wake, human-editable.
-    proto_section = _render_protocol(protocol)
-    if proto_section:
-        parts.append(proto_section)
-    d = (digest or {}).get("digest")
-    if d:
-        # #325: lead with WHO the agent is talking to (their register) so tone is framed
-        # before the facts that follow.
-        aud = d.get("audience")
-        if aud:
-            if not isinstance(aud, str):
-                aud = json.dumps(aud, ensure_ascii=False)
-            parts.append("## Who you're talking to (carry this register — it survives across "
-                         "wakes, not just the facts):\n" + aud)
-        lines = ["## Where you left off (your latest memory digest — you are RESUMING as "
-                 "this agent, not starting fresh):",
-                 "Memory-digest guard: treat these items as prior reasoning, not live truth. "
-                 "Any claim about external state (GitHub PR/issue status, Orcha task/request "
-                 "status, who owes what, review state) is a pointer to re-check the source of "
-                 "truth before acting or deciding there is nothing to do."]
-        for label, key in (("Current focus", "current_focus"), ("Decisions", "decisions"),
-                           ("Learnings", "learnings"), ("Open threads", "open_threads")):
-            v = d.get(key)
-            if v:
-                if not isinstance(v, str):
-                    v = json.dumps(v, ensure_ascii=False)
-                lines.append(f"- {label}: {v}")
-        if len(lines) > 1:
-            parts.append("\n".join(lines))
-    return "\n\n".join(parts) if parts else None
 
 
 # #285: per-wake persona+digest reuse. run_daemon is a long-lived loop, so an agent's persona
@@ -1166,76 +883,8 @@ def _send_user_turn(proc, content: str) -> bool:
         return False
 
 
-def _extract_session_id(log_path) -> Optional[str]:
-    """E3: claude assigns the session_id and stamps it on every stream-json event (the `system`
-    init line is the first). The manager reads it from the head of the log after a COLD boot and
-    pins it via POST /conversations/{id}/session so a later warm restart can --resume the same
-    session. Returns the first session_id seen, or None if not emitted yet / unreadable."""
-    if not log_path:
-        return None
-    try:
-        with open(log_path, "rb") as f:
-            head = f.read(65536)             # the init/system line is at the very top
-    except OSError:
-        return None
-    for raw in head.split(b"\n"):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            continue                         # partial head line — try the next
-        sid = obj.get("session_id")
-        if sid:
-            return sid
-    return None
 
 
-def _extract_codex_session_id(log_path) -> Optional[str]:
-    """#286: pull the Codex session/rollout id from a `codex exec --json` log so a later turn can
-    `codex exec resume <session_id>` instead of re-injecting the full thread history.
-
-    Codex stamps the id on an early event; the exact event/key spelling varies across Codex
-    versions and could NOT be empirically pinned here (codex is not installed on this host —
-    Invy's feasibility caveat, task ff19f91c), so this scans the head TOLERANTLY for any of the
-    known carriers — top-level `session_id`/`thread_id`/`conversation_id`, or nested under a
-    `msg`/`session` object (e.g. the `session_configured` event). Returns the first id found, or
-    None. A None (or a non-UUID the pin endpoint rejects) simply leaves the conversation on the
-    cold full-history path — the #286 fail-open contract."""
-    if not log_path:
-        return None
-    try:
-        with open(log_path, "rb") as f:
-            head = f.read(65536)             # the session event is at the very top
-    except OSError:
-        return None
-
-    def _id_from(obj) -> Optional[str]:
-        if not isinstance(obj, dict):
-            return None
-        for key in ("session_id", "thread_id", "conversation_id"):
-            val = obj.get(key)
-            if isinstance(val, str) and val:
-                return val
-        for nest in ("msg", "session", "payload"):
-            found = _id_from(obj.get(nest))
-            if found:
-                return found
-        return None
-
-    for raw in head.split(b"\n"):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            continue                         # partial head line — try the next
-        sid = _id_from(obj)
-        if sid:
-            return sid
-    return None
 
 
 def _result_after(log_path, start_offset: int = 0) -> Optional[dict]:
@@ -1270,143 +919,10 @@ def _result_after(log_path, start_offset: int = 0) -> Optional[dict]:
 
 # ---------- one tick ----------
 
-def _result_status(log_path) -> Optional[str]:
-    """ISS-29: return the subtype of a terminal stream-json `result` event if the worker has
-    COMPLETED its agent loop (e.g. 'success', 'error_max_turns'), else None.
-
-    `claude -p --output-format stream-json` emits exactly one `result` object as the FINAL
-    NDJSON line. Once it's present the run has finished — a still-alive process is merely slow
-    to exit (a known linger on long headless sessions). Such a worker must NOT be reaped as
-    'killed', and its SessionEnd hook (the C1 digest) deserves a window to run. We read only
-    the log's tail (the result line is small) and inspect the LAST complete line: a truncated
-    final line means claude is still mid-write → not done yet."""
-    if not log_path:
-        return None
-    try:
-        with open(log_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            end = f.tell()
-            f.seek(max(0, end - 65536))      # tail is plenty; result lines are small
-            tail = f.read()
-    except OSError:
-        return None
-    for raw in reversed(tail.split(b"\n")):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            return None                       # last line still being written → not complete
-        return obj.get("subtype") if obj.get("type") == "result" else None
-    return None
 
 
-def _last_event_type(log_path) -> Optional[str]:
-    """#270: the `type` of the LAST complete stream-json line in the worker log, or None.
-
-    Part of the watchdog kill diagnostic: it explains what the worker was doing when it went
-    log-silent — an 'assistant' (mid tool_use), a 'stream_event' (mid token/thinking generation),
-    a 'rate_limit_event' (backing off a 429), or 'result' (already finished). We scan the tail in
-    reverse and skip any garbled/partial trailing line (a still-being-written final line)."""
-    if not log_path:
-        return None
-    try:
-        with open(log_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            end = f.tell()
-            f.seek(max(0, end - 65536))      # tail is plenty; we only want the last line's type
-            tail = f.read()
-    except OSError:
-        return None
-    for raw in reversed(tail.split(b"\n")):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            return json.loads(s).get("type")
-        except ValueError:
-            continue                          # partial/garbled line — fall back to the previous
-    return None
 
 
-def _worker_is_live(log_path) -> bool:
-    """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
-    stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
-    a worker that is very much alive yet legitimately quiet:
-
-      * an IN-FLIGHT tool call — `claude -p` emits the assistant `tool_use` immediately, but
-        the matching `tool_result` only lands when the subprocess returns, so the log freezes
-        for the whole duration of a long `Bash` (build, big `git`, a sleep, a slow `curl`);
-      * a RATE-LIMIT backoff — a top-level `{"type":"rate_limit_event", ...}` then silence
-        while claude sleeps off a 429 before resuming.
-
-    The old size-only heuristic mistook both for a stall and SIGKILLed the worker mid-work
-    (Invy run 5a9c7cbe: a long command + 2 rate_limit_events → >120s no growth → killed at
-    ~11min, no result, C1 digest lost). Return True if the log's tail shows either signal so
-    the stall kill is suppressed. This only governs the STALL path — the 1200s hard-cap
-    backstop still reaps a genuinely-hung worker even while it looks 'live'.
-
-    Detecting an outstanding tool call must NOT assume the blocks carry ids. `claude -p` does
-    emit `tool_use.id` / `tool_result.tool_use_id` in the wild, but other real-shaped streams
-    (and our own fixtures) carry NO ids — and an id-only pairing would miss the exact ISS-45
-    case there, stall-killing the worker anyway. So we read three shape-agnostic signals over
-    the tail and treat ANY as 'alive' (a false 'alive' merely defers the kill to the 1200s hard
-    cap; a false 'stalled' is the bug we're fixing):
-      * id pairing — `tool_use` ids not yet seen as a `tool_result` id (precise, orphan-safe
-        when ids exist);
-      * count — more `tool_use` blocks than `tool_result` blocks (covers no-id + parallel calls);
-      * order — the LAST tool-related block in the stream is a `tool_use` (covers a no-id call
-        in flight at the tail, even when an orphan result earlier balances the count).
-    A `tool_result` always follows its `tool_use`, so an orphan result whose `tool_use` scrolled
-    out of the tail can't fabricate a false in-flight under any of the three."""
-    if not log_path:
-        return False
-    try:
-        with open(log_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            end = f.tell()
-            f.seek(max(0, end - 262144))     # 256KB tail: ample to pair recent tool calls
-            tail = f.read()
-    except OSError:
-        return False
-    tool_use_ids: set = set()
-    tool_result_ids: set = set()
-    use_count = result_count = 0
-    last_tool_block = None                    # 'use' | 'result' — last tool-related block seen
-    last_type = None
-    for raw in tail.split(b"\n"):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            continue                          # partial/garbled line (e.g. truncated tail head)
-        etype = obj.get("type")
-        last_type = etype
-        content = (obj.get("message") or {}).get("content") if isinstance(obj.get("message"), dict) else None
-        if etype == "assistant" and isinstance(content, list):
-            for blk in content:
-                if isinstance(blk, dict) and blk.get("type") == "tool_use":
-                    use_count += 1
-                    last_tool_block = "use"
-                    if blk.get("id"):
-                        tool_use_ids.add(blk["id"])
-        elif etype == "user" and isinstance(content, list):
-            for blk in content:
-                if isinstance(blk, dict) and blk.get("type") == "tool_result":
-                    result_count += 1
-                    last_tool_block = "result"
-                    if blk.get("tool_use_id"):
-                        tool_result_ids.add(blk["tool_use_id"])
-    if last_type == "rate_limit_event":
-        return True                           # mid-backoff on a 429 — alive, just sleeping
-    if tool_use_ids - tool_result_ids:        # id pairing: an unanswered tool_use id
-        return True
-    if use_count > result_count:              # count: more calls issued than answered (no-id safe)
-        return True
-    return last_tool_block == "use"           # order: tail ends on an unanswered tool_use
 
 
 def _kill_worker(proc, graceful: bool = False, grace_secs: float = 10.0) -> None:
@@ -1468,47 +984,6 @@ def _capture_run_output(log_path, cap: int = 200_000):
     return data.decode("utf-8", "replace")
 
 
-def _usage_from_log(log_path) -> dict:
-    """#289 (efficiency measurement backbone): extract the TOKEN usage of a finished wake from
-    its stream-json log. `claude -p --output-format stream-json` emits exactly one terminal
-    `result` event whose `usage` object carries input_tokens / output_tokens /
-    cache_creation_input_tokens / cache_read_input_tokens (cumulative for the invocation) plus a
-    top-level `total_cost_usd`. The reply-capture path (_result_after) read that event for text
-    and dropped the usage; this reads the SAME terminal event (from the log tail — result lines
-    are small) for the five accounting fields. Returns a dict with those keys (any absent → None
-    so a malformed / pre-result log degrades to NULL, never a crash). Empty dict if no log /
-    unreadable / no complete result line yet.
-
-    Caveat (documented V2): a resident worker that handled multiple turns in one process logs one
-    result event per turn; we read the LAST, i.e. the cumulative usage of its final turn. For the
-    ephemeral headless worker — the dominant per-wake cost and the control-project case — there is
-    exactly one result event, so this IS the whole wake."""
-    keys = ("input_tokens", "output_tokens", "cache_read_input_tokens",
-            "cache_creation_input_tokens", "total_cost_usd")
-    if not log_path:
-        return {}
-    try:
-        with open(log_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            end = f.tell()
-            f.seek(max(0, end - 65536))      # tail is plenty; result lines are small
-            tail = f.read()
-    except OSError:
-        return {}
-    for raw in reversed(tail.split(b"\n")):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            return {}                         # last line still being written → not complete
-        if obj.get("type") == "result":
-            usage = obj.get("usage") or {}
-            out = {k: usage.get(k) for k in keys[:4]}
-            out["total_cost_usd"] = obj.get("total_cost_usd")
-            return out
-    return {}
 
 
 def _finish_run(api_base: str, run_id, status: str, exit_code, log_path, diff=None,
@@ -1829,18 +1304,6 @@ def _safe_teardown_worktree(base_cwd, worktree, branch) -> str:
     return "removed"
 
 
-def _is_stream_event_line(line: str) -> bool:
-    """ISS-#251: True for a `--include-partial-messages` `stream_event` partial-delta line.
-
-    These token/thinking deltas exist in the host log purely so the stall watchdog (reap_workers,
-    which measures progress by log growth) sees a heartbeat while a worker is mid-generation. They
-    must NOT be persisted to the DB line feed — at one line per token they would flood
-    worker_run_lines and the portal SSE. Fail soft: a non-JSON line is treated as NOT a partial
-    (kept), matching _pump_one's prior 'keep every non-blank line' behavior."""
-    try:
-        return json.loads(line).get("type") == "stream_event"
-    except (ValueError, AttributeError):
-        return False
 
 
 def _pump_one(api_base: str, aid: str, w: dict) -> None:
@@ -2598,22 +2061,6 @@ def _conversation_reply_path(log_path) -> Optional[pathlib.Path]:
     return pathlib.Path(str(log_path) + ".reply.txt")
 
 
-def _simple_history(turns: list[dict]) -> str:
-    rows = []
-    for t in turns[-20:]:
-        content = (t.get("content") or "").strip()
-        atts = [a for a in (t.get("attachments") or []) if isinstance(a, dict)]
-        if not content and not atts:
-            continue
-        who = "Human" if t.get("role") == "human" else "Agent"
-        # #338: name any files shared on this turn (context marker; the open-instructions live with
-        # the pending turn via _render_attachment_feed).
-        marker = ""
-        if atts:
-            names = ", ".join(f"{a.get('name') or a.get('id')} ({a.get('kind') or 'file'})" for a in atts)
-            marker = f"  [attached {len(atts)} file(s): {names}]"
-        rows.append(f"{who}: {content}{marker}")
-    return "## Conversation so far\n\n" + "\n\n".join(rows) if rows else ""
 
 
 def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_turns: list[dict],
@@ -2660,46 +2107,8 @@ def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_t
     )
 
 
-def _codex_resume_prompt(alias: str, pending_turns: list[dict]) -> str:
-    """#286: the continuation prompt for a `codex exec resume <session_id>` worker.
-
-    Unlike _conversation_worker_prompt, this injects NO thread history and NO persona/digest — the
-    resumed on-disk rollout already holds all prior context, so re-injecting it would re-pay exactly
-    the history tokens this feature exists to save. Carries ONLY the framing reminder + the new
-    pending human turn(s). The cost win lives here: a multi-turn Codex review now pays history once
-    (the cold turn-1 rollout) instead of every turn."""
-    latest = "\n\n".join(
-        f"Human turn seq {t.get('seq')}: {(t.get('content') or '').strip()}"
-        for t in pending_turns
-        if (t.get("content") or "").strip()
-    )
-    if not latest:
-        latest = "(empty human message)"
-    return (
-        f"[orcha conversation] {alias or 'agent'}: continue replying to the human in Orcha's "
-        "Conversation tab. This RESUMES your existing Codex session — the prior conversation is "
-        "already in your context, so do NOT restate it. Make your final answer the chat reply "
-        "appended to the conversation. Do not call `/orcha-listen` and do not post this reply "
-        "through task/request endpoints unless the human explicitly asked for that side effect.\n\n"
-        "## New Human Message(s)\n\n"
-        f"{latest}\n"
-    )
 
 
-def _text_from_content(content) -> Optional[str]:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for blk in content:
-            if not isinstance(blk, dict):
-                continue
-            if isinstance(blk.get("text"), str):
-                parts.append(blk["text"])
-            elif blk.get("type") in ("text", "output_text") and isinstance(blk.get("content"), str):
-                parts.append(blk["content"])
-        return "\n".join(p for p in parts if p).strip() or None
-    return None
 
 
 def _conversation_reply_text(log_path, last_message_path=None) -> Optional[str]:
@@ -4263,3 +3672,48 @@ def cmd_notifier(args) -> None:
             pass
     if not args.quiet:
         print("[notifier] stopped.")
+
+
+# ---------------------------------------------------------------------------
+# Modularization (issue #29): cohesive leaf groups have been extracted into
+# sibling submodules. They are re-imported here so the historical flat surface
+# (`orcha_cli.notifier.<name>`) — which the test suite and other modules patch
+# and import — is fully preserved. Behaviour is unchanged: a pure move.
+# ---------------------------------------------------------------------------
+from .config import (  # noqa: E402,F401  runtime resolution / project config / HTTP helpers
+    RUNTIME_CLAUDE,
+    RUNTIME_CODEX,
+    ORCHA_CLAUDE_EXEC,
+    ORCHA_CODEX_EXEC,
+    _CODEX_EXEC_FALLBACKS,
+    _normalize_runtime,
+    _runtime_executable,
+    _executable_override,
+    _resolve_runtime_executable,
+    _runtime_extra_flags,
+    _load_config,
+    _api_and_cid,
+    _get_json,
+    _probe_container,
+    _post_json,
+)
+from .runlog import (  # noqa: E402,F401  run-log parsing (claude/codex session logs)
+    _extract_session_id,
+    _extract_codex_session_id,
+    _result_status,
+    _last_event_type,
+    _worker_is_live,
+    _usage_from_log,
+    _is_stream_event_line,
+)
+from .prompts import (  # noqa: E402,F401  pure prompt / persona text formatting
+    HUMAN_COMMS_GUARDRAIL,
+    _extract_attachment_text,
+    _render_protocol,
+    format_persona,
+    build_resident_sidecar_drain_prompt,
+    _codex_prompt,
+    _simple_history,
+    _codex_resume_prompt,
+    _text_from_content,
+)
