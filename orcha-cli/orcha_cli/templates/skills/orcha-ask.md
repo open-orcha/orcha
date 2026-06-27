@@ -1,7 +1,7 @@
 ---
 description: Send a request from the acting agent. Two modes — info (ask a question, default) or task (`--task`, ask for work). Optionally chain it off another open request as a follow-up.
 allowed-tools: Bash, Read, AskUserQuestion
-argument-hint: <target_alias> "<payload>" [--task --task-dod "..." [--task-priority N] [--task-description "..."]] [--priority N] [--expires N] [--in-service-of <parent_rid>] [--alias <name>]
+argument-hint: <target_alias> "<payload>" [--task --task-dod "..." [--task-priority N] [--task-description "..."] [--review-chain "..."] [--handoff-to "..."] [--autonomy "..."] [--notes "..."]] [--priority N] [--expires N] [--in-service-of <parent_rid>] [--alias <name>]
 ---
 
 You are executing `/orcha-ask`.
@@ -17,6 +17,7 @@ User arguments: `$ARGUMENTS`
      - `--task-dod "..."` (required) — the definition of done for the work
      - `--task-priority N` (default 100)
      - `--task-description "..."` (optional longer body)
+     - **Protocol (optional; GH #55)** — the loop rules the spawned task inherits the moment the target accepts (read on the wake that accept triggers, so the rules apply on turn one). Include only the ones you set: `--review-chain "..."` (the hand-off loop), `--handoff-to "..."` (who the assignee returns to first), `--autonomy "..."` (free text), `--notes "..."` (other standing rules).
    - Optional `--priority N` (default 100; lower = higher) — the *request*'s priority for the inbox, independent of `--task-priority` which the spawned task inherits.
    - Optional `--expires N` (minutes until the request auto-escalates if unanswered; default 60).
    - Optional `--in-service-of <parent_rid>` (UUID): when set, this request is recorded as a child of `parent_rid`.
@@ -49,10 +50,13 @@ User arguments: `$ARGUMENTS`
        "title": "<task title>",
        "description": "<optional longer body>",
        "definition_of_done": "<--task-dod>",
-       "priority": <--task-priority>
+       "priority": <--task-priority>,
+       // #55 — include `protocol` only if any protocol flag was given; put only the set keys inside it:
+       "protocol": { "review_chain": "<...>", "handoff_to": "<...>", "autonomy": "<...>", "notes": "<...>" }
      }
    }
    ```
+   (Omit the `"protocol"` key entirely when no protocol flags were passed — a request with no protocol spawns a task with a NULL protocol, same as before.)
 
 5. **POST**:
    ```bash

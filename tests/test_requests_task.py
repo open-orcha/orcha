@@ -22,6 +22,44 @@ async def test_accept_task_spawns_and_assigns(client, make_agent, make_request, 
     assert rows, "accepted task should be assigned to the responder"
 
 
+async def test_accept_task_carries_protocol_into_spawned_task(client, make_agent, make_request, db):
+    """GH #55: a task request may carry a `protocol` block (rides in the request's `detail`
+    JSONB). On accept, the spawned task's protocol is populated from it — so the accepter reads
+    the loop rules on the very wake this accept triggers, with NO follow-up PATCH."""
+    a = await make_agent("a", "eng")
+    b = await make_agent("b", "eng")
+    task = _task_payload()
+    task["protocol"] = {"review_chain": "b -> a -> human", "handoff_to": "a",
+                        "autonomy": "ship small fixes", "notes": "loop until clean"}
+    req = await make_request(a["agent_id"], "build X with loop rules", target_alias="b",
+                             type="task", task=task)
+    r = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                          json={"responder_agent_id": b["agent_id"], "note": "on it"})
+    assert r.status_code == 200, r.text
+    tid = r.json()["spawned_task_id"]
+    rows = db.execute("SELECT protocol FROM tasks WHERE id=%s", (tid,))
+    proto = rows[0]["protocol"]
+    assert proto, "spawned task should carry the request's protocol"
+    assert proto["review_chain"] == "b -> a -> human"
+    assert proto["handoff_to"] == "a"
+    assert proto["autonomy"] == "ship small fixes"
+    assert proto["notes"] == "loop until clean"
+
+
+async def test_accept_task_without_protocol_leaves_it_null(client, make_agent, make_request, db):
+    """GH #55: a task request with no protocol spawns a task whose protocol stays NULL —
+    the create-time block is strictly opt-in, unchanged from the pre-#55 behavior."""
+    a = await make_agent("a", "eng")
+    b = await make_agent("b", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="b",
+                             type="task", task=_task_payload())
+    r = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                          json={"responder_agent_id": b["agent_id"], "note": "on it"})
+    assert r.status_code == 200, r.text
+    rows = db.execute("SELECT protocol FROM tasks WHERE id=%s", (r.json()["spawned_task_id"],))
+    assert rows[0]["protocol"] is None, "no protocol on the request → NULL on the task"
+
+
 async def test_accept_task_idempotent_no_duplicate_task(client, make_agent, make_request, db):
     """R2.3: re-accepting an already-accepted task request returns the SAME spawned
     task_id (200) and does NOT create a second task — safe under at-least-once replay."""

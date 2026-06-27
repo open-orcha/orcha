@@ -6528,6 +6528,10 @@ class TaskRequestPayload(BaseModel):
     description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
     definition_of_done: str = Field(..., max_length=MAX_DOD_LEN)
     priority: int = 100
+    # GH #55: a task request may carry the per-task protocol (loop rules). It rides in the
+    # request's `detail` JSONB (no schema change) and is read into the spawned task's protocol
+    # on /accept-task — so a request-born task gets its loop rules without a follow-up PATCH.
+    protocol: Optional[ProtocolFields] = None
 
 
 class RequestCreate(BaseModel):
@@ -6666,6 +6670,12 @@ def create_request(cid: str, body: RequestCreate):
                 "definition_of_done": body.task.definition_of_done,
                 "priority": body.task.priority,
             }
+            # GH #55: carry the optional protocol through the request so the spawned task
+            # inherits its loop rules on accept (only the keys actually set are stored).
+            if body.task.protocol is not None:
+                proto_fields = body.task.protocol.model_dump(exclude_none=True)
+                if proto_fields:
+                    detail["protocol"] = proto_fields
         elif body.task is not None:
             raise HTTPException(400, "`task` field is only valid with type='task'")
 
@@ -7023,16 +7033,22 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         task = r["detail"] or {}
         if "title" not in task or "definition_of_done" not in task:
             raise HTTPException(500, "request detail is malformed; cannot synthesize a task")
+        # GH #55: if the request carried a protocol, populate it on the spawned task so the
+        # accepter reads its loop rules on the very wake this accept triggers (no follow-up PATCH).
+        protocol_json = None
+        cleaned_proto = _clean_protocol(task.get("protocol"))
+        if cleaned_proto:
+            protocol_json = json.dumps(cleaned_proto)
         # Create the task, assign to the accepter, start it.
         cur.execute(
             """INSERT INTO tasks
                  (container_id, title, description, definition_of_done,
-                  status, priority, created_by_agent_id, started_at)
-               VALUES (%s, %s, %s, %s, 'in_progress', %s, %s, now())
+                  status, priority, created_by_agent_id, protocol, started_at)
+               VALUES (%s, %s, %s, %s, 'in_progress', %s, %s, %s::jsonb, now())
                RETURNING id""",
             (str(r["container_id"]), task["title"], task.get("description"),
              task["definition_of_done"], task.get("priority", 100),
-             str(r["requester_id"])),
+             str(r["requester_id"]), protocol_json),
         )
         tid = str(cur.fetchone()["id"])
         cur.execute(

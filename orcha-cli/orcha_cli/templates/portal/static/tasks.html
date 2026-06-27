@@ -403,9 +403,10 @@
           : key === "notes"
             ? O.linkify(p.notes || "—")
             : O.esc(p[key] || "—");
-      const input = isNotes
-        ? `<textarea data-pfield="${key}">${O.esc(d[key] || "")}</textarea>`
-        : `<input data-pfield="${key}" value="${O.esc(d[key] || "")}">`;
+      // #55: all four fields are drag-expandable <textarea>s (resize: vertical via the
+      // .prow textarea CSS) — a multi-line review_chain/handoff_to/autonomy is common, not
+      // just Notes. saveProtocol() reads .value off [data-pfield], so input vs textarea is moot.
+      const input = `<textarea data-pfield="${key}">${O.esc(d[key] || "")}</textarea>`;
       return `<div class="prow"><span class="k">${label}</span>
         <span class="v${isNotes ? " notes" : ""}">${display}</span>
         <div class="edit">${input}</div></div>`;
@@ -570,6 +571,19 @@
       </div>
       ${dOpts ? `<div class="field" style="margin-top:12px"><div class="lbl">Depends on <span class="muted" style="font-weight:450;text-transform:none;letter-spacing:0">— optional; ⌘/Ctrl-click to multi-select</span></div>
         <select id="nt_deps" class="reply-in" multiple size="4" style="width:100%">${dOpts}</select></div>` : ""}
+      <details class="field" style="margin-top:12px">
+        <summary style="cursor:pointer;font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:650;color:var(--faint)">Protocol <span class="muted" style="font-weight:450;text-transform:none;letter-spacing:0">— optional; the multi-agent loop rules the assignee reads on its first wake</span></summary>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+          <div class="field"><div class="lbl">Review chain</div>
+            <textarea id="nt_p_chain" class="reply-in" style="width:100%;min-height:48px;resize:vertical" placeholder="e.g. Builder → Reviewer → loop until clean → human"></textarea></div>
+          <div class="field"><div class="lbl">Hand-off to</div>
+            <textarea id="nt_p_handoff" class="reply-in" style="width:100%;min-height:48px;resize:vertical" placeholder="Who the assignee returns to first when done"></textarea></div>
+          <div class="field"><div class="lbl">Autonomy</div>
+            <textarea id="nt_p_autonomy" class="reply-in" style="width:100%;min-height:48px;resize:vertical" placeholder="Free-text — how far the assignee may go before checking in"></textarea></div>
+          <div class="field"><div class="lbl">Notes</div>
+            <textarea id="nt_p_notes" class="reply-in" style="width:100%;min-height:48px;resize:vertical" placeholder="Any other standing rules for this task"></textarea></div>
+        </div>
+      </details>
       <div class="hint" id="nt_err" style="display:none;color:var(--danger);font-size:12px;margin-top:10px"></div>`;
     O.modal({
       title: "New task",
@@ -592,11 +606,17 @@
     const assignee_alias = (ov.querySelector("#nt_assignee") || {}).value || null;
     const depsEl = ov.querySelector("#nt_deps");
     const depends_on = depsEl ? Array.from(depsEl.selectedOptions).map((o) => o.value) : [];
+    // #55: optional create-time protocol — send only the fields the user actually filled in, and
+    // only attach `protocol` when at least one is set (so an untouched section persists as NULL).
+    const proto = {};
+    const pmap = { review_chain: "#nt_p_chain", handoff_to: "#nt_p_handoff", autonomy: "#nt_p_autonomy", notes: "#nt_p_notes" };
+    Object.keys(pmap).forEach((k) => { const v = val(pmap[k]); if (v) proto[k] = v; });
     const btn = ov.querySelector("#__mp"); if (btn) { btn.disabled = true; btn.textContent = "Creating…"; }
     postJSON("/api/containers/" + encodeURIComponent(cid) + "/tasks", {
       title, description: val("#nt_desc") || null, definition_of_done: dod,
       priority, created_by_agent_id: humanId,
       assignee_alias: assignee_alias || undefined, depends_on,
+      protocol: Object.keys(proto).length ? proto : undefined,
     })
       .then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, d })).catch(() => ({ ok: r.ok, status: r.status, d: {} })))
       .then(({ ok, status, d }) => {
