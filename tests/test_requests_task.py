@@ -134,6 +134,13 @@ async def test_accept_task_idempotent_no_duplicate_task(client, make_agent, make
     assert r2.json()["status"] == "accepted"
     assert r2.json()["spawned_task_id"] == tid          # same task, not a new one
     assert r2.json().get("already_accepted") is True
+    # GH #56 review P-retry: a retry (first accept response lost) is the ONLY thing the same
+    # worker session sees, so it MUST also carry the report-back instruction — identical to
+    # the fresh accept's — or the worker misses it and falls through to the Point 5 backstop.
+    assert "REPORT BACK" in r2.json()["report_back"]
+    assert rid in r2.json()["report_back"]
+    assert r2.json()["report_back_request_id"] == rid
+    assert r2.json()["report_back"] == r1.json()["report_back"]   # fresh and retry agree exactly
     # exactly ONE task was spawned from this request
     rows = db.execute("SELECT count(*) AS n FROM tasks WHERE title=%s", ("do work",))
     assert rows[0]["n"] == 1, "retry must not spawn a duplicate task"

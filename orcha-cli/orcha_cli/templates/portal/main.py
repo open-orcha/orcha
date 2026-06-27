@@ -1753,6 +1753,22 @@ def _clean_protocol(raw: Any) -> Optional[dict]:
     return data or None
 
 
+def _build_report_back(rid: str, dod: str) -> str:
+    """GH #56 (Point 4.4/4.5): the report-back instruction for a request-born task. It is
+    injected into the spawned task's protocol.notes AND echoed in the accept response so the
+    same worker session sees it immediately. Derived purely from (rid, dod) so the fresh
+    accept and the idempotent retry (first response lost) return the IDENTICAL instruction —
+    a retry must never fall back to the old, instruction-less response shape (review P-retry)."""
+    text = (
+        f"REPORT BACK: when you've materially finished this task — i.e. "
+        f"{dod.strip() or 'the requested work is complete'} — post your result to request {rid} "
+        f"(/orcha-respond {rid} \"...\") BEFORE moving on. Reporting back is a separate, "
+        f"agent-judged step: it is NOT /orcha-done (which only sends this task to human "
+        f"verification, and may still be pending after you report back)."
+    )
+    return text[:MAX_PROTOCOL_FIELD_LEN]
+
+
 def _normalize_roster_payload(raw: Any) -> dict:
     """Validate and repair the model's propose_roster payload into the exact UI-safe shape."""
     if not isinstance(raw, dict):
@@ -7163,9 +7179,16 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         # R2.3 idempotency: the target re-accepting an already-accepted task request gets
         # the SAME spawned task back (200) — so a retry never spawns a duplicate task.
         # 'rejected'/other states are genuine illegal transitions (409).
+        # GH #56 (review P-retry): the retry MUST echo the report-back instruction too. If the
+        # first accept response was lost, this idempotent retry is the only thing the same worker
+        # session sees — returning the old instruction-less shape would let it miss report-back and
+        # fall through to the Point 5 backstop. Rebuild it deterministically from the request detail.
         if r["status"] == "accepted":
+            _retry_dod = ((r["detail"] or {}).get("definition_of_done") or "")
             return {"request_id": rid, "status": "accepted",
                     "spawned_task_id": str(r["spawned_task_id"]) if r["spawned_task_id"] else None,
+                    "report_back": _build_report_back(rid, _retry_dod),
+                    "report_back_request_id": rid,
                     "already_accepted": True}
         if r["status"] != "open":
             raise HTTPException(409, f"request is '{r['status']}', not 'open' — cannot accept")
@@ -7180,20 +7203,15 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         # is explicitly decoupled from /orcha-done (reporting back ≠ sending the task to verification).
         cleaned_proto = _clean_protocol(task.get("protocol")) or {}
         dod = (task.get("definition_of_done") or "").strip()
-        report_back = (
-            f"REPORT BACK: when you've materially finished this task — i.e. "
-            f"{dod or 'the requested work is complete'} — post your result to request {rid} "
-            f"(/orcha-respond {rid} \"...\") BEFORE moving on. Reporting back is a separate, "
-            f"agent-judged step: it is NOT /orcha-done (which only sends this task to human "
-            f"verification, and may still be pending after you report back)."
-        )
+        # GH #56 (review P-retry): same builder as the idempotent-retry branch above, so the
+        # fresh accept and a lost-response retry hand back the identical report-back instruction.
+        report_back = _build_report_back(rid, dod)
         existing_notes = (cleaned_proto.get("notes") or "").strip()
         # GH #56 (Point 4.4/4.5, review P2): the report-back instruction is the MECHANISM that
         # tells the accepter to answer the request, so it must survive the per-field cap intact.
         # Prepend it and trim only the OLDER carried notes — never tail-truncate, or a near-max
         # carried `notes` would silently drop the whole REPORT BACK line and the answer waypoint
         # would be lost. report_back is well under the cap, but clamp defensively regardless.
-        report_back = report_back[:MAX_PROTOCOL_FIELD_LEN]
         if existing_notes:
             sep = "\n\n"
             room = MAX_PROTOCOL_FIELD_LEN - len(report_back) - len(sep)
