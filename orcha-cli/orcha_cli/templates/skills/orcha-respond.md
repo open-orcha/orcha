@@ -1,5 +1,5 @@
 ---
-description: Answer an info request addressed to the acting agent. Flips the request from 'open' to 'answered'.
+description: Answer a request addressed to the acting agent with your real result. Works for an info request (open → answered) and for a task request you accepted once the work is materially done (accepted → answered).
 allowed-tools: Bash, Read, AskUserQuestion
 argument-hint: <request_id> "<answer text>" [--alias <name>]
 ---
@@ -7,6 +7,15 @@ argument-hint: <request_id> "<answer text>" [--alias <name>]
 You are executing `/orcha-respond`.
 
 User arguments: `$ARGUMENTS`
+
+## What this is for
+
+This is how you give the requester the ANSWER they're waiting on — for an info request (`open`),
+or for a task request you accepted (`accepted`) once the work is materially complete. Answering is
+the event that WAKES the requester, so the `response` must carry your actual result: what you found,
+decided, built, or where it landed. Do NOT send a content-free receipt ("done", "ack", "accepted",
+"on it") — that wakes the requester with nothing to act on. If the work isn't materially finished
+yet, don't respond; keep working and answer once you have a real result.
 
 ## Steps
 
@@ -35,7 +44,7 @@ User arguments: `$ARGUMENTS`
    ```
    Response: `{"request_id": "...", "status": "answered"}`
 
-5. **Report**: `request <short-id> answered. Requester sees the answer; they will /orcha-close <rid> --alias <their_alias> or /orcha-escalate.`
+5. **Report**: `request <short-id> answered. Requester wakes on your result; they will /orcha-close <rid> --alias <their_alias> or /orcha-escalate.` If this was a task request you accepted, answering does NOT send the spawned task to verification — run `/orcha-done <spawned_task_id> "<result>"` separately for that.
 
 ## Missing required arguments
 
@@ -44,5 +53,5 @@ If `request_id` or `response` is missing from `$ARGUMENTS`, use **AskUserQuestio
 ## Errors
 
 - **403** "only the target agent may respond" → this request is addressed to someone else; check `/orcha-inbox` for what's actually yours.
-- **409** "request is '<status>', not 'open'" → already answered or closed.
+- **409** "request is '<status>', not 'open'/'accepted'" → already answered/closed, or a task request you haven't accepted yet (accept it first with `/orcha-accept-task`).
 - **409** "request was escalated to human" → target_id is null; a human must handle it now.

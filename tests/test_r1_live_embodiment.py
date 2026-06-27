@@ -143,7 +143,7 @@ def test_boot_prefix_none_without_api_or_agent():
 
 def test_boot_prefix_composes_persona_digest_then_history(monkeypatch):
     from orcha_cli import notifier
-    monkeypatch.setattr(notifier, "_build_persona", lambda api, aid: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_build_persona", lambda api, aid, **k: "PERSONA+DIGEST")
     # _get_json returns the conversation read; format_conversation_history renders the turns
     monkeypatch.setattr(cli, "_get_json",
                         lambda url, timeout=4.0: {"turns": [{"role": "human", "content": "hi"}]})
@@ -155,7 +155,7 @@ def test_boot_prefix_composes_persona_digest_then_history(monkeypatch):
 
 def test_boot_prefix_survives_history_fetch_failure(monkeypatch):
     from orcha_cli import notifier
-    monkeypatch.setattr(notifier, "_build_persona", lambda api, aid: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_build_persona", lambda api, aid, **k: "PERSONA+DIGEST")
     def _boom(url, timeout=4.0):
         raise RuntimeError("API down")
     monkeypatch.setattr(cli, "_get_json", _boom)

@@ -185,13 +185,15 @@ async def make_task(client, container):
 @pytest_asyncio.fixture
 async def make_request(client, container):
     async def _make(requester_id, payload, *, target_alias=None, type="info", task=None,
-                    priority=100, expires_minutes=60, parent_request_id=None, container_id=None):
+                    priority=100, expires_minutes=60, parent_request_id=None, container_id=None,
+                    originating_task_id=None):
         cid = container_id or container["id"]
         body = {
             "requester_agent_id": requester_id, "payload": payload, "type": type,
             "priority": priority, "expires_minutes": expires_minutes,
             "target_alias": target_alias, "task": task,
             "parent_request_id": parent_request_id,
+            "originating_task_id": originating_task_id,  # GH #56 (Point 3)
         }
         r = await client.post(f"/api/containers/{cid}/requests", json=body)
         assert r.status_code == 201, r.text

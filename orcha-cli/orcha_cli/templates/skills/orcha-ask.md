@@ -1,7 +1,7 @@
 ---
 description: Send a request from the acting agent. Two modes — info (ask a question, default) or task (`--task`, ask for work). Optionally chain it off another open request as a follow-up.
 allowed-tools: Bash, Read, AskUserQuestion
-argument-hint: <target_alias> "<payload>" [--task --task-dod "..." [--task-priority N] [--task-description "..."] [--review-chain "..."] [--handoff-to "..."] [--autonomy "..."] [--notes "..."]] [--priority N] [--expires N] [--in-service-of <parent_rid>] [--alias <name>]
+argument-hint: <target_alias> "<payload>" [--task --task-dod "..." [--task-priority N] [--task-description "..."] [--review-chain "..."] [--handoff-to "..."] [--autonomy "..."] [--notes "..."]] [--on-task <task_id>] [--priority N] [--expires N] [--in-service-of <parent_rid>] [--alias <name>]
 ---
 
 You are executing `/orcha-ask`.
@@ -21,6 +21,7 @@ User arguments: `$ARGUMENTS`
    - Optional `--priority N` (default 100; lower = higher) — the *request*'s priority for the inbox, independent of `--task-priority` which the spawned task inherits.
    - Optional `--expires N` (minutes until the request auto-escalates if unanswered; default 60).
    - Optional `--in-service-of <parent_rid>` (UUID): when set, this request is recorded as a child of `parent_rid`.
+   - **Optional `--on-task <task_id>` (GH #56 — the originating task).** The task **you (the requester)** are working on as you send this ask. When the answer comes back, your wake attaches to THIS task — its thread shows the activity and you wake with that task's protocol loaded (instead of a guess at your "one in_progress task", which is wrong when you have several). **You supply it** — the backend never guesses it. Set it to the id of the task this ask is in service of; **omit it for a conversation / taskless ask** (null is always fine). If `$ORCHA_ALIAS` and a current task are in scope and you know which task you're working on, fill it in. The backend **validates** a supplied id: it must be a real task in this container that you participate in (own / assignee / creator / collaborator), else the request is rejected (400) — so don't paste an id from another project or a stale one.
    - Optional `--alias <name>` (the *requesting* agent — see step 2).
 
 2. **Identify the acting (requesting) agent** (REQUIRED — only registered agents can ask) using this resolution order — STOP at the first match:
@@ -44,6 +45,7 @@ User arguments: `$ARGUMENTS`
      "priority": <N>,
      "expires_minutes": <N>,
      "parent_request_id": "<parent_rid-or-omit>",
+     "originating_task_id": "<--on-task-or-omit>",  // #56: the task YOU are working on; omit for taskless asks
      "type": "info"  // OR "task"
      // when type='task', also:
      "task": {
@@ -64,7 +66,7 @@ User arguments: `$ARGUMENTS`
      -H 'Content-Type: application/json' \
      -d '<body>'
    ```
-   Response: `{"request_id": "...", "type": "info|task", "status": "open", "target_alias": "...", "expires_at": "...", "parent_request_id": "...|null", "chain_depth": N, "task": {...}|null}`
+   Response: `{"request_id": "...", "type": "info|task", "status": "open", "target_alias": "...", "expires_at": "...", "parent_request_id": "...|null", "chain_depth": N, "originating_task_id": "...|null", "task": {...}|null}`
 
 6. **Report** to the user:
    - `request_id` and short summary
@@ -95,3 +97,4 @@ If `target_alias` or `payload` is missing from `$ARGUMENTS`, use **AskUserQuesti
 
 - **404** "no agent aliased '<alias>'" → typo or that agent isn't registered. Surface verbatim.
 - **400** target_agent_id and target_alias both specified → I'm sending too much; pick one.
+- **400** "originating_task_id must be a task in this container that the requester participates in" → the `--on-task` id is stale, foreign, or one you don't work on. Drop it (null is fine) or pass the correct task you're working on.
