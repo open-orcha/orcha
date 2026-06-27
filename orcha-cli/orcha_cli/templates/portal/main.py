@@ -1353,6 +1353,24 @@ def _require_task(cur, tid):
     return row
 
 
+def _agent_participates_in_task(cur, cid, agent_id, tid) -> bool:
+    """GH #56 (Point 3, FLAG 2b): the LOOSER participant check used to validate an
+    agent-supplied originating_task_id. True iff `tid` is a real task in container `cid`
+    that `agent_id` works on — owns/assignee/collaborator (any agent_tasks row) OR is the
+    creator (tasks.created_by_agent_id). Deliberately NOT the strict exact-one-in-progress
+    rule, so a valid tag from an agent juggling several tasks isn't rejected."""
+    cur.execute(
+        """SELECT 1 FROM tasks t
+           WHERE t.id=%s AND t.container_id=%s
+             AND (t.created_by_agent_id=%s
+                  OR EXISTS (SELECT 1 FROM agent_tasks at
+                             WHERE at.task_id=t.id AND at.agent_id=%s))
+           LIMIT 1""",
+        (tid, cid, agent_id, agent_id),
+    )
+    return cur.fetchone() is not None
+
+
 def _resolve_alias(cur, cid, alias):
     cur.execute("SELECT id FROM agents WHERE container_id=%s AND alias=%s", (cid, alias))
     row = cur.fetchone()
@@ -6542,6 +6560,11 @@ class RequestCreate(BaseModel):
     priority: int = 100
     expires_minutes: int = Field(default=60, ge=0, le=10080)             # cap at 7 days
     parent_request_id: Optional[str] = None                              # Orcha#1: chain off another request
+    # GH #56 (Point 3): the task the REQUESTER was working on when it asked. Optional + agent-supplied
+    # (never backend-guessed — a requester can have several tasks in progress). Null for conversation /
+    # taskless asks. When present it is server-validated (must be a real task in this container the
+    # requester participates in) and then rides the answer back so the requester wakes ON that task.
+    originating_task_id: Optional[str] = None
     # Phase 3 (Orcha#5):
     type: str = Field(default="info", pattern="^(info|task)$")
     task: Optional[TaskRequestPayload] = None                            # required when type='task'
@@ -6657,6 +6680,23 @@ def create_request(cid: str, body: RequestCreate):
             parent_request_id = body.parent_request_id
             chain_depth = (parent["chain_depth"] or 0) + 1
 
+        # GH #56 (Point 3, FLAG 2b): validate a SUPPLIED originating_task_id before storing.
+        # Null always passes untouched (conversation / taskless asks). When present it must be a
+        # real task in THIS container that the requester participates in — a typo or an id pasted
+        # from another project would otherwise route the answer's wake to nothing or the wrong
+        # task, silently. Uses the looser participant check (not exact-one-in-progress).
+        originating_task_id: Optional[str] = None
+        if body.originating_task_id is not None:
+            if not _valid_uuid(body.originating_task_id):
+                raise HTTPException(400, "originating_task_id is not a valid UUID")
+            if not _agent_participates_in_task(cur, cid, body.requester_agent_id, body.originating_task_id):
+                raise HTTPException(
+                    400,
+                    "originating_task_id must be a task in this container that the requester "
+                    "participates in (owns/assignee/creator/collaborator)",
+                )
+            originating_task_id = body.originating_task_id
+
         # Phase 3 (Orcha#5): type='task' carries a TaskRequestPayload in body.task
         # which gets stuffed into the JSONB `detail` column. The task itself is
         # only created on /accept-task.
@@ -6682,13 +6722,15 @@ def create_request(cid: str, body: RequestCreate):
         cur.execute(
             """INSERT INTO requests
                  (container_id, type, requester_id, target_id, priority, status,
-                  payload, expires_at, parent_request_id, chain_depth, detail)
+                  payload, expires_at, parent_request_id, chain_depth, detail,
+                  originating_task_id)
                VALUES (%s, %s, %s, %s, %s, 'open', %s,
-                       now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb)
+                       now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s)
                RETURNING id, expires_at""",
             (cid, body.type, body.requester_agent_id, target_id, body.priority,
              body.payload, str(body.expires_minutes), parent_request_id, chain_depth,
-             json.dumps(detail) if detail is not None else None),
+             json.dumps(detail) if detail is not None else None,
+             originating_task_id),
         )
         row = cur.fetchone()
         rid = str(row["id"])
@@ -6713,6 +6755,7 @@ def create_request(cid: str, body: RequestCreate):
         "expires_at": row["expires_at"].isoformat(),
         "parent_request_id": parent_request_id,
         "chain_depth": chain_depth,
+        "originating_task_id": originating_task_id,  # GH #56: task the answer's wake will attach to (or null)
         "task": detail,  # null for info; full task body for type='task'
     }
 
@@ -6727,7 +6770,7 @@ def _require_request(cur, rid, for_update=False):
     cur.execute(
         """SELECT id, container_id, type, status, requester_id, target_id,
                   payload, response, expires_at, parent_request_id, chain_depth,
-                  detail, spawned_task_id, rejection_reason
+                  detail, spawned_task_id, rejection_reason, originating_task_id
            FROM requests WHERE id=%s""" + (" FOR UPDATE" if for_update else ""), (rid,))
     r = cur.fetchone()
     if not r:
@@ -6757,8 +6800,12 @@ def respond_request(rid: str, body: RequestRespond):
         if r["status"] == "answered":
             return {"request_id": rid, "status": "answered", "already_answered": True,
                     "response": r["response"], "unblocks_parent": None}
-        if r["status"] != "open":
-            raise HTTPException(409, f"request is '{r['status']}', not 'open' — cannot respond")
+        # GH #56 (Point 4): `accepted` is now a WAYPOINT, not a dead end. The accepter
+        # (still the target) may post its real result to flip accepted → answered, which
+        # fires the answer notification so the requester wakes on its originating_task_id.
+        # The requester — not the accepter — later flips answered → closed (close_request).
+        if r["status"] not in ("open", "accepted"):
+            raise HTTPException(409, f"request is '{r['status']}', not 'open'/'accepted' — cannot respond")
         cur.execute(
             "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
             (body.response, rid),
@@ -6793,8 +6840,13 @@ def respond_request(rid: str, body: RequestRespond):
                     "parent_status": parent["status"],
                     "parent_payload_preview": (parent["payload"] or "")[:120],
                 }
+        # GH #56 (Point 3 / FLAG 2a): carry originating_task_id on the answer event so the
+        # requester's wake attaches to the task it asked on behalf of (wake-scan reads this →
+        # the run is stamped against that task → activity surfaces on the task thread, and the
+        # protocol loaded is that task's). Null for conversation/taskless asks (unchanged path).
         _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "request_answered",
-                       {"request_id": rid, "preview": body.response[:120]})
+                       {"request_id": rid, "preview": body.response[:120],
+                        "originating_task_id": str(r["originating_task_id"]) if r["originating_task_id"] else None})
         conn.commit()
     return {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
 
@@ -7035,10 +7087,24 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
             raise HTTPException(500, "request detail is malformed; cannot synthesize a task")
         # GH #55: if the request carried a protocol, populate it on the spawned task so the
         # accepter reads its loop rules on the very wake this accept triggers (no follow-up PATCH).
-        protocol_json = None
-        cleaned_proto = _clean_protocol(task.get("protocol"))
-        if cleaned_proto:
-            protocol_json = json.dumps(cleaned_proto)
+        # GH #56 (Point 4.4/4.5): also auto-inject a report-back instruction into protocol.notes —
+        # this is HOW the accepter learns to report back (it's in the protocol it reads every wake).
+        # It spells out what "materially done" means for THIS request (the definition_of_done) and
+        # is explicitly decoupled from /orcha-done (reporting back ≠ sending the task to verification).
+        cleaned_proto = _clean_protocol(task.get("protocol")) or {}
+        dod = (task.get("definition_of_done") or "").strip()
+        report_back = (
+            f"REPORT BACK: when you've materially finished this task — i.e. "
+            f"{dod or 'the requested work is complete'} — post your result to request {rid} "
+            f"(/orcha-respond {rid} \"...\") BEFORE moving on. Reporting back is a separate, "
+            f"agent-judged step: it is NOT /orcha-done (which only sends this task to human "
+            f"verification, and may still be pending after you report back)."
+        )
+        existing_notes = (cleaned_proto.get("notes") or "").strip()
+        merged_notes = (existing_notes + "\n\n" + report_back).strip() if existing_notes else report_back
+        # Cap to the per-field limit so a near-max carried `notes` can't overflow ProtocolFields.
+        cleaned_proto["notes"] = merged_notes[:MAX_PROTOCOL_FIELD_LEN]
+        protocol_json = json.dumps(cleaned_proto)
         # Create the task, assign to the accepter, start it.
         cur.execute(
             """INSERT INTO tasks
@@ -7069,8 +7135,10 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         log_event(cur, r["container_id"], "ai", body.responder_agent_id,
                   "task", tid, "created",
                   {"title": task["title"], "via": "task-request accept"})
-        _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "task_request_accepted",
-                       {"request_id": rid, "task_id": tid, "by_agent_id": body.responder_agent_id})
+        # GH #56 (Point 6): accept must NOT wake the requester — only the real ANSWER (at material
+        # completion) wakes them. The accept stays in the audit feed via log_event above, but we no
+        # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was
+        # classified as a `request_answered` notification — a premature receipt). Accept is silent now.
         conn.commit()
     return {"request_id": rid, "status": "accepted", "spawned_task_id": tid}
 
