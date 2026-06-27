@@ -7188,9 +7188,19 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
             f"verification, and may still be pending after you report back)."
         )
         existing_notes = (cleaned_proto.get("notes") or "").strip()
-        merged_notes = (existing_notes + "\n\n" + report_back).strip() if existing_notes else report_back
-        # Cap to the per-field limit so a near-max carried `notes` can't overflow ProtocolFields.
-        cleaned_proto["notes"] = merged_notes[:MAX_PROTOCOL_FIELD_LEN]
+        # GH #56 (Point 4.4/4.5, review P2): the report-back instruction is the MECHANISM that
+        # tells the accepter to answer the request, so it must survive the per-field cap intact.
+        # Prepend it and trim only the OLDER carried notes — never tail-truncate, or a near-max
+        # carried `notes` would silently drop the whole REPORT BACK line and the answer waypoint
+        # would be lost. report_back is well under the cap, but clamp defensively regardless.
+        report_back = report_back[:MAX_PROTOCOL_FIELD_LEN]
+        if existing_notes:
+            sep = "\n\n"
+            room = MAX_PROTOCOL_FIELD_LEN - len(report_back) - len(sep)
+            merged_notes = report_back + sep + existing_notes[:room] if room > 0 else report_back
+        else:
+            merged_notes = report_back
+        cleaned_proto["notes"] = merged_notes
         protocol_json = json.dumps(cleaned_proto)
         # Create the task, assign to the accepter, start it.
         cur.execute(
@@ -7227,7 +7237,14 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was
         # classified as a `request_answered` notification — a premature receipt). Accept is silent now.
         conn.commit()
-    return {"request_id": rid, "status": "accepted", "spawned_task_id": tid}
+    # GH #56 (review P1): the same worker session that accepts a task-request keeps working it
+    # WITHOUT reloading the spawned task's protocol, so the report-back note buried in
+    # protocol.notes is invisible on this wake — the primary accepted->answered path gets skipped
+    # and the Point 5 backstop becomes the normal route. Echo the instruction in the accept
+    # RESPONSE so /orcha-accept-task can surface it immediately, in the same session, before the
+    # agent starts the work.
+    return {"request_id": rid, "status": "accepted", "spawned_task_id": tid,
+            "report_back": report_back, "report_back_request_id": rid}
 
 
 @app.post("/api/requests/{rid}/reject-task", status_code=200)

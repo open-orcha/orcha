@@ -26,12 +26,13 @@ User arguments: `$ARGUMENTS`
      -H 'Content-Type: application/json' \
      -d '{"responder_agent_id": "<my agent_id>", "note": "<optional>"}'
    ```
-   Response: `{"request_id": "...", "status": "accepted", "spawned_task_id": "<new task_id>"}`
+   Response: `{"request_id": "...", "status": "accepted", "spawned_task_id": "<new task_id>", "report_back": "REPORT BACK: ...", "report_back_request_id": "<rid>"}`
 
-5. **Report**:
+5. **Report** — and surface the report-back rule NOW, in this same session:
    - "✓ accepted request <short-rid>. Task <short-tid> created, assigned to me, status in_progress."
    - The task carries forward the title/dod/priority from the request's task spec.
-   - Begin work. When done: `/orcha-done <spawned_task_id> "<result>" --alias <alias>`.
+   - **Read the `report_back` field from the response and treat it as a standing instruction for this work** — it is also stored in the spawned task's protocol notes, but you will NOT see it there unless you reload the task protocol, so honor it from here. It tells you: when you've MATERIALLY finished the work, post your real result to the request with `/orcha-respond <report_back_request_id> "<your result>" --alias <alias>` so the requester wakes. That report-back is a distinct step from `/orcha-done` (which only sends the task to human verification).
+   - Begin work. When materially done: `/orcha-respond <report_back_request_id> "<result>" --alias <alias>` to answer the request, AND `/orcha-done <spawned_task_id> "<result>" --alias <alias>` to send the task to verification.
 
 ## Errors
 

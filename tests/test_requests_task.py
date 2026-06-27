@@ -28,8 +28,9 @@ async def test_accept_task_carries_protocol_into_spawned_task(client, make_agent
     the loop rules on the very wake this accept triggers, with NO follow-up PATCH.
 
     GH #56 (Point 4.4): the carried fields ride verbatim, EXCEPT `notes`, onto which accept now
-    APPENDS a report-back instruction (so the accepter learns to report back from the protocol it
-    reads every wake). The original notes are preserved as the prefix."""
+    PREPENDS a report-back instruction (so the accepter learns to report back from the protocol it
+    reads every wake). Report-back leads; the carried notes follow — review P2: prepending keeps
+    the report-back line from being tail-truncated away when carried notes are near the field cap."""
     a = await make_agent("a", "eng")
     b = await make_agent("b", "eng")
     task = _task_payload()
@@ -47,9 +48,9 @@ async def test_accept_task_carries_protocol_into_spawned_task(client, make_agent
     assert proto["review_chain"] == "b -> a -> human"
     assert proto["handoff_to"] == "a"
     assert proto["autonomy"] == "ship small fixes"
-    # GH #56 Point 4.4: original notes preserved as prefix, report-back appended.
-    assert proto["notes"].startswith("loop until clean")
-    assert "REPORT BACK" in proto["notes"]
+    # GH #56 Point 4.4 (review P2): report-back leads, carried notes preserved as the suffix.
+    assert proto["notes"].startswith("REPORT BACK")
+    assert proto["notes"].rstrip().endswith("loop until clean")
     assert req["request_id"] in proto["notes"]
 
 
@@ -72,6 +73,47 @@ async def test_accept_task_without_protocol_injects_report_back(client, make_age
     assert "orcha-done" in proto["notes"].lower()  # explicitly decoupled from /orcha-done
     # only notes is populated — the other SPEC-4 fields stay unset
     assert not proto.get("review_chain") and not proto.get("handoff_to")
+
+
+async def test_accept_task_response_echoes_report_back(client, make_agent, make_request, db):
+    """GH #56 review P1: the SAME worker session that accepts a task-request keeps working it
+    without reloading the spawned task's protocol, so the report-back note in protocol.notes is
+    invisible on that wake. The accept RESPONSE must echo the report-back instruction (and the
+    request id to post it back to) so /orcha-accept-task can surface it in-session."""
+    a = await make_agent("a", "eng")
+    b = await make_agent("b", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="b",
+                             type="task", task=_task_payload())
+    r = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                          json={"responder_agent_id": b["agent_id"], "note": "on it"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "REPORT BACK" in body["report_back"]
+    assert req["request_id"] in body["report_back"]
+    assert body["report_back_request_id"] == req["request_id"]
+
+
+async def test_accept_task_report_back_survives_max_length_notes(client, make_agent, make_request, db):
+    """GH #56 review P2: a carried `notes` near the 4 KB per-field cap must NOT tail-truncate the
+    report-back instruction away — it's the mechanism that tells the accepter to answer the request.
+    With max-length notes, the spawned protocol must still LEAD with REPORT BACK and stay within the
+    field cap, keeping (a prefix of) the carried notes after it."""
+    from orcha_cli.templates.portal.main import MAX_PROTOCOL_FIELD_LEN
+    a = await make_agent("a", "eng")
+    b = await make_agent("b", "eng")
+    task = _task_payload()
+    huge = "X" * MAX_PROTOCOL_FIELD_LEN  # exactly fills the field on its own
+    task["protocol"] = {"notes": huge}
+    req = await make_request(a["agent_id"], "build X", target_alias="b",
+                             type="task", task=task)
+    r = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                          json={"responder_agent_id": b["agent_id"], "note": "on it"})
+    assert r.status_code == 200, r.text
+    rows = db.execute("SELECT protocol FROM tasks WHERE id=%s", (r.json()["spawned_task_id"],))
+    notes = rows[0]["protocol"]["notes"]
+    assert notes.startswith("REPORT BACK")            # never dropped
+    assert req["request_id"] in notes                 # the post-back target survives intact
+    assert len(notes) <= MAX_PROTOCOL_FIELD_LEN       # still within the cap
 
 
 async def test_accept_task_idempotent_no_duplicate_task(client, make_agent, make_request, db):
