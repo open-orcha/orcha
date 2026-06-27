@@ -45,7 +45,7 @@ APP_TABLES = [
     "agent_wake_state", "agent_reachability", "agent_memory_digests",
     "agent_notification_state",
     "decisions", "agent_events", "events", "task_messages", "agent_tasks",
-    "task_dependencies", "requests", "tasks", "agents", "containers",
+    "task_dependencies", "requests", "tasks", "container_provider_keys", "agents", "containers",
 ]
 
 

@@ -91,7 +91,7 @@
 
         <div class="set-intro">
           <h1>Settings</h1>
-          <p>Workspace-level configuration. The Anthropic API key below powers Orcha's
+          <p>Workspace-level configuration. The provider API keys below power Orcha's
              universal LLM client (#290) — the direct-API calls behind guided onboarding and
              wake triage — separate from each agent's own embodiment model.</p>
         </div>
@@ -103,6 +103,16 @@
               client. The <code>ORCHA_LLM_API_KEY</code> environment variable takes
               precedence — a key set here is used only when no env key is present.</div>
             <div id="keyCard"></div>
+          </div>
+        </div>
+
+        <div class="card set-card">
+          <div class="card-h"><h2>xAI / Grok API key</h2></div>
+          <div class="card-b">
+            <div class="lead">Stored encrypted on this workspace and used when a use-case below is
+              set to xAI (Grok) — wake triage, onboarding proposal, image-to-text, digest curation.
+              As above, <code>ORCHA_LLM_API_KEY</code> takes precedence when present.</div>
+            <div id="providerKeys"></div>
           </div>
         </div>
 

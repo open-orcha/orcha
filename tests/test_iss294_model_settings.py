@@ -29,10 +29,12 @@ def test_provider_catalog_shape():
     cat = llm_util.provider_catalog()
     by_id = {p["id"]: p for p in cat}
     assert by_id["anthropic"]["available"] is True
+    assert by_id["xai"]["available"] is True  # Grok is a live universal-client provider
     assert by_id["openai"]["available"] is False and by_id["gemini"]["available"] is False
-    # Anthropic lists the live Claude family; stubbed providers list no models.
+    # Anthropic lists the live Claude family; xAI lists the Grok family; stubs list no models.
     anth_models = {m["id"] for m in by_id["anthropic"]["models"]}
     assert {llm_util.MODEL_HAIKU, llm_util.MODEL_SONNET, llm_util.MODEL_OPUS} <= anth_models
+    assert llm_util.MODEL_GROK_4_3 in {m["id"] for m in by_id["xai"]["models"]}
     assert by_id["openai"]["models"] == []
 
 
@@ -46,6 +48,7 @@ def test_provider_catalog_is_a_copy():
 def test_is_catalog_choice():
     assert llm_util.is_catalog_choice("anthropic", llm_util.MODEL_HAIKU) is True
     assert llm_util.is_catalog_choice("anthropic", "claude-made-up-99") is False  # bogus model
+    assert llm_util.is_catalog_choice("xai", llm_util.MODEL_GROK_4_3) is True        # live Grok model
     assert llm_util.is_catalog_choice("openai", "gpt-x") is False                 # stubbed provider
     assert llm_util.is_catalog_choice("nope", llm_util.MODEL_HAIKU) is False      # unknown provider
 
@@ -75,7 +78,7 @@ async def test_get_providers(client, container):
     r = await client.get(f"/api/containers/{container['id']}/settings/providers")
     assert r.status_code == 200, r.text
     ids = {p["id"] for p in r.json()["providers"]}
-    assert {"anthropic", "openai", "gemini"} == ids
+    assert {"anthropic", "xai", "openai", "gemini"} == ids
 
 
 @pytest.mark.asyncio
@@ -253,7 +256,7 @@ def test_triage_wake_forwards_config(monkeypatch):
     """_triage_wake must thread `config` into llm_util.triage_wake so the configured model is used."""
     captured = {}
 
-    def _fake_triage(event_text, *, config=None):
+    def _fake_triage(event_text, *, config=None, api_key=None):
         captured["config"] = config
         return {"wake": True, "reason": "stub"}
 
@@ -284,7 +287,7 @@ def test_tick_binds_scan_triage_model_into_suppression_triage(monkeypatch):
     binding intact -> the scan override is threaded through -> GREEN."""
     captured = {}
 
-    def _fake_triage(event_text, *, config=None):
+    def _fake_triage(event_text, *, config=None, api_key=None):
         captured["config"] = config
         return {"wake": False, "reason": "pure ack"}   # suppress -> no spawn, stays off the network
 
