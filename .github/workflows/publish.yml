@@ -25,7 +25,7 @@ jobs:
     # actions/setup-python). tomllib needs 3.11+ — this venv provides it.
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Preflight — release prerequisites present
         if: github.event_name == 'push'
