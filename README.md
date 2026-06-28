@@ -543,6 +543,12 @@ and DB in one shot. Downgrade via the frozen per-release formulae
 (`brew install open-orcha/orcha/orcha@<version>`); details in the
 [tap README](https://github.com/open-orcha/homebrew-orcha).
 
+Uninstall cleanly with **`orcha uninstall`** — it stops this workspace's
+notifier daemon and live-terminal bridge, then `brew uninstall`s the CLI (add
+`--untap` to also drop the tap). It leaves your project data and Docker stack
+untouched; to remove those, run `orcha down` (or `orcha down -v` to also wipe
+the database volume) separately.
+
 Hacking on Orcha itself (editable install from a clone)? See
 [CONTRIBUTING.md](./CONTRIBUTING.md).
 
