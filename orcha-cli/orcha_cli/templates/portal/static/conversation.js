@@ -122,7 +122,7 @@ window.OrchaConvo = (function () {
             <div class="cr">${O().esc(a.role || "")}</div></div></div>
           <span class="presence" id="convPresence"></span>
           <button class="btn sm ghost" id="convPair" title="Pair in a live terminal as ${O().esc(a.alias)}">${O().icon("play", "")}<span>Pair in terminal</span></button>
-          <button class="btn sm ghost conv-max" id="convMax" title="Maximize conversation">${O().icon("maximize", "")}</button>
+          <button class="btn sm ghost conv-max" id="convMax" title="Maximize conversation" aria-label="Maximize conversation">${O().icon("maximize", "")}</button>
         </div>
         <div class="conv-list" id="convList"><div class="none" style="padding:18px">Loading conversation…</div></div>
         <div class="conv-lock" id="convLock" hidden>${O().icon("shield", "")}<span></span></div>

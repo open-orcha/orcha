@@ -37,5 +37,4 @@ User arguments: `$ARGUMENTS`
 
 ## Errors
 
-- **429** "turn budget exhausted" → this agent has hit its `turn_budget`. Tell the user; a human must reset via the DB or recreate the agent.
 - **404** "agent not found" → binding file references a stale agent_id (DB reset?). Tell the user to re-register.
