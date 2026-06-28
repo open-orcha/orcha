@@ -56,6 +56,17 @@ jobs:
         run: |
           pytest --cov=main --cov-report=term-missing --cov-fail-under=70
 
+      - name: Run portal JS tests (dependency-free, node only)
+        run: |
+          # The portal front-end tests load the real app.js in a vm sandbox — no npm.
+          # Run every tests/portal/*.test.js and fail the job if any one fails.
+          fail=0
+          for f in tests/portal/*.test.js; do
+            echo "=== $f ==="
+            node "$f" || fail=1
+          done
+          exit $fail
+
       - name: Coverage summary (PR)
         if: always()
         run: |

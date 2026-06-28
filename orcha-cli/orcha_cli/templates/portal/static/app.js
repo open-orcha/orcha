@@ -903,11 +903,18 @@ window.Orcha = (function () {
     float.className = "ncenter float";
     document.body.appendChild(float);
     // Outside-click closes (mirrors the modal dismiss). Guard on the pill so the toggle
-    // click that opened it doesn't immediately re-close it.
+    // click that opened it doesn't immediately re-close it. #31: also guard on the pointer-down
+    // target so a text-selection drag that STARTS inside the panel and releases outside doesn't
+    // close it — only an outside-click whose gesture also BEGAN outside dismisses.
+    let downOutside = false;
+    const _outside = (node) => {
+      const pill = document.getElementById("attnPill");
+      return !(float.contains(node) || (pill && pill.contains(node)));
+    };
+    document.addEventListener("pointerdown", (e) => { downOutside = _outside(e.target); });
     document.addEventListener("click", (e) => {
       if (!_ncOpen) return;
-      const pill = document.getElementById("attnPill");
-      if (float.contains(e.target) || (pill && pill.contains(e.target))) return;
+      if (!_outside(e.target) || !downOutside) return;
       ncClose();
     });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") ncClose(); });
@@ -954,7 +961,13 @@ window.Orcha = (function () {
       ov = document.createElement("div");
       ov.id = "__ov"; ov.className = "overlay";
       document.body.appendChild(ov);
-      ov.addEventListener("click", (e) => { if (e.target === ov) closeModal(); });
+      // #31: dismiss-on-outside-click must ignore a text-selection drag that STARTS inside the
+      // modal and releases on the backdrop (mouseup lands on ov, firing a click with target===ov).
+      // Only dismiss when the gesture both BEGAN and ENDED on the overlay itself — track the
+      // pointer-down target and require it (and the click target) to be ov.
+      let downOnOverlay = false;
+      ov.addEventListener("pointerdown", (e) => { downOnOverlay = (e.target === ov); });
+      ov.addEventListener("click", (e) => { if (downOnOverlay && e.target === ov) closeModal(); });
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
     }
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
