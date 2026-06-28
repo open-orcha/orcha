@@ -1,5 +1,5 @@
 ---
-description: Answer an info request addressed to the acting agent. Flips the request from 'open' to 'answered'.
+description: Answer a request addressed to the acting agent with your real result. Works for an info request (open → answered) and for a task request you accepted once the work is materially done (accepted → answered).
 allowed-tools: Bash, Read, AskUserQuestion
 argument-hint: <request_id> "<answer text>" [--alias <name>]
 ---
@@ -7,6 +7,15 @@ argument-hint: <request_id> "<answer text>" [--alias <name>]
 You are executing `/orcha-respond`.
 
 User arguments: `$ARGUMENTS`
+
+## What this is for
+
+This is how you give the requester the ANSWER they're waiting on — for an info request (`open`),
+or for a task request you accepted (`accepted`) once the work is materially complete. Answering is
+the event that WAKES the requester, so the `response` must carry your actual result: what you found,
+decided, built, or where it landed. Do NOT send a content-free receipt ("done", "ack", "accepted",
+"on it") — that wakes the requester with nothing to act on. If the work isn't materially finished
+yet, don't respond; keep working and answer once you have a real result.
 
 ## Steps
 
@@ -43,12 +52,14 @@ User arguments: `$ARGUMENTS`
    returns **200** with `"already_answered": true` and echoes the existing `response` —
    it does NOT re-answer or 409. So **inspect the body before reporting**: if
    `already_answered` is true, treat it as done-by-someone-already and report it as a no-op
-   (step 5, second form) rather than claiming you just answered. Only `closed`/`accepted`
-   requests 409 (a genuine illegal transition).
+   (step 5, second form) rather than claiming you just answered. Only a `closed` (or otherwise
+   terminal, non-`accepted`) request 409s — a genuine illegal transition.
 
 5. **Report**:
-   - Fresh answer (`already_answered` absent/false): `request <short-id> answered. Requester sees the answer; they will /orcha-close <rid> --alias <their_alias> or /orcha-escalate.`
+   - Fresh answer (`already_answered` absent/false): `request <short-id> answered. Requester wakes on your result; they will /orcha-close <rid> --alias <their_alias> or /orcha-escalate.`
    - Already answered (`already_answered` true): `request <short-id> was already answered (no-op); existing answer left in place.` — do not re-post or duplicate.
+
+   If this was a task request you accepted, answering does NOT send the spawned task to verification — run `/orcha-done <spawned_task_id> "<result>"` separately for that.
 
 ## Missing required arguments
 
@@ -58,5 +69,5 @@ If `request_id` or `response` is missing from `$ARGUMENTS`, use **AskUserQuestio
 
 - **403** "only the target agent may respond" → this request is addressed to someone else; check `/orcha-inbox` for what's actually yours.
 - **200** `"already_answered": true` → NOT an error; the request was already answered (idempotent no-op). See step 4 — report it as a no-op, don't retry.
-- **409** "request is '<status>', not 'open' — cannot respond" → the request is `closed` or `accepted` (a terminal state); it can't be answered. (An already-`answered` request does NOT 409 — it returns 200 per above.)
+- **409** "request is '<status>', not 'open'/'accepted' — cannot respond" → the request is `closed` (or otherwise terminal); it can't be answered. An already-`answered` request does NOT 409 (it returns 200, above), and an `accepted` task request you took on IS respondable (`accepted` is a waypoint — flip it to `answered` with your result; if you haven't accepted it yet, run `/orcha-accept-task` first).
 - **409** "request was escalated to human" → target_id is null; a human must handle it now.

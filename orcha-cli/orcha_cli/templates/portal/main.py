@@ -1353,6 +1353,24 @@ def _require_task(cur, tid):
     return row
 
 
+def _agent_participates_in_task(cur, cid, agent_id, tid) -> bool:
+    """GH #56 (Point 3, FLAG 2b): the LOOSER participant check used to validate an
+    agent-supplied originating_task_id. True iff `tid` is a real task in container `cid`
+    that `agent_id` works on — owns/assignee/collaborator (any agent_tasks row) OR is the
+    creator (tasks.created_by_agent_id). Deliberately NOT the strict exact-one-in-progress
+    rule, so a valid tag from an agent juggling several tasks isn't rejected."""
+    cur.execute(
+        """SELECT 1 FROM tasks t
+           WHERE t.id=%s AND t.container_id=%s
+             AND (t.created_by_agent_id=%s
+                  OR EXISTS (SELECT 1 FROM agent_tasks at
+                             WHERE at.task_id=t.id AND at.agent_id=%s))
+           LIMIT 1""",
+        (tid, cid, agent_id, agent_id),
+    )
+    return cur.fetchone() is not None
+
+
 def _resolve_alias(cur, cid, alias):
     cur.execute("SELECT id FROM agents WHERE container_id=%s AND alias=%s", (cid, alias))
     row = cur.fetchone()
@@ -1733,6 +1751,22 @@ def _clean_protocol(raw: Any) -> Optional[dict]:
     cleaned = ProtocolFields(**{k: raw.get(k) for k in ("review_chain", "handoff_to", "autonomy", "notes")})
     data = cleaned.model_dump(exclude_none=True)
     return data or None
+
+
+def _build_report_back(rid: str, dod: str) -> str:
+    """GH #56 (Point 4.4/4.5): the report-back instruction for a request-born task. It is
+    injected into the spawned task's protocol.notes AND echoed in the accept response so the
+    same worker session sees it immediately. Derived purely from (rid, dod) so the fresh
+    accept and the idempotent retry (first response lost) return the IDENTICAL instruction —
+    a retry must never fall back to the old, instruction-less response shape (review P-retry)."""
+    text = (
+        f"REPORT BACK: when you've materially finished this task — i.e. "
+        f"{dod.strip() or 'the requested work is complete'} — post your result to request {rid} "
+        f"(/orcha-respond {rid} \"...\") BEFORE moving on. Reporting back is a separate, "
+        f"agent-judged step: it is NOT /orcha-done (which only sends this task to human "
+        f"verification, and may still be pending after you report back)."
+    )
+    return text[:MAX_PROTOCOL_FIELD_LEN]
 
 
 def _normalize_roster_payload(raw: Any) -> dict:
@@ -4343,7 +4377,7 @@ def get_persona(aid: str):
 
 
 @app.get("/api/agents/{aid}/protocol")
-def get_agent_protocol(aid: str):
+def get_agent_protocol(aid: str, task_id: Optional[str] = None):
     """#326 (A1): the RULES the waking agent must read FRESH every wake — the protocol of its
     currently in_progress task (SPEC-4 per-task working agreement: review_chain / handoff_to /
     autonomy / notes), human-authored and human-edit-only (PATCH /api/tasks/{tid}/protocol).
@@ -4353,24 +4387,41 @@ def get_agent_protocol(aid: str):
     knew), this is read ahead of / independent of the digest so a human edit takes effect on the
     very next wake. The notifier (format_persona) injects it above the digest on every wake.
 
-    Returns {task_id, title, protocol} for the one in_progress task assigned to this agent
-    (one-task-in-progress is enforced elsewhere), or {protocol: null} when none — so a cold/idle
-    wake simply carries no protocol section."""
+    GH #56 (Point 3, FLAG 2a part d): an explicit `task_id` hint — the originating_task_id the
+    wake is consuming an answer ON BEHALF OF (notifier reads it off the request_answered event and
+    threads it through) — keys the protocol load off the STORED LINK instead of the fragile "one
+    in_progress task" guess. That guess serves the WRONG protocol to an agent juggling several
+    in-progress tasks; the link removes that risk. The hint is honored only when the agent actually
+    participates in that task (looser participant check), so a stale/foreign id can never leak a
+    protocol; otherwise we fall back to the in_progress guess.
+
+    Returns {task_id, title, protocol} for the resolved task, or {protocol: null} when none — so a
+    cold/idle wake simply carries no protocol section."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        _require_agent(cur, aid)
-        cur.execute(
-            """SELECT t.id, t.title, t.protocol
-               FROM tasks t
-               JOIN agent_tasks at ON at.task_id = t.id
-               WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
-                 AND t.status='in_progress' AND t.is_root = false
-               ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
-               LIMIT 1""",
-            (aid,),
-        )
-        row = cur.fetchone()
+        agent = _require_agent(cur, aid)
+        row = None
+        # GH #56: prefer the explicit originating-task link when supplied AND the agent participates
+        # in it (so a wrong/foreign id can never serve someone else's protocol). Falls through to the
+        # in_progress guess on a null/invalid/non-participating hint.
+        if task_id and _valid_uuid(task_id) and _agent_participates_in_task(
+                cur, str(agent["container_id"]), aid, task_id):
+            cur.execute(
+                "SELECT id, title, protocol FROM tasks WHERE id=%s AND is_root=false", (task_id,))
+            row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                """SELECT t.id, t.title, t.protocol
+                   FROM tasks t
+                   JOIN agent_tasks at ON at.task_id = t.id
+                   WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+                     AND t.status='in_progress' AND t.is_root = false
+                   ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
+                   LIMIT 1""",
+                (aid,),
+            )
+            row = cur.fetchone()
     if not row or not row["protocol"]:
         return {"task_id": str(row["id"]) if row else None, "protocol": None}
     return {"task_id": str(row["id"]), "title": row["title"], "protocol": row["protocol"]}
@@ -4562,6 +4613,29 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                     cur, aid, a["delivered_ts"], max_ts)
                 notifications, notifications_truncated = _wake_notification_manifest(
                     cur, aid, a["delivered_ts"])
+                # GH #56 (Point 3 / FLAG 2a part b): if no directed-message task claimed the wake,
+                # attach it to the originating task of the newest pending answer. A `request_answered`
+                # event (the requester's own ask coming back) carries `originating_task_id` — the task
+                # the requester was working on when it asked (respond_request / the Point 5 backstop
+                # both stamp it). Surfacing it as wake_task_id makes run-attribution stamp the run
+                # against THAT task (activity shows on its thread) and lets the protocol load key off
+                # the link. Null/taskless asks (originating_task_id absent) leave wake_task_id None —
+                # unchanged behaviour. Only set when the linked task is still live (not deleted).
+                if wake_task_id is None:
+                    cur.execute(
+                        """SELECT payload FROM agent_events
+                           WHERE event_key=%s AND ts > %s AND event_name='request_answered'
+                             AND payload->>'originating_task_id' IS NOT NULL
+                           ORDER BY ts DESC, id DESC LIMIT 1""",
+                        (aid, a["delivered_ts"]),
+                    )
+                    _ans = cur.fetchone()
+                    if _ans:
+                        _otid = (_ans["payload"] or {}).get("originating_task_id")
+                        if _otid:
+                            cur.execute("SELECT 1 FROM tasks WHERE id=%s", (_otid,))
+                            if cur.fetchone():
+                                wake_task_id = _otid
             else:
                 prompt_messages, wake_task_id, ack_through_ts = [], None, max_ts
                 notifications, notifications_truncated = [], False
@@ -5858,6 +5932,43 @@ def serve_conversation_attachment(conv_id: str, stored_name: str):
         headers={"Content-Disposition": disposition, "X-Content-Type-Options": "nosniff"})
 
 
+def _backstop_stranded_request(cur, container_id, tid):
+    """GH #56 (Point 5): the safety net that keeps a request loop from silently stranding. The
+    PRIMARY close-the-loop path is the accepter reporting back by hand (the auto-injected Point 4.4
+    report-back note tells it to). This net only catches the case where the accepter's spawned task
+    reaches a terminal state (needs_verification / completed) while its originating request is STILL
+    'accepted' — i.e. the agent finished but never reported back. We auto-answer the request so the
+    requester wakes on its originating_task_id and reads the result anyway.
+
+    DESIGN INTENT (kedar): this should RARELY fire. We log_event an `auto_answered` audit row each
+    time it does, with backstop=true on the wake event, so a leaking primary path is observable
+    (count the backstop fires vs total answers). A reviewer can grep for it.
+
+    Returns the list of request ids it auto-answered (usually empty)."""
+    cur.execute(
+        """SELECT id, requester_id, originating_task_id, type FROM requests
+           WHERE spawned_task_id=%s AND status='accepted' FOR UPDATE""", (tid,))
+    stranded = cur.fetchall()
+    fired = []
+    for req in stranded:
+        rid = str(req["id"])
+        note = (f"[auto-answered by the #56 backstop] the accepter's task {tid} reached a terminal "
+                f"state without an explicit report-back. See that task for the result/output.")
+        cur.execute(
+            "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
+            (note, rid))
+        _publish_event(cur, str(container_id), str(req["requester_id"]), "request_answered",
+                       {"request_id": rid, "preview": note[:120],
+                        "originating_task_id": (str(req["originating_task_id"])
+                                                if req["originating_task_id"] else None),
+                        "backstop": True})
+        log_event(cur, container_id, "system", None, "request", rid, "auto_answered",
+                  {"reason": "backstop: accepter task reached terminal state while request "
+                             "still 'accepted' (no report-back)", "task_id": str(tid)})
+        fired.append(rid)
+    return fired
+
+
 def _complete_and_unblock(cur, container_id, tid):
     """#298: the SHARED completion mechanics used by BOTH the human /verify (approve branch) and
     the full-autonomy /done path. Extracted so the two cannot drift — a single edit here changes
@@ -5867,6 +5978,11 @@ def _complete_and_unblock(cur, container_id, tid):
     root. It does NOT emit the verified / task_verified audit + wake events — each caller owns its
     own audit trail (a human verification vs an engine auto-completion are different events).
     Returns the list of newly-unblocked downstream task ids."""
+    # GH #56 (Point 5): if THIS task was the accepter's spawned task and its originating request is
+    # still 'accepted' (forgot to report back), auto-answer it now so the loop never strands. Covers
+    # both completion routes that funnel through here (full-autonomy /done and the human /verify
+    # approve branch). Usually a no-op (the request was already answered by the report-back).
+    _backstop_stranded_request(cur, container_id, tid)
     cur.execute(
         "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,))
     # unblock downstream tasks whose deps are now all completed
@@ -5978,6 +6094,11 @@ def mark_done(tid: str, body: TaskDone):
             "UPDATE tasks SET status='needs_verification', result=%s::jsonb WHERE id=%s",
             (result_json, tid),
         )
+        # GH #56 (Point 5): plan/pr autonomy parks the task at needs_verification (the full branch
+        # above auto-completes via _complete_and_unblock, which runs the same backstop). If this is
+        # an accepter's spawned task and its originating request is still 'accepted', auto-answer it
+        # so the requester's loop closes even when the accepter forgot the report-back.
+        _backstop_stranded_request(cur, t["container_id"], tid)
         bump_agent(cur, body.agent_id)
         recompute_agent_status(cur, body.agent_id)
         log_event(cur, t["container_id"], "ai", body.agent_id, "task", tid,
@@ -6528,6 +6649,10 @@ class TaskRequestPayload(BaseModel):
     description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
     definition_of_done: str = Field(..., max_length=MAX_DOD_LEN)
     priority: int = 100
+    # GH #55: a task request may carry the per-task protocol (loop rules). It rides in the
+    # request's `detail` JSONB (no schema change) and is read into the spawned task's protocol
+    # on /accept-task — so a request-born task gets its loop rules without a follow-up PATCH.
+    protocol: Optional[ProtocolFields] = None
 
 
 class RequestCreate(BaseModel):
@@ -6538,6 +6663,11 @@ class RequestCreate(BaseModel):
     priority: int = 100
     expires_minutes: int = Field(default=60, ge=0, le=10080)             # cap at 7 days
     parent_request_id: Optional[str] = None                              # Orcha#1: chain off another request
+    # GH #56 (Point 3): the task the REQUESTER was working on when it asked. Optional + agent-supplied
+    # (never backend-guessed — a requester can have several tasks in progress). Null for conversation /
+    # taskless asks. When present it is server-validated (must be a real task in this container the
+    # requester participates in) and then rides the answer back so the requester wakes ON that task.
+    originating_task_id: Optional[str] = None
     # Phase 3 (Orcha#5):
     type: str = Field(default="info", pattern="^(info|task)$")
     task: Optional[TaskRequestPayload] = None                            # required when type='task'
@@ -6653,6 +6783,23 @@ def create_request(cid: str, body: RequestCreate):
             parent_request_id = body.parent_request_id
             chain_depth = (parent["chain_depth"] or 0) + 1
 
+        # GH #56 (Point 3, FLAG 2b): validate a SUPPLIED originating_task_id before storing.
+        # Null always passes untouched (conversation / taskless asks). When present it must be a
+        # real task in THIS container that the requester participates in — a typo or an id pasted
+        # from another project would otherwise route the answer's wake to nothing or the wrong
+        # task, silently. Uses the looser participant check (not exact-one-in-progress).
+        originating_task_id: Optional[str] = None
+        if body.originating_task_id is not None:
+            if not _valid_uuid(body.originating_task_id):
+                raise HTTPException(400, "originating_task_id is not a valid UUID")
+            if not _agent_participates_in_task(cur, cid, body.requester_agent_id, body.originating_task_id):
+                raise HTTPException(
+                    400,
+                    "originating_task_id must be a task in this container that the requester "
+                    "participates in (owns/assignee/creator/collaborator)",
+                )
+            originating_task_id = body.originating_task_id
+
         # Phase 3 (Orcha#5): type='task' carries a TaskRequestPayload in body.task
         # which gets stuffed into the JSONB `detail` column. The task itself is
         # only created on /accept-task.
@@ -6666,19 +6813,27 @@ def create_request(cid: str, body: RequestCreate):
                 "definition_of_done": body.task.definition_of_done,
                 "priority": body.task.priority,
             }
+            # GH #55: carry the optional protocol through the request so the spawned task
+            # inherits its loop rules on accept (only the keys actually set are stored).
+            if body.task.protocol is not None:
+                proto_fields = body.task.protocol.model_dump(exclude_none=True)
+                if proto_fields:
+                    detail["protocol"] = proto_fields
         elif body.task is not None:
             raise HTTPException(400, "`task` field is only valid with type='task'")
 
         cur.execute(
             """INSERT INTO requests
                  (container_id, type, requester_id, target_id, priority, status,
-                  payload, expires_at, parent_request_id, chain_depth, detail)
+                  payload, expires_at, parent_request_id, chain_depth, detail,
+                  originating_task_id)
                VALUES (%s, %s, %s, %s, %s, 'open', %s,
-                       now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb)
+                       now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s)
                RETURNING id, expires_at""",
             (cid, body.type, body.requester_agent_id, target_id, body.priority,
              body.payload, str(body.expires_minutes), parent_request_id, chain_depth,
-             json.dumps(detail) if detail is not None else None),
+             json.dumps(detail) if detail is not None else None,
+             originating_task_id),
         )
         row = cur.fetchone()
         rid = str(row["id"])
@@ -6703,6 +6858,7 @@ def create_request(cid: str, body: RequestCreate):
         "expires_at": row["expires_at"].isoformat(),
         "parent_request_id": parent_request_id,
         "chain_depth": chain_depth,
+        "originating_task_id": originating_task_id,  # GH #56: task the answer's wake will attach to (or null)
         "task": detail,  # null for info; full task body for type='task'
     }
 
@@ -6717,7 +6873,7 @@ def _require_request(cur, rid, for_update=False):
     cur.execute(
         """SELECT id, container_id, type, status, requester_id, target_id,
                   payload, response, expires_at, parent_request_id, chain_depth,
-                  detail, spawned_task_id, rejection_reason
+                  detail, spawned_task_id, rejection_reason, originating_task_id
            FROM requests WHERE id=%s""" + (" FOR UPDATE" if for_update else ""), (rid,))
     r = cur.fetchone()
     if not r:
@@ -6747,8 +6903,12 @@ def respond_request(rid: str, body: RequestRespond):
         if r["status"] == "answered":
             return {"request_id": rid, "status": "answered", "already_answered": True,
                     "response": r["response"], "unblocks_parent": None}
-        if r["status"] != "open":
-            raise HTTPException(409, f"request is '{r['status']}', not 'open' — cannot respond")
+        # GH #56 (Point 4): `accepted` is now a WAYPOINT, not a dead end. The accepter
+        # (still the target) may post its real result to flip accepted → answered, which
+        # fires the answer notification so the requester wakes on its originating_task_id.
+        # The requester — not the accepter — later flips answered → closed (close_request).
+        if r["status"] not in ("open", "accepted"):
+            raise HTTPException(409, f"request is '{r['status']}', not 'open'/'accepted' — cannot respond")
         cur.execute(
             "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
             (body.response, rid),
@@ -6783,8 +6943,13 @@ def respond_request(rid: str, body: RequestRespond):
                     "parent_status": parent["status"],
                     "parent_payload_preview": (parent["payload"] or "")[:120],
                 }
+        # GH #56 (Point 3 / FLAG 2a): carry originating_task_id on the answer event so the
+        # requester's wake attaches to the task it asked on behalf of (wake-scan reads this →
+        # the run is stamped against that task → activity surfaces on the task thread, and the
+        # protocol loaded is that task's). Null for conversation/taskless asks (unchanged path).
         _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "request_answered",
-                       {"request_id": rid, "preview": body.response[:120]})
+                       {"request_id": rid, "preview": body.response[:120],
+                        "originating_task_id": str(r["originating_task_id"]) if r["originating_task_id"] else None})
         conn.commit()
     return {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
 
@@ -7014,25 +7179,57 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         # R2.3 idempotency: the target re-accepting an already-accepted task request gets
         # the SAME spawned task back (200) — so a retry never spawns a duplicate task.
         # 'rejected'/other states are genuine illegal transitions (409).
+        # GH #56 (review P-retry): the retry MUST echo the report-back instruction too. If the
+        # first accept response was lost, this idempotent retry is the only thing the same worker
+        # session sees — returning the old instruction-less shape would let it miss report-back and
+        # fall through to the Point 5 backstop. Rebuild it deterministically from the request detail.
         if r["status"] == "accepted":
+            _retry_dod = ((r["detail"] or {}).get("definition_of_done") or "")
             return {"request_id": rid, "status": "accepted",
                     "spawned_task_id": str(r["spawned_task_id"]) if r["spawned_task_id"] else None,
+                    "report_back": _build_report_back(rid, _retry_dod),
+                    "report_back_request_id": rid,
                     "already_accepted": True}
         if r["status"] != "open":
             raise HTTPException(409, f"request is '{r['status']}', not 'open' — cannot accept")
         task = r["detail"] or {}
         if "title" not in task or "definition_of_done" not in task:
             raise HTTPException(500, "request detail is malformed; cannot synthesize a task")
+        # GH #55: if the request carried a protocol, populate it on the spawned task so the
+        # accepter reads its loop rules on the very wake this accept triggers (no follow-up PATCH).
+        # GH #56 (Point 4.4/4.5): also auto-inject a report-back instruction into protocol.notes —
+        # this is HOW the accepter learns to report back (it's in the protocol it reads every wake).
+        # It spells out what "materially done" means for THIS request (the definition_of_done) and
+        # is explicitly decoupled from /orcha-done (reporting back ≠ sending the task to verification).
+        cleaned_proto = _clean_protocol(task.get("protocol")) or {}
+        dod = (task.get("definition_of_done") or "").strip()
+        # GH #56 (review P-retry): same builder as the idempotent-retry branch above, so the
+        # fresh accept and a lost-response retry hand back the identical report-back instruction.
+        report_back = _build_report_back(rid, dod)
+        existing_notes = (cleaned_proto.get("notes") or "").strip()
+        # GH #56 (Point 4.4/4.5, review P2): the report-back instruction is the MECHANISM that
+        # tells the accepter to answer the request, so it must survive the per-field cap intact.
+        # Prepend it and trim only the OLDER carried notes — never tail-truncate, or a near-max
+        # carried `notes` would silently drop the whole REPORT BACK line and the answer waypoint
+        # would be lost. report_back is well under the cap, but clamp defensively regardless.
+        if existing_notes:
+            sep = "\n\n"
+            room = MAX_PROTOCOL_FIELD_LEN - len(report_back) - len(sep)
+            merged_notes = report_back + sep + existing_notes[:room] if room > 0 else report_back
+        else:
+            merged_notes = report_back
+        cleaned_proto["notes"] = merged_notes
+        protocol_json = json.dumps(cleaned_proto)
         # Create the task, assign to the accepter, start it.
         cur.execute(
             """INSERT INTO tasks
                  (container_id, title, description, definition_of_done,
-                  status, priority, created_by_agent_id, started_at)
-               VALUES (%s, %s, %s, %s, 'in_progress', %s, %s, now())
+                  status, priority, created_by_agent_id, protocol, started_at)
+               VALUES (%s, %s, %s, %s, 'in_progress', %s, %s, %s::jsonb, now())
                RETURNING id""",
             (str(r["container_id"]), task["title"], task.get("description"),
              task["definition_of_done"], task.get("priority", 100),
-             str(r["requester_id"])),
+             str(r["requester_id"]), protocol_json),
         )
         tid = str(cur.fetchone()["id"])
         cur.execute(
@@ -7053,10 +7250,19 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         log_event(cur, r["container_id"], "ai", body.responder_agent_id,
                   "task", tid, "created",
                   {"title": task["title"], "via": "task-request accept"})
-        _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "task_request_accepted",
-                       {"request_id": rid, "task_id": tid, "by_agent_id": body.responder_agent_id})
+        # GH #56 (Point 6): accept must NOT wake the requester — only the real ANSWER (at material
+        # completion) wakes them. The accept stays in the audit feed via log_event above, but we no
+        # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was
+        # classified as a `request_answered` notification — a premature receipt). Accept is silent now.
         conn.commit()
-    return {"request_id": rid, "status": "accepted", "spawned_task_id": tid}
+    # GH #56 (review P1): the same worker session that accepts a task-request keeps working it
+    # WITHOUT reloading the spawned task's protocol, so the report-back note buried in
+    # protocol.notes is invisible on this wake — the primary accepted->answered path gets skipped
+    # and the Point 5 backstop becomes the normal route. Echo the instruction in the accept
+    # RESPONSE so /orcha-accept-task can surface it immediately, in the same session, before the
+    # agent starts the work.
+    return {"request_id": rid, "status": "accepted", "spawned_task_id": tid,
+            "report_back": report_back, "report_back_request_id": rid}
 
 
 @app.post("/api/requests/{rid}/reject-task", status_code=200)

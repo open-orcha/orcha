@@ -1,0 +1,24 @@
+-- GH #56 (Point 4) — DATA MIGRATION, IRREVERSIBLE. **DO NOT ACTIVATE WITHOUT EXPLICIT
+-- HUMAN (kedar) SIGN-OFF.**
+--
+-- ============================ WHY THIS FILE IS .pending ============================
+-- The portal migration runner (main.py run_migrations) globs `*.sql` and auto-applies
+-- every unrecorded file on the next portal boot (`orcha up`). This migration is
+-- IRREVERSIBLE — it rewrites the status of every request currently in `accepted`. Per
+-- the task's standing protocol it is a HARD STOP: a human must sign off before it runs.
+-- The `.sql.pending` suffix keeps it OUT of the `*.sql` glob so it CANNOT auto-run.
+--
+-- To activate (ONLY after kedar's explicit go-ahead on THIS migration):
+--   git mv 029_close_accepted_requests.sql.pending 029_close_accepted_requests.sql
+-- then regenerate the desktop template copy and let the next `orcha up` apply it.
+-- ==================================================================================
+--
+-- WHAT IT DOES: under #56, `accepted` stops being a dead end and becomes a waypoint
+-- (open -> accepted -> answered -> closed). Legacy rows sitting in `accepted` under the
+-- OLD dead-end meaning would be reinterpreted as live waypoints by the new code — a
+-- stranded loop the backstop would later have to mop up. Closing them out migrates the
+-- table to a clean slate so the new semantics start fresh.
+--
+-- Pre-existing `accepted` rows already spawned their task and recorded the accepter's
+-- note in `response`; closing them changes only `status`, losing no data.
+UPDATE requests SET status = 'closed' WHERE status = 'accepted';

@@ -751,8 +751,21 @@ def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
         return None
     lines = ["## Standing protocol (your task's working agreement — the RULES, read FRESH every "
              "wake ahead of your notes; a human edits these and they apply on your very next wake):"]
-    for label, key in (("Review chain", "review_chain"), ("Hand off to", "handoff_to"),
-                       ("Autonomy", "autonomy"), ("Notes", "notes")):
+    # GH #56 (Point 2): review_chain / handoff_to / notes are BINDING — render them as imperatives
+    # the agent must ACT on (route the review per the chain; hand the finished work to the named
+    # agent), not as passive labels it merely reads. `autonomy` stays ADVISORY: the real completion
+    # gate is the container autonomy setting, so we mark it as such to kill the ambiguity (an
+    # unvalidated free-text string must never read as a binding gate). Genuine server-side
+    # enforcement (e.g. blocking /orcha-done until the chain is satisfied) is out of scope for this
+    # pass and deliberately not implied.
+    for label, key in (
+            ("Review chain (BINDING — route reviews/sign-off through exactly this chain, in order)",
+             "review_chain"),
+            ("Hand off to (BINDING — when your part is materially done, hand the work to this agent "
+             "via an Orcha request)", "handoff_to"),
+            ("Autonomy (ADVISORY ONLY — the real gate is the container autonomy setting; never "
+             "self-certify, stop at needs_verification for a human)", "autonomy"),
+            ("Notes (BINDING instructions)", "notes")):
         v = p.get(key)
         if v:
             if not isinstance(v, str):
@@ -870,9 +883,16 @@ def _persona_and_digest(api_base: str, agent_id: str,
     return persona, digest
 
 
-def _build_persona(api_base: str, agent_id: str, *, force_fresh: bool = False) -> Optional[str]:
+def _build_persona(api_base: str, agent_id: str, *, task_id: Optional[str] = None,
+                   force_fresh: bool = False) -> Optional[str]:
     """Fetch the agent's persona + latest digest + active-task protocol and format them for
     injection.
+
+    GH #56 (Point 3 / FLAG 2a part d): `task_id` is the originating-task hint for this wake (the
+    wake-scan candidate's `wake_task_id` — set from a request_answered event's originating_task_id).
+    Passed through to the protocol GET so the RULES loaded are that task's, not a guess at the
+    agent's "one in_progress task" (which serves the wrong protocol when several are in progress).
+    None → the endpoint falls back to the in_progress guess (unchanged behaviour).
 
     #285: persona + the (#287-)curated digest are served from a short-TTL per-agent cache
     (_persona_and_digest) so close-together wakes don't re-GET + re-curate unchanged inputs.
@@ -887,7 +907,10 @@ def _build_persona(api_base: str, agent_id: str, *, force_fresh: bool = False) -
     #326 (A1): the protocol (RULES) is fetched fresh on EVERY wake — never cached — so a human
     edit applies on the next wake, independent of the (agent-authored, compressed) digest."""
     persona, digest = _persona_and_digest(api_base, agent_id, force_fresh=force_fresh)
-    protocol = _get_json(f"{api_base}/api/agents/{agent_id}/protocol")
+    proto_url = f"{api_base}/api/agents/{agent_id}/protocol"
+    if task_id:
+        proto_url += f"?task_id={task_id}"
+    protocol = _get_json(proto_url)
     return format_persona(persona, digest, protocol)
 
 
@@ -2430,7 +2453,10 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # Boot the headless worker AS the agent: inject persona + latest digest
             # (--append-system-prompt) and ORCHA_ALIAS, so it answers with the agent's
             # judgment + reasoning continuity, not as a generic Claude.
-            persona = None if dry_run else _build_persona(api_base, cand["agent_id"])
+            # GH #56 (Point 3 / FLAG 2a part d): pass the wake's originating-task hint so the injected
+            # protocol is that task's (the link), not a guess at the agent's one in_progress task.
+            persona = None if dry_run else _build_persona(
+                api_base, cand["agent_id"], task_id=cand.get("wake_task_id"))
             log_path = None
             hc = cand.get("headless_cwd")
             if hc and not dry_run:
