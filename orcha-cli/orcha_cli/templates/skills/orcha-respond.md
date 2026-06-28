@@ -33,7 +33,9 @@ User arguments: `$ARGUMENTS`
      -H 'Content-Type: application/json' \
      -d '{"responder_agent_id": "<my agent_id>", "response": "<answer>"}'
    ```
-   Response: `{"request_id": "...", "status": "answered"}`
+   Response — inspect the body, it has TWO shapes (see the ISS-24 note below):
+   - **Fresh answer**: `{"request_id": "...", "status": "answered"}`
+   - **Already answered** (idempotent no-op): `{"request_id": "...", "status": "answered", "already_answered": true, "response": "<the existing answer>"}`
 
    **ISS-24 — already-answered is a safe no-op, not a failure.** The endpoint is idempotent
    for the request's own target: if the request was *already* answered (e.g. the daemon and a
