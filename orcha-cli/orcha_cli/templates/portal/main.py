@@ -648,6 +648,19 @@ _DRAIN_DIRECTIVE = "directive"
 # the run MAY ack these buckets in a single drain pass (FYI + taskless any run; task_bound only when its
 # task == the run context, decided in wake_scan). NEW_WORK/DIRECTIVE are acked at their own seams, never here.
 _DRAIN_RUN_ACKABLE = (_DRAIN_FYI, _DRAIN_TASKLESS_ACTIONABLE)
+# the buckets whose actioning is bound to a SPECIFIC task — a run may surface/handle one only when that
+# task IS the run context; otherwise it belongs to a different (or fresh) ephemeral and stays pending.
+_DRAIN_TASK_SCOPED = (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE)
+
+
+def _is_cross_task_drain_row(bucket, task_id, context_task_id) -> bool:
+    """GH #58 (R3): True when a pending row is task-scoped to a DIFFERENT task than this run's context,
+    so this run must neither surface nor ack it — it stays pending for that task's own protocol-bound
+    ephemeral. The SINGLE predicate behind both the directed-message filter (prompt_messages) and the
+    wake-manifest filter, so surfacing-via-message and surfacing-via-manifest can never disagree.
+    A task-less task-scoped row (e.g. a 'task' request_created with no task_id yet) is NOT cross-task —
+    any run may accept it."""
+    return bool(bucket in _DRAIN_TASK_SCOPED and task_id and str(task_id) != str(context_task_id))
 
 
 def _drain_task_status(cur, task_id) -> Optional[str]:
@@ -782,7 +795,7 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
     backlog can hide a newer interrupt/human request from the wake prompt.
     """
     cur.execute(
-        """SELECT e.id, e.event_name, e.ts, e.payload
+        """SELECT e.id, e.event_name, e.ts, e.payload, e.target_id
            FROM agent_events e
            WHERE e.event_key = %s AND e.ts > %s AND e.event_name <> ALL(%s)
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
@@ -823,6 +836,11 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
         if deeplink.get("kind") == "request" and _valid_uuid(deeplink.get("id")):
             request_ids.add(deeplink["id"])
 
+        # GH #58 (R3): carry the SAME drain classification used for prompt_messages / handled_event_ids
+        # so wake_scan can drop a cross-task task-scoped row from the rendered manifest once the run
+        # context is known — the manifest is rendered verbatim as "drain in this order", so an unfiltered
+        # cross-task row would tell a task-B worker to drain task A's row (the R3 gap).
+        dc = _drain_class(cur, r["event_name"], p, target_id=r["target_id"])
         priority = n["priority"]
         item = {
             "event_name": r["event_name"],
@@ -833,6 +851,7 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
             "actor_kind": actor.get("kind"), "deeplink": n["deeplink"],
             "preview": n["preview"], "ts": r["ts"], "object_priority": None,
             "is_task_request": n.get("is_task_request", False),  # #359: steer the wake prompt into the work
+            "drain_bucket": dc["bucket"], "drain_task_id": dc["task_id"],
         }
         item["surface"] = _notification_surface(item)
         items.append(item)
@@ -4904,8 +4923,19 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # owns it (context new_work/directive) — surfacing and acking can never disagree.
             prompt_messages = [
                 d["text"] for d in directed_msgs
-                if not (d["bucket"] in (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE)
-                        and d["task_id"] and str(d["task_id"]) != str(context_task_id))
+                if not _is_cross_task_drain_row(d["bucket"], d["task_id"], context_task_id)
+            ]
+            # GH #58 (R3 fix): the ranked wake manifest is rendered verbatim by build_wake_prompt as
+            # "RANKED WAKE MANIFEST - drain in this order", so it must obey the SAME run-context rule as
+            # prompt_messages — otherwise a task-B run is told to drain task A's task-scoped rows even
+            # though those rows are left pending for task A's own protocol-bound run. Drop the cross-task
+            # task-scoped rows here (one predicate shared with prompt_messages above) before the manifest
+            # reaches the candidate dict. FYI / taskless rows and the context task's own rows stay; a
+            # task-less 'task' request_created stays (any run may accept it → #359 is_task_request path).
+            notifications = [
+                n for n in notifications
+                if not _is_cross_task_drain_row(
+                    n.get("drain_bucket"), n.get("drain_task_id"), context_task_id)
             ]
             handled_event_ids: list[int] = []
             if pending:

@@ -19,6 +19,7 @@ Coverage:
 import json
 
 import main
+from orcha_cli import notifier  # noqa: E402  (conftest puts orcha-cli on sys.path)
 
 
 # ----------------------------- helpers -----------------------------
@@ -263,6 +264,43 @@ async def test_prompt_messages_exclude_cross_task_directed_rows(
     cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand2["context_task_id"] == a["id"]
     assert any("rebase A onto main" in m for m in cand2["prompt_messages"])   # surfaced for A's run
+
+
+async def test_wake_manifest_excludes_cross_task_rows(
+        client, container, make_agent, make_task, db):
+    """R3 review fix: the ranked wake manifest is rendered verbatim as 'drain in this order', so it must
+    obey the SAME run-context rule as prompt_messages. With context bound to ready task B, task A's
+    task-thread message (TASK_BOUND to A != B) must be ABSENT from the manifest AND from the rendered
+    wake prompt — otherwise a task-B worker is told to drain task A's row. After B is claimed (context
+    falls to A) the row re-binds and appears again. Mirrors the prompt_messages re-bind."""
+    x = await make_agent("x", "eng")
+    human = await make_agent("kedar", "lead", kind="human")
+    poster = await make_agent("poster", "eng")
+    a = await make_task("task A", "done", assignee_alias="x")      # in_progress (NOT a ready target)
+    b = await make_task("task B", "done")                          # ready → wins context
+    await client.post(f"/api/tasks/{b['id']}/assign",
+                      json={"actor_agent_id": human["agent_id"], "agent_id": x["agent_id"]})
+    await client.post(f"/api/tasks/{a['id']}/messages",
+                      json={"author_agent_id": poster["agent_id"], "body": "rebase A onto main"})
+
+    cand = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert cand["context_task_id"] == b["id"]                      # ready B wins the context
+    # task A's TASK_BOUND row is filtered OUT of the manifest (not just out of prompt_messages)
+    a_rows = [n for n in cand["notifications"]
+              if str(n.get("drain_task_id")) == str(a["id"])]
+    assert a_rows == [], f"task A's row leaked into the manifest: {a_rows}"
+    # ...and so it cannot appear in the RENDERED 'drain in this order' wake prompt, while the context
+    # task's own row (B) still does — the filter drops only the cross-task row, not the whole manifest.
+    rendered = notifier.build_wake_prompt(cand)
+    assert str(a["id"]) not in rendered
+    assert str(b["id"]) in rendered
+
+    # claim B → context falls to A → A's row re-binds into the manifest for its own run
+    claim = await client.post(f"/api/agents/{x['agent_id']}/next")
+    assert claim.status_code == 200 and claim.json()["task"]["id"] == b["id"]
+    cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert cand2["context_task_id"] == a["id"]
+    assert any(str(n.get("drain_task_id")) == str(a["id"]) for n in cand2["notifications"])
 
 
 # ===================== NEW_WORK — consumed at the /next claim, not by a drain =====================
