@@ -27,12 +27,12 @@ User arguments: `$ARGUMENTS`
    curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/next"
    ```
    Response is one of:
-   - `{"task": {"id": "...", "title": "...", "definition_of_done": "...", "priority": N}}`  → task claimed
+   - `{"task": {"id": "...", "title": "...", "description": "...", "definition_of_done": "...", "priority": N}}`  → task claimed
    - `{"task": null, "message": "no ready tasks available"}`  → nothing to do
 
-4. **Report**:
-   - If a task was claimed: print task_id, title, definition_of_done, priority, and the instruction:
-     > Begin work now. When done, call `/orcha-done <task_id> "<result>" --alias <alias>`. To post progress: `/orcha-post <task_id> "<note>" --alias <alias>`.
+4. **Report & read the FULL task before working** (GH #33):
+   - If a task was claimed: print task_id, title, **description**, definition_of_done, priority. Then:
+     > **Read the full `description` and `definition_of_done` before you start — do not act on the title alone.** Acceptance criteria live in the description and DoD; if they ask for a **loop** or multi-step work, run the loop / complete every step, not a shallow one-pass. Begin work now. When done, call `/orcha-done <task_id> "<result>" --alias <alias>`. To post progress: `/orcha-post <task_id> "<note>" --alias <alias>`.
    - If nothing was claimed: print the message; suggest `/orcha-status` to inspect the project.
 
 ## Errors

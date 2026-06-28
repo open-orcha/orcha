@@ -606,8 +606,11 @@ def build_wake_prompt(cand: dict) -> str:
     elif cand.get("auto_start_task_ids"):
         task_step = (
             f"(2) if the auto-start rule still holds (assigned & ready, no human HOLD, "
-            f"container active) claim your task via `/orcha-next --alias {alias}` and make "
-            f"concrete progress; "
+            f"container active) claim your task via `/orcha-next --alias {alias}`, then READ "
+            f"the claimed task's FULL description AND definition_of_done before acting — do "
+            f"not work off the title alone (GH #33); honor every acceptance criterion, and if "
+            f"the description/DoD asks for a loop or multi-step work, run the loop / do all "
+            f"steps, then make concrete progress; "
         )
     else:
         task_step = (

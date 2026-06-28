@@ -546,6 +546,10 @@ def test_build_wake_prompt_is_safe_and_directive():
     # R2.2: drain the FULL backlog (all items, until empty), not just the first.
     assert "FULL inbox" in p
     assert "EMPTY" in p
+    # GH #33: after claiming, the worker is told to read the full task body (description +
+    # definition_of_done) and honor loops — not work off the title alone.
+    assert "definition_of_done" in p
+    assert "loop" in p
 
 
 def test_build_wake_prompt_surfaces_directed_message():

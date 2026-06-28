@@ -3388,7 +3388,7 @@ def agent_next(aid: str):
         # Ready-but-unassigned tasks remain visible for humans/leads to route, but there is no free
         # claim pool for an inbox-only worker to accidentally drain.
         cur.execute(
-            """SELECT t.id, t.title, t.definition_of_done, t.priority, t.protocol
+            """SELECT t.id, t.title, t.description, t.definition_of_done, t.priority, t.protocol
                FROM tasks t
                JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
                  AND at.assignment_status IN ('assigned','accepted','working')
@@ -3429,7 +3429,11 @@ def agent_next(aid: str):
     # SPEC-4: surface the task's protocol on the claim/wake payload so the working agent
     # reads its per-task working agreement (review_chain/handoff_to/autonomy/notes) on wake.
     # #298: also carry the global autonomy_level alongside it.
-    return {"task": {"id": tid, "title": t["title"], "definition_of_done": t["definition_of_done"],
+    # GH #33: carry the FULL task body on the claim payload — title AND description AND
+    # definition_of_done — so the woken worker acts on the complete spec (multi-step DoD,
+    # loops) instead of just the title/summary.
+    return {"task": {"id": tid, "title": t["title"], "description": t["description"],
+                     "definition_of_done": t["definition_of_done"],
                      "priority": t["priority"], "protocol": t["protocol"]},
             "autonomy_level": autonomy_level}
 

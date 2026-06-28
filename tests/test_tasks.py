@@ -43,6 +43,22 @@ async def test_next_claims_ready_excludes_root(client, container, make_agent, ma
     assert claimed["id"] != container["root_task_id"]  # never the root sentinel
 
 
+async def test_next_claim_payload_carries_full_task_body(client, make_agent, make_task):
+    """GH #33: the claim payload must surface the FULL task body — title AND description AND
+    definition_of_done — so the woken worker acts on the complete spec, not just the title."""
+    human = await make_agent("op", "operator", kind="human")
+    a = await make_agent("claimer", "eng")
+    t = await make_task("loop the thing", "all 5 iterations logged",
+                        description="Run the loop 5 times; each pass must append a line.")
+    ar = await client.post(f"/api/tasks/{t['task_id']}/assign",
+                           json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
+    assert ar.status_code == 200, ar.text
+    claimed = (await client.post(f"/api/agents/{a['agent_id']}/next")).json()["task"]
+    assert claimed["title"] == "loop the thing"
+    assert claimed["description"] == "Run the loop 5 times; each pass must append a line."
+    assert claimed["definition_of_done"] == "all 5 iterations logged"
+
+
 async def test_next_no_ready_returns_none(client, make_agent):
     a = await make_agent("idle-claimer", "eng")
     r = await client.post(f"/api/agents/{a['agent_id']}/next")
