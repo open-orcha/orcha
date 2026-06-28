@@ -2599,20 +2599,27 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # A3: ack only THROUGH the prompt batch we actually surfaced (ack_through_ts);
             # if wake-scan capped a large prompt backlog, the rest stay pending for the next
             # wake instead of being acked-away undelivered. Falls back to max_event_ts.
-            ack_ts = cand.get("ack_through_ts")
-            if ack_ts is None:
-                ack_ts = cand.get("max_event_ts")
             # GH #58: a reaped ephemeral worker (tracked in live_workers) acks its handled-set at
             # COMPLETION via /events/ack-handled (contiguous-floor advance), NOT here at spawn — so a
             # spawn-then-crash re-surfaces the events instead of high-watering past undrained ones.
-            # The single-flight lease suppresses any re-wake while it runs. Only the non-reaped paths
-            # (--once with no reaper, tmux/unreachable) still high-water the cursor at spawn.
+            # The single-flight lease suppresses any re-wake while it runs.
             ephemeral_reaped = (kind == "ephemeral" and sent and live_workers is not None
                                 and cand["agent_id"] in live_workers)
-            if ephemeral_reaped:
-                delivered_ts = None
-            else:
-                delivered_ts = ack_ts if (sent and cand.get("pending_events")) else None
+            # GH #58 (review fix): the NON-reaped delivery paths (`--once` with no reaper, and tmux
+            # sends) used to BLANKET high-water delivered_ts to ack_through_ts (|| max_event_ts) at
+            # spawn — which skipped past rows wake_scan deliberately left UN-handled (a cross-task
+            # task_bound, a NEW_WORK/DIRECTIVE), the exact skipped-notification class this PR removes.
+            # Instead they now post the SAME per-event handled-set (FYI + taskless + context-task
+            # task_bound, bounded by ack_through_ts) to /events/ack-handled, which advances the cursor
+            # only to the contiguous floor: handled rows stop re-waking while an unhandled one
+            # re-surfaces next tick (acked at its own seam when the agent acts). Identical semantics to
+            # the reaper and the resident drain sidecar. delivered_ts stays None on every path; the
+            # wake-ack below still stamps cooldown/lease. An unreachable/failed send acks nothing.
+            non_reaped_drain = (sent and not ephemeral_reaped and cand.get("pending_events"))
+            if non_reaped_drain:
+                _post_json(f"{api_base}/api/agents/{cand['agent_id']}/events/ack-handled",
+                           {"event_ids": cand.get("handled_event_ids") or []})
+            delivered_ts = None
             # We claim a single-flight lease ONLY for an ephemeral spawn. If that spawn
             # then failed (no claude, bad cwd, Popen error), no worker exists — release
             # the lease we just won so the agent isn't suppressed for the whole TTL.

@@ -4461,14 +4461,27 @@ def active_conversations(cid: str):
                          WHERE ev.event_key = cv.agent_id::text
                            AND ev.ts > COALESCE(ws.delivered_ts, 0)
                            AND ev.event_name = 'conversation_turn') AS conversation_ack_ts,
+                      -- GH #58 (review fix): anti-join agent_event_acks so an ALREADY-handled row
+                      -- never counts as pending_inbox. A `request_closed` audit row (excluded from
+                      -- the resident drain) pins the contiguous floor LOW, so a later already-acked
+                      -- row sits ABOVE the floor; without this anti-join it inflated pending_inbox
+                      -- while drain_ackable_ids (which DOES anti-join) stayed empty — the resident
+                      -- then kept spawning no-op drain sidecars. Now consistent with the floor
+                      -- recompute, the manifest, _collect_directed_messages and drain_ackable_ids.
                       COALESCE((SELECT count(*) FROM agent_events ev
                                  WHERE ev.event_key = cv.agent_id::text
                                    AND ev.ts > COALESCE(ws.delivered_ts, 0)
-                                   AND ev.event_name <> ALL(%s)), 0) AS pending_inbox,
+                                   AND ev.event_name <> ALL(%s)
+                                   AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                                    WHERE a.agent_id = cv.agent_id
+                                                      AND a.event_id = ev.id)), 0) AS pending_inbox,
                       (SELECT max(ev.ts) FROM agent_events ev
                          WHERE ev.event_key = cv.agent_id::text
                            AND ev.ts > COALESCE(ws.delivered_ts, 0)
-                           AND ev.event_name <> ALL(%s)) AS _inbox_max_ts
+                           AND ev.event_name <> ALL(%s)
+                           AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                            WHERE a.agent_id = cv.agent_id
+                                              AND a.event_id = ev.id)) AS _inbox_max_ts
                FROM conversations cv
                JOIN agents a ON a.id = cv.agent_id
                LEFT JOIN agent_wake_state ws ON ws.agent_id = cv.agent_id

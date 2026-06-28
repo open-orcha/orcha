@@ -16,6 +16,8 @@ Coverage:
 - the two R5-required cross-run cases: a REJECTED verify (DIRECTIVE) and a plan-approval
   decision_made (TASK_BOUND) are never FYI-acked by an unrelated run.
 """
+import json
+
 import main
 
 
@@ -353,3 +355,59 @@ async def test_plan_decision_left_unhandled_cross_task_but_fyi_decisions_drain(
     cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand2["context_task_id"] == a["id"]
     assert plan_ev in set(cand2["handled_event_ids"])
+
+
+# =========== active-conversations — an already-acked row above the floor is not pending ===========
+
+async def test_active_conversations_excludes_acked_rows_above_pinned_floor(
+        client, container, make_agent, db):
+    """GH #58 (PR review fix): an event that has already been ack-handled must NOT count as
+    `pending_inbox` even when it sits ABOVE the contiguous floor.
+
+    A `request_closed` audit row is EXCLUDED from the resident drain (_RESIDENT_DRAIN_AUDIT_EVENTS)
+    yet is a WAKING event for the floor recompute (only `digest_snapshotted` is non-waking), so an
+    unhandled one pins delivered_ts BELOW itself. A later already-acked row then sits above that
+    floor. Before the fix, the `pending_inbox` count/max lacked the `agent_event_acks` anti-join, so
+    they counted that acked row while `drain_ackable_ids` (which DOES anti-join) excluded it — leaving
+    pending_inbox > 0 with drain_ackable_ids == [], the no-op drain-sidecar thrash. The count/max now
+    anti-join, matching drain_ackable_ids, the floor recompute and _collect_directed_messages."""
+    human = await make_agent("KedarAC", "human", kind="human")
+    x = await make_agent("VoxAC", "eng")
+    aid = x["agent_id"]
+    cid = container["id"]
+    # a conversation makes x visible to the resident-discovery scan
+    r = await client.post(f"/api/agents/{aid}/conversations",
+                          json={"actor_agent_id": human["agent_id"]})
+    assert r.status_code in (200, 201), r.text
+    conv_id = r.json()["conversation"]["id"]
+
+    def _ins(ts, name, payload):
+        return db.execute(
+            "INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload) "
+            "VALUES (%s, %s, %s, %s, %s, %s::jsonb) RETURNING id",
+            (cid, aid, aid, name, ts, json.dumps(payload)))[0]["id"]
+
+    # t=10 request_closed: excluded from the drain count, but WAKING → pins the floor here
+    _ins(10.0, "request_closed", {"request_id": "00000000-0000-0000-0000-0000000000c1"})
+    # t=20 request_answered: drainable (taskless actionable) — we ack-handle THIS one
+    answered_id = _ins(20.0, "request_answered", {})
+    # t=30 task_verified (approved): a genuine UNHANDLED FYI — the only real pending row
+    verified_id = _ins(30.0, "task_verified", {"approved": True})
+
+    # ack-handle ONLY the middle row; the floor stays below the unhandled request_closed at t=10,
+    # so the acked row at t=20 sits ABOVE the floor.
+    rr = await client.post(f"/api/agents/{aid}/events/ack-handled",
+                           json={"event_ids": [answered_id]})
+    assert rr.status_code == 200, rr.text
+    frow = db.execute("SELECT delivered_ts FROM agent_wake_state WHERE agent_id=%s", (aid,))
+    floor = frow[0]["delivered_ts"] if frow else 0.0   # no row yet ⇒ floor 0 (never advanced past t=10)
+    assert floor < 10.0                              # pinned below request_closed → acked row is above it
+
+    r = await client.get(f"/api/containers/{cid}/active-conversations")
+    assert r.status_code == 200, r.text
+    cand = next(c for c in r.json()["conversations"] if c["conversation_id"] == conv_id)
+    # the acked row must NOT inflate the count; only the genuine unhandled task_verified counts, and
+    # the count is now consistent with the ackable-ids set (the bug was the two disagreeing).
+    assert cand["pending_inbox"] == 1
+    assert cand["drain_ackable_ids"] == [verified_id]
+    assert answered_id not in cand["drain_ackable_ids"]

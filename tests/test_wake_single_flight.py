@@ -1708,3 +1708,106 @@ def test_silent_worker_with_no_deltas_still_stall_killed(monkeypatch, tmp_path):
     assert sigs and sigs[0] == (4321, signal.SIGTERM) and live == {}
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert ack["kind"] == "worker_stalled_killed"
+
+
+# ---------- GH #58 (review fix): non-reaped deliveries ack the per-event handled-set ----------
+#
+# A reaped ephemeral worker (tracked in live_workers) defers its ack to reap_workers, which posts
+# the handled-set to /events/ack-handled (contiguous floor) on a CLEAN exit. The non-reaped paths
+# (`--once` with no reaper, and tmux sends) used to BLANKET high-water delivered_ts to ack_through_ts
+# (|| max_event_ts) at spawn — skipping past rows wake_scan deliberately left UN-handled (a cross-task
+# task_bound, a NEW_WORK / DIRECTIVE). That is the exact skipped-notification class GH #58 removes, so
+# they now post the SAME handled-set to /events/ack-handled and never high-water the cursor at spawn.
+
+def _drain_cand(**over):
+    """A candidate carrying a backlog whose handled-set is a STRICT SUBSET of pending (the bug
+    shape): 3 pending rows but only ids [11, 12] are run-handleable; the rest must re-surface."""
+    c = {"agent_id": "00000000-0000-0000-0000-0000000000d1", "alias": "Drain",
+         "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+         "pending_events": 3, "auto_start_task_ids": [], "reason": "wake",
+         "latest_event": "request_answered", "max_event_ts": 9.0, "ack_through_ts": 9.0,
+         "handled_event_ids": [11, 12], "headless_flags": None}
+    c.update(over)
+    return c
+
+
+def test_tmux_delivery_acks_handled_set_not_high_water(monkeypatch):
+    """A tmux send is non-reaped: it must post the per-event handled-set to /events/ack-handled and
+    leave delivered_ts None — never blanket high-water past the unhandled rows."""
+    cand = _drain_cand(tmux_target="sess:0.0")
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "tmux")
+    monkeypatch.setattr(notifier, "send_tmux", lambda target, prompt, dry: (True, "tmux cmd"))
+    posts = []
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
+
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+
+    ack_handled = next(b for u, b in posts if u.endswith("/events/ack-handled"))
+    assert ack_handled["event_ids"] == [11, 12]            # per-event handled-set, NOT a blanket jump
+    wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert wake_ack["delivered_ts"] is None                # cursor NOT high-watered at spawn
+    assert wake_ack["kind"] == "tmux"
+    # the regression: no wake-ack on this path may carry the old high-water (ack_through_ts / max_ts)
+    assert all(b.get("delivered_ts") != 9.0 for u, b in posts if u.endswith("/wake-ack"))
+
+
+def test_once_ephemeral_acks_handled_set_not_high_water(monkeypatch):
+    """`orcha notifier --once` (live_workers is None → no reaper) is non-reaped: same contract as
+    tmux — post the handled-set, never high-water delivered_ts."""
+    cand = _drain_cand()
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "decide_wake_tier", lambda c, triage_fn=None: {"tier": "full"})
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    posts = []
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"claimed": True, "wake_lease_until": "x"} if "wake-claim" in url else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "cmd", FakeProc(pid=4321)))
+
+    # live_workers omitted → None → the --once path (no reaper to /finish a run)
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+
+    ack_handled = next(b for u, b in posts if u.endswith("/events/ack-handled"))
+    assert ack_handled["event_ids"] == [11, 12]
+    wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert wake_ack["delivered_ts"] is None
+    assert all(b.get("delivered_ts") != 9.0 for u, b in posts if u.endswith("/wake-ack"))
+
+
+def test_daemon_ephemeral_defers_ack_to_reaper_not_at_spawn(monkeypatch):
+    """The REAPED daemon path (live_workers tracks the spawned worker) must NOT ack at spawn — the
+    reaper posts /events/ack-handled on the worker's clean exit, so a spawn-then-crash re-surfaces the
+    backlog. At spawn it only stamps wake-ack with delivered_ts None (lease/cooldown), no high-water."""
+    cand = _drain_cand(latest_event="request_answered", pending_events=1)   # single no-code → no worktree
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "decide_wake_tier", lambda c, triage_fn=None: {"tier": "full"})
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_provision_worktree", lambda *a, **k: (None, None))
+    posts = []
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        if "wake-claim" in url:
+            return {"claimed": True, "wake_lease_until": "x"}
+        if url.endswith("/runs"):
+            return {"run_id": "RUN-1", "status": "running"}
+        return {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "cmd", FakeProc(pid=4321)))
+    live = {}
+
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True,
+                  live_workers=live, base_cwd="/proj")
+
+    # reaped path: the ack is deferred to reap_workers — NOTHING posted to ack-handled at spawn
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)
+    wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert wake_ack["delivered_ts"] is None                # no high-water; reaper advances the floor
+    assert cand["agent_id"] in live                        # tracked so the reaper can finish + ack it
