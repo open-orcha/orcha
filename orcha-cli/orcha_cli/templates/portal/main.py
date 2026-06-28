@@ -7583,7 +7583,7 @@ def _assigned_ready_task(cur, aid: str) -> Optional[str]:
 
 def _agent_claim_blocked(cur, aid: str) -> bool:
     """#23 / Gate PR#274: True when `/api/agents/{aid}/next` would REFUSE to hand this agent a
-    task right now for a reason unrelated to task availability. It mirrors the three agent-level
+    task right now for a reason unrelated to task availability. It mirrors the two agent-level
     preconditions agent_next enforces before claiming: a paused/stopped container (409 via
     _require_container_active) or a retired agent (409 via _reject_if_retired, terminated_at set).
     GH #39: the turn-budget precondition (429, turns_used >= turn_budget) is removed from agent_next,
@@ -7592,13 +7592,13 @@ def _agent_claim_blocked(cur, aid: str) -> bool:
     `_assigned_ready_task` answers 'is there ready work' (task-level, lockstep with the wake-scan
     query). This answers the orthogonal 'could THIS agent claim it right now' (agent-level,
     lockstep with /next's preconditions). The synthetic /wait task_ready probe must honor BOTH:
-    surfacing 'ready work' that an immediate /orcha-next would bounce (409/429) is a false
+    surfacing 'ready work' that an immediate /orcha-next would bounce (409) is a false
     claimable signal — and because the synthetic echoes ts=since_ts the task stays perpetually
-    'new', so a /orcha-listen loop would re-emit task_ready → /orcha-next → 409/429 → repeat (a
+    'new', so a /orcha-listen loop would re-emit task_ready → /orcha-next → 409 → repeat (a
     spin). So /wait suppresses the synthetic whenever a claim is blocked; this gate governs ONLY
     the level-probe shortcut — a real agent_event still falls through to _wait_for_event and is
     delivered unchanged. CRITICAL: this is a pure predicate — it NEVER raises (agent_wait is a
-    long-poll; a 409/429 here would wrongly fail the /wait itself instead of just declining the
+    long-poll; a 409 here would wrongly fail the /wait itself instead of just declining the
     shortcut)."""
     cur.execute(
         """SELECT a.terminated_at, c.status AS container_status
@@ -7646,8 +7646,8 @@ async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: fl
         # event, unchanged). Only when nothing real is pending do we check for an assigned-ready task
         # and, if found, return a synthetic task_ready immediately instead of blocking. Gate
         # (PR#274): only when this agent could ACTUALLY claim — _agent_claim_blocked mirrors /next's
-        # preconditions (active container + budget), so we never surface work an immediate
-        # /orcha-next would bounce 409/429 (which a listener loop would re-emit → spin).
+        # preconditions (active container + not retired), so we never surface work an immediate
+        # /orcha-next would bounce 409 (which a listener loop would re-emit → spin).
         cur.execute(
             "SELECT 1 FROM agent_events WHERE event_key=%s AND ts > %s LIMIT 1",
             (aid, since_ts),

@@ -169,7 +169,7 @@ async def test_exhausted_budget_does_not_suppress_synthetic(
     await _assign_ready(db, aid, t["id"])
     db.execute("UPDATE agents SET turns_used = turn_budget WHERE id=%s", (aid,))
 
-    r = await client.get(f"/api/agents/{aid}/wait", params={"since_ts": 0, "timeout": 30})
+    r = await client.get(f"/api/agents/{aid}/wait", params={"since_ts": 0, "timeout": 2})
     body = r.json()
     assert body["event"] == "task_ready"                     # budget no longer gates the synthetic
     assert body["task_id"] == t["id"]
