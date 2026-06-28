@@ -1518,6 +1518,89 @@ def test_checkpoint_respawn_is_the_mechanism(monkeypatch, tmp_path):
     assert ack["kind"] == "worker_timeout_killed"
 
 
+def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
+    """A live_workers entry for a worker PAST the soft cap and STALLED — the log is frozen
+    (last_size already equals the file's current size, so no growth this tick) and last progress
+    was 200s ago — with the ISS-76 respawn context. Whether it is live/dead is decided by the log
+    CONTENT (an unanswered tool_use → live)."""
+    return {"agent-X": {"proc": proc, "hard_deadline": time.time() - 1,   # PAST the soft cap
+                        "last_size": log.stat().st_size,                  # no growth this tick …
+                        "last_progress_ts": time.time() - 200,            # … and frozen 200s → stalled
+                        "run_id": "R1", "log_path": str(log), "worktree": "/wt", "branch": "b",
+                        "base_cwd": None, "cap": cap, "respawns": respawns,
+                        "respawn_ctx": {"prompt": "drain + continue", "flags": None,
+                                        "alias": "Forge", "model": "claude-fable-5",
+                                        "model_runtime": "claude",
+                                        "task_id": "T1", "event": "task_message"}}}
+
+
+def test_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_path):
+    """GH#49: a worker that is log-SILENT (stalled) past the hard cap but PROVABLY ALIVE — holding
+    an unanswered tool_use (a long external job, e.g. `xcodebuild test`) — must NOT be hard-killed.
+    It is checkpoint-respawned like a still-progressing worker: graceful SIGTERM (so the C1 digest
+    runs), run finished as `exited`, worktree KEPT, a fresh worker spawned, respawns incremented."""
+    posts, sigs, spawned, torn = [], [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "repr", newproc))
+
+    log = tmp_path / "w.log"
+    # an unanswered tool_use (a fired shell command whose tool_result lands only when it returns)
+    # → _worker_is_live True even though the log is frozen.
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _stalled_respawn_entry(proc, log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    # graceful checkpoint, NOT a hard kill+teardown: SIGTERM to the old group, worktree kept
+    assert sigs and sigs[0] == (4321, signal.SIGTERM)
+    assert torn == []
+    fin = next(b for u, b in posts if u.endswith("/runs/R1/finish"))
+    assert fin["status"] == "exited"                            # work preserved, not `killed`
+    # respawned on the same worktree, agent still tracked, respawns bumped, lease NOT released
+    w = live["agent-X"]
+    assert w["proc"] is newproc and w["respawns"] == 1 and w["run_id"] == "R2"
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "worker_checkpoint_respawn" and ack["release_lease"] is False
+
+
+def test_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_path):
+    """GH#49 teeth: the new exemption is LIVENESS-gated, not a blanket over-cap reprieve. A worker
+    that is stalled past the cap with NO in-flight tool (last event a plain assistant text → not
+    live) is a genuine runaway and must still be hard-killed, even WITH a respawn budget."""
+    posts, sigs, spawned = [], [], []
+    monkeypatch.setattr(notifier, "_post_json", lambda u, b, **k: posts.append((u, b)))
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"hmm"}]}}\n')
+    live = _stalled_respawn_entry(FakeProc(pid=4321, exited=False), log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned == []                                        # NOT respawned — not live
+    assert sigs and live == {}                                  # hard-killed + released
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "worker_timeout_killed" and ack["release_lease"] is True
+    diag = json.loads(next(b for u, b in posts if u.endswith("/runs/R1/finish"))["kill_reason"])
+    assert diag["over_cap"] is True and diag["worker_is_live"] is False
+
+
 def test_watchdog_kill_escalates_to_sigkill_when_term_ignored(monkeypatch, tmp_path):
     """ISS-45: the graceful kill is not a free pass — a hung worker that ignores SIGTERM is
     still SIGKILLed after the grace window."""
