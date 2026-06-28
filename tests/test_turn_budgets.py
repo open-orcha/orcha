@@ -1,12 +1,18 @@
-"""Turn budgets (Orcha#22): exhausted budget blocks claims; bump only on work."""
+"""Turn budgets: GH#39 removed the budget gate — turns_used is telemetry only and never
+blocks a claim. The counter still bumps on work (Orcha#22) and not on reads."""
 
 
-async def test_exhausted_budget_blocks_next_429(client, make_agent, make_task, db):
+async def test_exhausted_budget_still_allows_claim(client, make_agent, make_task, db):
+    """GH#39: an exhausted turn budget no longer 429s an agent off its own assigned+ready task."""
+    human = await make_agent("op", "operator", kind="human")
     a = await make_agent("burned", "eng")
-    await make_task("work", "done")
+    t = await make_task("work", "done")
+    ar = await client.post(f"/api/tasks/{t['id']}/assign",
+                           json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
+    assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
     db.execute("UPDATE agents SET turns_used=turn_budget WHERE id=%s", (a["agent_id"],))
     r = await client.post(f"/api/agents/{a['agent_id']}/next")
-    assert r.status_code == 429, r.text
+    assert r.status_code == 200 and r.json()["task"] is not None, r.text
 
 
 async def test_budget_with_headroom_allows_claim(client, make_agent, make_task, db):
