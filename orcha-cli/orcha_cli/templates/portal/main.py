@@ -6680,6 +6680,11 @@ class RequestRespond(BaseModel):
 class RequestActorBody(BaseModel):
     requester_agent_id: str
     reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
+    # #60: an optional nudge delivered to the agent currently HANDLING the request (its
+    # target) when it is closed externally — so it learns the close happened and reorients.
+    # Independent of `reason` (which routes to the OWNER). `escalate_request` shares this body
+    # and simply ignores `nudge`. Capped at MAX_FEEDBACK_LEN like the other free-text fields.
+    nudge: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
 class TaskRequestAccept(BaseModel):
@@ -7032,11 +7037,12 @@ def close_request(rid: str, body: RequestActorBody):
         # B7 (ISS-23): the actor may be the requester (owner) OR ANY human — the human is the
         # authoritative party and can abandon a stale request regardless of owner. Non-humans
         # stay owner-only and get a 403, regardless of status.
-        cur.execute("SELECT kind FROM agents WHERE id=%s", (body.requester_agent_id,))
+        cur.execute("SELECT kind, alias FROM agents WHERE id=%s", (body.requester_agent_id,))
         arow = cur.fetchone()
         if not arow:
             raise HTTPException(404, f"agent {body.requester_agent_id} not found")
         is_human = arow["kind"] == "human"
+        actor_alias = arow["alias"] or ("a human" if is_human else "an agent")
         is_owner = str(r["requester_id"]) == body.requester_agent_id
         if not is_human and not is_owner:
             raise HTTPException(403, "only the requester (or a human) may close")
@@ -7066,8 +7072,32 @@ def close_request(rid: str, body: RequestActorBody):
         if forced:
             _route_close_reason(cur, r["container_id"], "request_close", rid, reason,
                                 body.requester_agent_id, str(r["requester_id"]))
+        # #60: optional nudge to the agent HANDLING the request (its target). Delivered with the
+        # OPEN cursor BEFORE conn.commit() — same transaction as the close UPDATE — so a nudge can
+        # never escape if the close rolls back, and the agent never sees a poke for a close that
+        # didn't happen. _poke_path_forward only _publish_event's on cur, so it's atomic here.
+        # Independent of `reason` (which routes to the OWNER); skipped when there's no distinct
+        # target (e.g. a self-targeted request) so an agent is never poked about its own close.
+        nudge = (body.nudge or "").strip()
+        nudged_target = False
+        if nudge and r["target_id"] and str(r["target_id"]) != body.requester_agent_id:
+            short_rid = rid[:8]
+            payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][:120]
+            # Closure-FRAMED prompt (not raw nudge text): the target is told the request was closed
+            # externally, that no further work is needed, who closed it, then the request id/preview,
+            # and finally the human's note — so it reorients rather than acting on the request again.
+            message = (
+                f'A request you were handling was just closed by {actor_alias}. '
+                f'No further work is needed on it. '
+                f'Request {short_rid}: "{payload_preview}". '
+                f'Note from the closer: {nudge}'
+            )
+            _poke_path_forward(cur, str(r["container_id"]), str(r["target_id"]),
+                               body.requester_agent_id, message)
+            nudged_target = True
         conn.commit()
-    return {"request_id": rid, "status": "closed", "forced_by_human": forced}
+    return {"request_id": rid, "status": "closed", "forced_by_human": forced,
+            "nudged_target": nudged_target}
 
 
 class TriageCloseBody(BaseModel):

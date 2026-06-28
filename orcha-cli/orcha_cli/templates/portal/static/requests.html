@@ -296,11 +296,13 @@
     }
     if (act === "close") {
       O.modal({ title: "Close this request?", desc: "Marks it resolved. " + r.from + " sees it closed on the next sync. A reason is required if it isn't yours.",
-        body: `<textarea id="clR" class="ans-in" style="min-height:64px" placeholder="Reason (required when closing someone else's request)…"></textarea>`,
+        body: `<textarea id="clR" class="ans-in" style="min-height:64px" placeholder="Reason (required when closing someone else's request)…"></textarea>`
+          + `<textarea id="clN" class="ans-in" style="min-height:64px;margin-top:8px" placeholder="Nudge the agent handling this (optional) — they'll be told it was closed…"></textarea>`,
         primary: "Close request", danger: true,
-        onPrimary: () => { const reason = ($("clR").value || "").trim(); O.closeModal();
-          postJSON("/api/requests/" + encodeURIComponent(r.id) + "/close", { requester_agent_id: h.id, reason: reason || undefined })
-            .then((res) => { O.toast(res.ok ? "Request closed" : (res.status === 422 ? "A reason is required to close another agent's request." : "Failed (" + res.status + ")"), res.ok ? "ok" : "danger"); if (res.ok) { renderList(); renderDetail(); } }); } });
+        onPrimary: () => { const reason = ($("clR").value || "").trim(); const nudge = ($("clN").value || "").trim(); O.closeModal();
+          postJSON("/api/requests/" + encodeURIComponent(r.id) + "/close", { requester_agent_id: h.id, reason: reason || undefined, nudge: nudge || undefined })
+            .then((res) => res.json().then((j) => ({ ok: res.ok, status: res.status, j })).catch(() => ({ ok: res.ok, status: res.status, j: {} })))
+            .then((res) => { O.toast(res.ok ? (res.j.nudged_target ? "Request closed — agent nudged" : "Request closed") : (res.status === 422 ? "A reason is required to close another agent's request." : "Failed (" + res.status + ")"), res.ok ? "ok" : "danger"); if (res.ok) { renderList(); renderDetail(); } }); } });
       return;
     }
   }
