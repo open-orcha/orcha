@@ -425,6 +425,59 @@ async def test_plan_decision_left_unhandled_cross_task_but_fyi_decisions_drain(
     assert plan_ev in set(cand2["handled_event_ids"])
 
 
+# ============ R4 sole-event grounding: a directive that is the ONLY pending row ============
+
+async def test_sole_rejected_verify_grounds_the_run(
+        client, container, make_agent, make_task, db):
+    """R4 GAP: a REJECTED verify can be the ONLY pending event after the task was already claimed (the
+    assignment/readiness rows were consumed at the /next claim). There is no ready task and no directed
+    message, so context_task_id would be None and the cross-task filter would drop the very row that
+    woke us — leaving a worker awake with no task, no protocol, no surfaced directive. The fix derives
+    the run context from that lone task-scoped directive: context binds to A, and A's rework row is
+    surfaced in the manifest AND the rendered wake prompt (but still NOT run-acked — it's a DIRECTIVE,
+    cleared only at A's clean /done)."""
+    x = await make_agent("x", "eng")
+    human = await make_agent("kedar", "lead", kind="human")
+    a = await make_task("task A", "done", assignee_alias="x")      # in_progress, x working
+    await client.post(f"/api/tasks/{a['id']}/done",
+                      json={"agent_id": x["agent_id"], "result": "draft"})
+    # claim consumed the assignment; finishing + REJECT leaves the rework verify as the sole pending row
+    rej = await client.post(f"/api/tasks/{a['id']}/verify",
+                            json={"approve": False, "feedback": "redo the edge case",
+                                  "actor_agent_id": human["agent_id"]})
+    assert rej.status_code == 200 and rej.json()["status"] == "in_progress"
+    verified_ev = _event_id(db, x["agent_id"], "task_verified", task_id=a["id"])
+
+    cand = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert cand["context_task_id"] == a["id"]                      # derived from the lone directive
+    # the rework row survives the run-context filter and reaches the rendered 'drain in this order'
+    assert any(str(n.get("drain_task_id")) == str(a["id"]) for n in cand["notifications"])
+    assert str(a["id"]) in notifier.build_wake_prompt(cand)
+    assert verified_ev not in set(cand["handled_event_ids"])       # DIRECTIVE → never run-acked
+
+
+async def test_sole_plan_decision_grounds_the_run(
+        client, container, make_agent, make_task, db):
+    """R4 GAP (same shape, TASK_BOUND): a plan_approval decision_made can be the SOLE pending event
+    after a task is claimed. With no ready task / directed message the context would be None and the
+    plan row would be filtered out, waking an ungrounded worker. The fix derives context from the lone
+    TASK_BOUND row: context binds to A, the plan decision is surfaced AND (being TASK_BOUND == context)
+    drains in this run."""
+    x = await make_agent("x", "eng")
+    human = await make_agent("kedar", "lead", kind="human")
+    a = await make_task("task A (plan)", "done", assignee_alias="x")   # in_progress; plan subject
+    await client.post("/api/decisions", json={
+        "subject_type": "plan_approval", "subject_id": a["id"], "decision": "approve",
+        "reason": "ship it", "actor_agent_id": human["agent_id"], "target_agent_id": x["agent_id"]})
+    plan_ev = _event_id(db, x["agent_id"], "decision_made", subject_id=a["id"])
+
+    cand = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert cand["context_task_id"] == a["id"]                      # derived from the lone plan decision
+    assert any(str(n.get("drain_task_id")) == str(a["id"]) for n in cand["notifications"])
+    assert str(a["id"]) in notifier.build_wake_prompt(cand)
+    assert plan_ev in set(cand["handled_event_ids"])              # TASK_BOUND == context → drains here
+
+
 # =========== active-conversations — an already-acked row above the floor is not pending ===========
 
 async def test_active_conversations_excludes_acked_rows_above_pinned_floor(

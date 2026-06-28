@@ -4914,6 +4914,36 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # them). Bounded by ack_through_ts so a truncated directed batch's tail is never acked-away
             # undelivered. The daemon posts these ids to /events/ack-handled at run COMPLETION.
             context_task_id = auto_tasks[0] if auto_tasks else wake_task_id
+            # GH #58 (R4 fix): a task-scoped DIRECTIVE/TASK_BOUND row can be the SOLE pending event
+            # AFTER its task was already claimed — a rejected verification (task_verified{approved:false})
+            # or a plan decision (decision_made plan_approval), whose assignment/readiness rows were
+            # already consumed at the /next claim. The task is in_progress (not 'ready', so auto_tasks
+            # is empty) and these directives never feed wake_task_id (that is directed-message / answer
+            # derived only) — so context_task_id would stay None, the cross-task filter below would drop
+            # the very row that woke us, and the worker would wake with one pending event but no task,
+            # no protocol, no surfaced directive. When nothing else has selected a context, derive it
+            # from the NEWEST pending task-scoped (TASK_BOUND / DIRECTIVE) row whose task is still live
+            # (latest wins — same precedence as wake_task_id). Other tasks' rows stay cross-task and
+            # re-surface on their own run. NEW_WORK is intentionally excluded: it is grounded via the
+            # /next claim (auto_tasks) or the accept/reject seam, never by passively waking a context.
+            if context_task_id is None and pending:
+                cur.execute(
+                    """SELECT e.event_name, e.payload, e.target_id FROM agent_events e
+                       WHERE e.event_key=%s AND e.ts > %s AND e.ts <= %s
+                         AND e.event_name <> ALL(%s)
+                         AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                          WHERE a.agent_id=%s AND a.event_id=e.id)
+                       ORDER BY e.ts DESC, e.id DESC""",
+                    (aid, a["delivered_ts"], ack_through_ts, list(_NON_WAKING_EVENTS), aid),
+                )
+                for _row in cur.fetchall():
+                    _dc = _drain_class(cur, _row["event_name"], _row["payload"],
+                                       target_id=_row["target_id"])
+                    if (_dc["bucket"] in (_DRAIN_TASK_BOUND, _DRAIN_DIRECTIVE) and _dc["task_id"]
+                            and _drain_task_status(cur, _dc["task_id"])
+                                not in (None, "completed", "cancelled")):
+                        context_task_id = str(_dc["task_id"])
+                        break
             # GH #58 (R2 fix): now that the run-context task is known, surface ONLY the directed
             # messages this run will actually handle. Drop a cross-task TASK_BOUND/NEW_WORK/DIRECTIVE
             # row (task != context) — it stays pending for that task's own protocol-bound ephemeral, so
