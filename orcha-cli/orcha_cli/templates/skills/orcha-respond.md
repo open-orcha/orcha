@@ -42,9 +42,24 @@ yet, don't respond; keep working and answer once you have a real result.
      -H 'Content-Type: application/json' \
      -d '{"responder_agent_id": "<my agent_id>", "response": "<answer>"}'
    ```
-   Response: `{"request_id": "...", "status": "answered"}`
+   Response — inspect the body, it has TWO shapes (see the ISS-24 note below):
+   - **Fresh answer**: `{"request_id": "...", "status": "answered"}`
+   - **Already answered** (idempotent no-op): `{"request_id": "...", "status": "answered", "already_answered": true, "response": "<the existing answer>"}`
 
-5. **Report**: `request <short-id> answered. Requester wakes on your result; they will /orcha-close <rid> --alias <their_alias> or /orcha-escalate.` If this was a task request you accepted, answering does NOT send the spawned task to verification — run `/orcha-done <spawned_task_id> "<result>"` separately for that.
+   **ISS-24 — already-answered is a safe no-op, not a failure.** The endpoint is idempotent
+   for the request's own target: if the request was *already* answered (e.g. the daemon and a
+   live `/orcha-listen` both fired, or an at-least-once retry after a dropped response), it
+   returns **200** with `"already_answered": true` and echoes the existing `response` —
+   it does NOT re-answer or 409. So **inspect the body before reporting**: if
+   `already_answered` is true, treat it as done-by-someone-already and report it as a no-op
+   (step 5, second form) rather than claiming you just answered. Only a `closed` (or otherwise
+   terminal, non-`accepted`) request 409s — a genuine illegal transition.
+
+5. **Report**:
+   - Fresh answer (`already_answered` absent/false): `request <short-id> answered. Requester wakes on your result; they will /orcha-close <rid> --alias <their_alias> or /orcha-escalate.`
+   - Already answered (`already_answered` true): `request <short-id> was already answered (no-op); existing answer left in place.` — do not re-post or duplicate.
+
+   If this was a task request you accepted, answering does NOT send the spawned task to verification — run `/orcha-done <spawned_task_id> "<result>"` separately for that.
 
 ## Missing required arguments
 
@@ -53,5 +68,6 @@ If `request_id` or `response` is missing from `$ARGUMENTS`, use **AskUserQuestio
 ## Errors
 
 - **403** "only the target agent may respond" → this request is addressed to someone else; check `/orcha-inbox` for what's actually yours.
-- **409** "request is '<status>', not 'open'/'accepted'" → already answered/closed, or a task request you haven't accepted yet (accept it first with `/orcha-accept-task`).
+- **200** `"already_answered": true` → NOT an error; the request was already answered (idempotent no-op). See step 4 — report it as a no-op, don't retry.
+- **409** "request is '<status>', not 'open'/'accepted' — cannot respond" → the request is `closed` (or otherwise terminal); it can't be answered. An already-`answered` request does NOT 409 (it returns 200, above), and an `accepted` task request you took on IS respondable (`accepted` is a waypoint — flip it to `answered` with your result; if you haven't accepted it yet, run `/orcha-accept-task` first).
 - **409** "request was escalated to human" → target_id is null; a human must handle it now.

@@ -215,7 +215,7 @@
   function trowHtml(t) {
     const who = t.assignee, a = O.agentByAlias(who);
     return `<button class="trow ${t.id === sel ? "sel" : ""}" data-id="${O.esc(t.id)}">
-      ${O.glyph(O.statusClass(t.status))}
+      ${O.pill(t.status)}
       <span class="grow">
         <span class="tt">${t.is_root ? '<span class="tag root" style="margin-right:5px">root</span>' : ""}${O.esc(t.title)}</span>
         <span class="tm">${who ? O.avatar(who, a ? a.kind : "ai", "sm") : ""}<span class="t2">${O.esc(who || "unassigned")}</span>

@@ -786,7 +786,6 @@ the smoking gun.
 | `/orcha-next` / `/orcha-done` says "tab isn't bound to an agent" | no `.claude/orcha-tabs/<tty>.json` in this terminal | re-run `/orcha-register-agent` in this tab |
 | `/orcha-done` returns 409 "task is 'ready', not 'in_progress'" | task hasn't been claimed yet | `/orcha-next` first, or only `done` your own claimed task |
 | `/orcha-verify` returns 409 "task is 'in_progress', not 'needs_verification'" | task hasn't been marked done yet | wait for `/orcha-done` from the assignee |
-| `/orcha-next` returns 429 "turn budget exhausted" | agent has hit its `turn_budget` (default 50) | `UPDATE agents SET turns_used=0 WHERE id=...` in psql, or re-register the agent |
 | Portal returns 404 on a UUID | DB was reset, container id is stale | `/orcha-container` to make a new one |
 | Edited `001_init.sql` template, schema didn't change in a live project | `initdb.d` only runs on first boot | `orcha down -v && orcha up` |
 | Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then `rm -rf .orcha .claude && orcha init` in the target project. |
