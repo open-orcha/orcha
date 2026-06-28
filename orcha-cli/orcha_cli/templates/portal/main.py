@@ -351,6 +351,28 @@ def resolve_model_runtime(model: Optional[str]) -> str:
     """
     return _MODELS_BY_ID.get(resolve_model(model), {}).get("runtime", "claude")
 
+
+# GH #51: per-agent reasoning effort. The id is the level passed straight to the worker —
+# `claude --effort <id>` (low|medium|high|xhigh|max) and, for Codex agents, mapped to
+# `-c model_reasoning_effort=<...>`. Curated like AVAILABLE_MODELS so an unknown/retired
+# persisted value gracefully resolves to DEFAULT_REASONING_EFFORT and never breaks a spawn.
+AVAILABLE_REASONING_EFFORTS = [
+    {"id": "low", "name": "Low"},
+    {"id": "medium", "name": "Medium"},
+    {"id": "high", "name": "High"},
+    {"id": "xhigh", "name": "Extra-high"},
+]
+DEFAULT_REASONING_EFFORT = "medium"
+_REASONING_EFFORT_IDS = {e["id"] for e in AVAILABLE_REASONING_EFFORTS}
+
+
+def resolve_reasoning_effort(effort: Optional[str]) -> str:
+    """Map a PERSISTED agents.reasoning_effort choice to the level to actually spawn with.
+    Unknown/NULL (no choice, or a value from an older deploy) → DEFAULT_REASONING_EFFORT, so a
+    stale value never reaches the worker argv. The stored choice is left intact."""
+    return effort if effort in _REASONING_EFFORT_IDS else DEFAULT_REASONING_EFFORT
+
+
 # Item 8 (review): cap user-supplied text to keep snapshots bounded and the DB sane.
 # Bytes, not chars — Postgres TEXT has no hard limit, but every snapshot returns these.
 MAX_NAME_LEN     = 200
@@ -1912,6 +1934,12 @@ class AgentModelUpdate(BaseModel):
     model: str = Field(..., max_length=64)
 
 
+class AgentReasoningEffortUpdate(BaseModel):
+    """GH #51: change the reasoning effort an agent's worker runs at. Must be one of the
+    curated levels (AVAILABLE_REASONING_EFFORTS)."""
+    reasoning_effort: str = Field(..., max_length=16)
+
+
 class AgentUpdate(BaseModel):
     """Agent-update: edit an agent's role / system_prompt / alias (onboarding +
     re-profiles). Human-authority gated. All fields optional except the actor — a
@@ -2214,7 +2242,7 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
         cur.execute(
             """SELECT a.id, a.alias, a.role, a.kind, a.turns_used, a.turn_budget,
                       a.last_heartbeat_at, a.is_auto_created, a.created_at, a.terminated_at,
-                      a.model,
+                      a.model, a.reasoning_effort,
                       -- #266: the configured clock-driven auto-wake cadence (NULL = off) so the
                       -- portal can render/edit it on the agent card without a second call.
                       a.auto_wake_interval_secs,
@@ -2738,6 +2766,13 @@ def list_models():
     the default. There is no live model-list API from the CLI — this is a maintained
     constant. B8's dropdown reads this; the selected id is persisted as agents.model."""
     return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL}
+
+
+@app.get("/api/reasoning-efforts")
+def list_reasoning_efforts():
+    """GH #51: the curated reasoning-effort list the agent settings UI renders ({id, name})
+    plus the default. Mirrors /api/models; the selected id is persisted as agents.reasoning_effort."""
+    return {"efforts": AVAILABLE_REASONING_EFFORTS, "default": DEFAULT_REASONING_EFFORT}
 
 
 @app.post("/api/containers/{cid}/status", status_code=200)
@@ -3825,6 +3860,36 @@ def set_agent_model(aid: str, body: AgentModelUpdate):
     return {"agent_id": aid, "model": new_model, "cold_reset_conversations": cold_reset}
 
 
+@app.post("/api/agents/{aid}/reasoning-effort", status_code=200)
+def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate):
+    """GH #51: set the reasoning effort an agent's worker spawns at. Persists
+    agents.reasoning_effort and flows through the read payload + wake-scan candidate, where the
+    daemon passes it to the worker (`claude --effort <level>`, or Codex model_reasoning_effort).
+    Must be a curated level (AVAILABLE_REASONING_EFFORTS). Humans carry no effort (400). Unlike
+    a model swap, effort applies per-spawn (it is not baked into a warm session), so no cold
+    reset is needed — the next worker spawn picks it up."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    if body.reasoning_effort not in _REASONING_EFFORT_IDS:
+        raise HTTPException(
+            400, f"reasoning_effort '{body.reasoning_effort}' is not valid; "
+                 f"choose one of {sorted(_REASONING_EFFORT_IDS)}")
+    with db_cursor() as (conn, cur):
+        ag = _require_agent(cur, aid)
+        cur.execute("SELECT kind, reasoning_effort FROM agents WHERE id=%s", (aid,))
+        row = cur.fetchone()
+        if row["kind"] == "human":
+            raise HTTPException(400, "humans carry no reasoning effort")
+        old_effort = row["reasoning_effort"]
+        cur.execute("UPDATE agents SET reasoning_effort=%s WHERE id=%s RETURNING reasoning_effort",
+                    (body.reasoning_effort, aid))
+        new_effort = cur.fetchone()["reasoning_effort"]
+        log_event(cur, ag["container_id"], "human", None, "agent", aid, "reasoning_effort_changed",
+                  {"reasoning_effort": new_effort, "previous_reasoning_effort": old_effort})
+        conn.commit()
+    return {"agent_id": aid, "reasoning_effort": new_effort}
+
+
 @app.patch("/api/agents/{aid}", status_code=200)
 def update_agent(aid: str, body: AgentUpdate):
     """Edit an agent's role / system_prompt / alias (onboarding + re-profiles; no such
@@ -4264,6 +4329,7 @@ def active_conversations(cid: str):
         _require_container(cur, cid)
         cur.execute(
             """SELECT cv.id AS conversation_id, cv.agent_id, a.alias AS agent_alias, a.model,
+                      a.reasoning_effort,
                       cv.session_id, cv.status, cv.last_turn_at,
                       -- #266: the clock-driven auto-wake inputs, so an idle warm resident can YIELD
                       -- its lease when the cadence is due (the wake then fires ephemeral, never
@@ -4333,6 +4399,7 @@ def active_conversations(cid: str):
             # actually picks this up (a warm --resume keeps the old in-session model).
             r["model"] = resolve_model(r["model"])
             r["model_runtime"] = resolve_model_runtime(r["model"])
+            r["reasoning_effort"] = resolve_reasoning_effort(r["reasoning_effort"])  # GH #51
             # ISS-74 (review fix): `prompt`/`task_message` events carry content with NO inbox surface —
             # they're delivered ONLY by injecting the text. So surface the bounded directed-message
             # batch (same semantics as wake_scan) and ACK ONLY THROUGH the last included one, so a
@@ -4535,7 +4602,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
         triage_key_enc = _provider_key_enc(cur, cid, _effective_use_case_provider(triage_model, "triage"))
         ack_key_enc = _provider_key_enc(cur, cid, _effective_use_case_provider(ack_model, "ack"))
         cur.execute(
-            """SELECT a.id, a.alias, a.model, a.last_heartbeat_at, a.turns_used, a.turn_budget,
+            """SELECT a.id, a.alias, a.model, a.reasoning_effort, a.last_heartbeat_at,
+                      a.turns_used, a.turn_budget,
                       a.auto_wake_interval_secs,
                       COALESCE(r.wake_enabled, true) AS wake_enabled,
                       r.tmux_target, r.headless_cwd, r.headless_flags,
@@ -4764,6 +4832,9 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # auto-falls-back to the default and never reaches the spawn argv as an invalid id.
                 "model": resolve_model(a["model"]),
                 "model_runtime": resolve_model_runtime(a["model"]),
+                # GH #51: the per-agent reasoning effort the daemon passes to the worker spawn,
+                # resolved server-side (unknown/NULL → DEFAULT_REASONING_EFFORT).
+                "reasoning_effort": resolve_reasoning_effort(a["reasoning_effort"]),
             })
     return {"container_id": cid, "container_status": c["status"],
             "active": active, "wakes_enabled": wakes_enabled,
