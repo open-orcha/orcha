@@ -4400,8 +4400,15 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
     participates in that task (looser participant check), so a stale/foreign id can never leak a
     protocol; otherwise we fall back to the in_progress guess.
 
-    Returns {task_id, title, protocol} for the resolved task, or {protocol: null} when none — so a
-    cold/idle wake simply carries no protocol section."""
+    GH #33: the resolved task's FULL body rides here too — title AND description AND
+    definition_of_done — so EVERY wake that resolves a task (the request-answer originating-link
+    path and the in-progress direct-assignment path both flow through this endpoint) surfaces the
+    complete spec, not just the title. The body is returned whenever a task resolves, independent
+    of whether a protocol is set; `protocol` is null when no working agreement exists.
+
+    Returns {task_id, title, description, definition_of_done, protocol} for the resolved task, or
+    {task_id: null, protocol: null} when none resolves — so a cold/idle wake carries neither a body
+    nor a protocol section."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
@@ -4413,11 +4420,12 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
         if task_id and _valid_uuid(task_id) and _agent_participates_in_task(
                 cur, str(agent["container_id"]), aid, task_id):
             cur.execute(
-                "SELECT id, title, protocol FROM tasks WHERE id=%s AND is_root=false", (task_id,))
+                "SELECT id, title, description, definition_of_done, protocol "
+                "FROM tasks WHERE id=%s AND is_root=false", (task_id,))
             row = cur.fetchone()
         if row is None:
             cur.execute(
-                """SELECT t.id, t.title, t.protocol
+                """SELECT t.id, t.title, t.description, t.definition_of_done, t.protocol
                    FROM tasks t
                    JOIN agent_tasks at ON at.task_id = t.id
                    WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
@@ -4427,9 +4435,12 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
                 (aid,),
             )
             row = cur.fetchone()
-    if not row or not row["protocol"]:
-        return {"task_id": str(row["id"]) if row else None, "protocol": None}
-    return {"task_id": str(row["id"]), "title": row["title"], "protocol": row["protocol"]}
+    if not row:
+        return {"task_id": None, "protocol": None}
+    # GH #33: body rides whenever a task resolves; protocol stays independent (null when unset).
+    return {"task_id": str(row["id"]), "title": row["title"],
+            "description": row["description"], "definition_of_done": row["definition_of_done"],
+            "protocol": row["protocol"] or None}
 
 
 class WakeAck(BaseModel):
@@ -5723,6 +5734,11 @@ def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
     identical `created_at` (bulk insert / coarse clock), and a `created_at < before` cursor would
     silently drop the same-timestamp rows straddling a page boundary (P2, kedar review #180). The
     composite tuple compare makes paging exact regardless of timestamp ties.
+
+    GH #33: the response also carries a `task` header — {title, description, definition_of_done} —
+    so a worker woken by a task-thread message that follows "read the thread" sees the FULL task
+    body alongside the conversation, not just the message preview. Acceptance criteria living in the
+    description / DoD are read before acting, not skipped for the title.
     """
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
@@ -5735,6 +5751,13 @@ def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
             "COALESCE(m.attachments, '[]'::jsonb) AS attachments, m.created_at")
     with db_cursor() as (_, cur):
         _require_task(cur, tid)
+        # GH #33: surface the FULL task body in a `task` header so a worker woken by a task-thread
+        # message — told to "read the thread" — reads description + definition_of_done before acting,
+        # not just the message preview and the title.
+        cur.execute("SELECT title, description, definition_of_done FROM tasks WHERE id=%s", (tid,))
+        _t = cur.fetchone()
+        task_hdr = {"title": _t["title"], "description": _t["description"],
+                    "definition_of_done": _t["definition_of_done"]}
         if limit and limit > 0:
             lim = min(limit, 200)
             params: list[Any] = [tid]
@@ -5761,7 +5784,7 @@ def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
             next_before = oldest["created_at"].isoformat() if (oldest and has_more) else None
             next_before_id = str(oldest["message_id"]) if (oldest and has_more) else None
             rows.reverse()   # ASC within the page (oldest→newest)
-            return {"task_id": tid, "messages": rows, "has_more": has_more,
+            return {"task_id": tid, "task": task_hdr, "messages": rows, "has_more": has_more,
                     "next_before": next_before, "next_before_id": next_before_id}
         cur.execute(
             f"""SELECT {cols}
@@ -5771,7 +5794,7 @@ def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
             (tid,),
         )
         messages = cur.fetchall()
-    return {"task_id": tid, "messages": messages}
+    return {"task_id": tid, "task": task_hdr, "messages": messages}
 
 
 @app.post("/api/tasks/{tid}/attachments", status_code=201)

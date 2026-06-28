@@ -59,6 +59,26 @@ async def test_next_claim_payload_carries_full_task_body(client, make_agent, mak
     assert claimed["definition_of_done"] == "all 5 iterations logged"
 
 
+async def test_task_thread_read_carries_task_body_header(client, make_agent, make_task):
+    """GH #33: reading a task thread also returns a `task` header (title + description +
+    definition_of_done), so a worker woken by a task-thread message and told to "read the thread"
+    sees the FULL task body — not just the message preview and the title."""
+    a = await make_agent("dev", "eng")
+    t = await make_task("loop the thing", "all 5 iterations logged", assignee_alias="dev",
+                        description="Run the loop 5 times; each pass appends a line.")
+    await client.post(f"/api/tasks/{t['id']}/messages",
+                      json={"author_id": a["agent_id"], "body": "starting now"})
+    r = await client.get(f"/api/tasks/{t['id']}/messages")
+    assert r.status_code == 200, r.text
+    hdr = r.json()["task"]
+    assert hdr["title"] == "loop the thing"
+    assert hdr["description"] == "Run the loop 5 times; each pass appends a line."
+    assert hdr["definition_of_done"] == "all 5 iterations logged"
+    # the same header rides on the paginated (limit>0) read too
+    rp = await client.get(f"/api/tasks/{t['id']}/messages", params={"limit": 5})
+    assert rp.json()["task"]["definition_of_done"] == "all 5 iterations logged"
+
+
 async def test_next_no_ready_returns_none(client, make_agent):
     a = await make_agent("idle-claimer", "eng")
     r = await client.post(f"/api/agents/{a['agent_id']}/next")
