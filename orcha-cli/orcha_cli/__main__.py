@@ -857,6 +857,79 @@ def cmd_down(args: argparse.Namespace) -> None:
     _compose(orcha_dir, "down", *extra)
 
 
+def cmd_uninstall(args: argparse.Namespace) -> None:
+    """GH #26: cleanly uninstall the host `orcha` CLI and stop its background processes.
+
+    Trashing the Mac app never touched the CLI (installed separately via Homebrew), so
+    `which orcha` kept resolving. This gives the app (and users) a single clean teardown:
+      1. stop the notifier daemon + live-terminal bridge for THIS workspace (best-effort),
+      2. uninstall the CLI itself — `brew uninstall` for a Homebrew keg, else print the
+         uv/pip command (we never auto-delete an editable/dev install),
+      3. optionally `brew untap` with --untap.
+
+    It deliberately does NOT wipe project data or tear down Docker — that stays a separate,
+    explicit step (`orcha down -v`), echoed below so the user knows it's untouched.
+    """
+    cwd = pathlib.Path.cwd()
+    # 1. Stop this workspace's background processes (best-effort; fine if none are running
+    #    or we're not in a project dir — uninstalling the CLI shouldn't require one).
+    try:
+        if stop_daemon(cwd):
+            print("[orcha] stopped the notifier daemon for this workspace")
+    except Exception as e:
+        print(f"[orcha] warn: could not stop notifier daemon ({e})", file=sys.stderr)
+    try:
+        from orcha_cli.terminal_bridge import stop_bridge
+        if stop_bridge(cwd):
+            print("[orcha] stopped the live-terminal bridge for this workspace")
+    except Exception as e:
+        print(f"[orcha] warn: could not stop terminal bridge ({e})", file=sys.stderr)
+
+    # 2. Uninstall the CLI itself.
+    keg = _brew_keg()
+    if keg:
+        brew = shutil.which("brew")
+        if "@" in keg and not args.force:
+            print(f"[orcha] host CLI is pinned to versioned formula {keg} (an explicit pin) — "
+                  f"not uninstalling it automatically.\n"
+                  f"        To remove it anyway: brew uninstall {keg}   (or re-run with --force)")
+        elif not brew:
+            print("[orcha] warn: Homebrew install detected but `brew` is not on PATH; "
+                  f"uninstall manually with: brew uninstall open-orcha/orcha/{keg}",
+                  file=sys.stderr)
+        else:
+            cmd = [brew, "uninstall", f"open-orcha/orcha/{keg}"]
+            print(f"[orcha] uninstalling host CLI via Homebrew\n        $ {' '.join(cmd)}")
+            try:
+                ok = subprocess.run(cmd).returncode == 0
+                print("[orcha] ✓ CLI uninstalled" if ok else
+                      "[orcha] warn: brew uninstall returned non-zero", file=sys.stderr if not ok else sys.stdout)
+            except (OSError, subprocess.SubprocessError) as e:
+                print(f"[orcha] warn: could not launch brew ({e})", file=sys.stderr)
+            if args.untap and brew:
+                untap = [brew, "untap", "open-orcha/orcha"]
+                print(f"[orcha] untapping the formula\n        $ {' '.join(untap)}")
+                try:
+                    subprocess.run(untap)
+                except (OSError, subprocess.SubprocessError):
+                    pass   # best-effort; an in-use tap (other formulae) is fine to leave
+    else:
+        exe = shutil.which("orcha")
+        if exe:
+            print(f"[orcha] host CLI is not a Homebrew keg (found at {exe}).")
+            print("[orcha] remove it with your package manager, e.g.:")
+            print("        uv tool uninstall orcha       # if installed via uv")
+            print("        pip uninstall orcha           # if installed via pip")
+        else:
+            print("[orcha] no `orcha` on PATH — CLI already removed.")
+
+    # 3. Be explicit that data/stack are intentionally left alone (issue #26 DoD).
+    print()
+    print("[orcha] Your project data and Docker stack were left untouched.")
+    print("        To also stop + remove this project's containers:  orcha down")
+    print("        To additionally wipe the database volume (DESTRUCTIVE):  orcha down -v")
+
+
 def cmd_migrate(_: argparse.Namespace) -> None:
     """R1: apply pending DB migrations on demand (the portal also runs them on startup,
     so `orcha up` already migrates; this is the explicit, on-demand path)."""
@@ -2396,6 +2469,18 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--no-bridge", action="store_true",
                         help="don't restart the live-terminal bridge (headless host with no terminal panel)")
     update.set_defaults(func=cmd_update)
+
+    uninstall = sub.add_parser(
+        "uninstall",
+        help="GH #26: cleanly remove the host CLI — stop this workspace's notifier daemon + "
+             "live-terminal bridge, then `brew uninstall` (or print the uv/pip command). Does "
+             "NOT wipe project data or Docker (use `orcha down [-v]` for that).",
+    )
+    uninstall.add_argument("--untap", action="store_true",
+                           help="(Homebrew only) also `brew untap open-orcha/orcha` after uninstalling")
+    uninstall.add_argument("--force", action="store_true",
+                           help="uninstall even a version-pinned keg (orcha@X.Y.Z)")
+    uninstall.set_defaults(func=cmd_uninstall)
 
     st = sub.add_parser("status", help="show stack status + config")
     st.set_defaults(func=cmd_status)
