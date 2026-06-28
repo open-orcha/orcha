@@ -2476,8 +2476,16 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # judgment + reasoning continuity, not as a generic Claude.
             # GH #56 (Point 3 / FLAG 2a part d): pass the wake's originating-task hint so the injected
             # protocol is that task's (the link), not a guess at the agent's one in_progress task.
+            # GH #58 (R2 fix): the task THIS run is bound to — persona/protocol, run attribution, and
+            # the drain all key off ONE value. Prefer the server's context_task_id (the task /orcha-next
+            # will claim — auto_start[0] — else the directed wake_task_id); recompute that same formula
+            # locally only for version skew where an older server didn't send it. wake_task_id ALONE
+            # was the bug: it can be a DIFFERENT in_progress task A while the run claims ready task B,
+            # booting B's worker under A's protocol and attributing the run to A.
+            auto = cand.get("auto_start_task_ids") or []
+            run_task_id = cand.get("context_task_id") or (auto[0] if auto else cand.get("wake_task_id"))
             persona = None if dry_run else _build_persona(
-                api_base, cand["agent_id"], task_id=cand.get("wake_task_id"))
+                api_base, cand["agent_id"], task_id=run_task_id)
             log_path = None
             hc = cand.get("headless_cwd")
             if hc and not dry_run:
@@ -2495,7 +2503,6 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # that might hide one) gets isolated (ISS-8.1-b). Pure single-request wakes still
             # skip to save the ~200-500ms + disk. Only the daemon loop (live_workers present)
             # provisions — it alone can reap + tear down; --once has no reaper.
-            auto = cand.get("auto_start_task_ids") or []
             # request_created is published for BOTH info AND task requests (the payload's
             # `type` distinguishes them, but wake-scan only exposes the event NAME) — and a
             # task-request, once accepted, spawns an in_progress task + code work. So it is
@@ -2534,7 +2541,9 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                 # and the run was invisible in the thread it was answering.
                 run = _post_json(f"{api_base}/api/agents/{cand['agent_id']}/runs",
                                  {"wake_kind": "ephemeral", "wake_event": event,
-                                  "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                  # GH #58 (R2): attribute the run to the SAME context task the persona
+                                  # + drain keyed off (run_task_id).
+                                  "task_id": run_task_id,
                                   "log_path": str(log_path) if log_path else None,
                                   "pid": getattr(proc, "pid", None),
                                   "runtime": cand.get("model_runtime"),
@@ -2570,7 +2579,7 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                     "alias": cand.get("alias"),
                                     "model": cand.get("model"),
                                     "model_runtime": cand.get("model_runtime"),
-                                    "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                    "task_id": run_task_id,
                                     "handled_event_ids": cand.get("handled_event_ids") or [],
                                     "event": event}}
             elif worktree and not sent:

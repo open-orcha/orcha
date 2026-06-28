@@ -717,6 +717,35 @@ def test_tick_auto_start_task_takes_precedence_over_wake_task_id(monkeypatch):
     assert run["task_id"] == "TASK-AUTO"
 
 
+def test_tick_persona_and_run_keyed_off_context_task_not_wake_task_id(monkeypatch):
+    """GH #58 (R2 fix): when the server says the run-context is task B (context_task_id) while a
+    DIFFERENT in_progress task A is the directed wake_task_id, the worker must boot under B's protocol
+    and the run must be attributed to B — NOT A. Keying persona/attribution off wake_task_id alone
+    (the bug) booted B's worker under A's protocol and logged the run on A's thread."""
+    cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
+            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "pending_events": 1, "auto_start_task_ids": ["TASK-B"],
+            "wake_task_id": "TASK-A", "context_task_id": "TASK-B",
+            "reason": "wake", "latest_event": "task_assigned", "max_event_ts": 5.0,
+            "headless_flags": None}
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    persona_task_ids = []
+    monkeypatch.setattr(notifier, "_build_persona",
+                        lambda *a, **k: persona_task_ids.append(k.get("task_id")) or None)
+    monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (True, "cmd", FakeProc(pid=7)))
+    posts = []
+    monkeypatch.setattr(notifier, "_post_json",
+                        lambda url, body, **k: posts.append((url, body)) or
+                        ({"claimed": True} if "wake-claim" in url else {"run_id": "R"} if url.endswith("/runs") else {}))
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True,
+                  live_workers={})
+    assert persona_task_ids == ["TASK-B"]        # protocol keyed off the context task, not wake_task_id
+    run = next(b for u, b in posts if u.endswith("/runs"))
+    assert run["task_id"] == "TASK-B"            # run attributed to the context task
+
+
 def test_hardcap_floored_independent_of_small_lease_ttl(monkeypatch):
     """ISS-31 + wake-latency: a small lease_ttl (e.g. a stale 300s daemon launch) must NOT lower
     the worker hard cap — `hard_deadline` is floored at HARD_CAP_MIN_SECS so a still-progressing

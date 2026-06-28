@@ -4313,7 +4313,9 @@ def end_conversation(conv_id: str, body: ConversationActor):
 def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     """Surface the DIRECTED messages (`prompt` / `task_message` / `task_assigned`) pending for an
     agent past its wake cursor, oldest-first, bounded by MAX_PROMPT_BATCH_CHARS. Returns (messages,
-    wake_task_id, ack_through_ts).
+    wake_task_id, ack_through_ts). `messages` is a list of dicts {"text", "task_id", "bucket"} — the
+    bucket/task let the ephemeral wake_scan path filter to only the rows THIS run will handle once its
+    run-context task is known; callers that want the raw text take m["text"].
 
     These event kinds carry content with NO inbox surface — they are delivered ONLY by injecting
     the text into the agent's turn (there is no 'prompt inbox' to read). So the cursor must NOT be
@@ -4397,7 +4399,15 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
             ack_through_ts = included_ts
             break
         if m:
-            messages.append(m)
+            # GH #58 (R2 fix): carry each surfaced message's drain bucket + task binding so wake_scan
+            # can drop the ones THIS run won't handle (a cross-task task_bound/new_work/directive row
+            # is left for that task's own ephemeral — never injected into the current run's prompt,
+            # which would tell a task-B worker to act on task A). Classified by the SAME _drain_class
+            # that builds handled_event_ids, so surfacing and acking can never disagree. The resident
+            # drain path ignores these and injects every message's text (it yields the lease to a
+            # protocol-bound ephemeral whenever a task-carrying row is present).
+            bucket = _drain_class(cur, r["event_name"], pl)["bucket"]
+            messages.append({"text": m, "task_id": ev_task_id, "bucket": bucket})
             budget -= len(m)
             if ev_task_id:
                 wake_task_id = ev_task_id            # latest SURFACED task event wins (ISS-56;
@@ -4524,7 +4534,10 @@ def active_conversations(cid: str):
             if r["pending_inbox"]:
                 msgs, _tid, ack_ts = _collect_directed_messages(
                     cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
-                r["inbox_messages"] = msgs
+                # Resident drain injects every surfaced message's text (unchanged): a task-carrying row
+                # forces the daemon to YIELD the lease to a protocol-bound ephemeral, so the resident
+                # never silently owns cross-task work — no context filter needed here.
+                r["inbox_messages"] = [m["text"] for m in msgs]
                 r["inbox_ack_ts"] = ack_ts
             else:
                 r["inbox_messages"] = []
@@ -4828,7 +4841,7 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # path), so the cursor is acked only THROUGH the last included one. Shared with the
             # resident inbox-drain path (ISS-74) via _collect_directed_messages — identical semantics.
             if pending:
-                prompt_messages, wake_task_id, ack_through_ts = _collect_directed_messages(
+                directed_msgs, wake_task_id, ack_through_ts = _collect_directed_messages(
                     cur, aid, a["delivered_ts"], max_ts)
                 notifications, notifications_truncated = _wake_notification_manifest(
                     cur, aid, a["delivered_ts"])
@@ -4858,7 +4871,7 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                             if cur.fetchone():
                                 wake_task_id = _otid
             else:
-                prompt_messages, wake_task_id, ack_through_ts = [], None, max_ts
+                directed_msgs, wake_task_id, ack_through_ts = [], None, max_ts
                 notifications, notifications_truncated = [], False
             # Assigned-and-ready tasks = auto-start targets (deps cleared, awaiting
             # the owner to claim+begin). Root is excluded — only the human verifies it.
@@ -4882,6 +4895,18 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # them). Bounded by ack_through_ts so a truncated directed batch's tail is never acked-away
             # undelivered. The daemon posts these ids to /events/ack-handled at run COMPLETION.
             context_task_id = auto_tasks[0] if auto_tasks else wake_task_id
+            # GH #58 (R2 fix): now that the run-context task is known, surface ONLY the directed
+            # messages this run will actually handle. Drop a cross-task TASK_BOUND/NEW_WORK/DIRECTIVE
+            # row (task != context) — it stays pending for that task's own protocol-bound ephemeral, so
+            # a task-B worker is never told to read/respond on task A. Taskless rows (prompt) and the
+            # context task's own rows are kept. This MIRRORS the handled_event_ids drain rule below, so
+            # a message is surfaced iff this run either acks it (FYI/taskless/context task_bound) or
+            # owns it (context new_work/directive) — surfacing and acking can never disagree.
+            prompt_messages = [
+                d["text"] for d in directed_msgs
+                if not (d["bucket"] in (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE)
+                        and d["task_id"] and str(d["task_id"]) != str(context_task_id))
+            ]
             handled_event_ids: list[int] = []
             if pending:
                 cur.execute(

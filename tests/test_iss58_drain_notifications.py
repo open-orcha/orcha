@@ -235,6 +235,36 @@ async def test_cross_task_left_unhandled_then_rebinds(
     assert a_msg in set(cand2["handled_event_ids"])              # now drains in A's run (re-bound)
 
 
+async def test_prompt_messages_exclude_cross_task_directed_rows(
+        client, container, make_agent, make_task, db):
+    """R2 review fix: surfacing must agree with the drain. With context bound to ready task B, task A's
+    task-thread message (TASK_BOUND to A != B) is LEFT UNHANDLED — so it must ALSO be kept OUT of the
+    surfaced `prompt_messages`, or a task-B worker is told to read/respond on task A. Only after B is
+    claimed (context falls to A) does A's message surface. Mirrors the handled_event_ids re-bind."""
+    x = await make_agent("x", "eng")
+    human = await make_agent("kedar", "lead", kind="human")
+    poster = await make_agent("poster", "eng")
+    a = await make_task("task A", "done", assignee_alias="x")      # in_progress (NOT a ready target)
+    b = await make_task("task B", "done")                          # ready → wins context
+    await client.post(f"/api/tasks/{b['id']}/assign",
+                      json={"actor_agent_id": human["agent_id"], "agent_id": x["agent_id"]})
+    await client.post(f"/api/tasks/{a['id']}/messages",
+                      json={"author_agent_id": poster["agent_id"], "body": "rebase A onto main"})
+
+    cand = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert cand["context_task_id"] == b["id"]                      # ready B wins the context
+    joined = " ".join(cand["prompt_messages"])
+    assert str(a["id"]) not in joined                             # task A's directed row is NOT surfaced
+    assert "rebase A onto main" not in joined                     # ...and neither is its body
+
+    # claim B → context falls to A (its surfaced task event) → A's message now surfaces for its own run
+    claim = await client.post(f"/api/agents/{x['agent_id']}/next")
+    assert claim.status_code == 200 and claim.json()["task"]["id"] == b["id"]
+    cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert cand2["context_task_id"] == a["id"]
+    assert any("rebase A onto main" in m for m in cand2["prompt_messages"])   # surfaced for A's run
+
+
 # ===================== NEW_WORK — consumed at the /next claim, not by a drain =====================
 
 async def test_new_work_acked_at_next_claim_not_other_task(
