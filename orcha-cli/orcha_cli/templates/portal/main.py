@@ -609,6 +609,168 @@ def _notification_surface(n: dict) -> str:
     return (n.get("type") or n.get("event_name") or "notification").replace("_", "-")
 
 
+# ---------- GH #58: drain classification + per-event handled-set (one run drains many) ----------
+# _classify_notification (above) answers "how does this row LOOK in the operator panel". _drain_class
+# answers the ORTHOGONAL wake question: "may the CURRENTLY-AWAKE run mark this pending event handled,
+# or must it leave it for a different/fresh ephemeral?" Every emitted event_name maps to exactly one
+# bucket, so nothing is implicitly "safe to ack":
+#   NON_WAKING          - self-echo / live-chat channel; never wakes, never counted (digest_snapshotted,
+#                         conversation_turn). Excluded from the pending set entirely.
+#   FYI                 - informational; no task-context reasoning needed, so ANY awake run acks it so
+#                         they don't pile up (task_unassigned, a broadcast task_ready, status_changed, an
+#                         APPROVED task_verified, a task_close / non-task decision_made, request_closed,
+#                         request_escalated, the task_request_* receipts, agent_suggested/-decided, and a
+#                         stale task_assigned whose task is already terminal/gone).
+#   TASKLESS_ACTIONABLE - needs reasoning but carries no task identity, so any awake run may drain it
+#                         (the resident yields to a protocol-bound ephemeral — docs/orcha-review-protocol
+#                         §5.2): prompt, an INFO request_created, a request_answered with no originating task.
+#   TASK_BOUND          - actioning it needs reasoning bound to a SPECIFIC task, so it is handled ONLY by a
+#                         run whose context == that task; a different-task run LEAVES IT PENDING:
+#                         task_message; a request_answered carrying originating_task_id (the #56 link); a
+#                         decision_made on a live non-terminal task subject (plan_approval, keyed on
+#                         subject_id — the thread mirror is NOT a task_message bus event, so this event is
+#                         the sole wake for "proceed/revise").
+#   NEW_WORK            - claiming/accepting it STARTS the work, so a drain NEVER acks it; it is consumed at
+#                         the /next CLAIM (or accept/reject seam): a task_assigned/task_ready on a `ready`
+#                         task; a request_created of type 'task'.
+#   DIRECTIVE           - a STATUS-SENSITIVE start/rework directive on an in_progress task: surfaced as the
+#                         assignee's wake reason but NOT acked by any drain — only at that worker's
+#                         clean-completion / terminal seam (/done, cancel, unassign): a task_assigned on an
+#                         in_progress task; a task_verified{approved:false} (a rejected verify is a rework
+#                         directive, never an FYI — FYI-acking it would clear the rework wake before the
+#                         restored assignee sees it).
+_DRAIN_NON_WAKING = "non_waking"
+_DRAIN_FYI = "fyi"
+_DRAIN_TASKLESS_ACTIONABLE = "taskless_actionable"
+_DRAIN_TASK_BOUND = "task_bound"
+_DRAIN_NEW_WORK = "new_work"
+_DRAIN_DIRECTIVE = "directive"
+# the run MAY ack these buckets in a single drain pass (FYI + taskless any run; task_bound only when its
+# task == the run context, decided in wake_scan). NEW_WORK/DIRECTIVE are acked at their own seams, never here.
+_DRAIN_RUN_ACKABLE = (_DRAIN_FYI, _DRAIN_TASKLESS_ACTIONABLE)
+
+
+def _drain_task_status(cur, task_id) -> Optional[str]:
+    """The current status of a task referenced by an event payload, or None if missing/gone/not-a-uuid."""
+    if not task_id or not _valid_uuid(str(task_id)):
+        return None
+    cur.execute("SELECT status FROM tasks WHERE id=%s", (str(task_id),))
+    row = cur.fetchone()
+    return row["status"] if row else None
+
+
+def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) -> dict:
+    """Classify one pending bus row into a drain bucket. Returns {"bucket": str, "task_id": id|None}.
+    `task_id` is set for TASK_BOUND / NEW_WORK(task) / DIRECTIVE so wake_scan can compare it against the
+    run's context task. See the bucket taxonomy above."""
+    payload = payload or {}
+    if event_name in _NON_WAKING_EVENTS or event_name == "conversation_turn":
+        return {"bucket": _DRAIN_NON_WAKING, "task_id": None}
+    if event_name == "task_message":
+        return {"bucket": _DRAIN_TASK_BOUND, "task_id": payload.get("task_id")}
+    if event_name == "prompt":
+        return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
+    if event_name == "request_answered":
+        otid = payload.get("originating_task_id")
+        if otid and _drain_task_status(cur, otid) is not None:
+            return {"bucket": _DRAIN_TASK_BOUND, "task_id": str(otid)}
+        return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
+    if event_name == "request_created":
+        rtype = payload.get("type")
+        if rtype is None:
+            rid = payload.get("request_id")
+            if rid and _valid_uuid(str(rid)):
+                cur.execute("SELECT type FROM requests WHERE id=%s", (str(rid),))
+                rr = cur.fetchone()
+                rtype = rr["type"] if rr else None
+        if rtype == "task":
+            return {"bucket": _DRAIN_NEW_WORK, "task_id": None}   # a TASK request → accept/reject seam
+        return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
+    if event_name == "task_assigned":
+        tid = payload.get("task_id")
+        st = _drain_task_status(cur, tid)
+        if st == "ready":
+            return {"bucket": _DRAIN_NEW_WORK, "task_id": str(tid)}
+        if st == "in_progress":
+            return {"bucket": _DRAIN_DIRECTIVE, "task_id": str(tid)}
+        return {"bucket": _DRAIN_FYI, "task_id": None}   # pending/terminal/gone → informational
+    if event_name == "task_ready":
+        if target_id is None:
+            return {"bucket": _DRAIN_FYI, "task_id": None}   # container-wide availability ping
+        tid = payload.get("task_id")
+        st = _drain_task_status(cur, tid)
+        if st in (None, "completed", "cancelled"):
+            return {"bucket": _DRAIN_FYI, "task_id": None}
+        return {"bucket": _DRAIN_NEW_WORK, "task_id": str(tid)}   # assigned+targeted readiness → claim
+    if event_name == "task_verified":
+        if payload.get("approved") is False:
+            return {"bucket": _DRAIN_DIRECTIVE, "task_id": payload.get("task_id")}   # rework directive
+        return {"bucket": _DRAIN_FYI, "task_id": None}
+    if event_name == "decision_made":
+        st, sid = payload.get("subject_type"), payload.get("subject_id")
+        if (st == "plan_approval" and sid
+                and _drain_task_status(cur, sid) not in (None, "completed", "cancelled")):
+            return {"bucket": _DRAIN_TASK_BOUND, "task_id": str(sid)}
+        return {"bucket": _DRAIN_FYI, "task_id": None}   # task_close / request / checkpoint / dummy subject
+    # task_unassigned, status_changed, request_closed/escalated, task_request_*, agent_suggested/-decided,
+    # and any unknown event_name (graceful degrade) → FYI: any awake run may ack it.
+    return {"bucket": _DRAIN_FYI, "task_id": None}
+
+
+def _recompute_delivered_floor(cur, aid: str) -> float:
+    """GH #58: advance agent_wake_state.delivered_ts to the CONTIGUOUS floor — the ts just below the
+    OLDEST still-unhandled WAKING event past the cursor — never over an unhandled one. So an event a
+    run could not handle (a cross-task task_bound left pending) keeps re-surfacing instead of being
+    skipped by a blanket high-water jump. Idempotent; only ever moves the cursor forward (GREATEST)."""
+    cur.execute("SELECT COALESCE(delivered_ts, 0) AS d FROM agent_wake_state WHERE agent_id=%s", (aid,))
+    row = cur.fetchone()
+    delivered = (row["d"] if row else 0.0) or 0.0
+    cur.execute(
+        """SELECT min(e.ts) AS m FROM agent_events e
+           WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
+             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                              WHERE a.agent_id=%s AND a.event_id=e.id)""",
+        (aid, delivered, list(_NON_WAKING_EVENTS), aid))
+    min_unhandled = cur.fetchone()["m"]
+    if min_unhandled is None:
+        # nothing waking left unhandled → advance past EVERYTHING above the cursor (incl. trailing
+        # non-waking / already-handled rows) so a later scan starts clean.
+        cur.execute("SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s",
+                    (aid, delivered))
+        new_floor = cur.fetchone()["m"]
+    else:
+        # advance to the largest event ts strictly BELOW the oldest unhandled one — everything there is
+        # acked or non-waking, safe to skip; the unhandled event still re-surfaces on the next scan.
+        cur.execute("SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s AND ts < %s",
+                    (aid, delivered, min_unhandled))
+        new_floor = cur.fetchone()["m"]
+    if new_floor is None or new_floor <= delivered:
+        return delivered
+    cur.execute(
+        """INSERT INTO agent_wake_state (agent_id, delivered_ts) VALUES (%s, %s)
+           ON CONFLICT (agent_id) DO UPDATE SET
+             delivered_ts = GREATEST(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)""",
+        (aid, new_floor))
+    return new_floor
+
+
+def _ack_events_handled(cur, agent_id, event_name: str, link_field: str, link_value) -> None:
+    """GH #58: mark every pending agent_events row of `event_name` on `agent_id`'s key whose payload
+    `link_field` == `link_value` as handled (the per-event ack), then advance the contiguous floor.
+    Called at each NEW_WORK / DIRECTIVE resolution seam — the /next claim, /done, accept/reject-task,
+    unassign, cancel, request close/escalate — in the SAME txn that consumes the work, so a
+    started/finished item stops re-waking. Idempotent (PK ON CONFLICT DO NOTHING)."""
+    if not agent_id or not _valid_uuid(str(agent_id)) or link_value is None:
+        return
+    cur.execute(
+        """INSERT INTO agent_event_acks (agent_id, event_id)
+           SELECT %s, e.id FROM agent_events e
+           WHERE e.event_key=%s AND e.event_name=%s AND e.payload->>%s = %s
+           ON CONFLICT DO NOTHING""",
+        (str(agent_id), str(agent_id), event_name, link_field, str(link_value)))
+    _recompute_delivered_floor(cur, str(agent_id))
+
+
 def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
                                 *, limit: int = _WAKE_NOTIFICATION_MANIFEST_LIMIT) -> tuple[list[dict], bool]:
     """Rank pending agent_events with the #247 notification registry for wake routing.
@@ -620,11 +782,13 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
     backlog can hide a newer interrupt/human request from the wake prompt.
     """
     cur.execute(
-        """SELECT id, event_name, ts, payload
-           FROM agent_events
-           WHERE event_key = %s AND ts > %s AND event_name <> ALL(%s)
-           ORDER BY ts ASC, id ASC""",
-        (aid, delivered_ts, list(_NON_WAKING_EVENTS)),
+        """SELECT e.id, e.event_name, e.ts, e.payload
+           FROM agent_events e
+           WHERE e.event_key = %s AND e.ts > %s AND e.event_name <> ALL(%s)
+             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                              WHERE a.agent_id = %s AND a.event_id = e.id)
+           ORDER BY e.ts ASC, e.id ASC""",
+        (aid, delivered_ts, list(_NON_WAKING_EVENTS), aid),
     )
     raw = cur.fetchall()
 
@@ -3416,6 +3580,11 @@ def agent_next(aid: str):
                ON CONFLICT (agent_id, task_id) DO UPDATE SET assignment_status='working'""",
             (aid, tid),
         )
+        # GH #58: claiming this task CONSUMES its NEW_WORK assignment/readiness notifications — mark
+        # them handled so they stop re-waking (the claim IS the handling). A DIFFERENT task's events
+        # stay pending for their own claim.
+        _ack_events_handled(cur, aid, "task_assigned", "task_id", tid)
+        _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
         # #298: read the container-level autonomy slider so the claim payload carries BOTH the
         # global engine level and the per-task protocol. The worker keys its loosely-hardened
         # gh/git behavior (pr create / pr merge) off autonomy_level; protocol.autonomy is the
@@ -4160,11 +4329,13 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     wake_task_id = None                              # ISS-56: attribute the run to its task
     ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
     cur.execute(
-        """SELECT ts, event_name, payload FROM agent_events
-           WHERE event_key = %s AND ts > %s
-             AND event_name IN ('prompt', 'task_message', 'task_assigned')
-           ORDER BY ts, id""",
-        (aid, delivered_ts))
+        """SELECT e.ts, e.event_name, e.payload FROM agent_events e
+           WHERE e.event_key = %s AND e.ts > %s
+             AND e.event_name IN ('prompt', 'task_message', 'task_assigned')
+             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                              WHERE a.agent_id = %s AND a.event_id = e.id)
+           ORDER BY e.ts, e.id""",
+        (aid, delivered_ts, aid))
     budget = MAX_PROMPT_BATCH_CHARS
     included_ts = delivered_ts
     for r in cur.fetchall():
@@ -4345,6 +4516,33 @@ def active_conversations(cid: str):
             else:
                 r["inbox_messages"] = []
                 r["inbox_ack_ts"] = None
+            # GH #58 (§5.2 warm-zone): classify each queued inbox row so the resident drain sidecar
+            # handles ONLY safe rows — FYI + taskless-actionable, which any run may ack with no task
+            # protocol — and the daemon YIELDS the lease to a protocol-bound ephemeral whenever a
+            # TASK_BOUND / NEW_WORK / DIRECTIVE row is present (those need that task's own run; a
+            # resident carries no injected protocol, so its run-context is NONE → a task-carrying row is
+            # never "matching" and always forces the yield). `drain_ackable_ids` are the exact event ids
+            # the sidecar may post to /events/ack-handled on clean exit.
+            drain_taskbound = 0
+            drain_ackable_ids: list[int] = []
+            if r["pending_inbox"]:
+                cur.execute(
+                    """SELECT e.id, e.event_name, e.payload, e.target_id FROM agent_events e
+                       WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
+                         AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                          WHERE a.agent_id=%s AND a.event_id=e.id)
+                       ORDER BY e.ts, e.id""",
+                    (str(r["agent_id"]), r["_delivered_ts"], excl, str(r["agent_id"])),
+                )
+                for _row in cur.fetchall():
+                    _b = _drain_class(cur, _row["event_name"], _row["payload"],
+                                      target_id=_row["target_id"])["bucket"]
+                    if _b in _DRAIN_RUN_ACKABLE:
+                        drain_ackable_ids.append(_row["id"])
+                    elif _b in (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE):
+                        drain_taskbound += 1
+            r["drain_taskbound"] = drain_taskbound
+            r["drain_ackable_ids"] = drain_ackable_ids
             r.pop("_delivered_ts", None)
             r.pop("_inbox_max_ts", None)
     return {"container_id": cid, "conversations": convs}
@@ -4582,11 +4780,17 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # ISS-58: the should_wake `pending` count excludes _NON_WAKING_EVENTS (self-echo
             # notifications like digest_snapshotted) so they never wake the agent — but max_ts is
             # over ALL events so the ack still advances past them (they don't accumulate uncounted).
+            # GH #58: a pending event already in the per-event handled-set (acked by a prior drain pass
+            # or at its seam) must NOT re-count toward should_wake — that is what lets one run drain
+            # several events without each re-waking. max_ts stays over ALL rows (the ack upper bound).
             cur.execute(
-                """SELECT count(*) FILTER (WHERE event_name <> ALL(%s)) AS n,
-                          max(ts) AS max_ts
-                   FROM agent_events WHERE event_key = %s AND ts > %s""",
-                (list(_NON_WAKING_EVENTS), aid, a["delivered_ts"]),
+                """SELECT count(*) FILTER (
+                            WHERE e.event_name <> ALL(%s)
+                              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                              WHERE a.agent_id = %s AND a.event_id = e.id)) AS n,
+                          max(e.ts) AS max_ts
+                   FROM agent_events e WHERE e.event_key = %s AND e.ts > %s""",
+                (list(_NON_WAKING_EVENTS), aid, aid, a["delivered_ts"]),
             )
             ev = cur.fetchone()
             pending = ev["n"] or 0
@@ -4595,10 +4799,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             latest_payload = None
             if pending:
                 cur.execute(
-                    """SELECT event_name, payload FROM agent_events
-                       WHERE event_key = %s AND ts > %s AND event_name <> ALL(%s)
-                       ORDER BY ts DESC, id DESC LIMIT 1""",
-                    (aid, a["delivered_ts"], list(_NON_WAKING_EVENTS)),
+                    """SELECT e.event_name, e.payload FROM agent_events e
+                       WHERE e.event_key = %s AND e.ts > %s AND e.event_name <> ALL(%s)
+                         AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                          WHERE a.agent_id = %s AND a.event_id = e.id)
+                       ORDER BY e.ts DESC, e.id DESC LIMIT 1""",
+                    (aid, a["delivered_ts"], list(_NON_WAKING_EVENTS), aid),
                 )
                 _latest_row = cur.fetchone()
                 latest = _latest_row["event_name"]
@@ -4623,11 +4829,13 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # unchanged behaviour. Only set when the linked task is still live (not deleted).
                 if wake_task_id is None:
                     cur.execute(
-                        """SELECT payload FROM agent_events
-                           WHERE event_key=%s AND ts > %s AND event_name='request_answered'
-                             AND payload->>'originating_task_id' IS NOT NULL
-                           ORDER BY ts DESC, id DESC LIMIT 1""",
-                        (aid, a["delivered_ts"]),
+                        """SELECT e.payload FROM agent_events e
+                           WHERE e.event_key=%s AND e.ts > %s AND e.event_name='request_answered'
+                             AND e.payload->>'originating_task_id' IS NOT NULL
+                             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                              WHERE a.agent_id = %s AND a.event_id = e.id)
+                           ORDER BY e.ts DESC, e.id DESC LIMIT 1""",
+                        (aid, a["delivered_ts"], aid),
                     )
                     _ans = cur.fetchone()
                     if _ans:
@@ -4652,6 +4860,35 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 (aid, cid),
             )
             auto_tasks = [str(r["id"]) for r in cur.fetchall()]
+
+            # GH #58: the events THIS run may mark handled in a single drain pass, and the task its
+            # context is bound to. Context precedence (R2 point 3): the task /orcha-next will actually
+            # claim (auto_start[0]) wins; else the directed/answer-derived wake_task_id. A run drains
+            # FYI + taskless-actionable (any run) plus the TASK_BOUND events whose task == context; it
+            # LEAVES cross-task task_bound, NEW_WORK and DIRECTIVE rows pending (their own run / seam acks
+            # them). Bounded by ack_through_ts so a truncated directed batch's tail is never acked-away
+            # undelivered. The daemon posts these ids to /events/ack-handled at run COMPLETION.
+            context_task_id = auto_tasks[0] if auto_tasks else wake_task_id
+            handled_event_ids: list[int] = []
+            if pending:
+                cur.execute(
+                    """SELECT e.id, e.event_name, e.payload, e.target_id FROM agent_events e
+                       WHERE e.event_key=%s AND e.ts > %s AND e.ts <= %s
+                         AND e.event_name <> ALL(%s)
+                         AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
+                                          WHERE a.agent_id=%s AND a.event_id=e.id)
+                       ORDER BY e.ts, e.id""",
+                    (aid, a["delivered_ts"], ack_through_ts, list(_NON_WAKING_EVENTS), aid),
+                )
+                for _row in cur.fetchall():
+                    _dc = _drain_class(cur, _row["event_name"], _row["payload"],
+                                       target_id=_row["target_id"])
+                    _b = _dc["bucket"]
+                    if _b in _DRAIN_RUN_ACKABLE:
+                        handled_event_ids.append(_row["id"])
+                    elif (_b == _DRAIN_TASK_BOUND and _dc["task_id"] and context_task_id
+                          and str(_dc["task_id"]) == str(context_task_id)):
+                        handled_event_ids.append(_row["id"])
 
             idle_seconds = a["idle_seconds"]
             is_idle = (idle_seconds is None) or (idle_seconds >= min_idle)
@@ -4743,6 +4980,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 "prompt_messages": prompt_messages, "wake_task_id": wake_task_id,
                 "notifications": notifications, "notifications_truncated": notifications_truncated,
                 "max_event_ts": max_ts, "ack_through_ts": ack_through_ts,
+                # GH #58: the per-event handled-set the daemon posts to /events/ack-handled when this
+                # run COMPLETES (not at spawn — a spawn-then-crash marks nothing, so the events
+                # re-surface; no loss), plus the task this run's context is bound to.
+                "handled_event_ids": handled_event_ids, "context_task_id": context_task_id,
                 "auto_start_task_ids": auto_tasks,
                 # #266: surface the scheduled-wake verdict + the configured cadence so the notifier
                 # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
@@ -4850,6 +5091,42 @@ def wake_ack(aid: str, body: WakeAck):
                    "release_lease": body.release_lease})
         conn.commit()
     return {"agent_id": aid, **row}
+
+
+class EventsAckHandled(BaseModel):
+    """GH #58: the per-event handled-set a finished drain run marks. The daemon posts the ids the run
+    actually handled (FYI + taskless + its context-task's task_bound rows) so they stop re-waking,
+    while events it could NOT handle (a cross-task task_bound, a NEW_WORK/DIRECTIVE) stay pending for
+    the right run/seam."""
+    event_ids: list[int] = Field(default_factory=list)
+
+
+@app.post("/api/agents/{aid}/events/ack-handled", status_code=200)
+def events_ack_handled(aid: str, body: EventsAckHandled):
+    """GH #58: record that THIS run handled the given pending events, then advance the wake cursor to
+    the CONTIGUOUS floor (the ts just below the oldest still-unhandled waking event). Replaces the
+    blanket delivered_ts high-water jump for drain acks: an event the run could not handle stays
+    pending and re-surfaces; a handled one never re-wakes. Idempotent (PK ON CONFLICT DO NOTHING); an
+    empty event_ids list just recomputes the floor. Scoped to the agent's OWN key, so a daemon can
+    never ack another agent's events."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        ag = _require_agent(cur, aid)
+        ids = [int(e) for e in (body.event_ids or []) if e is not None]
+        if ids:
+            cur.execute(
+                """INSERT INTO agent_event_acks (agent_id, event_id)
+                   SELECT %s, e.id FROM agent_events e
+                   WHERE e.event_key=%s AND e.id = ANY(%s)
+                   ON CONFLICT DO NOTHING""",
+                (aid, aid, ids),
+            )
+        new_floor = _recompute_delivered_floor(cur, aid)
+        log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
+                  "events_ack_handled", {"count": len(ids), "delivered_ts": new_floor})
+        conn.commit()
+    return {"agent_id": aid, "handled": len(ids), "delivered_ts": new_floor}
 
 
 @app.post("/api/agents/{aid}/wake-claim", status_code=200)
@@ -6078,6 +6355,11 @@ def mark_done(tid: str, body: TaskDone):
             "UPDATE agent_tasks SET assignment_status='done' WHERE agent_id=%s AND task_id=%s",
             (body.agent_id, tid),
         )
+        # GH #58: a CLEAN completion resolves this task's surfaced-not-acked DIRECTIVES — the in_progress
+        # task_assigned start directive and any task_verified{approved:false} rework directive — so they
+        # stop re-waking the now-finished assignee. Same txn as the /done (no loss if it rolls back).
+        _ack_events_handled(cur, body.agent_id, "task_assigned", "task_id", tid)
+        _ack_events_handled(cur, body.agent_id, "task_verified", "task_id", tid)
         if level == "full":
             cur.execute("UPDATE tasks SET result=%s::jsonb WHERE id=%s", (result_json, tid))
             unblocked = _complete_and_unblock(cur, t["container_id"], tid)
@@ -6339,6 +6621,12 @@ def unassign_task(tid: str, body: TaskUnassign):
             cur.execute("UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s", (new_status, tid))
         for pid in active:
             recompute_agent_status(cur, pid)
+            # GH #58: unassigning retracts this task from pid — resolve any outstanding NEW_WORK /
+            # DIRECTIVE notification for it (assign/ready/in_progress-directive/rework) so an
+            # assign→unassign-before-finish never pins pid's wake cursor on a task it no longer owns.
+            _ack_events_handled(cur, pid, "task_assigned", "task_id", tid)
+            _ack_events_handled(cur, pid, "task_ready", "task_id", tid)
+            _ack_events_handled(cur, pid, "task_verified", "task_id", tid)
             _publish_event(cur, cid, pid, "task_unassigned",
                            {"task_id": tid, "by_human_id": body.actor_agent_id})
         log_event(cur, cid, "human", body.actor_agent_id, "task", tid, "unassigned",
@@ -6531,6 +6819,11 @@ def cancel_task(tid: str, body: TaskCancel):
         for aid in assignees:
             bump_agent(cur, aid)
             recompute_agent_status(cur, aid)
+            # GH #58: cancel is a TERMINAL seam — resolve this task's outstanding NEW_WORK / DIRECTIVE
+            # notifications for every assignee so a cancelled task never pins their wake cursor.
+            _ack_events_handled(cur, aid, "task_assigned", "task_id", tid)
+            _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
+            _ack_events_handled(cur, aid, "task_verified", "task_id", tid)
         # Route the reason to each OWNING assignee that isn't the actor.
         if forced:
             for owner in others:
@@ -7064,6 +7357,10 @@ def close_request(rid: str, body: RequestActorBody):
         if r["target_id"]:
             _publish_event(cur, str(r["container_id"]), str(r["target_id"]), "request_closed",
                            {"request_id": rid})
+            # GH #58: a TASK request closed before the target accepted/rejected would otherwise pin the
+            # target's cursor on its NEW_WORK request_created (no accept/reject seam ever ran). Closing
+            # terminally resolves it.
+            _ack_events_handled(cur, str(r["target_id"]), "request_created", "request_id", rid)
         if forced:
             _route_close_reason(cur, r["container_id"], "request_close", rid, reason,
                                 body.requester_agent_id, str(r["requester_id"]))
@@ -7154,6 +7451,10 @@ def escalate_request(rid: str, body: RequestActorBody):
                         "via": "escalated"})
         _publish_event(cur, str(r["container_id"]), None, "request_escalated",
                        {"request_id": rid, "reason": body.reason, "to_human_id": human_id})
+        # GH #58: escalation re-routes this request to a human; if it was a TASK request the original
+        # agent target never accept/rejected, resolve its NEW_WORK request_created so it doesn't pin.
+        if r["target_id"]:
+            _ack_events_handled(cur, str(r["target_id"]), "request_created", "request_id", rid)
         conn.commit()
     return {"request_id": rid, "status": "open", "target_id": human_id, "escalated": True}
 
@@ -7254,6 +7555,9 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         # completion) wakes them. The accept stays in the audit feed via log_event above, but we no
         # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was
         # classified as a `request_answered` notification — a premature receipt). Accept is silent now.
+        # GH #58: accepting CONSUMES the target's NEW_WORK request_created notification (the accept IS
+        # the handling; the spawned task drives the work) so it stops re-waking the responder.
+        _ack_events_handled(cur, body.responder_agent_id, "request_created", "request_id", rid)
         conn.commit()
     # GH #56 (review P1): the same worker session that accepts a task-request keeps working it
     # WITHOUT reloading the spawned task's protocol, so the report-back note buried in
@@ -7301,6 +7605,9 @@ def reject_task_request(rid: str, body: TaskRequestReject):
             f"Your task request (id {rid}) was rejected: {reason_txt}. You're not stuck — pick a path "
             f"forward: re-ask another agent (/orcha-ask --task), propose a new agent for it "
             f"(/orcha-suggest-agent {rid}), or escalate to a human (/orcha-escalate {rid}).")
+        # GH #58: rejecting CONSUMES the target's NEW_WORK request_created notification so it stops
+        # re-waking the responder (the work is now back with the requester to re-route).
+        _ack_events_handled(cur, body.responder_agent_id, "request_created", "request_id", rid)
         conn.commit()
     return {"request_id": rid, "status": "rejected", "reason": body.reason, "requester_poked": True}
 
@@ -7527,6 +7834,10 @@ def convert_to_task(rid: str, body: RequestConvert):
         if assignee_id:
             _publish_event(cur, str(r["container_id"]), assignee_id, "task_assigned",
                            {"task_id": tid, "title": body.title, "via": "converted from info request"})
+        # GH #58: converting terminally resolves the original request — if the target still had a
+        # pending request_created for it, ack it so it stops re-surfacing (mirrors close/escalate).
+        if r["target_id"]:
+            _ack_events_handled(cur, str(r["target_id"]), "request_created", "request_id", rid)
         conn.commit()
     return {"request_id": rid, "status": "converted_to_task", "spawned_task_id": tid,
             "assignee_alias": body.assignee_alias}

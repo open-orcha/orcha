@@ -793,11 +793,13 @@ def test_reap_releases_lease_for_exited_worker(monkeypatch):
     notifier.reap_workers("http://x", live, quiet=True)
 
     assert live == {}                                        # stopped tracking it
-    assert len(posts) == 1
-    url, body = posts[0]
-    assert url.endswith("/api/agents/agent-X/wake-ack")
-    assert body["release_lease"] is True                     # lease released, not TTL-held
-    assert body["kind"] == "released"                        # clean exit, not a kill
+    # GH #58: a CLEAN exit (rc 0) first acks the run's handled-set (empty here — no ids tracked),
+    # then releases the lease via wake-ack. Two posts in that order.
+    ack_handled = next(b for url, b in posts if url.endswith("/events/ack-handled"))
+    assert ack_handled["event_ids"] == []                    # nothing to ack, but the seam still fires
+    ack = next(b for url, b in posts if url.endswith("/wake-ack"))
+    assert ack["release_lease"] is True                      # lease released, not TTL-held
+    assert ack["kind"] == "released"                         # clean exit, not a kill
 
 
 def test_reap_finishes_run_with_captured_output(monkeypatch, tmp_path):

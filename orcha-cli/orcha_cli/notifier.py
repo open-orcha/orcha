@@ -647,6 +647,13 @@ def build_resident_sidecar_drain_prompt(alias: Optional[str], inbox: int,
          claiming + working a task here would be a SECOND concurrent embodiment, violating the
          Kedar-locked §3 ONE-EMBODIMENT contract. So: drain notifications/requests only, then EXIT.
 
+    GH #58 (§5.2 safe-rows-only): the caller (service_residents) spawns this sidecar ONLY when the
+    queued backlog is pure FYI + taskless-actionable (active-conversations' drain_taskbound == 0); if
+    any TASK_BOUND / NEW_WORK / DIRECTIVE row is present it yields the lease to a protocol-bound
+    ephemeral instead. So this run, which carries NO injected task protocol, never needs to reason
+    about a specific task — it only clears protocol-less rows, and the caller acks exactly those ids
+    (drain_ackable_ids) via /events/ack-handled on its clean exit.
+
     Gate P1b: `prompt`/`task_message`/`task_assigned` events carry content with NO inbox surface —
     surfacing the text is the ONLY delivery path (same as build_wake_prompt / wake_scan). So the
     caller threads the bounded directed-message batch (active-conversations' `inbox_messages`) in
@@ -1984,6 +1991,9 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         "run_id": (run or {}).get("run_id"), "log_path": log_path,
         "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
         "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
+        # GH #58: the original wake's handled-set rides the respawn so the FINAL clean exit acks it
+        # (the checkpoint-respawn finishes the old run but the wake's work is still in flight).
+        "handled_event_ids": ctx.get("handled_event_ids") or w.get("handled_event_ids") or [],
         "cap": cap, "respawns": n, "respawn_ctx": ctx}
     # Non-releasing ack: keep the single-flight lease (the new worker continues under it) but
     # record the checkpoint for portal/event visibility + refresh the cooldown debounce.
@@ -2025,6 +2035,12 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             diff = _capture_diff(w.get("worktree"))
             _finish_run(api_base, w.get("run_id"), "exited", proc.returncode, w.get("log_path"), diff)
             _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
+            # GH #58: on a CLEAN exit (rc 0) record the per-event handled-set this run drained so it
+            # stops re-waking — the server then advances delivered_ts to the contiguous floor (events
+            # the run could NOT handle stay pending and re-surface). A non-zero exit marks nothing.
+            if proc.returncode == 0:
+                _post_json(f"{api_base}/api/agents/{aid}/events/ack-handled",
+                           {"event_ids": w.get("handled_event_ids") or []})
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
                        {"kind": "released", "release_lease": True})
             live_workers.pop(aid, None)
@@ -2098,6 +2114,11 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             exit_code = 0 if rstatus == "success" else proc.returncode
             _finish_run(api_base, w.get("run_id"), "exited", exit_code, w.get("log_path"), diff)
             _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
+            # GH #58: same completion seam as the clean-poll exit above — a successful drain acks its
+            # handled-set; a non-success (rstatus != success) marks nothing so the events re-surface.
+            if exit_code == 0:
+                _post_json(f"{api_base}/api/agents/{aid}/events/ack-handled",
+                           {"event_ids": w.get("handled_event_ids") or []})
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
                        {"kind": "worker_completed_reaped", "release_lease": True})
             live_workers.pop(aid, None)
@@ -2540,11 +2561,17 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     "cap": cap, "respawns": 0,
                     # [P2 #218] carry the resolved model: the replacement worker must come up
                     # on the agent's model, not claude's default (per-agent contract, #202)
+                    # GH #58: the per-event handled-set wake-scan computed for THIS run (FYI +
+                    # taskless + its context-task's task_bound rows). Posted to /events/ack-handled
+                    # only on a CLEAN exit (reap_workers) — a crash marks nothing, so the events
+                    # re-surface (no loss). Carried in respawn_ctx so a checkpoint-respawn keeps it.
+                    "handled_event_ids": cand.get("handled_event_ids") or [],
                     "respawn_ctx": {"prompt": prompt, "flags": cand.get("headless_flags"),
                                     "alias": cand.get("alias"),
                                     "model": cand.get("model"),
                                     "model_runtime": cand.get("model_runtime"),
                                     "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                    "handled_event_ids": cand.get("handled_event_ids") or [],
                                     "event": event}}
             elif worktree and not sent:
                 # spawn failed after we made a worktree — clean it up (no orphan)
@@ -2575,7 +2602,17 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             ack_ts = cand.get("ack_through_ts")
             if ack_ts is None:
                 ack_ts = cand.get("max_event_ts")
-            delivered_ts = ack_ts if (sent and cand.get("pending_events")) else None
+            # GH #58: a reaped ephemeral worker (tracked in live_workers) acks its handled-set at
+            # COMPLETION via /events/ack-handled (contiguous-floor advance), NOT here at spawn — so a
+            # spawn-then-crash re-surfaces the events instead of high-watering past undrained ones.
+            # The single-flight lease suppresses any re-wake while it runs. Only the non-reaped paths
+            # (--once with no reaper, tmux/unreachable) still high-water the cursor at spawn.
+            ephemeral_reaped = (kind == "ephemeral" and sent and live_workers is not None
+                                and cand["agent_id"] in live_workers)
+            if ephemeral_reaped:
+                delivered_ts = None
+            else:
+                delivered_ts = ack_ts if (sent and cand.get("pending_events")) else None
             # We claim a single-flight lease ONLY for an ephemeral spawn. If that spawn
             # then failed (no claude, bad cwd, Popen error), no worker exists — release
             # the lease we just won so the agent isn't suppressed for the whole TTL.
@@ -3003,7 +3040,8 @@ def _close_resident(api_base: str, r: dict, reason: str = "idle", teardown_workt
 
 
 def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Optional[list] = None,
-                         ack_ts=None, model: Optional[str] = None,
+                         ack_ts=None, ackable_ids: Optional[list] = None,
+                         model: Optional[str] = None,
                          dry_run: bool = False, quiet: bool = False) -> bool:
     """#247 B3 (§5.2 warm-zone): spawn a THROWAWAY one-shot drain worker for a warm resident's queued
     NON-conversation inbox WITHOUT releasing the resident's embodiment lease or tearing down the warm
@@ -3047,9 +3085,15 @@ def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Option
         # ts (release_lease=False) so the drained backlog stops re-surfacing as pending_inbox. Pinning
         # the spawn-time mark (not the next tick's) means events that arrive DURING the drain stay
         # pending and are drained next tick — never silently acked away.
+        # GH #58: stash the EXACT per-event ids this sidecar may mark handled — only the FYI +
+        # taskless-actionable rows active-conversations classified as safe for a protocol-less run
+        # (drain_ackable_ids). On confirmed-success the caller posts these to /events/ack-handled
+        # (per-event ack + contiguous-floor advance), replacing the old delivered_ts high-water park
+        # so a task-bound row that slipped in never gets acked away by the resident. ack_ts retained
+        # for log/back-compat only.
         r["sidecar"] = {"proc": proc, "log_path": log_path,
                         "hard_deadline": time.time() + HARD_CAP_MIN_SECS,
-                        "ack_ts": ack_ts}
+                        "ack_ts": ack_ts, "ackable_ids": list(ackable_ids or [])}
         if not quiet:
             print(f"[notifier] resident {r.get('alias')} idle with {inbox} queued inbox event(s) — "
                   f"spawned a throwaway drain sidecar (pid {proc.pid}) in its OWN session; warm "
@@ -3334,25 +3378,25 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                           f"(pid {getattr(sproc, 'pid', None)}) exceeded its hard cap — killed; warm "
                           f"resident + lease KEPT, cursor NOT advanced (#247 B3)")
             if done:
-                ack_ts = side.get("ack_ts")
-                # Gate P1a — SUCCESS only: a NATURAL exit with rc 0 means the drain ran to completion,
-                # so PARK the wake cursor (delivered_ts=ack_ts) with release_lease=False — the drained
-                # backlog stops re-surfacing as pending_inbox (no re-drain on the warm resident's real
-                # wake, no re-spawn after a notifier restart) while the warm lease is KEPT. A wedged-kill
-                # or a NON-ZERO exit means the backlog may be only partially drained → DO NOT advance the
-                # cursor; the un-acked events re-surface and the next tick spawns a fresh drain (Gate
-                # tooth 3: failure must never advance the cursor). release_lease stays False on every
-                # branch — never regress to the A2 yield/teardown model.
+                # GH #58 — SUCCESS only: a NATURAL exit with rc 0 means the drain ran to completion,
+                # so POST the per-event handled-set (the FYI/taskless ids captured at spawn) to
+                # /events/ack-handled — the server records the acks and advances delivered_ts to the
+                # contiguous floor, so the drained rows stop re-surfacing as pending_inbox while ANY
+                # row the run could not handle stays pending. A wedged-kill or a NON-ZERO exit posts
+                # nothing → the backlog re-surfaces for a fresh drain next tick (failure never advances
+                # the cursor). The lease is always KEPT (no wake-ack here) — never regress to the A2
+                # yield/teardown model. Replaces the old delivered_ts high-water park, which could ack
+                # past a task-bound row the resident must not clear.
                 success = natural and sproc.returncode == 0
+                ackable_ids = side.get("ackable_ids") or []
                 r["sidecar"] = None                       # finished/killed → no worker_run to finish
-                if success and ack_ts is not None:
-                    _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-                               {"delivered_ts": ack_ts, "kind": "resident_drain_sidecar",
-                                "event": "inbox_drain", "release_lease": False})
+                if success:
+                    _post_json(f"{api_base}/api/agents/{r['agent_id']}/events/ack-handled",
+                               {"event_ids": ackable_ids})
                     if not quiet:
                         print(f"[notifier] resident {r.get('alias')} drain sidecar finished — inbox "
-                              f"drained in its own session; cursor parked at {ack_ts} (lease KEPT), "
-                              f"warm conversation intact (#247 B3)")
+                              f"drained in its own session; {len(ackable_ids)} event(s) acked-handled "
+                              f"(lease KEPT), warm conversation intact (#247 B3 / GH #58)")
                 elif not quiet:
                     print(f"[notifier] resident {r.get('alias')} drain sidecar ended without a clean "
                           f"completion — cursor NOT advanced; the backlog re-surfaces for a fresh "
@@ -3375,6 +3419,14 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # circuits this tick (the `r["sidecar"]` block above), so we only get here with NO sidecar live.
         inbox = (cand or {}).get("pending_inbox", 0) or 0
         inbox_ack_ts = (cand or {}).get("inbox_ack_ts")
+        # GH #58 (§5.2 safe-rows-only): active-conversations classifies the queued backlog. A resident
+        # carries NO injected task protocol, so it may only drain FYI + taskless-actionable rows
+        # (drain_ackable_ids). If ANY TASK_BOUND / NEW_WORK / DIRECTIVE row is present (drain_taskbound
+        # > 0) the sidecar must NOT run — those need a fresh ephemeral bound to that task; so YIELD the
+        # lease (the existing A2 idle-yield) and let tick()'s protocol-bound ephemeral drain the whole
+        # backlog (FYI rows ride along). A pure FYI/taskless backlog drains in the warm-zone sidecar.
+        drain_taskbound = (cand or {}).get("drain_taskbound", 0) or 0
+        drain_ackable_ids = (cand or {}).get("drain_ackable_ids") or []
         # ISS-78 anti-thrash backstop (carries the ISS-75/#188 guard forward): don't spawn ANOTHER drain
         # pass when the inbox high-water mark (inbox_ack_ts) hasn't advanced past the last attempt's AND
         # we attempted within the cooldown — a stuck/echo event the drain can't ack away would otherwise
@@ -3386,10 +3438,22 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                    and inbox_ack_ts <= prev[0]
                    and time.time() - prev[1] < RESIDENT_DRAIN_COOLDOWN_SECS)
         if not r.get("awaiting_result") and not pending and inbox > 0 and not stalled:
+            if drain_taskbound > 0:
+                # A task-bound / new-work / directive row needs a protocol-bound ephemeral, which the
+                # resident is not → YIELD the lease so the next tick()'s ephemeral (carrying that task's
+                # protocol) drains the whole backlog. Same teardown seam as the §8 fail-open below.
+                if not quiet:
+                    print(f"[notifier] resident {r.get('alias')} has {drain_taskbound} task-bound "
+                          f"inbox row(s) needing a protocol-bound run — yielding the lease for an "
+                          f"ephemeral drain instead of the warm-zone sidecar (#247 B3 §5.2 / GH #58)")
+                _close_resident(api_base, r, reason="inbox_drain_yield")
+                live_residents.pop(conv_id, None)
+                continue
             _RESIDENT_DRAIN_YIELD[conv_id] = (inbox_ack_ts, time.time())   # mark this drain attempt
             spawned = _spawn_drain_sidecar(api_base, r, inbox,
                                            messages=(cand or {}).get("inbox_messages"),
                                            ack_ts=inbox_ack_ts,
+                                           ackable_ids=drain_ackable_ids,
                                            model=(cand or {}).get("model"),
                                            dry_run=dry_run, quiet=quiet)
             if not spawned:

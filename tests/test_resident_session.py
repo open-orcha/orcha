@@ -1010,6 +1010,8 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
+            # GH #58: a pure FYI/taskless backlog — no task-bound rows → safe to drain in the sidecar.
+            "drain_taskbound": 0, "drain_ackable_ids": [201, 202, 203],
             # Gate P1b: directed messages have no other inbox surface — must reach the sidecar prompt.
             "inbox_messages": ["[task-thread message on task T-7] review my diff — RESPOND on it"]}
     posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
@@ -1032,9 +1034,37 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     assert "review my diff — RESPOND on it" in spawns[0]["prompt"]
     assert live["C1"]["sidecar"]["proc"] is sidecar             # handle tracked on the resident
     assert live["C1"]["sidecar"]["ack_ts"] == 30.0             # P1a: spawn-time cursor mark stashed
+    assert live["C1"]["sidecar"]["ackable_ids"] == [201, 202, 203]   # GH #58: per-event handled-set stashed
     assert fed == []                                            # NOTHING injected into the warm session
     assert not any(u.endswith("/runs") for u, _ in posts)        # sidecar registers NO worker_run (§3)
     assert notifier._RESIDENT_DRAIN_YIELD["C1"][0] == 30.0       # attempt mark recorded (anti-thrash)
+
+
+def test_service_residents_yields_when_backlog_has_taskbound(monkeypatch, tmp_path):
+    """GH #58 (§5.2 safe-rows-only): if the queued backlog contains ANY task-bound / new-work /
+    directive row (drain_taskbound > 0), the resident must NOT spawn a warm-zone sidecar — it carries
+    no injected task protocol, so it would mis-handle that row. Instead it YIELDS the lease (the A2
+    idle-yield) so tick()'s next ephemeral, booted WITH that task's protocol, drains the whole backlog.
+    No sidecar is spawned; nothing is acked-handled this tick. Mutation tooth: drop the drain_taskbound
+    gate and a sidecar spawns over a task-bound row → this flips RED on the spawn / yield assertions."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 2, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
+            # one task-bound row present alongside a taskless one → must yield, not sidecar-drain
+            "drain_taskbound": 1, "drain_ackable_ids": [202]}
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert spawns == []                                          # NO warm-zone sidecar over a task-bound row
+    assert "C1" not in live                                      # resident torn down (lease yielded)
+    assert sigs and sigs[0][1] == notifier.signal.SIGTERM        # graceful-killed on the yield
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "resident_inbox_drain_yield" and ack["release_lease"] is True
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)   # nothing handled by the resident
 
 
 def test_service_residents_no_yield_when_inbox_empty(monkeypatch, tmp_path):
@@ -1237,14 +1267,15 @@ def test_service_residents_sidecar_running_preserves_single_embodiment(monkeypat
     assert not any(u.endswith("/runs") for u, _ in posts)        # sidecar opens NO worker_run (§3)
 
 
-def test_service_residents_reaps_finished_sidecar_parks_cursor(monkeypatch, tmp_path):
-    """#247 B3 §3(d) + Gate P1a: when the drain sidecar EXITS CLEANLY (rc 0), the tick clears its handle
-    (no worker_run to /finish — clean by construction) AND posts EXACTLY ONE wake-ack that PARKS the
-    wake cursor (delivered_ts=the stashed spawn-time ack_ts) with release_lease=False — so the drained
-    backlog stops re-surfacing as pending_inbox while the warm resident + lease are KEPT. One transition
-    per tick: it does NOT immediately spawn another drain. Mutation tooth: drop the success ack and the
-    cursor never advances → the warm resident re-sees the whole backlog on its real wake (this flips
-    RED on the wake-ack assertion)."""
+def test_service_residents_reaps_finished_sidecar_acks_handled(monkeypatch, tmp_path):
+    """#247 B3 §3(d) + GH #58: when the drain sidecar EXITS CLEANLY (rc 0), the tick clears its handle
+    (no worker_run to /finish — clean by construction) AND posts EXACTLY ONE /events/ack-handled with
+    the per-event ids the sidecar drained (the FYI/taskless ids stashed at spawn) — NOT the old
+    delivered_ts high-water park. The server records those acks and advances the cursor to the
+    contiguous floor, so the drained rows stop re-surfacing while a row the resident could not handle
+    stays pending. The warm resident + lease are KEPT (no wake-ack). One transition per tick: no
+    same-tick re-spawn. Mutation tooth: drop the success ack and the events never clear → the warm
+    resident re-sees the whole backlog on its real wake (this flips RED on the ack-handled assertion)."""
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 2, "inbox_ack_ts": 30.0}
@@ -1254,18 +1285,18 @@ def test_service_residents_reaps_finished_sidecar_parks_cursor(monkeypatch, tmp_
     dead_sidecar = ResidentProc(pid=9999, alive=False)               # exited cleanly (returncode 0)
     live = {"C1": _idle_resident(tmp_path, proc=proc,
                                  sidecar={"proc": dead_sidecar, "log_path": tmp_path / "d.log",
-                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0})}
+                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0,
+                                          "ackable_ids": [101, 102]})}
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
     assert live["C1"]["sidecar"] is None                          # handle cleared on exit (clean)
     assert "C1" in live and proc.killed is False                  # warm resident + lease KEPT
     assert spawns == []                                          # no same-tick re-spawn (one/tick)
-    acks = [b for u, b in posts if u.endswith("/wake-ack")]
-    assert len(acks) == 1                                        # P1a: EXACTLY one cursor-park ack
-    assert acks[0]["delivered_ts"] == 30.0                       # parked at the stashed spawn-time mark
-    assert acks[0]["release_lease"] is False                     # KEEP the warm lease (no A2 yield)
-    assert acks[0]["kind"] == "resident_drain_sidecar"
+    assert not any(u.endswith("/wake-ack") for u, _ in posts)    # GH #58: no delivered_ts park anymore
+    acks = [b for u, b in posts if u.endswith("/events/ack-handled")]
+    assert len(acks) == 1                                        # EXACTLY one per-event ack post
+    assert acks[0]["event_ids"] == [101, 102]                    # the stashed FYI/taskless ids
     assert not any(u.endswith("/runs") for u, _ in posts)        # nothing to finish (no run)
 
 
@@ -1285,7 +1316,8 @@ def test_service_residents_kills_wedged_sidecar_keeps_resident(monkeypatch, tmp_
     wedged = ResidentProc(pid=9999, alive=True)                      # still running, past deadline
     live = {"C1": _idle_resident(tmp_path, proc=proc,
                                  sidecar={"proc": wedged, "log_path": tmp_path / "d.log",
-                                          "hard_deadline": time.time() - 1, "ack_ts": 30.0})}
+                                          "hard_deadline": time.time() - 1, "ack_ts": 30.0,
+                                          "ackable_ids": [101, 102]})}
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
@@ -1293,6 +1325,7 @@ def test_service_residents_kills_wedged_sidecar_keeps_resident(monkeypatch, tmp_
     assert live["C1"]["sidecar"] is None                          # handle cleared after the kill
     assert "C1" in live and proc.killed is False                  # resident + lease KEPT (pid 4321 alive)
     assert not any(u.endswith("/wake-ack") for u, _ in posts)    # tooth 3: NO cursor ack on wedged-kill
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)   # GH #58: nothing acked-handled
 
 
 def test_service_residents_failed_sidecar_does_not_park_cursor(monkeypatch, tmp_path):
@@ -1312,7 +1345,8 @@ def test_service_residents_failed_sidecar_does_not_park_cursor(monkeypatch, tmp_
     failed_sidecar.returncode = 1                                    # ...but with a FAILURE code
     live = {"C1": _idle_resident(tmp_path, proc=proc,
                                  sidecar={"proc": failed_sidecar, "log_path": tmp_path / "d.log",
-                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0})}
+                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0,
+                                          "ackable_ids": [101, 102]})}
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
@@ -1320,6 +1354,7 @@ def test_service_residents_failed_sidecar_does_not_park_cursor(monkeypatch, tmp_
     assert "C1" in live and proc.killed is False                  # warm resident + lease KEPT
     assert spawns == []                                          # one transition per tick (no re-spawn)
     assert not any(u.endswith("/wake-ack") for u, _ in posts)    # tooth 3: NO cursor ack on a failed exit
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)   # GH #58: nothing acked-handled
 
 
 def test_service_residents_warm_zone_holds_to_1200s(monkeypatch, tmp_path):

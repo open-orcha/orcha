@@ -96,6 +96,39 @@ resident-session resource caps + per-conversation budget.
    `--permission-prompt-tool` / `canUseTool`; **clarifying questions** via an ask-human tool that
    blocks on a GUI answer; MCP OAuth handled by the web portal.
 
+### 5.2 Warm-zone backlog drain — resident vs. ephemeral (GH #58)
+
+While a resident holds the single-embodiment lease, the server's wake gate suppresses every ephemeral
+wake for that agent, so its non-conversation notifications (task-thread notes, request answers,
+decisions, assignments) **queue**. They must be drained without (a) bleeding task reasoning into the
+warm conversation's context window and (b) breaking the one-embodiment invariant. The rule:
+
+- **One already-awake run drains everything it CAN handle in that run, acking each as it goes** —
+  never one fresh wake per notification. The server classifies each pending event into a *drain
+  bucket* (`_drain_class` in `main.py`) and records a per-event ack in `agent_event_acks` (migration
+  030), advancing the wake cursor to the **contiguous floor** — the ts just below the oldest
+  still-unhandled waking event — so an event a run could not handle still re-surfaces instead of being
+  skipped by a blanket high-water jump.
+- **A row is left UNACKED for a fresh, protocol-bound ephemeral only when the current run cannot/should
+  not handle it:**
+  - **TASK_BOUND** (a task-thread message; a request answer carrying its originating task; a
+    `plan_approval` decision on a live task) is handled **only by a run whose context == that task**; a
+    different-task run leaves it pending.
+  - **NEW_WORK** (an assignment/readiness on a `ready` task; a task-type request) is consumed at the
+    `/next` claim or accept/reject seam — a drain never acks it.
+  - **DIRECTIVE** (an assignment/rework on an `in_progress` task — incl. a `task_verified{approved:false}`
+    rejected verify) is surfaced as the assignee's wake reason but acked only at that worker's clean
+    completion / terminal seam (`/done`, cancel, unassign), never by an unrelated drain.
+  - **FYI** and **taskless-actionable** rows need no task protocol, so **any** awake run may ack them.
+- **Resident vs. ephemeral for the queued backlog:** the resident carries **no injected task
+  protocol**, so its warm-zone drain **sidecar** (a throwaway one-shot in its own session, lease KEPT)
+  handles **only FYI + taskless-actionable** rows. If the backlog contains **any** TASK_BOUND /
+  NEW_WORK / DIRECTIVE row, the resident **yields its lease** so `tick()`'s next ephemeral — booted
+  *with that task's protocol* — drains the whole backlog (the FYI rows ride along). The sidecar / worker
+  posts the exact ids it handled to `POST /api/agents/{aid}/events/ack-handled` on a **clean exit
+  only**; a crash marks nothing, so the events re-surface (no loss, no double-handling — the
+  single-flight lease and per-event ack keep concurrent awake runs from racing).
+
 ## 6. What is genuinely CLI-only (needs a real PTY)
 After the above, the irreducible "needs a terminal" set is small:
 1. **Interactive TTY programs** — debuggers (`pdb`/`gdb` stepping), REPLs you drive, `vim`/curses
