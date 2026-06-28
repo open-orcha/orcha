@@ -1519,9 +1519,10 @@ def test_checkpoint_respawn_is_the_mechanism(monkeypatch, tmp_path):
 
 
 def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
-    """A live_workers entry for a worker PAST the soft cap and STALLED (log frozen: last_size ==
-    current size + last progress 200s ago), with the ISS-76 respawn context. Whether it is
-    live/dead is decided by the log CONTENT (an unanswered tool_use → live)."""
+    """A live_workers entry for a worker PAST the soft cap and STALLED — the log is frozen
+    (last_size already equals the file's current size, so no growth this tick) and last progress
+    was 200s ago — with the ISS-76 respawn context. Whether it is live/dead is decided by the log
+    CONTENT (an unanswered tool_use → live)."""
     return {"agent-X": {"proc": proc, "hard_deadline": time.time() - 1,   # PAST the soft cap
                         "last_size": log.stat().st_size,                  # no growth this tick …
                         "last_progress_ts": time.time() - 200,            # … and frozen 200s → stalled
