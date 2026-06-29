@@ -6680,11 +6680,6 @@ class RequestRespond(BaseModel):
 class RequestActorBody(BaseModel):
     requester_agent_id: str
     reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
-    # #60: an optional nudge delivered to the agent currently HANDLING the request (its
-    # target) when it is closed externally — so it learns the close happened and reorients.
-    # Independent of `reason` (which routes to the OWNER). `escalate_request` shares this body
-    # and simply ignores `nudge`. Capped at MAX_FEEDBACK_LEN like the other free-text fields.
-    nudge: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
 class TaskRequestAccept(BaseModel):
@@ -7037,12 +7032,11 @@ def close_request(rid: str, body: RequestActorBody):
         # B7 (ISS-23): the actor may be the requester (owner) OR ANY human — the human is the
         # authoritative party and can abandon a stale request regardless of owner. Non-humans
         # stay owner-only and get a 403, regardless of status.
-        cur.execute("SELECT kind, alias FROM agents WHERE id=%s", (body.requester_agent_id,))
+        cur.execute("SELECT kind FROM agents WHERE id=%s", (body.requester_agent_id,))
         arow = cur.fetchone()
         if not arow:
             raise HTTPException(404, f"agent {body.requester_agent_id} not found")
         is_human = arow["kind"] == "human"
-        actor_alias = arow["alias"] or ("a human" if is_human else "an agent")
         is_owner = str(r["requester_id"]) == body.requester_agent_id
         if not is_human and not is_owner:
             raise HTTPException(403, "only the requester (or a human) may close")
@@ -7072,32 +7066,94 @@ def close_request(rid: str, body: RequestActorBody):
         if forced:
             _route_close_reason(cur, r["container_id"], "request_close", rid, reason,
                                 body.requester_agent_id, str(r["requester_id"]))
-        # #60: optional nudge to the agent HANDLING the request (its target). Delivered with the
-        # OPEN cursor BEFORE conn.commit() — same transaction as the close UPDATE — so a nudge can
-        # never escape if the close rolls back, and the agent never sees a poke for a close that
-        # didn't happen. _poke_path_forward only _publish_event's on cur, so it's atomic here.
-        # Independent of `reason` (which routes to the OWNER); skipped when there's no distinct
-        # target (e.g. a self-targeted request) so an agent is never poked about its own close.
-        nudge = (body.nudge or "").strip()
-        nudged_target = False
-        if nudge and r["target_id"] and str(r["target_id"]) != body.requester_agent_id:
-            short_rid = rid[:8]
-            payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][:120]
-            # Closure-FRAMED prompt (not raw nudge text): the target is told the request was closed
-            # externally, that no further work is needed, who closed it, then the request id/preview,
-            # and finally the human's note — so it reorients rather than acting on the request again.
-            message = (
-                f'A request you were handling was just closed by {actor_alias}. '
-                f'No further work is needed on it. '
-                f'Request {short_rid}: "{payload_preview}". '
-                f'Note from the closer: {nudge}'
-            )
-            _poke_path_forward(cur, str(r["container_id"]), str(r["target_id"]),
-                               body.requester_agent_id, message)
-            nudged_target = True
         conn.commit()
-    return {"request_id": rid, "status": "closed", "forced_by_human": forced,
-            "nudged_target": nudged_target}
+    return {"request_id": rid, "status": "closed", "forced_by_human": forced}
+
+
+class NudgeBody(BaseModel):
+    """#60: a standalone request nudge — wakes whoever owns the NEXT ACTION, no state change."""
+    actor_agent_id: str
+    note: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
+
+
+@app.post("/api/requests/{rid}/nudge", status_code=200)
+def nudge_request(rid: str, body: NudgeBody):
+    """#60: a STANDALONE wake-up for whoever owns the NEXT ACTION on a request — fully
+    DECOUPLED from close. It NEVER changes the request's state (the handler does a SELECT
+    only, never an UPDATE), so state invariance holds on every branch. The recipient is
+    state-routed:
+      • open      → the TARGET (they still owe the answer)
+      • answered  → the REQUESTER (they must act on the answer or close it)
+    Accepted (now a task — nudge the task, not the request) and the terminal states
+    (rejected / converted_to_task / closed) are not actionable here → 409, no poke. Routing
+    is total over the request status enum.
+
+    Human-only (an operator wake action; the portal viewer is always human, the CLI resolves
+    the acting human → else 403). When the routed recipient is a human (e.g. an escalated-to-
+    human request, where the next action genuinely sits with a person) or the actor themselves,
+    there's no agent to wake via a poke → 200 {nudged:false} as a clean no-op (no error, no
+    state change). Delivery reuses the A3 `prompt` poke (`_poke_path_forward`): a directed
+    prompt is surfaced verbatim into the recipient's wake/drain turn AND counts as pending work
+    in wake-scan, so the agent re-engages."""
+    if not _valid_uuid(rid):
+        raise HTTPException(400, "request_id is not a valid UUID")
+    if not _valid_uuid(body.actor_agent_id):
+        raise HTTPException(400, "actor_agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        r = _require_request(cur, rid)   # SELECT-only (no FOR UPDATE): a nudge never mutates the request
+        _require_container_active(cur, str(r["container_id"]), body.actor_agent_id)
+        # Human-only: a nudge is an operator wake action.
+        cur.execute("SELECT kind, alias FROM agents WHERE id=%s", (body.actor_agent_id,))
+        arow = cur.fetchone()
+        if not arow:
+            raise HTTPException(404, f"agent {body.actor_agent_id} not found")
+        if arow["kind"] != "human":
+            raise HTTPException(403, "only a human may nudge a request")
+        actor_alias = arow["alias"] or "a human"
+        status = r["status"]
+        # State routing — total over REQUEST_STATUSES.
+        if status == "open":
+            recipient_id, role = r["target_id"], "target"
+        elif status == "answered":
+            recipient_id, role = r["requester_id"], "requester"
+        elif status == "accepted":
+            # The next action moved from the request to the spawned task — nudge the task.
+            raise HTTPException(409, "this request was accepted and became a task — "
+                                     "nudge the task, not the request")
+        else:  # rejected, converted_to_task, closed — terminal, nothing to nudge
+            raise HTTPException(409, f"nothing to nudge: request is '{status}'")
+        # No distinct AI to wake: the next action sits with a human (escalated-to-human, a
+        # human target/requester, or a null target) or with the nudger themselves → clean no-op.
+        recipient_id = str(recipient_id) if recipient_id else None
+        recipient_is_human = False
+        if recipient_id:
+            cur.execute("SELECT kind FROM agents WHERE id=%s", (recipient_id,))
+            rrow = cur.fetchone()
+            recipient_is_human = bool(rrow) and rrow["kind"] == "human"
+        if not recipient_id or recipient_is_human or recipient_id == body.actor_agent_id:
+            return {"request_id": rid, "status": status, "nudged": False,
+                    "nudged_role": role, "nudged_agent_id": None,
+                    "reason": "a human owns the next action — nothing to wake"}
+        # Wake-framed, state-appropriate directed prompt naming the nudger + rid8 + a 1-line preview.
+        short_rid = rid[:8]
+        payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][:120]
+        if role == "target":
+            message = (f'{actor_alias} nudged you about an OPEN request you still owe an answer on. '
+                       f'Request {short_rid}: "{payload_preview}". Please respond to it (/orcha-respond).')
+        else:
+            message = (f'{actor_alias} nudged you: a request you sent has been ANSWERED and is waiting '
+                       f'on you to act on the answer or close it. '
+                       f'Request {short_rid}: "{payload_preview}".')
+        note = (body.note or "").strip()
+        if note:
+            message += f' Note from {actor_alias}: {note}'
+        _poke_path_forward(cur, str(r["container_id"]), recipient_id, body.actor_agent_id, message)
+        # Audit only — NO status UPDATE, NO turn bump (an external poke, like triage-close).
+        log_event(cur, r["container_id"], "human", body.actor_agent_id,
+                  "request", rid, "nudged", {"by_human": True, "role": role})
+        conn.commit()
+    return {"request_id": rid, "status": status, "nudged": True,
+            "nudged_role": role, "nudged_agent_id": recipient_id}
 
 
 class TriageCloseBody(BaseModel):
