@@ -2540,6 +2540,10 @@ def _task_list_sql(where: str, order: str) -> str:
                       -- (NULL when unset). Rides the shared task-list builder so it surfaces on the
                       -- snapshot poll + GET /containers/{{cid}}/tasks with no extra call.
                       t.protocol,
+                      -- GH #27: scheduled-task cadence (NULL = run-once) + last re-fire stamp, so
+                      -- every task surface (snapshot poll + GET /containers/{{cid}}/tasks) can show
+                      -- the interval and when it last re-armed without an extra call.
+                      t.schedule_interval_secs, t.last_fired_at,
                       t.created_at, t.started_at, t.completed_at,
                       COALESCE((SELECT json_agg(a.alias ORDER BY a.alias)
                                 FROM agent_tasks at JOIN agents a ON a.id = at.agent_id
@@ -5561,6 +5565,26 @@ def create_task(cid: str, body: TaskCreateBody):
             if not _valid_uuid(dep):
                 raise HTTPException(400, f"depends_on contains invalid UUID: {dep}")
 
+        # GH #27: scheduled tasks must NOT participate in dependency edges (either direction).
+        # A scheduled task re-arms 'completed' → 'ready' on each interval; if it were a dependency,
+        # that re-arm would silently un-complete a blocker without re-blocking downstream children
+        # (they'd already be ready/running), corrupting the dependency gate. v1 forbids the edge
+        # entirely rather than re-deriving the whole subtree on every re-fire.
+        if body.schedule_interval_secs is not None and body.depends_on:
+            raise HTTPException(
+                400, "a scheduled task (schedule_interval_secs set) cannot depend on other tasks — "
+                "its periodic re-arm is incompatible with the dependency gate")
+        if body.depends_on:
+            cur.execute(
+                "SELECT id FROM tasks WHERE id = ANY(%s) AND schedule_interval_secs IS NOT NULL",
+                ([d for d in body.depends_on],),
+            )
+            sched_dep = cur.fetchone()
+            if sched_dep:
+                raise HTTPException(
+                    400, f"cannot depend on scheduled task {sched_dep['id']} — a scheduled task "
+                    "re-arms itself periodically, so it never stays 'completed' to satisfy a dependency")
+
         assignee_id = None
         if body.assignee_alias:
             assignee_id = _resolve_alias(cur, cid, body.assignee_alias)
@@ -5643,12 +5667,19 @@ def fire_due_schedules(cid: str):
     SELECT uses FOR UPDATE SKIP LOCKED and only matches completed+due tasks, so a second
     caller (or a second daemon) finds nothing to do. Re-fire is keyed off completed_at, so a
     task never re-fires while still in_progress / needs_verification — no overlap, no pile-up.
+
+    GH #24 invariant: re-arm runs ONLY while the container is 'active'. A paused or stopped
+    ('paused'/'completed'/'cancelled'/'failed') workspace must not resurrect completed work or
+    publish task_assigned wakes — wake-scan already suppresses all wakes off the same gate, so
+    firing here would bypass /orcha-pause + /orcha-stop. A non-active container no-ops (fired=[]).
     """
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     fired: list[str] = []
     with db_cursor() as (conn, cur):
-        _require_container(cur, cid)
+        c = _require_container(cur, cid)
+        if c["status"] != "active":
+            return {"container_id": cid, "fired": fired, "skipped": "container_not_active"}
         cur.execute(
             """SELECT id, title FROM tasks
                WHERE container_id = %s AND schedule_interval_secs IS NOT NULL
