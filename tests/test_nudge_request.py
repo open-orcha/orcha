@@ -58,6 +58,34 @@ async def _task_request(client, make_agent, make_request):
     return owner, target, req["id"]
 
 
+async def _rich_task_request(client, make_agent, make_request):
+    """An OPEN task request carrying a FULL ask (description, definition of done, protocol) so the
+    nudge's task-context block has every field to render."""
+    owner = await make_agent("Owner", kind="ai")
+    target = await make_agent("Target", kind="ai")
+    req = await make_request(
+        owner["agent_id"], "do the thing", target_alias="Target", type="task",
+        task={"title": "Ship the widget", "description": "build and test the widget",
+              "definition_of_done": "tests pass and PR open",
+              "protocol": {"review_chain": "Target -> Code Reviewer -> human",
+                           "handoff_to": "human", "autonomy": "high",
+                           "notes": "do not merge"}})
+    return owner, target, req["id"]
+
+
+async def _answered_task_request(client, make_agent, make_request):
+    """A task request taken all the way to ANSWERED: target accepts, then posts its result
+    (accepted → answered), so the REQUESTER now owns the next move."""
+    owner, target, rid = await _rich_task_request(client, make_agent, make_request)
+    a = await client.post(f"/api/requests/{rid}/accept-task",
+                          json={"responder_agent_id": target["agent_id"]})
+    assert a.status_code == 200, a.text
+    rsp = await client.post(f"/api/requests/{rid}/respond",
+                            json={"responder_agent_id": target["agent_id"], "response": "done"})
+    assert rsp.status_code == 200, rsp.text
+    return owner, target, rid
+
+
 # ---------- the two live routes (poke + state invariance) ----------
 
 async def test_open_nudges_target_state_unchanged(client, make_agent, make_request, db):
@@ -102,6 +130,59 @@ async def test_answered_nudges_requester_state_unchanged(client, make_agent, mak
     # the TARGET (no longer owing anything) is NOT poked
     tev = await _wait_prompt(client, target["agent_id"], since_ts=base, timeout=1)
     assert tev["event"] == "timeout", tev
+    assert _status(db, rid) == "answered"
+
+
+# ---------- task-aware routing (accept/reject verbs + full task context) ----------
+
+async def test_open_task_request_pokes_target_to_accept_reject_with_context(
+        client, make_agent, make_request, db):
+    """open + type='task' → the TARGET is poked to ACCEPT/REJECT (not 'respond'), and the poke
+    re-delivers the full task ask (title / description / definition of done / protocol) so the
+    woken agent can decide even though the original request_created event was consumed."""
+    human = await make_agent("Boss", kind="human")
+    owner, target, rid = await _rich_task_request(client, make_agent, make_request)
+    r = await client.post(f"/api/requests/{rid}/nudge",
+                          json={"actor_agent_id": human["agent_id"]})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["nudged"] is True and d["nudged_role"] == "target"
+    assert d["nudged_agent_id"] == target["agent_id"]
+    pev = await _wait_prompt(client, target["agent_id"])
+    assert pev["event"] == "prompt", pev
+    msg = pev["message"]
+    # task verbs, NOT the info-request "respond"
+    assert "/orcha-accept-task" in msg and "/orcha-reject-task" in msg
+    assert "/orcha-respond" not in msg
+    # full task context is re-delivered into the poke
+    assert "Ship the widget" in msg
+    assert "build and test the widget" in msg
+    assert "tests pass and PR open" in msg
+    assert "Target -> Code Reviewer -> human" in msg   # protocol review_chain
+    assert "do not merge" in msg                        # protocol notes
+    # SELECT-only: still open
+    assert _status(db, rid) == "open"
+
+
+async def test_answered_task_request_pokes_requester_to_act_or_close(
+        client, make_agent, make_request, db):
+    """answered + type='task' → the REQUESTER is poked to act on the result or close it; the poke
+    names the task and points at /orcha-close (not /orcha-respond / accept-reject)."""
+    human = await make_agent("Boss", kind="human")
+    owner, target, rid = await _answered_task_request(client, make_agent, make_request)
+    base = time.time()
+    r = await client.post(f"/api/requests/{rid}/nudge",
+                          json={"actor_agent_id": human["agent_id"]})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["nudged"] is True and d["nudged_role"] == "requester"
+    assert d["nudged_agent_id"] == owner["agent_id"]
+    pev = await _wait_prompt(client, owner["agent_id"], since_ts=base)
+    assert pev["event"] == "prompt", pev
+    msg = pev["message"]
+    assert "Ship the widget" in msg
+    assert "/orcha-close" in msg
+    assert "/orcha-accept-task" not in msg
     assert _status(db, rid) == "answered"
 
 

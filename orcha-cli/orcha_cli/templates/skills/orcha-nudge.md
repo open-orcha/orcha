@@ -16,6 +16,11 @@ the request's state — it just wakes whoever owns the next action so they resum
 - request is **open** → wakes the **target** (they still owe an answer)
 - request is **answered** → wakes the **requester** (they must act on the answer or close it)
 
+The wake is **task-aware**. For a task request (not a plain question), an open nudge tells the
+target to **accept or reject the task** (not "answer" it) and re-delivers the full task ask —
+title, description, definition of done, and protocol — so they have everything to decide, even if
+the original notification was already drained.
+
 If the next action is owned by a human (an escalated-to-human request, a human target/requester,
 or no target at all), there's no agent to wake via a poke — that's a clean no-op, not an error.
 

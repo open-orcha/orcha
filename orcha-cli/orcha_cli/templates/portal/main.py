@@ -7076,6 +7076,38 @@ class NudgeBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
+def _task_request_context_block(detail) -> str:
+    """#60: render a TASK request's ask — title / description / definition of done / protocol —
+    into a nudge poke. A task request stores its ask in the JSONB `detail` column (see
+    create_request); the only event that ever carried it (`request_created`) is consumed once
+    the recipient drains its inbox. So an agent woken later by a context-less poke could not see
+    what the task even is — it could not meaningfully accept or reject. This re-delivers the full
+    ask verbatim in the wake prompt itself. Returns "" when there's nothing to show."""
+    if not isinstance(detail, dict) or not detail:
+        return ""
+    lines = []
+    title = (detail.get("title") or "").strip()
+    if title:
+        lines.append(f"Task: {title}")
+    desc = (detail.get("description") or "").strip()
+    if desc:
+        lines.append(f"What's being asked: {desc}")
+    dod = (detail.get("definition_of_done") or "").strip()
+    if dod:
+        lines.append(f"Definition of done: {dod}")
+    proto = detail.get("protocol")
+    if isinstance(proto, dict):
+        proto_bits = []
+        for key in ("review_chain", "handoff_to", "autonomy", "notes"):
+            val = proto.get(key)
+            val = val.strip() if isinstance(val, str) else val
+            if val:
+                proto_bits.append(f"{key.replace('_', ' ')}: {val}")
+        if proto_bits:
+            lines.append("Protocol — " + "; ".join(proto_bits))
+    return ("\n\n" + "\n".join(lines)) if lines else ""
+
+
 @app.post("/api/requests/{rid}/nudge", status_code=200)
 def nudge_request(rid: str, body: NudgeBody):
     """#60: a STANDALONE wake-up for whoever owns the NEXT ACTION on a request — fully
@@ -7087,6 +7119,12 @@ def nudge_request(rid: str, body: NudgeBody):
     Accepted (now a task — nudge the task, not the request) and the terminal states
     (rejected / converted_to_task / closed) are not actionable here → 409, no poke. Routing
     is total over the request status enum.
+
+    Task-aware: for a type='task' request the poke is shaped to the actual next action — an OPEN
+    task request directs the TARGET to accept/reject (not answer) and re-delivers the full task ask
+    (title / description / definition of done / protocol) from the JSONB detail, since the original
+    request_created event is consumed on first drain and an info-style "respond" prompt would be
+    both the wrong verb and missing the context the agent needs to decide.
 
     Human-only (an operator wake action; the portal viewer is always human, the CLI resolves
     the acting human → else 403). When the routed recipient is a human (e.g. an escalated-to-
@@ -7135,15 +7173,32 @@ def nudge_request(rid: str, body: NudgeBody):
                     "nudged_role": role, "nudged_agent_id": None,
                     "reason": "a human owns the next action — nothing to wake"}
         # Wake-framed, state-appropriate directed prompt naming the nudger + rid8 + a 1-line preview.
+        # Task-aware: an OPEN *task* request is accepted/rejected (NOT answered), and the poke carries
+        # the full task ask (title / description / definition of done / protocol) so the woken agent
+        # can decide even though the original request_created event was consumed on first drain.
         short_rid = rid[:8]
+        is_task = r["type"] == "task"
         payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][:120]
         if role == "target":
-            message = (f'{actor_alias} nudged you about an OPEN request you still owe an answer on. '
-                       f'Request {short_rid}: "{payload_preview}". Please respond to it (/orcha-respond).')
-        else:
-            message = (f'{actor_alias} nudged you: a request you sent has been ANSWERED and is waiting '
-                       f'on you to act on the answer or close it. '
-                       f'Request {short_rid}: "{payload_preview}".')
+            if is_task:
+                message = (f'{actor_alias} nudged you about an OPEN task request you have not picked up '
+                           f'yet. Request {short_rid}. Please accept it (/orcha-accept-task) or reject it '
+                           f'(/orcha-reject-task).' + _task_request_context_block(r["detail"]))
+            else:
+                message = (f'{actor_alias} nudged you about an OPEN request you still owe an answer on. '
+                           f'Request {short_rid}: "{payload_preview}". Please respond to it (/orcha-respond).')
+        else:  # requester, on an answered request
+            if is_task:
+                detail = r["detail"] if isinstance(r["detail"], dict) else {}
+                title = (detail.get("title") or "").strip()
+                what = f' ("{title[:120]}")' if title else ""
+                message = (f'{actor_alias} nudged you: a task request you sent{what} has been ANSWERED '
+                           f'and is waiting on you to act on the result or close it (/orcha-close). '
+                           f'Request {short_rid}.')
+            else:
+                message = (f'{actor_alias} nudged you: a request you sent has been ANSWERED and is waiting '
+                           f'on you to act on the answer or close it. '
+                           f'Request {short_rid}: "{payload_preview}".')
         note = (body.note or "").strip()
         if note:
             message += f' Note from {actor_alias}: {note}'
