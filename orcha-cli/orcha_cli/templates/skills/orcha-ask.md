@@ -13,6 +13,7 @@ User arguments: `$ARGUMENTS`
 1. **Parse `$ARGUMENTS`**:
    - First positional: `target_alias` (the agent you're asking; use a literal dash `-` or `--human` to escalate-to-human from the start).
    - Second positional / remaining quoted: `payload` — for info mode, the question; for task mode, a one-line summary of the ask.
+   - **Task vs info — choose correctly (GH #71).** Any **sizable / actionable work** you want *done* goes out as a **task request** (`--task`), not info. That includes — but isn't limited to — **code review or sign-off, writing/updating documentation, writing or changing code, or anything that produces an artifact or a PR**. Reserve plain **info** for a genuine quick question the target answers from their own knowledge (no deliverable). **If in doubt, it's a task.** A task request gets its own task-bound lifecycle; an info request answered while the requester already has a live "body" can be closed by a drain turn without the work ever starting (#72). The server enforces this: an info request to another agent that reads like work is rejected with a nudge to add `--task` (see Errors).
    - Mode flag `--task` (default off → info mode). When set, this is a **task request** (Phase 3 / Orcha#5): the target either `/orcha-accept-task` (creating a real task assigned to them) or `/orcha-reject-task <rid> --reason "..."` (kicking it back). With `--task`, also pass:
      - `--task-dod "..."` (required) — the definition of done for the work
      - `--task-priority N` (default 100)
@@ -98,3 +99,4 @@ If `target_alias` or `payload` is missing from `$ARGUMENTS`, use **AskUserQuesti
 - **404** "no agent aliased '<alias>'" → typo or that agent isn't registered. Surface verbatim.
 - **400** target_agent_id and target_alias both specified → I'm sending too much; pick one.
 - **400** "originating_task_id must be a task in this container that the requester participates in" → the `--on-task` id is stale, foreign, or one you don't work on. Drop it (null is fine) or pass the correct task you're working on.
+- **422** "This reads like a work request … add `--task`" (GH #71) → you sent sizable work (review / sign-off / docs / coding) as an `info` request. Resend as a **task**: add `--task --task-dod "..."` (and a `--task-description`/`--task-priority` if useful). If it really *is* a quick knowledge question, rephrase it so it reads as a question, not a work instruction.

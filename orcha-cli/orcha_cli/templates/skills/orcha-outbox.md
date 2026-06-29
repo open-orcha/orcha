@@ -20,16 +20,18 @@ User arguments: `$ARGUMENTS`
 
    Read `.claude/orcha-tabs/<alias>.json` to get `agent_id`.
 
-2. **Parse `--status`** (optional). Default: API's default (non-closed). If user passed `--status all`, omit the `status` query param so the API returns all statuses including closed. Otherwise pass the value through.
+2. **Parse `--status`** (optional). Default: **open + recently-closed** — call with `?include_recently_closed=true` so you see what's still open AND what was just answered-and-closed (GH #71), which keeps you from re-asking something already resolved. If the user passed an explicit `--status <value>`, pass that value through instead (an explicit filter wins). `--status all` → omit the `status` param entirely so the API returns every status including older closed ones.
 
 3. **Read `.claude/orcha.json`** for `api_base_url`.
 
 4. **GET**:
    ```bash
-   # default
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox"
-   # with explicit status
+   # default — open + recently-closed (last 24h)
+   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?include_recently_closed=true"
+   # with explicit status filter
    curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=<status>"
+   # everything, including older closed requests
+   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox"
    ```
    Response: `{"outgoing_requests": [{ id, status, priority, payload, response, target_alias, parent_request_id, chain_depth, created_at, responded_at, closed_at, expires_at, ... }, ...]}`
 
