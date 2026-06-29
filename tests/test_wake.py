@@ -546,6 +546,10 @@ def test_build_wake_prompt_is_safe_and_directive():
     # R2.2: drain the FULL backlog (all items, until empty), not just the first.
     assert "FULL inbox" in p
     assert "EMPTY" in p
+    # GH #33: after claiming, the worker is told to read the full task body (description +
+    # definition_of_done) and honor loops — not work off the title alone.
+    assert "definition_of_done" in p
+    assert "loop" in p
 
 
 def test_build_wake_prompt_surfaces_directed_message():
@@ -557,6 +561,22 @@ def test_build_wake_prompt_surfaces_directed_message():
     assert '"re-check the failing test and report back"' in p
     # still a one-shot drain-then-exit worker
     assert "ONE-SHOT" in p and "EXIT" in p
+
+
+def test_build_wake_prompt_directed_message_on_task_steers_to_full_body():
+    """GH #33: when a directed-message wake resolves a task (wake_task_id set — the task-thread
+    message path), the worker is told to read the FULL task body (description + definition_of_done)
+    riding in its 'Your task' section, not act on the message preview / title alone."""
+    p = notifier.build_wake_prompt(
+        {"alias": "Forge", "pending_events": 1, "wake_task_id": "t-42",
+         "prompt_messages": ["see my note on the thread"]})
+    assert "DIRECTED MESSAGE FOR YOU" in p
+    assert "definition_of_done" in p
+    assert "Your task" in p and "title alone" in p
+    # no task resolved → no body directive (a plain inbox-only directed message)
+    p2 = notifier.build_wake_prompt(
+        {"alias": "Forge", "pending_events": 1, "prompt_messages": ["ping"]})
+    assert "Your task" not in p2
 
 
 def test_build_wake_prompt_renders_ranked_manifest():

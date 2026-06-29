@@ -43,6 +43,42 @@ async def test_next_claims_ready_excludes_root(client, container, make_agent, ma
     assert claimed["id"] != container["root_task_id"]  # never the root sentinel
 
 
+async def test_next_claim_payload_carries_full_task_body(client, make_agent, make_task):
+    """GH #33: the claim payload must surface the FULL task body — title AND description AND
+    definition_of_done — so the woken worker acts on the complete spec, not just the title."""
+    human = await make_agent("op", "operator", kind="human")
+    a = await make_agent("claimer", "eng")
+    t = await make_task("loop the thing", "all 5 iterations logged",
+                        description="Run the loop 5 times; each pass must append a line.")
+    ar = await client.post(f"/api/tasks/{t['task_id']}/assign",
+                           json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
+    assert ar.status_code == 200, ar.text
+    claimed = (await client.post(f"/api/agents/{a['agent_id']}/next")).json()["task"]
+    assert claimed["title"] == "loop the thing"
+    assert claimed["description"] == "Run the loop 5 times; each pass must append a line."
+    assert claimed["definition_of_done"] == "all 5 iterations logged"
+
+
+async def test_task_thread_read_carries_task_body_header(client, make_agent, make_task):
+    """GH #33: reading a task thread also returns a `task` header (title + description +
+    definition_of_done), so a worker woken by a task-thread message and told to "read the thread"
+    sees the FULL task body — not just the message preview and the title."""
+    a = await make_agent("dev", "eng")
+    t = await make_task("loop the thing", "all 5 iterations logged", assignee_alias="dev",
+                        description="Run the loop 5 times; each pass appends a line.")
+    await client.post(f"/api/tasks/{t['id']}/messages",
+                      json={"author_id": a["agent_id"], "body": "starting now"})
+    r = await client.get(f"/api/tasks/{t['id']}/messages")
+    assert r.status_code == 200, r.text
+    hdr = r.json()["task"]
+    assert hdr["title"] == "loop the thing"
+    assert hdr["description"] == "Run the loop 5 times; each pass appends a line."
+    assert hdr["definition_of_done"] == "all 5 iterations logged"
+    # the same header rides on the paginated (limit>0) read too
+    rp = await client.get(f"/api/tasks/{t['id']}/messages", params={"limit": 5})
+    assert rp.json()["task"]["definition_of_done"] == "all 5 iterations logged"
+
+
 async def test_next_no_ready_returns_none(client, make_agent):
     a = await make_agent("idle-claimer", "eng")
     r = await client.post(f"/api/agents/{a['agent_id']}/next")

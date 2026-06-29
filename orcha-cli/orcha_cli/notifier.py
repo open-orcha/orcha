@@ -590,6 +590,15 @@ def build_wake_prompt(cand: dict) -> str:
         quoted = " ".join(f'(prompt {i + 1}) "{m}"' for i, m in enumerate(msgs))
         directed = (f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — act on "
                     f"{'these' if len(msgs) > 1 else 'this'} specifically: {quoted}.")
+        # GH #33: a task-thread message wake carries only the message preview. When the wake resolves
+        # a task, its FULL body (title + description + definition_of_done) now rides in your system
+        # prompt's "Your task" section — read it before acting, and don't work off the message/title
+        # alone. The thread read (GET /api/tasks/<id>/messages) also returns a `task` header with the
+        # same body if you re-read it there.
+        if cand.get("wake_task_id"):
+            directed += (" Before acting, READ the FULL task body (description AND definition_of_done) "
+                         "in your 'Your task' section — honor every acceptance criterion (run the loop "
+                         "if asked); do not act on the message preview or title alone (GH #33).")
     # #359: a TASK-request in the inbox IS an assignment — accepting it spawns the task. Without this
     # the worker reads "drain your inbox" + "assignment is the only task trigger" and DEFLECTS the
     # work (answers/defers the request to empty the inbox) instead of spawning it. When one is
@@ -606,8 +615,11 @@ def build_wake_prompt(cand: dict) -> str:
     elif cand.get("auto_start_task_ids"):
         task_step = (
             f"(2) if the auto-start rule still holds (assigned & ready, no human HOLD, "
-            f"container active) claim your task via `/orcha-next --alias {alias}` and make "
-            f"concrete progress; "
+            f"container active) claim your task via `/orcha-next --alias {alias}`, then READ "
+            f"the claimed task's FULL description AND definition_of_done before acting — do "
+            f"not work off the title alone (GH #33); honor every acceptance criterion, and if "
+            f"the description/DoD asks for a loop or multi-step work, run the loop / do all "
+            f"steps, then make concrete progress; "
         )
     else:
         task_step = (
@@ -774,6 +786,32 @@ def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _render_task_body(protocol: Optional[dict]) -> Optional[str]:
+    """GH #33: render the resolved task's FULL body — title + description + definition_of_done —
+    as a wake section so a woken worker acts on the complete spec, not the title alone. `protocol`
+    is the GET /agents/{aid}/protocol response, which now carries the body fields alongside the
+    rules (the endpoint resolves the wake's task via the originating-link or in-progress guess).
+
+    Covers EVERY wake that resolves a task: the request-answer (originating-task) path and the
+    in-progress direct-assignment path both flow through that endpoint. Returns None when no task
+    resolved (cold/idle wake) or the task carries no description/DoD beyond a title."""
+    p = protocol or {}
+    if not p.get("task_id"):
+        return None
+    lines = ["## Your task (read this FULL body FRESH every wake — act on the complete spec, NOT "
+             "the title alone; acceptance criteria live in the description and definition of done, "
+             "and a loop / multi-step DoD must be honored, not given a shallow one-pass):"]
+    for label, key in (("Title", "title"), ("Description", "description"),
+                       ("Definition of done", "definition_of_done")):
+        v = p.get(key)
+        if v:
+            if not isinstance(v, str):
+                v = json.dumps(v, ensure_ascii=False)
+            lines.append(f"- {label}: {v}")
+    # Title alone (no description/DoD) adds nothing over what the worker already knows — skip.
+    return "\n".join(lines) if len(lines) > 2 else None
+
+
 def format_persona(persona: Optional[dict], digest: Optional[dict],
                    protocol: Optional[dict] = None) -> Optional[str]:
     """Pure: assemble the --append-system-prompt text so a headless worker boots AS the
@@ -800,6 +838,11 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     # #325: standing guardrail rides whenever we're actually booting as an agent.
     if parts:
         parts.append(HUMAN_COMMS_GUARDRAIL)
+    # GH #33: the resolved task's FULL body (title + description + DoD) rides ahead of the RULES so
+    # the worker reads the complete spec — not the title alone — on every wake that resolves a task.
+    body_section = _render_task_body(protocol)
+    if body_section:
+        parts.append(body_section)
     # #326 (A1): RULES (protocol) ahead of the digest — read fresh every wake, human-editable.
     proto_section = _render_protocol(protocol)
     if proto_section:
