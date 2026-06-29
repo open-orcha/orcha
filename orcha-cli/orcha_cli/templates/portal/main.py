@@ -3486,11 +3486,15 @@ def agent_inbox(aid: str, since: Optional[str] = None):
 
 
 @app.get("/api/agents/{aid}/outbox")
-def agent_outbox(aid: str, status: Optional[str] = None):
+def agent_outbox(aid: str, status: Optional[str] = None, include_closed: bool = False):
     """Outgoing requests where this agent is the requester.
 
     Use `?status=answered` to see only requests waiting for me to close (or resume the parent).
     Default: all non-closed (open, answered, escalated-via-target-null still open).
+
+    GH #71: opt-in `?include_closed=true` ALSO returns recently-closed requests (the default
+    view still omits them — back-compat). Ignored when an explicit `?status=` filter is given
+    (that already pins the exact status the caller asked for).
     """
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -3507,6 +3511,19 @@ def agent_outbox(aid: str, status: Optional[str] = None):
                    WHERE r.requester_id = %s AND r.status = %s
                    ORDER BY r.created_at DESC""",
                 (aid, status),
+            )
+        elif include_closed:
+            # GH #71: every outgoing request regardless of status (incl. closed/rejected).
+            cur.execute(
+                """SELECT r.id, r.type, r.status, r.priority, r.payload, r.response,
+                          r.created_at, r.responded_at, r.expires_at, r.closed_at,
+                          r.target_id, t.alias AS target_alias, r.requester_id,
+                          r.parent_request_id, r.chain_depth
+                   FROM requests r
+                   LEFT JOIN agents t ON t.id = r.target_id
+                   WHERE r.requester_id = %s
+                   ORDER BY r.created_at DESC""",
+                (aid,),
             )
         else:
             cur.execute(
@@ -6669,6 +6686,86 @@ def close_implications(tid: str):
 
 # ---------- requests (Phase 2 — info type only) ----------
 
+# GH #71: requests default to type='info', but real work (review / sign-off / docs / coding)
+# routed as 'info' silently skips the task wake path — a missed-wake incident. This shared,
+# PURE classifier is the server-side BACKSTOP: when a caller sends type='info' with no task
+# object, create_request runs it and AUTO-PROMOTES the request to type='task' if the payload
+# clearly *asks for work*. It is intentionally conservative — a false promotion (info that
+# becomes a task) is worse than a false negative (work that stays info), so the verb set is
+# curated, not speculative, and an interrogative phrasing always wins (stays info).
+#
+# Curated WORK_VERBS only (do NOT expand speculatively). Multi-word forms ("sign off",
+# "sign-off") are matched separately below.
+WORK_VERBS = frozenset({
+    "review", "approve", "implement", "write", "code", "build", "fix",
+    "document", "draft", "create", "refactor", "test", "add",
+})
+# Leading question words / auxiliaries — if the payload OPENS with one of these it is a
+# genuine question (interrogative), never promote even if a work verb appears later
+# ("which file do I review?" stays info).
+_QUESTION_LEADERS = frozenset({
+    "which", "what", "who", "whom", "whose", "when", "where", "why", "how",
+    "is", "are", "was", "were", "do", "does", "did", "can", "could",
+    "should", "would", "will", "shall", "may", "might", "am", "has", "have",
+})
+# Imperative lead-ins that may precede the work verb ("please review ...", "can you go
+# review ...") — we skip past these to find the verb in imperative position. "can"/"could"
+# are deliberately NOT here: they lead a question ("can you review?" → interrogative).
+_IMPERATIVE_LEADINS = frozenset({"please", "kindly", "pls", "plz", "go", "now", "then", "you", "to"})
+_WORD_RE = re.compile(r"[a-z][a-z\-']*")
+
+
+def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
+    """GH #71 — pure, unit-testable classifier. Decide whether an info-typed request
+    payload actually *asks for work* and should be promoted to a task.
+
+    Returns ("task", matched_verb) to promote, or ("info", None) to leave alone.
+
+    Rules (all must hold to promote):
+      * a curated WORK_VERB (lowercased, word-boundary matched) appears in IMPERATIVE
+        position — i.e. it is the first meaningful word, or follows only imperative
+        lead-ins like "please"/"go"/"you";
+      * the payload is NOT interrogative — it must not open with a question word/auxiliary
+        AND must not end with '?'.
+    Anything else stays info. Conservative by design (backstop only).
+    """
+    if not payload:
+        return ("info", None)
+    text = payload.strip()
+    if not text:
+        return ("info", None)
+    lowered = text.lower()
+
+    # Interrogative guards: trailing '?' OR a leading question word → genuine question.
+    if text.rstrip().endswith("?"):
+        return ("info", None)
+    words = _WORD_RE.findall(lowered)
+    if not words:
+        return ("info", None)
+    if words[0] in _QUESTION_LEADERS:
+        return ("info", None)
+
+    # Multi-word verb form: "sign off" / "sign-off" in imperative position.
+    # Normalize the hyphenated form to the spaced form for a uniform prefix check.
+    norm = re.sub(r"sign-off", "sign off", lowered)
+    norm_words = norm.split()
+    idx = 0
+    while idx < len(norm_words) and norm_words[idx].strip(".,;:!") in _IMPERATIVE_LEADINS:
+        idx += 1
+    if idx + 1 < len(norm_words):
+        if norm_words[idx] == "sign" and norm_words[idx + 1].strip(".,;:!") == "off":
+            return ("task", "sign off")
+
+    # Single-word work verb in imperative position: scan past leading imperative lead-ins,
+    # the first meaningful word must be a curated WORK_VERB.
+    pos = 0
+    while pos < len(words) and words[pos] in _IMPERATIVE_LEADINS:
+        pos += 1
+    if pos < len(words) and words[pos] in WORK_VERBS:
+        return ("task", words[pos])
+    return ("info", None)
+
+
 class TaskRequestPayload(BaseModel):
     """Embedded inside a request when type='task' (Orcha#5, Phase 3)."""
     title: str = Field(..., max_length=MAX_NAME_LEN)
@@ -6826,26 +6923,54 @@ def create_request(cid: str, body: RequestCreate):
                 )
             originating_task_id = body.originating_task_id
 
+        # GH #71: AUTO-PROMOTE info-that-is-really-work to a task BEFORE the type branch,
+        # so we never insert a task-type row with task=None (the 400 contract below is kept
+        # for genuine caller errors). Only runs when the caller sent the DEFAULT type='info'
+        # with NO task object — an explicit type='task' honors the caller and SKIPS the
+        # classifier (binding answer #4). On a "task" verdict we synthesize a minimal
+        # TaskRequestPayload (title = first line of payload truncated; dod = the payload;
+        # priority = the request priority) and route it through the SAME task-detail build
+        # path below, then stamp the audit fields onto `detail`.
+        effective_type = body.type
+        effective_task = body.task
+        promoted_verb: Optional[str] = None
+        if body.type == "info" and body.task is None:
+            verdict, matched_verb = classify_request_type(body.payload)
+            if verdict == "task":
+                effective_type = "task"
+                promoted_verb = matched_verb
+                first_line = body.payload.strip().splitlines()[0].strip()
+                synth_title = (first_line[:MAX_NAME_LEN] if first_line else "(promoted request)")
+                effective_task = TaskRequestPayload(
+                    title=synth_title,
+                    definition_of_done=body.payload[:MAX_DOD_LEN],
+                    priority=body.priority,
+                )
+
         # Phase 3 (Orcha#5): type='task' carries a TaskRequestPayload in body.task
         # which gets stuffed into the JSONB `detail` column. The task itself is
         # only created on /accept-task.
         detail: Optional[dict] = None
-        if body.type == "task":
-            if body.task is None:
+        if effective_type == "task":
+            if effective_task is None:
                 raise HTTPException(400, "type='task' requires a `task` object (title, definition_of_done, priority)")
             detail = {
-                "title": body.task.title,
-                "description": body.task.description,
-                "definition_of_done": body.task.definition_of_done,
-                "priority": body.task.priority,
+                "title": effective_task.title,
+                "description": effective_task.description,
+                "definition_of_done": effective_task.definition_of_done,
+                "priority": effective_task.priority,
             }
             # GH #55: carry the optional protocol through the request so the spawned task
             # inherits its loop rules on accept (only the keys actually set are stored).
-            if body.task.protocol is not None:
-                proto_fields = body.task.protocol.model_dump(exclude_none=True)
+            if effective_task.protocol is not None:
+                proto_fields = effective_task.protocol.model_dump(exclude_none=True)
                 if proto_fields:
                     detail["protocol"] = proto_fields
-        elif body.task is not None:
+            # GH #71: audit stamp on a promoted request so the provenance is visible in `detail`.
+            if promoted_verb is not None:
+                detail["promoted_from_info"] = True
+                detail["matched_verb"] = promoted_verb
+        elif effective_task is not None:
             raise HTTPException(400, "`task` field is only valid with type='task'")
 
         cur.execute(
@@ -6856,7 +6981,7 @@ def create_request(cid: str, body: RequestCreate):
                VALUES (%s, %s, %s, %s, %s, 'open', %s,
                        now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s)
                RETURNING id, expires_at""",
-            (cid, body.type, body.requester_agent_id, target_id, body.priority,
+            (cid, effective_type, body.requester_agent_id, target_id, body.priority,
              body.payload, str(body.expires_minutes), parent_request_id, chain_depth,
              json.dumps(detail) if detail is not None else None,
              originating_task_id),
@@ -6866,19 +6991,20 @@ def create_request(cid: str, body: RequestCreate):
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)  # → awaiting_request
         log_event(cur, cid, "ai", body.requester_agent_id, "request", rid, "created",
-                  {"type": body.type, "target_alias": target_alias,
+                  {"type": effective_type, "target_alias": target_alias,
                    "priority": body.priority, "preview": body.payload[:120],
                    "parent_request_id": parent_request_id, "chain_depth": chain_depth,
-                   "task_title": detail["title"] if detail else None})
+                   "task_title": detail["title"] if detail else None,
+                   "promoted_from_info": promoted_verb is not None})  # GH #71
         _publish_event(cur, cid, target_id, "request_created", {
-            "request_id": rid, "type": body.type, "from_agent_id": body.requester_agent_id,
+            "request_id": rid, "type": effective_type, "from_agent_id": body.requester_agent_id,
             "preview": body.payload[:120]
         })
         conn.commit()
 
     return {
         "request_id": rid,
-        "type": body.type,
+        "type": effective_type,  # GH #71: reflects auto-promotion (info → task) when it fired
         "status": "open",
         "target_alias": target_alias,  # null when the request was born already targeting the human (Orcha#30)
         "expires_at": row["expires_at"].isoformat(),
