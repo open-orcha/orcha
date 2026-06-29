@@ -63,6 +63,9 @@
   .proto.editing .pf { display: flex; }
   .proto.editing .ph .editbtn { display: none; }
   .empty-proto { color: var(--faint); font-size: 13px; padding: 14px 16px; }
+  /* #74: thread-fetch error state — muted message + inline retry button */
+  .thread-err { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .thread-err .btn { letter-spacing: 0; text-transform: none; }
   /* #301: attachment composer (paperclip + drag-drop + staging tray) */
   .reply-wrap { display: flex; flex-direction: column; gap: 8px; }
   .reply-wrap.dragover { outline: 2px dashed var(--accent-line); outline-offset: 3px; border-radius: 11px; }
@@ -135,6 +138,11 @@
   // when the summary count outgrows the cached thread (a new message landed).
   const threadCache = {};
   const threadLoading = {};
+  // #74: per-task thread-fetch error latch. Set when a fetch fails (network/non-200) OR comes back
+  // empty while the snapshot says count>0 (a data inconsistency). While latched we STOP auto-retrying
+  // (the render shows a "Failed to load — tap to retry" affordance) so a persistent failure can't hammer
+  // the endpoint every 3s repaint. Cleared on an explicit retry or once a fetch succeeds with content.
+  const threadError = {};
   // #301: attachment staging for the composer. Files upload immediately on pick/drop/paste; each
   // staged entry holds its real server ref once done. Reset when the selected task changes. Survives
   // no-op 3s repaints (O.patch only re-runs wire() on actual DOM change) and is re-rendered from this
@@ -142,14 +150,27 @@
   let staged = [];          // [{key, name, size, kind, status:'uploading'|'done'|'failed', ref?}]
   let stagedTask = null;
   let stagedSeq = 0;
-  function maybeLoadThread(t) {
+  // #74: lazy-load a task's full thread. `manual` is an explicit user retry — it clears the error
+  // latch and refetches even when nothing new is expected. Auto-calls (every repaint) are suppressed
+  // while loading, while already current, or while the error latch is set (so a failing fetch isn't
+  // retried on every 3s tick — the user retries via the affordance instead).
+  function maybeLoadThread(t, manual) {
     const want = (t.message_summary && t.message_summary.count) || 0;
     const have = (threadCache[t.id] || []).length;
-    if (threadLoading[t.id] || have >= want) return;   // nothing to load / already current
+    if (threadLoading[t.id]) return;
+    if (manual) { threadError[t.id] = false; }
+    else if (have >= want || threadError[t.id]) return;   // current / failed-awaiting-retry
     threadLoading[t.id] = true;
     window.OrchaData.threadOf(t.id)
-      .then((thread) => { threadCache[t.id] = thread; threadLoading[t.id] = false; if (sel === t.id) renderDetail(); })
-      .catch(() => { threadLoading[t.id] = false; });
+      .then((thread) => {
+        threadLoading[t.id] = false;
+        // Inconsistency: snapshot claims messages exist but the fetch came back empty — treat as a
+        // failure so the user gets a retry rather than a perpetual "Loading thread…".
+        if ((!thread || !thread.length) && want > 0) { threadError[t.id] = true; }
+        else { threadCache[t.id] = thread; threadError[t.id] = false; }
+        if (sel === t.id) renderDetail();
+      })
+      .catch(() => { threadLoading[t.id] = false; threadError[t.id] = true; if (sel === t.id) renderDetail(); });
   }
   // optimistic one-shot: tasks acted on THIS session (plan decided / verified). Suppress the
   // gate immediately so the 3s repaint can't double-submit before the snapshot reflects it.
@@ -289,6 +310,7 @@
     const msgs = threadCache[t.id] || [];
     const summaryCount = (t.message_summary && t.message_summary.count) || 0;
     const loading = !!threadLoading[t.id] && !msgs.length;
+    const errored = !!threadError[t.id] && !msgs.length;   // #74: failed/inconsistent fetch, no cache
     const count = msgs.length || summaryCount;
     html += `<div class="card" style="margin-bottom:18px">
       <div class="card-h"><h3>Thread</h3><span class="count">${count ? "(" + count + ")" : ""}</span>
@@ -296,7 +318,8 @@
       <div class="card-b" style="padding:16px 18px">
         ${msgs.length ? `<div class="thread">${msgs.map(msgRow).join("")}</div>`
           : (loading ? '<div class="none">Loading thread…</div>'
-                     : (summaryCount ? '<div class="none">Loading thread…</div>' : '<div class="none">No messages yet.</div>'))}
+                     : (errored ? `<div class="none thread-err">Couldn’t load the thread. <button type="button" class="btn subtle sm" data-thread-retry="${O.esc(t.id)}">Retry</button></div>`
+                                : (summaryCount ? '<div class="none">Loading thread…</div>' : '<div class="none">No messages yet.</div>')))}
         <div id="replyWrap" class="reply-wrap" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
           <div class="reply-row">
             ${humanAvatar()}
@@ -711,6 +734,9 @@
         .then((r) => { O.toast(r.ok ? "Comment posted" : "Failed (" + r.status + ")", r.ok ? "ok" : "danger");
           if (r.ok) { inp.value = ""; inp.blur(); staged = []; renderTray(); renderDetail(); } });
     });
+    // #74: explicit retry for a failed/inconsistent thread fetch — clears the error latch and refetches.
+    const tr = $("detailMain").querySelector("[data-thread-retry]");
+    if (tr) tr.addEventListener("click", () => { tr.textContent = "Retrying…"; tr.disabled = true; maybeLoadThread(t, true); });
     const gate = $("gate-" + t.id);
     if (gate) wireGate(gate, t);
     wireProtocol(t);
