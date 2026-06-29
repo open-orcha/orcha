@@ -190,6 +190,9 @@
     if (isTarget && r.status === "open") btns.push(`<button class="btn approve" data-act="answer">${O.icon("check", "")}Answer</button>`);
     if (isRequester && r.status === "answered") btns.push(`<button class="btn subtle" data-act="convert">${O.icon("convert", "")}Convert to task</button>`);
     if (isRequester && (r.status === "open" || r.status === "answered")) btns.push(`<button class="btn subtle" data-act="escalate">${O.icon("flag", "")}Escalate to human</button>`);
+    // #60: a standalone nudge — wakes whoever owns the next action (open → the target who
+    // still owes an answer; answered → the requester who must act on it). Never changes state.
+    if (r.status === "open" || r.status === "answered") btns.push(`<button class="btn subtle" data-act="nudge">${O.icon("bell", "")}Nudge</button>`);
     btns.push(`<button class="btn ghost" data-act="close">Close</button>`);
     let html = `<div class="wrap-g" id="reqacts" data-req="${O.esc(r.id)}">${btns.join("")}</div>
       <div class="acting-note" style="margin-top:10px;color:var(--muted);font-size:11.5px">${O.avatar(h.alias, "human", "sm")}&nbsp;Arbitrating as ${O.esc(h.alias)} — answer (if it's yours), convert, escalate, or close. Every action is logged.</div>`;
@@ -292,6 +295,17 @@
           O.closeModal();
           postJSON("/api/requests/" + encodeURIComponent(r.id) + "/convert-to-task", { requester_agent_id: h.id, title, definition_of_done: dod, assignee_alias: assignee })
             .then((res) => { O.toast(res.ok ? "Task created from request" : "Failed (" + res.status + ")", res.ok ? "ok" : "danger"); if (res.ok) { renderList(); renderDetail(); } }); } });
+      return;
+    }
+    if (act === "nudge") {
+      // #60: standalone nudge — wakes whoever owns the next action. Never changes state.
+      const whom = r.status === "answered" ? r.from + " (they must act on the answer or close it)" : (r.to || "the agent handling it") + " (they still owe an answer)";
+      O.modal({ title: "Nudge this request?", desc: "Wakes " + whom + ". This does NOT change the request — it just prompts them to act.",
+        body: `<textarea id="ndN" class="ans-in" style="min-height:64px" placeholder="Optional note to include in the nudge…"></textarea>`,
+        primary: "Send nudge", onPrimary: () => { const note = ($("ndN").value || "").trim(); O.closeModal();
+          postJSON("/api/requests/" + encodeURIComponent(r.id) + "/nudge", { actor_agent_id: h.id, note: note || undefined })
+            .then((res) => res.json().then((j) => ({ ok: res.ok, status: res.status, j })).catch(() => ({ ok: res.ok, status: res.status, j: {} })))
+            .then((res) => { O.toast(!res.ok ? "Failed (" + res.status + ")" : (res.j.nudged ? "Nudged the " + (res.j.nudged_role || "agent") : "No agent to wake — a human owns the next action"), res.ok ? "ok" : "danger"); }); } });
       return;
     }
     if (act === "close") {
