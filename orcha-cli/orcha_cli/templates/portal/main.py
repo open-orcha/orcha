@@ -3158,6 +3158,60 @@ def put_settings_models(cid: str, body: ModelSettingsUpdate):
     return {"use_cases": use_cases}
 
 
+# ---------- container settings: free-form container protocol (GH#70) ----------
+# A single container-wide working agreement (default behavioral context for every task/agent).
+# Mirrors the per-task protocol (SPEC-4) but scoped to the whole container and deliberately simpler:
+# one free-text field, no JSONB sub-keys, no templating. Task-level protocols OVERRIDE it — the
+# resolution (task protocol wins; this is the fallback) lives in GET /api/agents/{aid}/protocol.
+
+MAX_CONTAINER_PROTOCOL_LEN = 8_000   # GH#70: cap on the free-form container protocol string
+
+
+class ContainerProtocolUpdate(BaseModel):
+    """PATCH .../settings/protocol body. `protocol` REPLACES the whole field (it's a single
+    free-text value, not a partial JSONB merge); "" / whitespace clears it back to no-protocol."""
+    protocol: str = Field(default="", max_length=MAX_CONTAINER_PROTOCOL_LEN,
+                          description="free-form container-wide working agreement; '' clears it")
+    actor_agent_id: str = Field(..., description="UUID of the human (kind='human') editing it")
+
+
+@app.get("/api/containers/{cid}/settings/protocol", status_code=200)
+def get_container_protocol(cid: str):
+    """GH#70: the container's free-form protocol (the workspace-wide default working agreement).
+    Read-only/open like the other GET /settings/* routes (no secrets). Returns {container_id,
+    protocol} where protocol is null when none is set."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        _require_container(cur, cid)
+        cur.execute("SELECT protocol FROM containers WHERE id=%s", (cid,))
+        row = cur.fetchone()
+    return {"container_id": cid, "protocol": row["protocol"] or None}
+
+
+@app.patch("/api/containers/{cid}/settings/protocol", status_code=200)
+def update_container_protocol(cid: str, body: ContainerProtocolUpdate):
+    """GH#70: set/clear the container-wide protocol. Like /autonomy and the other /settings/*
+    writes, this is HUMAN-GATED (Orcha#30) and audit-logged — it shapes how every agent in the
+    workspace behaves. A full replace (not a merge): the sent text wins; "" clears to NULL. Takes
+    effect on the very next wake (the protocol is loaded FRESH each wake, never cached). Returns the
+    stored value so the Settings panel re-renders."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    text = (body.protocol or "").strip()
+    new_val = text or None   # empty/whitespace clears the field back to no-protocol
+    with db_cursor() as (conn, cur):
+        _require_container(cur, cid)
+        _require_kind(cur, body.actor_agent_id, ("human",))   # Orcha#30: a deliberate human action
+        cur.execute("UPDATE containers SET protocol=%s WHERE id=%s RETURNING protocol",
+                    (new_val, cid))
+        row = cur.fetchone()
+        log_event(cur, cid, "human", body.actor_agent_id, "container", cid,
+                  "container_protocol_updated", {"cleared": new_val is None, "length": len(text)})
+        conn.commit()
+    return {"container_id": cid, "protocol": row["protocol"] or None}
+
+
 # ---------- onboarding: SPEC-292 streaming roster proposal ----------
 
 @app.post("/api/onboarding/propose", status_code=200)
@@ -4435,12 +4489,25 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
                 (aid,),
             )
             row = cur.fetchone()
+        # GH#70: a task-level protocol OVERRIDES the container one — so we fall back to the
+        # container's free-form protocol only when the resolved task carries none (or no task
+        # resolves). Loaded fresh here so a human's Settings edit applies on the very next wake
+        # (same contract as the task protocol).
+        container_protocol = None
+        if not row or not row["protocol"]:
+            cur.execute("SELECT protocol FROM containers WHERE id=%s", (agent["container_id"],))
+            crow = cur.fetchone()
+            container_protocol = (crow["protocol"] if crow else None) or None
     if not row:
-        return {"task_id": None, "protocol": None}
+        return {"task_id": None, "protocol": None, "container_protocol": container_protocol}
     # GH #33: body rides whenever a task resolves; protocol stays independent (null when unset).
-    return {"task_id": str(row["id"]), "title": row["title"],
+    # GH#70: when the task has no protocol of its own, the container protocol rides as the fallback.
+    resp = {"task_id": str(row["id"]), "title": row["title"],
             "description": row["description"], "definition_of_done": row["definition_of_done"],
             "protocol": row["protocol"] or None}
+    if not row["protocol"]:
+        resp["container_protocol"] = container_protocol
+    return resp
 
 
 class WakeAck(BaseModel):

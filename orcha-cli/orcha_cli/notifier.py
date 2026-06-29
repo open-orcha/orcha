@@ -760,7 +760,16 @@ def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
     rules are set so an idle/cold wake carries no protocol section."""
     p = (protocol or {}).get("protocol")
     if not p:
-        return None
+        # GH#70: no task-level protocol → fall back to the container-wide free-form protocol (the
+        # workspace default working agreement). A task protocol, when present, OVERRIDES it (the
+        # server only sends container_protocol when the task carries none), so this never double-renders.
+        cp = (protocol or {}).get("container_protocol")
+        cp = cp.strip() if isinstance(cp, str) else None
+        if not cp:
+            return None
+        return ("## Standing protocol (your WORKSPACE's working agreement — the default RULES for "
+                "every task here, read FRESH every wake; a human edits these in Settings and they "
+                "apply on your very next wake):\n" + cp)
     lines = ["## Standing protocol (your task's working agreement — the RULES, read FRESH every "
              "wake ahead of your notes; a human edits these and they apply on your very next wake):"]
     # GH #56 (Point 2): review_chain / handoff_to / notes are BINDING — render them as imperatives

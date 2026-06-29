@@ -42,6 +42,14 @@
   .sc-inp:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
   .sc-row .iconbtn { flex: none; }
 
+  /* GH#70: container protocol free-form text area — reuses the sc-inp tokens but block-sized
+     and prose-styled (not monospace) since it holds a working agreement, not a key. */
+  .sc-textarea { width: 100%; box-sizing: border-box; min-height: 120px; resize: vertical;
+    background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 10px;
+    color: var(--text); font: 13px Inter, system-ui, sans-serif; line-height: 1.55; padding: 11px 13px; outline: none; }
+  .sc-textarea::placeholder { color: var(--faint); }
+  .sc-textarea:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+
   .sc-hint { font-size: 11.5px; color: var(--faint); min-height: 16px; margin: 7px 2px 0; line-height: 1.4; }
   .sc-hint code { font-size: 11px; }
   .sc-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -113,6 +121,17 @@
               set to xAI (Grok) — wake triage, onboarding proposal, image-to-text, digest curation.
               As above, <code>ORCHA_LLM_API_KEY</code> takes precedence when present.</div>
             <div id="providerKeys"></div>
+          </div>
+        </div>
+
+        <div class="card set-card">
+          <div class="card-h"><h2>Workspace protocol</h2></div>
+          <div class="card-b">
+            <div class="lead">A free-form working agreement applied as the default behavioral context
+              for every task and agent in this workspace. A task's own protocol takes precedence when
+              set — this is the fallback. Leave it empty for no constraint. Edits take effect on each
+              agent's next wake (no restart needed).</div>
+            <div id="protocolCard"></div>
           </div>
         </div>
 
