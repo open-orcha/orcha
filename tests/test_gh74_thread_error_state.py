@@ -34,3 +34,19 @@ def test_render_shows_retry_affordance_and_is_wired():
     assert "maybeLoadThread(t, true)" in src, "retry button doesn't trigger a manual refetch"
     # no regression: a task with zero real messages still shows the empty state
     assert "No messages yet." in src, "empty-thread state lost"
+
+
+def test_failed_refresh_over_cached_messages_still_offers_retry():
+    """Review blocker: a refresh that fails while cached messages are shown must still surface a
+    retry control — otherwise the latch silently freezes the thread stale until a full page refresh."""
+    src = TASKS.read_text()
+    # there must be a distinct "cached messages present + error latched" branch
+    assert "staleError" in src, "no stale-refresh branch for cached-messages-present failures"
+    assert re.search(r"staleError\s*=\s*!!threadError\[t\.id\]\s*&&\s*!!msgs\.length", src), \
+        "staleError must fire when an error is latched AND cached messages exist"
+    # the retry affordance (shared retryBtn carrying data-thread-retry) must render in the
+    # cached-messages branch, not only the empty-thread branch
+    assert re.search(r"data-thread-retry[^\n]*</button>", src.replace("\n", " ")) and "retryBtn" in src, \
+        "no shared retry button defined"
+    cached_branch = re.search(r"msgs\.length \?[^\n]*staleError[^\n]*\$\{retryBtn\}", src)
+    assert cached_branch, "retry button isn't rendered alongside cached messages on a failed refresh"
