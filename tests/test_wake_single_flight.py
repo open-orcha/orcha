@@ -1313,6 +1313,36 @@ def test_worker_is_live_codex_runtime(tmp_path):
         '{"type":"stream_error","msg":{"retry_after":12}}\n')
     assert notifier._worker_is_live(retry_after, runtime="codex") is True
 
+    # PR #80 review round 2 (Code Reviewer) — terminal turn events. In the official
+    # `codex exec --json` shape a command `item.started` is closed by an agent-message
+    # `item.completed` (a DIFFERENT id) and then `turn.completed`, so the command id would otherwise
+    # stay 'in flight' and read the FINISHED worker as live → wrongly checkpoint-respawned. The turn
+    # boundary must clear it: an unpaired command start followed by `turn.completed` is NOT live.
+    turn_done = _log("ctd.log",
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n'
+        '{"type":"turn.completed"}\n')
+    assert notifier._worker_is_live(turn_done, runtime="codex") is False
+    # a failed turn is just as terminal.
+    turn_failed = _log("ctf.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"turn.failed"}\n')
+    assert notifier._worker_is_live(turn_failed, runtime="codex") is False
+    # legacy nested-msg spelling of the turn boundary is honored too.
+    turn_done_legacy = _log("ctl.log",
+        '{"msg":{"type":"exec_command_begin","call_id":"c1","command":["sleep","1"]}}\n'
+        '{"msg":{"type":"task_complete"}}\n')
+    assert notifier._worker_is_live(turn_done_legacy, runtime="codex") is False
+    # but a command that starts in a NEW turn AFTER the boundary is genuinely in flight → live (the
+    # turn-end reset must not mask a fresh, still-open command).
+    turn_then_inflight = _log("cti.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"turn.completed"}\n'
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i2","type":"command_execution","status":"in_progress"}}\n')
+    assert notifier._worker_is_live(turn_then_inflight, runtime="codex") is True
+
     blank = _log("cz.log", "xxxx\n{bad json\n")
     assert notifier._worker_is_live(blank, runtime="codex") is False
     assert notifier._worker_is_live(None, runtime="codex") is False

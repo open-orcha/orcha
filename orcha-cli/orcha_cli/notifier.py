@@ -1461,6 +1461,28 @@ def _codex_event_phase(obj: dict):
     return None, None
 
 
+def _codex_is_turn_end(obj: dict) -> bool:
+    """GH#61 (PR #80 review): does this Codex `codex exec --json` event mark the end of a whole
+    TURN, not just one item? Codex frames an agent turn as `turn.started` → …items… →
+    `turn.completed`/`turn.failed` (older builds nest a `msg.type` of `turn_complete`/`task_complete`).
+    This matters for liveness because a command `item.started` is not always closed by its own
+    `item.completed`: in the official `codex exec --json` sample a command start is followed by an
+    agent-message `item.completed` (a DIFFERENT id) and then `turn.completed`, leaving the command id
+    perpetually 'in flight'. A turn-terminal event is a hard boundary — every item opened in that turn
+    is finished — so we honor it as such (clear in-flight ids, balance the count) rather than reading a
+    completed turn as a live worker. Recognized tolerantly (codex unpinned on this host)."""
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if t in ("turn.completed", "turn.failed", "turn.done", "turn_complete",
+                 "turn_completed", "turn_failed", "turn_end", "task_complete",
+                 "task_completed", "task_finished"):
+            return True
+    return False
+
+
 def _codex_tail_is_live(tail: bytes) -> bool:
     """GH#61: liveness probe for a Codex (`codex exec --json`) worker, the runtime-aware sibling of
     the Claude `_worker_is_live` body. The Claude probe only understands Claude stream-json shapes,
@@ -1474,10 +1496,17 @@ def _codex_tail_is_live(tail: bytes) -> bool:
       * order — the LAST tool-phase event in the tail is a START (a no-id call in flight at the tail);
     plus a rate-limit/backoff event as the last meaningful signal (mid-429, alive but sleeping).
     A genuinely finished/idle Codex tail trips none of these → False, so the dead-Codex teeth case
-    still hard-kills. Parsing is fail-open/tolerant (codex unpinned on this host)."""
+    still hard-kills. Parsing is fail-open/tolerant (codex unpinned on this host).
+
+    PR #80 review: a `turn.completed`/`turn.failed` event is a hard TURN boundary that overrides the
+    in-flight pairing. In the official `codex exec --json` shape a command `item.started` is closed by
+    an agent-message `item.completed` (a different id) and then `turn.completed`, so the command id
+    would otherwise stay 'in flight' and read the finished worker as live (→ wrongly checkpoint-
+    respawned). On a turn-terminal event we clear the in-flight set, reset the start/end count, and
+    make the turn end the last signal — so a completed/failed turn correctly reads NOT live."""
     inflight: set = set()
     start_count = end_count = 0
-    last_signal = None                         # 'start' | 'end' | 'rate_limit' — last of the three
+    last_signal = None                         # 'start' | 'end' | 'rate_limit' | 'turn_end'
     for raw in tail.split(b"\n"):
         s = raw.strip()
         if not s:
@@ -1487,6 +1516,13 @@ def _codex_tail_is_live(tail: bytes) -> bool:
         except ValueError:
             continue                           # partial/garbled line (e.g. truncated tail head)
         if not isinstance(obj, dict):
+            continue
+        if _codex_is_turn_end(obj):
+            # hard turn boundary: every item opened this turn is done — drop in-flight ids, balance
+            # the count, and let this terminal event be the last signal so the order check reads idle.
+            inflight.clear()
+            start_count = end_count = 0
+            last_signal = "turn_end"
             continue
         if _codex_is_rate_limit(obj):
             last_signal = "rate_limit"
