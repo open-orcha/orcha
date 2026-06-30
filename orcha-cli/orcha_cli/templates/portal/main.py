@@ -5257,6 +5257,29 @@ def _run_row(r: dict) -> dict:
     }
 
 
+def _infer_agent_active_task(cur, aid: str) -> Optional[str]:
+    """GH #83: lazy/late worker-run attribution. Many spawn paths can't supply a task_id at
+    wake time — a task-request accept (the spawned task isn't ready-queued and no wake event
+    carries its id), a checkpoint respawn that lost the original context, or any wake that
+    fires without a directed task event — so the worker run would otherwise be recorded with
+    task_id=NULL and float unattached. This reconciles such a run to the agent's CURRENT task
+    using the same heuristic the wake-protocol guess uses (GH #56): the agent's most recently
+    started in_progress task that it is assigned/accepted/working. Returns the task id, or None
+    when no active task can be determined (a genuinely task-less wake stays unattributed)."""
+    cur.execute(
+        """SELECT t.id
+           FROM tasks t
+           JOIN agent_tasks at ON at.task_id = t.id
+           WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+             AND t.status='in_progress' AND t.is_root = false
+           ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
+           LIMIT 1""",
+        (aid,),
+    )
+    row = cur.fetchone()
+    return str(row["id"]) if row else None
+
+
 @app.post("/api/agents/{aid}/runs", status_code=201)
 def start_worker_run(aid: str, body: WorkerRunStart):
     """A2: the notifier records a worker it just spawned (status=running). Returns run_id;
@@ -5270,8 +5293,16 @@ def start_worker_run(aid: str, body: WorkerRunStart):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
-        if body.task_id is not None:
-            _require_task(cur, body.task_id)   # 404 on a valid-but-unknown task, not a 500 FK violation
+        task_id = body.task_id
+        lazy_attributed = False
+        if task_id is not None:
+            _require_task(cur, task_id)   # 404 on a valid-but-unknown task, not a 500 FK violation
+        else:
+            # GH #83: the wake path gave us no task link — lazily attribute the run to the
+            # agent's current in_progress task so accept-task / checkpoint-respawn / any
+            # task_id-less wake never leaves the worker run floating unattached.
+            task_id = _infer_agent_active_task(cur, aid)
+            lazy_attributed = task_id is not None
         if body.conversation_id is not None:
             cur.execute("SELECT agent_id FROM conversations WHERE id=%s", (body.conversation_id,))
             conv = cur.fetchone()
@@ -5286,13 +5317,15 @@ def start_worker_run(aid: str, body: WorkerRunStart):
                      worktree, branch, base_cwd, status)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running')
                RETURNING *""",
-            (aid, body.task_id, body.wake_kind, body.wake_event, body.log_path,
+            (aid, task_id, body.wake_kind, body.wake_event, body.log_path,
              body.pid, body.runtime, body.conversation_id, body.conversation_ack_ts,
              body.last_message_path, body.worktree, body.branch, body.base_cwd),
         )
         row = cur.fetchone()
         log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
-                  "worker_run_started", {"run_id": str(row["run_id"]), "wake_kind": body.wake_kind})
+                  "worker_run_started",
+                  {"run_id": str(row["run_id"]), "wake_kind": body.wake_kind,
+                   "task_id": task_id, "lazy_attributed": lazy_attributed})
         conn.commit()
     return _run_row(row)
 
@@ -5362,11 +5395,19 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
     if body.status not in ("exited", "killed"):
         raise HTTPException(422, "status must be 'exited' or 'killed'")
     with db_cursor() as (conn, cur):
-        cur.execute("SELECT run_id, agent_id FROM worker_runs WHERE run_id=%s", (run_id,))
-        if not cur.fetchone():
+        cur.execute("SELECT run_id, agent_id, task_id FROM worker_runs WHERE run_id=%s", (run_id,))
+        existing = cur.fetchone()
+        if not existing:
             raise HTTPException(404, f"worker run {run_id} not found")
+        # GH #83: backstop the lazy attribution — if the run started with no task link and one
+        # is determinable now (e.g. the task only reached in_progress AFTER spawn), reconcile it
+        # on reap so the finished run still surfaces under its task. COALESCE so a run that was
+        # already attributed (at spawn or a prior finish) is never overwritten.
+        late_task_id = (_infer_agent_active_task(cur, str(existing["agent_id"]))
+                        if existing["task_id"] is None else None)
         cur.execute(
             """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
+                      task_id=COALESCE(task_id, %s),
                       diff=COALESCE(%s, diff), kill_reason=COALESCE(%s, kill_reason),
                       input_tokens=COALESCE(%s, input_tokens),
                       output_tokens=COALESCE(%s, output_tokens),
@@ -5375,7 +5416,8 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
                       total_cost_usd=COALESCE(%s, total_cost_usd),
                       ended_at=now()
                WHERE run_id=%s RETURNING agent_id, status, ended_at""",
-            (body.status, body.exit_code, body.output, body.diff, body.kill_reason,
+            (body.status, body.exit_code, body.output, late_task_id,
+             body.diff, body.kill_reason,
              body.input_tokens, body.output_tokens, body.cache_read_input_tokens,
              body.cache_creation_input_tokens, body.total_cost_usd, run_id),
         )
