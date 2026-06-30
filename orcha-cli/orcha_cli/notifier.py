@@ -1396,7 +1396,97 @@ def _last_event_type(log_path) -> Optional[str]:
     return None
 
 
-def _worker_is_live(log_path) -> bool:
+def _codex_event_type(obj) -> Optional[str]:
+    """GH#61: tolerantly pull a `codex exec --json` event's type. Codex stamps it either at the top
+    level (`{"type": ...}`) or nested under a `msg` object (`{"msg": {"type": ...}}`) — the same dual
+    carrier `_extract_codex_session_id` handles for the session id. Returns the type string or None."""
+    if not isinstance(obj, dict):
+        return None
+    t = obj.get("type")
+    if isinstance(t, str) and t:
+        return t
+    msg = obj.get("msg")
+    if isinstance(msg, dict):
+        mt = msg.get("type")
+        if isinstance(mt, str) and mt:
+            return mt
+    return None
+
+
+def _codex_call_id(obj) -> Optional[str]:
+    """GH#61: pull a codex command/tool `call_id` (what pairs a `*_begin` with its `*_end`), top-level
+    or nested under `msg`, tolerantly. The generic top-level `id` is the SUBMISSION id — shared by
+    every event of a turn — so it cannot pair a begin with its end; only `call_id` is used."""
+    if not isinstance(obj, dict):
+        return None
+    val = obj.get("call_id")
+    if isinstance(val, str) and val:
+        return val
+    msg = obj.get("msg")
+    if isinstance(msg, dict):
+        val = msg.get("call_id")
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
+def _codex_worker_is_live(tail: bytes) -> bool:
+    """GH#61: the Codex analogue of _worker_is_live's Claude signals. `codex exec --json` does NOT
+    emit Claude's assistant/`tool_use` + user/`tool_result` shapes — it streams PAIRED begin/end
+    events for every command or tool call (`exec_command_begin`/`exec_command_end`,
+    `mcp_tool_call_begin`/`mcp_tool_call_end`), keyed by `call_id`, with the type at top level or
+    nested under `msg`. A long external command IN FLIGHT shows a `*_begin` whose matching `*_end`
+    has not landed — exactly the ISS-45/GH#49 'alive but log-silent' shape, just spelled differently.
+    Without this the Claude-only probe finds none of Codex's signals → returns False → a stalled-
+    but-alive Codex worker is hard-killed past the cap, defeating PR #54's checkpoint protection for
+    EVERY Codex worker.
+
+    Codex is NOT installed on the dev host (#286 / ff19f91c) so the exact event names can't be
+    empirically pinned — parsing is TOLERANT/FAIL-OPEN like _extract_codex_session_id: we match the
+    `_begin`/`_end` SUFFIX rather than a closed name set, pull `call_id` from either nesting, and read
+    the same three shape-agnostic signals (id pairing, count, order). A rate-limit/backoff at the tail
+    also counts as alive. A false 'alive' merely defers the kill to the 1200s hard cap; a false
+    'stalled' is the bug being fixed."""
+    begin_ids: set = set()
+    end_ids: set = set()
+    begin_count = end_count = 0
+    last_call_block = None                    # 'begin' | 'end' — last command/tool block seen
+    last_type = None
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                          # partial/garbled line
+        etype = _codex_event_type(obj)
+        if not etype:
+            continue
+        last_type = etype
+        low = etype.lower()
+        if low.endswith("_begin"):
+            begin_count += 1
+            last_call_block = "begin"
+            cid = _codex_call_id(obj)
+            if cid:
+                begin_ids.add(cid)
+        elif low.endswith("_end"):
+            end_count += 1
+            last_call_block = "end"
+            cid = _codex_call_id(obj)
+            if cid:
+                end_ids.add(cid)
+    if last_type and ("rate_limit" in last_type.lower() or "rate-limit" in last_type.lower()):
+        return True                           # mid-backoff on a 429 — alive, just sleeping
+    if begin_ids - end_ids:                    # id pairing: a begin with no matching end
+        return True
+    if begin_count > end_count:                # count: more begins issued than ended (no-id / parallel safe)
+        return True
+    return last_call_block == "begin"          # order: tail ends on an unanswered begin
+
+
+def _worker_is_live(log_path, runtime: Optional[str] = None) -> bool:
     """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
     stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
     a worker that is very much alive yet legitimately quiet:
@@ -1425,7 +1515,13 @@ def _worker_is_live(log_path) -> bool:
       * order — the LAST tool-related block in the stream is a `tool_use` (covers a no-id call
         in flight at the tail, even when an orphan result earlier balances the count).
     A `tool_result` always follows its `tool_use`, so an orphan result whose `tool_use` scrolled
-    out of the tail can't fabricate a false in-flight under any of the three."""
+    out of the tail can't fabricate a false in-flight under any of the three.
+
+    GH#61: runtime-aware. Claude stream-json and Codex `exec --json` emit DIFFERENT event schemas;
+    a Codex worker scanned with the Claude shapes below matches none of them and is wrongly judged
+    dead, so PR #54's checkpoint protection never fired for Codex (still hard-killed mid-run on a
+    long, log-silent external job). When the worker's runtime is Codex we dispatch to
+    _codex_worker_is_live; otherwise the Claude path below. `runtime` defaults to None → Claude."""
     if not log_path:
         return False
     try:
@@ -1436,6 +1532,8 @@ def _worker_is_live(log_path) -> bool:
             tail = f.read()
     except OSError:
         return False
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_worker_is_live(tail)
     tool_use_ids: set = set()
     tool_result_ids: set = set()
     use_count = result_count = 0
@@ -1473,6 +1571,168 @@ def _worker_is_live(log_path) -> bool:
     if use_count > result_count:              # count: more calls issued than answered (no-id safe)
         return True
     return last_tool_block == "use"           # order: tail ends on an unanswered tool_use
+
+
+def _tool_use_descriptor(blk) -> Optional[str]:
+    """GH#61: a one-line descriptor of a Claude `tool_use` block — the tool name plus its `command`
+    input (or a compact input repr) — enough for a successor to recognise the in-flight job and find
+    any result/output path the command itself names."""
+    if not isinstance(blk, dict):
+        return None
+    name = blk.get("name") or "tool"
+    inp = blk.get("input")
+    if isinstance(inp, dict):
+        cmd = inp.get("command") or inp.get("cmd")
+        if isinstance(cmd, str) and cmd.strip():
+            return f"{name}: {cmd.strip()}"
+        if inp:
+            return f"{name}: {json.dumps(inp, ensure_ascii=False)}"
+    return str(name)
+
+
+def _codex_call_descriptor(obj) -> Optional[str]:
+    """GH#61: a one-line descriptor of a codex `*_begin` event — the command array (joined) or the
+    tool name — pulled tolerantly from top-level or `msg` nesting (Codex isn't installed here, so the
+    key spelling is best-effort)."""
+    if not isinstance(obj, dict):
+        return None
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else None
+
+    def _pick(key):
+        if obj.get(key) is not None:
+            return obj.get(key)
+        return msg.get(key) if msg else None
+
+    cmd = _pick("command")
+    if isinstance(cmd, list) and cmd:
+        return " ".join(str(c) for c in cmd)
+    if isinstance(cmd, str) and cmd.strip():
+        return cmd.strip()
+    for k in ("tool", "tool_name", "name", "invocation"):
+        v = _pick(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _claude_inflight_command(tail: bytes) -> Optional[str]:
+    """GH#61: the descriptor of the last UNANSWERED Claude `tool_use` in the tail (the in-flight
+    call), or None. Uses the same three-signal in-flight test as _worker_is_live so it returns a
+    command only when the probe agrees something is genuinely in flight."""
+    use_ids: set = set()
+    result_ids: set = set()
+    use_count = result_count = 0
+    last_tool_block = None
+    last_use_desc = None
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue
+        etype = obj.get("type")
+        content = (obj.get("message") or {}).get("content") if isinstance(obj.get("message"), dict) else None
+        if etype == "assistant" and isinstance(content, list):
+            for blk in content:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                    use_count += 1
+                    last_tool_block = "use"
+                    if blk.get("id"):
+                        use_ids.add(blk["id"])
+                    last_use_desc = _tool_use_descriptor(blk)
+        elif etype == "user" and isinstance(content, list):
+            for blk in content:
+                if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                    result_count += 1
+                    last_tool_block = "result"
+                    if blk.get("tool_use_id"):
+                        result_ids.add(blk["tool_use_id"])
+    inflight = bool(use_ids - result_ids) or use_count > result_count or last_tool_block == "use"
+    return last_use_desc if inflight else None
+
+
+def _codex_inflight_command(tail: bytes) -> Optional[str]:
+    """GH#61: the descriptor of the last unmatched Codex `*_begin` (exec/tool call in flight), or
+    None. Mirrors _codex_worker_is_live's in-flight test (id pairing / count / order)."""
+    begin_ids: set = set()
+    end_ids: set = set()
+    begin_count = end_count = 0
+    last_call_block = None
+    last_begin_desc = None
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue
+        etype = _codex_event_type(obj)
+        if not etype:
+            continue
+        low = etype.lower()
+        if low.endswith("_begin"):
+            begin_count += 1
+            last_call_block = "begin"
+            last_begin_desc = _codex_call_descriptor(obj)
+            cid = _codex_call_id(obj)
+            if cid:
+                begin_ids.add(cid)
+        elif low.endswith("_end"):
+            end_count += 1
+            last_call_block = "end"
+            cid = _codex_call_id(obj)
+            if cid:
+                end_ids.add(cid)
+    inflight = bool(begin_ids - end_ids) or begin_count > end_count or last_call_block == "begin"
+    return last_begin_desc if inflight else None
+
+
+def _inflight_external_command(log_path, runtime: Optional[str] = None) -> Optional[str]:
+    """GH#61 (direction 2): the RESUMABLE MARKER handed to a checkpoint successor. When a worker is
+    checkpoint-respawned with a long external command still IN FLIGHT, _worker_is_live has already
+    proven something is unanswered; this pulls that command's invocation out of the same log tail so
+    the successor can be told EXPLICITLY 'a run was in flight: <cmd> — read its result before
+    re-running' instead of restarting the whole suite from zero (the #49 failure mode that PR #54
+    only fixed IMPLICITLY, via the C1 digest). Returns a short one-line descriptor of the most-recent
+    unanswered tool/command call, or None when nothing is in flight. Runtime-aware + tolerant,
+    mirroring _worker_is_live; `runtime` defaults to None → Claude."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            f.seek(max(0, end - 262144))     # same 256KB tail the liveness probe reads
+            tail = f.read()
+    except OSError:
+        return None
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_inflight_command(tail)
+    return _claude_inflight_command(tail)
+
+
+def _resumable_marker_preamble(marker: str) -> str:
+    """GH#61 (direction 2): the explicit, machine-readable resume instruction prepended to a
+    checkpoint successor's prompt. PR #54 preserved continuity only IMPLICITLY (via the C1 digest —
+    it leaned on the worker having journaled what it kicked off and the successor reading it); this
+    hands the successor the EXACT in-flight command plus a directive to read any existing result
+    before re-running, so its natural move on a half-done external job is NOT to restart the whole
+    suite from zero. The command often NAMES its own result-bundle/output path as an argument (e.g.
+    `xcodebuild test -resultBundlePath …`), so the one marker carries both command and path."""
+    marker = marker.strip()
+    if len(marker) > 600:
+        marker = marker[:600] + " …(truncated)"
+    return (
+        "⚠️ RESUMABLE JOB IN FLIGHT — a long external command was still running when your "
+        "predecessor was checkpointed:\n"
+        f"    {marker}\n"
+        "Its result may ALREADY EXIST on disk — e.g. a result-bundle / output / log path named in "
+        "that command, or files in this run's worktree. BEFORE re-running it from scratch, check for "
+        "and read that existing result; only re-run if it is missing or incomplete.\n\n"
+    )
 
 
 def _kill_worker(proc, graceful: bool = False, grace_secs: float = 10.0) -> None:
@@ -1983,6 +2243,12 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     n = w.get("respawns", 0) + 1
     cap = w.get("cap", HARD_CAP_MIN_SECS)
 
+    # GH#61 (direction 2): capture the RESUMABLE MARKER from the worker's CURRENT log tail BEFORE we
+    # kill it — if a long external command was in flight (the GH#49 case), pull its invocation so the
+    # successor is handed an EXPLICIT 'a run was in flight: <cmd>; read its result before re-running'
+    # signal, not just the implicit C1 digest continuity. None when nothing was in flight.
+    marker = _inflight_external_command(w.get("log_path"), ctx.get("model_runtime"))
+
     # 1) graceful checkpoint — SessionEnd (C1 digest) runs before the process is forced down.
     _kill_worker(proc, graceful=True)
     diff = _capture_diff(worktree)
@@ -1997,7 +2263,12 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     if base_cwd:
         log_path = (pathlib.Path(base_cwd) / ".claude" / ".orcha-wakes"
                     / f"{ctx.get('alias', 'agent')}-{int(time.time())}.log")
-    sent, _cmd, newproc = spawn_headless(run_cwd, ctx.get("prompt", ""), ctx.get("flags"), False,
+    # GH#61 (direction 2): prepend the explicit resume instruction to the successor's prompt when a
+    # job was in flight, so it checks the existing result before re-running the whole suite.
+    resume_prompt = ctx.get("prompt", "")
+    if marker:
+        resume_prompt = _resumable_marker_preamble(marker) + resume_prompt
+    sent, _cmd, newproc = spawn_headless(run_cwd, resume_prompt, ctx.get("flags"), False,
                                          alias=ctx.get("alias"), system_prompt=persona,
                                          model=ctx.get("model"),
                                          runtime=ctx.get("model_runtime"),
@@ -2033,9 +2304,10 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
                {"kind": "worker_checkpoint_respawn", "release_lease": False})
     if not quiet:
+        marker_note = f"; handed resumable marker [{marker}]" if marker else ""
         print(f"[notifier] worker for {aid} (pid {proc.pid}) crossed the soft hard-cap while "
               f"still progressing — checkpointed (C1 digest) + respawned (pid {newproc.pid}, "
-              f"respawn {n}/{HARD_CAP_RESPAWN_MAX}) on the same worktree")
+              f"respawn {n}/{HARD_CAP_RESPAWN_MAX}) on the same worktree{marker_note}")
 
 
 def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: float = 120.0) -> None:
@@ -2152,7 +2424,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
         # returns) or backing off on a rate limit. Compute liveness ONCE here; reused by the
         # exemption, the checkpoint gate, and the kill diagnostic below.
-        is_live = _worker_is_live(w.get("log_path"))
+        is_live = _worker_is_live(w.get("log_path"), (w.get("respawn_ctx") or {}).get("model_runtime"))
         # Under the soft cap a log-silent-but-live worker is simply LEFT ALONE — don't STALL-kill it:
         # that SIGKILLed legitimately-working workers mid-task, losing the result + the C1 digest.
         if stalled and not over_cap and is_live:

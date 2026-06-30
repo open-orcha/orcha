@@ -1239,6 +1239,73 @@ def test_worker_is_live_handles_no_id_tool_shape(tmp_path):
     assert notifier._worker_is_live(str(_resolved_tool_log_no_id(tmp_path))) is False
 
 
+# ---------- GH#61: Codex (`codex exec --json`) liveness — schema is NOT Claude stream-json ----------
+
+def _codex_inflight_log(tmp_path):
+    """A `codex exec --json` tail ending on an exec_command_begin whose exec_command_end hasn't
+    landed — a long external command IN FLIGHT. Codex isn't installed on the dev host (#286), so the
+    event spelling is the best-effort schema the tolerant parser targets: `msg`-nested type +
+    `call_id` pairing. The command NAMES its own result-bundle path (the direction-2 marker)."""
+    log = tmp_path / "cw.log"
+    log.write_text(
+        '{"id":"sub_1","msg":{"type":"task_started"}}\n'
+        '{"id":"sub_1","msg":{"type":"exec_command_begin","call_id":"call_A",'
+        '"command":["xcodebuild","test","-resultBundlePath","/tmp/r.xcresult"],"cwd":"/repo"}}\n')
+    return log
+
+
+def _codex_resolved_log(tmp_path):
+    """Same exec call, but its exec_command_end HAS landed (matched by call_id) — nothing in flight."""
+    log = tmp_path / "cw.log"
+    log.write_text(
+        '{"id":"sub_1","msg":{"type":"exec_command_begin","call_id":"call_A","command":["pytest"]}}\n'
+        '{"id":"sub_1","msg":{"type":"exec_command_end","call_id":"call_A","exit_code":0}}\n')
+    return log
+
+
+def _codex_rate_limited_log(tmp_path):
+    """A tail ending on a rate-limit/backoff event — codex sleeping off a 429 (alive, just quiet)."""
+    log = tmp_path / "cw.log"
+    log.write_text(
+        '{"id":"sub_1","msg":{"type":"agent_message","message":"running the suite"}}\n'
+        '{"id":"sub_1","msg":{"type":"rate_limit_reached","retry_after_ms":30000}}\n')
+    return log
+
+
+def _codex_inflight_log_toplevel(tmp_path):
+    """The in-flight shape with the type carried TOP-LEVEL (not under `msg`) and NO call_id — the
+    other carrier the tolerant parser must handle, caught by the count/order signals."""
+    log = tmp_path / "cw.log"
+    log.write_text(
+        '{"type":"agent_message","message":"go"}\n'
+        '{"type":"mcp_tool_call_begin","tool":"run_tests","command":["npm","test"]}\n')
+    return log
+
+
+def test_codex_worker_is_live_distinguishes_alive_from_stuck(tmp_path):
+    """GH#61 unit: _worker_is_live with runtime='codex' recognises codex's begin/end + rate-limit
+    schema — an unmatched exec_command_begin (msg-nested OR top-level) or a rate-limit tail is alive;
+    a begin matched by its end is not. The Claude parser would miss ALL of these (False)."""
+    assert notifier._worker_is_live(str(_codex_inflight_log(tmp_path)), "codex") is True
+    assert notifier._worker_is_live(str(_codex_inflight_log_toplevel(tmp_path)), "codex") is True
+    assert notifier._worker_is_live(str(_codex_rate_limited_log(tmp_path)), "codex") is True
+    assert notifier._worker_is_live(str(_codex_resolved_log(tmp_path)), "codex") is False
+    # the regression itself: parsed as Claude (the old behavior), an alive codex worker reads dead
+    assert notifier._worker_is_live(str(_codex_inflight_log(tmp_path)), "claude") is False
+    assert notifier._worker_is_live(None, "codex") is False
+
+
+def test_inflight_external_command_extracts_resumable_marker(tmp_path):
+    """GH#61 (direction 2) unit: _inflight_external_command pulls the in-flight command descriptor
+    (the resumable marker) from either runtime's log, and returns None once nothing is in flight."""
+    assert notifier._inflight_external_command(str(_inflight_tool_log(tmp_path))) == "Bash: sleep 600"
+    assert notifier._inflight_external_command(str(_resolved_tool_log(tmp_path))) is None
+    codex_marker = notifier._inflight_external_command(str(_codex_inflight_log(tmp_path)), "codex")
+    assert codex_marker == "xcodebuild test -resultBundlePath /tmp/r.xcresult"   # command + bundle path
+    assert notifier._inflight_external_command(str(_codex_resolved_log(tmp_path)), "codex") is None
+    assert notifier._inflight_external_command(None, "codex") is None
+
+
 def test_no_id_inflight_tool_worker_not_stall_killed(monkeypatch, tmp_path):
     """PR #75 review (P2) regression: a worker whose log ends on a NO-ID in-flight tool_use is
     ALIVE — it must NOT be SIGTERM'd / marked worker_stalled_killed (the precise failure the
@@ -1518,11 +1585,12 @@ def test_checkpoint_respawn_is_the_mechanism(monkeypatch, tmp_path):
     assert ack["kind"] == "worker_timeout_killed"
 
 
-def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
+def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0, runtime="claude"):
     """A live_workers entry for a worker PAST the soft cap and STALLED — the log is frozen
     (last_size already equals the file's current size, so no growth this tick) and last progress
     was 200s ago — with the ISS-76 respawn context. Whether it is live/dead is decided by the log
-    CONTENT (an unanswered tool_use → live)."""
+    CONTENT (an unanswered tool_use / codex `*_begin` → live). GH#61: `runtime` picks the worker
+    runtime carried in respawn_ctx so the watchdog liveness probe parses the right log schema."""
     return {"agent-X": {"proc": proc, "hard_deadline": time.time() - 1,   # PAST the soft cap
                         "last_size": log.stat().st_size,                  # no growth this tick …
                         "last_progress_ts": time.time() - 200,            # … and frozen 200s → stalled
@@ -1530,7 +1598,7 @@ def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
                         "base_cwd": None, "cap": cap, "respawns": respawns,
                         "respawn_ctx": {"prompt": "drain + continue", "flags": None,
                                         "alias": "Forge", "model": "claude-fable-5",
-                                        "model_runtime": "claude",
+                                        "model_runtime": runtime,
                                         "task_id": "T1", "event": "task_message"}}}
 
 
@@ -1590,6 +1658,75 @@ def test_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_p
     log = tmp_path / "w.log"
     log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"hmm"}]}}\n')
     live = _stalled_respawn_entry(FakeProc(pid=4321, exited=False), log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned == []                                        # NOT respawned — not live
+    assert sigs and live == {}                                  # hard-killed + released
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "worker_timeout_killed" and ack["release_lease"] is True
+    diag = json.loads(next(b for u, b in posts if u.endswith("/runs/R1/finish"))["kill_reason"])
+    assert diag["over_cap"] is True and diag["worker_is_live"] is False
+
+
+def test_stalled_but_alive_codex_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_path):
+    """GH#61 (the URGENT half): a CODEX worker stalled past the cap but PROVABLY ALIVE — holding an
+    unmatched exec_command_begin (a long external job) — must get the SAME PR #54 checkpoint-respawn
+    protection a Claude worker gets, NOT a hard kill. Before the fix _worker_is_live only understood
+    Claude stream-json, so an alive codex worker read dead and fell through to the kill — the #49
+    failure mode left unfixed for codex. The regression test the issue asks for."""
+    posts, sigs, torn, spawn_args = [], [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawn_args.append((a, k)) or (True, "repr", newproc))
+
+    log = _codex_inflight_log(tmp_path)
+    proc = FakeProc(pid=4321, exited=False)
+    live = _stalled_respawn_entry(proc, log, runtime="codex")
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    # graceful checkpoint, NOT a hard kill+teardown: SIGTERM to the old group, worktree kept
+    assert sigs and sigs[0] == (4321, signal.SIGTERM)
+    assert torn == []
+    fin = next(b for u, b in posts if u.endswith("/runs/R1/finish"))
+    assert fin["status"] == "exited"                            # work preserved, not `killed`
+    w = live["agent-X"]
+    assert w["proc"] is newproc and w["respawns"] == 1 and w["run_id"] == "R2"
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "worker_checkpoint_respawn" and ack["release_lease"] is False
+    # GH#61 direction 2: the successor's prompt carries the EXPLICIT resumable marker (the in-flight
+    # command + its result-bundle path), ahead of the original drain-and-continue prompt.
+    resume_prompt = spawn_args[0][0][1]
+    assert "RESUMABLE JOB IN FLIGHT" in resume_prompt
+    assert "xcodebuild test -resultBundlePath /tmp/r.xcresult" in resume_prompt
+    assert resume_prompt.endswith("drain + continue")
+
+
+def test_stalled_dead_codex_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_path):
+    """GH#61 teeth: the codex liveness probe is not a blanket over-cap reprieve either. A codex
+    worker stalled past the cap whose last exec_command_begin was already matched by its end (nothing
+    in flight) is a genuine runaway and is still hard-killed, even WITH a respawn budget."""
+    posts, sigs, spawned = [], [], []
+    monkeypatch.setattr(notifier, "_post_json", lambda u, b, **k: posts.append((u, b)))
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
+
+    log = _codex_resolved_log(tmp_path)
+    live = _stalled_respawn_entry(FakeProc(pid=4321, exited=False), log, runtime="codex")
 
     notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
 
