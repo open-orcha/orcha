@@ -1558,6 +1558,79 @@ def _codex_tail_is_live(tail: bytes) -> bool:
     return last_signal in ("start", "rate_limit")   # order/backoff: tail ends mid-tool or mid-429
 
 
+def _codex_result_status(log_path) -> Optional[str]:
+    """GH#61 (PR #80 review round 2): the Codex sibling of `_result_status`. Return a terminal
+    status ('success' / 'error') when a Codex (`codex exec --json`) worker's log tail shows a
+    COMPLETED turn as its last meaningful signal, else None.
+
+    Why `reap_workers` needs this distinctly from `_worker_is_live`: when a Codex worker finishes,
+    its terminal `turn.completed` line is fresh log GROWTH, so `reap_workers` reads the worker as
+    `stalled=False`. `_result_status` only understands Claude's `result` event (→ None for Codex),
+    so the finished worker skipped the hold-off/exit-cleanly branch and fell through to the
+    checkpoint branch (`respawnable and (not stalled or ...)`) — which respawned an ALREADY-FINISHED
+    worker. Mirroring the Claude `result` path, a turn-terminal Codex tail must instead take the
+    terminal branch: hold off, let the process exit on its own (reaped 'exited', SessionEnd/C1
+    digest runs), never checkpoint-respawn it.
+
+    Terminal means the LAST turn/tool signal in the tail is a `turn.completed`/`turn.failed` with
+    NOTHING live after it — no later `item.started`, no unpaired in-flight id, no rate-limit
+    backoff. A worker that went silent WITHOUT a turn end (e.g. crashed mid-item) is NOT terminal
+    here → it stays on the stall/liveness/respawn path, exactly as before. A turn end followed by a
+    new turn's activity is likewise not terminal (the new turn is still running). Tolerant/fail-open
+    parsing (codex unpinned on this host), and — like `_result_status` — a still-being-written final
+    line (unparseable last line) defers the decision to a later tick rather than risk a false
+    terminal on a live worker."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            f.seek(max(0, end - 65536))          # tail is plenty; terminal lines are small
+            tail = f.read()
+    except OSError:
+        return None
+    # the LAST non-empty line must parse cleanly; a truncated final line means codex is still
+    # mid-write → don't declare terminal yet (mirrors _result_status's last-line guard).
+    for raw in reversed(tail.split(b"\n")):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            json.loads(s)
+        except ValueError:
+            return None
+        break
+    last_signal = None                           # 'start' | 'end' | 'rate_limit' | 'turn_end'
+    last_turn_status = None                      # 'success' | 'error' — status of the last turn end
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                             # partial/garbled line (e.g. truncated tail head)
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_turn_end(obj):
+            last_signal = "turn_end"
+            blob = ((obj.get("type") or "") + " "
+                    + ((obj.get("msg") or {}).get("type") or "")).lower()
+            last_turn_status = "error" if "fail" in blob else "success"
+            continue
+        if _codex_is_rate_limit(obj):
+            last_signal = "rate_limit"
+            continue
+        phase, _iid = _codex_event_phase(obj)
+        if phase == "start":
+            last_signal = "start"
+        elif phase == "end":
+            last_signal = "end"
+    # terminal ONLY when the tail's last meaningful signal is a turn end (nothing live after it).
+    return last_turn_status if last_signal == "turn_end" else None
+
+
 def _worker_is_live(log_path, runtime=None) -> bool:
     """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
     stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
@@ -1644,6 +1717,19 @@ def _worker_is_live(log_path, runtime=None) -> bool:
     if use_count > result_count:              # count: more calls issued than answered (no-id safe)
         return True
     return last_tool_block == "use"           # order: tail ends on an unanswered tool_use
+
+
+def _terminal_status(log_path, runtime=None) -> Optional[str]:
+    """GH#61 (PR #80 review round 2): runtime-aware 'has this worker FINISHED its agent loop?'.
+    Claude emits a terminal stream-json `result` line (`_result_status`); a Codex worker emits a
+    terminal `turn.completed`/`turn.failed` (`_codex_result_status`). `reap_workers` uses this to
+    HOLD OFF on a finished worker — let it exit cleanly so SessionEnd (the C1 digest) runs and it is
+    reaped 'exited' — instead of stall-killing OR checkpoint-respawning it. Without the Codex arm a
+    finished Codex worker's terminal turn line read as fresh growth (`not stalled`) and was wrongly
+    respawned by the checkpoint branch."""
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_result_status(log_path)
+    return _result_status(log_path)
 
 
 def _kill_worker(proc, graceful: bool = False, grace_secs: float = 10.0) -> None:
@@ -2290,13 +2376,22 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         over_cap = now > w.get("hard_deadline", now)
         if not (stalled or over_cap):
             continue                   # progressing (or within stall window) — let it work
-        # ISS-29: a worker that already emitted a terminal `result` has COMPLETED — the log
-        # stops growing at the result line, so the stall timer trips even though the work is
-        # done and the process is just slow to exit. Do NOT reap it as 'killed': hold off and
-        # let the next tick's proc.poll() catch a clean exit (reaped 'exited', SessionEnd/C1
-        # digest gets to run). Only force it down — still 'exited' — if it overruns a generous
-        # graceful-exit window.
-        rstatus = _result_status(w.get("log_path"))
+        # GH#61: resolve the worker's OWN runtime up front — both the terminal-completion check
+        # below and the liveness probe further down must read the worker's runtime schema. A Codex
+        # worker's `codex exec --json` log carries none of the Claude stream-json signals, so a
+        # runtime-blind read mis-classifies it. The runtime rides on respawn_ctx (set at spawn AND
+        # carried through checkpoint-respawn).
+        w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+        # ISS-29: a worker that already emitted a terminal `result` (Claude) / `turn.completed`
+        # (Codex, GH#61 PR #80 review) has COMPLETED — the log stops growing at that line, so the
+        # stall timer trips even though the work is done and the process is just slow to exit. Do
+        # NOT reap it as 'killed' AND do NOT checkpoint-respawn it: a Codex worker's terminal turn
+        # line is fresh growth (`not stalled`), which the checkpoint branch below would otherwise
+        # treat as "still progressing" and respawn an already-finished worker (#80 review round 2).
+        # Hold off here and let the next tick's proc.poll() catch a clean exit (reaped 'exited',
+        # SessionEnd/C1 digest gets to run). Only force it down — still 'exited' — if it overruns a
+        # generous graceful-exit window.
+        rstatus = _terminal_status(w.get("log_path"), runtime=w_runtime)
         if rstatus is not None:
             seen = w.get("result_seen_ts")
             if seen is None:
@@ -2322,12 +2417,9 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # ISS-45: a stalled-looking worker can be log-silent yet ALIVE — waiting on an in-flight
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
         # returns) or backing off on a rate limit. Compute liveness ONCE here; reused by the
-        # exemption, the checkpoint gate, and the kill diagnostic below.
-        # GH#61: the liveness probe must read the worker's OWN runtime — a Codex worker's
-        # `codex exec --json` log carries none of the Claude stream-json signals, so a runtime-blind
-        # probe would always read it as dead and hard-kill an alive-but-silent Codex worker past the
-        # cap. The runtime rides on respawn_ctx (set at spawn AND carried through checkpoint-respawn).
-        w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+        # exemption, the checkpoint gate, and the kill diagnostic below. The probe reads the
+        # worker's OWN runtime (w_runtime, resolved above) — a runtime-blind probe would read an
+        # alive-but-silent Codex worker as dead and hard-kill it past the cap (GH#61).
         is_live = _worker_is_live(w.get("log_path"), runtime=w_runtime)
         # Under the soft cap a log-silent-but-live worker is simply LEFT ALONE — don't STALL-kill it:
         # that SIGKILLed legitimately-working workers mid-task, losing the result + the C1 digest.

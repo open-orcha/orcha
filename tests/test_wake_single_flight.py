@@ -1551,6 +1551,86 @@ def test_progressing_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_pa
     assert ack["kind"] == "worker_checkpoint_respawn" and ack["release_lease"] is False
 
 
+def _codex_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
+    """A `_respawn_entry` over the CODEX runtime: past the soft cap, last_size=0 + a non-empty log
+    so this tick sees growth (`stalled=False`), respawn_ctx tagged model_runtime='codex'."""
+    entry = _respawn_entry(proc, log, respawns=respawns, cap=cap)
+    entry["agent-X"]["respawn_ctx"]["model_runtime"] = "codex"
+    return entry
+
+
+def test_finished_codex_worker_past_cap_is_not_respawned(monkeypatch, tmp_path):
+    """PR #80 review round 2 (GH#61): a FINISHED Codex worker must NOT be checkpoint-respawned.
+    When a Codex turn completes, the terminal `turn.completed` line is fresh log GROWTH, so
+    reap_workers reads `stalled=False`. `_result_status` only knew Claude's `result` event, so the
+    finished worker skipped the hold-off branch and fell through to the checkpoint branch
+    (`respawnable and (not stalled or ...)`) — respawning an already-finished worker. The
+    runtime-aware `_terminal_status` now routes the official over-cap Codex terminal tail
+    (`item.started` cmd + agent-message `item.completed` + `turn.completed`) into the terminal
+    branch: hold off (record result_seen_ts, let it exit cleanly), NO respawn, lease NOT released."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
+
+    log = tmp_path / "w.log"
+    # the official `codex exec --json` terminal shape: a command start is closed by an
+    # agent-message item.completed (a DIFFERENT id), then turn.completed ends the turn.
+    log.write_text(
+        '{"type":"item.started","item":{"id":"cmd-1","type":"command_execution"}}\n'
+        '{"type":"item.completed","item":{"id":"msg-1","type":"agent_message"}}\n'
+        '{"type":"turn.completed"}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _codex_respawn_entry(proc, log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned == []                                         # finished → NOT respawned
+    assert sigs == []                                            # not killed either — let it exit
+    assert not any(u.endswith("/runs/R1/finish") for u, _ in posts)   # run not finished yet
+    assert "agent-X" in live and live["agent-X"]["proc"] is proc      # still tracked, lease held
+    assert live["agent-X"].get("result_seen_ts") is not None          # terminal branch: holding off
+
+
+def test_inflight_codex_worker_past_cap_is_still_respawned(monkeypatch, tmp_path):
+    """Contrast/guard for the fix above: a Codex worker still IN A TURN past the cap (an
+    `item.started` with no terminal `turn.completed`) is genuinely progressing, so `_terminal_status`
+    returns None and it MUST still be checkpoint-respawned — the round-2 fix must not over-fire and
+    strand live Codex workers on the terminal branch."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(k.get("runtime")) or (True, "r", newproc))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"item.started","item":{"id":"cmd-1","type":"command_execution"}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _codex_respawn_entry(proc, log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert sigs and sigs[0] == (4321, signal.SIGTERM)            # graceful checkpoint of the old worker
+    assert spawned == ["codex"]                                  # respawned ON the codex runtime
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["wake_event"] == "checkpoint_respawn"
+    assert live["agent-X"]["proc"] is newproc and live["agent-X"]["respawns"] == 1
+
+
 def test_checkpoint_respawn_budget_exhausted_is_reaped_as_runaway(monkeypatch, tmp_path):
     """ISS-76 runaway backstop: a task still progressing after HARD_CAP_RESPAWN_MAX rollovers is
     no longer respawned — it's gracefully reaped as a timeout kill and its lease released."""
