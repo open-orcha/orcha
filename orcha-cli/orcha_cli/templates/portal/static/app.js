@@ -1051,8 +1051,12 @@ window.Orcha = (function () {
       const isText = c.tagName === "TEXTAREA" || (c.tagName === "INPUT" && textish.test(c.type || ""));
       // dirty = edited away from what it was rendered with. `defaultValue` reflects the
       // markup-supplied value for both <input> and <textarea>, so an untouched field (incl.
-      // a pre-filled one) is value===defaultValue and never blocks the repaint.
-      if (isText && typeof c.value === "string" && c.value !== c.defaultValue) return true;
+      // a pre-filled one) is value===defaultValue and never blocks the repaint. In a real DOM
+      // defaultValue is always a string (the empty field's is ""); fall back to "" if a field
+      // exposes a non-string (a never-rendered/synthetic node) so an empty box isn't read as
+      // dirty against `undefined`.
+      const rendered = typeof c.defaultValue === "string" ? c.defaultValue : "";
+      if (isText && typeof c.value === "string" && c.value !== rendered) return true;
     }
     return false;
   }

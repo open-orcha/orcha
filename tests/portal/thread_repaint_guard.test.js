@@ -117,6 +117,15 @@ function run() {
   assert(O.inputActiveWithin(emptyPane) === false,
     "an empty untouched composer does not block the repaint");
 
+  // Regression: an empty field whose defaultValue is absent (undefined) — a synthetic /
+  // never-rendered node, as the older ISS-53 test fakes — must read as "" (not dirty),
+  // so "" !== undefined doesn't wrongly block the repaint.
+  const noDefault = { tagName: "TEXTAREA", type: "textarea", value: "" };  // no defaultValue
+  const noDefaultPane = makePane([noDefault]);
+  document.activeElement = null;
+  assert(O.inputActiveWithin(noDefaultPane) === false,
+    "an empty field with no defaultValue (undefined) is treated as clean, not dirty");
+
   console.log("\npatch() — end-to-end GH#74 scenario (non-forced repaint):");
 
   // With pre-filled-untouched protocol fields, a NON-forced patch must APPLY
