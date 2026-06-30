@@ -1400,9 +1400,13 @@ def _codex_is_rate_limit(obj: dict) -> bool:
     """GH#61: does this Codex `codex exec --json` event signal a rate-limit / backoff / retry —
     i.e. the worker is alive, just sleeping off a 429? Tolerant on purpose (codex is not installed
     on the dev host, so the exact event spelling can't be pinned — same caveat as
-    `_extract_codex_session_id`): we scan the event `type`, any nested `msg.type`, and explicit
-    retry fields, and only treat an error-shaped event as 'live' when it CLEARLY carries
-    retry/backoff/429 semantics (a generic error is a dead worker, not a sleeping one)."""
+    `_extract_codex_session_id`): we scan the event `type`, any nested `msg.type`, and the explicit
+    `retry_after` backoff field, and only treat an error-shaped event as 'live' when it CLEARLY
+    carries retry/backoff/429 semantics (a generic error is a dead worker, not a sleeping one).
+    We deliberately do NOT key off a bare `retries` count: a *successful* event can be stamped with
+    `retries: N` (it retried then succeeded), which is history, not a backoff in progress — counting
+    it would read a finished worker as alive. Only `retry_after` (a concrete 'sleep this long before
+    the next attempt') and explicit retry/429 type/message text mark an in-flight backoff."""
     if not isinstance(obj, dict):
         return False
     msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
@@ -1411,7 +1415,7 @@ def _codex_is_rate_limit(obj: dict) -> bool:
         if "rate_limit" in t or "rate-limit" in t or "backoff" in t or "throttl" in t \
                 or "retry" in t or "retrying" in t:
             return True
-    if obj.get("retry_after") or msg.get("retry_after") or msg.get("retries"):
+    if obj.get("retry_after") or msg.get("retry_after"):
         return True
     for field in (msg.get("message"), msg.get("error"), obj.get("error"), obj.get("message")):
         if isinstance(field, str):
@@ -1489,15 +1493,28 @@ def _codex_tail_is_live(tail: bytes) -> bool:
             continue
         phase, iid = _codex_event_phase(obj)
         if phase == "start":
-            start_count += 1
             last_signal = "start"
             if iid:
-                inflight.add(iid)
+                # Codex emits repeated `item.updated` (status:in_progress) events for ONE command,
+                # each read as a "start" by the status fallback. Trust the id: only count a fresh
+                # start (id not already in flight) so repeated updates of the same command don't
+                # inflate start_count and read a finished worker as live. No-id events still count.
+                if iid not in inflight:
+                    inflight.add(iid)
+                    start_count += 1
+            else:
+                start_count += 1
         elif phase == "end":
-            end_count += 1
             last_signal = "end"
             if iid:
-                inflight.discard(iid)
+                # Only balance the count for an id we actually counted as started; a terminal event
+                # for an id whose start scrolled out of the tail (or a duplicate end) must not drive
+                # end_count past the real starts and fabricate a false stall.
+                if iid in inflight:
+                    inflight.discard(iid)
+                    end_count += 1
+            else:
+                end_count += 1
     if inflight:                               # pairing: an unpaired in-flight tool/command id
         return True
     if start_count > end_count:                # count: more starts issued than terminated (no-id safe)

@@ -1282,6 +1282,37 @@ def test_worker_is_live_codex_runtime(tmp_path):
         '{"type":"error","msg":{"type":"fatal","message":"unexpected EOF"}}\n')
     assert notifier._worker_is_live(err, runtime="codex") is False
 
+    # PR #80 review (mahimagupta) — finding 1: Codex emits repeated `item.updated` (in_progress)
+    # events for ONE command, each read as a "start" by the status fallback. A FINISHED command
+    # that issued such an update must still read NOT live — the id-dedup must stop start_count from
+    # outrunning end_count. (Pre-fix this returned True via `start_count > end_count`, defanging the
+    # dead-Codex teeth — the bare `done` case above missed it because it had no `item.updated` line.)
+    updated_done = _log("cu.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+    assert notifier._worker_is_live(updated_done, runtime="codex") is False
+    # …but the SAME repeated-update stream with no terminal event is still in flight → live (the
+    # id-pairing signal, not the count, carries it).
+    updated_inflight = _log("cui.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n')
+    assert notifier._worker_is_live(updated_inflight, runtime="codex") is True
+
+    # finding 2: a *successful* command stamped with a historical `retries` count is NOT a backoff
+    # in progress — it finished. A bare `retries` field must no longer read as a live 429.
+    retries_done = _log("crd.log",
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"},'
+        '"msg":{"type":"agent_message","retries":2}}\n')
+    assert notifier._worker_is_live(retries_done, runtime="codex") is False
+    # an explicit `retry_after` backoff IS a live, mid-429 worker.
+    retry_after = _log("cra.log",
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"stream_error","msg":{"retry_after":12}}\n')
+    assert notifier._worker_is_live(retry_after, runtime="codex") is True
+
     blank = _log("cz.log", "xxxx\n{bad json\n")
     assert notifier._worker_is_live(blank, runtime="codex") is False
     assert notifier._worker_is_live(None, runtime="codex") is False
