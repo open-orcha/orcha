@@ -494,6 +494,28 @@ def _probe_container(api_base: str, cid: str) -> str:
         return "unreachable"
 
 
+# Issue #36: how often a RUNNING daemon re-checks that its container still exists. Far longer
+# than the scan --interval (default 2s) — this is a cheap liveness guard, not a hot path, and a
+# minute's delay before an orphan self-terminates is harmless. The startup 404-refusal posture
+# only protects the moment of launch; this carries the same protection through the daemon's life.
+_DAEMON_LIVENESS_INTERVAL = 60.0
+
+
+def _container_vanished(api_base: str, cid: str) -> bool:
+    """Issue #36 self-terminate predicate. True iff the API is ALIVE and DEFINITIVELY no longer
+    knows this container (HTTP 404).
+
+    A long-running daemon resolves (api_base, cid) ONCE at startup. When its container is later
+    REPLACED (`orcha up` / `init --force`) or its `.claude/orcha.json` goes stale, the daemon
+    would otherwise poll a now-404 container forever — an orphan that still shows up as a live
+    `orcha notifier` in ps (the #36 boot-loop postmortem found 4 notifier daemons, 3 of them bound
+    to dead containers). Mirrors the startup 404-refusal: only a definitive 404 is grounds to quit.
+
+    Returns False for 'unreachable' (API down / booting / mid-restart): a transient API bounce —
+    routine during `orcha up` — must NEVER kill a healthy daemon. Only a definitive 'missing' does."""
+    return _probe_container(api_base, cid) == "missing"
+
+
 def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode(), method="POST",
@@ -4551,8 +4573,28 @@ def cmd_notifier(args) -> None:
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
+    # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
+    # re-check fires ~_DAEMON_LIVENESS_INTERVAL later, not redundantly on iteration one.
+    last_liveness = time.monotonic()
     try:
         while not stop["flag"]:
+            # Issue #36: the daemon resolved (api_base, cid) ONCE at startup and never re-checks.
+            # When its container is later REPLACED (`orcha up` / `init --force`) or its orcha.json
+            # goes stale, it would poll a now-404 container forever — an orphan that still reads as
+            # a live `orcha notifier` in ps (the #36 postmortem found 4 daemons, 3 on dead
+            # containers). Re-run the SAME definitive probe the startup refusal uses, on a slow
+            # cadence, and self-terminate on a DEFINITIVE 'missing' (HTTP 404). A transient
+            # 'unreachable' (API mid-restart during `orcha up`) is tolerated — see _container_vanished.
+            now = time.monotonic()
+            if now - last_liveness >= _DAEMON_LIVENESS_INTERVAL:
+                last_liveness = now
+                if _container_vanished(api_base, cid):
+                    if not args.quiet:
+                        print(f"[notifier] container {cid} no longer exists at {api_base} (HTTP "
+                              f"404) — self-terminating this orphaned daemon (issue #36). The "
+                              f"container was likely replaced (orcha up / init) or "
+                              f".claude/orcha.json points at a previous stack.", file=sys.stderr)
+                    break
             try:
                 # Release leases of workers that finished since the last tick, BEFORE
                 # scanning, so a just-finished agent with fresh work is wakeable now.
