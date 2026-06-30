@@ -1396,7 +1396,116 @@ def _last_event_type(log_path) -> Optional[str]:
     return None
 
 
-def _worker_is_live(log_path) -> bool:
+def _codex_is_rate_limit(obj: dict) -> bool:
+    """GH#61: does this Codex `codex exec --json` event signal a rate-limit / backoff / retry —
+    i.e. the worker is alive, just sleeping off a 429? Tolerant on purpose (codex is not installed
+    on the dev host, so the exact event spelling can't be pinned — same caveat as
+    `_extract_codex_session_id`): we scan the event `type`, any nested `msg.type`, and explicit
+    retry fields, and only treat an error-shaped event as 'live' when it CLEARLY carries
+    retry/backoff/429 semantics (a generic error is a dead worker, not a sleeping one)."""
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if "rate_limit" in t or "rate-limit" in t or "backoff" in t or "throttl" in t \
+                or "retry" in t or "retrying" in t:
+            return True
+    if obj.get("retry_after") or msg.get("retry_after") or msg.get("retries"):
+        return True
+    for field in (msg.get("message"), msg.get("error"), obj.get("error"), obj.get("message")):
+        if isinstance(field, str):
+            low = field.lower()
+            if "429" in low or "rate limit" in low or "rate_limit" in low or "too many requests" in low:
+                return True
+    return False
+
+
+def _codex_event_phase(obj: dict):
+    """GH#61: classify a Codex `codex exec --json` event as the START or END of a tool/command,
+    returning ('start'|'end'|None, id_or_None). Codex frames work as item lifecycle events —
+    `item.started` → `item.completed`/`item.failed` carrying `item.id`, `item.type`
+    (command_execution, mcp_tool_call, web_search, file_change, …) and `item.status` — but older
+    builds emit a nested `msg` with `*_begin`/`*_end` pairs (exec_command_begin/_end,
+    mcp_tool_call_begin/_end, …). The exact spelling can't be pinned on this host, so we recognize
+    BOTH shapes tolerantly and fall back to a status-string read; an unrecognized event is None
+    (ignored) rather than mistaken for in-flight work."""
+    if not isinstance(obj, dict):
+        return None, None
+    item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    iid = item.get("id") or msg.get("call_id") or msg.get("id") or obj.get("id")
+    top = (obj.get("type") or "").lower()
+    mtype = (msg.get("type") or "").lower()
+    # modern item.* lifecycle
+    if top == "item.started":
+        return "start", iid
+    if top in ("item.completed", "item.failed", "item.done"):
+        return "end", iid
+    # nested msg begin/end pairs (older schema)
+    if mtype.endswith("_begin"):
+        return "start", iid
+    if mtype.endswith("_end"):
+        return "end", iid
+    # status-string fallback (e.g. an item.updated carrying status)
+    status = str(item.get("status") or msg.get("status") or "").lower()
+    if status in ("in_progress", "running", "started", "pending"):
+        return "start", iid
+    if status in ("completed", "complete", "done", "failed", "success", "error",
+                  "cancelled", "canceled", "aborted"):
+        return "end", iid
+    return None, None
+
+
+def _codex_tail_is_live(tail: bytes) -> bool:
+    """GH#61: liveness probe for a Codex (`codex exec --json`) worker, the runtime-aware sibling of
+    the Claude `_worker_is_live` body. The Claude probe only understands Claude stream-json shapes,
+    so before this an ALIVE-but-log-silent Codex worker (e.g. on a long external command) read as
+    stalled and was hard-killed past the cap — the exact #49 failure mode left unfixed for Codex.
+
+    Mirror the Claude three-signal heuristic over Codex's event schema and treat ANY as alive:
+      * pairing — a tool/command `item.started`/`*_begin` whose id has not yet been seen as a
+        terminal `item.completed`/`*_end` (precise when ids exist);
+      * count — more starts than ends (covers no-id + parallel calls);
+      * order — the LAST tool-phase event in the tail is a START (a no-id call in flight at the tail);
+    plus a rate-limit/backoff event as the last meaningful signal (mid-429, alive but sleeping).
+    A genuinely finished/idle Codex tail trips none of these → False, so the dead-Codex teeth case
+    still hard-kills. Parsing is fail-open/tolerant (codex unpinned on this host)."""
+    inflight: set = set()
+    start_count = end_count = 0
+    last_signal = None                         # 'start' | 'end' | 'rate_limit' — last of the three
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                           # partial/garbled line (e.g. truncated tail head)
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_rate_limit(obj):
+            last_signal = "rate_limit"
+            continue
+        phase, iid = _codex_event_phase(obj)
+        if phase == "start":
+            start_count += 1
+            last_signal = "start"
+            if iid:
+                inflight.add(iid)
+        elif phase == "end":
+            end_count += 1
+            last_signal = "end"
+            if iid:
+                inflight.discard(iid)
+    if inflight:                               # pairing: an unpaired in-flight tool/command id
+        return True
+    if start_count > end_count:                # count: more starts issued than terminated (no-id safe)
+        return True
+    return last_signal in ("start", "rate_limit")   # order/backoff: tail ends mid-tool or mid-429
+
+
+def _worker_is_live(log_path, runtime=None) -> bool:
     """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
     stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
     a worker that is very much alive yet legitimately quiet:
@@ -1425,7 +1534,14 @@ def _worker_is_live(log_path) -> bool:
       * order — the LAST tool-related block in the stream is a `tool_use` (covers a no-id call
         in flight at the tail, even when an orphan result earlier balances the count).
     A `tool_result` always follows its `tool_use`, so an orphan result whose `tool_use` scrolled
-    out of the tail can't fabricate a false in-flight under any of the three."""
+    out of the tail can't fabricate a false in-flight under any of the three.
+
+    GH#61: the probe is RUNTIME-AWARE. Codex workers launch via `codex exec --json` (not
+    `claude -p`), which emits an entirely different event schema, so the Claude-only shapes below
+    found none of a live Codex worker's signals and returned False → the #54 checkpoint protection
+    never fired and an alive-but-silent Codex worker was hard-killed past the cap. For a Codex
+    runtime we delegate to `_codex_tail_is_live`; the default (None/claude) keeps the original
+    Claude path so existing callers are unchanged."""
     if not log_path:
         return False
     try:
@@ -1436,6 +1552,8 @@ def _worker_is_live(log_path) -> bool:
             tail = f.read()
     except OSError:
         return False
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_tail_is_live(tail)
     tool_use_ids: set = set()
     tool_result_ids: set = set()
     use_count = result_count = 0
@@ -2152,7 +2270,12 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
         # returns) or backing off on a rate limit. Compute liveness ONCE here; reused by the
         # exemption, the checkpoint gate, and the kill diagnostic below.
-        is_live = _worker_is_live(w.get("log_path"))
+        # GH#61: the liveness probe must read the worker's OWN runtime — a Codex worker's
+        # `codex exec --json` log carries none of the Claude stream-json signals, so a runtime-blind
+        # probe would always read it as dead and hard-kill an alive-but-silent Codex worker past the
+        # cap. The runtime rides on respawn_ctx (set at spawn AND carried through checkpoint-respawn).
+        w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+        is_live = _worker_is_live(w.get("log_path"), runtime=w_runtime)
         # Under the soft cap a log-silent-but-live worker is simply LEFT ALONE — don't STALL-kill it:
         # that SIGKILLed legitimately-working workers mid-task, losing the result + the C1 digest.
         if stalled and not over_cap and is_live:
@@ -2194,6 +2317,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             "last_progress_ts": lpts,
             "over_cap": over_cap,
             "worker_is_live": is_live,
+            "runtime": w_runtime,            # GH#61: which liveness schema the probe applied
             "last_event_type": _last_event_type(lp),
         }
         _kill_worker(proc, graceful=True)
