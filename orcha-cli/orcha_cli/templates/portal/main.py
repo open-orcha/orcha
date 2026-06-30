@@ -4239,6 +4239,38 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     return messages, wake_task_id, ack_through_ts
 
 
+# #72: an ANSWER event that unblocks the recipient's OWN task work must NEVER be drained away by a
+# short-lived / sidecar body that is forbidden from doing task work — otherwise, once that body exits,
+# no fresh worker ever spawns and the loop goes silent on a green light (the bug is timing-dependent:
+# it only strikes when a body happened to be alive when the answer arrived). A drain turn may ack
+# pure housekeeping events, but it must PARK the wake cursor BEFORE such an "actionable" answer so the
+# event stays pending and the existing post-exit wake gate spawns a real task worker. This is the one
+# shared predicate; both wake_scan (#288/#307 suppression exemption) and active_conversations (resident
+# drain-sidecar cursor park) consult it.
+def _earliest_actionable_answer_ts(cur, aid: str, delivered_ts):
+    """Return the ts of the EARLIEST pending answer/close event (ts > ``delivered_ts``) that unblocks
+    THIS agent's task work, or ``None`` when there is none.
+
+    Actionable (Code Reviewer #72 Q2) = a ``request_answered`` / ``request_closed`` event where
+    EITHER the request is a ``task`` request and this agent is its original REQUESTER (the one
+    unblocked — not the answerer), OR the event carries an ``originating_task_id`` (a sufficient
+    OR-signal: the answer's wake is meant to resume a specific task). Pure-ack notifications and plain
+    ``info`` answers are housekeeping-drainable and yield ``None``."""
+    cur.execute(
+        """SELECT min(e.ts) AS floor_ts
+             FROM agent_events e
+             LEFT JOIN requests r
+               ON r.id::text = NULLIF(e.payload->>'request_id', '')
+            WHERE e.event_key = %s AND e.ts > %s
+              AND e.event_name IN ('request_answered', 'request_closed')
+              AND ( (r.type = 'task' AND r.requester_id::text = %s)
+                    OR (e.payload->>'originating_task_id') IS NOT NULL )""",
+        (aid, delivered_ts, aid),
+    )
+    row = cur.fetchone()
+    return row["floor_ts"] if row else None
+
+
 @app.get("/api/containers/{cid}/active-conversations")
 def active_conversations(cid: str):
     """E3: the resident-session manager's read-only discovery scan. Every ACTIVE
@@ -4347,9 +4379,36 @@ def active_conversations(cid: str):
                     cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
                 r["inbox_messages"] = msgs
                 r["inbox_ack_ts"] = ack_ts
+                # #72: a warm resident's drain sidecar may NOT do task work, so it must never ack the
+                # cursor PAST an answer that unblocks this agent's own task — that would erase the only
+                # trigger and, after the resident exits, no worker would spawn to act on the green
+                # light. Park strictly BEFORE the earliest such answer: drain only the events ahead of
+                # it (drainable_inbox) and clamp inbox_ack_ts to the newest of those. When nothing is
+                # drainable (the answer is the sole/earliest queued event) inbox_ack_ts is None and the
+                # daemon skips the sidecar entirely, leaving the answer pending for the post-exit
+                # ephemeral wake. No actionable answer queued → unchanged (drain the whole backlog).
+                floor = _earliest_actionable_answer_ts(cur, str(r["agent_id"]), r["_delivered_ts"])
+                if floor is not None:
+                    cur.execute(
+                        """SELECT count(*) AS n, max(ts) AS mx FROM agent_events
+                           WHERE event_key = %s AND ts > %s AND ts < %s
+                             AND event_name <> ALL(%s)""",
+                        (str(r["agent_id"]), r["_delivered_ts"], floor, excl))
+                    drow = cur.fetchone()
+                    r["drainable_inbox"] = drow["n"] or 0
+                    safe = drow["mx"]   # newest drainable event ts strictly before the answer (or None)
+                    if safe is None:
+                        r["inbox_ack_ts"] = None
+                    elif ack_ts is None:
+                        r["inbox_ack_ts"] = safe
+                    else:
+                        r["inbox_ack_ts"] = min(ack_ts, safe)
+                else:
+                    r["drainable_inbox"] = r["pending_inbox"]
             else:
                 r["inbox_messages"] = []
                 r["inbox_ack_ts"] = None
+                r["drainable_inbox"] = 0
             r.pop("_delivered_ts", None)
             r.pop("_inbox_max_ts", None)
     return {"container_id": cid, "conversations": convs}
@@ -4655,6 +4714,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             else:
                 prompt_messages, wake_task_id, ack_through_ts = [], None, max_ts
                 notifications, notifications_truncated = [], False
+            # #72: is any pending answer/close event one that unblocks THIS agent's task work? If so a
+            # $0 drain/auto-close (#288 suppress / #307 cheap-act) must NOT consume it — a real worker
+            # has to spawn to act on the answer. Used below to EXEMPT it from the triage hint (no hint
+            # → decide_wake_tier returns 'full' → spawn) and surfaced for the portal/debug + tests.
+            actionable_answer_ts = (
+                _earliest_actionable_answer_ts(cur, aid, a["delivered_ts"]) if pending else None)
             # Assigned-and-ready tasks = auto-start targets (deps cleared, awaiting
             # the owner to claim+begin). Root is excluded — only the human verifies it.
             # Order by priority, created_at so auto_start_task_ids[0] (what the notifier attributes
@@ -4741,7 +4806,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # The notifier reads the hint and decides (failing open); the server never suppresses.
             triage_hint = None
             if (should_wake and pending == 1 and not auto_tasks
-                    and not wake_task_id and not prompt_messages and latest):
+                    and not wake_task_id and not prompt_messages and latest
+                    and actionable_answer_ts is None):   # #72: never $0-suppress an unblocking answer
                 full_answer = None
                 if latest == "request_answered" and (latest_payload or {}).get("request_id"):
                     cur.execute("SELECT response FROM requests WHERE id=%s",
@@ -4765,6 +4831,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # #288: the wake-suppression hint (None unless the sole pending signal is a single
                 # FYI/answer event). The notifier daemon makes the final call and fails open.
                 "triage_hint": triage_hint,
+                # #72: True when a pending answer/close unblocks this agent's own task work — such an
+                # answer is EXEMPT from #288/#307 suppression (triage_hint stays None) so a real worker
+                # spawns to act on it instead of a drain silently closing it.
+                "actionable_answer_pending": actionable_answer_ts is not None,
                 "wake_enabled": wake_enabled, "in_cooldown": in_cooldown,
                 "lease_active": lease_active, "lease_kind": lease_kind,
                 # #247 B2: the authoritative live-embodiment signal (a 'running' worker_run), exposed
