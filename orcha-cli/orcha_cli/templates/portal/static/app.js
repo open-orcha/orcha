@@ -1029,8 +1029,18 @@ window.Orcha = (function () {
   function inputActiveWithin(el) {
     // ISS-53 (same root as ISS-46): a 3s patch repaint must not wipe text the human is
     // typing into a card — a reject REASON or an answer to an agent's QUESTION. Defer the
-    // patch while, inside el, a form control is FOCUSED, or a text input/textarea holds
-    // unsaved (non-empty) text (typed, then the mouse moved off it before submit).
+    // patch while, inside el, a form control is FOCUSED, or a text input/textarea is DIRTY
+    // (its current value differs from the value it was rendered with — i.e. the human typed
+    // into it, then the mouse moved off before submit).
+    //
+    // GH #74: the old test was "value is non-empty". That misfires on PRE-FILLED but
+    // UNTOUCHED fields — notably the SPEC-4 protocol editor (review_chain/handoff_to/
+    // autonomy/notes), which renders the task's saved protocol straight into textareas. A
+    // populated-but-unedited panel made this return true forever, so EVERY non-forced repaint
+    // of that detail pane (the lazy thread load + the 3s poll) was deferred and the thread
+    // stayed stuck on "Loading thread…". Comparing against `defaultValue` (the rendered
+    // value) flips a field to "active" only once the human actually edits it, which preserves
+    // the anti-clobber intent without freezing panes that merely show saved data.
     if (typeof document === "undefined" || !el || !el.querySelectorAll) return false;
     const ae = document.activeElement;
     if (ae && el.contains && el.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || "")) return true;
@@ -1039,7 +1049,10 @@ window.Orcha = (function () {
     for (let i = 0; i < ctrls.length; i++) {
       const c = ctrls[i];
       const isText = c.tagName === "TEXTAREA" || (c.tagName === "INPUT" && textish.test(c.type || ""));
-      if (isText && typeof c.value === "string" && c.value.trim() !== "") return true;
+      // dirty = edited away from what it was rendered with. `defaultValue` reflects the
+      // markup-supplied value for both <input> and <textarea>, so an untouched field (incl.
+      // a pre-filled one) is value===defaultValue and never blocks the repaint.
+      if (isText && typeof c.value === "string" && c.value !== c.defaultValue) return true;
     }
     return false;
   }
