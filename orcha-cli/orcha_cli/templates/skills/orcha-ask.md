@@ -8,6 +8,28 @@ You are executing `/orcha-ask`.
 
 User arguments: `$ARGUMENTS`
 
+## Choosing the mode — task vs info (GH #71)
+
+- **Use `--task` (a task request) for any real WORK hand-off**: a code review or sign-off, a docs
+  write-up, a coding/implementation/refactor/fix, a build — anything the target must *do* and that
+  should wake them as ready work. Examples that should be `--task`:
+  - `/orcha-ask Reviewer "please review my PR plan" --task --task-dod "..."`
+  - `/orcha-ask Writer "draft the v1.1 release notes" --task --task-dod "..."`
+  - `/orcha-ask Dev "implement the include_closed param" --task --task-dod "..."`
+- **Use `info` (the default) for a genuine quick QUESTION** the requester can't answer themselves:
+  - `/orcha-ask Dev "what port does the DB use?"`
+  - `/orcha-ask Lead "which file owns the outbox query?"`
+
+**Server-side auto-promote (GH #71): a backstop, not a license to be sloppy.** If you send a
+default `info` request whose payload clearly *asks for work* (a curated work verb — review, sign
+off, approve, implement, write, code, build, fix, document, draft, create, refactor, test, add — in
+imperative position, and the payload is not a question), the server **auto-promotes it to a `task`**
+so it doesn't silently skip the task wake path. The stored request is stamped
+`detail.promoted_from_info=true` and `detail.matched_verb`. Interrogatives are never promoted
+("which file do I review?" stays `info`). **Prefer being explicit with `--task`** — promotion is a
+safety net for a missed flag, not the intended path, and it synthesizes a minimal task object
+(title from your payload, DoD = your payload). Genuine quick questions are untouched.
+
 ## Steps
 
 1. **Parse `$ARGUMENTS`**:
@@ -70,6 +92,10 @@ User arguments: `$ARGUMENTS`
 
 6. **Report** to the user:
    - `request_id` and short summary
+   - **The returned `type`** — if you sent `info` but the response `type` came back `task`, the
+     server auto-promoted it (GH #71). Say so: "auto-promoted to a task request (matched work
+     verb) — the target will accept/reject it." If that was not your intent, re-send phrased as a
+     plain question, or own it with an explicit `--task` + a real `--task-dod`.
    - Target alias (or "(escalated to human)")
    - Expires at (so they know when sweep will auto-escalate)
    - If chained: `chain_depth=N, child of <parent_rid>`
