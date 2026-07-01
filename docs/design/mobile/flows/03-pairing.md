@@ -60,6 +60,7 @@ the paired human. If multiple humans are registered the modal shows a "pair as" 
 | A3 | Failure: unreachable | phone can't reach `baseUrl` (different Wi-Fi, firewall): explanation + "Both devices on the same Wi-Fi?" checklist + Retry |
 | I5 | Failure: expired/invalid QR | re-scan CTA |
 | A4 | Manual entry | fallback: URL + pairing code fields (same validation path) |
+| — | iOS: local-network permission denied | distinct from A3 (see Platform notes) — copy names the OS permission and deep-links to app Settings; no mockup frame yet, same `.state` layout as A2/I2 |
 
 ### Behavior
 
@@ -82,6 +83,13 @@ the paired human. If multiple humans are registered the modal shows a "pair as" 
 - **iOS:** scanner presented as a full-height **sheet** over Containers home (`DataScannerViewController`
   / AVFoundation); confirm is a pushed step inside the sheet's own navigation; success dismisses the
   sheet and the new container card animates in. Permission denial deep-links to app Settings.
+- **iOS local-network prompt:** the confirm screen's first probe of a LAN IP triggers the iOS 14+
+  "allow local network access" system prompt. The flow must expect it: confirm-screen copy warns
+  "iOS will ask for local network access — tap Allow", the app ships
+  `NSLocalNetworkUsageDescription` copy, and a denial surfaces as its own failure state (table row
+  above) — **not** A3 "unreachable" — because every container call fails identically after a deny
+  and it would otherwise masquerade as a Wi-Fi/firewall problem. Recovery is Settings deep-link,
+  not Retry.
 
 ## 4. Security callouts (design position — decisions belong to the team, doc 13)
 
@@ -91,6 +99,10 @@ the paired human. If multiple humans are registered the modal shows a "pair as" 
   Shipping the app against an unauthenticated LAN API is a real security decision that needs an
   explicit team call — flagged as **A2** in doc 13, together with HTTPS/self-signed-cert questions
   (plain HTTP on LAN vs. provisioning a cert).
+- The HTTP-vs-TLS choice is **one decision with the transport exceptions both apps must ship**:
+  the base URL is a runtime LAN IP (no fixed domain), so iOS needs `NSAllowsLocalNetworking`
+  (or broader) in ATS and Android needs a cleartext-traffic allowance in its network security
+  config (scoped narrowly, not app-wide). Detailed in doc 13 §A2.
 
 ## 5. Endpoints used
 

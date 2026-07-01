@@ -1,6 +1,7 @@
 # Orcha Mobile — New API Asks (appendix)
 
-Everything the mobile designs need that `/openapi.json` (verified 2026-07-01, 104 endpoints) cannot
+Everything the mobile designs need that `/openapi.json` (verified 2026-07-01, 104 path+method
+operations across 92 unique paths) cannot
 serve today. Nothing here is silently assumed by the designs: each screen that depends on a new ask
 labels it `NEW — ask <id>` in its endpoint annotations. Owners: backend + portal; Andrew and Ethan
 build against the final contracts once agreed.
@@ -25,9 +26,16 @@ build against the final contracts once agreed.
 - **Ask:** `POST /api/pair` (proposed) exchanging the short-lived pairing token for a long-lived
   device token; subsequent requests authenticated (e.g. `Authorization: Bearer`); a way to list and
   revoke paired devices (portal Settings).
-- **Also in scope of this decision:** plain HTTP on LAN vs. self-signed TLS (iOS ATS requires an
-  explicit exception for HTTP; Android needs `usesCleartextTraffic` — both are shippable but should
-  be a *decision*, not a default); whether SSE endpoints accept the token via header or query param.
+- **Also in scope of this decision:** plain HTTP on LAN vs. self-signed TLS — the answer fixes the
+  transport exceptions both apps ship, so treat it as **one** call (per Ethan + Andrew's ACKs):
+  - *iOS:* the base URL is a runtime LAN IP, so no per-domain ATS exception is possible — it's
+    `NSAllowsLocalNetworking` (RFC1918 / `.local`, the clean option) or the broader
+    `NSAllowsArbitraryLoads`. Separately, the first LAN request triggers the iOS **local-network
+    privacy prompt** (`NSLocalNetworkUsageDescription` + a distinct permission-denied failure state
+    in the pairing flow — see flows/03 §Platform notes).
+  - *Android:* plain-HTTP LAN needs a cleartext-traffic exception in the network security config,
+    scoped narrowly (per-host, not app-wide `usesCleartextTraffic`).
+  - Also: whether SSE endpoints accept the token via header or query param.
 - **Design stance:** v1 mockups render no auth UI beyond pairing; if the team ships
   unauthenticated-LAN as an interim, the pairing confirm screen's copy must say so honestly.
 
