@@ -103,6 +103,22 @@ def test_tier_full_when_triage_wakes_and_no_t2_tag():
     assert out["tier"] == "full"
 
 
+def test_review_verdict_forces_full_before_suppress_or_act():
+    """A CLEAN/NEEDS CHANGES answer is a workflow-control verdict. It must full-boot the requester
+    before triage can suppress it or a stale ack_close tag can take the no-spawn cheap-act path."""
+    rid = str(uuid.uuid4())
+    hint = {"tier": "llm", "event_name": "request_answered", "request_id": rid,
+            "text": "CLEAN. The Round 11 addendum closes the remaining gap.",
+            "t2": {"action": "ack_close", "request_id": rid}}
+
+    def boom(_text):
+        raise AssertionError("review verdicts should not be sent to triage before forcing full")
+
+    out = notifier.decide_wake_tier(_cand(hint), triage_fn=boom)
+    assert out["tier"] == "full"
+    assert out["reason"] == "review verdict requires requester wake"
+
+
 # ===========================================================================================
 # main._triage_hint_for — the server tags routine events with a t2 action
 # ===========================================================================================

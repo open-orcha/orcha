@@ -78,6 +78,25 @@ def test_llm_followup_wakes():
     assert out is None
 
 
+def test_review_verdict_answer_forces_wake_without_triage_call():
+    """A review verdict is a workflow-control signal. Even if the cheap triage model would call it
+    a pure acknowledgement, the requester must wake to continue or revise."""
+    calls = []
+
+    def boom(_text):
+        calls.append(_text)
+        raise AssertionError("review verdicts should bypass wake suppression triage")
+
+    for verdict in (
+        "CLEAN. The Round 11 addendum closes the remaining gap.",
+        "NEEDS CHANGES: please move the guard before the cheap action rung.",
+    ):
+        hint = {"tier": "llm", "event_name": "request_answered", "request_id": "r", "text": verdict}
+        assert notifier.decide_wake_suppression(_cand(hint), triage_fn=boom) is None
+
+    assert calls == []
+
+
 def test_llm_error_fails_open_to_wake():
     """TOOTH 5: any triage exception -> fail-open wake (None). A flaky LLM can NEVER suppress."""
     def boom(_t):

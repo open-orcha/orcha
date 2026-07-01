@@ -725,6 +725,10 @@ _TRIAGE_SYSTEM = (
     "You decide whether an autonomous agent must be WOKEN for an incoming event, or whether "
     "waking would burn tokens for no action. Wake if the event needs a human-or-agent response, "
     "changes task state, or asks a question. Skip pure acknowledgements/FYIs that need no action. "
+    "Important Orcha workflow rule: review verdicts for task, plan, PR, or implementation review "
+    "are workflow-control signals and MUST wake the requester. Verdicts include CLEAN, APPROVED, "
+    "PASS, LGTM, NEEDS CHANGES, REQUEST CHANGES, CHANGES REQUESTED, BLOCKED, and similar. CLEAN or "
+    "APPROVED means the requester should continue; NEEDS CHANGES means it should revise. "
     "When uncertain, prefer to WAKE."
 )
 
@@ -821,7 +825,9 @@ HANDOFF_ACK_SCHEMA = {
         "ack": {"type": "boolean",
                 "description": "True ONLY if the right next step is a brief acknowledgement that "
                                "closes the loop. False if the message asks for ANY real work — a "
-                               "change, a rebase, a question to answer, a decision to make."},
+                               "change, a rebase, a question to answer, a decision to make. "
+                               "False for review verdicts such as CLEAN, APPROVED, LGTM, "
+                               "NEEDS CHANGES, REQUEST CHANGES, or CHANGES REQUESTED."},
         "text": {"type": "string",
                  "description": "A short, warm one-sentence acknowledgement to post in the agent's "
                                 "voice. Only meaningful when ack is true."},
@@ -834,6 +840,9 @@ _HANDOFF_ACK_SYSTEM = (
     "to one of its own questions, or an approval of work it completed. Decide whether the only "
     "appropriate next step is a brief acknowledgement that closes the loop (ack=true), or whether "
     "the message actually asks for more work — a change, a rebase, a question, a decision (ack=false). "
+    "Never auto-ack and close review verdicts. If the message is a verdict such as CLEAN, APPROVED, "
+    "PASS, LGTM, NEEDS CHANGES, REQUEST CHANGES, CHANGES REQUESTED, or BLOCKED, return ack=false "
+    "so a full agent wakes and handles the next workflow step. "
     "When ack=true, also compose a short, warm one-sentence acknowledgement in the agent's voice. "
     "When in ANY doubt, return ack=false so a full agent handles it."
 )

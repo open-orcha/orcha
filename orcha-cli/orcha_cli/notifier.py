@@ -192,6 +192,28 @@ def _triage_config_from_scan(scan: dict) -> Optional[dict]:
     return None
 
 
+_REVIEW_VERDICT_RE = re.compile(
+    r"^\s*(?:\*\*)?\s*("
+    r"clean|approved|approval|pass(?:ed)?|lgtm|looks good(?: to me)?|"
+    r"needs changes|request changes|changes requested|blocked|rejected|fail(?:ed)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_review_verdict_hint(hint: dict) -> bool:
+    """True when an answered request starts with a review verdict.
+
+    Review verdicts are workflow-control signals, not pure acknowledgements: CLEAN/APPROVED lets
+    the requester proceed, while NEEDS CHANGES/REQUEST CHANGES sends it back to revise. False
+    positives only cost a wake; false negatives can silently drop ordered work.
+    """
+    if not isinstance(hint, dict) or hint.get("event_name") != "request_answered":
+        return False
+    text = hint.get("text") or ""
+    return isinstance(text, str) and _REVIEW_VERDICT_RE.search(text) is not None
+
+
 def decide_wake_suppression(cand, *, triage_fn=_triage_wake):
     """#288: PURE decision — should this candidate's EPHEMERAL wake be SUPPRESSED (no spawn)?
 
@@ -212,6 +234,8 @@ def decide_wake_suppression(cand, *, triage_fn=_triage_wake):
                 "reason": f"bare {hint.get('event_name')}",
                 "request_id": hint.get("request_id")}
     if tier == "llm":
+        if _is_review_verdict_hint(hint):
+            return None
         try:
             verdict = triage_fn(hint.get("text") or "")
         except Exception:
@@ -244,6 +268,8 @@ def decide_wake_tier(cand, *, triage_fn=_triage_wake):
     hint = (cand or {}).get("triage_hint")
     if not hint:
         return {"tier": "full"}
+    if _is_review_verdict_hint(hint):
+        return {"tier": "full", "reason": "review verdict requires requester wake"}
     # #288 first: a structural bare FYI or a triage=skip answer stays a suppress, verbatim.
     suppress = decide_wake_suppression(cand, triage_fn=triage_fn)
     if suppress is not None:
