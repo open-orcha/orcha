@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 05 Tasks</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  /* filter chips */
+  .chips-row { flex: none; display: flex; gap: 8px; padding: 2px 0 4px; overflow: hidden; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--border-2); background: var(--surface-2); font-size: 12.5px; font-weight: 650;
+    color: var(--text-2); white-space: nowrap; flex: none; }
+  .chip.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+  .chip .n { font-weight: 800; }
+  /* collapsed terminal group header */
+  .grp-closed { display: flex; align-items: center; gap: 8px; padding: 11px 12px; border: 1px solid var(--border);
+    border-radius: 12px; background: var(--surface); font-size: 12px; font-weight: 700; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--muted); }
+  .grp-closed .cnt { color: var(--faint); }
+  .grp-closed .chev { margin-left: auto; transform: rotate(90deg); }
+  /* definition-of-done checklist card */
+  .dod { border: 1px solid var(--accent-line); background: var(--accent-soft); border-radius: 12px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .dod .dl { display: flex; gap: 9px; align-items: flex-start; font-size: 13.5px; line-height: 1.45; color: var(--text-2); }
+  .dod .dl svg { width: 15px; height: 15px; color: var(--accent); flex: none; margin-top: 2px; }
+  /* dependency row */
+  .dep { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 12px; background: var(--surface); font-size: 13.5px; }
+  .dep svg.ic { width: 15px; height: 15px; color: var(--muted); flex: none; }
+  /* attachment chip */
+  .att { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; flex: none; }
+  .att svg { width: 14px; height: 14px; color: var(--muted); }
+  .att .sz { color: var(--faint); font-size: 10.5px; }
+  /* failed-send retry chip */
+  .retry-chip { display: inline-flex; align-items: center; gap: 6px; align-self: flex-end; margin-top: 2px;
+    padding: 5px 11px; border-radius: 999px; background: var(--danger-soft); border: 1px solid var(--danger-line);
+    color: var(--danger); font-size: 11.5px; font-weight: 700; }
+  .retry-chip svg { width: 12px; height: 12px; }
+  /* list meta line inside task card */
+  .tmeta { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+  .tmeta svg.lock { width: 12px; height: 12px; color: var(--warn); }
+  .tmeta .ago { margin-left: auto; color: var(--faint); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>05 — Tasks (list · detail · thread)</h1>
+  <p>Tasks tab: status-grouped list → task detail (DoD, dependencies, verify entry, close) → chat-style
+     thread. Spec: <span class="mono">flows/05-tasks.md</span>. Verify/plan sheets themselves are flow 08;
+     worker runs are flow 06. Every endpoint exists in <span class="mono">/openapi.json</span> today.
+     Frames mix platforms and themes.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ T1: Tasks list, Android dark ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title">Tasks</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="chips-row">
+            <span class="chip on">All</span>
+            <span class="chip">Needs me <span class="n">2</span></span>
+            <span class="chip">Dana</span>
+            <span class="chip">Andrew</span>
+            <span class="chip">Ethan</span>
+            <span class="chip">Code Rev…</span>
+          </div>
+          <div class="section-h">In progress <span class="cnt">2</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-accent pulse"><span class="dot"></span>in_progress</span><span class="grow"></span></div>
+            <div class="c-title">Mobile app design (GH #30)</div>
+            <div class="tmeta"><span class="avatar sm">D</span><span>Dana</span><span class="tag">P20</span><span class="ago">updated 12m ago</span></div>
+          </div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-accent pulse"><span class="dot"></span>in_progress</span><span class="grow"></span></div>
+            <div class="c-title">Fix notification ack veto (GH #89)</div>
+            <div class="tmeta"><span class="avatar sm">E</span><span>Ethan</span><span class="tag">P10</span><span class="ago">updated 3m ago</span></div>
+          </div>
+          <div class="section-h">Blocked <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-warn"><span class="dot"></span>blocked</span><span class="grow"></span></div>
+            <div class="c-title">Publish v0.3.0 release notes</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P30</span>
+              <svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg><span>waits on 1</span><span class="ago">1h ago</span></div>
+          </div>
+          <div class="section-h">Needs verification <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-violet"><span class="dot"></span>needs_verification</span><span class="grow"></span></div>
+            <div class="c-title">Update Homebrew tap to 0.3.0</div>
+            <div class="tmeta"><span class="avatar sm">E</span><span>Ethan</span><span class="tag">P40</span><span class="ago">25m ago</span></div>
+          </div>
+          <div class="section-h">Ready <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-info"><span class="dot"></span>ready</span><span class="grow"></span></div>
+            <div class="c-title">Portal pairing QR modal (ask A1)</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P50</span><span class="ago">2h ago</span></div>
+          </div>
+          <div class="grp-closed">Done <span class="cnt">14</span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div>
+          <div class="grp-closed">Cancelled <span class="cnt">2</span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div>
+        </div>
+        <div class="fab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="tabbar">
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>Home<span class="bdg">3</span></span>
+          <span class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg></span>Tasks</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>Requests<span class="bdg">2</span></span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg></span>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T1 · Tasks list, grouped by status <span class="plat">Android</span></div>
+      <div class="cap-note">Kanban order with active work first: in_progress → blocked → needs_verification → ready → pending; Done/Cancelled collapse to count headers. Filter chips (All / Needs me / per agent), FAB creates. Pull-to-refresh; SSE keeps groups live.</div>
+      <div class="cap-api">GET /api/containers/{cid}/tasks · SSE GET /api/containers/{cid}/events <b>(invalidate on task events)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T2: Tasks list, iOS light ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="row"><span class="spacer"></span>
+            <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <div class="big-title">Tasks</div>
+        </div>
+        <div class="scroll">
+          <div class="input" style="border-radius:12px; padding:9px 12px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;color:var(--faint);"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="ph">Search tasks</span></div>
+          <div class="chips-row">
+            <span class="chip on">All</span>
+            <span class="chip">Needs me <span class="n">2</span></span>
+            <span class="chip">Dana</span>
+            <span class="chip">Andrew</span>
+            <span class="chip">Ethan</span>
+          </div>
+          <div class="section-h">In progress <span class="cnt">2</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-accent pulse"><span class="dot"></span>in_progress</span><span class="grow"></span></div>
+            <div class="c-title">Mobile app design (GH #30)</div>
+            <div class="tmeta"><span class="avatar sm">D</span><span>Dana</span><span class="tag">P20</span><span class="ago">updated 12m ago</span></div>
+          </div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-accent pulse"><span class="dot"></span>in_progress</span><span class="grow"></span></div>
+            <div class="c-title">Fix notification ack veto (GH #89)</div>
+            <div class="tmeta"><span class="avatar sm">E</span><span>Ethan</span><span class="tag">P10</span><span class="ago">updated 3m ago</span></div>
+          </div>
+          <div class="section-h">Pending (waiting on deps) <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-idle"><span class="dot"></span>pending</span><span class="grow"></span></div>
+            <div class="c-title">Run-log retention sweep</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P60</span>
+              <svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg><span>waits on 2</span><span class="ago">yesterday</span></div>
+          </div>
+          <div class="grp-closed">Done <span class="cnt">14</span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home<span class="bdg">3</span></span>
+          <span class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg>Tasks</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg>Requests<span class="bdg">2</span></span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T2 · Tasks list <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Large title collapses on scroll; create is the toolbar "+" (no FAB on iOS); <span class="mono">.searchable</span> field pulls down from the nav bar. Pending tasks carry the dependency lock + "waits on N".</div>
+      <div class="cap-api">GET /api/containers/{cid}/tasks</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T3: list empty ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><div class="title">Tasks</div></div>
+        <div class="state">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div>
+          <div class="st-title">No tasks yet</div>
+          <div class="st-sub">Create the first task for this Orcha — the assigned agent wakes and starts the moment it's ready.</div>
+          <button class="btn primary">Create task</button>
+        </div>
+        <div class="fab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="tabbar">
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>Home</span>
+          <span class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg></span>Tasks</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>Requests</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg></span>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T3 · Empty list <span class="plat">Android · light</span></div>
+      <div class="cap-note">Standard state layout; the CTA duplicates the FAB on purpose (first-run users don't scan corners). iOS identical with the toolbar "+" instead of the FAB.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T4: task detail, iOS dark, in_progress ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Tasks</span></span>
+          <div class="title" style="text-align:center;">Task</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750; letter-spacing:-.2px;">Mobile app design (GH #30)</div>
+            <div class="c-meta">
+              <span class="pill s-accent pulse"><span class="dot"></span>in_progress</span>
+              <span class="tag">P20</span>
+            </div>
+            <div class="rowline" style="margin-top:2px;"><span class="avatar sm">D</span><span style="font-size:13.5px;">Dana</span><span style="font-size:12px; color:var(--faint);">· assignee</span></div>
+          </div>
+          <div class="section-h">Description</div>
+          <div class="card"><div class="c-sub" style="color:var(--text-2);">Design the iOS + Android companion apps: foundations, IA, per-flow specs and mockups under docs/design/mobile/. Portal parity, both themes.</div></div>
+          <div class="section-h">Definition of done</div>
+          <div class="dod">
+            <div class="dl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span>Numbered design docs 01–13 in docs/design/mobile/</span></div>
+            <div class="dl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span>HTML mockups per flow, built from the shared kit</span></div>
+            <div class="dl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span>Every screen checked in dark and light</span></div>
+          </div>
+          <div class="section-h">Depends on</div>
+          <div class="dep"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span class="grow">Portal design tokens export</span><span class="pill s-ok"><span class="dot"></span>completed</span></div>
+          <div class="section-h">Attachments</div>
+          <div style="display:flex; gap:8px; overflow:hidden;">
+            <span class="att"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>wireframe-v2.png <span class="sz">210 KB</span></span>
+            <span class="att"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>tokens.json <span class="sz">4 KB</span></span>
+          </div>
+          <div class="card tap"><div class="rowline"><span class="grow"><span class="c-title" style="font-size:14px;">Thread</span><span class="c-sub" style="display:block; margin-top:2px;">12 messages · Dana: "Pairing mockups done — both…"</span></span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div></div>
+          <div class="card tap"><div class="rowline"><span class="grow"><span class="c-title" style="font-size:14px;">Worker runs</span><span class="c-sub" style="display:block; margin-top:2px;">1 running · 2 finished</span></span><span class="pill s-accent pulse"><span class="dot"></span>running</span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T4 · Task detail — in progress <span class="plat">iOS</span></div>
+      <div class="cap-note">One fetch renders everything (task + messages). DoD is a highlighted checklist card (presentational — no per-item API state). "Close task…" lives in the overflow (⋯), never inline. Runs section → flow 06; a needs_verification task adds the violet entry card (T7).</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages <b>→ {task, messages[]}</b> · GET /api/tasks/{tid}/runs · GET /api/tasks/{tid}/attachments/{stored_name}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T5: iOS cancel confirmationDialog ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="scroll" style="opacity:.35;">
+          <div class="appbar" style="padding-left:0; padding-right:0;">
+            <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Tasks</span></span>
+            <div class="title" style="text-align:center;">Task</div>
+            <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+          </div>
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750;">Portal pairing QR modal (ask A1)</div>
+            <div class="c-meta"><span class="pill s-info"><span class="dot"></span>ready</span><span class="tag">P50</span></div>
+            <div class="rowline"><span class="avatar sm">A</span><span style="font-size:13.5px;">Andrew</span></div>
+          </div>
+          <div class="skel card-h96"></div><div class="skel card-h74"></div><div class="skel card-h74"></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="action-sheet">
+          <div class="grp">
+            <div class="as-note">Close "Portal pairing QR modal (ask A1)"?<br>This force-closes the task. <b style="color:var(--text-2);">1 waiting task will unblock: Run-log retention sweep.</b> Andrew is notified with your reason.</div>
+            <div class="as-btn destructive">Close task</div>
+            <div class="as-btn">Add reason &amp; close…</div>
+          </div>
+          <div class="grp"><div class="as-btn bold">Keep task</div></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T5 · Close task — confirm <span class="plat">iOS</span></div>
+      <div class="cap-note">confirmationDialog (action-sheet idiom, per doc 02). Close-implications are fetched BEFORE presenting and baked into the note — the user sees downstream effects, not a generic "are you sure". "Add reason &amp; close…" opens a one-field alert (sheets can't host text fields).</div>
+      <div class="cap-api">GET /api/tasks/{tid}/close-implications <b>(pre-fetch)</b><br>POST /api/tasks/{tid}/cancel {actor_agent_id, reason?}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T6: Android cancel AlertDialog ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="scroll" style="opacity:.4;">
+          <div class="appbar" style="padding-left:0; padding-right:0;">
+            <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+            <div class="title">Task</div>
+            <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </div>
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750;">Publish v0.3.0 release notes</div>
+            <div class="c-meta"><span class="pill s-warn"><span class="dot"></span>blocked</span><span class="tag">P30</span></div>
+            <div class="rowline"><span class="avatar sm">A</span><span style="font-size:13.5px;">Andrew</span></div>
+          </div>
+          <div class="skel card-h96"></div><div class="skel card-h74"></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="dialog">
+          <div class="d-title">Close this task?</div>
+          <div class="d-body">Force-closes "Publish v0.3.0 release notes". Nothing is waiting on it. Andrew is notified and the close is logged with your identity (kedar).</div>
+          <div class="input area"><span class="ph">Reason (optional) — Andrew sees this on the next wake</span></div>
+          <div class="d-actions">
+            <span class="textbtn">Keep task</span>
+            <span class="textbtn danger">Close task</span>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T6 · Close task — confirm <span class="plat">Android · light</span></div>
+      <div class="cap-note">M3 AlertDialog with the optional reason textarea inline (Android dialogs host inputs; iOS routes reason through a follow-up alert). Body copy comes from the pre-fetched close-implications; if that call fails the dialog still shows with generic copy.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/close-implications <b>(pre-fetch)</b><br>POST /api/tasks/{tid}/cancel {actor_agent_id, reason?}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T7: detail, needs_verification ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Task</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750; letter-spacing:-.2px;">Update Homebrew tap to 0.3.0</div>
+            <div class="c-meta"><span class="pill s-violet"><span class="dot"></span>needs_verification</span><span class="tag">P40</span></div>
+            <div class="rowline" style="margin-top:2px;"><span class="avatar sm">E</span><span style="font-size:13.5px;">Ethan</span><span style="font-size:12px; color:var(--faint);">· assignee</span></div>
+          </div>
+          <div class="card" style="border-color:var(--violet-line); background:var(--violet-soft); gap:10px;">
+            <div class="rowline">
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2" style="width:19px; height:19px; flex:none;"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4.5"/></svg>
+              <span class="grow" style="font-size:14.5px; font-weight:750; color:var(--violet);">Awaiting your verification</span>
+            </div>
+            <div style="font-size:13px; color:var(--text-2); line-height:1.5;">Ethan claims done: "Formula pushed to the public tap; brew install + brew test verified locally — binary reports orcha 0.3.0."</div>
+            <button class="btn tonal block" style="background:var(--violet-soft); color:var(--violet); border-color:var(--violet-line);">Review &amp; verify
+              <svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" style="width:7px; height:12px;"><path d="M1.5 1l5 6-5 6"/></svg></button>
+          </div>
+          <div class="section-h">Definition of done</div>
+          <div class="dod">
+            <div class="dl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span>Formula bumped to 0.3.0 on the public tap</span></div>
+            <div class="dl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span>brew install + brew test pass from a clean machine</span></div>
+          </div>
+          <div class="card tap"><div class="rowline"><span class="grow"><span class="c-title" style="font-size:14px;">Thread</span><span class="c-sub" style="display:block; margin-top:2px;">6 messages</span></span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div></div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>Home<span class="bdg">3</span></span>
+          <span class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg></span>Tasks</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>Requests</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg></span>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T7 · Detail — needs verification <span class="plat">Android</span></div>
+      <div class="cap-note">The violet entry card sits directly under the header — the one thing the human must do. "Review &amp; verify" opens the flow-08 verify sheet (result vs DoD, approve/reject + feedback); this screen never respecs it.</div>
+      <div class="cap-api">POST /api/tasks/{tid}/verify {approve, feedback?, actor_agent_id} <b>(entry point — sheet in flow 08)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T8: thread, iOS ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Task</span></span>
+          <div class="title" style="text-align:center; font-size:15px;">Mobile app design (GH #30)</div>
+          <span style="width:58px;"></span>
+        </div>
+        <div class="scroll" style="gap:12px; padding-top:8px;">
+          <div class="bubble system">Task created by kedar · assigned to Dana · 2d ago</div>
+          <div class="bubble theirs">
+            <div class="b-author">Dana</div>
+            Phases 1–2 are in review — foundations + IA docs are pushed. Starting the tasks-flow mockups next.
+            <div class="b-time">10:42</div>
+          </div>
+          <div class="bubble mine">
+            Looks great. Keep the portal-parity notes coming — Andrew and Ethan build from these.
+            <div class="b-time">10:45</div>
+          </div>
+          <div class="bubble system">kedar approved the plan · logged to the audit trail</div>
+          <div class="bubble theirs">
+            <div class="b-author">Dana</div>
+            Pairing mockups done, both themes. Flows 05/06 in progress — list, detail, thread and the run-log screens.
+            <div class="b-time">11:37</div>
+          </div>
+          <div class="bubble theirs">
+            <div class="b-author">Code Reviewer</div>
+            Reviewed the token file — status colors match the portal 1:1. No findings.
+            <div class="b-time">11:52</div>
+          </div>
+        </div>
+        <div class="composer">
+          <button class="iconbtn" style="width:34px; height:34px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px; height:18px;"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg></button>
+          <div class="input"><span class="ph">Message Dana…</span></div>
+          <div class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T8 · Task thread <span class="plat">iOS</span></div>
+      <div class="cap-note">Agents left with author name (.bubble.theirs); the paired human right (.bubble.mine — author id == pairing humanAgentId); decisions/system entries centered dashed (.bubble.system). Append-only; SSE appends live, auto-scrolling only when already at the bottom.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages <b>(text in `body`)</b><br>POST /api/tasks/{tid}/messages {author_agent_id, body, attachments?} <b>(author = paired human)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T9: thread send failure ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title" style="font-size:15px;">Fix notification ack veto (GH #89)</div>
+        </div>
+        <div class="scroll" style="gap:12px; padding-top:8px;">
+          <div class="bubble theirs">
+            <div class="b-author">Ethan</div>
+            Migration 031 is in — per-event human_acked_at. The /wait precheck now filters acked notifications.
+            <div class="b-time">14:03</div>
+          </div>
+          <div class="bubble mine">
+            Good. Does the pending panel still key on the read cursor?
+            <div class="b-time">14:06</div>
+          </div>
+          <div class="bubble theirs">
+            <div class="b-author">Ethan</div>
+            No — it keys on ack state now. Pushing the branch for review.
+            <div class="b-time">14:07</div>
+          </div>
+          <div class="bubble mine" style="border:1.5px solid var(--danger); box-shadow:0 0 0 3px var(--danger-soft);">
+            Send it to Code Reviewer first, then to me.
+            <div class="b-time">14:09 · not sent</div>
+          </div>
+          <span class="retry-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M21 12a9 9 0 11-2.6-6.4"/><path d="M21 3v6h-6"/></svg>Not sent · Tap to retry</span>
+        </div>
+        <div class="composer">
+          <button class="iconbtn" style="width:34px; height:34px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px; height:18px;"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg></button>
+          <div class="input"><span class="ph">Message Ethan…</span></div>
+          <div class="send disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T9 · Send failure — retry on the bubble <span class="plat">Android</span></div>
+      <div class="cap-note">Optimistic send: the bubble stays put, flips to a danger outline with "not sent", and grows a retry chip that re-POSTs the same payload. Long-press offers Delete draft. No offline queue in v1 — while unreachable the composer disables instead.</div>
+      <div class="cap-api">POST /api/tasks/{tid}/messages <b>(retry = same body)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T10: loading skeleton ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="row"><span class="spacer"></span>
+            <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <div class="big-title">Tasks</div>
+        </div>
+        <div class="scroll">
+          <div class="chips-row" style="opacity:.5;">
+            <span class="chip on">All</span><span class="chip">Needs me</span><span class="chip">Dana</span><span class="chip">Andrew</span>
+          </div>
+          <div class="skel line" style="width:110px; margin:8px 2px 0;"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel line" style="width:80px; margin:8px 2px 0;"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h74"></div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home</span>
+          <span class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg>Tasks</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg>Requests</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T10 · List loading skeleton <span class="plat">iOS · light</span></div>
+      <div class="cap-note">First load only — subsequent visits render the cache instantly and refetch behind it. Shimmer cards mimic group-header + card rhythm; chips render immediately (they're local).</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ T11: detail error + unreachable banner ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Task</div>
+        </div>
+        <div class="scroll">
+          <div class="banner danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 16.5a5 5 0 017 0M5 13a10 10 0 0114 0M1.5 9.5a15 15 0 0121 0"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/><path d="M3 3l18 18"/></svg>
+            Can't reach openorcha
+            <span class="b-act">Retry</span>
+          </div>
+          <div class="state">
+            <div class="glyph danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h5"/><path d="M15 15l5 5m0-5l-5 5"/></svg></div>
+            <div class="st-title">Couldn't load this task</div>
+            <div class="st-sub">The container didn't answer. Actions are disabled until the connection is back.</div>
+            <button class="btn tonal">Try again</button>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">T11 · Detail load error + unreachable banner <span class="plat">Android · light</span></div>
+      <div class="cap-note">Banner pins under the app bar on every task screen while the probe fails; mutating controls (composer, close, verify) disable with the banner as the explanation. With a cached copy, content stays visible under a "showing cached" variant instead of this state.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages <b>(failed)</b> · GET /api/containers/{cid} <b>(probe)</b></div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

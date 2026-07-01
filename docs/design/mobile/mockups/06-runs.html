@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 06 Worker Runs</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  .runrow { display:flex; align-items:center; gap:10px; padding:12px 2px; border-bottom:.5px solid var(--border); }
+  .runrow:last-child { border-bottom:none; }
+  .autoscroll-pill { position:absolute; bottom:96px; left:50%; transform:translateX(-50%); z-index:6;
+    display:flex; align-items:center; gap:8px; background:var(--raised); border:1px solid var(--border-2);
+    border-radius:999px; padding:8px 14px; font-size:12.5px; font-weight:650; color:var(--text-2); box-shadow:var(--shadow); }
+  .autoscroll-pill b { color:var(--accent); font-weight:750; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>06 — Worker runs (list · live log · stop)</h1>
+  <p>The most "alive" screen in the app: watching an agent's worker run stream like a terminal over
+     someone's shoulder. Runs section inside Task detail (flow 05), full-screen color-keyed log viewer
+     (reused verbatim from Agent detail, flow 09), pin-to-bottom auto-scroll, and a confirmed
+     destructive Stop. Spec: <span class="mono">flows/06-runs.md</span>. Ships entirely on the existing API.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ R1: runs section in task detail (Android, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Task</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="19" r="1.6" fill="currentColor"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div style="font-size:19px; font-weight:750; letter-spacing:-.2px; line-height:1.3;">Add dark-mode screenshots to the website</div>
+          <div class="rowline" style="gap:8px;">
+            <span class="pill s-accent pulse"><span class="dot"></span>in progress</span>
+            <span class="tag">P100</span>
+            <div class="rowline" style="gap:6px; margin-left:auto;">
+              <div class="avatar sm">A</div><span style="font-size:13px; color:var(--text-2);">Andrew</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="card tap">
+            <div class="rowline">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+              <div class="grow" style="font-size:14px; font-weight:650;">Thread</div>
+              <span class="tag">6 messages</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+          <div class="section-h">Worker runs <span class="cnt">· 3</span>
+            <span class="conn" style="margin-left:auto; text-transform:none; letter-spacing:0;"><span class="dot"></span>live</span>
+          </div>
+          <div class="card" style="gap:0; padding:2px 14px;">
+            <div class="runrow">
+              <span class="tag mono">9f3c21</span>
+              <div class="avatar sm">A</div>
+              <div class="grow" style="font-size:13.5px;">Andrew</div>
+              <span class="pill s-accent pulse"><span class="dot"></span>running</span>
+              <span style="font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums;">6m ago</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="runrow">
+              <span class="tag mono">41d87f</span>
+              <div class="avatar sm">A</div>
+              <div class="grow" style="font-size:13.5px;">Andrew</div>
+              <span class="pill s-ok"><span class="dot"></span>finished</span>
+              <span style="font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums;">2h · 4m 12s</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="runrow">
+              <span class="tag mono">b2e90a</span>
+              <div class="avatar sm">A</div>
+              <div class="grow" style="font-size:13.5px;">Andrew</div>
+              <span class="pill s-idle"><span class="dot"></span>stopped</span>
+              <span style="font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums;">1d · 0m 48s</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+          <div class="section-h">Definition of done</div>
+          <div class="card">
+            <div class="c-sub" style="color:var(--text-2);">Every page of openorcha.io has a dark-mode screenshot; the installation guide shows both themes side by side.</div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R1 · Runs section in Task detail <span class="plat">Android · dark</span></div>
+      <div class="cap-note">One row per run, newest first: short mono id, owning agent (needed for the stream URL), state chip (running pulses), started-ago / duration. Section header carries the pulsing live chip while any run is running. Longer lists collapse to 3 + "All runs (N)". Empty variant is an inline note, not a full-screen state: "No runs yet — appears when a worker wakes for this task."</div>
+      <div class="cap-api">GET /api/tasks/{tid}/runs · SSE GET /api/containers/{cid}/events (invalidation)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R2: run detail — streaming (iOS, dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Task</span></span>
+          <div class="title mono" style="text-align:center; font-size:15px;">run 9f3c21</div>
+          <button class="btn danger-tonal sm">Stop</button>
+        </div>
+        <div style="padding:0 16px 8px; display:flex; flex-direction:column; gap:8px;">
+          <div class="rowline">
+            <div class="avatar sm">A</div>
+            <div class="grow">
+              <div style="font-size:13.5px; font-weight:650;">Andrew</div>
+              <div style="font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Add dark-mode screenshots to the website</div>
+            </div>
+            <span class="conn"><span class="dot"></span>live</span>
+          </div>
+          <div style="font-size:11px; color:var(--faint); font-family:'JetBrains Mono',monospace;">started 21:36:02 · 6m 14s elapsed</div>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="log"><span class="ln-t">[21:36:02]</span> <span class="ln-acc">▶ wake: task assigned — Add dark-mode screenshots</span>
+<span class="ln-t">[21:36:04]</span> reading website repo structure…
+<span class="ln-t">[21:36:09]</span> <span class="ln-acc">tool: Bash</span> git clone openorcha.io (shallow)
+<span class="ln-t">[21:36:31]</span> <span class="ln-ok">✓ clone ok — 214 files</span>
+<span class="ln-t">[21:36:40]</span> <span class="ln-acc">tool: Playwright</span> capture /installation (dark)
+<span class="ln-t">[21:37:12]</span> <span class="ln-ok">✓ screenshot saved installation-dark.png (1440×900)</span>
+<span class="ln-t">[21:37:15]</span> <span class="ln-acc">tool: Playwright</span> capture /usage (dark)
+<span class="ln-t">[21:37:58]</span> <span class="ln-warn">⚠ /usage hero image lazy-loads — retrying with networkidle</span>
+<span class="ln-t">[21:38:41]</span> <span class="ln-ok">✓ screenshot saved usage-dark.png</span>
+<span class="ln-t">[21:39:03]</span> <span class="ln-acc">tool: Edit</span> installation.md — add theme toggle figure
+<span class="ln-t">[21:40:22]</span> rebuilding site preview…
+<span class="ln-t">[21:41:47]</span> <span class="ln-ok">✓ build ok — 0 warnings</span>
+<span class="ln-t">[21:42:10]</span> <span class="ln-acc">tool: Bash</span> open PR draft<span class="cursor"></span></div>
+        </div>
+        <div class="autoscroll-pill" style="display:none;"></div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R2 · Run detail — streaming <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Pushed in the tab's NavigationStack, inline mono nav title. Color-keyed log (timestamps faint, tools accent, success ok, warnings warn, errors danger), pulsing block cursor = "this is live" together with the live chip. Auto-scroll pins to bottom; Stop only renders while running. Screen stays awake during a live stream.</div>
+      <div class="cap-api">SSE GET /api/agents/{aid}/runs/{run_id}/stream</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R2b: auto-scroll paused (iOS, dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Task</span></span>
+          <div class="title mono" style="text-align:center; font-size:15px;">run 9f3c21</div>
+          <button class="btn danger-tonal sm">Stop</button>
+        </div>
+        <div class="scroll" style="padding-top:4px;">
+          <div class="log"><span class="ln-t">[21:36:40]</span> <span class="ln-acc">tool: Playwright</span> capture /installation (dark)
+<span class="ln-t">[21:37:12]</span> <span class="ln-ok">✓ screenshot saved installation-dark.png (1440×900)</span>
+<span class="ln-t">[21:37:15]</span> <span class="ln-acc">tool: Playwright</span> capture /usage (dark)
+<span class="ln-t">[21:37:58]</span> <span class="ln-warn">⚠ /usage hero image lazy-loads — retrying with networkidle</span>
+<span class="ln-t">[21:38:41]</span> <span class="ln-ok">✓ screenshot saved usage-dark.png</span>
+<span class="ln-t">[21:39:03]</span> <span class="ln-acc">tool: Edit</span> installation.md — add theme toggle figure
+<span class="ln-t">[21:39:19]</span> reading existing figure shortcodes…
+<span class="ln-t">[21:39:36]</span> writing figure block: light/dark pair, captioned
+<span class="ln-t">[21:39:58]</span> <span class="ln-ok">✓ edit applied — installation.md +18 −2</span>
+<span class="ln-t">[21:40:22]</span> rebuilding site preview…</div>
+        </div>
+        <div class="autoscroll-pill">Auto-scroll paused · <b>Jump to latest</b></div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R2b · Auto-scroll disengaged <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Any upward scroll unpins the view — never fight the user's finger. The floating pill (above the home indicator; M3 assist-chip above the gesture bar on Android) re-pins on tap. New lines keep arriving underneath; the reader position is stable.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R3: run detail — finished (Android, light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title mono" style="font-size:15px;">run 41d87f</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="19" r="1.6" fill="currentColor"/></svg></button>
+        </div>
+        <div style="padding:0 16px 8px; display:flex; flex-direction:column; gap:8px;">
+          <div class="rowline">
+            <div class="avatar sm">A</div>
+            <div class="grow">
+              <div style="font-size:13.5px; font-weight:650;">Andrew</div>
+              <div style="font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Add dark-mode screenshots to the website</div>
+            </div>
+          </div>
+          <div class="banner info" style="color:var(--ok); background:var(--ok-soft); border-color:var(--ok-line);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.1V12a10 10 0 11-5.9-9.1"/><path d="M22 4L12 14l-3-3"/></svg>
+            Run finished · 4m 12s
+          </div>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="log"><span class="ln-t">[19:02:11]</span> <span class="ln-acc">▶ wake: task assigned — Add dark-mode screenshots</span>
+<span class="ln-t">[19:02:14]</span> planning: survey pages, capture, edit guide, PR
+<span class="ln-t">[19:02:29]</span> <span class="ln-acc">tool: Bash</span> git clone openorcha.io (shallow)
+<span class="ln-t">[19:02:47]</span> <span class="ln-ok">✓ clone ok — 214 files</span>
+<span class="ln-t">[19:03:05]</span> <span class="ln-acc">tool: Playwright</span> capture home (dark)
+<span class="ln-t">[19:03:44]</span> <span class="ln-ok">✓ screenshot saved home-dark.png</span>
+<span class="ln-t">[19:04:31]</span> <span class="ln-acc">tool: Bash</span> gh pr create --draft
+<span class="ln-t">[19:05:52]</span> <span class="ln-ok">✓ PR #112 opened (draft)</span>
+<span class="ln-t">[19:06:19]</span> posting summary to task thread…
+<span class="ln-t">[19:06:23]</span> <span class="ln-ok">✓ done — run complete</span></div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R3 · Run detail — finished <span class="plat">Android · light</span></div>
+      <div class="cap-note">Terminal banner pinned above the log with outcome + duration (ok "finished" / idle "stopped" / danger "failed"). No cursor, no Stop, stream closed — the endpoint replays the stored transcript and ends. Log stays scrollable; long-press copies a line, overflow offers Copy all / Share log.</div>
+      <div class="cap-api">SSE GET /api/agents/{aid}/runs/{run_id}/stream (replay → close)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R4: stream connect error (iOS, dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Task</span></span>
+          <div class="title mono" style="text-align:center; font-size:15px;">run 9f3c21</div>
+          <button class="btn danger-tonal sm">Stop</button>
+        </div>
+        <div style="padding:0 16px 8px;">
+          <div class="banner danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+            Stream disconnected
+            <span class="b-act">Retry</span>
+          </div>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="log" style="opacity:.55;"><span class="ln-t">[21:36:02]</span> <span class="ln-acc">▶ wake: task assigned — Add dark-mode screenshots</span>
+<span class="ln-t">[21:36:04]</span> reading website repo structure…
+<span class="ln-t">[21:36:09]</span> <span class="ln-acc">tool: Bash</span> git clone openorcha.io (shallow)
+<span class="ln-t">[21:36:31]</span> <span class="ln-ok">✓ clone ok — 214 files</span>
+<span class="ln-t">[21:36:40]</span> <span class="ln-acc">tool: Playwright</span> capture /installation (dark)
+<span class="ln-t">[21:37:12]</span> <span class="ln-ok">✓ screenshot saved installation-dark.png (1440×900)</span>
+<span class="ln-t">[21:37:15]</span> <span class="ln-acc">tool: Playwright</span> capture /usage (dark)
+<span class="ln-t">[21:37:58]</span> <span class="ln-warn">⚠ /usage hero image lazy-loads — retrying with networkidle</span></div>
+          <div style="font-size:11.5px; color:var(--faint); text-align:center; line-height:1.5;">Log frozen at the last received line. The run's state chip keeps updating in the background (events stream / 30s poll), so a run that ends while disconnected still resolves.</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R4 · Stream connect / drop error <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Danger banner over the frozen (dimmed) transcript with Retry. Reconnect replays from the start; the client dedupes by line index. Same treatment for the laptop-unreachable case, with the shared flow-04 connectivity banner. If the run finished while disconnected, the row-level state resolves it to the R3 terminal banner.</div>
+      <div class="cap-api">retry: SSE GET /api/agents/{aid}/runs/{run_id}/stream · fallback: GET /api/tasks/{tid}/runs</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R5: stop-run confirm (Android, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; display:flex; flex-direction:column; flex:1; overflow:hidden;">
+          <div class="appbar">
+            <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+            <div class="title mono" style="font-size:15px;">run 9f3c21</div>
+            <button class="btn danger-tonal sm">Stop</button>
+          </div>
+          <div class="scroll" style="padding-top:0;">
+            <div class="log"><span class="ln-t">[21:39:03]</span> <span class="ln-acc">tool: Edit</span> installation.md — add theme toggle figure
+<span class="ln-t">[21:40:22]</span> rebuilding site preview…
+<span class="ln-t">[21:41:47]</span> <span class="ln-ok">✓ build ok — 0 warnings</span>
+<span class="ln-t">[21:42:10]</span> <span class="ln-acc">tool: Bash</span> open PR draft<span class="cursor"></span></div>
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="dialog">
+          <div class="d-title">Stop this run?</div>
+          <div class="d-body">Andrew's worker is interrupted mid-turn. The log so far is kept and the run is marked stopped.</div>
+          <div class="d-actions">
+            <span class="textbtn" style="color:var(--text-2);">Cancel</span>
+            <span class="textbtn danger">Stop run</span>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R5 · Stop-run confirm <span class="plat">Android · dark</span></div>
+      <div class="cap-note">M3 AlertDialog (iOS: confirmationDialog). Chip flips to stopped only after the 2xx — no optimistic destruction; failure = snackbar "Couldn't stop the run", state untouched. On success the terminal banner arrives via the stream (or the refetched run row if the stream already dropped).</div>
+      <div class="cap-api">POST /api/runs/{run_id}/stop</div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

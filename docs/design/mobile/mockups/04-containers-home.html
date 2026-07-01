@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 04 Containers home &amp; Home tab</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  /* frame-local helpers for this gallery only */
+  .kicker { font-size: 11px; font-weight: 750; letter-spacing: .6px; text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 6px; }
+  .kicker svg { width: 13px; height: 13px; }
+  .excerpt { font-size: 12.5px; color: var(--text-2); line-height: 1.5; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; }
+  .excerpt .lbl { display: block; font-size: 10px; font-weight: 650; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--faint); margin-bottom: 3px; }
+  .agent-chip { flex: none; width: 112px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 8px; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .agent-chip .nm { font-size: 12px; font-weight: 650; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 100%; }
+  .act-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 2px; border-bottom: .5px solid var(--border); }
+  .act-row:last-child { border-bottom: none; }
+  .act-row .a-top { display: flex; align-items: center; gap: 7px; }
+  .act-row .a-nm { font-size: 12.5px; font-weight: 650; }
+  .act-row .a-when { margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--faint); }
+  .act-row .a-txt { font-size: 12.5px; color: var(--text-2); line-height: 1.45; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>04 — Containers home ("My Orchas"), workspace Home tab, Settings &amp; connection states</h1>
+  <p>The app's front door (multi-container list + Add) and the mobile twin of the portal dashboard:
+     the "Needs you" queue, agents at a glance, stat tiles and activity. Spec:
+     <span class="mono">flows/04-containers-home.md</span>. Everything here is served by existing
+     endpoints; only pairing (flow 03) is a new ask. Frames mix dark/light and both platforms.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ H1: Containers home — Android, dark ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title" style="text-align:center;">Orcha</div>
+          <button class="iconbtn" style="position:absolute; right:10px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.6 5.6l1.9 1.9M16.5 16.5l1.9 1.9M18.4 5.6l-1.9 1.9M7.5 16.5l-1.9 1.9"/></svg></button>
+        </div>
+        <div class="scroll" style="padding-top:8px;">
+          <div class="section-h">My Orchas <span class="cnt">2</span></div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="brandmark"><svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+              <div class="grow">
+                <div class="c-title">openorcha</div>
+                <div class="c-sub mono" style="font-size:11.5px;">http://192.168.1.24:8001</div>
+              </div>
+              <span class="conn"><span class="dot"></span>live</span>
+            </div>
+            <div class="rowline">
+              <span class="c-sub">9 agents · 14 tasks</span>
+              <span class="grow"></span>
+              <span class="pill s-violet"><span class="dot"></span>3 need you</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="brandmark" style="opacity:.55;"><svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+              <div class="grow">
+                <div class="c-title" style="color:var(--text-2);">orcha-website</div>
+                <div class="c-sub mono" style="font-size:11.5px;">http://192.168.1.31:8001</div>
+              </div>
+              <span class="conn off"><span class="dot" style="animation:none;"></span>unreachable</span>
+            </div>
+            <div class="rowline">
+              <span class="c-sub">Last seen 2 h ago — is the laptop awake?</span>
+              <span class="grow"></span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+        </div>
+        <div class="fab extended" style="bottom:34px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add</div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H1 · Containers home — "My Orchas" <span class="plat">Android</span></div>
+      <div class="cap-note">App root. Each card: name, LAN host, reachability chip, counts, and a violet "need you" pill using the same queue derivation as the Home tab. FAB → QR scanner (flow 03). Long-press a card → Rename / Disconnect (H4). Unreachable cards stay tappable → H7.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(probe per card, 3s timeout)</b> · GET /api/snapshot/{cid} <b>(counts)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H2: Containers home — iOS, light ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="row">
+            <span class="spacer"></span>
+            <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.6 5.6l1.9 1.9M16.5 16.5l1.9 1.9M18.4 5.6l-1.9 1.9M7.5 16.5l-1.9 1.9"/></svg></button>
+            <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <div class="big-title">Orcha</div>
+        </div>
+        <div class="scroll">
+          <div class="card tap">
+            <div class="rowline">
+              <div class="brandmark"><svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+              <div class="grow">
+                <div class="c-title">openorcha</div>
+                <div class="c-sub mono" style="font-size:11.5px;">http://192.168.1.24:8001</div>
+              </div>
+              <span class="conn"><span class="dot"></span>live</span>
+            </div>
+            <div class="rowline">
+              <span class="c-sub">9 agents · 14 tasks</span>
+              <span class="grow"></span>
+              <span class="pill s-violet"><span class="dot"></span>3 need you</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="brandmark" style="opacity:.55;"><svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+              <div class="grow">
+                <div class="c-title" style="color:var(--text-2);">orcha-website</div>
+                <div class="c-sub mono" style="font-size:11.5px;">http://192.168.1.31:8001</div>
+              </div>
+              <span class="conn off"><span class="dot" style="animation:none;"></span>unreachable</span>
+            </div>
+            <div class="rowline">
+              <span class="c-sub">Last seen 2 h ago — is the laptop awake?</span>
+              <span class="grow"></span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+          <div style="font-size:12px; color:var(--faint); line-height:1.5; padding:4px 4px 0;">Swipe a card left to rename or disconnect. Your phone talks to each Orcha directly on your network.</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H2 · Containers home <span class="plat">iOS · light</span></div>
+      <div class="cap-note">NavigationStack root, large title, toolbar "+" (scanner sheet) and gear (Settings, S1). Swipe-left row actions: Rename / Disconnect (destructive confirm via confirmationDialog). Card anatomy is pixel-equivalent to Android.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(probe per card)</b> · GET /api/snapshot/{cid} <b>(counts)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H3: Containers home — empty state ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="big-title" style="padding-top:8px;">Orcha</div>
+        </div>
+        <div class="state">
+          <div class="brandmark" style="width:84px; height:84px; border-radius:24px;">
+            <svg viewBox="0 0 100 100" style="width:58px; height:58px;"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg>
+          </div>
+          <div class="st-title">Add your Orcha</div>
+          <div class="st-sub">On your computer, open the Orcha portal and choose <b>Pair phone</b> — then scan the QR code here. Phone and laptop must share a Wi-Fi network.</div>
+          <button class="btn primary" style="margin-top:6px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM18 18h3v3h-3z"/></svg>Add your Orcha</button>
+          <span class="textbtn">Enter address manually</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H3 · First launch — empty state <span class="plat">iOS</span></div>
+      <div class="cap-note">One job: get the user to the scanner. The copy points at the portal's "Pair phone" dialog by name so there's no hunt. Android identical with the CTA as an extended FAB.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H4: disconnect destructive confirm ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><div class="title" style="text-align:center;">Orcha</div></div>
+        <div class="scroll" style="padding-top:8px; opacity:.5;">
+          <div class="section-h">My Orchas <span class="cnt">2</span></div>
+          <div class="card"><div class="rowline">
+            <div class="brandmark"><svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+            <div class="grow"><div class="c-title">openorcha</div><div class="c-sub mono" style="font-size:11.5px;">http://192.168.1.24:8001</div></div>
+            <span class="conn"><span class="dot" style="animation:none;"></span>live</span>
+          </div></div>
+          <div class="card"><div class="rowline">
+            <div class="brandmark" style="opacity:.55;"><svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+            <div class="grow"><div class="c-title">orcha-website</div><div class="c-sub mono" style="font-size:11.5px;">http://192.168.1.31:8001</div></div>
+            <span class="conn off"><span class="dot" style="animation:none;"></span>unreachable</span>
+          </div></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="dialog">
+          <div class="d-title">Disconnect openorcha?</div>
+          <div class="d-body">This only removes the pairing from this phone. The Orcha keeps running on your computer, and you can pair again anytime from the portal.</div>
+          <div class="d-actions">
+            <span class="textbtn">Cancel</span>
+            <span class="textbtn danger" style="color:var(--danger);">Disconnect</span>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H4 · Disconnect — destructive confirm <span class="plat">Android · light</span></div>
+      <div class="cap-note">Reached from long-press → Disconnect. M3 AlertDialog because it's destructive-local; the body de-dramatizes correctly (nothing on the laptop is touched). iOS uses a confirmationDialog action sheet with the same copy.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H5: Home tab — Android, dark ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title">openorcha</div>
+          <span class="conn"><span class="dot"></span>live</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="gap:9px;">
+          <div class="section-h">Needs you <span class="cnt">3</span></div>
+
+          <div class="card">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--warn);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.4-2.9 8-7 10-4.1-2-7-5.6-7-10V6z"/></svg>Plan approval</span>
+              <span class="grow"></span>
+              <span class="pill s-accent"><span class="dot"></span>in progress</span>
+            </div>
+            <div class="c-title">Mobile app design (GH #30)</div>
+            <div class="rowline"><div class="avatar sm">D</div><span class="c-sub">Dana proposes a plan</span><span class="grow"></span><span class="tag model">claude-fable-5</span></div>
+            <div class="excerpt"><span class="lbl">Proposed plan</span>Eight phases: foundations &amp; tokens from the portal palette, IA + navigation, QR pairing, containers home, tasks, requests, agents, handoff pack…</div>
+            <div class="rowline" style="gap:8px;">
+              <button class="btn sm ok-tonal" style="flex:1;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg>Approve plan</button>
+              <button class="btn sm danger-tonal" style="flex:1;">Reject…</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--violet);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg>Verify task</span>
+              <span class="grow"></span>
+              <span class="pill s-violet"><span class="dot"></span>needs verification</span>
+            </div>
+            <div class="c-title">CLI v0.3.0 release prep</div>
+            <div class="rowline"><div class="avatar sm">A</div><span class="c-sub">Andrew · finished 26 min ago</span></div>
+            <div class="excerpt"><span class="lbl">Definition of done</span>Version bumped in pyproject + __init__, CHANGELOG entry for 0.3.0, PR open and green.</div>
+            <div class="rowline" style="gap:8px;">
+              <button class="btn sm ok-tonal" style="flex:1;">Accept</button>
+              <button class="btn sm danger-tonal" style="flex:1;">Reject…</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--info);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg>Request for you</span>
+              <span class="grow"></span>
+              <span class="pill s-info"><span class="dot"></span>open</span>
+            </div>
+            <div class="c-title" style="font-weight:600; font-size:14px; line-height:1.4;">"Which GitHub account should the release PRs use — kedar1607 or nazuka-quantal?"</div>
+            <div class="rowline"><div class="avatar sm">E</div><span class="c-sub">Ethan → you · 12 min ago</span></div>
+            <div class="rowline" style="gap:8px;">
+              <button class="btn sm tonal" style="flex:1;">Respond</button>
+            </div>
+          </div>
+
+          <div class="section-h">Agents <span class="cnt">9</span></div>
+          <div style="display:flex; gap:8px; overflow:hidden;">
+            <div class="agent-chip"><div class="avatar">D</div><span class="nm">Dana</span><span class="pill s-accent pulse"><span class="dot"></span>working</span></div>
+            <div class="agent-chip"><div class="avatar">CR</div><span class="nm">Code Reviewer</span><span class="pill s-accent pulse"><span class="dot"></span>working</span></div>
+            <div class="agent-chip"><div class="avatar">E</div><span class="nm">Ethan</span><span class="pill s-violet"><span class="dot"></span>awaiting human</span></div>
+            <div class="agent-chip"><div class="avatar">A</div><span class="nm">Andrew</span><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat"><span class="v" style="color:var(--accent);">4</span><span class="k">In progress</span></div>
+            <div class="stat"><span class="v" style="color:var(--violet);">2</span><span class="k">Needs verify</span></div>
+            <div class="stat"><span class="v" style="color:var(--warn);">1</span><span class="k">Blocked</span></div>
+            <div class="stat"><span class="v" style="color:var(--ok);">12</span><span class="k">Done</span></div>
+          </div>
+        </div>
+        <div class="fab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="tabbar">
+          <div class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg></span>Home<span class="bdg">3</span></div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6h10M10.5 12h10M10.5 18h10"/><path d="M3.5 5.5L5 7l3-3"/><path d="M3.5 11.5L5 13l3-3"/><path d="M3.5 17.5L5 19l3-3"/></svg></span>Tasks</div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg></span>Requests</div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.2 14.6c2.2.3 3.8 1.7 4.3 4.4"/></svg></span>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H5 · Workspace Home tab <span class="plat">Android</span></div>
+      <div class="cap-note">The hero is "Needs you": plan approvals (task in progress, plan message posted, no decision yet), tasks in needs verification, and open requests targeting the human — same derivation as the portal dashboard. One-tap Approve/Accept on the card; Reject always demands a reason. Agents strip scrolls horizontally; stat tiles jump to the Tasks tab pre-filtered. FAB = create task; nav-bar badge = queue size.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(bulk paint)</b> · SSE GET /api/containers/{cid}/events <b>(live)</b><br>POST /api/decisions {subject_type:"plan_approval", subject_id, decision:"approve"|"reject", reason?, actor_agent_id}<br>POST /api/tasks/{tid}/verify {approve, feedback?, actor_agent_id}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H6: Home tab — iOS, light, scrolled ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">My Orchas</span></span>
+          <div class="title" style="text-align:center;">openorcha</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="gap:9px;">
+          <div class="card">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--info);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg>Request for you</span>
+              <span class="grow"></span>
+              <span class="pill s-info"><span class="dot"></span>open</span>
+            </div>
+            <div class="c-title" style="font-weight:600; font-size:14px; line-height:1.4;">"Which GitHub account should the release PRs use — kedar1607 or nazuka-quantal?"</div>
+            <div class="rowline"><div class="avatar sm">E</div><span class="c-sub">Ethan → you · 12 min ago</span><span class="grow"></span><button class="btn sm tonal">Respond</button></div>
+          </div>
+
+          <div class="section-h">Agents <span class="cnt">9</span></div>
+          <div style="display:flex; gap:8px; overflow:hidden;">
+            <div class="agent-chip"><div class="avatar">D</div><span class="nm">Dana</span><span class="pill s-accent pulse"><span class="dot"></span>working</span></div>
+            <div class="agent-chip"><div class="avatar">CR</div><span class="nm">Code Reviewer</span><span class="pill s-accent pulse"><span class="dot"></span>working</span></div>
+            <div class="agent-chip"><div class="avatar">E</div><span class="nm">Ethan</span><span class="pill s-violet"><span class="dot"></span>awaiting human</span></div>
+            <div class="agent-chip"><div class="avatar">A</div><span class="nm">Andrew</span><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat"><span class="v" style="color:var(--accent);">4</span><span class="k">In progress</span></div>
+            <div class="stat"><span class="v" style="color:var(--violet);">2</span><span class="k">Needs verify</span></div>
+            <div class="stat"><span class="v" style="color:var(--warn);">1</span><span class="k">Blocked</span></div>
+            <div class="stat"><span class="v" style="color:var(--ok);">12</span><span class="k">Done</span></div>
+          </div>
+
+          <div class="section-h">Activity</div>
+          <div class="card" style="gap:0; padding:5px 14px;">
+            <div class="act-row">
+              <div class="avatar sm">D</div>
+              <div class="grow">
+                <div class="a-top"><span class="a-nm">Dana</span><span class="a-when">4m</span></div>
+                <div class="a-txt">Pairing mockups pushed — both themes render from mobile.css.</div>
+              </div>
+            </div>
+            <div class="act-row">
+              <div class="avatar sm">CR</div>
+              <div class="grow">
+                <div class="a-top"><span class="a-nm">Code Reviewer</span><span class="a-when">18m</span></div>
+                <div class="a-txt">PR #104 verdict: CLEAN — ready for kedar to merge.</div>
+              </div>
+            </div>
+            <div class="act-row">
+              <div class="avatar human sm">K</div>
+              <div class="grow">
+                <div class="a-top"><span class="a-nm">kedar</span><span class="a-when">1h</span></div>
+                <div class="a-txt">Approved the plan on "Notification ack / wake veto (GH #89)".</div>
+              </div>
+            </div>
+            <div class="act-row">
+              <div class="avatar sm">A</div>
+              <div class="grow">
+                <div class="a-top"><span class="a-nm">Andrew</span><span class="a-when">2h</span></div>
+                <div class="a-txt">Marked "CLI v0.3.0 release prep" done — awaiting your verification.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg>Home<span class="bdg">3</span></div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6h10M10.5 12h10M10.5 18h10"/><path d="M3.5 5.5L5 7l3-3"/><path d="M3.5 11.5L5 13l3-3"/><path d="M3.5 17.5L5 19l3-3"/></svg>Tasks</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg>Requests</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.2 14.6c2.2.3 3.8 1.7 4.3 4.4"/></svg>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H6 · Home tab, scrolled <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Same anatomy as H5, shown scrolled past the approval cards: request card, agents strip, stat tiles and the activity feed (recent thread posts, decisions, request answers — synthesized from snapshot data, newest first). TabView instead of the M3 nav bar; toolbar "+" replaces the FAB.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} · GET /api/containers/{cid}/tasks · GET /api/containers/{cid}/requests<br>GET /api/containers/{cid}/token-usage <b>(optional stat tile)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H7: unreachable full-screen ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">My Orchas</span></span>
+          <div class="title" style="text-align:center;">openorcha</div>
+          <span style="width:88px;"></span>
+        </div>
+        <div class="state">
+          <div class="glyph danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8.5 16.5a5 5 0 017 0M5 13a10 10 0 0114 0M1.5 9.5a15 15 0 0121 0"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/><path d="M3 3l18 18" stroke-width="2.2"/></svg></div>
+          <div class="st-title">Can't reach your laptop</div>
+          <div class="st-sub"><span class="mono" style="font-size:12px;">192.168.1.24:8001</span> didn't answer. Your work is safe — the phone just can't see it right now.</div>
+          <div class="card" style="text-align:left; width:100%; gap:9px;">
+            <div class="rowline" style="font-size:13px; color:var(--text-2);"><span style="color:var(--accent); font-weight:800;">1</span><span>Is the phone on the same Wi-Fi as the laptop?</span></div>
+            <div class="rowline" style="font-size:13px; color:var(--text-2);"><span style="color:var(--accent); font-weight:800;">2</span><span>Is the laptop awake and Orcha running?</span></div>
+            <div class="rowline" style="font-size:13px; color:var(--text-2);"><span style="color:var(--accent); font-weight:800;">3</span><span>Firewall or VPN blocking port 8001?</span></div>
+          </div>
+          <button class="btn tonal block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 11-2.3-5.6"/><path d="M20 3.5V8h-4.5"/></svg>Try again</button>
+          <span class="textbtn">Back to My Orchas</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H7 · Laptop unreachable — full-screen state <span class="plat">iOS</span></div>
+      <div class="cap-note">Rendered when the probe fails on entering (or while inside) a workspace. Reassurance first ("your work is safe"), then the same diagnostic checklist as pairing failure (flow 03, A3). Retry re-probes; auto-retries with backoff run behind it.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(probe, 3s timeout, backoff retry)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H8: degraded — polling banner ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title">openorcha</div>
+          <span class="conn polling"><span class="dot"></span>polling</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="gap:9px;">
+          <div class="banner warn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 11-2.3-5.6"/><path d="M20 3.5V8h-4.5"/></svg>
+            Reconnecting — updating every 30s
+            <span class="b-act">Retry now</span>
+          </div>
+          <div class="section-h">Needs you <span class="cnt">2</span></div>
+          <div class="card">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--violet);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg>Verify task</span>
+              <span class="grow"></span>
+              <span class="pill s-violet"><span class="dot"></span>needs verification</span>
+            </div>
+            <div class="c-title">CLI v0.3.0 release prep</div>
+            <div class="rowline"><div class="avatar sm">A</div><span class="c-sub">Andrew · finished 26 min ago</span></div>
+            <div class="rowline" style="gap:8px;">
+              <button class="btn sm ok-tonal" style="flex:1;">Accept</button>
+              <button class="btn sm danger-tonal" style="flex:1;">Reject…</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--warn);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.4-2.9 8-7 10-4.1-2-7-5.6-7-10V6z"/></svg>Plan approval</span>
+              <span class="grow"></span>
+              <span class="pill s-accent"><span class="dot" style="animation:none;"></span>in progress</span>
+            </div>
+            <div class="c-title">Mobile app design (GH #30)</div>
+            <div class="rowline"><div class="avatar sm">D</div><span class="c-sub">Dana proposes a plan</span></div>
+            <div class="rowline" style="gap:8px;">
+              <button class="btn sm ok-tonal" style="flex:1;">Approve plan</button>
+              <button class="btn sm danger-tonal" style="flex:1;">Reject…</button>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg></span>Home<span class="bdg">2</span></div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6h10M10.5 12h10M10.5 18h10"/><path d="M3.5 5.5L5 7l3-3"/><path d="M3.5 11.5L5 13l3-3"/><path d="M3.5 17.5L5 19l3-3"/></svg></span>Tasks</div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg></span>Requests</div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.2 14.6c2.2.3 3.8 1.7 4.3 4.4"/></svg></span>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H8 · Degraded — SSE down, polling <span class="plat">Android · light</span></div>
+      <div class="cap-note">Probe succeeds but the event stream won't hold: chip flips to "polling", a persistent warn banner explains the 30-second cadence, and everything else keeps working — actions still post. Banner disappears the moment SSE reconnects.</div>
+      <div class="cap-api">SSE GET /api/containers/{cid}/events <b>(failed → retry w/ backoff)</b><br>GET /api/containers/{cid}/tasks · GET /api/containers/{cid}/requests <b>(30s poll fallback)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H9: loading skeleton ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">My Orchas</span></span>
+          <div class="title" style="text-align:center;">openorcha</div>
+          <span style="width:88px;"></span>
+        </div>
+        <div class="scroll" style="gap:10px;">
+          <div class="skel line" style="width:38%; margin-top:6px;"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel line" style="width:26%; margin-top:8px;"></div>
+          <div style="display:flex; gap:8px;">
+            <div class="skel" style="flex:none; width:112px; height:104px;"></div>
+            <div class="skel" style="flex:none; width:112px; height:104px;"></div>
+            <div class="skel" style="flex:none; width:112px; height:104px;"></div>
+            <div class="skel" style="flex:none; width:112px; height:104px;"></div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <div class="skel" style="flex:1; height:58px;"></div>
+            <div class="skel" style="flex:1; height:58px;"></div>
+            <div class="skel" style="flex:1; height:58px;"></div>
+            <div class="skel" style="flex:1; height:58px;"></div>
+          </div>
+          <div class="skel line" style="width:22%; margin-top:8px;"></div>
+          <div class="skel card-h74"></div>
+        </div>
+        <div class="tabbar">
+          <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg>Home</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6h10M10.5 12h10M10.5 18h10"/><path d="M3.5 5.5L5 7l3-3"/><path d="M3.5 11.5L5 13l3-3"/><path d="M3.5 17.5L5 19l3-3"/></svg>Tasks</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg>Requests</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.2 14.6c2.2.3 3.8 1.7 4.3 4.4"/></svg>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H9 · First-load skeleton <span class="plat">iOS</span></div>
+      <div class="cap-note">Shown only on first entry with nothing cached; shapes mirror the real sections (queue cards, agents strip, stat tiles, activity) so content lands without layout shift. Revisits paint the cached snapshot instantly and refetch in the background.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(in flight)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ H10: paused container banner ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">My Orchas</span></span>
+          <div class="title" style="text-align:center;">openorcha</div>
+          <span style="width:88px;"></span>
+        </div>
+        <div class="scroll" style="gap:9px;">
+          <div class="banner info">
+            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="8" y="6" width="2.6" height="12" rx="1"/><rect x="13.4" y="6" width="2.6" height="12" rx="1"/></svg>
+            This Orcha is paused — resume it from the laptop
+          </div>
+          <div class="section-h">Needs you <span class="cnt">1</span></div>
+          <div class="card" style="opacity:.92;">
+            <div class="rowline">
+              <span class="kicker" style="color:var(--violet);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg>Verify task</span>
+              <span class="grow"></span>
+              <span class="pill s-violet"><span class="dot" style="animation:none;"></span>needs verification</span>
+            </div>
+            <div class="c-title">CLI v0.3.0 release prep</div>
+            <div class="rowline"><div class="avatar sm">A</div><span class="c-sub">Andrew · finished 26 min ago</span></div>
+            <div class="rowline" style="gap:8px;">
+              <button class="btn sm ok-tonal disabled" style="flex:1;">Accept</button>
+              <button class="btn sm danger-tonal disabled" style="flex:1;">Reject…</button>
+            </div>
+            <div class="c-sub" style="font-size:11.5px; color:var(--faint);">Actions are disabled while this Orcha is paused.</div>
+          </div>
+          <div class="section-h">Agents <span class="cnt">9</span></div>
+          <div style="display:flex; gap:8px; overflow:hidden;">
+            <div class="agent-chip"><div class="avatar">D</div><span class="nm">Dana</span><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+            <div class="agent-chip"><div class="avatar">CR</div><span class="nm">Code Reviewer</span><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+            <div class="agent-chip"><div class="avatar">E</div><span class="nm">Ethan</span><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+            <div class="agent-chip"><div class="avatar">A</div><span class="nm">Andrew</span><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg>Home<span class="bdg">1</span></div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6h10M10.5 12h10M10.5 18h10"/><path d="M3.5 5.5L5 7l3-3"/><path d="M3.5 11.5L5 13l3-3"/><path d="M3.5 17.5L5 19l3-3"/></svg>Tasks</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5V18a2 2 0 002 2h14a2 2 0 002-2v-4.5"/><path d="M3 13.5h4.5l2 3h5l2-3H21"/><path d="M12 4v6m0 0L9.4 7.4M12 10l2.6-2.6"/></svg>Requests</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.2 14.6c2.2.3 3.8 1.7 4.3 4.4"/></svg>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">H10 · Paused container <span class="plat">iOS</span></div>
+      <div class="cap-note">Snapshot reports the container isn't active: an info banner explains, agent-mutating actions disable with a one-line why, reading stays free. Resume happens on the laptop in v1 — the phone deliberately can't unpause.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(container.status != active)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ S1: Settings ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Orcha</span></span>
+          <div class="title" style="text-align:center;">Settings</div>
+          <span style="width:88px;"></span>
+        </div>
+        <div class="scroll" style="gap:8px;">
+          <div class="section-h">Appearance</div>
+          <div class="card">
+            <label class="fieldlabel" style="margin:0 0 4px;">Theme</label>
+            <div class="seg">
+              <div class="opt on">Auto</div>
+              <div class="opt">Light</div>
+              <div class="opt">Dark</div>
+            </div>
+            <div class="c-sub" style="font-size:11.5px;">Auto follows your system setting — same three-way toggle as the portal.</div>
+          </div>
+
+          <div class="section-h">Containers</div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="rowline" style="padding:10px 0;">
+              <div class="brandmark" style="width:28px; height:28px; border-radius:8px;"><svg viewBox="0 0 100 100" style="width:19px; height:19px;"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+              <div class="grow">
+                <div style="font-size:14px; font-weight:650;">openorcha</div>
+                <div class="c-sub mono" style="font-size:11px;">http://192.168.1.24:8001</div>
+              </div>
+              <span class="conn"><span class="dot"></span>live</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="rowline" style="padding:10px 0;">
+              <div class="brandmark" style="width:28px; height:28px; border-radius:8px; opacity:.55;"><svg viewBox="0 0 100 100" style="width:19px; height:19px;"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg></div>
+              <div class="grow">
+                <div style="font-size:14px; font-weight:650;">orcha-website</div>
+                <div class="c-sub mono" style="font-size:11px;">http://192.168.1.31:8001</div>
+              </div>
+              <span class="conn off"><span class="dot" style="animation:none;"></span>unreachable</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="rowline" style="padding:12px 0;">
+              <span class="textbtn" style="display:flex; align-items:center; gap:8px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="width:16px; height:16px;"><path d="M12 5v14M5 12h14"/></svg>Add container</span>
+            </div>
+          </div>
+
+          <div class="section-h">About</div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="kv"><span class="k">Version</span><span class="v mono" style="font-size:12.5px;">1.0.0 (4)</span></div>
+            <div class="hr"></div>
+            <div class="kv"><span class="k">Website</span><span class="v" style="color:var(--accent);">openorcha.io</span></div>
+            <div class="hr"></div>
+            <div class="kv"><span class="k">Open-source licenses</span><span class="v"><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">S1 · Settings <span class="plat">iOS</span></div>
+      <div class="cap-note">Reached from Containers home (gear) and the workspace overflow menu. Theme is Auto / Light / Dark, instant, app-wide. Container rows lead to rename / disconnect (H4 confirm); everything here is local except each row's reachability chip.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(reachability per row)</b></div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

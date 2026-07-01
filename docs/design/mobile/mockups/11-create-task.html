@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 11 Create Task</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  .form { display:flex; flex-direction:column; gap:2px; }
+  .helper { font-size:11.5px; color:var(--faint); line-height:1.5; margin:5px 2px 8px; }
+  .helper.err { color:var(--danger); font-weight:600; }
+  .adv-head { display:flex; align-items:center; gap:8px; padding:12px 2px 6px; font-size:13px; font-weight:700; color:var(--text-2); }
+  .adv-head svg { width:14px; height:14px; color:var(--muted); }
+  .switchrow { display:flex; align-items:center; gap:12px; padding:10px 2px; }
+  .switchrow .sw { width:44px; height:26px; border-radius:13px; background:var(--border-2); position:relative; flex:none; }
+  .switchrow .sw::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:var(--surface); box-shadow:var(--shadow-sm); }
+  .switchrow .sw.on { background:var(--accent); }
+  .switchrow .sw.on::after { left:auto; right:3px; background:#fff; }
+  .pickrow { display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:.5px solid var(--border); }
+  .pickrow:last-child { border-bottom:none; }
+  .navbar-ios { display:flex; align-items:center; justify-content:space-between; padding:14px 18px 6px; }
+  .navbar-ios .nb-title { font-size:16.5px; font-weight:700; }
+  .depchip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--accent-line); background:var(--accent-soft);
+    color:var(--accent); border-radius:999px; padding:5px 12px; font-size:12px; font-weight:650; }
+  .depchip svg { width:12px; height:12px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>11 — Create &amp; assign a task</h1>
+  <p>Capture a piece of work — title, what "done" means, who does it — in under a minute. The form is a
+     faithful mapping of the create-task API schema; <b>Definition of done</b> gets first-class treatment
+     because the whole verify loop (flow 08) settles against it. Android: FAB → full-screen dialog.
+     iOS: toolbar + → .large sheet. Spec: <span class="mono">flows/11-create-task.md</span>. No new backend asks.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ N1: create form (Android, dark, filled, advanced expanded) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <div class="title">New task</div>
+          <span class="textbtn" style="font-size:15px;">Create</span>
+        </div>
+        <div class="scroll form">
+          <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+          <div class="input"><span>Add dark-mode screenshots to the website</span></div>
+          <label class="fieldlabel">Description</label>
+          <div class="input area"><span style="color:var(--text-2);">The installation and usage guides only show light-mode captures. Users on dark default themes see a mismatch.</span></div>
+          <label class="fieldlabel">Definition of done <span style="color:var(--danger);">*</span></label>
+          <div class="input area"><span style="color:var(--text-2);">Every page of openorcha.io has a dark-mode screenshot; the installation guide shows both themes side by side.</span></div>
+          <div class="helper">How will you know it's done? The agent stops at needs-verification and you check against this.</div>
+          <label class="fieldlabel">Assign to</label>
+          <div class="input">
+            <div class="avatar sm" style="width:26px; height:26px; font-size:11px;">A</div>
+            <span>Andrew</span>
+            <span class="pill s-idle" style="margin-left:auto;"><span class="dot"></span>idle</span>
+            <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+          </div>
+          <label class="fieldlabel">Priority</label>
+          <div class="seg">
+            <div class="opt">Low</div>
+            <div class="opt on">Normal</div>
+            <div class="opt">High</div>
+          </div>
+          <div class="adv-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+            Advanced
+          </div>
+          <label class="fieldlabel">Depends on</label>
+          <div><span class="depchip">Publish v1.1.2 release <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
+          <div class="switchrow">
+            <div class="grow">
+              <div style="font-size:14px; font-weight:650;">Park it</div>
+              <div style="font-size:12px; color:var(--muted);">The agent won't start yet.</div>
+            </div>
+            <div class="sw"></div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N1 · Create form, filled <span class="plat">Android · dark</span></div>
+      <div class="cap-note">M3 full-screen dialog: X dismisses (confirm if dirty), Create in the app bar. Field order fixed: Title → Description → Definition of done → Assign to → Priority → Advanced. Priority maps Low/Normal/High → 300/100/20 (the raw int is never asked for). Advanced expanded here: depends-on chip + park toggle (`not_ready` → task created pending).</div>
+      <div class="cap-api">POST /api/containers/{cid}/tasks {title, description?, definition_of_done, priority, created_by_agent_id, assignee_alias?, depends_on:[], not_ready?}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N2: create form (iOS, light, sheet) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg);">
+          <div class="navbar-ios">
+            <span class="textbtn" style="font-weight:500;">Cancel</span>
+            <span class="nb-title">New Task</span>
+            <span class="textbtn" style="font-weight:750; opacity:.45;">Create</span>
+          </div>
+          <div class="scroll form" style="padding-top:8px;">
+            <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+            <div class="input focus" style="background:var(--surface);"><span>Rotate the tap token</span></div>
+            <label class="fieldlabel">Description</label>
+            <div class="input area" style="background:var(--surface);"><span class="ph">Context the agent will read…</span></div>
+            <label class="fieldlabel">Definition of done <span style="color:var(--danger);">*</span></label>
+            <div class="input area" style="background:var(--surface);"><span class="ph">How will you know it's done?</span></div>
+            <div class="helper">The agent stops at needs-verification and you check against this.</div>
+            <label class="fieldlabel">Assign to</label>
+            <div class="input" style="background:var(--surface);">
+              <span class="ph">Unassigned</span>
+              <span class="chev" style="margin-left:auto;"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <label class="fieldlabel">Priority</label>
+            <div class="seg" style="background:var(--surface);">
+              <div class="opt">Low</div>
+              <div class="opt on">Normal</div>
+              <div class="opt">High</div>
+            </div>
+            <div class="adv-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="transform:rotate(-90deg);"><path d="M6 9l6 6 6-6"/></svg>
+              Advanced
+            </div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N2 · Create form, pristine <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Sheet at the .large detent with nav-bar Cancel / Create (bold). Create stays disabled until Title and Definition of done are both non-empty (whitespace-trimmed) — it never silently ignores a tap. Advanced (Depends on, Park it) is a collapsed disclosure so the default form is four fields tall. Unassigned is allowed: the task parks in the backlog.</div>
+      <div class="cap-api">POST /api/containers/{cid}/tasks · later: POST /api/tasks/{tid}/assign</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N3: assignee picker (Android, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="appbar">
+            <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <div class="title">New task</div>
+            <span class="textbtn" style="font-size:15px;">Create</span>
+          </div>
+          <div class="scroll form">
+            <label class="fieldlabel">Title</label>
+            <div class="input"><span>Add dark-mode screenshots to the website</span></div>
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="sh-title">Assign to</div>
+          <div style="display:flex; flex-direction:column;">
+            <div class="pickrow">
+              <div class="avatar sm" style="background:var(--idle-soft); border-color:var(--idle-line); color:var(--idle);">—</div>
+              <div class="grow" style="font-size:14.5px; font-weight:650;">Unassigned</div>
+              <span style="font-size:12px; color:var(--faint);">parks in the backlog</span>
+            </div>
+            <div class="pickrow">
+              <div class="avatar sm">A</div>
+              <div class="grow">
+                <div style="font-size:14.5px; font-weight:650;">Andrew</div>
+                <div style="font-size:12px; color:var(--muted);">Android Developer</div>
+              </div>
+              <span class="pill s-idle"><span class="dot"></span>idle</span>
+            </div>
+            <div class="pickrow">
+              <div class="avatar sm">E</div>
+              <div class="grow">
+                <div style="font-size:14.5px; font-weight:650;">Ethan</div>
+                <div style="font-size:12px; color:var(--muted);">iOS Developer</div>
+              </div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+            <div class="pickrow">
+              <div class="avatar sm">D</div>
+              <div class="grow">
+                <div style="font-size:14.5px; font-weight:650;">Dana</div>
+                <div style="font-size:12px; color:var(--muted);">Mobile Product Designer</div>
+              </div>
+              <span class="pill s-warn"><span class="dot"></span>awaiting human</span>
+            </div>
+          </div>
+          <div style="font-size:11.5px; color:var(--faint); line-height:1.5;">A busy agent is selectable — the task queues for it and it picks it up next.</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N3 · Assignee picker <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Modal bottom sheet (iOS: nested .medium sheet): Unassigned row first, then agents (kind='ai') with avatar, role line, and live status pill per the foundations status→color contract. Empty container: an empty state ("No agents registered yet — the task will start unassigned") and the field falls back to Unassigned.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} (agents slice)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N4: validation error (iOS, dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg);">
+          <div class="navbar-ios">
+            <span class="textbtn" style="font-weight:500;">Cancel</span>
+            <span class="nb-title">New Task</span>
+            <span class="textbtn" style="font-weight:750; opacity:.45;">Create</span>
+          </div>
+          <div class="scroll form" style="padding-top:8px;">
+            <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+            <div class="input" style="background:var(--surface);"><span>Fix the stats page contrast</span></div>
+            <label class="fieldlabel">Description</label>
+            <div class="input area" style="background:var(--surface);"><span style="color:var(--text-2);">Dark theme renders the bar chart labels nearly invisible.</span></div>
+            <label class="fieldlabel" style="color:var(--danger);">Definition of done <span>*</span></label>
+            <div class="input area" style="background:var(--surface); border-color:var(--danger); box-shadow:0 0 0 3px var(--danger-soft);"><span class="ph">How will you know it's done?</span></div>
+            <div class="helper err">Required — the verify step checks the result against this.</div>
+            <label class="fieldlabel">Assign to</label>
+            <div class="input" style="background:var(--surface);">
+              <div class="avatar sm" style="width:26px; height:26px; font-size:11px;">E</div>
+              <span>Ethan</span>
+              <span class="chev" style="margin-left:auto;"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N4 · Validation error <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Empty Definition of done: inline required-error on field blur or on a disabled-Create tap; the field gets the danger ring and Create stays dim. The error explains WHY the field matters, not just that it's required.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N5: discard-draft confirm (iOS, light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg); opacity:.45;">
+          <div class="navbar-ios">
+            <span class="textbtn" style="font-weight:500;">Cancel</span>
+            <span class="nb-title">New Task</span>
+            <span class="textbtn" style="font-weight:750; opacity:.45;">Create</span>
+          </div>
+          <div class="scroll form" style="padding-top:8px;">
+            <label class="fieldlabel">Title</label>
+            <div class="input" style="background:var(--surface);"><span>Fix the stats page contrast</span></div>
+          </div>
+        </div>
+        <div class="scrim" style="background:rgba(4,8,14,.35);"></div>
+        <div class="action-sheet">
+          <div class="grp">
+            <div class="as-note">You have an unsaved draft.</div>
+            <div class="as-btn destructive">Discard Draft</div>
+            <div class="as-btn">Keep Editing</div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N5 · Discard-draft confirm <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Shown only when the form is dirty (any field edited); a pristine form dismisses silently. iOS marks the sheet interactiveDismissDisabled while dirty so swipe-down routes through this confirmationDialog. Android: same choice as an M3 AlertDialog on X / back gesture.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N6: submit failure (Android, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <div class="title">New task</div>
+          <span class="textbtn" style="font-size:15px;">Retry</span>
+        </div>
+        <div class="scroll form">
+          <div class="banner danger" style="margin-bottom:6px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+            Couldn't create the task — nothing was lost
+            <span class="b-act">Retry</span>
+          </div>
+          <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+          <div class="input"><span>Add dark-mode screenshots to the website</span></div>
+          <label class="fieldlabel">Description</label>
+          <div class="input area"><span style="color:var(--text-2);">The installation and usage guides only show light-mode captures.</span></div>
+          <label class="fieldlabel">Definition of done <span style="color:var(--danger);">*</span></label>
+          <div class="input area"><span style="color:var(--text-2);">Every page of openorcha.io has a dark-mode screenshot; the installation guide shows both themes side by side.</span></div>
+          <label class="fieldlabel">Assign to</label>
+          <div class="input">
+            <div class="avatar sm" style="width:26px; height:26px; font-size:11px;">A</div>
+            <span>Andrew</span>
+            <span class="chev" style="margin-left:auto;"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N6 · Submit failure <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Non-2xx / timeout: stay on the form, danger banner at the top, every field preserved. 4xx validation details from the server render under the offending field when identifiable. On 2xx instead: dismiss + snackbar/toast ("Task created · assigned to Andrew — he'll wake and start") and navigate to the new Task detail so the first status change is visible live. Unreachable while the form is open: form stays editable, Create disables, shared flow-04 banner; the draft survives until connectivity returns.</div>
+      <div class="cap-api">retry: POST /api/containers/{cid}/tasks · then SSE GET /api/containers/{cid}/events</div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

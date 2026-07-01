@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 10 Converse</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  /* chat-only helpers on top of the shared kit */
+  .chat { gap: 12px; padding-top: 8px; }
+  .daydiv { align-self: center; font-size: 10.5px; font-weight: 700; letter-spacing: .6px;
+    text-transform: uppercase; color: var(--faint); padding: 2px 0; }
+  .dots { display: flex; gap: 5px; padding: 6px 2px; }
+  .dots span { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); animation: pulse 1.2s infinite; }
+  .dots span:nth-child(2) { animation-delay: .18s; }
+  .dots span:nth-child(3) { animation-delay: .36s; }
+  .working-cap { align-self: flex-start; font-size: 11px; color: var(--faint); margin: -4px 0 0 10px; }
+  .hintchips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .hintchip { border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: 9px 14px; font-size: 13px; font-weight: 650; }
+  .failnote { align-self: flex-end; display: flex; gap: 6px; align-items: center; color: var(--danger);
+    font-size: 11.5px; font-weight: 700; margin-top: -4px; }
+  .failnote svg { width: 13px; height: 13px; }
+  .worklink { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px;
+    font-weight: 650; color: var(--accent); font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .worklink svg { width: 12px; height: 12px; }
+  .queued { display: flex; gap: 8px; align-items: flex-start; color: var(--text-2); font-size: 13.5px; line-height: 1.45; }
+  .queued svg { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--warn); }
+  .skb { border-radius: 16px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>10 — Converse with an agent</h1>
+  <p>Turn-based chat with one agent: your message wakes the agent, it works, it replies. Spec:
+     <span class="mono">flows/10-converse.md</span>. All endpoints exist today; the composer is
+     text-only in v1 (attachments = v2 even though the API already has them). The pending indicator
+     is honest — pulsing dots only when the agent is actually working your turn; a "queued" notice
+     when it's busy on a task. Frames mix platforms/themes; chat anatomy is pixel-equivalent.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ C1: conversation, iOS dark ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow" style="min-width:0;">
+            <div style="font-size:16px; font-weight:700;">Dana</div>
+          </div>
+          <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll chat">
+          <div class="daydiv">Today</div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Pairing and IA are locked in — flows 03–09 are specced and the mockups render in both themes. I'm on the converse and create-task screens now.
+            <div class="b-time">20:58</div></div>
+          <div class="bubble mine">How's the mobile design coming along? Anything blocking you?
+            <div class="b-time">20:59</div></div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            No blockers. Two things I need from you: confirm attachments stay v2, and a verdict on the pairing-token question in doc 13.
+            <div class="b-time">21:00</div></div>
+          <div class="bubble mine">Attachments are v2 — keep the composer text-only. I'll read doc 13 tonight.
+            <div class="b-time">21:01</div></div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            <div class="dots"><span></span><span></span><span></span></div></div>
+          <div class="working-cap">Dana is working…</div>
+        </div>
+        <div class="composer">
+          <div class="input"><span class="ph">Message Dana…</span></div>
+          <div class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C1 · Conversation — reply pending <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Human turns right (accent), agent turns left with author name. Presence pill in the bar; the pulsing-dots bubble + "Dana is working…" caption show only while presence is working/waking — the honest indicator. Scroll-up reveals older turns.</div>
+      <div class="cap-api">GET /api/agents/{aid}/conversation?limit=50 · POST /api/conversations/{conv_id}/turns {role:"human", author_agent_id, content}<br>GET /api/conversations/{conv_id}/turns?after_seq=S <b>(delta on SSE event)</b> · SSE GET /api/containers/{cid}/events</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C2: conversation, Android light ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow" style="min-width:0;">
+            <div style="font-size:16px; font-weight:700;">Dana</div>
+          </div>
+          <span class="pill s-idle"><span class="dot"></span>idle</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll chat">
+          <div class="daydiv">Today</div>
+          <div class="bubble mine">Can you post the token-file diff to the task thread when you're done?
+            <div class="b-time">18:22</div></div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Done — tokens JSON and the foundations doc are updated, and the diff is posted. Full trace in the work log if you want the details.
+            <span class="worklink"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 5.5l11 6.5-11 6.5z"/></svg>work log · 8f3a2c1d</span>
+            <div class="b-time">18:31</div></div>
+          <div class="bubble mine">Great — I'll review after dinner.
+            <div class="b-time">18:33</div></div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Sounds good. I'll pick up the create-task flow in the meantime.
+            <div class="b-time">18:34</div></div>
+        </div>
+        <div class="composer">
+          <div class="input"><span class="ph">Message Dana…</span></div>
+          <div class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C2 · Conversation — settled <span class="plat">Android · light</span></div>
+      <div class="cap-note">Same anatomy in M3 chrome (system back, vertical overflow). An agent turn carrying a run_id gets a "work log" link → Run detail (flow 06). No pending indicator when nothing is owed.</div>
+      <div class="cap-api">GET /api/agents/{aid}/conversation?limit=50 · turn.run_id → GET /api/agents/{aid}/runs/{run_id}/stream</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C3: fresh conversation, hint chips ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow" style="min-width:0;">
+            <div style="font-size:16px; font-weight:700;">Dana</div>
+          </div>
+          <span class="pill s-idle"><span class="dot"></span>idle</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="state" style="gap:14px;">
+          <div class="avatar lg">D</div>
+          <div class="st-title">Say hello to Dana</div>
+          <div class="st-sub">Your message wakes her: she reads it, works, and replies. The first answer can take a minute.</div>
+          <div class="hintchips">
+            <span class="hintchip">What are you working on?</span>
+            <span class="hintchip">Where are the mobile designs at?</span>
+            <span class="hintchip">Any blockers I can clear?</span>
+          </div>
+        </div>
+        <div class="composer">
+          <div class="input focus"><span class="ph">Message Dana…</span></div>
+          <div class="send disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C3 · Fresh conversation <span class="plat">iOS · light</span></div>
+      <div class="cap-note">No conversation exists yet — it's created lazily on first send (get-or-create). Hint chips prefill the composer, they don't auto-send. Send stays disabled while the field is empty.</div>
+      <div class="cap-api"><b>on first send:</b> POST /api/agents/{aid}/conversations {actor_agent_id:&lt;paired human id&gt;} → POST /api/conversations/{conv_id}/turns</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C4: agent busy on a task ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow" style="min-width:0;">
+            <div style="font-size:16px; font-weight:700;">Dana</div>
+          </div>
+          <span class="pill s-accent pulse"><span class="dot"></span>busy · task</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll chat">
+          <div class="banner info" style="flex:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4.5l3 2"/></svg>
+            Dana is working on a task — she'll reply when she wraps up her current step.
+          </div>
+          <div class="daydiv">Today</div>
+          <div class="bubble mine">Quick one — which frames still need a light-theme pass?
+            <div class="b-time">16:05</div></div>
+          <div class="bubble theirs"><div class="b-author">Dana <span style="color:var(--warn);">· queued</span></div>
+            <div class="queued">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4.5l3 2"/></svg>
+              <span>Your message is queued — Dana is mid-task ("portal dark-mode audit") and will answer as soon as the step completes.</span>
+            </div></div>
+        </div>
+        <div class="composer">
+          <div class="input"><span class="ph">Message Dana…</span></div>
+          <div class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C4 · Agent busy — message queued <span class="plat">Android · dark</span></div>
+      <div class="cap-note">presence=busy: the banner sets expectations and the pending indicator is an honest "queued" notice (presence_reason rendered verbatim when the backend provides it) — never fake typing dots while she's on a task lease. Sending stays allowed.</div>
+      <div class="cap-api">GET /api/agents/{aid}/conversation → presence:"busy", presence_reason · POST /api/conversations/{conv_id}/turns <b>(queued server-side)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C5: send failure, retry ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow" style="min-width:0;">
+            <div style="font-size:16px; font-weight:700;">Dana</div>
+          </div>
+          <span class="pill s-idle"><span class="dot"></span>idle</span>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll chat">
+          <div class="daydiv">Today</div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Create-task mockups are rendering — six frames, both platforms. Anything else for this pass?
+            <div class="b-time">21:38</div></div>
+          <div class="bubble mine" style="opacity:.85; border:1px solid var(--danger-line);">Yes — drop them in the review thread and tag Andrew and Ethan.
+            <div class="b-time">21:40</div></div>
+          <div class="failnote">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 8v5m0 3.5h.01"/><circle cx="12" cy="12" r="9"/></svg>
+            Not sent — tap to retry
+          </div>
+        </div>
+        <div class="composer">
+          <div class="input"><span class="ph">Message Dana…</span></div>
+          <div class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C5 · Turn send failed <span class="plat">Android · dark</span></div>
+      <div class="cap-note">The POST failed (timeout / non-2xx). The bubble keeps its text with a danger outline; tapping the note re-sends, long-press offers Copy text / Delete. Nothing retries silently — no offline queue in v1.</div>
+      <div class="cap-api">POST /api/conversations/{conv_id}/turns <b>(failed → manual retry, same body)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C6: end conversation confirm ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar" style="opacity:.5;">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow"><div style="font-size:16px; font-weight:700;">Dana</div></div>
+          <span class="pill s-idle"><span class="dot"></span>idle</span>
+        </div>
+        <div class="scroll chat" style="opacity:.5;">
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Both mockup pages are pushed. I'll wait on your doc-13 read before touching auth screens.
+            <div class="b-time">21:44</div></div>
+          <div class="bubble mine">Perfect — that's everything for today. Thanks!
+            <div class="b-time">21:45</div></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="action-sheet">
+          <div class="grp">
+            <div class="as-note">End this conversation with Dana? She goes back to her own work. The transcript stays right here.</div>
+            <div class="as-btn destructive">End Conversation</div>
+          </div>
+          <div class="grp"><div class="as-btn bold">Cancel</div></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C6 · End conversation — confirm <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">From the overflow menu. confirmationDialog per the platform split (Android: M3 AlertDialog, same copy). Framed as releasing the agent, not deleting anything — the transcript is kept.</div>
+      <div class="cap-api">POST /api/conversations/{conv_id}/end</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C7: transcript loading skeleton ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow"><div style="font-size:16px; font-weight:700;">Dana</div></div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll chat">
+          <div class="skel skb" style="height:64px; width:72%; align-self:flex-start;"></div>
+          <div class="skel skb" style="height:44px; width:58%; align-self:flex-end;"></div>
+          <div class="skel skb" style="height:84px; width:76%; align-self:flex-start;"></div>
+          <div class="skel skb" style="height:44px; width:48%; align-self:flex-end;"></div>
+          <div class="skel skb" style="height:56px; width:66%; align-self:flex-start;"></div>
+        </div>
+        <div class="composer">
+          <div class="input"><span class="ph">Message Dana…</span></div>
+          <div class="send disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C7 · Transcript loading <span class="plat">Android · light</span></div>
+      <div class="cap-note">Skeleton bubbles mirror the alternating chat layout while the initial fetch is in flight (&lt;1s on LAN). The composer renders immediately so typing can start; Send enables once the conversation resolves.</div>
+      <div class="cap-api">GET /api/agents/{aid}/conversation?limit=50 <b>(in flight)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C8: unreachable ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow"><div style="font-size:16px; font-weight:700;">Dana</div></div>
+          <span class="pill s-danger"><span class="dot"></span>offline</span>
+        </div>
+        <div class="scroll chat">
+          <div class="banner danger" style="flex:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 16.5a5 5 0 017 0M5 13a10 10 0 0114 0"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/><path d="M3 3l18 18"/></svg>
+            Can't reach openorcha — reconnecting…
+            <span class="b-act">Retry</span>
+          </div>
+          <div class="daydiv">Today</div>
+          <div class="bubble mine">Attachments are v2 — keep the composer text-only. I'll read doc 13 tonight.
+            <div class="b-time">21:01</div></div>
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Noted — spec updated to say so explicitly. Converse mockups are next.
+            <div class="b-time">21:07</div></div>
+        </div>
+        <div class="composer" style="opacity:.5;">
+          <div class="input"><span class="ph">Reconnect to send messages</span></div>
+          <div class="send disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6l6-6 6 6"/></svg></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C8 · Container unreachable <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Probe failed mid-conversation. The cached transcript stays readable; the composer disables with honest placeholder copy — no offline queue in v1 (doc 02 §4). Retry re-probes and reopens SSE.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(probe, 3s timeout)</b> · SSE reconnect on success</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ C9: conversation ended ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg></span>
+          <div class="avatar sm">D</div>
+          <div class="grow"><div style="font-size:16px; font-weight:700;">Dana</div></div>
+          <span class="pill s-idle"><span class="dot"></span>idle</span>
+        </div>
+        <div class="scroll chat">
+          <div class="bubble theirs"><div class="b-author">Dana</div>
+            Both mockup pages are pushed. I'll wait on your doc-13 read before touching auth screens.
+            <div class="b-time">21:44</div></div>
+          <div class="bubble mine">Perfect — that's everything for today. Thanks!
+            <div class="b-time">21:45</div></div>
+          <div class="bubble system">Conversation ended — Dana went back to her own work · 21:46</div>
+        </div>
+        <div style="flex:none; padding:10px 16px 12px; border-top:.5px solid var(--border);">
+          <button class="btn tonal block">Start a new conversation</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">C9 · Conversation ended <span class="plat">iOS · light</span></div>
+      <div class="cap-note">After the end call: dashed system bubble closes the transcript and the composer is replaced by a single restart action — which is just the same get-or-create as C3's first send.</div>
+      <div class="cap-api">POST /api/conversations/{conv_id}/end <b>(done)</b> · restart: POST /api/agents/{aid}/conversations {actor_agent_id}</div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>
