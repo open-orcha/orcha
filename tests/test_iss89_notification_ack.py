@@ -13,7 +13,8 @@ Coverage, mirroring the plan (docs/plans/issue-89-plan.md §7):
   3. lane coverage — the veto holds on the resident-drain (conversation) surface
   4. directed-message veto — an acked `prompt` is not injected into the wake prompt
   5. idempotency + guards (double-ack no-op, foreign/unknown 404, suppressed-name 400)
-  6. bulk ack via notifications/read {suppress_wake} + the conversation_turn message-eater guard
+  6. bulk ack via notifications/read {suppress_wake, through_ts} + the explicit-bound guard +
+     the conversation_turn message-eater guard
   7. pending feed + total_pending + event_id; acked rows stay in the REGULAR feed as read
   8. read-but-unacked regression (Round-1 review fix): read alone neither hides nor suppresses
   9. clock-wake snooze gates ONLY auto_wake_due; event wakes fire through it
@@ -231,6 +232,34 @@ async def test_bulk_ack_bounded_and_spares_conversation_turns(client, container,
     # the row newer than through_ts stays pending
     newest = max(by_name["prompt"], key=lambda row: row["ts"])
     assert newest["human_acked_at"] is None
+
+    cand = _cand(await _scan(client, container["id"]), aid)
+    assert cand["should_wake"] is True and cand["pending_events"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_ack_requires_loaded_bound_and_spares_later_arrivals(
+        client, container, make_agent, db):
+    """Acknowledge-all must be bounded to the pending rows the human actually loaded. If the
+    server defaulted suppress_wake=true to MAX(ts) at click time, a notification that arrived
+    after panel load but before confirm would be silently vetoed unseen."""
+    a = await make_agent("Vox89f2", "eng")
+    aid = a["agent_id"]
+    await _prompt(client, aid, "visible in the panel")
+    loaded = (await client.get(f"/api/agents/{aid}/notifications/pending")).json()
+    bound = max(n["ts"] for n in loaded["notifications"])
+
+    await _prompt(client, aid, "arrived after panel load")
+    assert (await client.post(f"/api/agents/{aid}/notifications/read",
+                              json={"suppress_wake": True})).status_code == 400
+
+    r = await client.post(f"/api/agents/{aid}/notifications/read",
+                          json={"through_ts": bound, "suppress_wake": True})
+    assert r.status_code == 200, r.text
+    rows = _rows(db, aid)
+    by_message = {row["payload"]["message"]: row for row in rows}
+    assert by_message["visible in the panel"]["human_acked_at"] is not None
+    assert by_message["arrived after panel load"]["human_acked_at"] is None
 
     cand = _cand(await _scan(client, container["id"]), aid)
     assert cand["should_wake"] is True and cand["pending_events"] == 1

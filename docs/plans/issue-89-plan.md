@@ -9,6 +9,12 @@ Branch: `feat/gh89-notification-ack`, **stacked on `feat/gh91-90-conversation-wo
 > (regression test #8). (b) §3 gains an 8th filter site: the `agent_wait` entry precheck
 > (~8188), so an acked-only backlog can't block the synthetic `task_ready` until timeout
 > (regression test #11).
+>
+> **Round 3 revision** (addressing the bulk-ack blocker): `suppress_wake:true` on
+> `POST /notifications/read` now requires an explicit `through_ts`; the portal sends the max
+> timestamp from the loaded pending rows and hides "Acknowledge all" when the pending list is
+> only partially loaded. This prevents a notification that arrives after panel load but before
+> the confirm click from being silently suppressed unseen.
 
 ## Pain point (from kedar)
 
@@ -119,9 +125,13 @@ UPDATE agent_events SET human_acked_at = now()
    AND event_name <> ALL(%s)   -- _NOTIF_SUPPRESSED guard
 ```
 
-with `%s` = the (possibly defaulted) `through_ts`. Bulk is *bounded by ts* — matching the
-existing "mark all read up to here" semantics — and is what "Acknowledge all" uses. The
-`_NOTIF_SUPPRESSED` exclusion is load-bearing: you can only ack what the feed can show you.
+with `%s` = the explicit `through_ts`. If `suppress_wake=true` and `through_ts` is omitted (or
+null), the route returns 400 and stamps nothing. This is load-bearing: an unbounded suppress
+would default to the agent's newest event at click time and could silently suppress a notification
+that arrived after the human opened the panel but before they confirmed. Bulk is still *bounded
+by ts* — matching the existing "mark all read up to here" semantics — and is what "Acknowledge
+all" uses, but only with the timestamp bound supplied by the loaded pending rows. The
+`_NOTIF_SUPPRESSED` exclusion is also load-bearing: you can only ack what the feed can show you.
 Without it, "Acknowledge all" would stamp un-consumed `conversation_turn` events and the
 resident drain would skip the human's own pending chat messages — a silent message-eater.
 Existing callers are unaffected (flag defaults false; response only gains `"suppressed_count"`).
@@ -222,7 +232,11 @@ The existing notification center (`ncToggle`/`ncOpen`/`ncLoadFeed`/`ncMarkAllRea
   - per-row **Acknowledge** → `POST .../notifications/{event_id}/acknowledge`
     `{suppress_wake:true}`, optimistic row removal, rollback on non-2xx.
   - **Acknowledge all** (header) → confirm step → `POST .../notifications/read`
-    `{suppress_wake:true}`; clears list.
+    `{suppress_wake:true, through_ts:<max ts among loaded rows>}`; clears list optimistically.
+    The action is offered only when the loaded pending page contains the full pending set. If
+    more pending rows exist than the panel loaded, the panel says it is showing the newest
+    `<loaded> of <total>` and leaves the user with per-row acknowledgements, avoiding an unsafe
+    cursor-style bulk ack over unseen older rows.
   - rows whose event is an open task request or ready task get a one-line hint: "the agent
     will still see this open request/task — acknowledging only hides the notification"
     (honest about the §2 scope boundary). Detection: classified `type` for request/task kinds.
@@ -248,10 +262,12 @@ New file `tests/test_iss89_notification_ack.py`:
    output (wake prompt) while an unacked one beside it still surfaces.
 5. **idempotent + guards**: double-ack 200 no-op (`human_acked_at` unchanged on 2nd call); ack
    of a foreign/unknown event id → 404; ack of a `conversation_turn` → 400.
-6. **bulk**: `notifications/read {suppress_wake:true}` stamps all rows ≤ through_ts EXCEPT
-   `_NOTIF_SUPPRESSED` names (a pending un-consumed `conversation_turn` survives bulk ack and
-   still reaches the resident drain — the message-eater guard), leaves newer rows pending;
-   without the flag stamps nothing (existing behaviour regression-pinned).
+6. **bulk**: `notifications/read {suppress_wake:true, through_ts}` stamps all rows ≤ through_ts
+   EXCEPT `_NOTIF_SUPPRESSED` names (a pending un-consumed `conversation_turn` survives bulk ack
+   and still reaches the resident drain — the message-eater guard), leaves newer rows pending;
+   without the flag stamps nothing (existing behaviour regression-pinned). A sibling regression
+   proves `suppress_wake:true` without `through_ts` is rejected and that a notification arriving
+   after panel load (ts > loaded bound) is not suppressed by the confirm click.
 7. **pending feed**: returns only unacked+undelivered rows, both zones, `total_pending`
    matches, rows carry `event_id`; acked row still appears in the *regular* feed with
    `read: true`; a row the agent already consumed (delivery cursor past it) is absent.

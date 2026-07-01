@@ -3583,8 +3583,9 @@ class NotificationsRead(BaseModel):
     suppress_wake: bool = Field(
         False,
         description="GH #89 'Acknowledge all': also stamp human_acked_at on every feed-visible row "
-                    "up to through_ts, so those events stop counting toward wakes/drains. "
-                    "_NOTIF_SUPPRESSED rows are excluded — you can only ack what the feed can show.")
+                    "up to an explicit through_ts, so those events stop counting toward "
+                    "wakes/drains. _NOTIF_SUPPRESSED rows are excluded — you can only ack what "
+                    "the feed can show.")
 
 
 class NotificationAck(BaseModel):
@@ -3886,8 +3887,9 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
     notifier daemon's wake-ack cursor); the two must never cross-clear.
 
     GH #89 (``suppress_wake: true`` — "Acknowledge all"): additionally stamps human_acked_at on
-    every feed-visible row up to the (possibly defaulted) through_ts, so those events stop
-    counting toward wakes/drains. Bounded by ts to match the cursor's "up to here" semantics.
+    every feed-visible row up to an explicit through_ts, so those events stop counting toward
+    wakes/drains. The explicit bound is required: otherwise a client that loaded a pending panel
+    and waited for confirmation could suppress a notification that arrived after the panel load.
     The _NOTIF_SUPPRESSED exclusion is load-bearing: you can only ack what the feed can show you —
     without it a bulk ack would stamp un-consumed conversation_turn rows and the resident drain
     would skip the human's own pending chat messages (a silent message-eater). Response gains
@@ -3898,6 +3900,12 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
     with db_cursor() as (conn, cur):
         _require_agent(cur, aid)
         target = body.through_ts
+        if body.suppress_wake and target is None:
+            raise HTTPException(
+                400,
+                "through_ts is required when suppress_wake=true; bound the acknowledge-all action "
+                "to the notifications the human actually loaded",
+            )
         if target is None:
             cur.execute("SELECT COALESCE(MAX(ts), 0) AS mx FROM agent_events WHERE event_key=%s", (aid,))
             target = cur.fetchone()["mx"]

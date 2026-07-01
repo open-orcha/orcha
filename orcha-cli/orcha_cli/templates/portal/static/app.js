@@ -954,10 +954,11 @@ window.Orcha = (function () {
   // (POST .../notifications/{event_id}/acknowledge), "Acknowledge all" bulk-acks the feed
   // (POST .../notifications/read {suppress_wake:true}, with a confirm step), and — only when the
   // agent has a clock auto-wake configured — a snooze control (POST .../wake/snooze).
-  const PN_PAGE = 50;
+  const PN_PAGE = 200;
   // agentId doubles as the open flag; snoozeUntil: null = trust the snapshot's a.snooze_until,
   // a number (ms epoch, 0 = cleared) = this panel session's own POST result wins until close.
-  let _pn = { agentId: null, rows: [], total: 0, loading: false, confirmAll: false, snoozeUntil: null };
+  let _pn = { agentId: null, rows: [], total: 0, loading: false, confirmAll: false,
+              snoozeUntil: null, hasMore: false };
 
   // Types whose underlying WORK persists after an ack (an open request / a ready task keeps its
   // state-driven wake reason) — the ack only hides the notification, so say so on the row.
@@ -1029,13 +1030,18 @@ window.Orcha = (function () {
     } else {
       listHTML = _pn.rows.map(pnRowHTML).join("");
     }
-    const ackAll = _pn.rows.length
+    const allLoaded = _pn.rows.length && !_pn.hasMore && _pn.rows.length >= _pn.total;
+    const ackAll = allLoaded
       ? `<span class="mark${_pn.confirmAll ? " confirm" : ""}" id="pnAckAll">${_pn.confirmAll ? "Really acknowledge all " + _pn.rows.length + "?" : "Acknowledge all"}</span>`
+      : "";
+    const partial = _pn.rows.length && _pn.hasMore
+      ? '<div class="nc-empty small">Showing the newest ' + _pn.rows.length + ' of ' + _pn.total + ' pending notifications. Acknowledge rows individually.</div>'
       : "";
     float.innerHTML = `
       <div class="nc-h"><h3>Pending notifications — ${esc(name)}</h3>${ackAll}</div>
       <div class="nc-zlbl">Will wake this agent <span class="ct">(${_pn.total})</span></div>
       <div class="nc-list">${listHTML}</div>
+      ${partial}
       ${pnSnoozeHTML(a)}`;
     const all = document.getElementById("pnAckAll");
     if (all) all.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); pnAckAll(); });
@@ -1079,15 +1085,18 @@ window.Orcha = (function () {
   function pnAckAll() {
     const a = pnAgent();
     if (!a) return;
+    const tsVals = _pn.rows.map((n) => n.ts).filter((ts) => typeof ts === "number");
+    if (_pn.hasMore || tsVals.length !== _pn.rows.length || !_pn.rows.length) return;
     if (!_pn.confirmAll) { _pn.confirmAll = true; pnRenderPanel(); return; }
     _pn.confirmAll = false;
+    const throughTs = Math.max.apply(Math, tsVals);
     const prevRows = _pn.rows, prevTotal = _pn.total;
     _pn.rows = []; _pn.total = 0;
     if (a.total_pending != null) a.total_pending = 0;
     pnRenderPanel();
     fetch("/api/agents/" + encodeURIComponent(a.id) + "/notifications/read", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suppress_wake: true }),
+      body: JSON.stringify({ suppress_wake: true, through_ts: throughTs }),
     })
       .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
       .catch((e) => {
@@ -1141,7 +1150,8 @@ window.Orcha = (function () {
 
   function openPendingPanel(agentId) {
     ensurePnFloat();
-    _pn = { agentId: agentId, rows: [], total: 0, loading: true, confirmAll: false, snoozeUntil: null };
+    _pn = { agentId: agentId, rows: [], total: 0, loading: true, confirmAll: false,
+            snoozeUntil: null, hasMore: false };
     const float = document.getElementById("pnFloat");
     if (float) float.classList.add("show");
     pnRenderPanel();
@@ -1151,6 +1161,7 @@ window.Orcha = (function () {
         if (_pn.agentId !== agentId) return;   // closed / switched while in flight
         _pn.rows = res.notifications || [];
         _pn.total = res.total_pending || 0;
+        _pn.hasMore = res.next_before_ts != null || _pn.rows.length < _pn.total;
         _pn.loading = false;
         pnRenderPanel();
       })

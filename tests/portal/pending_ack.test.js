@@ -5,8 +5,8 @@
    panel is the human's per-notification VETO surface: per-row Acknowledge POSTs
    .../notifications/{event_id}/acknowledge {suppress_wake:true} and optimistically
    removes the row (rollback on failure); "Acknowledge all" needs a confirm step
-   before POSTing .../notifications/read {suppress_wake:true}; the snooze control
-   renders ONLY for an agent with a clock auto-wake configured.
+   before POSTing .../notifications/read {suppress_wake:true, through_ts:<loaded max>};
+   the snooze control renders ONLY for an agent with a clock auto-wake configured.
 
    Dependency-free vm-sandbox harness, same pattern as notification_center.test.js:
    stub DOM + fetch, load the REAL app.js, drive the wired path.
@@ -224,12 +224,24 @@ async function run() {
     const bulk = s.fetchCalls.find((c) => /\/notifications\/read$/.test(c.url));
     assert(!!bulk && bulk.method === "POST" && bulk.body && bulk.body.suppress_wake === true,
            "second click POSTs notifications/read {suppress_wake:true}");
+    assert(bulk.body.through_ts === 1718000100, "bulk ack is bounded to the loaded rows' max ts");
     assert(/Nothing pending/.test(s.reg.pnFloat.innerHTML), "list clears to the empty state");
   }
 
-  // --- Case 5: snooze only renders with a clock auto-wake; POSTs the choice --
+  // --- Case 5: partial loads do not expose an unsafe bulk acknowledge --------
   {
-    console.log("\nCase 5: snooze control is clock-wake-gated and POSTs wake/snooze");
+    console.log("\nCase 5: partial pending list hides Acknowledge all");
+    const s = makeSandbox({ pending: { ...PENDING, total_pending: 3, next_before_ts: 1717999999, next_before_id: 4 } });
+    s.Orcha.applySnapshot(snapshotWith({ ...AGENT, total_pending: 3 }));
+    s.Orcha.openPendingPanel("a1");
+    await tick();
+    assert(!/Acknowledge all/.test(s.reg.pnFloat.innerHTML), "no bulk ack when not all pending rows are loaded");
+    assert(/Showing the newest 2 of 3/.test(s.reg.pnFloat.innerHTML), "partial-load notice explains why");
+  }
+
+  // --- Case 6: snooze only renders with a clock auto-wake; POSTs the choice --
+  {
+    console.log("\nCase 6: snooze control is clock-wake-gated and POSTs wake/snooze");
     const noClock = makeSandbox();
     noClock.Orcha.applySnapshot(snapshotWith({ ...AGENT, auto_wake_interval_secs: null }));
     noClock.Orcha.openPendingPanel("a1");
