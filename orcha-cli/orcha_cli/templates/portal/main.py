@@ -5263,9 +5263,13 @@ def _infer_agent_active_task(cur, aid: str) -> Optional[str]:
     carries its id), a checkpoint respawn that lost the original context, or any wake that
     fires without a directed task event — so the worker run would otherwise be recorded with
     task_id=NULL and float unattached. This reconciles such a run to the agent's CURRENT task
-    using the same heuristic the wake-protocol guess uses (GH #56): the agent's most recently
-    started in_progress task that it is assigned/accepted/working. Returns the task id, or None
-    when no active task can be determined (a genuinely task-less wake stays unattributed)."""
+    when — and ONLY when — that task is UNAMBIGUOUS: the agent has exactly one in_progress task
+    it is assigned/accepted/working. If the agent holds several concurrent in_progress tasks we
+    can't tell which one the run belongs to (kedar1607, PR #86), so we return None and leave the
+    run unattributed rather than risk stamping the wrong task — a wrong link is worse than an
+    honest NULL. Returns the sole active task id, or None when there is no active task OR more
+    than one candidate (both stay unattributed; a directed wake still attaches precisely via the
+    GH #56 wake_task_id path, which supplies task_id explicitly and never reaches this fallback)."""
     cur.execute(
         """SELECT t.id
            FROM tasks t
@@ -5273,11 +5277,11 @@ def _infer_agent_active_task(cur, aid: str) -> Optional[str]:
            WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
              AND t.status='in_progress' AND t.is_root = false
            ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
-           LIMIT 1""",
+           LIMIT 2""",
         (aid,),
     )
-    row = cur.fetchone()
-    return str(row["id"]) if row else None
+    rows = cur.fetchall()
+    return str(rows[0]["id"]) if len(rows) == 1 else None
 
 
 @app.post("/api/agents/{aid}/runs", status_code=201)

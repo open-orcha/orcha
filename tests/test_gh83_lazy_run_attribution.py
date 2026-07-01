@@ -8,6 +8,8 @@ worker was spawned. Several spawn paths can't supply a task_id at wake time:
   - any wake that fires without a directed task event.
 The portal backfills the link server-side: at run start (POST /agents/{aid}/runs) from the
 agent's current in_progress task, and as a backstop on /finish for a run still unattached.
+The inference only fires when the agent's active task is UNAMBIGUOUS (exactly one in_progress
+task); with several concurrent tasks it declines rather than guess wrong, leaving the run NULL.
 """
 import uuid
 
@@ -83,8 +85,9 @@ async def test_explicit_task_id_is_never_overwritten(client, make_agent, make_ta
     (the finish backstop only fills a NULL link, never replaces an existing one)."""
     a = await make_agent("W", "eng")
     aid = a["agent_id"]
-    # two in_progress tasks; T2 is created later so the lazy guess (most-recently-started) is T2,
-    # NOT the explicit T1 we pass — proving the explicit link wins over the heuristic.
+    # two concurrent in_progress tasks: the lazy fallback is ambiguous and would give up (None),
+    # so the explicit T1 we pass is the ONLY thing that can link the run — proving the explicit
+    # link is honoured over (and independent of) the inference path.
     t1 = await make_task("T1", "dod", assignee_alias="W")
     await make_task("T2", "dod", assignee_alias="W")
 
@@ -94,6 +97,28 @@ async def test_explicit_task_id_is_never_overwritten(client, make_agent, make_ta
     await client.post(f"/api/runs/{r.json()['run_id']}/finish", json={"status": "exited"})
     run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
     assert run["task_id"] == t1["id"]               # finish did not overwrite it
+
+
+async def test_ambiguous_multiple_in_progress_tasks_stays_unattributed(
+        client, make_agent, make_task):
+    """kedar1607 (PR #86): when the agent holds SEVERAL concurrent in_progress tasks the
+    inference can't tell which one an unlinked run belongs to. Rather than tag a plausible-but-
+    possibly-wrong task, it declines — the run stays NULL at start AND on finish. A wrong link
+    is worse than an honest unattributed run."""
+    a = await make_agent("W", "eng")
+    aid = a["agent_id"]
+    # two concurrent in_progress tasks assigned to the same agent → ambiguous
+    await make_task("T1", "dod", assignee_alias="W")
+    await make_task("T2", "dod", assignee_alias="W")
+
+    r = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral"})
+    assert r.status_code == 201, r.text
+    assert r.json()["task_id"] is None              # ambiguous → not guessed at start
+
+    f = await client.post(f"/api/runs/{r.json()['run_id']}/finish", json={"status": "exited"})
+    assert f.status_code == 200
+    run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
+    assert run["task_id"] is None                   # still ambiguous → not guessed on finish
 
 
 async def test_taskless_wake_stays_unattributed(client, make_agent):
