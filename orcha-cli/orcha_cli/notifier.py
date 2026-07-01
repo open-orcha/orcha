@@ -753,6 +753,46 @@ HUMAN_COMMS_GUARDRAIL = (
 )
 
 
+# GH #90: the conversation-work dispatch guardrail. A conversation agent (Codex one-shot or Claude
+# resident) is for QUICK information exchange and DISPATCH — never for doing substantive work inline.
+# When the human asks for real work, the agent converts the ask into an ASSIGNED task and stops; the
+# task assignment wakes a separate ephemeral task worker that reads the full spec and does the work
+# (so the work gets task state, protocol, run attribution, human verification, and an audit trail).
+# This rides EVERY conversation turn (Codex cold + resume prompts, and every Claude resident human
+# turn — a warm resident never re-reads its cold system prompt) so a warm session can't drift into
+# doing the work itself. Enforcement is paired with the ORCHA_CONVERSATION_WORKER=1 spawn marker,
+# which the task-working skills read to refuse claiming/accepting work in a conversation embodiment.
+CONVERSATION_WORK_GUARDRAIL = (
+    "## Dispatch, don't do the work (conversation-agent guardrail — GH #90)\n"
+    "You are a CONVERSATION agent: quick information exchange and DISPATCH only. If the human asks "
+    "you to perform substantive work — write or change code, review a diff, investigate/debug, run "
+    "a long or multi-step job, edit files — do NOT do it in this conversation session. Instead:\n"
+    "1. Create a real task and ASSIGN it, using `/orcha-task-new \"<title>\" --dod \"<definition of "
+    "done>\" --description \"<the human's instructions + the conversation context the worker needs>\" "
+    "--assign <alias> --notes \"<how to proceed and where to report back>\"`. Assign it to the SAME "
+    "agent the human is talking to (you) unless the human names a different agent. Infer an obvious "
+    "definition of done; only ask the human if it is genuinely missing. Add review-chain/handoff-to "
+    "via the protocol flags when the work needs them.\n"
+    "2. Then reply SHORT — one or two sentences saying you created and assigned the task (name it in "
+    "plain English). Do NOT start coding, reviewing, editing files, running long commands, or "
+    "otherwise completing the task yourself. Setting the task to the assignee wakes a SEPARATE task "
+    "worker that reads the full title, description, definition of done, and protocol and does the "
+    "work — that is where the work belongs.\n"
+    "Pure questions, brainstorming, clarification, and status/opinion replies are NOT work — answer "
+    "those inline here and do NOT create a task for them. When in doubt about whether an ask is "
+    "substantive work: if it would change files or take real effort, dispatch it; if it's just "
+    "information, answer it."
+)
+
+
+def _resident_turn_feed(content: str) -> str:
+    """GH #90: frame EVERY Claude resident human turn with the conversation-work dispatch guardrail.
+    A warm `--resume` resident never re-reads its cold system prompt, so injecting here (per turn)
+    is the only place that reliably covers resumed turns — a cold-boot-only guardrail would miss
+    them. Kept as a pure helper so the 'rides every turn' guarantee is unit-testable."""
+    return f"{CONVERSATION_WORK_GUARDRAIL}\n\n---\n\n{content}"
+
+
 def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
     """#326 (A1): render the per-task protocol (GET /agents/{aid}/protocol → {protocol:{...}})
     as the standing-RULES section. `protocol` is the response dict; its `protocol` key is the
@@ -964,7 +1004,8 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
                    runtime: Optional[str] = None,
                    resume_session_id: Optional[str] = None,
                    log_path: Optional[pathlib.Path] = None,
-                   last_message_path: Optional[pathlib.Path] = None) -> tuple[bool, str, object]:
+                   last_message_path: Optional[pathlib.Path] = None,
+                   conversation_worker: bool = False) -> tuple[bool, str, object]:
     """Fire-and-forget a one-shot coding-agent worker in `cwd`, booted AS `alias`.
 
     Claude models spawn `claude -p "<prompt>"`; Codex models spawn `codex exec "<prompt>"`.
@@ -1079,6 +1120,12 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
     # this the worker runs `orcha watch --detach`, whose per-session poller never returns,
     # and the worker wedges before draining its inbox — completing zero work.
     env["ORCHA_HEADLESS_WORKER"] = "1"
+    # GH #90: mark a CONVERSATION embodiment (Codex one-shot conversation reply worker) so the
+    # task-working skills refuse to claim/accept/do real task work in it — a conversation agent
+    # dispatches work into an assigned task and stops. NOT set for ephemeral task workers or drain
+    # sidecars, which are exactly the workers that SHOULD do the task.
+    if conversation_worker:
+        env["ORCHA_CONVERSATION_WORKER"] = "1"
     out = subprocess.DEVNULL
     if log_path is not None:
         try:
@@ -1191,6 +1238,10 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
     if alias:
         env["ORCHA_ALIAS"] = alias
     env["ORCHA_HEADLESS_WORKER"] = "1"      # ISS-21: short-circuit interactive SessionStart hooks
+    # GH #90: a resident is a CONVERSATION embodiment — it exists to answer the human and DISPATCH
+    # work, never to do substantive task work itself. Mark it so the task-working skills refuse to
+    # claim/accept/do real work here (the resident creates+assigns a task and yields instead).
+    env["ORCHA_CONVERSATION_WORKER"] = "1"
     out = subprocess.DEVNULL
     if log_path is not None:
         try:
@@ -2997,6 +3048,7 @@ def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_t
         "that should be appended to the conversation. Do not call `/orcha-listen` and do "
         "not post this reply through task/request endpoints unless the human explicitly "
         "asked for that side effect.\n\n"
+        f"{CONVERSATION_WORK_GUARDRAIL}\n\n"
         f"{history}\n\n"
         "## Pending Human Message(s)\n\n"
         f"{latest}\n"
@@ -3025,6 +3077,7 @@ def _codex_resume_prompt(alias: str, pending_turns: list[dict]) -> str:
         "already in your context, so do NOT restate it. Make your final answer the chat reply "
         "appended to the conversation. Do not call `/orcha-listen` and do not post this reply "
         "through task/request endpoints unless the human explicitly asked for that side effect.\n\n"
+        f"{CONVERSATION_WORK_GUARDRAIL}\n\n"
         "## New Human Message(s)\n\n"
         f"{latest}\n"
     )
@@ -3676,6 +3729,26 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                           f"completion — cursor NOT advanced; the backlog re-surfaces for a fresh "
                           f"drain next tick (#247 B3)")
             continue
+        # GH #90 conversation→task handoff: this idle resident's agent has a self-assigned
+        # `task_assigned` waiting (the conversation agent dispatched real work to ITSELF). That is
+        # REAL task work — it must run as a proper ephemeral task worker (own worktree, own
+        # worker_run, task state, verification), NOT a base-checkout drain sidecar. The warm lease
+        # suppresses that ephemeral wake, so RELEASE it: _close_resident yields the lease (keeping
+        # the worktree + conversation active for the next human turn) and the very next wake-scan
+        # tick spawns the real task worker. Distinct ack reason `conversation_task_handoff` makes
+        # this auditable and separate from idle/failure/drain. Intercept BEFORE the inbox-drain
+        # branch below (a task_assigned also counts in pending_inbox → the sidecar would otherwise
+        # wrongly claim it). A pending human turn still takes precedence (answer it first, then hand
+        # off next tick); a mid-turn resident never reaches here (awaiting_result short-circuits §1).
+        if (not r.get("awaiting_result") and not pending
+                and ((cand or {}).get("pending_task_assigned", 0) or 0) > 0):
+            if not quiet:
+                print(f"[notifier] resident {r.get('alias')} has a self-assigned task waiting — "
+                      f"releasing the lease (conversation_task_handoff) so the task worker wakes in "
+                      f"its own run/worktree (GH #90)")
+            _close_resident(api_base, r, reason="conversation_task_handoff")
+            live_residents.pop(conv_id, None)
+            continue
         # ISS-78 (A2) → #247 B3 (§5.2): a warm resident holds the single-embodiment lease, so the
         # server's wake gate suppresses EVERY ephemeral wake for this agent — decision_made/task_message/
         # request_* QUEUE and the resident (which only consumes conversation turns) never sees them.
@@ -3810,7 +3883,8 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                            model=c.get("model"), runtime=runtime,
                                            resume_session_id=(session_id if use_resume else None),
                                            log_path=log_path,
-                                           last_message_path=last_message_path)
+                                           last_message_path=last_message_path,
+                                           conversation_worker=True)  # GH #90: dispatch-only marker
             if not sent or proc is None:
                 _safe_teardown_worktree(base_cwd, worktree, branch)
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
@@ -3970,12 +4044,18 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         _feed = _render_attachment_feed(nxt.get("attachments"), api_base=api_base, runtime="claude")
         if _feed:
             nxt["content"] = f"{nxt['content']}\n\n{_feed}" if nxt["content"] else _feed
+        # GH #90: ride the conversation-work dispatch guardrail on EVERY human turn, not only cold
+        # boot. A warm --resume resident never re-reads its cold system prompt (format_persona), so a
+        # prompt-only fix there would miss every resumed turn — the exact warm-drift this guards. Feed
+        # it as a framing preamble ahead of the human's message so the resident dispatches substantive
+        # work into an assigned task and answers pure questions inline.
+        turn_content = _resident_turn_feed(nxt["content"])
         # ISS-stranded (e4b77f3f): SEND-FIRST. Persist the worker_run only AFTER the turn lands on
         # the resident's stdin. The old POST-then-send order created a status=running row and then,
         # on a broken pipe, hit `continue` WITHOUT setting current_run_id — orphaning the row forever
         # (the exact stall Page hit) and re-POSTing a fresh orphan every tick. A broken pipe now just
         # skips this tick (the resident is reaped via proc.poll()/idle), creating no row.
-        if not _send_user_turn(r["proc"], nxt["content"]):  # pipe gone → reaped next tick, no orphan row
+        if not _send_user_turn(r["proc"], turn_content):  # pipe gone → reaped next tick, no orphan row
             continue
         run = _post_json(f"{api_base}/api/agents/{c['agent_id']}/runs",
                          {"wake_kind": "resident", "wake_event": "conversation_turn",

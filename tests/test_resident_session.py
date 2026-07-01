@@ -472,7 +472,7 @@ def test_service_residents_cold_boot_and_feeds_turn(monkeypatch, tmp_path):
     assert any("wake-claim" in u and b.get("lease_kind") == "resident" for u, b in posts)
     assert any(u.endswith("/runs") for u, _ in posts)                    # per-turn run opened
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "hello"
+    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"].endswith("hello")
     r = live["C1"]
     assert r["awaiting_result"] is True and r["serviced_seq"] == 1 and r["current_run_id"] == "RUN-1"
     assert r["runtime"] == notifier.RUNTIME_CLAUDE
@@ -552,7 +552,7 @@ def test_service_residents_restarts_existing_idle_resident_when_cold_required(mo
     assert live["C1"]["proc"] is new_proc and live["C1"]["cold"] is True
     new_proc.stdin.seek(0)
     sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
-    assert sent == "fresh question"                              # delivered only to the fresh boot
+    assert sent.endswith("fresh question")                              # delivered only to the fresh boot
     assert any(u.endswith("/wake-ack") and b["kind"] == "resident_digest_resync"
                and b["release_lease"] is True for u, b in posts)
 
@@ -1053,6 +1053,76 @@ def test_service_residents_no_yield_when_inbox_empty(monkeypatch, tmp_path):
     assert not any(u.endswith("/wake-ack") for u, _ in posts)    # lease NOT released
 
 
+# ---------- GH #90: same-agent conversation→task handoff releases the resident lease ----------
+
+def test_service_residents_releases_lease_for_self_assigned_task(monkeypatch, tmp_path):
+    """GH #90: a conversation agent that dispatched work to ITSELF produces a self-targeted
+    `task_assigned` (active-conversations surfaces it as pending_task_assigned). That is REAL task work
+    — it must run as a proper ephemeral task worker (own worktree + worker_run), which the warm lease
+    suppresses. So the daemon RELEASES the lease (graceful kill so SessionEnd/C1 runs) with the
+    distinct `conversation_task_handoff` ack, and does NOT spawn a base-checkout drain sidecar for it.
+    The next wake-scan tick then wakes the real task worker."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            # a task_assigned also counts in pending_inbox — the handoff must intercept BEFORE the drain.
+            "pending_inbox": 1, "inbox_ack_ts": 30.0, "pending_task_assigned": 1,
+            "inbox_messages": ["[new task assigned to you: Refactor auth (task T-9)] — begin"]}
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert live == {}                                            # resident torn down → lease free
+    assert sigs and sigs[0][1] == notifier.signal.SIGTERM        # graceful kill (SessionEnd/C1 runs)
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "resident_conversation_task_handoff"   # auditable, distinct from idle/drain
+    assert ack["release_lease"] is True
+    assert spawns == []                                          # NO drain sidecar — task worker path
+    assert fed == []                                            # nothing injected into the warm session
+    assert not any(u.endswith("/end") for u, _ in posts)         # conversation stays usable
+
+
+def test_service_residents_no_handoff_without_self_assigned_task(monkeypatch, tmp_path):
+    """Mutation guard: pending_inbox>0 but pending_task_assigned=0 (a task_message/decision, not a
+    self-assigned task) → the existing drain-sidecar path handles it, NOT the handoff lease-release."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 1, "inbox_ack_ts": 30.0, "pending_task_assigned": 0,
+            "model": "claude-opus-4-8",
+            "inbox_messages": ["[task-thread message on task T-7] review my diff — RESPOND on it"]}
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert "C1" in live and proc.killed is False                 # warm resident + lease KEPT
+    assert not any(b.get("kind") == "resident_conversation_task_handoff"
+                   for u, b in posts if u.endswith("/wake-ack"))
+    assert len(spawns) == 1                                      # drain sidecar path, as before
+
+
+def test_resident_cold_boot_feeds_turn_with_dispatch_guardrail(monkeypatch, tmp_path):
+    """GH #90 integration: a cold-boot resident turn fed to stdin carries the dispatch guardrail ahead
+    of the human's message — so even the very first turn steers work into an assigned task."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": None, "pending_human": True, "last_turn_seq": 1}
+    _wire(monkeypatch, active=[conv],
+          turns=[{"seq": 1, "role": "human", "content": "refactor the auth module please"}])
+    proc = ResidentProc()
+    monkeypatch.setattr(notifier, "spawn_resident", lambda *a, **k: (True, "r", proc))
+    live = {}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    fed = json.loads(proc.stdin.getvalue().decode())["message"]["content"][0]["text"]
+    assert notifier.CONVERSATION_WORK_GUARDRAIL in fed          # guardrail rides the turn
+    assert fed.endswith("refactor the auth module please")     # ...ahead of the human's message
+
+
 def test_service_residents_drain_backstop_skips_stalled_repeat(monkeypatch, tmp_path):
     """#247 B3 anti-thrash backstop (carries ISS-75/#188 forward). A conversation that already drained
     at inbox_ack_ts=30 must NOT spawn ANOTHER drain sidecar when the scan still reports the SAME high-
@@ -1417,7 +1487,7 @@ def test_cold_boot_injects_history_prefix_and_feeds_unanswered_turn(monkeypatch,
     assert "PERSONA" in sp and "## Conversation so far" in sp and "old q;old a" in sp
     assert spawned[0][1]["resume_session_id"] is None                    # cold boot
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"].endswith("new q")
     assert live["C1"]["serviced_seq"] == 3                               # fed seq3, skipped seq1
 
 
@@ -1441,7 +1511,7 @@ def test_cold_boot_skips_already_answered_turns_without_formatter(monkeypatch, t
 
     assert spawned[0][1]["system_prompt"] == "PERSONA"                   # persona only, no history
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"].endswith("new q")
     assert live["C1"]["serviced_seq"] == 3
 
 
@@ -1463,7 +1533,7 @@ def test_cold_boot_cursor_uses_newest_agent_reply_not_oldest_page(monkeypatch, t
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "latest pending"
+    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"].endswith("latest pending")
     assert live["C1"]["serviced_seq"] == 301              # newest agent (300) → feed 301, not an old turn
 
 
@@ -1487,7 +1557,7 @@ def test_warm_resume_skips_history_and_persona(monkeypatch, tmp_path):
     assert spawned[0][1]["system_prompt"] is None                        # warm — nothing injected
     assert spawned[0][1]["resume_session_id"] == "sess-9"
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"].endswith("new q")
     assert live["C1"]["serviced_seq"] == 3
 
 

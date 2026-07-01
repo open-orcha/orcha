@@ -8,6 +8,10 @@ You are executing `/orcha-next`.
 
 User arguments: `$ARGUMENTS`
 
+## Conversation-worker guardrail (GH #90 — check FIRST)
+
+Check `printenv ORCHA_CONVERSATION_WORKER`. **If it is `1`, STOP — do not claim or work a task.** You are a conversation embodiment: your job is to answer the human and DISPATCH work, not to do it here. If the human asked for substantive work, create and assign a task instead (`/orcha-task-new "<title>" --dod "..." --description "<their ask + context>" --assign <your alias>`) — assigning it wakes a separate task worker that does the work — then reply briefly that you dispatched it. Only continue past this step when `ORCHA_CONVERSATION_WORKER` is unset/empty.
+
 ## Steps
 
 1. **Identify the acting agent** using this resolution order — STOP at the first that matches:
