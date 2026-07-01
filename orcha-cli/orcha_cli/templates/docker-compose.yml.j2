@@ -9,7 +9,9 @@ services:
       POSTGRES_USER: orcha
       POSTGRES_PASSWORD: orcha
       POSTGRES_DB: orcha
-    ports: ["{{ db_port }}:5432"]
+    # Auth v1 (#271): host-loopback publish by default — the stack is a local tool; LAN
+    # exposure is opt-in (`orcha init --expose`, which requires ORCHA_AUTH_MODE=enforce).
+    ports: ["{{ bind_host }}{{ db_port }}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       # initdb runs ONLY the 001 baseline on a fresh volume; the portal's migration runner
@@ -44,7 +46,10 @@ services:
       # injected explicitly (mirrors how api_port/db_port are chosen per-project). Without this
       # every project's browser dialled the fixed ws://127.0.0.1:8765 = the wrong container.
       ORCHA_TERMINAL_WS_URL: ws://127.0.0.1:{{ bridge_port }}
-    ports: ["{{ api_port }}:8000"]
+      # Auth v1 (#271): off | warn | enforce. New `orcha init` projects get enforce;
+      # `orcha upgrade` keeps existing stacks on warn (log-only) until the operator flips it.
+      ORCHA_AUTH_MODE: {{ auth_mode }}
+    ports: ["{{ bind_host }}{{ api_port }}:8000"]
     volumes:
       - ./migrations:/app/migrations:ro   # R1: portal reads migrations to apply pending ones (no wipe)
       # SSE worker-run streaming: the daemon writes each worker's NDJSON log to the host's
