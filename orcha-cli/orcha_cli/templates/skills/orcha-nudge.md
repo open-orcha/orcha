@@ -6,6 +6,8 @@ argument-hint: <request_id> [--alias <name>] [--note "..."]
 
 You are executing `/orcha-nudge`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## What a nudge does
@@ -46,7 +48,7 @@ or no target at all), there's no agent to wake via a poke — that's a clean no-
 
 4. **POST** — include `note` only when given:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/requests/<request_id>/nudge" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/requests/<request_id>/nudge" \
      -H 'Content-Type: application/json' \
      -d '{"actor_agent_id": "<my agent_id>", "note": "<note or omit>"}'
    ```

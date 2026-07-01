@@ -464,9 +464,29 @@ def _api_and_cid(cwd: pathlib.Path, api_override: Optional[str],
     return api_base, cid
 
 
+def _auth_headers() -> dict:
+    """Auth v1 (#271): the daemon authenticates as the project runtime credential —
+    $ORCHA_RUNTIME_TOKEN / $ORCHA_TOKEN, else .orcha/runtime-token found by walking up
+    from CWD (the daemon runs at the project root). Empty on a pre-auth stack (warn
+    mode serves unauthenticated calls, so nothing breaks)."""
+    tok = os.environ.get("ORCHA_RUNTIME_TOKEN") or os.environ.get("ORCHA_TOKEN")
+    if not tok:
+        cwd = pathlib.Path.cwd()
+        for d in (cwd, *cwd.parents):
+            p = d / ".orcha" / "runtime-token"
+            if p.is_file():
+                try:
+                    tok = p.read_text().strip()
+                except OSError:
+                    tok = ""
+                break
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
 def _get_json(url: str, timeout: float = 8.0) -> Optional[dict]:
+    req = urllib.request.Request(url, headers=_auth_headers())
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
         return None
@@ -483,7 +503,8 @@ def _probe_container(api_base: str, cid: str) -> str:
     forever, deepening the which-daemon-is-which confusion during an incident."""
     url = f"{api_base}/api/containers/{cid}/wake-scan?cooldown=15&min_idle=30"
     try:
-        with urllib.request.urlopen(url, timeout=8.0) as resp:
+        req = urllib.request.Request(url, headers=_auth_headers())
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
             resp.read()
         return "ok"
     except urllib.error.HTTPError as e:
@@ -497,7 +518,7 @@ def _probe_container(api_base: str, cid: str) -> str:
 def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode(), method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_auth_headers()},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:

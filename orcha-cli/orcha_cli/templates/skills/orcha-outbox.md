@@ -6,6 +6,8 @@ argument-hint: "[--status open|answered|closed|all] [--alias <name>]"
 
 You are executing `/orcha-outbox`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -27,9 +29,9 @@ User arguments: `$ARGUMENTS`
 4. **GET**:
    ```bash
    # default
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/outbox"
    # with explicit status
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=<status>"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/outbox?status=<status>"
    ```
    Response: `{"outgoing_requests": [{ id, status, priority, payload, response, target_alias, parent_request_id, chain_depth, created_at, responded_at, closed_at, expires_at, ... }, ...]}`
 

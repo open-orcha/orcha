@@ -6,6 +6,8 @@ argument-hint: <alias> --role "..." --prompt "..." [--initial-task "..." --task-
 
 You are executing `/orcha-register-agent`. This creates an **AI agent** (`kind='ai'`). The first human was registered at `orcha init --as <name>`; to add more humans mid-run use `/orcha-register-human` — those rows skip `--prompt`, can't be assigned tasks via `initial_task`, and gain access to human-only skills (`/orcha-verify`, `/orcha-decide-suggestion`, `/orcha-pause`, `/orcha-resume`, `/orcha-stop`, `/orcha-sweep`).
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -45,15 +47,19 @@ User arguments: `$ARGUMENTS`
 
 4. **POST** to register:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/containers/<current_container_id>/agents" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/containers/<current_container_id>/agents" \
      -H 'Content-Type: application/json' \
      -d '<body>'
    ```
-   Response: `{"agent_id": "...", "alias": "...", "container_id": "...", "initial_task": {...} | null}`
+   Response: `{"agent_id": "...", "alias": "...", "container_id": "...", "initial_task": {...} | null, "token": "orcha_a_..."}`
+
+   The response's `token` is this agent's capability credential (#271), returned **exactly
+   once** — the server stores only its hash. Persist it in the binding file below or the
+   agent cannot authenticate on an enforce-mode stack.
 
 5. **Bind this agent.** Write the binding file **keyed by alias** (NOT by tty — tty is unreliable in Claude Code's non-TTY Bash subprocess and collides across tabs). The file path is `.claude/orcha-tabs/<alias>.json` with content:
    ```json
-   {"alias": "<alias>", "agent_id": "<agent_id>", "container_id": "<container_id>"}
+   {"alias": "<alias>", "agent_id": "<agent_id>", "container_id": "<container_id>", "token": "<token from the register response>"}
    ```
    Use the **Write tool**. If `.claude/orcha-tabs/<alias>.json` already exists (re-registering a returning alias), overwrite it.
 

@@ -6,6 +6,8 @@ argument-hint: "[--alias <name>] [--idle-interval N] [--working-interval N] [--a
 
 You are executing `/orcha-checkpoint`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -21,8 +23,8 @@ User arguments: `$ARGUMENTS`
 
 4. **GET** both endpoints:
    ```bash
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/inbox"
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/inbox"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
    ```
 
 5. **Act, where reasonable.** For each:
@@ -39,7 +41,7 @@ User arguments: `$ARGUMENTS`
 
 6. **GET the agent's own row** to learn current status (after step 5's actions may have changed it):
    ```bash
-   curl -fsS "<api_base_url>/api/containers/<cid>" \
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/containers/<cid>" \
      | python3 -c "import sys,json;d=json.load(sys.stdin);a=[a for a in d['agents'] if a['id']=='<agent_id>'][0];print(a['status'])"
    ```
    (Or read the snapshot once at the start and reuse.)

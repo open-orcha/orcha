@@ -6,6 +6,8 @@ argument-hint: "[container_id] [--cancel] [--alias <human alias>]"
 
 You are executing `/orcha-stop` (human-only — API enforces kind='human').
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 ## Steps
 
 1. **Identify the acting human** via standard 4-step alias resolution; read `.claude/orcha-tabs/<alias>.json` for `agent_id`.
@@ -18,7 +20,7 @@ You are executing `/orcha-stop` (human-only — API enforces kind='human').
 
 4. **POST**:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/containers/<cid>/status" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/containers/<cid>/status" \
      -H 'Content-Type: application/json' \
      -d '{"status": "completed", "actor_agent_id": "<my human agent_id>"}'
    # or "cancelled" if --cancel

@@ -22,6 +22,7 @@ import subprocess
 import sys
 from typing import Optional
 
+from orcha_cli import auth_tokens  # Auth v1 (#271): token primitives + derived root
 from orcha_cli.notifier import (  # Epic A: wake daemon / cron stopgap
     cmd_notifier, ensure_daemon, stop_daemon, stop_daemon_for_container)
 
@@ -42,7 +43,8 @@ _MASTER_KEY_ENV = "ORCHA_SECRET_KEY"
 #   * llm_util    (#290) — universal LLM client
 #   * secret_box  (#294) — at-rest encryption for the per-container LLM API key
 #   * digest_curate (#287) — write-side digest dedup + boot-copy trim
-_PORTAL_SHARED_MODULES = ("llm_util.py", "secret_box.py", "digest_curate.py")
+_PORTAL_SHARED_MODULES = ("llm_util.py", "secret_box.py", "digest_curate.py",
+                          "auth_tokens.py")
 
 
 def _install_llm_util(orcha_dir: pathlib.Path) -> None:
@@ -224,6 +226,116 @@ def _ensure_secret_key(orcha_dir: pathlib.Path) -> None:
     os.environ[_MASTER_KEY_ENV] = key
 
 
+def _ensure_runtime_token(orcha_dir: pathlib.Path) -> str:
+    """Auth v1 (#271): write the project's runtime token (.orcha/runtime-token, 0600).
+
+    The runtime token IS the derived root credential — an HMAC of the secret_box master
+    key (see auth_tokens.derive_root). Host daemons (watch/notifier) read the file; the
+    portal verifies it computationally from its own ORCHA_SECRET_KEY env, so no DB row
+    exists to bootstrap or lose. Rotate by rotating ORCHA_SECRET_KEY. Requires
+    _ensure_secret_key() to have run (init/up/upgrade all funnel through _compose)."""
+    key = os.environ.get(_MASTER_KEY_ENV, "")
+    if not key:
+        raise RuntimeError("ORCHA_SECRET_KEY missing — call _ensure_secret_key first")
+    tok = auth_tokens.derive_root(key)
+    path = orcha_dir / "runtime-token"
+    try:
+        if not path.is_file() or path.read_text().strip() != tok:
+            path.write_text(tok + "\n")
+        os.chmod(path, 0o600)
+    except OSError as e:
+        print(f"[orcha] warn: couldn't persist {path} ({e}); daemons will derive from .env")
+    return tok
+
+
+def _read_runtime_token_upward(start: pathlib.Path) -> str:
+    """Find this project's runtime token by walking up from `start` (same discovery walk
+    as .claude/orcha.json). Falls back to deriving from a found .orcha/.env — covers a
+    pre-auth stack that was upgraded in place before its first `orcha up`."""
+    for d in (start, *start.parents):
+        p = d / ".orcha" / "runtime-token"
+        if p.is_file():
+            try:
+                tok = p.read_text().strip()
+                if tok:
+                    return tok
+            except OSError:
+                pass
+        env_file = d / ".orcha" / ".env"
+        if env_file.is_file():
+            key = _read_env_file_value(env_file, _MASTER_KEY_ENV)
+            if key:
+                return auth_tokens.derive_root(key)
+    return ""
+
+
+def _default_auth_headers() -> dict:
+    """Authorization header for CLI → portal calls. $ORCHA_TOKEN (explicit override,
+    e.g. a personal human token) wins; else the discovered project runtime token; else
+    empty — a warn-mode stack serves unauthenticated calls, so pre-auth flows degrade
+    gracefully instead of breaking."""
+    tok = os.environ.get("ORCHA_TOKEN") or _read_runtime_token_upward(pathlib.Path.cwd())
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def _persist_home_credentials(project: str, alias: str, agent_id: str,
+                              token: str, api_base: str) -> None:
+    """Auth v1 (#271): keep the operator's human token in ~/.orcha/credentials/<project>.json
+    (0600) — recoverable outside the repo checkout (tab bindings are project-local and
+    gitignored; a fresh clone still has the operator's credential)."""
+    try:
+        cred_dir = pathlib.Path.home() / ".orcha" / "credentials"
+        cred_dir.mkdir(parents=True, exist_ok=True)
+        path = cred_dir / f"{project}.json"
+        path.write_text(json.dumps({
+            "project": project, "alias": alias, "agent_id": agent_id,
+            "token": token, "api_base_url": api_base,
+        }, indent=2) + "\n")
+        os.chmod(path, 0o600)
+        print(f"[orcha] ✓ human token saved to {path} (0600)")
+    except OSError as e:
+        print(f"[orcha] warn: couldn't persist home credentials ({e}) — "
+              f"your token is in .claude/orcha-tabs/{alias}.json")
+
+
+_GITIGNORE_SECRET_ENTRIES = (".orcha/.env", ".orcha/runtime-token", ".claude/orcha-tabs/")
+
+
+def _ensure_gitignore_entries(project_root: pathlib.Path) -> list:
+    """Auth v1 (#271): make sure the project .gitignore covers every secret-bearing file
+    Orcha drops (master key .env, runtime token, per-tab bindings that now carry agent
+    tokens). Additive + idempotent; returns the entries added this call."""
+    gi = project_root / ".gitignore"
+    try:
+        existing = gi.read_text().splitlines() if gi.exists() else []
+    except OSError:
+        return []
+    present = {line.strip().rstrip("/") for line in existing}
+    added = [e for e in _GITIGNORE_SECRET_ENTRIES if e.rstrip("/") not in present]
+    if added:
+        block = existing + ["", "# orcha secrets (added by `orcha init`)"] + added
+        try:
+            gi.write_text("\n".join(block).lstrip("\n") + "\n")
+        except OSError:
+            return []
+    return added
+
+
+def _render_compose(project_name: str, *, db_port, api_port, bridge_port,
+                    auth_mode: str, expose: bool) -> str:
+    """Single source for docker-compose.yml rendering (init + upgrade). Loopback publish
+    unless the operator opted into LAN exposure (#271)."""
+    return (
+        (PKG_TEMPLATES / "docker-compose.yml.j2").read_text()
+        .replace("{{ project_name }}", project_name)
+        .replace("{{ db_port }}", str(db_port))
+        .replace("{{ api_port }}", str(api_port))
+        .replace("{{ bridge_port }}", str(bridge_port))
+        .replace("{{ bind_host }}", "" if expose else "127.0.0.1:")
+        .replace("{{ auth_mode }}", auth_mode)
+    )
+
+
 def _read_env_file_value(env_file: pathlib.Path, name: str) -> Optional[str]:
     """Read ``NAME=value`` from a dotenv-style file (first match wins). None if absent/unreadable."""
     try:
@@ -288,6 +400,9 @@ def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: b
         # #294 Item 1: ensure the secret_box master key exists + is exported so the portal env
         # gets it on this up (init / up / upgrade all funnel through here).
         _ensure_secret_key(orcha_dir)
+        # Auth v1 (#271): persist the runtime token (derived root credential) alongside it
+        # so host daemons authenticate on enforce-mode stacks.
+        _ensure_runtime_token(orcha_dir)
     cmd = ["docker", "compose", "-f", str(orcha_dir / "docker-compose.yml"), *args]
     return subprocess.run(cmd, check=check, capture_output=capture, text=capture)
 
@@ -350,15 +465,12 @@ def cmd_init(args: argparse.Namespace) -> None:
     human_alias = args.as_user or os.environ.get("USER") or "operator"
     human_alias = human_alias.strip() or "operator"
 
-    # 1. Render docker-compose template
-    template_text = (PKG_TEMPLATES / "docker-compose.yml.j2").read_text()
-    rendered = (
-        template_text
-        .replace("{{ project_name }}", project_name)
-        .replace("{{ db_port }}", str(db_port))
-        .replace("{{ api_port }}", str(api_port))
-        .replace("{{ bridge_port }}", str(bridge_port))
-    )
+    # 1. Render docker-compose template. Auth v1 (#271): NEW projects start in enforce;
+    #    port publish is host-loopback unless --expose.
+    auth_mode = (getattr(args, "auth_mode", None) or "enforce").strip().lower()
+    expose = bool(getattr(args, "expose", False))
+    rendered = _render_compose(project_name, db_port=db_port, api_port=api_port,
+                               bridge_port=bridge_port, auth_mode=auth_mode, expose=expose)
     orcha_dir.mkdir(parents=True, exist_ok=True)
     (orcha_dir / "docker-compose.yml").write_text(rendered)
 
@@ -390,9 +502,17 @@ def cmd_init(args: argparse.Namespace) -> None:
         "api_port": api_port,
         "db_port": db_port,
         "bridge_port": bridge_port,
+        "auth_mode": auth_mode,   # #271: upgrade re-renders compose from these
+        "expose": expose,
     }
     claude_config.parent.mkdir(parents=True, exist_ok=True)
     claude_config.write_text(json.dumps(config, indent=2) + "\n")
+
+    # Auth v1 (#271): the tab bindings + runtime token now carry credentials — make sure
+    # the project .gitignore covers them before anything gets committed.
+    added_gi = _ensure_gitignore_entries(project_root)
+    if added_gi:
+        print(f"[orcha] added to .gitignore (secret-bearing): {', '.join(added_gi)}")
 
     # 4b. Orcha#33: register the PostToolUse poll-inbox hook so working agents
     #     notice incoming asks within ~5s. Idempotent w.r.t. existing settings.json.
@@ -468,6 +588,13 @@ def cmd_init(args: argparse.Namespace) -> None:
                 "container_id": container_id,
                 "kind": "human",
             }
+            # Auth v1 (#271): the register response carries the human's capability token
+            # exactly once — persist it in the binding (skills read it for the
+            # Authorization header) and in the operator's home credentials file.
+            if data.get("token"):
+                binding["token"] = data["token"]
+                _persist_home_credentials(project_name, human_alias, human_agent_id,
+                                          data["token"], api_base)
             (tabs_dir / f"{human_alias}.json").write_text(
                 json.dumps(binding, indent=2) + "\n"
             )
@@ -641,6 +768,10 @@ def cmd_connect(args: argparse.Namespace) -> None:
                 "container_id": container_id,
                 "kind": "human",
             }
+            if resp.get("token"):  # Auth v1 (#271) — see cmd_init
+                binding["token"] = resp["token"]
+                _persist_home_credentials(match["project"], human_alias, human_agent_id,
+                                          resp["token"], api_base)
             (tabs_dir / f"{human_alias}.json").write_text(
                 json.dumps(binding, indent=2) + "\n"
             )
@@ -687,15 +818,17 @@ def _wait_for_portal(api_base: str, timeout_s: float = 30.0) -> None:
     raise SystemExit(f"error: portal didn't come up within {timeout_s}s: {last_err}")
 
 
-def _post_json(url: str, body: dict) -> dict:
-    """Tiny urllib POST helper; returns parsed JSON. Raises on non-2xx."""
+def _post_json(url: str, body: dict, headers: Optional[dict] = None) -> dict:
+    """Tiny urllib POST helper; returns parsed JSON. Raises on non-2xx.
+    Auth v1 (#271): auto-sends the project credential (see _default_auth_headers)."""
     import urllib.error
     import urllib.request
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json",
+                 **_default_auth_headers(), **(headers or {})},
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -713,8 +846,9 @@ def _get_json(url: str, timeout: float = 5.0) -> Optional[dict]:
     """
     import urllib.error
     import urllib.request
+    req = urllib.request.Request(url, headers=_default_auth_headers())
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
         return None
@@ -907,14 +1041,19 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
         cfg["bridge_port"] = bridge_port
         config_path.write_text(json.dumps(cfg, indent=2) + "\n")
         print(f"[orcha] backfilled per-project bridge_port={bridge_port} (ISS-84/#235)")
-    rendered = (
-        (PKG_TEMPLATES / "docker-compose.yml.j2").read_text()
-        .replace("{{ project_name }}", project_name)
-        .replace("{{ db_port }}", str(db_port))
-        .replace("{{ api_port }}", str(api_port))
-        .replace("{{ bridge_port }}", str(bridge_port))
-    )
+    # Auth v1 (#271): upgraded stacks default to warn (log-only) so nothing breaks before
+    # skills/daemons hold tokens; the operator flips to enforce via --auth-mode (persisted).
+    auth_mode = (getattr(args, "auth_mode", None) or cfg.get("auth_mode") or "warn").strip().lower()
+    expose = bool(cfg.get("expose", False))
+    if cfg.get("auth_mode") != auth_mode or "expose" not in cfg:
+        cfg["auth_mode"], cfg["expose"] = auth_mode, expose
+        config_path.write_text(json.dumps(cfg, indent=2) + "\n")
+        print(f"[orcha] auth_mode={auth_mode} (persisted to orcha.json; "
+              f"flip with `orcha upgrade --auth-mode enforce`)")
+    rendered = _render_compose(project_name, db_port=db_port, api_port=api_port,
+                               bridge_port=bridge_port, auth_mode=auth_mode, expose=expose)
     (orcha_dir / "docker-compose.yml").write_text(rendered)
+    _ensure_gitignore_entries(cwd)
     _copy_tree(PKG_TEMPLATES / "migrations", orcha_dir / "migrations")
     _copy_tree(PKG_TEMPLATES / "portal", orcha_dir / "portal")
     _install_llm_util(orcha_dir)  # #290 llm_util + #294 secret_box + #287 digest_curate into portal build
@@ -2014,6 +2153,59 @@ def _exec_live_session(cwd: pathlib.Path, alias: str, binding_file: pathlib.Path
     os.execvpe(exec_cmd, argv, env)
 
 
+def cmd_token(args: argparse.Namespace) -> None:
+    """Auth v1 (#271): `orcha token new|ls|revoke|rotate` — capability-token management.
+
+    Calls the portal's token endpoints authenticated as the project runtime credential
+    (auto-injected by _post_json/_get_json). Works even on an enforce-mode stack with no
+    human token at hand: host filesystem access is the local root of trust."""
+    cwd = pathlib.Path.cwd()
+    config_path = cwd / ".claude" / "orcha.json"
+    if not config_path.exists():
+        sys.exit("error: no .claude/orcha.json — run `orcha token` from a project root")
+    cfg = json.loads(config_path.read_text())
+    api_base = cfg.get("api_base_url") or sys.exit("error: api_base_url missing from orcha.json")
+    cid = cfg.get("current_container_id")
+    if not cid:
+        sys.exit("error: no current_container_id in .claude/orcha.json yet")
+
+    def _agent_id_for(alias: str) -> str:
+        snap = _get_json(f"{api_base}/api/containers/{cid}")
+        for a in (snap or {}).get("agents", []):
+            if a.get("alias") == alias:
+                return str(a["id"])
+        sys.exit(f"error: no agent with alias '{alias}' in this container")
+
+    action = args.token_action
+    if action == "new":
+        aid = _agent_id_for(args.alias)
+        data = _post_json(f"{api_base}/api/agents/{aid}/tokens", {"label": args.label})
+        print(f"[orcha] token for {args.alias} (id {data['token_id']}) — shown ONCE, store it now:")
+        print(data["token"])
+    elif action == "ls":
+        aid = _agent_id_for(args.alias)
+        data = _get_json(f"{api_base}/api/agents/{aid}/tokens")
+        if data is None:
+            sys.exit("error: token list failed (portal down, or credential rejected)")
+        print(f"{'ID':36}  {'LABEL':12}  {'CREATED':25}  {'LAST USED':25}  REVOKED")
+        for t in data["tokens"]:
+            print(f"{t['id']:36}  {(t['label'] or '-'):12}  {str(t['created_at']):25}  "
+                  f"{str(t['last_used_at'] or '-'):25}  {t['revoked_at'] or '-'}")
+    elif action == "revoke":
+        _post_json(f"{api_base}/api/tokens/{args.token_id}/revoke", {})
+        print(f"[orcha] ✓ revoked {args.token_id}")
+    elif action == "rotate":
+        aid = _agent_id_for(args.alias)
+        before = _get_json(f"{api_base}/api/agents/{aid}/tokens") or {"tokens": []}
+        data = _post_json(f"{api_base}/api/agents/{aid}/tokens", {"label": "rotate"})
+        for t in before["tokens"]:
+            if not t["revoked_at"]:
+                _post_json(f"{api_base}/api/tokens/{t['id']}/revoke", {})
+        print(f"[orcha] rotated {args.alias}: {len([t for t in before['tokens'] if not t['revoked_at']])} "
+              f"old credential(s) revoked. New token — shown ONCE, update the binding/daemon now:")
+        print(data["token"])
+
+
 def cmd_use(args: argparse.Namespace) -> None:
     """Print `export ORCHA_ALIAS=<alias>` for the user to eval into their shell — OR, when the
     S3 PTY bridge spawns us with ORCHA_LIVE=1, BECOME the agent: exec an interactive `claude`
@@ -2343,6 +2535,12 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--no-container", action="store_true",
                       help="skip auto-container creation (advanced: scripted setups)")
     # Orcha#30: first human agent registered at init so the human is a first-class participant
+    init.add_argument("--auth-mode", dest="auth_mode", default=None,
+                      choices=("off", "warn", "enforce"),
+                      help="portal auth mode (#271; default: enforce for new projects)")
+    init.add_argument("--expose", action="store_true",
+                      help="publish API/DB ports on all interfaces instead of 127.0.0.1 "
+                           "(requires auth enforce; put TLS in front for real networks)")
     init.add_argument("--as", dest="as_user", default=None,
                       help="alias for the first human agent (default: $USER or 'operator')")
     init.set_defaults(func=cmd_init)
@@ -2381,7 +2579,31 @@ def build_parser() -> argparse.ArgumentParser:
              "CLI reinstall so an existing project gets new portal code + compose (e.g. the R1 "
              "migration runner); then `orcha up`/startup migrates the live volume.",
     )
+    upgrade.add_argument("--auth-mode", dest="auth_mode", default=None,
+                         choices=("off", "warn", "enforce"),
+                         help="portal auth mode (#271; upgraded stacks default to warn — "
+                              "flip to enforce once agents/daemons hold tokens)")
     upgrade.set_defaults(func=cmd_upgrade)
+
+    token = sub.add_parser(
+        "token",
+        help="manage capability tokens (#271): new/ls/revoke/rotate. The CLI authenticates "
+             "with the project runtime credential (host filesystem = local root of trust).",
+    )
+    token_sub = token.add_subparsers(dest="token_action", required=True)
+    t_new = token_sub.add_parser("new", help="mint a token for an agent")
+    t_new.add_argument("alias", help="agent alias to mint for")
+    t_new.add_argument("--label", default="cli", help="label recorded on the credential")
+    t_new.set_defaults(func=cmd_token)
+    t_ls = token_sub.add_parser("ls", help="list an agent's credentials (metadata only)")
+    t_ls.add_argument("alias", help="agent alias to list")
+    t_ls.set_defaults(func=cmd_token)
+    t_rv = token_sub.add_parser("revoke", help="revoke a credential by token id")
+    t_rv.add_argument("token_id", help="token id (from `orcha token ls`)")
+    t_rv.set_defaults(func=cmd_token)
+    t_rt = token_sub.add_parser("rotate", help="mint a fresh token and revoke the agent's others")
+    t_rt.add_argument("alias", help="agent alias to rotate")
+    t_rt.set_defaults(func=cmd_token)
 
     update = sub.add_parser(
         "update",

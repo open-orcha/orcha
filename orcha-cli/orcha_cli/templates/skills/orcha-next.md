@@ -6,6 +6,8 @@ argument-hint: "[--alias <name>]"
 
 You are executing `/orcha-next`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -24,7 +26,7 @@ User arguments: `$ARGUMENTS`
 
 3. **POST** to claim:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/next"
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/agents/<agent_id>/next"
    ```
    Response is one of:
    - `{"task": {"id": "...", "title": "...", "description": "...", "definition_of_done": "...", "priority": N, "protocol": {...}}}`  → task claimed

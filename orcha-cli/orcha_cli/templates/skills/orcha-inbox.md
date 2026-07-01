@@ -6,6 +6,8 @@ argument-hint: "[--alias <name>]"
 
 You are executing `/orcha-inbox`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 ## Steps
 
 1. **Identify the acting agent** using this resolution order — STOP at the first match:
@@ -22,8 +24,8 @@ You are executing `/orcha-inbox`.
 
 3. **GET both endpoints** in parallel:
    ```bash
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/inbox"
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/inbox"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
    ```
    - `/inbox` returns `{"open_requests": [...]}` — requests addressed to me, status `open`
    - `/outbox?status=answered` returns `{"outgoing_requests": [...]}` — my asks that have been answered (each row includes `target_alias`, `parent_request_id`, `chain_depth`, `response`)
