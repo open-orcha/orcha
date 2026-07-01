@@ -285,6 +285,8 @@ window.Orcha = (function () {
     live: '<path d="M2.5 10h3l2-5 3 10 2-7 1.5 2h3.5"/>',
     search: '<circle cx="8.5" cy="8.5" r="5"/><path d="m13 13 3.5 3.5"/>',
     bell: '<path d="M6 9a4 4 0 0 1 8 0c0 3 1.2 4 1.8 4.6.3.3.1.9-.4.9H4.6c-.5 0-.7-.6-.4-.9C4.8 13 6 12 6 9z"/><path d="M8.4 17a1.8 1.8 0 0 0 3.2 0"/>',
+    phone: '<rect x="6" y="2.5" width="8" height="15" rx="2"/><path d="M8.8 5h2.4M9.5 15.2h1"/>',
+    alert: '<path d="M10 3 17 16H3z"/><path d="M10 7.2v4.2M10 14.2h.01"/>',
     sun: '<circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v2M10 15.6v2M2.4 10h2M15.6 10h2M4.6 4.6l1.4 1.4M14 14l1.4 1.4M15.4 4.6 14 6M6 14l-1.4 1.4"/>',
     moon: '<path d="M15.5 11.5A6 6 0 0 1 8.5 4.5a6 6 0 1 0 7 7z"/>',
     chev: '<path d="M5 7.5 10 12l5-4.5"/>',
@@ -499,12 +501,17 @@ window.Orcha = (function () {
             <span class="lbl">acting as</span>
             <span class="who" id="actingWho">${actingHTML}</span>
           </div>
+          <button class="btn sm subtle pair-top" id="pairPhoneBtn" type="button" title="Pair a phone on this Wi-Fi network">
+            ${icon("phone", "")}Pair phone
+          </button>
           <button class="iconbtn" id="themeBtn" title="Theme: ${currentTheme()} — click to cycle">
             ${icon("sun", "sun")}${icon("moon", "moon")}
           </button>
         </div>`;
       const tb = document.getElementById("themeBtn");
       if (tb) tb.addEventListener("click", cycleTheme);
+      const pb = document.getElementById("pairPhoneBtn");
+      if (pb) pb.addEventListener("click", openPairingModal);
       // SPEC-1: ensure the paused micro-banner element sits between topbar and content,
       // then render the autonomy switch from the current snapshot. Injected here (not in
       // each *.html) so the control is identical on every page.
@@ -947,16 +954,171 @@ window.Orcha = (function () {
     if (_ncOpen) ncRenderPanel();
   }
 
-  /* ---- modal ----------------------------------------------------------- */
-  function modal(cfg) {
+  /* ---- mobile pairing modal --------------------------------------------- */
+  let pairingTimer = null;
+  let pairingSeq = 0;
+
+  function clearPairingTimer() {
+    if (pairingTimer != null) clearInterval(pairingTimer);
+    pairingTimer = null;
+  }
+
+  function ensureOverlay() {
     let ov = document.getElementById("__ov");
     if (!ov) {
       ov = document.createElement("div");
       ov.id = "__ov"; ov.className = "overlay";
       document.body.appendChild(ov);
+    }
+    if (!ov.__orchaWired) {
       ov.addEventListener("click", (e) => { if (e.target === ov) closeModal(); });
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+      ov.__orchaWired = true;
     }
+    return ov;
+  }
+
+  function pairingHumanSelect(selectedId) {
+    const hs = humans();
+    if (hs.length <= 1) return "";
+    return `<label class="pair-select"><span>Pair as</span><select id="pairHuman">
+      ${hs.map((h) => `<option value="${esc(h.id)}"${String(h.id) === String(selectedId) ? " selected" : ""}>${esc(h.alias)} (human)</option>`).join("")}
+    </select></label>`;
+  }
+
+  function openPairingModal() {
+    const cid = D.container && D.container.id;
+    if (!cid) { toast("No Orcha container is loaded.", "danger"); return; }
+    const hs = humans();
+    const who = actingHuman() || hs[0] || null;
+    const selected = who && who.id;
+    clearPairingTimer();
+
+    const ov = ensureOverlay();
+    ov.innerHTML = `<div class="modal pair-modal" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
+      <div class="pair-head">
+        <span class="pair-mark">${orcaSVG()}</span>
+        <div class="grow">
+          <h3 id="pairTitle">Pair your phone</h3>
+          <p>Scan with the Orcha app on the same Wi-Fi network.</p>
+        </div>
+        <button class="iconbtn" id="pairClose" type="button" title="Close">${icon("x", "")}</button>
+      </div>
+      <div class="pair-content">
+        ${pairingHumanSelect(selected)}
+        <div id="pairBody"><div class="pair-loading">${icon("clock", "")}<span>Preparing pairing code...</span></div></div>
+      </div>
+    </div>`;
+    ov.classList.add("show");
+    const close = document.getElementById("pairClose");
+    if (close) close.addEventListener("click", closeModal);
+    const sel = document.getElementById("pairHuman");
+    if (sel) sel.addEventListener("change", () => loadPairing(sel.value));
+    if (!hs.length) {
+      renderPairingWarning({ title: "No human can pair this phone", message: "Add a human operator before pairing a phone." });
+    } else {
+      loadPairing(selected);
+    }
+  }
+
+  function renderPairingWarning(info) {
+    clearPairingTimer();
+    const host = document.getElementById("pairBody");
+    if (!host) return;
+    info = info || {};
+    host.innerHTML = `<div class="pair-warning">
+      <div class="pair-warn-title">${icon("alert", "")}<span>${esc(info.title || "Phones can't reach this Orcha yet")}</span></div>
+      <p>${esc(info.message || "The server could not produce a phone-reachable network address.")}</p>
+      ${info.remedy ? `<div class="pair-remedy">${pairingCopyWithCode(info.remedy)}</div>` : ""}
+      <p class="pair-foot">Both devices must be on the same Wi-Fi. Some VPNs and corporate networks block phone-to-laptop traffic.</p>
+    </div>`;
+  }
+
+  function pairingCopyWithCode(s) {
+    return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+
+  function renderPairingLoading() {
+    const host = document.getElementById("pairBody");
+    if (host) host.innerHTML = `<div class="pair-loading">${icon("clock", "")}<span>Preparing pairing code...</span></div>`;
+  }
+
+  async function loadPairing(humanId) {
+    const cid = D.container && D.container.id;
+    if (!cid) return;
+    const seq = ++pairingSeq;
+    clearPairingTimer();
+    renderPairingLoading();
+    let url = "/api/containers/" + encodeURIComponent(cid) + "/pairing";
+    if (humanId) url += "?human_agent_id=" + encodeURIComponent(humanId);
+    try {
+      const r = await fetch(url);
+      let data = null;
+      try { data = await r.json(); } catch (e) {}
+      if (seq !== pairingSeq) return;
+      if (!r.ok) {
+        renderPairingWarning((data && data.detail) || { message: "Pairing failed (" + r.status + ")." });
+        return;
+      }
+      renderPairingPayload(data, humanId);
+    } catch (e) {
+      if (seq === pairingSeq) renderPairingWarning({ message: "Could not reach the local pairing endpoint: " + e.message });
+    }
+  }
+
+  function countdownText(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = String(total % 60).padStart(2, "0");
+    return "expires in " + m + ":" + s + " — regenerates automatically";
+  }
+
+  function startPairingCountdown(data, humanId) {
+    clearPairingTimer();
+    const exp = Date.parse(data.expiresAt || "");
+    const el = document.getElementById("pairCountdown");
+    if (!exp || !el) return;
+    const tick = () => {
+      const left = exp - Date.now();
+      if (left <= 0) {
+        clearPairingTimer();
+        loadPairing(humanId);
+      } else {
+        el.textContent = countdownText(left);
+      }
+    };
+    tick();
+    pairingTimer = setInterval(tick, 1000);
+  }
+
+  function renderPairingPayload(data, humanId) {
+    const host = document.getElementById("pairBody");
+    if (!host) return;
+    const human = data.humanAgentAlias || aliasFor(data.humanAgentId) || "selected human";
+    host.innerHTML = `<div class="pair-grid">
+      <div class="pair-qr-wrap">
+        <div class="pair-qr" aria-label="Orcha phone pairing QR code">${data.qrSvg || ""}</div>
+        <div class="pair-url mono">${esc(data.baseUrl || "")}</div>
+      </div>
+      <div class="pair-meta">
+        <div>
+          <div class="pair-label">Pairing as</div>
+          <div class="pair-value">${esc(human)} (human)</div>
+        </div>
+        <div>
+          <div class="pair-label">Manual code</div>
+          <div class="pair-code mono">${esc(data.shortCode || "")}</div>
+        </div>
+        <div class="pill s-warn" id="pairCountdown">${icon("clock", "gl")}expires soon</div>
+        <div class="pair-foot">Your phone talks directly to this computer on your network. Nothing goes through the cloud.</div>
+      </div>
+    </div>`;
+    startPairingCountdown(data, humanId || data.humanAgentId);
+  }
+
+  /* ---- modal ----------------------------------------------------------- */
+  function modal(cfg) {
+    let ov = ensureOverlay();
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
       <div class="mh"><h3>${esc(cfg.title)}</h3>${cfg.desc ? `<p>${esc(cfg.desc)}</p>` : ""}</div>
       <div class="mb">${cfg.body || ""}</div>
@@ -969,7 +1131,7 @@ window.Orcha = (function () {
     document.getElementById("__mp").addEventListener("click", () => { if (cfg.onPrimary) cfg.onPrimary(ov); else closeModal(); });
     if (cfg.onOpen) cfg.onOpen(ov);
   }
-  function closeModal() { const ov = document.getElementById("__ov"); if (ov) ov.classList.remove("show"); }
+  function closeModal() { clearPairingTimer(); const ov = document.getElementById("__ov"); if (ov) ov.classList.remove("show"); }
 
   /* ---- toast ----------------------------------------------------------- */
   let toastT;
@@ -1513,7 +1675,7 @@ window.Orcha = (function () {
   return {
     D, applySnapshot, esc, linkify, mdText, trunc, shortId, relTime, clockTime, recencyTs, recencyBand, avatar, icon, pill, statusClass, glyph,
     sortState, sortControlHtml, sortComparator, wireSortControl,
-    kindBadge, agentLink, taskLink, requestLink, taskByRef, taskRefs, attnItems, mountShell, modal, closeModal,
+    kindBadge, agentLink, taskLink, requestLink, taskByRef, taskRefs, attnItems, mountShell, modal, closeModal, openPairingModal,
     toast, copyText, renderDiff, runCard, stopRun, activateRuns, startRunStream, paintFinished, classifyLine,
     applyTheme, currentTheme, cycleTheme, orcaSVG,
     agents, tasks, requests, agentByAlias, agentById, aliasFor, taskById, humans, isToHuman,
