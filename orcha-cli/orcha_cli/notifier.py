@@ -3422,6 +3422,27 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
             _close_resident(api_base, r, reason="runtime_changed")
             live_residents.pop(conv_id, None)
             continue
+        # GH#88: same-RUNTIME model switch (e.g. Opus → another Claude model). set_agent_model
+        # already cleared the pinned session_id so the NEXT boot is COLD and picks up the new
+        # --model — but a still-alive warm resident kept its OLD boot model baked into its
+        # session, and the runtime branch above never fires because desired_runtime equals the
+        # resident's. Recycle the idle resident so the next human turn cold-boots on the newly
+        # selected model. A mid-turn resident (awaiting_result) is left alone — its turn finishes
+        # on the old model and this fires next tick, before the next human turn is fed. Claude
+        # only: codex conversation turns already cold-spawn per turn with the current model, and
+        # their in-memory dict carries no boot model to compare against.
+        desired_model = cand.get("model") if cand else None
+        if (_resident_runtime(r) == RUNTIME_CLAUDE
+                and desired_model is not None
+                and r.get("model") is not None
+                and desired_model != r.get("model")
+                and not r.get("awaiting_result")):
+            if not quiet:
+                print(f"[notifier] resident {r.get('alias')} model changed "
+                      f"{r.get('model')}→{desired_model} — recycling for cold reboot (GH#88)")
+            _close_resident(api_base, r, reason="model_changed")
+            live_residents.pop(conv_id, None)
+            continue
         if _resident_runtime(r) == RUNTIME_CODEX:
             if conv_id not in active_ids:
                 _kill_worker(proc, graceful=True)
@@ -3953,6 +3974,12 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
             r = {"runtime": RUNTIME_CLAUDE, "proc": proc,
                  "agent_id": c["agent_id"], "conversation_id": conv_id,
                  "alias": c.get("agent_alias"), "log_path": log_path,
+                 # GH#88: the model this resident was actually booted on (already resolved
+                 # server-side). service_residents recycles the resident when the candidate's
+                 # current model drifts from this — a same-runtime warm session keeps its boot
+                 # model in-context, so a mid-conversation Opus→other-Claude switch needs a cold
+                 # boundary to take effect.
+                 "model": c.get("model"),
                  "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
                  "session_id": session_id, "session_pinned": not cold, "cold": cold,
                  "serviced_seq": serviced, "current_run_id": None, "run_id": None,
