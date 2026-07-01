@@ -47,6 +47,7 @@ Compat:
     GET  /                                        read-only HTML dashboard
 """
 import asyncio
+import contextvars
 import json
 import logging
 import pathlib
@@ -61,7 +62,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import psycopg
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -75,6 +76,14 @@ try:  # portal container: secret_box.py sits next to main.py
     import secret_box
 except ImportError:  # host daemon / pytest: import from the package on sys.path
     from orcha_cli import secret_box
+
+# auth_tokens (#271 Auth v1): capability-token primitives (mint/hash/verify + the derived
+# root credential). Same dual-context import as secret_box: copied next to main.py in the
+# portal container, imported from the package for host/pytest runs.
+try:  # portal container: auth_tokens.py sits next to main.py
+    import auth_tokens
+except ImportError:  # host daemon / pytest: import from the package on sys.path
+    from orcha_cli import auth_tokens
 
 # llm_util (#290): the universal LLM client. #294 reads its catalog + use-case registry here to
 # serve the SETTINGS model-picker and to resolve the per-container triage model for wake-scan.
@@ -295,6 +304,176 @@ async def _no_store_dynamic_responses(request, call_next):
     if request.url.path.startswith("/api/") or ctype.startswith("text/html"):
         response.headers["Cache-Control"] = "no-store"
     return response
+
+
+# ---------- Auth v1 (#271): the capability-token gate ----------
+# Closes spoof vector #271-V2 (actor identity was 100% body-supplied; an AI could pass any
+# human's UUID through every _require_kind(..., ("human",)) gate). Modes via ORCHA_AUTH_MODE:
+#   off     — no checks; every audit event detail is stamped {"_auth_mode": "off"} so an
+#             evidence export can't silently launder unauthenticated history.
+#   warn    — DEFAULT (upgraded stacks + the pre-auth test suite keep working): requests are
+#             served, unauthenticated writes and claim mismatches are logged to the portal log.
+#   enforce — new-`orcha init` projects: every /api/* request needs a valid credential, and a
+#             body actor claim must MATCH the authenticated agent (daemon credentials exempt —
+#             host daemons legitimately act on behalf of the agents they wake).
+# Two credential shapes (see auth_tokens.py): per-agent tokens stored hashed in agent_tokens,
+# and the derived root credential (HMAC of ORCHA_SECRET_KEY) for the CLI + host daemons —
+# host filesystem access is the local root of trust, so no DB row is needed to bootstrap.
+
+_AUTH_EXEMPT_PATHS = {"/api/auth/session"}  # login/logout must work without a credential
+
+# Body fields that CLAIM an acting identity ("I am agent X"). Fields naming a SUBJECT
+# (target_agent_id, AssignTask.agent_id, assignee_alias, ...) are deliberately absent.
+# TaskDone.agent_id is actor-semantics but shares the subject spelling, hence the /done
+# special-case rather than a blanket "agent_id" claim.
+_AUTH_CLAIM_FIELDS = ("actor_agent_id", "author_agent_id", "requester_agent_id",
+                      "responder_agent_id", "created_by_agent_id")
+
+_auth_ctx: contextvars.ContextVar = contextvars.ContextVar("orcha_auth", default=None)
+_AUTH_LOG = logging.getLogger("orcha.auth")
+
+
+def _auth_mode() -> str:
+    """Read per-request (not import-time) so tests and `orcha upgrade` can flip it live."""
+    return (os.environ.get("ORCHA_AUTH_MODE") or "warn").strip().lower() or "warn"
+
+
+def _resolve_principal(token: str):
+    """Token → principal dict, or None. Root credential first (no DB), then agent_tokens."""
+    if not token:
+        return None
+    master = os.environ.get("ORCHA_SECRET_KEY", "")
+    if master and auth_tokens.is_root(token, master):
+        return {"kind": "daemon", "agent_id": None, "credential_id": None, "alias": "_root"}
+    with db_cursor() as (conn, cur):
+        cur.execute(
+            """SELECT t.id AS credential_id, t.agent_id, a.kind, a.alias
+                 FROM agent_tokens t JOIN agents a ON a.id = t.agent_id
+                WHERE t.token_hash = %s AND t.revoked_at IS NULL""",
+            (auth_tokens.hash_token(token),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute("UPDATE agent_tokens SET last_used_at = now() WHERE id = %s",
+                    (row["credential_id"],))
+        conn.commit()
+    return {"kind": row["kind"], "agent_id": str(row["agent_id"]),
+            "credential_id": str(row["credential_id"]), "alias": row["alias"]}
+
+
+def _token_from_scope(scope) -> str:
+    """Authorization: Bearer <tok> header, else the orcha_token session cookie."""
+    headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+               for k, v in scope.get("headers", [])}
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    for part in headers.get("cookie", "").split(";"):
+        name, _, val = part.strip().partition("=")
+        if name == "orcha_token":
+            return val.strip()
+    return ""
+
+
+def _current_principal():
+    """The authenticated principal for THIS request (or None). Endpoint-level checks
+    (e.g. register_agent's agents-never-create-agents gate, token management) read this;
+    contextvars propagate into the threadpool FastAPI runs sync endpoints on."""
+    ctx = _auth_ctx.get()
+    return ctx.get("principal") if ctx else None
+
+
+class _AuthGate:
+    """Pure-ASGI middleware (NOT BaseHTTPMiddleware) so the request body can be buffered
+    and replayed for the claim check without breaking downstream streaming semantics."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def _deny(self, send, status: int, detail: str):
+        body = json.dumps({"detail": detail}).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"cache-control", b"no-store")]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path = scope.get("path", "")
+        if not path.startswith("/api/") or path in _AUTH_EXEMPT_PATHS:
+            return await self.app(scope, receive, send)
+
+        mode = _auth_mode()
+        method = scope.get("method", "GET")
+        token = _token_from_scope(scope)
+        principal = None
+        if mode != "off" and token:
+            principal = await asyncio.to_thread(_resolve_principal, token)
+
+        ctx_token = _auth_ctx.set({"mode": mode, "principal": principal})
+        try:
+            if mode == "off":
+                return await self.app(scope, receive, send)
+
+            if principal is None:
+                if mode == "enforce":
+                    return await self._deny(
+                        send, 401,
+                        "authentication required — send 'Authorization: Bearer <token>' "
+                        "(agent tokens are minted at registration; the CLI/daemons use the "
+                        "project runtime token; humans can log in via POST /api/auth/session)")
+                if method not in ("GET", "HEAD", "OPTIONS"):
+                    _AUTH_LOG.warning(
+                        "auth warn: unauthenticated %s %s (would be 401 with ORCHA_AUTH_MODE=enforce)",
+                        method, path)
+                return await self.app(scope, receive, send)
+
+            # Authenticated. Claim check: agent-bound principals must BE the actor their
+            # JSON body claims. Daemon credentials act on behalf of agents by design.
+            headers = {k.lower(): v for k, v in scope.get("headers", [])}
+            is_json = headers.get(b"content-type", b"").startswith(b"application/json")
+            if principal["kind"] != "daemon" and method not in ("GET", "HEAD", "OPTIONS") and is_json:
+                chunks = []
+                while True:
+                    msg = await receive()
+                    chunks.append(msg.get("body", b""))
+                    if not msg.get("more_body", False):
+                        break
+                raw = b"".join(chunks)
+                claim_fields = _AUTH_CLAIM_FIELDS
+                if path.endswith("/done"):  # TaskDone.agent_id IS the actor claim
+                    claim_fields = claim_fields + ("agent_id",)
+                mismatch = None
+                try:
+                    parsed = json.loads(raw) if raw else None
+                except ValueError:
+                    parsed = None  # malformed JSON → let the endpoint 422 it
+                if isinstance(parsed, dict):
+                    for f in claim_fields:
+                        v = parsed.get(f)
+                        if v and str(v) != principal["agent_id"]:
+                            mismatch = (f, str(v))
+                            break
+                if mismatch:
+                    msg = (f"body {mismatch[0]}={mismatch[1]!r} does not match the "
+                           f"authenticated agent {principal['agent_id']} "
+                           f"({principal['alias']!r}) — #271 actor claims must be your own")
+                    if mode == "enforce":
+                        return await self._deny(send, 403, msg)
+                    _AUTH_LOG.warning("auth warn: %s %s: %s", method, path, msg)
+
+                async def replay():
+                    return {"type": "http.request", "body": raw, "more_body": False}
+                return await self.app(scope, replay, send)
+
+            return await self.app(scope, receive, send)
+        finally:
+            _auth_ctx.reset(ctx_token)
+
+
+app.add_middleware(_AuthGate)
 
 
 ALLOWED_CONTAINER_STATUSES = {"active", "paused", "completed", "cancelled", "failed"}
@@ -1238,12 +1417,24 @@ def admin_migrate():
 
 
 def log_event(cur, container_id, actor_type, actor_id, entity_type, entity_id, event_type, detail=None):
+    # Auth v1 (#271): stamp WHICH credential authenticated this request (NULL when
+    # unauthenticated in warn mode / system actors), and mark off-mode events so an
+    # evidence export can't pass unauthenticated history off as verified.
+    ctx = _auth_ctx.get()
+    credential_id = None
+    if ctx:
+        if ctx.get("mode") == "off":
+            detail = {**(detail or {}), "_auth_mode": "off"}
+        p = ctx.get("principal")
+        if p and p.get("credential_id"):
+            credential_id = p["credential_id"]
     cur.execute(
         """INSERT INTO events
-             (container_id, actor_type, actor_id, entity_type, entity_id, event_type, detail)
-           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)""",
+             (container_id, actor_type, actor_id, entity_type, entity_id, event_type, detail,
+              credential_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)""",
         (container_id, actor_type, actor_id, entity_type, entity_id, event_type,
-         json.dumps(detail) if detail is not None else None),
+         json.dumps(detail) if detail is not None else None, credential_id),
     )
 
 
@@ -1568,6 +1759,10 @@ class AgentCreateResponse(BaseModel):
     alias: str
     container_id: str
     initial_task: Optional[dict] = None
+    # Auth v1 (#271): the agent's capability token, returned ONCE at registration —
+    # the server stores only its hash. The registering skill/CLI persists it into the
+    # agent's binding file (.claude/orcha-tabs/<alias>.json).
+    token: Optional[str] = None
 
 
 class ProtocolFields(BaseModel):
@@ -3301,6 +3496,13 @@ def propose_onboarding_roster(body: ProposeBody):
 def register_agent(cid: str, body: AgentCreate):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
+    # Auth v1 (#271): "agents never create other agents" was a convention — an enforce-mode
+    # stack makes it structural. (Middleware already 401'd the unauthenticated case.)
+    p = _current_principal()
+    if _auth_mode() == "enforce" and p and p["kind"] == "ai":
+        raise HTTPException(
+            403, "agents never create agents — registering an agent requires a human "
+                 "(or the project runtime) credential; use /orcha-suggest-agent instead")
     # Orcha#30: agents need a prompt; humans don't.
     if body.kind == "ai" and not (body.prompt and body.prompt.strip()):
         raise HTTPException(400, "kind='ai' requires a non-empty `prompt` (the system prompt)")
@@ -3329,6 +3531,13 @@ def register_agent(cid: str, body: AgentCreate):
         except psycopg.errors.UniqueViolation:
             raise HTTPException(409, f"alias '{body.alias}' already registered in this container")
         aid = str(cur.fetchone()["id"])
+        # Auth v1 (#271): mint the agent's capability token. Plaintext goes back in the
+        # response exactly once; only the hash is stored.
+        token_plain = auth_tokens.mint(body.kind)
+        cur.execute(
+            "INSERT INTO agent_tokens (agent_id, token_hash, label) VALUES (%s, %s, %s)",
+            (aid, auth_tokens.hash_token(token_plain), "register"),
+        )
         log_event(cur, cid, "human", None, "agent", aid, "created",
                   {"alias": body.alias, "role": body.role, "kind": body.kind})
 
@@ -3361,7 +3570,126 @@ def register_agent(cid: str, body: AgentCreate):
 
     return AgentCreateResponse(
         agent_id=aid, alias=body.alias, container_id=cid, initial_task=initial,
+        token=token_plain,
     )
+
+
+# ---------- Auth v1 (#271): token management + browser session ----------
+# Token management is STRICTLY authenticated in every mode (unlike the general gate,
+# which defaults to warn): minting/revoking credentials is a human (or project-runtime)
+# action, full stop. Bootstrap/recovery never dead-ends because the CLI always holds the
+# derived root credential (host filesystem = local root of trust).
+
+class TokenMint(BaseModel):
+    label: str = Field(default="", max_length=100)
+
+
+class SessionCreate(BaseModel):
+    token: str = Field(..., max_length=256)
+
+
+def _require_token_admin():
+    p = _current_principal()
+    if not p:
+        raise HTTPException(401, "token management requires an authenticated credential "
+                                 "(a human token, or the project runtime token)")
+    if p["kind"] == "ai":
+        raise HTTPException(403, "token management requires a human (or project runtime) "
+                                 "credential — an AI agent cannot mint or revoke tokens")
+    return p
+
+
+@app.post("/api/agents/{aid}/tokens", status_code=201)
+def mint_agent_token(aid: str, body: TokenMint):
+    """Mint an additional token for an agent (re-issue, rotation, extra tab)."""
+    admin = _require_token_admin()
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        cur.execute("SELECT kind, container_id FROM agents WHERE id = %s", (aid,))
+        ag = cur.fetchone()
+        if not ag:
+            raise HTTPException(404, f"agent {aid} not found")
+        token_plain = auth_tokens.mint(ag["kind"])
+        cur.execute(
+            """INSERT INTO agent_tokens (agent_id, token_hash, label)
+               VALUES (%s, %s, %s) RETURNING id""",
+            (aid, auth_tokens.hash_token(token_plain), body.label or "minted"),
+        )
+        token_id = str(cur.fetchone()["id"])
+        log_event(cur, str(ag["container_id"]), "human", admin.get("agent_id"),
+                  "agent", aid, "token_minted", {"label": body.label, "token_id": token_id})
+        conn.commit()
+    return {"token_id": token_id, "token": token_plain}
+
+
+@app.get("/api/agents/{aid}/tokens")
+def list_agent_tokens(aid: str):
+    """List an agent's credentials — metadata only, never the token or its hash."""
+    _require_token_admin()
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        _require_agent(cur, aid)
+        cur.execute(
+            """SELECT id, label, issuer, created_at, last_used_at, revoked_at
+                 FROM agent_tokens WHERE agent_id = %s ORDER BY created_at""",
+            (aid,),
+        )
+        rows = [{**r, "id": str(r["id"])} for r in cur.fetchall()]
+    return {"agent_id": aid, "tokens": rows}
+
+
+@app.post("/api/tokens/{token_id}/revoke", status_code=200)
+def revoke_token(token_id: str):
+    admin = _require_token_admin()
+    if not _valid_uuid(token_id):
+        raise HTTPException(400, "token_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        cur.execute(
+            """UPDATE agent_tokens SET revoked_at = now()
+               WHERE id = %s AND revoked_at IS NULL
+               RETURNING agent_id""",
+            (token_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "token not found (or already revoked)")
+        aid = str(row["agent_id"])
+        cur.execute("SELECT container_id FROM agents WHERE id = %s", (aid,))
+        cid = str(cur.fetchone()["container_id"])
+        log_event(cur, cid, "human", admin.get("agent_id"),
+                  "agent", aid, "token_revoked", {"token_id": token_id})
+        conn.commit()
+    return {"revoked": True, "token_id": token_id}
+
+
+@app.post("/api/auth/session", status_code=200)
+def create_session(body: SessionCreate, response: Response):
+    """Browser login: validate a pasted token, set it as an HttpOnly cookie. The
+    cookie carries the token itself (localhost product, no server session store);
+    revoking the token kills the session on its next request."""
+    p = _resolve_principal(body.token.strip())
+    if not p:
+        raise HTTPException(401, "invalid or revoked token")
+    response.set_cookie("orcha_token", body.token.strip(),
+                        httponly=True, samesite="lax", path="/")
+    return {"agent_id": p["agent_id"], "alias": p["alias"], "kind": p["kind"]}
+
+
+@app.delete("/api/auth/session", status_code=200)
+def destroy_session(response: Response):
+    response.delete_cookie("orcha_token", path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/whoami")
+def whoami():
+    p = _current_principal()
+    if not p:
+        raise HTTPException(401, "not authenticated")
+    return {"agent_id": p["agent_id"], "alias": p["alias"], "kind": p["kind"],
+            "credential_id": p["credential_id"]}
 
 
 @app.post("/api/agents/{aid}/next")
