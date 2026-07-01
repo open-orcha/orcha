@@ -130,6 +130,15 @@ def test_service_residents_starts_codex_conversation_worker(monkeypatch, tmp_pat
     assert live["c1"]["conversation_ack_ts"] == 42.0
     assert spawned[0][1]["resume_session_id"] is None     # no pinned session → cold
     assert live["c1"]["resume_session_id"] is None
+    # GH #91/#90 (R3): the PRODUCTION Codex conversation spawn must stamp the CONVERSATION lane and
+    # carry the conversation token — else the run defaults to lane='work' and wake_scan counts a live
+    # conversation as a work embodiment, suppressing work wakes (the exact bug this PR fixes).
+    assert any("embodiment-tokens" in u and b.get("lane") == "conversation" for u, b in posts)
+    assert spawned[0][1]["conversation"] is True          # PreToolUse backstop marker
+    assert spawned[0][1]["run_token"] == "TOK-1"          # capability rides the process env
+    assert run_post["lane"] == "conversation"             # NOT the 'work' default
+    assert run_post["token_id"] == "TOK-1"                # bound for server revoke-on-terminal
+    assert live["c1"]["run_token"] == "TOK-1"             # tracked for _retire_resident teardown revoke
 
 
 # ---------- #286: Codex session-resume (capture + reattach, fail-open) ----------
@@ -440,6 +449,8 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
         if "wake-claim" in url:
             return {"claimed": claim, "reason": "blocked" if not claim else None,
                     "lease_kind": "resident"}
+        if "embodiment-tokens" in url:                    # GH #91/#90: conversation-lane mint
+            return {"run_token": "TOK-1"}
         if url.endswith("/runs"):
             return {"run_id": "RUN-1", "status": "running"}
         if "/conversations/" in url and url.endswith("/turns"):
@@ -476,6 +487,56 @@ def test_service_residents_cold_boot_and_feeds_turn(monkeypatch, tmp_path):
     r = live["C1"]
     assert r["awaiting_result"] is True and r["serviced_seq"] == 1 and r["current_run_id"] == "RUN-1"
     assert r["runtime"] == notifier.RUNTIME_CLAUDE
+
+
+def test_service_residents_resident_boot_stamps_conversation_lane(monkeypatch, tmp_path):
+    """GH #91/#90 (R3): the PRODUCTION Claude-resident boot must build a CONVERSATION-lane persona,
+    mint + carry a conversation token, and stamp lane='conversation' on the per-turn run — else the
+    run defaults to lane='work' and wake_scan counts the warm resident as a WORK embodiment,
+    suppressing work wakes. The token is PROCESS-scoped (one resident spans many per-turn runs), so
+    it is tracked in the live dict for teardown revoke and is NOT bound to the per-turn run."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": None, "pending_human": True, "last_turn_seq": 1}
+    posts = _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hello"}])
+    persona_calls = []
+    monkeypatch.setattr(notifier, "_build_persona",
+                        lambda *a, **k: persona_calls.append(k.get("lane")) or "PERSONA")
+    proc = ResidentProc()
+    spawned = []
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", proc))
+    live = {}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert persona_calls == ["conversation"]                       # cold persona built in the conv lane
+    assert any("embodiment-tokens" in u and b.get("lane") == "conversation" for u, b in posts)
+    assert spawned[0][1]["conversation"] is True                   # PreToolUse backstop marker
+    assert spawned[0][1]["run_token"] == "TOK-1"                   # capability rides the resident env
+    run_post = next(b for u, b in posts if u.endswith("/runs"))
+    assert run_post["lane"] == "conversation"                      # NOT the 'work' default
+    assert "token_id" not in run_post                              # process-scoped, not per-turn-bound
+    assert live["C1"]["run_token"] == "TOK-1"                      # teardown revoke tracks it
+
+
+def test_service_residents_resident_spawn_failure_releases_conversation_lane(monkeypatch, tmp_path):
+    """GH #91/#90 (R3): if spawn_resident fails after the conversation token is minted, the wake-ack
+    must release the CONVERSATION lane (not the 'work' default, which would strand the conv lease)
+    and the orphaned token must be revoked."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": None, "pending_human": True, "last_turn_seq": 1}
+    posts = _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hello"}])
+    monkeypatch.setattr(notifier, "spawn_resident", lambda *a, **k: (False, "repr", None))
+    revoked = []
+    monkeypatch.setattr(notifier, "_revoke_or_defer", lambda api, tok: revoked.append(tok))
+    live = {}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    ack = next(b for u, b in posts if "wake-ack" in u)
+    assert ack["release_lease"] is True and ack["lane"] == "conversation"
+    assert revoked == ["TOK-1"]                                    # orphaned token revoked
+    assert "C1" not in live                                        # no resident recorded
 
 
 def test_service_residents_cold_boot_forced_by_cold_required(monkeypatch, tmp_path):

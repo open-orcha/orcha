@@ -4058,7 +4058,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                           f"worktree isolation failed (won't run in shared checkout)")
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
                            {"kind": "codex_conversation_failed", "event": "conversation_turn",
-                            "release_lease": True})
+                            "release_lease": True, "lane": "conversation"})   # no token minted yet
                 continue
             run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
             log_path = _conversation_log_path(base_cwd, conv_id)
@@ -4079,18 +4079,31 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     c.get("agent_alias"), pending_turns,
                     [t for t in turns if t.get("seq", 0) <= resolved_through],
                     api_base=api_base)
-                persona = None if dry_run else _build_persona(api_base, c["agent_id"])
+                persona = None if dry_run else _build_persona(
+                    api_base, c["agent_id"], lane="conversation")
+            # GH #91/#90 (R3): this Codex conversation worker IS a conversation-lane embodiment —
+            # mint the CONVERSATION-lane token BEFORE Popen (valid in the DB before its first gated
+            # call), pass it + conversation=True to the process, and stamp lane='conversation' on the
+            # run below. Without this the run recorded lane='work' (the WorkerRunStart default), so
+            # wake_scan counted a live conversation as a WORK embodiment and suppressed work wakes —
+            # the exact split this PR delivers. One run per process (one-shot `codex exec`), so the
+            # server's revoke-on-terminal (bound via token_id) is the right lifetime, mirroring the
+            # ephemeral path. dry_run never mints (no process); a None token spawns token-less.
+            conv_tok = None if dry_run else _mint_embodiment_token(
+                api_base, c["agent_id"], "conversation", "headless")
             sent, _, proc = spawn_headless(run_cwd, prompt, None, dry_run,
                                            alias=c.get("agent_alias"), system_prompt=persona,
                                            model=c.get("model"), runtime=runtime,
                                            resume_session_id=(session_id if use_resume else None),
                                            log_path=log_path,
-                                           last_message_path=last_message_path)
+                                           last_message_path=last_message_path,
+                                           run_token=conv_tok, conversation=True)
             if not sent or proc is None:
                 _safe_teardown_worktree(base_cwd, worktree, branch)
+                _revoke_or_defer(api_base, conv_tok)   # token never rode a process → revoke now
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
                            {"kind": "codex_conversation_failed", "event": "conversation_turn",
-                            "release_lease": True})
+                            "release_lease": True, "lane": "conversation"})
                 continue
             run = _post_json(
                 f"{api_base}/api/agents/{c['agent_id']}/runs",
@@ -4099,14 +4112,18 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                  "pid": proc.pid, "runtime": runtime, "conversation_id": conv_id,
                  "conversation_ack_ts": c.get("conversation_ack_ts"),
                  "last_message_path": str(last_message_path) if last_message_path else None,
-                 "worktree": worktree, "branch": branch, "base_cwd": base_cwd})
+                 "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
+                 # GH #91/#90 (R3): stamp the conversation lane + bind the minted token so the
+                 # server durably revokes it on this run's terminal transition.
+                 "lane": "conversation", "token_id": conv_tok})
             run_id = (run or {}).get("run_id")
             if not run_id:
                 _kill_worker(proc, graceful=True)
                 _safe_teardown_worktree(base_cwd, worktree, branch)
+                _revoke_or_defer(api_base, conv_tok)   # no run bound the token → revoke now
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
                            {"kind": "codex_conversation_failed", "event": "conversation_turn",
-                            "release_lease": True})
+                            "release_lease": True, "lane": "conversation"})
                 if not quiet:
                     print(f"[notifier] Codex conversation skip {c.get('agent_alias')} — "
                           "worker_run creation failed")
@@ -4123,6 +4140,9 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 # uses it to (a) fall back to cold if a resume produced no reply, and (b) skip
                 # re-pinning when the resumed session id is unchanged.
                 "resume_session_id": session_id if use_resume else None,
+                # GH #91/#90 (R3): track the conversation token so _retire_resident revokes it on
+                # teardown (belt to the server's run-terminal revoke, mirroring the ephemeral path).
+                "run_token": conv_tok,
                 "hard_deadline": time.time() + HARD_CAP_MIN_SECS,
                 "last_size": 0, "last_progress_ts": time.time(),
                 "lines_offset": 0, "lines_buf": b"", "lines_seq": 1,
@@ -4177,7 +4197,8 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                      or {}).get("turns", [])
             resolved_through = max([t["seq"] for t in turns if t.get("role") == "agent"], default=0)
             serviced = max(serviced, resolved_through)
-            persona = _build_persona(api_base, c["agent_id"]) if cold else None   # warm --resume's it
+            persona = (_build_persona(api_base, c["agent_id"], lane="conversation")
+                       if cold else None)   # warm --resume already carries it in-session
             if cold and _format_history is not None:
                 # V1 history prefix (Vault #120): the warm session has no in-context history on a
                 # cold boot, so prepend the RESOLVED turns (seq ≤ resolved_through). WARM --resume
@@ -4210,26 +4231,44 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     print(f"[notifier] resident skip {c.get('agent_alias')} — "
                           f"worktree isolation failed (won't run in shared checkout)")
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
-                           {"kind": "resident_failed", "release_lease": True})
+                           {"kind": "resident_failed", "release_lease": True,
+                            "lane": "conversation"})   # release the CONVERSATION lease we claimed
                 continue
             run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
+            # GH #91/#90 (R3): a resident is a CONVERSATION-lane embodiment. Mint the conversation
+            # token BEFORE spawn and pass it + conversation=True so its env carries the capability
+            # (the gated WORK endpoints 403 it — it may only dispatch). Unlike the one-shot ephemeral/
+            # Codex worker (one run per process, so token_id binds to that run for revoke-on-terminal),
+            # a resident is ONE process spanning MANY per-turn runs — so the token is PROCESS-scoped:
+            # stored in r["run_token"] and revoked by _retire_resident at teardown. Binding it to a
+            # per-turn run would revoke it after the first turn (each turn's run goes terminal). The
+            # per-turn run below is still stamped lane='conversation' — the wake_scan-critical fix.
+            conv_tok = None if dry_run else _mint_embodiment_token(
+                api_base, c["agent_id"], "conversation", "resident")
             sent, _, proc = spawn_resident(run_cwd,
                                            system_prompt=persona, log_path=log_path,
                                            resume_session_id=None if cold else session_id,
                                            alias=c.get("agent_alias"), model=c.get("model"),
                                            runtime=c.get("model_runtime"),
+                                           run_token=conv_tok, conversation=True,
                                            dry_run=dry_run)
             if not sent or proc is None:
                 # ISS-61: keep the STABLE per-conversation worktree (reused on the next boot); it's
-                # torn down only when the conversation ends. Just release the lease.
+                # torn down only when the conversation ends. Revoke the just-minted token (no process
+                # to carry it) and release the CONVERSATION lease.
+                _revoke_or_defer(api_base, conv_tok)
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
-                           {"kind": "resident_failed", "release_lease": True})
+                           {"kind": "resident_failed", "release_lease": True,
+                            "lane": "conversation"})
                 continue
             r = {"runtime": RUNTIME_CLAUDE, "proc": proc,
                  "agent_id": c["agent_id"], "conversation_id": conv_id,
                  "alias": c.get("agent_alias"), "log_path": log_path,
                  "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
                  "session_id": session_id, "session_pinned": not cold, "cold": cold,
+                 # GH #91/#90 (R3): the process-scoped conversation token, revoked by
+                 # _retire_resident at teardown (see the mint comment above).
+                 "run_token": conv_tok,
                  "serviced_seq": serviced, "current_run_id": None, "run_id": None,
                  "awaiting_result": False, "turn_scan_offset": existing,
                  "lines_offset": existing, "lines_buf": b"", "lines_seq": 1,
@@ -4255,7 +4294,12 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         run = _post_json(f"{api_base}/api/agents/{c['agent_id']}/runs",
                          {"wake_kind": "resident", "wake_event": "conversation_turn",
                           "log_path": str(r["log_path"]) if r.get("log_path") else None,
-                          "pid": getattr(r.get("proc"), "pid", None)})
+                          "pid": getattr(r.get("proc"), "pid", None),
+                          # GH #91/#90 (R3): stamp the conversation lane so wake_scan does not count
+                          # this warm resident as a WORK embodiment (which would suppress work wakes).
+                          # No token_id: the resident token is PROCESS-scoped (revoked at teardown),
+                          # not bound to a per-turn run — see the mint comment at boot.
+                          "lane": "conversation"})
         run_id = (run or {}).get("run_id")
         r["current_run_id"] = run_id
         r["run_id"] = run_id                                # _pump_one streams this turn to run_id
