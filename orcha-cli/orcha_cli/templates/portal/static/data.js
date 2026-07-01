@@ -95,7 +95,12 @@ window.OrchaData = (function () {
       // SPEC-4: per-task hand-off protocol (Ledger: tasks.protocol JSONB, surfaced via the shared
       // _task_list_sql). null when unset. Whitelisted here so the adapter doesn't drop it.
       protocol: t.protocol != null ? t.protocol : null,
-      result: t.result != null ? t.result : null,
+      // tasks.result JSONB is {"result": <text>, "by_agent_id": ...} (written by /done) —
+      // unwrap to the text the pages render (was "[object Object]"). Legacy plain-string
+      // and null rows pass through.
+      result: (t.result && typeof t.result === "object")
+        ? (t.result.result != null ? t.result.result : null)
+        : (t.result != null ? t.result : null),
       // D7: latest plan_approval decision {decision, reason, actor, at}; null pre-D7. The
       // plan TEXT itself is the agent's opening thread message — this is the durable
       // "already decided" signal so the approval card stops re-asking (ISS-41 / B10 P2).
