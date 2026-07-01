@@ -6,6 +6,8 @@ argument-hint: <alias> [--role "..."]
 
 You are executing `/orcha-register-human`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## When to use this
@@ -32,7 +34,7 @@ Humans (`kind='human'`) and AI (`kind='ai'`) are both agents but differ in what 
 
 3. **POST** to register. `kind` is the only thing that distinguishes this from AI registration; the rest of the body shape is the same minus `prompt` and `initial_task`:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/containers/<current_container_id>/agents" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/containers/<current_container_id>/agents" \
      -H 'Content-Type: application/json' \
      -d '{
        "alias": "<alias>",
@@ -40,11 +42,15 @@ Humans (`kind='human'`) and AI (`kind='ai'`) are both agents but differ in what 
        "kind": "human"
      }'
    ```
-   Response: `{"agent_id": "...", "alias": "...", "container_id": "...", "kind": "human", "initial_task": null}`
+   Response: `{"agent_id": "...", "alias": "...", "container_id": "...", "kind": "human", "initial_task": null, "token": "orcha_h_..."}`
+
+   The response's `token` is this human's capability credential (#271), returned **exactly
+   once** — the server stores only its hash. Persist it in the binding below; it is what
+   authorizes this human's verify/decide/pause actions on an enforce-mode stack.
 
 4. **Bind this human.** Write `.claude/orcha-tabs/<alias>.json`:
    ```json
-   {"alias": "<alias>", "agent_id": "<agent_id>", "container_id": "<container_id>", "kind": "human"}
+   {"alias": "<alias>", "agent_id": "<agent_id>", "container_id": "<container_id>", "kind": "human", "token": "<token from the register response>"}
    ```
    Use the **Write tool**. Overwrite if it already exists.
 

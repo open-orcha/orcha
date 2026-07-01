@@ -6,6 +6,8 @@ argument-hint: <request_id> [--create | --reassign <alias> | --refuse [--reason 
 
 You are executing `/orcha-decide-suggestion` (Phase 3 / Orcha#5). This is a **human-only** action — the load-bearing piece of "agents propose, humans decide."
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -23,17 +25,17 @@ User arguments: `$ARGUMENTS`
 3. **POST** to decide:
    ```bash
    # --create:
-   curl -fsS -X POST "<api_base_url>/api/agent-suggestions/<request_id>/decide" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/agent-suggestions/<request_id>/decide" \
      -H 'Content-Type: application/json' \
      -d '{"kind": "create", "actor_agent_id": "<my human agent_id>"}'
 
    # --reassign:
-   curl -fsS -X POST "<api_base_url>/api/agent-suggestions/<request_id>/decide" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/agent-suggestions/<request_id>/decide" \
      -H 'Content-Type: application/json' \
      -d '{"kind": "reassign", "target_alias": "<existing alias>", "actor_agent_id": "<my human agent_id>"}'
 
    # --refuse:
-   curl -fsS -X POST "<api_base_url>/api/agent-suggestions/<request_id>/decide" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/agent-suggestions/<request_id>/decide" \
      -H 'Content-Type: application/json' \
      -d '{"kind": "refuse", "reason": "<--reason>", "actor_agent_id": "<my human agent_id>"}'
    ```

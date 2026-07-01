@@ -6,6 +6,8 @@ argument-hint: <request_id> "<task title>" --dod "..." [--priority N] [--assign 
 
 You are executing `/orcha-convert` (Phase 3 / Orcha#5).
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 Use this when you asked an info request, got an answer, but the answer is "I know enough to know this needs real work, not just an answer." The answer becomes context; a fresh task carries forward.
 
 User arguments: `$ARGUMENTS`
@@ -26,7 +28,7 @@ User arguments: `$ARGUMENTS`
 
 4. **POST**:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/requests/<request_id>/convert-to-task" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/requests/<request_id>/convert-to-task" \
      -H 'Content-Type: application/json' \
      -d '{
        "requester_agent_id": "<my agent_id>",

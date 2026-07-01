@@ -6,6 +6,8 @@ argument-hint: <task_id> "<result text or summary>" [--alias <name>]
 
 You are executing `/orcha-done`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -29,7 +31,7 @@ User arguments: `$ARGUMENTS`
 
 4. **POST** the done signal:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/tasks/<task_id>/done" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/tasks/<task_id>/done" \
      -H 'Content-Type: application/json' \
      -d '{"agent_id": "<agent_id>", "result": "<result>"}'
    ```
@@ -37,7 +39,7 @@ User arguments: `$ARGUMENTS`
 
 5. **Snapshot your memory digest** (Epic C / D3 — the `/orcha-done` cadence trigger). Finishing a task is the natural "captured a unit of work" boundary, so persist your reasoning now so a future re-binding tab rehydrates it. Compose a tight digest from THIS conversation and POST it:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/digest" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/agents/<agent_id>/digest" \
      -H 'Content-Type: application/json' \
      -d '{"current_focus": "<what you just finished / what is next>", "decisions": [{"text":"<key choices + why>"}], "learnings": [{"text":"<non-obvious facts discovered>"}], "open_threads": [{"text":"<loose ends to resume>"}]}'
    ```
@@ -45,8 +47,8 @@ User arguments: `$ARGUMENTS`
 
 6. **Before yielding, check the inbox** (Orcha#1 — idle-agent inbox handling). Now that you've just gone idle, immediately call:
    ```bash
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/inbox"
-   curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/inbox"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
    ```
    Count `open_requests` (incoming) and `outgoing_requests` (answered). Use these counts in the report below so the user knows there's pending request work before they go to /orcha-next.
 

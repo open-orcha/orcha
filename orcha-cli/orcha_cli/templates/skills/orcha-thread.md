@@ -6,6 +6,8 @@ argument-hint: <task_id> [--limit N] [--alias <name>]
 
 You are executing `/orcha-thread`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -21,11 +23,11 @@ User arguments: `$ARGUMENTS`
 
 3. **GET** the thread:
    ```bash
-   curl -fsS "<api_base_url>/api/tasks/<task_id>/messages"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/tasks/<task_id>/messages"
    ```
    If `--limit N` was given, append the query param:
    ```bash
-   curl -fsS "<api_base_url>/api/tasks/<task_id>/messages?limit=<N>"
+   curl -fsS -H "Authorization: Bearer <token>" "<api_base_url>/api/tasks/<task_id>/messages?limit=<N>"
    ```
    Response: `{"task_id": "...", "messages": [...]}`. Each message is
    `{message_id, author_id, author_alias, is_human, body, created_at}`, ordered `created_at` ASC.

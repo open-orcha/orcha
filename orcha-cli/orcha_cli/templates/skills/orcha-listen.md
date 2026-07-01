@@ -6,6 +6,8 @@ argument-hint: "[--timeout N] [--alias <name>] [--auto-accept-task] [--auto-clos
 
 You are executing `/orcha-listen` (Phase 3 / Orcha#5 — addresses the polling-cost concern from Orcha#3).
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 ## What this does
 
 Connects to `GET /api/agents/<my_id>/wait` — a long-poll endpoint that blocks for up to `--timeout` seconds (default 30, max 120) and returns the next event. Events arrive when:
@@ -31,7 +33,7 @@ Unlike `/orcha-checkpoint`, the LLM here is invoked ONCE per real event (plus on
    ```bash
    CURSOR_FILE=".claude/orcha-tabs/<alias>.last_event_ts"
    SINCE_TS=$(cat "$CURSOR_FILE" 2>/dev/null || echo 0)
-   curl -fsS --max-time 60 "<api_base_url>/api/agents/<agent_id>/wait?since_ts=${SINCE_TS}&timeout=<timeout-or-30>"
+   curl -fsS -H "Authorization: Bearer <token>" --max-time 60 "<api_base_url>/api/agents/<agent_id>/wait?since_ts=${SINCE_TS}&timeout=<timeout-or-30>"
    ```
    Response: `{event: "...", ts: <epoch>, ...}` or `{event: "timeout", ts: ...}`.
 

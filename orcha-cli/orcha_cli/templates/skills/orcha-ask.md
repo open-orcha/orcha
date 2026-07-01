@@ -6,6 +6,8 @@ argument-hint: <target_alias> "<payload>" [--task --task-dod "..." [--task-prior
 
 You are executing `/orcha-ask`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -62,7 +64,7 @@ User arguments: `$ARGUMENTS`
 
 5. **POST**:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/containers/<cid>/requests" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/containers/<cid>/requests" \
      -H 'Content-Type: application/json' \
      -d '<body>'
    ```

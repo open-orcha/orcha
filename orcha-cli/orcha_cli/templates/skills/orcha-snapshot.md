@@ -6,6 +6,8 @@ argument-hint: [--alias <name>]
 
 You are executing `/orcha-snapshot`.
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## What this is
@@ -55,7 +57,7 @@ are non-overlapping with no sync.
 
 4. **POST** the snapshot:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/digest" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/agents/<agent_id>/digest" \
      -H 'Content-Type: application/json' \
      -d '{"current_focus": "...", "decisions": [{"text":"..."}], "learnings": [{"text":"..."}], "open_threads": [{"text":"..."}], "audience": "who you are talking to + their register"}'
    ```

@@ -169,6 +169,27 @@ the Track-2 evidence story.
 - Follow `docs/orcha-test-runbook.md` (`.venv-test`) conventions; per-issue test files as
   with prior epics.
 
+### 3.11 As-landed deviations (implementation, same PR)
+
+The implementation follows this design with four deliberate deviations, recorded here so
+the spec stays truthful:
+
+1. **Daemons hold a *derived* root credential, not a DB row.** Instead of a `kind='daemon'`
+   agents row (§3.1), the runtime token is `HMAC(ORCHA_SECRET_KEY, purpose)` — computed by
+   the CLI (which already owns the master key in `.orcha/.env`) and verified computationally
+   by the portal. No bootstrap chicken-and-egg, no daemon rows polluting agent lists/status
+   logic. Rotation = rotate the master key. `agents.kind` is unchanged.
+2. **Warn-mode violations log to the portal log, not the events table.** An `events` row
+   per unauthenticated poll would flood the audit stream (daemons poll every 10s). `docker
+   compose logs portal` shows the `orcha.auth` warnings; enforce mode is the real gate.
+3. **Terminal-bridge WebSocket auth is deferred** to the immediate follow-up (§9): it needs
+   a browser-side ticket flow (portal JS → bridge), which belongs with the Track 2 work.
+   The bridge remains a localhost-only listener, as before.
+4. **Claim-field vocabulary:** the middleware matches `actor_agent_id`, `author_agent_id`,
+   `requester_agent_id`, `responder_agent_id`, `created_by_agent_id`, plus `agent_id` on
+   `POST /api/tasks/{tid}/done` only (elsewhere `agent_id` names a *subject*, e.g. assign).
+   Endpoint-level kind gates (`_require_kind`) stay as defense-in-depth behind the match.
+
 ## 4. Track 2 — Evidence: tamper-evident audit + exports
 
 (Depends on Auth v1. Design sketch; own spec before build.)

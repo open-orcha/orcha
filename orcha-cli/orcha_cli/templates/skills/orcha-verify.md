@@ -6,6 +6,8 @@ argument-hint: <task_id> [--reject "feedback explaining what's missing"] [--alia
 
 You are executing `/orcha-verify`. This is a **human-only** action — the API rejects it when the actor isn't kind='human' (Orcha#30).
 
+**Auth (#271):** every `curl` to the API sends `-H "Authorization: Bearer <token>"`. `<token>` is the `token` field of the acting binding JSON (`.claude/orcha-tabs/<alias>.json`); if the binding predates tokens (or no binding applies, e.g. bootstrap), read the project runtime credential from `.orcha/runtime-token` instead. On a warn-mode stack a missing token still works (logged); on an enforce stack it 401s.
+
 User arguments: `$ARGUMENTS`
 
 ## Steps
@@ -22,12 +24,12 @@ User arguments: `$ARGUMENTS`
 4. **POST**:
    ```bash
    # Approval:
-   curl -fsS -X POST "<api_base_url>/api/tasks/<task_id>/verify" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/tasks/<task_id>/verify" \
      -H 'Content-Type: application/json' \
      -d '{"approve": true, "actor_agent_id": "<my human agent_id>"}'
 
    # Rejection:
-   curl -fsS -X POST "<api_base_url>/api/tasks/<task_id>/verify" \
+   curl -fsS -H "Authorization: Bearer <token>" -X POST "<api_base_url>/api/tasks/<task_id>/verify" \
      -H 'Content-Type: application/json' \
      -d '{"approve": false, "feedback": "<feedback>", "actor_agent_id": "<my human agent_id>"}'
    ```
