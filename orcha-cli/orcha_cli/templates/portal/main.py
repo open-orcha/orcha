@@ -318,7 +318,7 @@ AVAILABLE_MODELS = [
     # with ZERO breakage — the persisted agents.model choice is left intact, so re-adding the
     # entry restores it automatically. To retire Fable: just delete this one line.
     {"id": "claude-fable-5", "name": "Fable 5", "runtime": "claude"},
-    {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "runtime": "claude"},
+    {"id": "claude-sonnet-5", "name": "Sonnet 5", "runtime": "claude"},
     {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5", "runtime": "claude"},
     {"id": "gpt-5.5", "name": "GPT-5.5", "runtime": "codex"},
     {"id": "gpt-5.4", "name": "GPT-5.4", "runtime": "codex"},
