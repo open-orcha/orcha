@@ -63,6 +63,9 @@ window.OrchaData = (function () {
       // snapshot (main.py: a.auto_wake_interval_secs) so the agent Controls card can render
       // and edit it; whitelisted here or the adapter would drop it (control reads undefined→Off).
       auto_wake_interval_secs: a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : null,
+      // GH#89: count of UNACKNOWLEDGED wake reasons — the agent-card bell badge. Whitelisted here
+      // or the adapter drops it (the badge would read undefined → never show). 0 = no badge.
+      pending_notifications: a.pending_notifications != null ? a.pending_notifications : 0,
       // #81: LEFT(system_prompt,160) — an inline persona preview on the agent view;
       // the FULL system_prompt is lazy-fetched from GET /api/agents/{id}/persona on expand.
       prompt_preview: a.prompt_preview != null ? a.prompt_preview : null,
