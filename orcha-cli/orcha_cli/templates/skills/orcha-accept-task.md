@@ -8,6 +8,10 @@ You are executing `/orcha-accept-task` (Phase 3 / Orcha#5).
 
 User arguments: `$ARGUMENTS`
 
+## Conversation-worker guardrail (GH #90 — check FIRST)
+
+Check `printenv ORCHA_CONVERSATION_WORKER`. **If it is `1`, you are a conversation embodiment — you may accept (that creates and assigns the task, which wakes a separate task worker), but you must NOT begin the work inline in this session.** Do steps 1–4 to accept, then STOP after the short report: say the request was accepted and the task will be worked by its assigned worker. Do NOT start coding/reviewing/editing or call `/orcha-respond`/`/orcha-done` yourself — the separate task worker does that. When `ORCHA_CONVERSATION_WORKER` is unset/empty, follow the full accept-and-work flow below unchanged.
+
 ## Steps
 
 1. **Parse `$ARGUMENTS`**:

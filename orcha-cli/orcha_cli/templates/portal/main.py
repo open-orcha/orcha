@@ -4298,6 +4298,16 @@ def active_conversations(cid: str):
                                  WHERE ev.event_key = cv.agent_id::text
                                    AND ev.ts > COALESCE(ws.delivered_ts, 0)
                                    AND ev.event_name <> ALL(%s)), 0) AS pending_inbox,
+                      -- GH #90: a self-targeted `task_assigned` past the cursor means this
+                      -- conversation agent just dispatched work to ITSELF (event_key = the agent =
+                      -- the target). A warm resident holds the single-embodiment lease, so that
+                      -- task's ephemeral worker is suppressed until the resident yields. The daemon
+                      -- reads this to RELEASE the lease (conversation_task_handoff) so the real task
+                      -- worker wakes in its own worktree/run — not a base-checkout drain sidecar.
+                      COALESCE((SELECT count(*) FROM agent_events ev
+                                 WHERE ev.event_key = cv.agent_id::text
+                                   AND ev.ts > COALESCE(ws.delivered_ts, 0)
+                                   AND ev.event_name = 'task_assigned'), 0) AS pending_task_assigned,
                       (SELECT max(ev.ts) FROM agent_events ev
                          WHERE ev.event_key = cv.agent_id::text
                            AND ev.ts > COALESCE(ws.delivered_ts, 0)
@@ -4318,6 +4328,7 @@ def active_conversations(cid: str):
             r["last_turn_seq"] = r["last_turn_seq"] or 0
             r["pending_human"] = (r["last_turn_role"] == "human")
             r["pending_inbox"] = r["pending_inbox"] or 0
+            r["pending_task_assigned"] = r["pending_task_assigned"] or 0   # GH #90 handoff signal
             # #266: is a clock-driven auto-wake due for this resident's agent? Identical interlocks to
             # wake_scan — opt-in (interval set) and the cadence has elapsed since the last wake of any
             # kind (NULL last_woken_at => never woken => due). GH #39: the turns_used<turn_budget cost

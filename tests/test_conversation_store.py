@@ -310,6 +310,35 @@ async def test_active_conversations_reports_pending_inbox(client, container, mak
 
 
 @pytest.mark.asyncio
+async def test_active_conversations_reports_pending_task_assigned(client, container, make_agent, db):
+    """GH #90: the scan reports `pending_task_assigned` — self-targeted `task_assigned` events past the
+    wake cursor. A conversation agent that dispatched work to ITSELF produces exactly this; the daemon
+    reads it to RELEASE the warm resident lease (conversation_task_handoff) so the real ephemeral task
+    worker wakes in its own run/worktree instead of a base-checkout drain sidecar. task_assigned also
+    counts in pending_inbox (it is a waking event) — the daemon intercepts on the narrower field."""
+    human = await make_agent("KedarPTA", "human", kind="human")
+    ai = await make_agent("VoxPTA", "eng")
+    aid = ai["agent_id"]
+    cid = (await _start(client, aid, human["agent_id"]))["conversation"]["id"]
+    # no self-assigned task yet
+    _, cand = await _active(client, container["id"], cid)
+    assert cand["pending_task_assigned"] == 0
+    # the agent dispatched work to itself → a self-targeted task_assigned, plus an unrelated inbox event
+    _seed_event(db, container["id"], aid, "task_message", 10.0)
+    _seed_event(db, container["id"], aid, "task_assigned", 20.0)
+    _, cand = await _active(client, container["id"], cid)
+    assert cand["pending_task_assigned"] == 1                          # the self-assigned task
+    assert cand["pending_inbox"] == 2                                  # task_assigned also counts here
+    # once the wake cursor advances past it, the handoff signal clears
+    r = await client.post(f"/api/agents/{aid}/wake-ack",
+                          json={"kind": "resident_conversation_task_handoff",
+                                "delivered_ts": 20.0, "release_lease": True})
+    assert r.status_code == 200, r.text
+    _, cand = await _active(client, container["id"], cid)
+    assert cand["pending_task_assigned"] == 0
+
+
+@pytest.mark.asyncio
 async def test_active_conversations_excludes_selfecho_request_closed(client, container, make_agent, db):
     """ISS-75 (#188) + ISS-77 (#200): `request_closed` is the SOLE drain exclusion — it SELF-ECHOES
     (closing a request emits another request_closed), so counting it re-drains the warm resident every
