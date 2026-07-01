@@ -162,11 +162,15 @@ def _fetch_next_event(key: str, since_ts: float) -> Optional[dict]:
     Opens its own short-lived connection (it runs off the async loop in a worker
     thread). Reconstructs the same {event, ts, **payload} shape the in-process
     buffer used to return, so callers are unchanged.
+
+    GH #89: human-acked rows are skipped — a live listener must not be handed an event the
+    human vetoed. Safe: the next UNACKED row's later ts advances the caller's cursor past the
+    acked one; if none is pending the poll blocks as before.
     """
     with db_cursor() as (_, cur):
         cur.execute(
             """SELECT event_name, ts, payload FROM agent_events
-               WHERE event_key = %s AND ts > %s
+               WHERE event_key = %s AND ts > %s AND human_acked_at IS NULL
                ORDER BY ts, id
                LIMIT 1""",
             (key, since_ts),
@@ -630,6 +634,7 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
         """SELECT id, event_name, ts, payload
            FROM agent_events
            WHERE event_key = %s AND ts > %s AND event_name <> ALL(%s)
+             AND human_acked_at IS NULL
            ORDER BY ts ASC, id ASC""",
         (aid, delivered_ts, list(_NON_WAKING_EVENTS)),
     )
@@ -2230,8 +2235,18 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
         # D7: additionally surface model (D7), wake_enabled (reachability join),
         # current_task (the actively-worked task) and last_active (latest of heartbeat /
         # worker-run start) so the redesign can render agent cards without extra calls.
+        # GH #89: the snapshot is the overview's batch agent fetch, so total_pending (the
+        # roster bell badge) rides here — the plan's "expose it on the batch endpoint"
+        # branch — instead of one /notifications/pending call per agent per poll. Same
+        # predicate as that endpoint, with the already-joined ws cursors inlined.
+        pending_sub = _notif_pending_predicate(
+            "COALESCE(ws.conv_delivered_ts, 0)", "COALESCE(ws.delivered_ts, 0)", prefix="ev.")
         cur.execute(
             """SELECT a.id, a.alias, a.role, a.kind, a.turns_used, a.turn_budget,
+                      -- GH #89: bell badge count + active clock-wake snooze for the roster/panel.
+                      (SELECT count(*) FROM agent_events ev
+                        WHERE ev.event_key = a.id::text""" + pending_sub + """) AS total_pending,
+                      ws.snooze_until,
                       a.last_heartbeat_at, a.is_auto_created, a.created_at, a.terminated_at,
                       a.model,
                       -- #266: the configured clock-driven auto-wake cadence (NULL = off) so the
@@ -2350,7 +2365,7 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                ) w ON w.requester_id = a.id
                WHERE a.container_id=%s AND a.terminated_at IS NULL
                ORDER BY a.created_at""",
-            (cid, cid),
+            (list(_NOTIF_SUPPRESSED), list(_WORK_NON_WAKING_EVENTS), cid, cid),
         )
         agents = cur.fetchall()
 
@@ -3565,6 +3580,127 @@ class NotificationsRead(BaseModel):
         None,
         description="advance the read cursor to this bus ts (epoch seconds); omit to mark ALL "
                     "current notifications read (cursor jumps to the agent's newest event ts)")
+    suppress_wake: bool = Field(
+        False,
+        description="GH #89 'Acknowledge all': also stamp human_acked_at on every feed-visible row "
+                    "up to through_ts, so those events stop counting toward wakes/drains. "
+                    "_NOTIF_SUPPRESSED rows are excluded — you can only ack what the feed can show.")
+
+
+class NotificationAck(BaseModel):
+    """GH #89: human acknowledges ONE notification — 'I've seen this; the agent must not act on it'."""
+    suppress_wake: bool = Field(
+        True,
+        description="true (default) stamps human_acked_at so the event stops counting toward wakes "
+                    "and drains everywhere. false stamps nothing — a no-op kept for API-shape "
+                    "compatibility (mark-read-without-suppress is the bulk notifications/read "
+                    "cursor; a per-row read marker would need a second column for near-zero value).")
+
+
+def _notification_page(cur, aid, *, zone=None, limit=50, before_ts=None, before_id=None,
+                       read_through=0.0, extra_where="", extra_params=()):
+    """#247 / GH #89: the shared query→classify→paginate engine behind the notification feed
+    (GET notifications) and the pending panel (GET notifications/pending).
+
+    Scans this agent's bus rows newest-first with the compound (ts, id) keyset, applies
+    `extra_where`/`extra_params` in SQL (the GH #89 pending predicate; empty for the full feed),
+    classifies each row via _classify_notification, drops suppressed rows, applies the optional
+    `zone` filter, and fills up to `limit` classified rows.
+
+    Compound (ts, id) keyset: ORDER BY ts DESC, id DESC means a page boundary can fall INSIDE a
+    group of rows sharing one ts. A ts-only cursor (ts < before_ts) would silently DROP the
+    remaining co-ts rows below the cut; pairing the boundary id with the ts resumes EXACTLY after
+    the last-returned row. idx_agent_events_key_ts (event_key, ts, id) covers it directly.
+
+    Row `read` flag (GH #89): ts <= read_through OR human_acked_at set. An acked row renders read
+    WITHOUT advancing the read cursor — a per-row veto must not visually mark older unread
+    neighbors read the way a cursor bump would.
+
+    Returns (rows, next_before_ts, next_before_id) — both cursor parts None at the true tail.
+    """
+    limit = max(1, min(limit, 200))
+    # Over-fetch: suppressed rows (conversation_turn can be high-volume) and zone filtering thin the
+    # page out post-classify, so scan a wider window of bus rows to fill `limit` classified ones.
+    fetch_cap = limit * 4
+    before_ts_eff = before_ts if before_ts is not None else 9e18
+    if before_id is not None:
+        cur.execute(
+            f"""SELECT id, event_name, ts, payload, human_acked_at FROM agent_events
+                 WHERE event_key = %s AND (ts < %s OR (ts = %s AND id < %s)){extra_where}
+                 ORDER BY ts DESC, id DESC
+                 LIMIT %s""",
+            (aid, before_ts_eff, before_ts_eff, before_id, *extra_params, fetch_cap),
+        )
+    else:
+        cur.execute(
+            f"""SELECT id, event_name, ts, payload, human_acked_at FROM agent_events
+                 WHERE event_key = %s AND ts < %s{extra_where}
+                 ORDER BY ts DESC, id DESC
+                 LIMIT %s""",
+            (aid, before_ts_eff, *extra_params, fetch_cap),
+        )
+    raw = cur.fetchall()
+    # Q2: batch-resolve actor aliases + requester kinds in ONE query (read-time, no backfill).
+    ids: set[str] = set()
+    for r in raw:
+        p = r["payload"] or {}
+        for f in _NOTIF_ACTOR_FIELDS:
+            if p.get(f):
+                ids.add(str(p[f]))
+    people: dict[str, dict] = {}
+    if ids:
+        cur.execute("SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),))
+        people = {str(a["id"]): a for a in cur.fetchall()}
+
+    out = []
+    truncated = False
+    last_emitted = None   # raw row behind out[-1] — its (ts, id) is the next page's keyset cursor
+    for r in raw:
+        p = r["payload"] or {}
+        requester_is_human = False
+        if r["event_name"] == "request_created":
+            fa = str(p["from_agent_id"]) if p.get("from_agent_id") else None
+            requester_is_human = bool(fa and (people.get(fa) or {}).get("kind") == "human")
+        n = _classify_notification(r["event_name"], p, requester_is_human=requester_is_human)
+        if n is None:
+            continue
+        if zone is not None and n["zone"] != zone:
+            continue
+        actor = people.get(n["actor_ref"]) or {} if n["actor_ref"] else {}
+        out.append({
+            # GH #89: the bus row id, needed by the per-row acknowledge endpoint (additive).
+            "event_id": r["id"],
+            "event_name": r["event_name"],
+            "type": n["type"], "zone": n["zone"], "priority": n["priority"],
+            # actor_ref = the originating agent id; actor_alias/actor_kind are resolved read-time
+            # (Q2, no backfill). actor_kind ('human'|'agent') is the ORIGIN tiebreak the #247 wake
+            # ranker (SPEC-WAKE-BOOT) needs to break ties between equal-priority notifications.
+            "actor_ref": n["actor_ref"], "actor_alias": actor.get("alias"),
+            "actor_kind": actor.get("kind"),
+            "deeplink": n["deeplink"], "preview": n["preview"],
+            "ts": r["ts"],
+            "read": r["ts"] <= read_through or r["human_acked_at"] is not None,
+        })
+        last_emitted = r
+        if len(out) >= limit:
+            truncated = True
+            break
+
+    # Keyset for "Load earlier": resume from the (ts, id) of the boundary row so a page that splits
+    # a co-ts group loses nothing. If we capped `out` at limit, that boundary is the last emitted
+    # row. Otherwise we consumed the whole fetch window — only signal more if that window itself was
+    # full (it may have ended on suppressed rows with real rows still beyond it, so resume from the
+    # last scanned raw row); a short window = the true tail.
+    if truncated:
+        next_before_ts = last_emitted["ts"]
+        next_before_id = last_emitted["id"]
+    elif len(raw) >= fetch_cap:
+        next_before_ts = raw[-1]["ts"]
+        next_before_id = raw[-1]["id"]
+    else:
+        next_before_ts = None
+        next_before_id = None
+    return out, next_before_ts, next_before_id
 
 
 @app.get("/api/agents/{aid}/notifications")
@@ -3586,105 +3722,156 @@ def agent_notifications(aid: str, zone: Optional[str] = None,
         page; pass back BOTH next_before_ts and next_before_id verbatim for each subsequent page.
     Response: ``{notifications: [...], read_through_ts, next_before_ts, next_before_id}`` — the
     (ts, id) cursor pair to pass back for the next page (both null = reached the tail). Each row:
-    ``{event_name, type, zone, priority, actor_ref, actor_alias, actor_kind, deeplink, preview,
-    ts, read}`` — priority is the blocker-CLASS rank (lower = more urgent) and actor_kind
+    ``{event_id, event_name, type, zone, priority, actor_ref, actor_alias, actor_kind, deeplink,
+    preview, ts, read}`` — priority is the blocker-CLASS rank (lower = more urgent) and actor_kind
     ('ai'|'human'|None) is the ORIGIN tiebreak; the feed is ts-DESC, blocker-sort is the caller's.
+
+    GH #89: human-acked rows deliberately STAY in this feed (dimmed via read=true) so the human
+    can see what they acked; only the /notifications/pending panel filters them out.
     """
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     if zone is not None and zone not in ("needs_you", "earlier"):
         raise HTTPException(400, "zone must be 'needs_you' or 'earlier'")
-    limit = max(1, min(limit, 200))
-    # Over-fetch: suppressed rows (conversation_turn can be high-volume) and zone filtering thin the
-    # page out post-classify, so scan a wider window of bus rows to fill `limit` classified ones.
-    fetch_cap = limit * 4
     with db_cursor() as (_, cur):
         _require_agent(cur, aid)
         cur.execute("SELECT read_through_ts FROM agent_notification_state WHERE agent_id=%s", (aid,))
         crow = cur.fetchone()
         read_through = crow["read_through_ts"] if crow else 0.0
-        # Compound (ts, id) keyset. ORDER BY ts DESC, id DESC means a page boundary can fall
-        # INSIDE a group of rows that share one ts. A ts-only cursor (ts < before_ts) would then
-        # silently DROP the remaining co-ts rows below the cut. Pairing the boundary id with the ts
-        # resumes EXACTLY after the last-returned row: (ts < before_ts) OR (ts = before_ts AND
-        # id < before_id). The idx_agent_events_key_ts (event_key, ts, id) index covers it directly.
-        before_ts_eff = before_ts if before_ts is not None else 9e18
-        if before_id is not None:
-            cur.execute(
-                """SELECT id, event_name, ts, payload FROM agent_events
-                     WHERE event_key = %s AND (ts < %s OR (ts = %s AND id < %s))
-                     ORDER BY ts DESC, id DESC
-                     LIMIT %s""",
-                (aid, before_ts_eff, before_ts_eff, before_id, fetch_cap),
-            )
-        else:
-            cur.execute(
-                """SELECT id, event_name, ts, payload FROM agent_events
-                     WHERE event_key = %s AND ts < %s
-                     ORDER BY ts DESC, id DESC
-                     LIMIT %s""",
-                (aid, before_ts_eff, fetch_cap),
-            )
-        raw = cur.fetchall()
-        # Q2: batch-resolve actor aliases + requester kinds in ONE query (read-time, no backfill).
-        ids: set[str] = set()
-        for r in raw:
-            p = r["payload"] or {}
-            for f in _NOTIF_ACTOR_FIELDS:
-                if p.get(f):
-                    ids.add(str(p[f]))
-        people: dict[str, dict] = {}
-        if ids:
-            cur.execute("SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),))
-            people = {str(a["id"]): a for a in cur.fetchall()}
-
-    out = []
-    truncated = False
-    last_emitted = None   # raw row behind out[-1] — its (ts, id) is the next page's keyset cursor
-    for r in raw:
-        p = r["payload"] or {}
-        requester_is_human = False
-        if r["event_name"] == "request_created":
-            fa = str(p["from_agent_id"]) if p.get("from_agent_id") else None
-            requester_is_human = bool(fa and (people.get(fa) or {}).get("kind") == "human")
-        n = _classify_notification(r["event_name"], p, requester_is_human=requester_is_human)
-        if n is None:
-            continue
-        if zone is not None and n["zone"] != zone:
-            continue
-        actor = people.get(n["actor_ref"]) or {} if n["actor_ref"] else {}
-        out.append({
-            "event_name": r["event_name"],
-            "type": n["type"], "zone": n["zone"], "priority": n["priority"],
-            # actor_ref = the originating agent id; actor_alias/actor_kind are resolved read-time
-            # (Q2, no backfill). actor_kind ('human'|'agent') is the ORIGIN tiebreak the #247 wake
-            # ranker (SPEC-WAKE-BOOT) needs to break ties between equal-priority notifications.
-            "actor_ref": n["actor_ref"], "actor_alias": actor.get("alias"),
-            "actor_kind": actor.get("kind"),
-            "deeplink": n["deeplink"], "preview": n["preview"],
-            "ts": r["ts"], "read": r["ts"] <= read_through,
-        })
-        last_emitted = r
-        if len(out) >= limit:
-            truncated = True
-            break
-
-    # Keyset for "Load earlier": resume from the (ts, id) of the boundary row so a page that splits
-    # a co-ts group loses nothing. If we capped `out` at limit, that boundary is the last emitted
-    # row. Otherwise we consumed the whole fetch window — only signal more if that window itself was
-    # full (it may have ended on suppressed rows with real rows still beyond it, so resume from the
-    # last scanned raw row); a short window = the true tail.
-    if truncated:
-        next_before_ts = last_emitted["ts"]
-        next_before_id = last_emitted["id"]
-    elif len(raw) >= fetch_cap:
-        next_before_ts = raw[-1]["ts"]
-        next_before_id = raw[-1]["id"]
-    else:
-        next_before_ts = None
-        next_before_id = None
+        out, next_before_ts, next_before_id = _notification_page(
+            cur, aid, zone=zone, limit=limit, before_ts=before_ts, before_id=before_id,
+            read_through=read_through)
     return {"notifications": out, "read_through_ts": read_through,
             "next_before_ts": next_before_ts, "next_before_id": next_before_id}
+
+
+# GH #89: the pending predicate — the rows that can still make the agent ACT. Defined by WAKE
+# truth, not the read cursor: (a) not human-acked, (b) newer than the lane-appropriate DELIVERY
+# cursor, (c) not a name the lane's wake paths ignore — mirroring wake_scan's work-lane count and
+# active_conversations' resident-drain count. read_through_ts plays NO role here: marking read is
+# visual dimming only, so a read-but-unacked event stays pending (it will still wake the agent).
+# The conversation-lane branch compares against conv_delivered_ts so each lane's rows are judged
+# by ITS delivery cursor; today the conversation lane's only surface (conversation_turn) is also
+# in _NOTIF_SUPPRESSED, so the branch is a lane-symmetry guard for any future feed-visible
+# conversation-lane event rather than a live path.
+def _notif_pending_predicate(conv_cursor_sql: str, work_cursor_sql: str, prefix: str = "") -> str:
+    """The ONE definition of pending, as an AND-chain SQL fragment. The two cursors are SQL
+    expressions ('%s' for a bound scalar, or a column ref like 'COALESCE(ws.conv_delivered_ts,0)'
+    when agent_wake_state is already joined); `prefix` qualifies the agent_events columns.
+    Bound params contributed by the fragment, in order: _NOTIF_SUPPRESSED, then (with scalar
+    cursors) conv cursor, then _WORK_NON_WAKING_EVENTS, then (scalar) work cursor."""
+    return f"""
+   AND {prefix}human_acked_at IS NULL
+   AND {prefix}event_name <> ALL(%s)
+   AND (CASE WHEN {prefix}event_name = 'conversation_turn'
+             THEN {prefix}ts > {conv_cursor_sql}
+             ELSE {prefix}event_name <> ALL(%s) AND {prefix}ts > {work_cursor_sql}
+        END)"""
+
+
+# Placeholders, in order: (_NOTIF_SUPPRESSED, conv_delivered_ts, _WORK_NON_WAKING_EVENTS, delivered_ts).
+_NOTIF_PENDING_WHERE = _notif_pending_predicate("%s", "%s")
+
+
+@app.get("/api/agents/{aid}/notifications/pending")
+def agent_notifications_pending(aid: str, limit: int = 50,
+                                before_ts: Optional[float] = None,
+                                before_id: Optional[int] = None):
+    """GH #89 — the per-agent PENDING panel: notifications that can still make the agent act,
+    i.e. the human's veto surface. Same row shape + keyset paging as GET notifications, but
+    filtered to the pending predicate (see _NOTIF_PENDING_WHERE) and spanning BOTH zones (no
+    `zone` param — the panel shows everything pending).
+
+    Response adds ``total_pending`` — a count over the same predicate, so the bell badge, the
+    panel rows and what wake-scan would count all agree. Rows the agent already consumed (the
+    delivery cursor moved past them by a wake ack) drop out naturally — nothing left to veto.
+    """
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        _require_agent(cur, aid)
+        cur.execute("SELECT read_through_ts FROM agent_notification_state WHERE agent_id=%s", (aid,))
+        crow = cur.fetchone()
+        read_through = crow["read_through_ts"] if crow else 0.0
+        cur.execute(
+            """SELECT COALESCE(delivered_ts, 0) AS work_ts,
+                      COALESCE(conv_delivered_ts, 0) AS conv_ts
+               FROM agent_wake_state WHERE agent_id = %s""", (aid,))
+        wrow = cur.fetchone()
+        work_cursor = wrow["work_ts"] if wrow else 0.0
+        conv_cursor = wrow["conv_ts"] if wrow else 0.0
+        pending_params = (list(_NOTIF_SUPPRESSED), conv_cursor,
+                          list(_WORK_NON_WAKING_EVENTS), work_cursor)
+        out, next_before_ts, next_before_id = _notification_page(
+            cur, aid, limit=limit, before_ts=before_ts, before_id=before_id,
+            read_through=read_through,
+            extra_where=_NOTIF_PENDING_WHERE, extra_params=pending_params)
+        cur.execute(
+            "SELECT count(*) AS n FROM agent_events WHERE event_key = %s" + _NOTIF_PENDING_WHERE,
+            (aid, *pending_params))
+        total_pending = cur.fetchone()["n"]
+    return {"notifications": out, "total_pending": total_pending,
+            "read_through_ts": read_through,
+            "next_before_ts": next_before_ts, "next_before_id": next_before_id}
+
+
+@app.post("/api/agents/{aid}/notifications/{event_id}/acknowledge", status_code=200)
+def acknowledge_notification(aid: str, event_id: int, body: NotificationAck):
+    """GH #89 — per-notification human acknowledge + wake suppression (the veto).
+
+    Stamps agent_events.human_acked_at for ONE row. Every "should the agent act on this?" query
+    (wake_scan's pending count / latest-event / answer-fallback, the wake manifest, directed-
+    message collection, the resident-drain counts, /wait's entry precheck and long-poll delivery)
+    filters acked rows out, so the agent never wakes for — or is handed — this event. Deliberately
+    NOT a cursor advance: per-row precision means acking ts2 never swallows an unacked ts1 beside
+    it, and the veto holds on BOTH lanes (#104 split the delivery cursor; a per-row marker is
+    lane-agnostic). Cursors still advance past acked rows naturally (max_ts stays computed over
+    ALL events), so acked rows never linger uncounted. An in-flight wake that already picked the
+    event up in its manifest is not cancelled (accepted per the issue).
+
+    Scope boundary: acknowledge suppresses EVENT-driven wake reasons only. State-driven reasons
+    are untouched by design — an OPEN task request keeps has_pending_task_request true and an
+    assigned-ready task keeps auto_tasks non-empty, because the underlying WORK still exists and
+    hiding its notification must not orphan it. The veto for those is answering/rejecting the
+    request or unassigning the task (the panel deep-links there).
+
+    404: no such event on this agent's key. 400: a _NOTIF_SUPPRESSED event — it never surfaces in
+    the feed, so a human can't have "seen" it; refusing also protects an un-consumed live chat
+    message (conversation_turn) from being acked out of existence by a client bug. Re-acking an
+    already-acked row is a 200 no-op (idempotent).
+    """
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        _require_agent(cur, aid)
+        cur.execute(
+            "SELECT event_name, human_acked_at FROM agent_events WHERE id = %s AND event_key = %s",
+            (event_id, aid))
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(404, "no such notification for this agent")
+        if row["event_name"] in _NOTIF_SUPPRESSED:
+            raise HTTPException(
+                400, f"'{row['event_name']}' events never surface as notifications "
+                     "and cannot be acknowledged")
+        acked_at = row["human_acked_at"]
+        if not body.suppress_wake:
+            # Mark-read-only shape-compat: stamp nothing; the response says so. (The panel
+            # always sends true; bulk mark-read is POST notifications/read.)
+            return {"agent_id": aid, "event_id": event_id,
+                    "suppressed": False, "human_acked_at": acked_at}
+        if acked_at is None:
+            cur.execute(
+                """UPDATE agent_events SET human_acked_at = now()
+                   WHERE id = %s AND human_acked_at IS NULL
+                   RETURNING human_acked_at""",
+                (event_id,))
+            urow = cur.fetchone()
+            if urow is not None:
+                acked_at = urow["human_acked_at"]
+            conn.commit()
+    return {"agent_id": aid, "event_id": event_id,
+            "suppressed": True, "human_acked_at": acked_at}
 
 
 @app.post("/api/agents/{aid}/notifications/read", status_code=200)
@@ -3697,6 +3884,14 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
 
     This OPERATOR read cursor is deliberately SEPARATE from agent_wake_state.delivered_ts (the
     notifier daemon's wake-ack cursor); the two must never cross-clear.
+
+    GH #89 (``suppress_wake: true`` — "Acknowledge all"): additionally stamps human_acked_at on
+    every feed-visible row up to the (possibly defaulted) through_ts, so those events stop
+    counting toward wakes/drains. Bounded by ts to match the cursor's "up to here" semantics.
+    The _NOTIF_SUPPRESSED exclusion is load-bearing: you can only ack what the feed can show you —
+    without it a bulk ack would stamp un-consumed conversation_turn rows and the resident drain
+    would skip the human's own pending chat messages (a silent message-eater). Response gains
+    ``suppressed_count`` (0 when the flag is off — existing callers unaffected).
     """
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -3717,8 +3912,18 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
             (aid, target),
         )
         read_through = cur.fetchone()["read_through_ts"]
+        suppressed_count = 0
+        if body.suppress_wake:
+            cur.execute(
+                """UPDATE agent_events SET human_acked_at = now()
+                   WHERE event_key = %s AND ts <= %s AND human_acked_at IS NULL
+                     AND event_name <> ALL(%s)""",
+                (aid, target, list(_NOTIF_SUPPRESSED)),
+            )
+            suppressed_count = cur.rowcount
         conn.commit()
-    return {"agent_id": aid, "read_through_ts": read_through}
+    return {"agent_id": aid, "read_through_ts": read_through,
+            "suppressed_count": suppressed_count}
 
 
 # ---------- reachability (Epic A: wake & self-movement) ----------
@@ -4198,10 +4403,14 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     messages = []
     wake_task_id = None                              # ISS-56: attribute the run to its task
     ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
+    # GH #89: an acked directed message is the human saying "I've eaten this" — it must not be
+    # injected into the agent's turn. Skipping it here also keeps ack_through_ts honest: the
+    # default max_ts is computed over ALL events (unchanged), so the cursor still advances past it.
     cur.execute(
         """SELECT ts, event_name, payload FROM agent_events
            WHERE event_key = %s AND ts > %s
              AND event_name IN ('prompt', 'task_message', 'task_assigned')
+             AND human_acked_at IS NULL
            ORDER BY ts, id""",
         (aid, delivered_ts))
     budget = MAX_PROMPT_BATCH_CHARS
@@ -4329,14 +4538,18 @@ def active_conversations(cid: str):
                          WHERE ev.event_key = cv.agent_id::text
                            AND ev.ts > COALESCE(ws.delivered_ts, 0)
                            AND ev.event_name = 'conversation_turn') AS conversation_ack_ts,
+                      -- GH #89: human-acked events are vetoed on the resident-drain path too
+                      -- (the ack must hold lane-agnostically, not just for ephemeral wakes).
                       COALESCE((SELECT count(*) FROM agent_events ev
                                  WHERE ev.event_key = cv.agent_id::text
                                    AND ev.ts > COALESCE(ws.delivered_ts, 0)
-                                   AND ev.event_name <> ALL(%s)), 0) AS pending_inbox,
+                                   AND ev.event_name <> ALL(%s)
+                                   AND ev.human_acked_at IS NULL), 0) AS pending_inbox,
                       (SELECT max(ev.ts) FROM agent_events ev
                          WHERE ev.event_key = cv.agent_id::text
                            AND ev.ts > COALESCE(ws.delivered_ts, 0)
-                           AND ev.event_name <> ALL(%s)) AS _inbox_max_ts
+                           AND ev.event_name <> ALL(%s)
+                           AND ev.human_acked_at IS NULL) AS _inbox_max_ts
                FROM conversations cv
                JOIN agents a ON a.id = cv.agent_id
                LEFT JOIN agent_wake_state ws ON ws.agent_id = cv.agent_id
@@ -4506,6 +4719,17 @@ class WakeAck(BaseModel):
                     "out from under its own auto_wake_due (the real ephemeral wake stamps it instead).")
 
 
+class WakeSnooze(BaseModel):
+    """GH #89: suppress the SCHEDULED (auto_wake_interval_secs) clock wake until an instant,
+    without disabling auto-wake permanently. Pass exactly ONE of the two fields."""
+    snooze_seconds: Optional[float] = Field(
+        default=None, ge=0,
+        description="snooze for this many seconds from now; 0 clears an active snooze")
+    until_ts: Optional[float] = Field(
+        default=None,
+        description="snooze until this epoch-seconds instant; a value in the past clears")
+
+
 class PromptEvent(BaseModel):
     """A3: a directed human/teammate message that wakes an agent. Posting one publishes a
     `prompt` agent_event carrying the text; wake-scan counts it as pending work and the daemon
@@ -4633,6 +4857,11 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                       -- so the cadence floats forward off the LAST wake of any kind, never overlapping
                       -- a real event/task wake.
                       EXTRACT(EPOCH FROM (now() - w.last_woken_at)) AS secs_since_woken,
+                      -- GH #89: clock-wake snooze. Gates ONLY the auto_wake_due term below —
+                      -- event/task/task-request wakes fire normally during a snooze. An expired
+                      -- snooze_until self-clears here (snoozed=false) without a write.
+                      w.snooze_until,
+                      (w.snooze_until IS NOT NULL AND w.snooze_until > now()) AS snoozed,
                       (w.last_woken_at IS NOT NULL
                        AND EXTRACT(EPOCH FROM (now() - w.last_woken_at)) < %s) AS in_cooldown,
                       -- R2.4 / GH #91/#90: a live WORK worker holds an unexpired WORK lease. This is
@@ -4681,11 +4910,15 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # over ALL events so the ack still advances past them (they don't accumulate uncounted).
             # GH #91/#90: this is the WORK-lane count, so it uses _WORK_NON_WAKING_EVENTS (adds
             # `conversation_turn`) — a bare human chat message is the conversation lane's surface and
-            # must not by itself wake a WORK embodiment. max_ts is still over ALL events (unfiltered),
-            # so a work ack advances the work cursor past a conversation_turn too (it never accumulates
-            # uncounted); the conversation lane consumes it via its own delivered cursor.
+            # must not by itself wake a WORK embodiment. max_ts is still over ALL events (unfiltered,
+            # GH #89: including human-acked ones), so a work ack advances the work cursor past a
+            # conversation_turn or an acked row too (they never accumulate uncounted); the
+            # conversation lane consumes conversation_turn via its own delivered cursor.
+            # GH #89: a human-acked event must not count toward the wake decision — that is the
+            # whole veto. Per-row filter, never a cursor advance (an ack must not swallow neighbors).
             cur.execute(
-                """SELECT count(*) FILTER (WHERE event_name <> ALL(%s)) AS n,
+                """SELECT count(*) FILTER (WHERE event_name <> ALL(%s)
+                                             AND human_acked_at IS NULL) AS n,
                           max(ts) AS max_ts
                    FROM agent_events WHERE event_key = %s AND ts > %s""",
                 (list(_WORK_NON_WAKING_EVENTS), aid, a["delivered_ts"]),
@@ -4696,9 +4929,11 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             latest = None
             latest_payload = None
             if pending:
+                # GH #89: skip acked rows so the wake reason / triage hint never names a vetoed event.
                 cur.execute(
                     """SELECT event_name, payload FROM agent_events
                        WHERE event_key = %s AND ts > %s AND event_name <> ALL(%s)
+                         AND human_acked_at IS NULL
                        ORDER BY ts DESC, id DESC LIMIT 1""",
                     (aid, a["delivered_ts"], list(_WORK_NON_WAKING_EVENTS)),
                 )
@@ -4724,10 +4959,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # the link. Null/taskless asks (originating_task_id absent) leave wake_task_id None —
                 # unchanged behaviour. Only set when the linked task is still live (not deleted).
                 if wake_task_id is None:
+                    # GH #89: an acked answer must not attribute the wake to its originating task.
                     cur.execute(
                         """SELECT payload FROM agent_events
                            WHERE event_key=%s AND ts > %s AND event_name='request_answered'
                              AND payload->>'originating_task_id' IS NOT NULL
+                             AND human_acked_at IS NULL
                            ORDER BY ts DESC, id DESC LIMIT 1""",
                         (aid, a["delivered_ts"]),
                     )
@@ -4782,9 +5019,13 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # GH #39: the turns_used<turn_budget cost ceiling that previously gated clock wakes is removed.
             auto_interval = a["auto_wake_interval_secs"]
             secs_since_woken = a["secs_since_woken"]
+            # GH #89: a live snooze suppresses ONLY the clock-driven wake reason; every other
+            # has_work term (events, ready tasks, owed task requests) is deliberately un-gated.
+            snoozed = bool(a["snoozed"])
             auto_wake_due = bool(
                 auto_interval is not None
-                and (secs_since_woken is None or secs_since_woken >= auto_interval))
+                and (secs_since_woken is None or secs_since_woken >= auto_interval)
+                and not snoozed)
             has_work = pending > 0 or len(auto_tasks) > 0 or auto_wake_due or has_pending_task_request
             wake_enabled = a["wake_enabled"]
             in_cooldown = bool(a["in_cooldown"])
@@ -4875,6 +5116,9 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
                 # can show why an idle agent is being woken on a clock.
                 "auto_wake_due": auto_wake_due, "auto_wake_interval_secs": auto_interval,
+                # GH #89: surfaced for the portal/debug — why an interval-configured agent isn't
+                # clock-waking (snoozed=true while snooze_until is in the future).
+                "snoozed": snoozed, "snooze_until": a["snooze_until"],
                 # #288: the wake-suppression hint (None unless the sole pending signal is a single
                 # FYI/answer event). The notifier daemon makes the final call and fails open.
                 "triage_hint": triage_hint,
@@ -5025,6 +5269,45 @@ def wake_ack(aid: str, body: WakeAck):
                    "release_lease": body.release_lease, "lane": lane})
         conn.commit()
     return {"agent_id": aid, "lane": lane, **row}
+
+
+@app.post("/api/agents/{aid}/wake/snooze", status_code=200)
+def wake_snooze(aid: str, body: WakeSnooze):
+    """GH #89 — snooze the CLOCK-driven auto-wake (agent_wake_state.snooze_until).
+
+    Gates ONLY wake_scan's auto_wake_due term: event wakes, ready-task wakes and owed-task-request
+    wakes fire normally during the snooze (the human's veto for those is the per-notification
+    acknowledge). ``snooze_seconds: 0`` — or an ``until_ts`` in the past — clears an active
+    snooze; an expired snooze self-clears in wake_scan's read (no sweeper). Same upsert shape as
+    wake_ack uses for this table."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    if (body.snooze_seconds is None) == (body.until_ts is None):
+        raise HTTPException(422, "pass exactly one of snooze_seconds or until_ts")
+    with db_cursor() as (conn, cur):
+        _require_agent(cur, aid)
+        if body.snooze_seconds is not None:
+            clear = body.snooze_seconds <= 0
+            target_expr, params = "now() + make_interval(secs => %s)", (body.snooze_seconds,)
+        else:
+            clear = body.until_ts <= time.time()
+            target_expr, params = "to_timestamp(%s)", (body.until_ts,)
+        if clear:
+            cur.execute(
+                """INSERT INTO agent_wake_state (agent_id, snooze_until) VALUES (%s, NULL)
+                   ON CONFLICT (agent_id) DO UPDATE SET snooze_until = NULL
+                   RETURNING snooze_until""",
+                (aid,))
+        else:
+            cur.execute(
+                f"""INSERT INTO agent_wake_state (agent_id, snooze_until)
+                    VALUES (%s, {target_expr})
+                    ON CONFLICT (agent_id) DO UPDATE SET snooze_until = EXCLUDED.snooze_until
+                    RETURNING snooze_until""",
+                (aid, *params))
+        snooze_until = cur.fetchone()["snooze_until"]
+        conn.commit()
+    return {"agent_id": aid, "snooze_until": snooze_until}
 
 
 @app.post("/api/agents/{aid}/wake-claim", status_code=200)
@@ -8184,8 +8467,14 @@ async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: fl
         # (PR#274): only when this agent could ACTUALLY claim — _agent_claim_blocked mirrors /next's
         # preconditions (active container + not retired), so we never surface work an immediate
         # /orcha-next would bounce 409 (which a listener loop would re-emit → spin).
+        # GH #89: ignore human-acked rows here so an acked-only backlog can't read as "real event
+        # pending" — without this the probe would fall through to _wait_for_event, which (post-#89)
+        # skips acked rows, and the listener would block to timeout instead of getting its ready
+        # task immediately. Keeps this probe and _fetch_next_event judging the same set. (The
+        # timeout-path re-probe below checks tasks only, not events — no filter needed there.)
         cur.execute(
-            "SELECT 1 FROM agent_events WHERE event_key=%s AND ts > %s LIMIT 1",
+            """SELECT 1 FROM agent_events
+               WHERE event_key=%s AND ts > %s AND human_acked_at IS NULL LIMIT 1""",
             (aid, since_ts),
         )
         if cur.fetchone() or _agent_claim_blocked(cur, aid):

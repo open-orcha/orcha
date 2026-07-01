@@ -947,6 +947,227 @@ window.Orcha = (function () {
     if (_ncOpen) ncRenderPanel();
   }
 
+  /* ---- GH #89: per-agent pending notifications (bell badge + veto panel) ---- */
+  // The roster bell shows `total_pending` — computed server-side on the snapshot with the SAME
+  // predicate wake-scan uses, so badge == panel rows == what would wake the agent. The panel is
+  // the human's per-notification VETO surface: per-row Acknowledge stamps human_acked_at
+  // (POST .../notifications/{event_id}/acknowledge), "Acknowledge all" bulk-acks the feed
+  // (POST .../notifications/read {suppress_wake:true}, with a confirm step), and — only when the
+  // agent has a clock auto-wake configured — a snooze control (POST .../wake/snooze).
+  const PN_PAGE = 50;
+  // agentId doubles as the open flag; snoozeUntil: null = trust the snapshot's a.snooze_until,
+  // a number (ms epoch, 0 = cleared) = this panel session's own POST result wins until close.
+  let _pn = { agentId: null, rows: [], total: 0, loading: false, confirmAll: false, snoozeUntil: null };
+
+  // Types whose underlying WORK persists after an ack (an open request / a ready task keeps its
+  // state-driven wake reason) — the ack only hides the notification, so say so on the row.
+  const PN_STATEFUL = { request_created: "request", escalation: "request", agent_suggested: "request",
+                        task_assigned: "task", task_ready: "task" };
+
+  function pnAgent() { return _pn.agentId ? agentById(_pn.agentId) : null; }
+
+  // Roster-row bell chip; empty string when nothing is pending (no zero-noise).
+  function pendingBellHtml(a) {
+    const n = (a && a.total_pending) || 0;
+    if (!n) return "";
+    return `<span class="pbell" data-pending-agent="${esc(a.id)}" title="${n} pending notification${n === 1 ? "" : "s"} — review &amp; acknowledge">${icon("bell", "")}<span class="pn tnum">${n > 99 ? "99+" : n}</span></span>`;
+  }
+
+  function pnRowHTML(n) {
+    const vis = NC_VIS[n.type] || { icon: null, col: "idle" };
+    const label = NC_LABEL[n.type] || ncHumanize(n.type);
+    const ti = n.preview ? label + " · " + trunc(n.preview, 52) : label;
+    const href = ncDeeplinkHref(n.deeplink);
+    const stateful = PN_STATEFUL[n.type];
+    const hint = stateful
+      ? `<div class="pn-hint">The agent will still see this open ${stateful} — acknowledging only hides the notification.</div>`
+      : "";
+    const when = n.ts != null ? relTime(n.ts * 1000) : "";
+    return `<div class="nrow pnrow">
+      ${ncIcon(vis.icon, vis.col)}
+      <div class="b"><div class="ti">${href ? `<a href="${href}">${esc(ti)}</a>` : esc(ti)}</div>
+        <div class="me">${n.actor_alias ? esc(n.actor_alias) + "<span>·</span>" : ""}<span class="when">${esc(when)}</span></div>
+        ${hint}</div>
+      <button class="btn sm ghost pn-ack" id="pnAck-${n.event_id}" title="I've seen this — the agent must not wake for it">Acknowledge</button>
+    </div>`;
+  }
+
+  // Snooze block — rendered ONLY for an agent with a clock auto-wake configured (there is no
+  // scheduled wake to snooze otherwise). Active snooze shows when it lifts + a Clear affordance.
+  function pnSnoozeHTML(a) {
+    if (!a || a.auto_wake_interval_secs == null) return "";
+    const until = _pn.snoozeUntil != null
+      ? _pn.snoozeUntil
+      : (a.snooze_until ? Date.parse(a.snooze_until) : null);
+    const active = until != null && until > Date.now();
+    // relTime is past-only ("3h ago") — a future instant needs its own label.
+    let liftLabel = "";
+    if (active) {
+      const lift = new Date(until);
+      liftLabel = lift.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+        + (lift.toDateString() === new Date().toDateString()
+           ? "" : " " + lift.toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+    }
+    const body = active
+      ? `<span class="pn-snoozed">Snoozed — auto-wake resumes ${esc(liftLabel)}</span><button class="btn sm ghost" id="pnSnoozeClear">Clear</button>`
+      : `<button class="btn sm ghost" id="pnSnooze1h" data-snooze="3600">1h</button>
+         <button class="btn sm ghost" id="pnSnooze4h" data-snooze="14400">4h</button>
+         <button class="btn sm ghost" id="pnSnoozeTomorrow" data-snooze="tomorrow">Until 9am tomorrow</button>`;
+    return `<div class="pn-snooze"><span class="lbl">Snooze scheduled wake</span><span class="grow"></span>${body}</div>`;
+  }
+
+  function pnRenderPanel() {
+    const float = document.getElementById("pnFloat");
+    if (!float || !_pn.agentId) return;
+    const a = pnAgent();
+    const name = a ? a.alias : "";
+    let listHTML;
+    if (_pn.loading) {
+      listHTML = '<div class="nc-empty">Loading…</div>';
+    } else if (!_pn.rows.length) {
+      listHTML = '<div class="nc-empty">✓ Nothing pending — no notification is waiting to wake this agent.</div>';
+    } else {
+      listHTML = _pn.rows.map(pnRowHTML).join("");
+    }
+    const ackAll = _pn.rows.length
+      ? `<span class="mark${_pn.confirmAll ? " confirm" : ""}" id="pnAckAll">${_pn.confirmAll ? "Really acknowledge all " + _pn.rows.length + "?" : "Acknowledge all"}</span>`
+      : "";
+    float.innerHTML = `
+      <div class="nc-h"><h3>Pending notifications — ${esc(name)}</h3>${ackAll}</div>
+      <div class="nc-zlbl">Will wake this agent <span class="ct">(${_pn.total})</span></div>
+      <div class="nc-list">${listHTML}</div>
+      ${pnSnoozeHTML(a)}`;
+    const all = document.getElementById("pnAckAll");
+    if (all) all.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); pnAckAll(); });
+    _pn.rows.forEach((n) => {
+      const b = document.getElementById("pnAck-" + n.event_id);
+      if (b) b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); pnAck(n.event_id); });
+    });
+    [["pnSnooze1h", "3600"], ["pnSnooze4h", "14400"], ["pnSnoozeTomorrow", "tomorrow"], ["pnSnoozeClear", "0"]]
+      .forEach(([id, spec]) => {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); pnSnooze(spec); });
+      });
+  }
+
+  function pnAck(eventId) {
+    const a = pnAgent();
+    if (!a) return;
+    const idx = _pn.rows.findIndex((n) => String(n.event_id) === String(eventId));
+    if (idx < 0) return;
+    const removed = _pn.rows.splice(idx, 1)[0];   // optimistic removal…
+    _pn.total = Math.max(0, _pn.total - 1);
+    if (a.total_pending != null) a.total_pending = Math.max(0, a.total_pending - 1);
+    _pn.confirmAll = false;
+    pnRenderPanel();
+    fetch("/api/agents/" + encodeURIComponent(a.id) + "/notifications/" + encodeURIComponent(eventId) + "/acknowledge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suppress_wake: true }),
+    })
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
+      .catch((e) => {                              // …rollback on failure
+        _pn.rows.splice(Math.min(idx, _pn.rows.length), 0, removed);
+        _pn.total += 1;
+        if (a.total_pending != null) a.total_pending += 1;
+        pnRenderPanel();
+        toast("Could not acknowledge: " + e.message, "danger");
+      });
+  }
+
+  // "Acknowledge all" is destructive-ish (it silences every pending notification), so it takes
+  // TWO clicks: the first flips the label to a confirm, the second executes.
+  function pnAckAll() {
+    const a = pnAgent();
+    if (!a) return;
+    if (!_pn.confirmAll) { _pn.confirmAll = true; pnRenderPanel(); return; }
+    _pn.confirmAll = false;
+    const prevRows = _pn.rows, prevTotal = _pn.total;
+    _pn.rows = []; _pn.total = 0;
+    if (a.total_pending != null) a.total_pending = 0;
+    pnRenderPanel();
+    fetch("/api/agents/" + encodeURIComponent(a.id) + "/notifications/read", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suppress_wake: true }),
+    })
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
+      .catch((e) => {
+        _pn.rows = prevRows; _pn.total = prevTotal;
+        if (a.total_pending != null) a.total_pending = prevTotal;
+        pnRenderPanel();
+        toast("Could not acknowledge all: " + e.message, "danger");
+      });
+  }
+
+  function pnSnooze(spec) {
+    const a = pnAgent();
+    if (!a) return;
+    let body;
+    if (spec === "tomorrow") {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(9, 0, 0, 0);
+      body = { until_ts: d.getTime() / 1000 };
+    } else {
+      body = { snooze_seconds: Number(spec) || 0 };
+    }
+    fetch("/api/agents/" + encodeURIComponent(a.id) + "/wake/snooze", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    })
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((res) => {
+        _pn.snoozeUntil = res.snooze_until ? Date.parse(res.snooze_until) : 0;   // 0 = cleared
+        a.snooze_until = res.snooze_until;   // keep the snapshot copy honest until the next poll
+        pnRenderPanel();
+        toast(res.snooze_until ? "Scheduled wake snoozed" : "Snooze cleared", "ok");
+      })
+      .catch((e) => toast("Could not snooze: " + e.message, "danger"));
+  }
+
+  function ensurePnFloat() {
+    if (document.getElementById("pnFloat")) return;
+    const float = document.createElement("div");
+    float.id = "pnFloat";
+    float.className = "ncenter float pnfloat";
+    document.body.appendChild(float);
+    document.addEventListener("click", (e) => {
+      if (!_pn.agentId) return;
+      if (float.contains(e.target)) return;
+      // the bell that opened it — let its own handler toggle, don't double-close
+      if (e.target && e.target.closest && e.target.closest(".pbell")) return;
+      closePendingPanel();
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePendingPanel(); });
+  }
+
+  function openPendingPanel(agentId) {
+    ensurePnFloat();
+    _pn = { agentId: agentId, rows: [], total: 0, loading: true, confirmAll: false, snoozeUntil: null };
+    const float = document.getElementById("pnFloat");
+    if (float) float.classList.add("show");
+    pnRenderPanel();
+    fetch("/api/agents/" + encodeURIComponent(agentId) + "/notifications/pending?limit=" + PN_PAGE)
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((res) => {
+        if (_pn.agentId !== agentId) return;   // closed / switched while in flight
+        _pn.rows = res.notifications || [];
+        _pn.total = res.total_pending || 0;
+        _pn.loading = false;
+        pnRenderPanel();
+      })
+      .catch((e) => {
+        if (_pn.agentId !== agentId) return;
+        _pn.loading = false;
+        pnRenderPanel();
+        toast("Could not load pending notifications: " + e.message, "danger");
+      });
+  }
+
+  function closePendingPanel() {
+    _pn.agentId = null;
+    const float = document.getElementById("pnFloat");
+    if (float) float.classList.remove("show");
+  }
+
   /* ---- modal ----------------------------------------------------------- */
   function modal(cfg) {
     let ov = document.getElementById("__ov");
@@ -1518,5 +1739,6 @@ window.Orcha = (function () {
     applyTheme, currentTheme, cycleTheme, orcaSVG,
     agents, tasks, requests, agentByAlias, agentById, aliasFor, taskById, humans, isToHuman,
     actingHuman, setActingHuman, patch, selectionWithin, inputActiveWithin, leaseOf,
+    pendingBellHtml, openPendingPanel, closePendingPanel,
   };
 })();

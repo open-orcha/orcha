@@ -444,6 +444,7 @@
       ags.map((a) => `<button class="rrow ${a.alias === sel ? "sel" : ""}" data-alias="${O.esc(a.alias)}">
         ${O.avatar(a.alias, a.kind, "")}
         <span class="grow"><span class="nm">${O.esc(a.alias)}</span><span class="rl">${O.esc(a.role)}</span></span>
+        ${O.pendingBellHtml(a)}
         ${embodBadge(a, liveSet)}
         ${O.glyph(O.statusClass(a.status))}
       </button>`).join(""));
@@ -828,6 +829,9 @@
 
   // roster clicks are delegated once (the roster element persists across patches).
   $("roster").addEventListener("click", (ev) => {
+    // GH #89: the pending-notifications bell opens the veto panel INSTEAD of selecting the row.
+    const bell = ev.target.closest(".pbell");
+    if (bell) { ev.preventDefault(); ev.stopPropagation(); O.openPendingPanel(bell.dataset.pendingAgent); return; }
     const b = ev.target.closest("[data-alias]"); if (b) select(b.dataset.alias);
   });
   // ISS-63: collapse-toggle clicks delegated once on the stable #detailMain (its innerHTML is
