@@ -1000,6 +1000,65 @@ window.Orcha = (function () {
     return `<div class="diff"><div class="dstat"><span class="a">+${add}</span><span class="d">−${del}</span><span class="muted">unified diff</span></div>${rows}</div>`;
   }
 
+  /* Approval–diff binding: split a (possibly multi-file) unified diff into per-file
+     sections [{path, adds, dels, text}] so the verify gate can render a collapsed
+     manifest for large changes (50-file diffs) instead of one endless scroll. Pure
+     text parse; a bare hunk stream with no `diff --git` header yields one synthetic
+     "(diff)" file so nothing is ever dropped. Counting matches renderDiff's rules
+     (`+++`/`---` are meta lines, not adds/dels). */
+  function parseDiffFiles(diff) {
+    const files = [];
+    let cur = null;
+    const start = (path) => { cur = { path, adds: 0, dels: 0, lines: [] }; files.push(cur); };
+    for (const l of String(diff || "").split("\n")) {
+      const m = /^diff --git a\/(.+?) b\//.exec(l);
+      if (m) { start(m[1]); cur.lines.push(l); continue; }
+      if (!cur) start("(diff)");
+      cur.lines.push(l);
+      if (l.startsWith("+++") || l.startsWith("---")) continue;      // meta, not a change
+      if (l.startsWith("+")) cur.adds++;
+      else if (l.startsWith("-")) cur.dels++;
+    }
+    return files.map((f) => ({ path: f.path, adds: f.adds, dels: f.dels, text: f.lines.join("\n") }));
+  }
+
+  /* Full-screen diff reviewer (GitHub files-view style): file sidebar + anchored
+     per-file sections. PURE builder — returns the overlay's inner HTML; the page
+     (tasks.html openDiffViewer) owns mounting, nav clicks, Esc/close, and delegating
+     dv-accept/dv-reject to the gate's own guarded buttons so approval semantics
+     (digest binding, loading/stale guards, reason-required reject) have ONE owner. */
+  function diffViewerHTML(files, opts) {
+    const o = opts || {};
+    const adds = o.adds != null ? o.adds : files.reduce((n, f) => n + f.adds, 0);
+    const dels = o.dels != null ? o.dels : files.reduce((n, f) => n + f.dels, 0);
+    const side = files.map((f, i) => `
+      <button class="dv-file" data-dvf="${i}" title="${esc(f.path)}">
+        <span class="dv-path">${esc(f.path)}</span>
+        <span class="dv-stat"><span class="a">+${f.adds}</span> <span class="d">−${f.dels}</span></span>
+      </button>`).join("");
+    const main = files.map((f, i) => `
+      <section class="dv-sec" id="dvf-${i}">
+        <div class="dv-sechead"><span class="dv-path">${esc(f.path)}</span>
+          <span class="dv-stat"><span class="a">+${f.adds}</span> <span class="d">−${f.dels}</span></span></div>
+        ${renderDiff(f.text)}
+      </section>`).join("");
+    return `
+      <div class="dv-head">
+        <div class="dv-title">${esc(o.title || "Review changes")}
+          <span class="dv-sub">${files.length} files · <span class="a">+${adds}</span> <span class="d">−${dels}</span>${o.digest ? ` · approval binds to <code>${esc(String(o.digest).slice(0, 17))}…</code>` : ""}</span>
+        </div>
+        <div class="dv-actions">
+          ${o.digest ? `<button class="btn approve" data-act="dv-accept">${icon("check", "")}Accept</button>
+          <button class="btn ghost" data-act="dv-reject">Reject…</button>` : ""}
+          <button class="btn subtle" data-act="dv-close" title="Esc">✕ Close</button>
+        </div>
+      </div>
+      <div class="dv-body">
+        <nav class="dv-side">${side}</nav>
+        <div class="dv-main">${main}</div>
+      </div>`;
+  }
+
   /* ---- scroll/selection-preserving render (ISS-46) --------------------- */
   // The 3s live re-render must NOT (a) reset scrollTop inside a widget, nor (b)
   // clobber an in-progress text selection. patch() is the shared write path the
@@ -1514,7 +1573,7 @@ window.Orcha = (function () {
     D, applySnapshot, esc, linkify, mdText, trunc, shortId, relTime, clockTime, recencyTs, recencyBand, avatar, icon, pill, statusClass, glyph,
     sortState, sortControlHtml, sortComparator, wireSortControl,
     kindBadge, agentLink, taskLink, requestLink, taskByRef, taskRefs, attnItems, mountShell, modal, closeModal,
-    toast, copyText, renderDiff, runCard, stopRun, activateRuns, startRunStream, paintFinished, classifyLine,
+    toast, copyText, renderDiff, parseDiffFiles, diffViewerHTML, runCard, stopRun, activateRuns, startRunStream, paintFinished, classifyLine,
     applyTheme, currentTheme, cycleTheme, orcaSVG,
     agents, tasks, requests, agentByAlias, agentById, aliasFor, taskById, humans, isToHuman,
     actingHuman, setActingHuman, patch, selectionWithin, inputActiveWithin, leaseOf,

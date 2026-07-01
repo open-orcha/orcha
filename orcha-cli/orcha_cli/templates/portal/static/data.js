@@ -48,6 +48,14 @@ window.OrchaData = (function () {
     return mapThread(d.messages, agents);
   }
 
+  // Approval–diff binding: the task's reviewable diff + its binding digest
+  // ({task_id, diff_digest, runs:[{run_id, agent_id, started_at, diff}]}). The verify
+  // gate renders exactly this and echoes diff_digest back on approve, so the approval
+  // is bound to the diff the human actually saw.
+  async function diffOf(tid) {
+    return getJSON("/api/tasks/" + encodeURIComponent(tid) + "/diff");
+  }
+
   // pure: raw FastAPI snapshot ({container, agents, tasks, requests}) -> component shape.
   function mapSnapshot(raw) {
     raw = raw || {};
@@ -87,7 +95,12 @@ window.OrchaData = (function () {
       // SPEC-4: per-task hand-off protocol (Ledger: tasks.protocol JSONB, surfaced via the shared
       // _task_list_sql). null when unset. Whitelisted here so the adapter doesn't drop it.
       protocol: t.protocol != null ? t.protocol : null,
-      result: t.result != null ? t.result : null,
+      // tasks.result JSONB is {"result": <text>, "by_agent_id": ...} (written by /done) —
+      // unwrap to the text the pages render (was "[object Object]"). Legacy plain-string
+      // and null rows pass through.
+      result: (t.result && typeof t.result === "object")
+        ? (t.result.result != null ? t.result.result : null)
+        : (t.result != null ? t.result : null),
       // D7: latest plan_approval decision {decision, reason, actor, at}; null pre-D7. The
       // plan TEXT itself is the agent's opening thread message — this is the durable
       // "already decided" signal so the approval card stops re-asking (ISS-41 / B10 P2).
@@ -204,5 +217,5 @@ window.OrchaData = (function () {
     connect();
   }
 
-  return { mapSnapshot, resolveCid, refresh, start, startEventStream, aliasFor, mapThread, threadOf, _cidOf: () => _cid };
+  return { mapSnapshot, resolveCid, refresh, start, startEventStream, aliasFor, mapThread, threadOf, diffOf, _cidOf: () => _cid };
 })();

@@ -47,6 +47,7 @@ Compat:
     GET  /                                        read-only HTML dashboard
 """
 import asyncio
+import hashlib
 import json
 import logging
 import pathlib
@@ -1891,6 +1892,10 @@ class TaskVerify(BaseModel):
     approve: bool
     feedback: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
     actor_agent_id: str = Field(..., description="UUID of the human agent verifying (kind='human')")
+    # Approval–diff binding: REQUIRED on approve when the task has a captured diff.
+    # Fetch from GET /api/tasks/{tid}/diff; a mismatch means the diff changed since
+    # review (409). Binds the approval to the exact diff the human saw.
+    diff_digest: Optional[str] = Field(default=None, max_length=128)
 
 
 class TaskCancel(BaseModel):
@@ -5495,6 +5500,51 @@ def list_task_runs(tid: str, limit: int = Query(default=20, ge=1, le=200)):
     return {"task_id": tid, "runs": runs}
 
 
+def _task_reviewable_diff(cur, tid):
+    """Approval–diff binding: the task's reviewable artifact.
+
+    Returns (diff_digest, rows) where rows are the task's worker runs that captured a
+    non-empty diff, OLDEST first (the order a reviewer reads the work), and diff_digest
+    is the canonical `sha256:<hex>` over each (run_id, diff) pair in that order. Any new
+    run landing a diff changes the digest, so an approval carrying a digest can only
+    match the exact diff set the human loaded. (None, []) when nothing was captured —
+    research/coordination tasks verify without a digest."""
+    cur.execute(
+        """SELECT run_id, agent_id, diff, started_at FROM worker_runs
+            WHERE task_id=%s AND diff IS NOT NULL AND btrim(diff) <> ''
+            ORDER BY started_at, run_id""",
+        (tid,),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return None, []
+    h = hashlib.sha256()
+    for r in rows:
+        h.update(str(r["run_id"]).encode())
+        h.update(b"\n")
+        h.update(r["diff"].encode())
+        h.update(b"\x00")
+    return "sha256:" + h.hexdigest(), rows
+
+
+@app.get("/api/tasks/{tid}/diff")
+def task_diff(tid: str):
+    """The reviewable diff for a task + its binding digest. The verify surface renders
+    exactly this and echoes `diff_digest` back on approve — see verify_task."""
+    if not _valid_uuid(tid):
+        raise HTTPException(400, "task_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        _require_task(cur, tid)
+        digest, rows = _task_reviewable_diff(cur, tid)
+    return {
+        "task_id": tid,
+        "diff_digest": digest,
+        "runs": [{"run_id": str(r["run_id"]), "agent_id": str(r["agent_id"]),
+                  "started_at": r["started_at"].isoformat(), "diff": r["diff"]}
+                 for r in rows],
+    }
+
+
 def _worker_run_status(run_id):
     with db_cursor() as (_, cur):
         cur.execute("SELECT status FROM worker_runs WHERE run_id=%s", (run_id,))
@@ -6427,6 +6477,28 @@ def verify_task(tid: str, body: TaskVerify):
         if not t["is_root"] and t["status"] != "needs_verification":
             raise HTTPException(409, f"task is '{t['status']}', not 'needs_verification'")
 
+        # Approval–diff binding: approving a task that HAS a captured diff requires the
+        # digest of that exact diff (GET /api/tasks/{tid}/diff). Rejection stays lenient —
+        # it must never be blocked by staleness (rejecting is the conservative action).
+        digest_current, _diff_rows = _task_reviewable_diff(cur, tid)
+        if body.approve:
+            if digest_current:
+                if not body.diff_digest:
+                    raise HTTPException(
+                        400,
+                        "this task has a captured diff — approving requires `diff_digest` "
+                        "from GET /api/tasks/{tid}/diff, so the approval is bound to the "
+                        "exact diff you reviewed")
+                if body.diff_digest != digest_current:
+                    raise HTTPException(
+                        409,
+                        "diff_digest is stale — the task's captured diff changed since you "
+                        "reviewed it; re-fetch GET /api/tasks/{tid}/diff and review again")
+            elif body.diff_digest:
+                raise HTTPException(
+                    409, "this task has no captured diff, but a diff_digest was supplied — "
+                         "you may have reviewed the wrong task")
+
         if body.approve:
             # #298: completion mechanics (mark completed, unblock downstream, complete-root)
             # are SHARED with the full-autonomy /done path via _complete_and_unblock so the two
@@ -6448,14 +6520,27 @@ def verify_task(tid: str, body: TaskVerify):
             log_event(cur, t["container_id"], "human", None, "task", tid, "verified",
                       {"approved": True, "unblocked": unblocked,
                        "feedback": body.feedback,
+                       "diff_digest": digest_current,
                        "verifier_human_id": body.actor_agent_id})
             # Notify the assignees their work was approved + any newly-ready downstream
             cur.execute(
                 "SELECT DISTINCT agent_id FROM agent_tasks WHERE task_id=%s",
                 (tid,),
             )
-            for r in cur.fetchall():
-                _publish_event(cur, str(t["container_id"]), str(r["agent_id"]),
+            assignees = [str(r["agent_id"]) for r in cur.fetchall()]
+            # Approval–diff binding: the decision row is the durable audit artifact —
+            # "this human approved this task having seen exactly this diff". (Closes the
+            # gap where /verify never wrote to the ONE-auditable-table decisions record.)
+            cur.execute(
+                """INSERT INTO decisions
+                     (container_id, subject_type, subject_id, decision, reason,
+                      actor_agent_id, target_agent_id, diff_digest)
+                   VALUES (%s, 'task_verify', %s, 'approve', %s, %s, %s, %s)""",
+                (t["container_id"], tid, body.feedback or None, body.actor_agent_id,
+                 assignees[0] if assignees else None, digest_current),
+            )
+            for aid_ in assignees:
+                _publish_event(cur, str(t["container_id"]), aid_,
                                "task_verified",
                                {"task_id": tid, "approved": True, "feedback": body.feedback})
             # (downstream task_ready wakes + root→container completion are published inside
@@ -6485,8 +6570,23 @@ def verify_task(tid: str, body: TaskVerify):
                 )
             log_event(cur, t["container_id"], "human", None, "task", tid, "verified",
                       {"approved": False, "feedback": body.feedback,
+                       "diff_digest": digest_current,
                        "reassigned_to_agent_ids": restored,
                        "verifier_human_id": body.actor_agent_id})
+            # Approval–diff binding: record the rejection in decisions too. The decisions
+            # table's CHECK requires a reason on reject, and /verify keeps feedback optional
+            # — so only a feedback-carrying rejection lands here (the events row above is
+            # the unconditional audit line). digest recorded as supplied: it documents what
+            # the human had loaded when rejecting (staleness never blocks a reject).
+            if body.feedback and body.feedback.strip():
+                cur.execute(
+                    """INSERT INTO decisions
+                         (container_id, subject_type, subject_id, decision, reason,
+                          actor_agent_id, target_agent_id, diff_digest)
+                       VALUES (%s, 'task_verify', %s, 'reject', %s, %s, %s, %s)""",
+                    (t["container_id"], tid, body.feedback, body.actor_agent_id,
+                     restored[0] if restored else None, body.diff_digest),
+                )
             for aid in restored:
                 _publish_event(cur, str(t["container_id"]), aid, "task_verified",
                                {"task_id": tid, "approved": False, "feedback": body.feedback})
