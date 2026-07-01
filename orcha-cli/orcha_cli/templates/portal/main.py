@@ -4327,7 +4327,7 @@ def active_conversations(cid: str):
                       COALESCE(ws.delivered_ts, 0) AS _delivered_ts,
                       (SELECT max(ev.ts) FROM agent_events ev
                          WHERE ev.event_key = cv.agent_id::text
-                           AND ev.ts > COALESCE(ws.delivered_ts, 0)
+                           AND ev.ts > COALESCE(ws.conv_delivered_ts, 0)
                            AND ev.event_name = 'conversation_turn') AS conversation_ack_ts,
                       COALESCE((SELECT count(*) FROM agent_events ev
                                  WHERE ev.event_key = cv.agent_id::text
@@ -5238,9 +5238,10 @@ def wake_renew(aid: str, body: WakeClaim):
                      FROM worker_runs w
                      LEFT JOIN agents ag ON ag.id::text = w.stop_requested_by
                     WHERE w.agent_id = %s AND w.status = 'running'
+                      AND w.lane = %s
                       AND w.stop_requested_at IS NOT NULL
                     ORDER BY w.started_at DESC LIMIT 1""",
-                (aid,),
+                (aid, lane),
             )
             stop = cur.fetchone()
         conn.commit()

@@ -259,7 +259,8 @@ async def test_active_conversations_reports_conversation_ack_ts(client, containe
     r = await client.post(f"/api/agents/{aid}/wake-ack",
                           json={"kind": "resident_conversation_turn",
                                 "event": "conversation_turn",
-                                "delivered_ts": cand["conversation_ack_ts"]})
+                                "delivered_ts": cand["conversation_ack_ts"],
+                                "lane": "conversation"})
     assert r.status_code == 200, r.text
     _, cand2 = await _active(client, container["id"], cid)
     assert cand2["conversation_ack_ts"] is None
