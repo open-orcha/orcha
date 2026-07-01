@@ -1396,7 +1396,242 @@ def _last_event_type(log_path) -> Optional[str]:
     return None
 
 
-def _worker_is_live(log_path) -> bool:
+def _codex_is_rate_limit(obj: dict) -> bool:
+    """GH#61: does this Codex `codex exec --json` event signal a rate-limit / backoff / retry —
+    i.e. the worker is alive, just sleeping off a 429? Tolerant on purpose (codex is not installed
+    on the dev host, so the exact event spelling can't be pinned — same caveat as
+    `_extract_codex_session_id`): we scan the event `type`, any nested `msg.type`, and the explicit
+    `retry_after` backoff field, and only treat an error-shaped event as 'live' when it CLEARLY
+    carries retry/backoff/429 semantics (a generic error is a dead worker, not a sleeping one).
+    We deliberately do NOT key off a bare `retries` count: a *successful* event can be stamped with
+    `retries: N` (it retried then succeeded), which is history, not a backoff in progress — counting
+    it would read a finished worker as alive. Only `retry_after` (a concrete 'sleep this long before
+    the next attempt') and explicit retry/429 type/message text mark an in-flight backoff."""
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if "rate_limit" in t or "rate-limit" in t or "backoff" in t or "throttl" in t \
+                or "retry" in t or "retrying" in t:
+            return True
+    if obj.get("retry_after") or msg.get("retry_after"):
+        return True
+    for field in (msg.get("message"), msg.get("error"), obj.get("error"), obj.get("message")):
+        if isinstance(field, str):
+            low = field.lower()
+            if "429" in low or "rate limit" in low or "rate_limit" in low or "too many requests" in low:
+                return True
+    return False
+
+
+def _codex_event_phase(obj: dict):
+    """GH#61: classify a Codex `codex exec --json` event as the START or END of a tool/command,
+    returning ('start'|'end'|None, id_or_None). Codex frames work as item lifecycle events —
+    `item.started` → `item.completed`/`item.failed` carrying `item.id`, `item.type`
+    (command_execution, mcp_tool_call, web_search, file_change, …) and `item.status` — but older
+    builds emit a nested `msg` with `*_begin`/`*_end` pairs (exec_command_begin/_end,
+    mcp_tool_call_begin/_end, …). The exact spelling can't be pinned on this host, so we recognize
+    BOTH shapes tolerantly and fall back to a status-string read; an unrecognized event is None
+    (ignored) rather than mistaken for in-flight work."""
+    if not isinstance(obj, dict):
+        return None, None
+    item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    iid = item.get("id") or msg.get("call_id") or msg.get("id") or obj.get("id")
+    top = (obj.get("type") or "").lower()
+    mtype = (msg.get("type") or "").lower()
+    # modern item.* lifecycle
+    if top == "item.started":
+        return "start", iid
+    if top in ("item.completed", "item.failed", "item.done"):
+        return "end", iid
+    # nested msg begin/end pairs (older schema)
+    if mtype.endswith("_begin"):
+        return "start", iid
+    if mtype.endswith("_end"):
+        return "end", iid
+    # status-string fallback (e.g. an item.updated carrying status)
+    status = str(item.get("status") or msg.get("status") or "").lower()
+    if status in ("in_progress", "running", "started", "pending"):
+        return "start", iid
+    if status in ("completed", "complete", "done", "failed", "success", "error",
+                  "cancelled", "canceled", "aborted"):
+        return "end", iid
+    return None, None
+
+
+def _codex_is_turn_end(obj: dict) -> bool:
+    """GH#61 (PR #80 review): does this Codex `codex exec --json` event mark the end of a whole
+    TURN, not just one item? Codex frames an agent turn as `turn.started` → …items… →
+    `turn.completed`/`turn.failed` (older builds nest a `msg.type` of `turn_complete`/`task_complete`).
+    This matters for liveness because a command `item.started` is not always closed by its own
+    `item.completed`: in the official `codex exec --json` sample a command start is followed by an
+    agent-message `item.completed` (a DIFFERENT id) and then `turn.completed`, leaving the command id
+    perpetually 'in flight'. A turn-terminal event is a hard boundary — every item opened in that turn
+    is finished — so we honor it as such (clear in-flight ids, balance the count) rather than reading a
+    completed turn as a live worker. Recognized tolerantly (codex unpinned on this host)."""
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if t in ("turn.completed", "turn.failed", "turn.done", "turn_complete",
+                 "turn_completed", "turn_failed", "turn_end", "task_complete",
+                 "task_completed", "task_finished"):
+            return True
+    return False
+
+
+def _codex_tail_is_live(tail: bytes) -> bool:
+    """GH#61: liveness probe for a Codex (`codex exec --json`) worker, the runtime-aware sibling of
+    the Claude `_worker_is_live` body. The Claude probe only understands Claude stream-json shapes,
+    so before this an ALIVE-but-log-silent Codex worker (e.g. on a long external command) read as
+    stalled and was hard-killed past the cap — the exact #49 failure mode left unfixed for Codex.
+
+    Mirror the Claude three-signal heuristic over Codex's event schema and treat ANY as alive:
+      * pairing — a tool/command `item.started`/`*_begin` whose id has not yet been seen as a
+        terminal `item.completed`/`*_end` (precise when ids exist);
+      * count — more starts than ends (covers no-id + parallel calls);
+      * order — the LAST tool-phase event in the tail is a START (a no-id call in flight at the tail);
+    plus a rate-limit/backoff event as the last meaningful signal (mid-429, alive but sleeping).
+    A genuinely finished/idle Codex tail trips none of these → False, so the dead-Codex teeth case
+    still hard-kills. Parsing is fail-open/tolerant (codex unpinned on this host).
+
+    PR #80 review: a `turn.completed`/`turn.failed` event is a hard TURN boundary that overrides the
+    in-flight pairing. In the official `codex exec --json` shape a command `item.started` is closed by
+    an agent-message `item.completed` (a different id) and then `turn.completed`, so the command id
+    would otherwise stay 'in flight' and read the finished worker as live (→ wrongly checkpoint-
+    respawned). On a turn-terminal event we clear the in-flight set, reset the start/end count, and
+    make the turn end the last signal — so a completed/failed turn correctly reads NOT live."""
+    inflight: set = set()
+    start_count = end_count = 0
+    last_signal = None                         # 'start' | 'end' | 'rate_limit' | 'turn_end'
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                           # partial/garbled line (e.g. truncated tail head)
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_turn_end(obj):
+            # hard turn boundary: every item opened this turn is done — drop in-flight ids, balance
+            # the count, and let this terminal event be the last signal so the order check reads idle.
+            inflight.clear()
+            start_count = end_count = 0
+            last_signal = "turn_end"
+            continue
+        if _codex_is_rate_limit(obj):
+            last_signal = "rate_limit"
+            continue
+        phase, iid = _codex_event_phase(obj)
+        if phase == "start":
+            last_signal = "start"
+            if iid:
+                # Codex emits repeated `item.updated` (status:in_progress) events for ONE command,
+                # each read as a "start" by the status fallback. Trust the id: only count a fresh
+                # start (id not already in flight) so repeated updates of the same command don't
+                # inflate start_count and read a finished worker as live. No-id events still count.
+                if iid not in inflight:
+                    inflight.add(iid)
+                    start_count += 1
+            else:
+                start_count += 1
+        elif phase == "end":
+            last_signal = "end"
+            if iid:
+                # Only balance the count for an id we actually counted as started; a terminal event
+                # for an id whose start scrolled out of the tail (or a duplicate end) must not drive
+                # end_count past the real starts and fabricate a false stall.
+                if iid in inflight:
+                    inflight.discard(iid)
+                    end_count += 1
+            else:
+                end_count += 1
+    if inflight:                               # pairing: an unpaired in-flight tool/command id
+        return True
+    if start_count > end_count:                # count: more starts issued than terminated (no-id safe)
+        return True
+    return last_signal in ("start", "rate_limit")   # order/backoff: tail ends mid-tool or mid-429
+
+
+def _codex_result_status(log_path) -> Optional[str]:
+    """GH#61 (PR #80 review round 2): the Codex sibling of `_result_status`. Return a terminal
+    status ('success' / 'error') when a Codex (`codex exec --json`) worker's log tail shows a
+    COMPLETED turn as its last meaningful signal, else None.
+
+    Why `reap_workers` needs this distinctly from `_worker_is_live`: when a Codex worker finishes,
+    its terminal `turn.completed` line is fresh log GROWTH, so `reap_workers` reads the worker as
+    `stalled=False`. `_result_status` only understands Claude's `result` event (→ None for Codex),
+    so the finished worker skipped the hold-off/exit-cleanly branch and fell through to the
+    checkpoint branch (`respawnable and (not stalled or ...)`) — which respawned an ALREADY-FINISHED
+    worker. Mirroring the Claude `result` path, a turn-terminal Codex tail must instead take the
+    terminal branch: hold off, let the process exit on its own (reaped 'exited', SessionEnd/C1
+    digest runs), never checkpoint-respawn it.
+
+    Terminal means the LAST turn/tool signal in the tail is a `turn.completed`/`turn.failed` with
+    NOTHING live after it — no later `item.started`, no unpaired in-flight id, no rate-limit
+    backoff. A worker that went silent WITHOUT a turn end (e.g. crashed mid-item) is NOT terminal
+    here → it stays on the stall/liveness/respawn path, exactly as before. A turn end followed by a
+    new turn's activity is likewise not terminal (the new turn is still running). Tolerant/fail-open
+    parsing (codex unpinned on this host), and — like `_result_status` — a still-being-written final
+    line (unparseable last line) defers the decision to a later tick rather than risk a false
+    terminal on a live worker."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            f.seek(max(0, end - 65536))          # tail is plenty; terminal lines are small
+            tail = f.read()
+    except OSError:
+        return None
+    # the LAST non-empty line must parse cleanly; a truncated final line means codex is still
+    # mid-write → don't declare terminal yet (mirrors _result_status's last-line guard).
+    for raw in reversed(tail.split(b"\n")):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            json.loads(s)
+        except ValueError:
+            return None
+        break
+    last_signal = None                           # 'start' | 'end' | 'rate_limit' | 'turn_end'
+    last_turn_status = None                      # 'success' | 'error' — status of the last turn end
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                             # partial/garbled line (e.g. truncated tail head)
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_turn_end(obj):
+            last_signal = "turn_end"
+            blob = ((obj.get("type") or "") + " "
+                    + ((obj.get("msg") or {}).get("type") or "")).lower()
+            last_turn_status = "error" if "fail" in blob else "success"
+            continue
+        if _codex_is_rate_limit(obj):
+            last_signal = "rate_limit"
+            continue
+        phase, _iid = _codex_event_phase(obj)
+        if phase == "start":
+            last_signal = "start"
+        elif phase == "end":
+            last_signal = "end"
+    # terminal ONLY when the tail's last meaningful signal is a turn end (nothing live after it).
+    return last_turn_status if last_signal == "turn_end" else None
+
+
+def _worker_is_live(log_path, runtime=None) -> bool:
     """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
     stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
     a worker that is very much alive yet legitimately quiet:
@@ -1425,7 +1660,14 @@ def _worker_is_live(log_path) -> bool:
       * order — the LAST tool-related block in the stream is a `tool_use` (covers a no-id call
         in flight at the tail, even when an orphan result earlier balances the count).
     A `tool_result` always follows its `tool_use`, so an orphan result whose `tool_use` scrolled
-    out of the tail can't fabricate a false in-flight under any of the three."""
+    out of the tail can't fabricate a false in-flight under any of the three.
+
+    GH#61: the probe is RUNTIME-AWARE. Codex workers launch via `codex exec --json` (not
+    `claude -p`), which emits an entirely different event schema, so the Claude-only shapes below
+    found none of a live Codex worker's signals and returned False → the #54 checkpoint protection
+    never fired and an alive-but-silent Codex worker was hard-killed past the cap. For a Codex
+    runtime we delegate to `_codex_tail_is_live`; the default (None/claude) keeps the original
+    Claude path so existing callers are unchanged."""
     if not log_path:
         return False
     try:
@@ -1436,6 +1678,8 @@ def _worker_is_live(log_path) -> bool:
             tail = f.read()
     except OSError:
         return False
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_tail_is_live(tail)
     tool_use_ids: set = set()
     tool_result_ids: set = set()
     use_count = result_count = 0
@@ -1473,6 +1717,19 @@ def _worker_is_live(log_path) -> bool:
     if use_count > result_count:              # count: more calls issued than answered (no-id safe)
         return True
     return last_tool_block == "use"           # order: tail ends on an unanswered tool_use
+
+
+def _terminal_status(log_path, runtime=None) -> Optional[str]:
+    """GH#61 (PR #80 review round 2): runtime-aware 'has this worker FINISHED its agent loop?'.
+    Claude emits a terminal stream-json `result` line (`_result_status`); a Codex worker emits a
+    terminal `turn.completed`/`turn.failed` (`_codex_result_status`). `reap_workers` uses this to
+    HOLD OFF on a finished worker — let it exit cleanly so SessionEnd (the C1 digest) runs and it is
+    reaped 'exited' — instead of stall-killing OR checkpoint-respawning it. Without the Codex arm a
+    finished Codex worker's terminal turn line read as fresh growth (`not stalled`) and was wrongly
+    respawned by the checkpoint branch."""
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_result_status(log_path)
+    return _result_status(log_path)
 
 
 def _kill_worker(proc, graceful: bool = False, grace_secs: float = 10.0) -> None:
@@ -2119,13 +2376,22 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         over_cap = now > w.get("hard_deadline", now)
         if not (stalled or over_cap):
             continue                   # progressing (or within stall window) — let it work
-        # ISS-29: a worker that already emitted a terminal `result` has COMPLETED — the log
-        # stops growing at the result line, so the stall timer trips even though the work is
-        # done and the process is just slow to exit. Do NOT reap it as 'killed': hold off and
-        # let the next tick's proc.poll() catch a clean exit (reaped 'exited', SessionEnd/C1
-        # digest gets to run). Only force it down — still 'exited' — if it overruns a generous
-        # graceful-exit window.
-        rstatus = _result_status(w.get("log_path"))
+        # GH#61: resolve the worker's OWN runtime up front — both the terminal-completion check
+        # below and the liveness probe further down must read the worker's runtime schema. A Codex
+        # worker's `codex exec --json` log carries none of the Claude stream-json signals, so a
+        # runtime-blind read mis-classifies it. The runtime rides on respawn_ctx (set at spawn AND
+        # carried through checkpoint-respawn).
+        w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+        # ISS-29: a worker that already emitted a terminal `result` (Claude) / `turn.completed`
+        # (Codex, GH#61 PR #80 review) has COMPLETED — the log stops growing at that line, so the
+        # stall timer trips even though the work is done and the process is just slow to exit. Do
+        # NOT reap it as 'killed' AND do NOT checkpoint-respawn it: a Codex worker's terminal turn
+        # line is fresh growth (`not stalled`), which the checkpoint branch below would otherwise
+        # treat as "still progressing" and respawn an already-finished worker (#80 review round 2).
+        # Hold off here and let the next tick's proc.poll() catch a clean exit (reaped 'exited',
+        # SessionEnd/C1 digest gets to run). Only force it down — still 'exited' — if it overruns a
+        # generous graceful-exit window.
+        rstatus = _terminal_status(w.get("log_path"), runtime=w_runtime)
         if rstatus is not None:
             seen = w.get("result_seen_ts")
             if seen is None:
@@ -2151,8 +2417,10 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # ISS-45: a stalled-looking worker can be log-silent yet ALIVE — waiting on an in-flight
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
         # returns) or backing off on a rate limit. Compute liveness ONCE here; reused by the
-        # exemption, the checkpoint gate, and the kill diagnostic below.
-        is_live = _worker_is_live(w.get("log_path"))
+        # exemption, the checkpoint gate, and the kill diagnostic below. The probe reads the
+        # worker's OWN runtime (w_runtime, resolved above) — a runtime-blind probe would read an
+        # alive-but-silent Codex worker as dead and hard-kill it past the cap (GH#61).
+        is_live = _worker_is_live(w.get("log_path"), runtime=w_runtime)
         # Under the soft cap a log-silent-but-live worker is simply LEFT ALONE — don't STALL-kill it:
         # that SIGKILLed legitimately-working workers mid-task, losing the result + the C1 digest.
         if stalled and not over_cap and is_live:
@@ -2194,6 +2462,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             "last_progress_ts": lpts,
             "over_cap": over_cap,
             "worker_is_live": is_live,
+            "runtime": w_runtime,            # GH#61: which liveness schema the probe applied
             "last_event_type": _last_event_type(lp),
         }
         _kill_worker(proc, graceful=True)
