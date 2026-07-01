@@ -3,6 +3,13 @@
 Issue: https://github.com/open-orcha/orcha/issues/89
 Branch: `feat/gh89-notification-ack`, **stacked on `feat/gh91-90-conversation-work-lanes` (PR #104)** — see "Why stacked" below.
 
+> **Round 2 revisions** (addressing PLAN Round 1 review): (a) §5 pending feed + badge re-keyed
+> off `human_acked_at` + lane delivery cursors instead of `read_through_ts` — read is visual
+> dimming only; a read-but-unacked notification stays pending and keeps waking until acked
+> (regression test #8). (b) §3 gains an 8th filter site: the `agent_wait` entry precheck
+> (~8188), so an acked-only backlog can't block the synthetic `task_ready` until timeout
+> (regression test #11).
+
 ## Pain point (from kedar)
 
 Sometimes the human does NOT want an agent to wake for a certain notification — the human
@@ -133,6 +140,7 @@ branch as of `git merge-base`, will shift):
 | ~4202 | `_collect_directed_messages` | an acked `prompt`/`task_message` must not be injected into the turn (this IS the delivery path for nudges — acking a nudge is the human eating it) |
 | ~4328–4338 | `active_conversations` conversation-lane pending count / max-ts subqueries | same veto must hold for the resident-drain path (lane-agnostic requirement) |
 | ~168 | `_fetch_next_event` (long-poll `/orcha-listen` delivery) | a live listener must not be handed an acked event. Safe: it returns the next *unacked* row, whose later ts advances the caller's cursor past the acked one; if none, the poll blocks as today |
+| ~8188 | `agent_wait` entry precheck (`SELECT 1 ... ts > since_ts LIMIT 1`) | this probe decides whether a synthetic `task_ready` may be returned; without the filter an acked-only backlog reads as "real event pending", falls through to `_wait_for_event` — which (post-filter) skips the acked row — and the listener blocks to timeout instead of getting its ready task immediately. Same `AND human_acked_at IS NULL` keeps the precheck and `_fetch_next_event` judging the same set. (The timeout-path re-probe at ~8219 only checks tasks, not events — no change needed there.) |
 
 `max_ts` / ack-through computations stay over ALL events (unchanged) so wake-acks advance
 cursors past acked rows and they never linger. `_NON_WAKING_EVENTS` /
@@ -166,14 +174,30 @@ and owed-task-request wakes fire normally during a snooze, exactly as the issue 
 
 `GET /api/agents/{aid}/notifications/pending?limit=&before_ts=&before_id=`
 
+**Pending is defined by wake truth, NOT the read cursor.** The panel exists to give the human
+veto power over wakes, so a row is "pending" exactly when it can still make the agent act:
+
+- `human_acked_at IS NULL`, **and**
+- newer than the lane-appropriate *delivery* cursor — work-zone rows: `ts > delivered_ts`;
+  conversation-zone rows: `ts > conv_delivered_ts` (zone per the same classification the feed
+  already applies on the #104 branch), **and**
+- name not in the lane's suppressed/non-waking sets (`_NOTIF_SUPPRESSED` always;
+  `_WORK_NON_WAKING_EVENTS` for work-zone rows — those never wake, so listing them as
+  "veto?" would be dishonest), mirroring the §3 `wake_scan` / `active_conversations` counts.
+
+`read_through_ts` plays NO role here. Marking notifications read is *visual dimming only* (the
+regular feed's `read` flag, §2); a read-but-unacked event stays in the pending panel and keeps
+its badge count because it will still wake the agent. (This is the Round-1 review fix: keying
+the panel on the read cursor let a read-without-ack hide a notification that still wakes.)
+Rows the agent has since consumed (delivery cursor moved past them by a wake ack) drop out
+naturally — nothing left to veto.
+
 Same query/classify/paginate machinery as the existing feed (shared helper extracted from
 `agent_notifications` rather than copy-pasted), differing only in:
-- filter `ts > read_through_ts AND human_acked_at IS NULL` (only items still awaiting the human),
+- the pending filter above (vs the regular feed's no-filter + read-dimming),
 - no `zone` param — returns both zones (the panel shows everything pending),
-- response envelope adds `"total_pending"`: `SELECT count(*) FROM agent_events WHERE
-  event_key=%s AND ts > <read_through_ts> AND human_acked_at IS NULL AND event_name <> ALL(
-  _NOTIF_SUPPRESSED)`. Classify-time drops are name-driven and the constant already exists
-  (`_NOTIF_SUPPRESSED`, main.py ~515), so the count stays honest with what the panel renders.
+- response envelope adds `"total_pending"`: count over the same pending predicate (work-lane
+  count + conversation-lane count), so badge == panel rows == what wake-scan would count.
   Row shape gains `"event_id"` (= `agent_events.id`, needed by the acknowledge button; the
   existing feed rows gain it too — additive, no break).
 
@@ -228,12 +252,22 @@ New file `tests/test_iss89_notification_ack.py`:
    `_NOTIF_SUPPRESSED` names (a pending un-consumed `conversation_turn` survives bulk ack and
    still reaches the resident drain — the message-eater guard), leaves newer rows pending;
    without the flag stamps nothing (existing behaviour regression-pinned).
-7. **pending feed**: returns only unread+unacked, both zones, `total_pending` matches, rows
-   carry `event_id`; acked row still appears in the *regular* feed with `read: true`.
-8. **snooze**: `auto_wake_due` true → snooze → false while only the clock reason exists; a
+7. **pending feed**: returns only unacked+undelivered rows, both zones, `total_pending`
+   matches, rows carry `event_id`; acked row still appears in the *regular* feed with
+   `read: true`; a row the agent already consumed (delivery cursor past it) is absent.
+8. **read-but-unacked regression (Round-1 review fix)**: publish an event → `POST
+   notifications/read` (advance `read_through_ts` past it, NO `suppress_wake`) → the event
+   still appears in the pending feed, `total_pending` still counts it, and wake-scan still
+   says `should_wake` — read alone must neither hide nor suppress. Regular feed shows it
+   `read: true`.
+9. **snooze**: `auto_wake_due` true → snooze → false while only the clock reason exists; a
    real event during snooze still yields `should_wake` true; `snooze_seconds: 0` clears;
    expired snooze self-clears (no wake suppression after `snooze_until`).
-9. **listener path**: `_fetch_next_event` skips an acked row and returns the next unacked one.
+10. **listener path**: `_fetch_next_event` skips an acked row and returns the next unacked one.
+11. **`/wait` precheck (Round-1 review fix)**: agent has an assigned ready task and its ONLY
+    event newer than `since_ts` is acked → `GET /wait` returns the synthetic `task_ready`
+    immediately (entry probe no longer counts the acked row as pending), instead of blocking
+    to timeout; with an *unacked* event pending, the real event still takes precedence.
 
 Frontend: new `tests/portal/pending_ack.test.js` following the existing
 `tests/portal/notification_center.test.js` vm-sandbox pattern — badge renders from
@@ -254,7 +288,7 @@ smoke 4) plus the new tests.
 
 - `orcha-cli/orcha_cli/templates/migrations/031_notification_ack.sql` (new)
 - `orcha-cli/orcha_cli/templates/portal/main.py` (ack endpoint, read-bulk flag, pending feed,
-  snooze endpoint, 7 query-site filters, wake-scan snooze term)
+  snooze endpoint, 8 query-site filters incl. the `/wait` entry precheck, wake-scan snooze term)
 - `orcha-cli/orcha_cli/templates/portal/static/app.js` (+ `agents.html`/CSS as needed): bell,
   badge, panel, snooze UI
 - `tests/test_iss89_notification_ack.py` (new), `tests/portal/pending_ack.test.js` (new)
