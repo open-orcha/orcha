@@ -287,6 +287,7 @@
           <div class="row" style="gap:10px;margin-top:10px;flex-wrap:wrap">
             ${O.pill(t.status, "lg")}
             <span class="prio ${t.priority<=20?'p-hi':t.priority<=40?'p-md':''}">Priority ${O.esc(t.priority)}</span>
+            ${t.schedule_interval_secs ? `<span class="tag" title="Re-fires ${O.esc(fmtInterval(t.schedule_interval_secs))} after each completion${t.last_fired_at ? `; last re-armed ${O.esc(O.relTime(t.last_fired_at))}` : ""}">↻ every ${O.esc(fmtInterval(t.schedule_interval_secs))}</span>` : ""}
             <span class="muted" style="font-size:12.5px">·</span>
             <span class="muted" style="font-size:12.5px">assignee</span> ${who ? O.agentLink(who) : "—"}
           </div>
@@ -484,6 +485,14 @@
     if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
     return (n / (1024 * 1024)).toFixed(1) + " MB";
   }
+  // GH #27: humanize a scheduled-task interval (seconds) for the cadence badge.
+  function fmtInterval(s) {
+    s = +s || 0;
+    if (s % 86400 === 0) return (s / 86400) + (s === 86400 ? " day" : " days");
+    if (s % 3600 === 0) return (s / 3600) + (s === 3600 ? " hour" : " hours");
+    if (s % 60 === 0) return (s / 60) + (s === 60 ? " min" : " min");
+    return s + "s";
+  }
   const FILE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
   // #301: render a message's attachments (read view). Images → inline thumbnail (click = lightbox);
   // everything else → a download chip. esc() the name; the url is a same-origin /api path.
@@ -599,6 +608,8 @@
       </div>
       ${dOpts ? `<div class="field" style="margin-top:12px"><div class="lbl">Depends on <span class="muted" style="font-weight:450;text-transform:none;letter-spacing:0">— optional; ⌘/Ctrl-click to multi-select</span></div>
         <select id="nt_deps" class="reply-in" multiple size="4" style="width:100%">${dOpts}</select></div>` : ""}
+      <div class="field" style="margin-top:12px"><div class="lbl">Repeat every <span class="muted" style="font-weight:450;text-transform:none;letter-spacing:0">— optional; seconds, min 60; blank = run once. Re-fires this long after each completion. A repeating task can't have dependencies.</span></div>
+        <input id="nt_sched" class="reply-in" type="number" min="60" step="1" style="width:100%" placeholder="e.g. 3600 for hourly"></div>
       <details class="field" style="margin-top:12px">
         <summary style="cursor:pointer;font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:650;color:var(--faint)">Protocol <span class="muted" style="font-weight:450;text-transform:none;letter-spacing:0">— optional; the multi-agent loop rules the assignee reads on its first wake</span></summary>
         <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
@@ -639,12 +650,22 @@
     const proto = {};
     const pmap = { review_chain: "#nt_p_chain", handoff_to: "#nt_p_handoff", autonomy: "#nt_p_autonomy", notes: "#nt_p_notes" };
     Object.keys(pmap).forEach((k) => { const v = val(pmap[k]); if (v) proto[k] = v; });
+    // GH #27: optional re-fire cadence. Blank = run-once (omit the field). The server enforces
+    // min 60 (422) and rejects pairing it with dependencies (400) — both surface via fail() below.
+    const schedRaw = val("#nt_sched");
+    let schedule_interval_secs;
+    if (schedRaw) {
+      schedule_interval_secs = parseInt(schedRaw, 10);
+      if (!Number.isFinite(schedule_interval_secs) || schedule_interval_secs < 60) return fail("Repeat interval must be a whole number of seconds ≥ 60 (or leave it blank).");
+      if (depends_on.length) return fail("A repeating task can't have dependencies — clear the interval or the dependencies.");
+    }
     const btn = ov.querySelector("#__mp"); if (btn) { btn.disabled = true; btn.textContent = "Creating…"; }
     postJSON("/api/containers/" + encodeURIComponent(cid) + "/tasks", {
       title, description: val("#nt_desc") || null, definition_of_done: dod,
       priority, created_by_agent_id: humanId,
       assignee_alias: assignee_alias || undefined, depends_on,
       protocol: Object.keys(proto).length ? proto : undefined,
+      schedule_interval_secs,
     })
       .then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, d })).catch(() => ({ ok: r.ok, status: r.status, d: {} })))
       .then(({ ok, status, d }) => {

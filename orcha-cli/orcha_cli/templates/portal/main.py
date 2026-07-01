@@ -1597,6 +1597,10 @@ class TaskCreateBody(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     # SPEC-4: optional per-task protocol set at create-time (Glass's New-Task form may include it).
     protocol: Optional[ProtocolFields] = None
+    # GH #27: scheduled task. NULL = run-once (default). >=60 = re-fire this many seconds after
+    # each completion (the task re-arms to 'ready' and its assignment re-opens). Cadence is measured
+    # from completion so a scheduled task never overlaps itself.
+    schedule_interval_secs: Optional[int] = Field(default=None, ge=60)
     # #326 (B3): create the task HELD — status='not_ready' instead of ready/pending. A held task
     # is design-gated (awaiting a brainstorm / upstream decision) so it is EXCLUDED from the
     # ready-queue and NOT self-claimable via /orcha-next until a human flips it to ready
@@ -2536,6 +2540,10 @@ def _task_list_sql(where: str, order: str) -> str:
                       -- (NULL when unset). Rides the shared task-list builder so it surfaces on the
                       -- snapshot poll + GET /containers/{{cid}}/tasks with no extra call.
                       t.protocol,
+                      -- GH #27: scheduled-task cadence (NULL = run-once) + last re-fire stamp, so
+                      -- every task surface (snapshot poll + GET /containers/{{cid}}/tasks) can show
+                      -- the interval and when it last re-armed without an extra call.
+                      t.schedule_interval_secs, t.last_fired_at,
                       t.created_at, t.started_at, t.completed_at,
                       COALESCE((SELECT json_agg(a.alias ORDER BY a.alias)
                                 FROM agent_tasks at JOIN agents a ON a.id = at.agent_id
@@ -5572,6 +5580,26 @@ def create_task(cid: str, body: TaskCreateBody):
             if not _valid_uuid(dep):
                 raise HTTPException(400, f"depends_on contains invalid UUID: {dep}")
 
+        # GH #27: scheduled tasks must NOT participate in dependency edges (either direction).
+        # A scheduled task re-arms 'completed' → 'ready' on each interval; if it were a dependency,
+        # that re-arm would silently un-complete a blocker without re-blocking downstream children
+        # (they'd already be ready/running), corrupting the dependency gate. v1 forbids the edge
+        # entirely rather than re-deriving the whole subtree on every re-fire.
+        if body.schedule_interval_secs is not None and body.depends_on:
+            raise HTTPException(
+                400, "a scheduled task (schedule_interval_secs set) cannot depend on other tasks — "
+                "its periodic re-arm is incompatible with the dependency gate")
+        if body.depends_on:
+            cur.execute(
+                "SELECT id FROM tasks WHERE id = ANY(%s) AND schedule_interval_secs IS NOT NULL",
+                ([d for d in body.depends_on],),
+            )
+            sched_dep = cur.fetchone()
+            if sched_dep:
+                raise HTTPException(
+                    400, f"cannot depend on scheduled task {sched_dep['id']} — a scheduled task "
+                    "re-arms itself periodically, so it never stays 'completed' to satisfy a dependency")
+
         assignee_id = None
         if body.assignee_alias:
             assignee_id = _resolve_alias(cur, cid, body.assignee_alias)
@@ -5598,11 +5626,13 @@ def create_task(cid: str, body: TaskCreateBody):
         cur.execute(
             f"""INSERT INTO tasks
                   (container_id, title, description, definition_of_done,
-                   status, priority, created_by_agent_id, protocol, started_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, {started_clause})
+                   status, priority, created_by_agent_id, protocol, started_at,
+                   schedule_interval_secs)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, {started_clause}, %s)
                 RETURNING id""",
             (cid, body.title, body.description, body.definition_of_done,
-             initial_status, body.priority, body.created_by_agent_id, protocol_json),
+             initial_status, body.priority, body.created_by_agent_id, protocol_json,
+             body.schedule_interval_secs),
         )
         tid = str(cur.fetchone()["id"])
 
@@ -5635,7 +5665,69 @@ def create_task(cid: str, body: TaskCreateBody):
         conn.commit()
 
     return {"task_id": tid, "status": initial_status,
-            "assignee_alias": body.assignee_alias, "depends_on": body.depends_on}
+            "assignee_alias": body.assignee_alias, "depends_on": body.depends_on,
+            "schedule_interval_secs": body.schedule_interval_secs}
+
+
+@app.post("/api/containers/{cid}/fire-due-schedules", status_code=200)
+def fire_due_schedules(cid: str):
+    """GH #27: re-arm scheduled tasks whose interval has elapsed since they last COMPLETED.
+
+    A scheduled task (`tasks.schedule_interval_secs IS NOT NULL`) runs once like any task;
+    `schedule_interval_secs` seconds after it reaches 'completed' this flips it back to
+    'ready', resets its run fields, re-opens the assignee's agent_tasks row, and publishes a
+    task_assigned event so the normal auto-start wake picks it up again.
+
+    The notifier calls this once per tick. It is idempotent and concurrency-safe: the row
+    SELECT uses FOR UPDATE SKIP LOCKED and only matches completed+due tasks, so a second
+    caller (or a second daemon) finds nothing to do. Re-fire is keyed off completed_at, so a
+    task never re-fires while still in_progress / needs_verification — no overlap, no pile-up.
+
+    GH #24 invariant: re-arm runs ONLY while the container is 'active'. A paused or stopped
+    ('paused'/'completed'/'cancelled'/'failed') workspace must not resurrect completed work or
+    publish task_assigned wakes — wake-scan already suppresses all wakes off the same gate, so
+    firing here would bypass /orcha-pause + /orcha-stop. A non-active container no-ops (fired=[]).
+    """
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    fired: list[str] = []
+    with db_cursor() as (conn, cur):
+        c = _require_container(cur, cid)
+        if c["status"] != "active":
+            return {"container_id": cid, "fired": fired, "skipped": "container_not_active"}
+        cur.execute(
+            """SELECT id, title FROM tasks
+               WHERE container_id = %s AND schedule_interval_secs IS NOT NULL
+                 AND status = 'completed' AND completed_at IS NOT NULL
+                 AND EXTRACT(EPOCH FROM (now() - completed_at)) >= schedule_interval_secs
+               FOR UPDATE SKIP LOCKED""",
+            (cid,),
+        )
+        for t in cur.fetchall():
+            tid = str(t["id"])
+            cur.execute(
+                "UPDATE tasks SET status='ready', started_at=NULL, completed_at=NULL, "
+                "result=NULL, last_fired_at=now() WHERE id=%s",
+                (tid,),
+            )
+            # Re-open the prior assignee(s) (their row went 'done' on completion) so the
+            # assigned-and-ready auto-start wake re-fires this task to the same owner.
+            cur.execute(
+                """UPDATE agent_tasks SET assignment_status='assigned'
+                   WHERE task_id=%s AND assignment_status='done'
+                   RETURNING agent_id""",
+                (tid,),
+            )
+            for r in cur.fetchall():
+                aid = str(r["agent_id"])
+                recompute_agent_status(cur, aid)
+                _publish_event(cur, cid, aid, "task_assigned",
+                               {"task_id": tid, "title": t["title"], "via": "schedule"})
+            log_event(cur, cid, "system", None, "task", tid, "schedule_fired",
+                      {"title": t["title"]})
+            fired.append(tid)
+        conn.commit()
+    return {"container_id": cid, "fired": fired}
 
 
 @app.post("/api/tasks/{tid}/messages", status_code=201)

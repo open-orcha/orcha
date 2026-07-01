@@ -2628,6 +2628,12 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
     `live_workers` (daemon-loop state, {agent_id: pid}) is updated with each ephemeral
     worker spawned so `reap_workers` can release its lease on exit. `base_cwd` is the daemon's
     project dir, used to auto-record reachability for portal-created agents (see below)."""
+    # GH #27: re-arm any scheduled tasks whose interval has elapsed since they last completed,
+    # BEFORE the scan, so a re-fired task surfaces as an assigned-ready auto-start target in the
+    # SAME pass. Server-side + idempotent (FOR UPDATE SKIP LOCKED), so this thin POST is the only
+    # daemon-side hook; the wake-scan stays read-only.
+    if not dry_run:
+        _post_json(f"{api_base}/api/containers/{cid}/fire-due-schedules", {})
     scan = _get_json(
         f"{api_base}/api/containers/{cid}/wake-scan?cooldown={cooldown}&min_idle={min_idle}"
     )

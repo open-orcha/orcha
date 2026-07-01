@@ -87,6 +87,10 @@ window.OrchaData = (function () {
       // SPEC-4: per-task hand-off protocol (Ledger: tasks.protocol JSONB, surfaced via the shared
       // _task_list_sql). null when unset. Whitelisted here so the adapter doesn't drop it.
       protocol: t.protocol != null ? t.protocol : null,
+      // GH #27: scheduled-task cadence in seconds (null = run-once) + last re-fire stamp. Surfaced
+      // by the shared _task_list_sql; whitelisted here so cards/detail can render the cadence.
+      schedule_interval_secs: t.schedule_interval_secs != null ? t.schedule_interval_secs : null,
+      last_fired_at: t.last_fired_at || null,
       result: t.result != null ? t.result : null,
       // D7: latest plan_approval decision {decision, reason, actor, at}; null pre-D7. The
       // plan TEXT itself is the agent's opening thread message — this is the durable
