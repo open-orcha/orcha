@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 03 QR Pairing</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  /* portal-modal frames (desktop context) reuse the phone theme vars via .phone class on a wide card */
+  .portal-frame { width: 520px; height: auto; border-radius: 16px; min-height: 0; }
+  .portal-frame .screen { padding: 0; }
+  .qr-fake { display:block; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>03 — QR Pairing</h1>
+  <p>Portal shows a QR for the live container (laptop LAN IP, never localhost); the app scans it and
+     the container appears on the phone. Spec: <span class="mono">flows/03-pairing.md</span>.
+     Pairing endpoint + mobile auth are NEW API asks (doc 13, A1/A2). Frames mix dark/light to prove both themes.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ P1: portal modal ============ -->
+  <figure class="shot">
+    <div class="phone portal-frame" data-theme="dark">
+      <div class="screen" style="padding:22px 24px 24px; gap:14px;">
+        <div class="rowline">
+          <div class="brandmark">
+            <svg viewBox="0 0 100 100"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg>
+          </div>
+          <div class="grow">
+            <div style="font-size:17px; font-weight:750;">Pair your phone</div>
+            <div style="font-size:13px; color:var(--muted);">Scan with the Orcha app on the same Wi-Fi network.</div>
+          </div>
+          <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div style="display:flex; gap:20px; align-items:center;">
+          <div class="qr" style="flex:none;">
+            <svg class="qr-fake" width="200" height="200" viewBox="0 0 29 29" shape-rendering="crispEdges">
+              <rect width="29" height="29" fill="#fff"/>
+              <g fill="#0b0f14">
+                <path d="M1 1h7v7h-7z M21 1h7v7h-7z M1 21h7v7h-7z" fill="none" stroke="#0b0f14" stroke-width="1"/>
+                <rect x="3" y="3" width="3" height="3"/><rect x="23" y="3" width="3" height="3"/><rect x="3" y="23" width="3" height="3"/>
+                <path d="M10 1h1v1h-1zM13 1h2v1h-2zM17 1h1v2h-1zM10 3h2v1h-2zM14 3h1v2h-1zM16 4h2v1h-2zM10 5h1v2h-1zM12 6h3v1h-3zM18 6h1v1h-1zM1 10h2v1h-2zM4 10h1v1h-1zM7 10h2v1h-2zM11 10h1v2h-1zM14 9h1v3h-1zM17 10h2v1h-2zM21 10h1v1h-1zM24 10h2v1h-2zM27 10h1v2h-1zM2 12h1v2h-1zM5 12h2v1h-2zM9 13h2v1h-2zM13 12h1v2h-1zM16 13h2v1h-2zM20 12h1v2h-1zM23 13h2v1h-2zM26 13h1v1h-1zM1 15h1v2h-1zM4 15h2v1h-2zM8 15h1v2h-1zM11 15h2v1h-2zM15 15h1v2h-1zM18 16h2v1h-2zM22 15h1v2h-1zM25 16h2v1h-2zM3 17h1v1h-1zM6 18h2v1h-2zM10 18h1v1h-1zM13 17h2v1h-2zM17 18h1v1h-1zM20 18h2v1h-2zM24 18h1v1h-1zM27 17h1v2h-1zM10 21h1v2h-1zM13 21h2v1h-2zM16 22h2v1h-2zM20 21h1v1h-1zM23 22h1v2h-1zM26 21h2v1h-2zM10 24h2v1h-2zM14 24h1v2h-1zM17 25h2v1h-2zM21 24h2v1h-2zM25 25h1v1h-1zM10 27h1v1h-1zM13 27h2v1h-2zM18 27h1v1h-1zM22 27h2v1h-2zM26 27h1v1h-1z"/>
+              </g>
+            </svg>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:10px; min-width:0;">
+            <div>
+              <div style="font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; color:var(--muted);">Encodes</div>
+              <div class="mono" style="font-size:13px; color:var(--accent); margin-top:3px;">http://192.168.1.24:8001</div>
+            </div>
+            <div>
+              <div style="font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; color:var(--muted);">Pairing as</div>
+              <div style="font-size:13.5px; margin-top:3px;">kedar (human)</div>
+            </div>
+            <div class="pill s-warn" style="align-self:flex-start;"><span class="dot"></span>expires in 4:58</div>
+            <div style="font-size:11.5px; color:var(--faint); line-height:1.5;">Your phone talks directly to this computer on your network. Nothing goes through the cloud.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">P1 · Portal — "Pair phone" modal <span class="plat">Portal · new</span></div>
+      <div class="cap-note">Opened from a new header button / Settings row. QR ≥280px, error-correction M. Human-readable URL shown for debugging; code auto-regenerates on expiry. Multi-human containers show a "pair as" picker first.</div>
+      <div class="cap-api"><b>NEW</b> GET /api/containers/{cid}/pairing → payload + short-lived token (ask A1)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ P2: portal modal, no LAN IP ============ -->
+  <figure class="shot">
+    <div class="phone portal-frame" data-theme="dark">
+      <div class="screen" style="padding:22px 24px 24px; gap:14px;">
+        <div class="rowline">
+          <div class="grow" style="font-size:17px; font-weight:750;">Pair your phone</div>
+          <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="banner warn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+          Phones can't reach this Orcha yet
+        </div>
+        <div style="font-size:13.5px; color:var(--text-2); line-height:1.55;">
+          The server is only listening on <span class="mono">localhost</span>, so no LAN address could be
+          detected. Restart it as reachable on your network, then reopen this dialog:
+        </div>
+        <div class="log" style="flex:none; min-height:0;">$ orcha up --host 0.0.0.0</div>
+        <div style="font-size:11.5px; color:var(--faint); line-height:1.5;">Both devices must be on the same Wi-Fi. Corporate networks with client isolation can block phone↔laptop traffic.</div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">P2 · Portal modal — no reachable address <span class="plat">Portal · new</span></div>
+      <div class="cap-note">Shown when the backend can't produce a non-localhost base URL. Copy is a first-class part of the spec: the failure is environmental and the user needs the remedy, not an error code.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A1: Android scanner ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen" style="background: #05080c;">
+        <div class="appbar" style="color:#e8edf6;">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Scan pairing code</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4m0 12v4M4 12h4m8 0h4"/><circle cx="12" cy="12" r="3.2"/></svg></button>
+        </div>
+        <div style="flex:1; position:relative; display:flex; align-items:center; justify-content:center;">
+          <div style="position:absolute; inset:0; background: radial-gradient(70% 45% at 50% 44%, transparent 58%, rgba(0,0,0,.72) 59%);"></div>
+          <svg width="240" height="240" viewBox="0 0 100 100" fill="none" stroke="#1fc7cd" stroke-width="3.4" stroke-linecap="round" style="position:relative;">
+            <path d="M8 30V16a8 8 0 018-8h14"/><path d="M70 8h14a8 8 0 018 8v14"/><path d="M92 70v14a8 8 0 01-8 8H70"/><path d="M30 92H16a8 8 0 01-8-8V70"/>
+          </svg>
+          <div style="position:absolute; bottom:120px; left:0; right:0; text-align:center; color:#c4cedd; font-size:13.5px;">Scan the QR from your Orcha portal</div>
+          <div style="position:absolute; bottom:64px; left:0; right:0; display:flex; justify-content:center;">
+            <span class="textbtn" style="color:#7dd7db;">Enter address manually</span>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A1 · Scanner <span class="plat">Android</span></div>
+      <div class="cap-note">Full-screen destination (predictive back → Containers home). ML Kit scanning, torch toggle top-right, manual-entry escape hatch. On decode → confirm screen (I3 pattern).</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I1: iOS scanner (sheet) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="scroll" style="opacity:.35;">
+          <div class="appbar large" style="padding:8px 0 0;"><div class="big-title">Orcha</div></div>
+          <div class="skel card-h96"></div><div class="skel card-h96"></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet" style="top:64px; border-radius:22px; bottom:0; padding-bottom:14px; background:#05080c; border:none;">
+          <div class="grabber"></div>
+          <div class="rowline" style="padding:0 2px;">
+            <div class="sh-title" style="color:#e8edf6;">Scan pairing code</div>
+            <div class="spacer" style="flex:1;"></div>
+            <span class="textbtn" style="color:#7dd7db;">Cancel</span>
+          </div>
+          <div style="flex:1; position:relative; display:flex; align-items:center; justify-content:center; min-height:520px;">
+            <svg width="220" height="220" viewBox="0 0 100 100" fill="none" stroke="#1fc7cd" stroke-width="3.4" stroke-linecap="round">
+              <path d="M8 30V16a8 8 0 018-8h14"/><path d="M70 8h14a8 8 0 018 8v14"/><path d="M92 70v14a8 8 0 01-8 8H70"/><path d="M30 92H16a8 8 0 01-8-8V70"/>
+            </svg>
+            <div style="position:absolute; bottom:52px; left:0; right:0; text-align:center; color:#c4cedd; font-size:13.5px;">Scan the QR from your Orcha portal</div>
+            <div style="position:absolute; bottom:16px; left:0; right:0; display:flex; justify-content:center;">
+              <span class="textbtn" style="color:#7dd7db;">Enter address manually</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I1 · Scanner <span class="plat">iOS</span></div>
+      <div class="cap-note">Full-height sheet over Containers home (grabber + Cancel, swipe-down to dismiss). AVFoundation/DataScanner. Confirm step pushes inside the sheet's own NavigationStack.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A2: permission denied ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Scan pairing code</div>
+        </div>
+        <div class="state">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 8a2 2 0 012-2h2l2-3h8l2 3h2a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2z"/><circle cx="12" cy="13" r="3.5"/><path d="M3 3l18 18" stroke-width="2"/></svg></div>
+          <div class="st-title">Camera access needed</div>
+          <div class="st-sub">Orcha uses the camera only to scan pairing codes from your portal. Enable it in system settings.</div>
+          <button class="btn tonal">Open settings</button>
+          <span class="textbtn">Enter address manually</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A2 · Camera permission denied <span class="plat">Android · light</span></div>
+      <div class="cap-note">Standard state layout (glyph / title / sub / action). Same layout on iOS with "Open Settings" deep link. Manual entry always available so a broken camera never blocks pairing.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I3: confirm ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Scan</span></span>
+          <div class="title" style="text-align:center;">Add Orcha</div>
+          <span style="width:58px;"></span>
+        </div>
+        <div class="scroll" style="gap:14px; padding-top:12px;">
+          <div style="display:flex; flex-direction:column; align-items:center; gap:12px; padding:18px 0 4px;">
+            <div class="brandmark" style="width:64px; height:64px; border-radius:18px;">
+              <svg viewBox="0 0 100 100" style="width:44px; height:44px;"><path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/><circle cx="49" cy="35" r="6" fill="#1fc7cd"/><path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/></svg>
+            </div>
+            <div style="font-size:21px; font-weight:800; letter-spacing:-.3px;">openorcha</div>
+            <div class="conn"><span class="dot"></span>reachable</div>
+          </div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="kv"><span class="k">Address</span><span class="v mono" style="font-size:12.5px;">http://192.168.1.24:8001</span></div>
+            <div class="hr"></div>
+            <div class="kv"><span class="k">Pair as</span><span class="v">kedar (human)</span></div>
+            <div class="hr"></div>
+            <div class="kv"><span class="k">Agents</span><span class="v">9 registered</span></div>
+          </div>
+          <div style="font-size:12px; color:var(--faint); line-height:1.5; padding:0 4px;">You'll see every task, request, and agent in this Orcha, and act as kedar when you respond.</div>
+          <div style="flex:1;"></div>
+          <button class="btn primary block">Connect</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I3 · Confirm pairing <span class="plat">iOS</span></div>
+      <div class="cap-note">Shown after decode. Probe runs immediately; Connect stays disabled until "reachable" ✓. Identity framing ("act as kedar") is deliberate — the phone inherits the human's actor id.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(probe)</b> · GET /api/snapshot/{cid} <b>(agent count)</b><br><b>NEW</b> POST /api/pair (token exchange — ask A2)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I4: success ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="state">
+          <div class="glyph" style="color:var(--ok); background:var(--ok-soft); border-color:var(--ok-line);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+          </div>
+          <div class="st-title">Paired with openorcha</div>
+          <div class="st-sub">Opening your workspace…</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I4 · Success moment <span class="plat">iOS</span></div>
+      <div class="cap-note">800ms confirmation beat, then the sheet dismisses and the app pushes straight into the new container's Home tab. Android identical minus the sheet dismissal (navigates forward).</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A3: unreachable ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Add Orcha</div>
+        </div>
+        <div class="state">
+          <div class="glyph danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8.5 16.5a5 5 0 017 0M5 13a10 10 0 0114 0M1.5 9.5a15 15 0 0121 0"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/><path d="M3 3l18 18" stroke-width="2.2"/></svg></div>
+          <div class="st-title">Can't reach this Orcha</div>
+          <div class="st-sub">The code scanned fine, but <span class="mono" style="font-size:12px;">192.168.1.24:8001</span> didn't answer.</div>
+          <div class="card" style="text-align:left; width:100%; gap:9px;">
+            <div class="rowline" style="font-size:13px; color:var(--text-2);"><span style="color:var(--accent); font-weight:800;">1</span><span>Is the phone on the same Wi-Fi as the laptop?</span></div>
+            <div class="rowline" style="font-size:13px; color:var(--text-2);"><span style="color:var(--accent); font-weight:800;">2</span><span>Is Orcha still running? (check the portal)</span></div>
+            <div class="rowline" style="font-size:13px; color:var(--text-2);"><span style="color:var(--accent); font-weight:800;">3</span><span>Firewall or VPN on the laptop blocking port 8001?</span></div>
+          </div>
+          <button class="btn tonal block">Try again</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A3 · Failure — host unreachable <span class="plat">Android</span></div>
+      <div class="cap-note">The single most likely real-world failure. Diagnostic checklist over error codes; Retry re-probes. Identical layout on iOS.</div>
+      <div class="cap-api">GET /api/containers/{cid} <b>(probe, 3s timeout)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I5: invalid / expired ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="state">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM18 18h3v3h-3z"/></svg></div>
+          <div class="st-title">That code has expired</div>
+          <div class="st-sub">Pairing codes are short-lived. Open the "Pair phone" dialog on your portal again and scan the fresh one.</div>
+          <button class="btn primary">Scan again</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I5 · Failure — expired or invalid QR <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Also covers non-Orcha QR codes ("That's not an Orcha pairing code"). Copy tells the user exactly where the fresh code lives.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A4: manual entry ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Connect manually</div>
+        </div>
+        <div class="scroll" style="gap:2px; padding-top:8px;">
+          <label class="fieldlabel">Address (from the portal's pairing dialog)</label>
+          <div class="input focus"><span class="mono" style="font-size:14px;">http://192.168.1.24:8001</span><span class="cursor" style="display:inline-block;width:2px;height:16px;background:var(--accent);"></span></div>
+          <label class="fieldlabel" style="margin-top:14px;">Pairing code</label>
+          <div class="input"><span class="ph">6-digit code shown under the QR</span></div>
+          <div style="font-size:12px; color:var(--faint); line-height:1.5; padding:12px 4px 0;">Use this when the camera can't scan — the portal dialog shows both the address and a short code.</div>
+          <div style="flex:1;"></div>
+          <button class="btn primary block">Connect</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A4 · Manual entry fallback <span class="plat">Android</span></div>
+      <div class="cap-note">Same validation path as scanning (probe → confirm). Requires the pairing dialog to also display a short numeric code — folded into ask A1.</div>
+      <div class="cap-api"><b>NEW</b> pairing payload must include a human-typable short code (ask A1)</div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

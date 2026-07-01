@@ -1,0 +1,213 @@
+{
+  "$description": "Orcha mobile design tokens — single source for the iOS and Android apps. Values are mapped 1:1 from the web portal CSS variables (orcha-cli/orcha_cli/templates/portal/static/styles.css) so all three clients share one visual language. Consumers: Android maps these to a Material 3 ColorScheme + Compose theme; iOS maps them to asset-catalog colors + a SwiftUI theme struct. Do not fork values per platform — change here, propagate to both.",
+  "$version": "1.0.0",
+
+  "color": {
+    "dark": {
+      "bg":          "#0a0d12",
+      "bgGrad1":     "rgba(21, 192, 198, 0.055)",
+      "bgGrad2":     "rgba(125, 145, 255, 0.045)",
+      "surface":     "#111620",
+      "surface2":    "#161d29",
+      "surface3":    "#1c2532",
+      "raised":      "#1a2230",
+      "border":      "#232d3d",
+      "border2":     "#2c3848",
+      "hover":       "#1a2230",
+      "text":        "#e8edf6",
+      "text2":       "#c4cedd",
+      "muted":       "#8b98ae",
+      "faint":       "#5a6678",
+      "accent":      "#1fc7cd",
+      "accentInk":   "#04181a",
+      "accentSoft":  "rgba(31, 199, 205, 0.12)",
+      "accentLine":  "rgba(31, 199, 205, 0.34)",
+      "accentGlow":  "rgba(31, 199, 205, 0.22)",
+      "amber":       "#f2a83c",
+      "ok":          "#38d39a",
+      "okSoft":      "rgba(56, 211, 154, 0.12)",
+      "okLine":      "rgba(56, 211, 154, 0.32)",
+      "info":        "#5aa6ff",
+      "infoSoft":    "rgba(90, 166, 255, 0.12)",
+      "infoLine":    "rgba(90, 166, 255, 0.32)",
+      "warn":        "#f5b13d",
+      "warnSoft":    "rgba(245, 177, 61, 0.13)",
+      "warnLine":    "rgba(245, 177, 61, 0.34)",
+      "danger":      "#f6757e",
+      "dangerSoft":  "rgba(246, 117, 126, 0.12)",
+      "dangerLine":  "rgba(246, 117, 126, 0.32)",
+      "violet":      "#b08cff",
+      "violetSoft":  "rgba(176, 140, 255, 0.13)",
+      "violetLine":  "rgba(176, 140, 255, 0.32)",
+      "idle":        "#6b788e",
+      "idleSoft":    "rgba(107, 120, 142, 0.14)",
+      "idleLine":    "rgba(107, 120, 142, 0.30)",
+      "diffAdd":     "#8fe3a8",
+      "diffAddBg":   "rgba(56, 211, 154, 0.10)",
+      "diffDel":     "#f6909a",
+      "diffDelBg":   "rgba(246, 117, 126, 0.10)",
+      "diffHunk":    "#5aa6ff",
+      "diffHunkBg":  "rgba(90, 166, 255, 0.07)"
+    },
+    "light": {
+      "bg":          "#f3f6fa",
+      "bgGrad1":     "rgba(21, 192, 198, 0.07)",
+      "bgGrad2":     "rgba(125, 145, 255, 0.06)",
+      "surface":     "#ffffff",
+      "surface2":    "#f5f8fc",
+      "surface3":    "#eef3f9",
+      "raised":      "#ffffff",
+      "border":      "#e4eaf2",
+      "border2":     "#d3dce8",
+      "hover":       "#f1f5fa",
+      "text":        "#0e1722",
+      "text2":       "#2c3a4d",
+      "muted":       "#5a6678",
+      "faint":       "#8794a6",
+      "accent":      "#0c9aa0",
+      "accentInk":   "#ffffff",
+      "accentSoft":  "rgba(12, 154, 160, 0.10)",
+      "accentLine":  "rgba(12, 154, 160, 0.30)",
+      "accentGlow":  "rgba(12, 154, 160, 0.18)",
+      "amber":       "#d9881c",
+      "ok":          "#11a472",
+      "okSoft":      "rgba(17, 164, 114, 0.11)",
+      "okLine":      "rgba(17, 164, 114, 0.28)",
+      "info":        "#2f74e6",
+      "infoSoft":    "rgba(47, 116, 230, 0.10)",
+      "infoLine":    "rgba(47, 116, 230, 0.26)",
+      "warn":        "#c9871a",
+      "warnSoft":    "rgba(201, 135, 26, 0.13)",
+      "warnLine":    "rgba(201, 135, 26, 0.30)",
+      "danger":      "#d94a55",
+      "dangerSoft":  "rgba(217, 74, 85, 0.10)",
+      "dangerLine":  "rgba(217, 74, 85, 0.26)",
+      "violet":      "#7b54d6",
+      "violetSoft":  "rgba(123, 84, 214, 0.11)",
+      "violetLine":  "rgba(123, 84, 214, 0.26)",
+      "idle":        "#768296",
+      "idleSoft":    "rgba(118, 130, 150, 0.13)",
+      "idleLine":    "rgba(118, 130, 150, 0.26)",
+      "diffAdd":     "#1c7a4a",
+      "diffAddBg":   "rgba(17, 164, 114, 0.12)",
+      "diffDel":     "#c43d48",
+      "diffDelBg":   "rgba(217, 74, 85, 0.10)",
+      "diffHunk":    "#2f74e6",
+      "diffHunkBg":  "rgba(47, 116, 230, 0.08)"
+    },
+    "brand": {
+      "iconTileGradientInner": "#0e2d33",
+      "iconTileGradientOuter": "#06171c",
+      "orcaBody":              "#f3fbfb",
+      "orcaAccent":            "#1fc7cd"
+    }
+  },
+
+  "statusColor": {
+    "$description": "Which semantic color each domain status maps to. Same mapping as the portal pill classes (s-working/s-ok/s-info/s-warn/s-bad/s-acc/s-idle). Badge = <color> text on <color>Soft background with <color>Line border.",
+    "task": {
+      "pending":            "idle",
+      "ready":              "info",
+      "in_progress":        "accent",
+      "blocked":            "warn",
+      "needs_verification": "violet",
+      "completed":          "ok",
+      "cancelled":          "danger"
+    },
+    "request": {
+      "open":               "info",
+      "accepted":           "accent",
+      "rejected":           "danger",
+      "answered":           "violet",
+      "converted_to_task":  "violet",
+      "closed":             "idle"
+    },
+    "agent": {
+      "idle":            "idle",
+      "working":         "accent",
+      "blocked":         "warn",
+      "awaiting_request":"info",
+      "awaiting_human":  "violet",
+      "terminated":      "danger"
+    }
+  },
+
+  "typography": {
+    "$description": "Portal uses Inter 400-800 + JetBrains Mono 400-700. Mobile default: platform system stacks that match Inter's metrics (SF Pro on iOS, Roboto/system on Android) with Inter as an optional bundled brand font; JetBrains Mono bundled on both for logs/ids/code.",
+    "family": {
+      "sans":      "Inter",
+      "sansIOSFallback":     "SF Pro Text / system",
+      "sansAndroidFallback": "Roboto / system",
+      "mono":      "JetBrains Mono",
+      "monoIOSFallback":     "SF Mono / ui-monospace",
+      "monoAndroidFallback": "Roboto Mono / monospace"
+    },
+    "scale": {
+      "displaySm":  { "size": 24, "lineHeight": 30, "weight": 800, "tracking": -0.4 },
+      "titleLg":    { "size": 20, "lineHeight": 26, "weight": 750, "tracking": -0.3 },
+      "titleMd":    { "size": 17, "lineHeight": 23, "weight": 700, "tracking": -0.2 },
+      "titleSm":    { "size": 15, "lineHeight": 21, "weight": 650, "tracking": 0 },
+      "body":       { "size": 15, "lineHeight": 22, "weight": 400, "tracking": 0 },
+      "bodySm":     { "size": 13, "lineHeight": 19, "weight": 400, "tracking": 0 },
+      "label":      { "size": 12, "lineHeight": 16, "weight": 650, "tracking": 0.2 },
+      "overline":   { "size": 11, "lineHeight": 14, "weight": 700, "tracking": 0.8, "transform": "uppercase" },
+      "mono":       { "size": 12, "lineHeight": 18, "weight": 400, "family": "mono" },
+      "monoSm":     { "size": 10.5, "lineHeight": 15, "weight": 400, "family": "mono" }
+    }
+  },
+
+  "spacing": {
+    "$description": "4pt base grid, same rhythm as portal (portal uses 4/8/12/16/20/24).",
+    "xxs": 4, "xs": 8, "sm": 12, "md": 16, "lg": 20, "xl": 24, "xxl": 32,
+    "screenMarginCompact": 16,
+    "listItemGap": 10,
+    "cardPadding": 14
+  },
+
+  "radius": {
+    "$description": "Portal radii: 12px cards, 8-9px inner elements, 999px pills. Mobile keeps the same family.",
+    "sm": 8, "md": 12, "lg": 16, "xl": 22, "pill": 999,
+    "sheetTop": 22,
+    "bubble": 16,
+    "bubbleTail": 6
+  },
+
+  "elevation": {
+    "$description": "Portal shadows, adapted. On Android prefer tonal elevation (surface/surface2/surface3) over shadows in dark theme, per Material 3.",
+    "level0": "none",
+    "level1": { "dark": "0 1px 2px rgba(0,0,0,0.30)",   "light": "0 1px 2px rgba(16,28,48,0.06)" },
+    "level2": { "dark": "0 8px 28px rgba(0,0,0,0.40)",  "light": "0 10px 30px rgba(16,28,48,0.10)" },
+    "level3": { "dark": "0 24px 60px rgba(0,0,0,0.55)", "light": "0 24px 60px rgba(16,28,48,0.16)" },
+    "focusRing": "0 0 0 3px {color.accentGlow}"
+  },
+
+  "motion": {
+    "sheetIn":   { "duration": 280, "easing": "emphasizedDecelerate (M3) / spring(response 0.4) (iOS)" },
+    "listItem":  { "duration": 180, "easing": "standard" },
+    "statusPulse": { "duration": 2000, "easing": "ease-in-out", "note": "working-state glyph pulse, mirrors portal .pill.s-working animation" }
+  },
+
+  "platformMapping": {
+    "materialColorScheme": {
+      "$description": "How token colors fill a Material 3 ColorScheme (dark shown; light analogous).",
+      "primary": "{color.dark.accent}",
+      "onPrimary": "{color.dark.accentInk}",
+      "primaryContainer": "{color.dark.accentSoft}",
+      "onPrimaryContainer": "{color.dark.accent}",
+      "secondary": "{color.dark.info}",
+      "error": "{color.dark.danger}",
+      "background": "{color.dark.bg}",
+      "surface": "{color.dark.surface}",
+      "surfaceContainer": "{color.dark.surface2}",
+      "surfaceContainerHigh": "{color.dark.surface3}",
+      "outline": "{color.dark.border2}",
+      "outlineVariant": "{color.dark.border}",
+      "onSurface": "{color.dark.text}",
+      "onSurfaceVariant": "{color.dark.muted}"
+    },
+    "swiftUI": {
+      "$description": "Asset-catalog color set names (Any/Dark appearance pairs from color.light / color.dark).",
+      "names": ["OrchaBg", "OrchaSurface", "OrchaSurface2", "OrchaSurface3", "OrchaRaised", "OrchaBorder", "OrchaBorder2", "OrchaText", "OrchaText2", "OrchaMuted", "OrchaFaint", "OrchaAccent", "OrchaAccentInk", "OrchaOk", "OrchaInfo", "OrchaWarn", "OrchaDanger", "OrchaViolet", "OrchaIdle"]
+    }
+  }
+}
