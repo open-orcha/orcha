@@ -57,10 +57,10 @@ ANTHROPIC_VERSION = "2023-06-01"
 # it translates this module's normalised (Anthropic-shaped) request/response to/from it.
 XAI_BASE_URL = "https://api.x.ai/v1"
 
-# Model ids (latest Claude family as of 2026-01). Cheap triage model vs. capable onboarding
+# Model ids (latest Claude family as of 2026-07). Cheap triage model vs. capable onboarding
 # model. v1 hardcodes these; #294 settings make them config-swappable per use-case later.
 MODEL_HAIKU = "claude-haiku-4-5-20251001"
-MODEL_SONNET = "claude-sonnet-4-6"
+MODEL_SONNET = "claude-sonnet-5"
 MODEL_OPUS = "claude-opus-4-8"
 
 # xAI Grok family (current ids per https://docs.x.ai/developers/models). grok-4.3 is xAI's
@@ -85,7 +85,7 @@ MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
 PROVIDER_CATALOG: list[dict] = [
     {"id": "anthropic", "name": "Anthropic", "available": True, "models": [
         {"id": MODEL_HAIKU, "name": "Haiku 4.5"},
-        {"id": MODEL_SONNET, "name": "Sonnet 4.6"},
+        {"id": MODEL_SONNET, "name": "Sonnet 5"},
         {"id": MODEL_OPUS, "name": "Opus 4.8"},
     ]},
     {"id": "xai", "name": "xAI", "available": True, "models": [
