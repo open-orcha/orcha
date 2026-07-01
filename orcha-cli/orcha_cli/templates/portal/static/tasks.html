@@ -424,17 +424,92 @@
 
   /* Approval–diff binding: the reviewable diff INSIDE the verify gate. What renders here is
      exactly what GET /api/tasks/{tid}/diff digested — Accept sends that digest back, so the
-     recorded decision means "this human saw exactly this diff", not "a human typed approve". */
+     recorded decision means "this human saw exactly this diff", not "a human typed approve".
+
+     Scale: a scoped task's diff is usually a handful of files → render it expanded, zero
+     friction. Past the thresholds below (a 50-file sweep), one endless scroll is unreadable,
+     so switch to a GitHub-style MANIFEST: one collapsed <details> per file with +/− stats —
+     scan the file list, expand what deserves eyes. The digest is computed server-side over
+     the whole artifact either way; presentation never changes what the approval binds. */
+  const GATE_DIFF_MANIFEST_FILES = 6;    // ≥ this many files → per-file manifest
+  const GATE_DIFF_MANIFEST_LINES = 500;  // or this many changed lines in total
+
   function gateDiffPanel(t) {
     const wrap = (inner) => `<div class="field" style="margin-top:14px"><div class="lbl">${O.icon("dot", "")}Code diff</div>${inner}</div>`;
     if (diffError[t.id]) return wrap(`<div class="tx">Couldn’t load the diff. <button class="btn subtle" data-act="retry-diff">Retry</button></div>`);
     const d = diffCache[t.id];
     if (!d) return wrap(`<div class="tx">Loading reviewable diff…</div>`);
     if (!d.diff_digest) return wrap(`<div class="tx">No captured code diff for this task (research/coordination work) — the approval won’t carry a diff binding.</div>`);
-    const runs = d.runs.map((r, i) => `<div style="margin-top:${i ? 10 : 0}px">${d.runs.length > 1 ? `<div class="lbl">run ${i + 1} · ${O.esc((r.started_at || "").slice(0, 19).replace("T", " "))}</div>` : ""}${O.renderDiff(r.diff)}</div>`).join("");
+
+    // Per-file sections across all runs (multi-run tasks prefix the run ordinal so
+    // the same path touched by two wakes stays distinguishable).
+    const files = d.runs.flatMap((r, i) =>
+      O.parseDiffFiles(r.diff).map((f) => d.runs.length > 1 ? { ...f, path: `run ${i + 1} · ${f.path}` } : f));
+    const adds = files.reduce((n, f) => n + f.adds, 0), dels = files.reduce((n, f) => n + f.dels, 0);
+    const bound = `your approval is bound to exactly this (${O.esc(d.diff_digest.slice(0, 17))}…)`;
+
+    const fullBtn = `<button class="btn subtle" data-act="open-diff-viewer" style="margin-top:8px">⤢ Open full review</button>`;
+
+    if (files.length < GATE_DIFF_MANIFEST_FILES && (adds + dels) < GATE_DIFF_MANIFEST_LINES) {
+      // small change (the common case): expanded, exactly what the reviewer reads top-to-bottom
+      const runs = d.runs.map((r, i) => `<div style="margin-top:${i ? 10 : 0}px">${d.runs.length > 1 ? `<div class="lbl">run ${i + 1} · ${O.esc((r.started_at || "").slice(0, 19).replace("T", " "))}</div>` : ""}${O.renderDiff(r.diff)}</div>`).join("");
+      return wrap(
+        `<details open><summary style="cursor:pointer;color:var(--info);font-size:12.5px;font-weight:600">reviewable diff — ${d.runs.length} run${d.runs.length > 1 ? "s" : ""} · ${bound}</summary>
+         <div style="max-height:420px;overflow-y:auto;margin-top:8px">${runs}</div></details>${fullBtn}`);
+    }
+
+    // big change: the per-file manifest — stats up front, expand per file (or go full-screen)
+    const sections = files.map((f) => `
+      <details style="margin-top:6px">
+        <summary style="cursor:pointer;font-size:12.5px;font-family:ui-monospace,monospace;display:flex;gap:10px;align-items:baseline">
+          <span style="color:var(--text)">${O.esc(f.path)}</span>
+          <span class="dv-stat"><span class="a" style="color:var(--diff-add)">+${f.adds}</span> <span class="d" style="color:var(--diff-del)">−${f.dels}</span></span>
+        </summary>
+        <div style="margin-top:6px">${O.renderDiff(f.text)}</div>
+      </details>`).join("");
     return wrap(
-      `<details open><summary style="cursor:pointer;color:var(--info);font-size:12.5px;font-weight:600">reviewable diff — ${d.runs.length} run${d.runs.length > 1 ? "s" : ""} · your approval is bound to exactly this (${O.esc(d.diff_digest.slice(0, 17))}…)</summary>
-       <div style="max-height:420px;overflow-y:auto;margin-top:8px">${runs}</div></details>`);
+      `<div style="font-size:12.5px;color:var(--info);font-weight:600;margin-bottom:4px">reviewable diff — ${files.length} files · <span style="color:var(--diff-add)">+${adds}</span> <span style="color:var(--diff-del)">−${dels}</span> · ${bound}</div>
+       <div class="tx" style="margin-bottom:6px">Large change: files are collapsed — expand inline, or open the full-screen reviewer. Approval covers the whole artifact either way.</div>
+       <div style="max-height:460px;overflow-y:auto">${sections}</div>${fullBtn}`);
+  }
+
+  /* Full-screen reviewer: mounts O.diffViewerHTML in a .dv-overlay, wires the file
+     sidebar (click → jump), Esc/✕ to close, and delegates Accept/Reject to the GATE's
+     own buttons — one owner for the guarded, digest-bound approval flow. */
+  function openDiffViewer(t) {
+    const d = diffCache[t.id];
+    if (!d || !d.diff_digest) return;
+    const files = d.runs.flatMap((r, i) =>
+      O.parseDiffFiles(r.diff).map((f) => d.runs.length > 1 ? { ...f, path: `run ${i + 1} · ${f.path}` } : f));
+    const ov = document.createElement("div");
+    ov.className = "dv-overlay";
+    ov.innerHTML = O.diffViewerHTML(files, { title: t.title, digest: d.diff_digest });
+    document.body.appendChild(ov);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const close = () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = prevOverflow; ov.remove(); };
+    document.addEventListener("keydown", onKey);
+    const gateBtn = (act) => {
+      const g = document.getElementById("gate-" + t.id);
+      const b = g && g.querySelector(`[data-act="${act}"]`);
+      if (b) b.click();
+    };
+    ov.addEventListener("click", (e) => {
+      const fbtn = e.target.closest(".dv-file");
+      if (fbtn) {
+        const sec = ov.querySelector("#dvf-" + fbtn.dataset.dvf);
+        if (sec) sec.scrollIntoView({ block: "start" });
+        ov.querySelectorAll(".dv-file.active").forEach((x) => x.classList.remove("active"));
+        fbtn.classList.add("active");
+        return;
+      }
+      const act = e.target.closest("[data-act]");
+      if (!act) return;
+      if (act.dataset.act === "dv-close") close();
+      else if (act.dataset.act === "dv-accept") { close(); gateBtn("approve"); }
+      else if (act.dataset.act === "dv-reject") { close(); gateBtn("reject"); }
+    });
   }
 
   /* ---------- SPEC-4 protocol panel — collapsible hand-off rules on the task itself ----------
@@ -803,6 +878,7 @@
     gate.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
       const act = b.dataset.act;
       if (act === "retry-diff") { maybeLoadGateDiff(t, true); renderDetail(); return; }
+      if (act === "open-diff-viewer") { openDiffViewer(t); return; }
       if (act === "approve") {
         const h = actorOrWarn(); if (!h) return;
         // Approval–diff binding: don't let an Accept race the diff it must be bound to.
