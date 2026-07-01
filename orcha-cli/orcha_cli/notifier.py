@@ -2738,11 +2738,16 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
     the agent as busy (blocks re-wake, compounds #340).
 
     This sweep is keyed on the only truth that survives daemon turnover: the DB run row + a HOST
-    os.kill(pid,0) (the API can't see host PIDs). For each agent with a running run whose process is dead:
-      * NO live process backs ANY of its running rows → release the lease (the server's wake-ack reconcile
-        orphans every running row for the agent) so the agent is idle + re-wakeable within one poll cycle.
-      * a live sibling DOES exist (true double-spawn / a fresh worker mid-run) → finish ONLY the dead orphan
-        rows ('killed'), keep the lease the live worker still renews.
+    os.kill(pid,0) (the API can't see host PIDs). GH #91/#90: the wake-ack lease release + the
+    server's running->orphaned reconcile are LANE-scoped, so the sweep groups per (agent, lane) —
+    a dead CONVERSATION-lane run releases the conv lease, a dead WORK run the work lease, and a
+    live run in ONE lane never shields a dead run in the OTHER (the lanes lease independently).
+    For each (agent, lane) with a running run whose process is dead:
+      * NO live process backs ANY of that lane's running rows → release that LANE's lease (the
+        server's wake-ack reconcile orphans every running row for the agent IN THAT LANE) so the
+        lane is idle + re-claimable within one poll cycle.
+      * a live SAME-LANE sibling DOES exist (true double-spawn / a fresh worker mid-run) → finish
+        ONLY the dead orphan rows ('killed'), keep the lease the live worker still renews.
     `live_pids` shields THIS daemon's genuinely-live workers + residents from a racing os.kill. (pid REUSE
     can mask a dead run as alive — accepted: the ISS-60B heartbeat backstop still catches that tail.)
     Returns the number of dead runs reaped."""
@@ -2755,11 +2760,12 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
         pid = r.get("pid")
         return (pid in live_pids) or _run_pid_alive(pid)
 
-    by_agent: dict = {}
+    by_agent_lane: dict = {}
     for r in runs:
-        by_agent.setdefault(r.get("agent_id"), []).append(r)
+        # missing lane (pre-030 server mid-upgrade) → 'work', the historical default
+        by_agent_lane.setdefault((r.get("agent_id"), r.get("lane") or "work"), []).append(r)
     reaped = 0
-    for aid, arows in by_agent.items():
+    for (aid, lane), arows in by_agent_lane.items():
         dead = [r for r in arows if not _alive(r)]
         if not dead:
             continue
@@ -2769,10 +2775,10 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
                 _finish_run(api_base, r.get("run_id"), "killed", -1, None)
         else:
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "orphan_run_sweep", "release_lease": True})
+                       {"kind": "orphan_run_sweep", "release_lease": True, "lane": lane})
         reaped += len(dead)
         if not quiet:
-            print(f"[notifier] swept {len(dead)} dead-pid orphaned run(s) for {aid} "
+            print(f"[notifier] swept {len(dead)} dead-pid orphaned {lane}-lane run(s) for {aid} "
                   f"({'finished orphans, kept lease (live sibling)' if live_sibling else 'released lease'}) "
                   f"(#342)")
     return reaped

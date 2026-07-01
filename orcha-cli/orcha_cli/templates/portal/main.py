@@ -5673,13 +5673,19 @@ def list_container_running_runs(cid: str):
     wake_kinds: it's what reaps an orphaned EPHEMERAL wake-run (request_answered / checkpoint_respawn
     / conversation_turn) whose daemon RESTARTED and lost the Popen handle that would have poll()/
     finished it — the #342 'busy forever' leak the per-agent resident reaper (active-conversation +
-    resident-scoped) and the heartbeat reap-orphan-leases (live-lease-scoped) both miss. Newest first."""
+    resident-scoped) and the heartbeat reap-orphan-leases (live-lease-scoped) both miss. Newest first.
+
+    GH #91/#90 (PR R3): each row carries `lane` — the sweep's wake-ack release + running->orphaned
+    reconcile are lane-scoped server-side, so the reaper must ack the DEAD run's OWN lane. Without
+    it every sweep ack defaulted to 'work' and a dead CONVERSATION-lane run kept its conv lease +
+    'running' row forever, blocking all future conversation claims for that agent."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
         cur.execute(
-            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.started_at
+            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
+                      wr.started_at
                  FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
                 WHERE a.container_id = %s AND wr.status = 'running'
                   AND a.terminated_at IS NULL
@@ -5689,6 +5695,7 @@ def list_container_running_runs(cid: str):
     return {"container_id": cid,
             "runs": [{"run_id": str(r["run_id"]), "agent_id": str(r["agent_id"]),
                       "pid": r["pid"], "wake_kind": r["wake_kind"], "wake_event": r["wake_event"],
+                      "lane": r["lane"],
                       "started_at": r["started_at"].isoformat() if r["started_at"] else None}
                      for r in rows]}
 
