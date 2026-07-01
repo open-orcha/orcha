@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import io.openorcha.mobile.data.ContainerSnapshot
 import io.openorcha.mobile.data.ContainerStore
 import io.openorcha.mobile.data.OrchaApiClient
+import io.openorcha.mobile.data.OrchaServerAddress
 import io.openorcha.mobile.data.StoredContainer
 import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
@@ -59,9 +60,10 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun connectManual(rawBaseUrl: String) {
-        val baseUrl = rawBaseUrl.trim().trimEnd('/')
-        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-            _uiState.update { it.copy(error = "Use a full address, for example http://192.168.1.8:8001") }
+        val baseUrl = try {
+            OrchaServerAddress.normalize(rawBaseUrl)
+        } catch (err: IllegalArgumentException) {
+            _uiState.update { it.copy(error = err.message ?: friendlyConnectionError()) }
             return
         }
         viewModelScope.launch {
@@ -88,7 +90,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
                 refreshSelected()
             }.onFailure { err ->
                 _uiState.update {
-                    it.copy(connecting = false, error = err.message ?: "Could not reach this Orcha.")
+                    it.copy(connecting = false, error = friendlyConnectionError(err))
                 }
             }
         }
@@ -120,7 +122,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(snapshot = snapshot, loading = false) }
             }.onFailure { err ->
                 _uiState.update {
-                    it.copy(loading = false, error = err.message ?: "Could not refresh this Orcha.")
+                    it.copy(loading = false, error = friendlyConnectionError(err))
                 }
             }
         }
@@ -143,7 +145,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(taskMessages = messages, loading = false) }
             }.onFailure { err ->
                 _uiState.update {
-                    it.copy(loading = false, error = err.message ?: "Could not load this task thread.")
+                    it.copy(loading = false, error = friendlyConnectionError(err))
                 }
             }
         }
@@ -164,5 +166,11 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     fun forgetSelectedContainer() {
         _uiState.value.selectedContainer?.id?.let(::forgetContainer)
     }
-}
 
+    private fun friendlyConnectionError(err: Throwable? = null): String {
+        if (err is IllegalArgumentException && !err.message.isNullOrBlank()) {
+            return err.message.orEmpty()
+        }
+        return "Could not reach Orcha at this address. Check that Orcha is running and your phone is on the same Wi-Fi."
+    }
+}
