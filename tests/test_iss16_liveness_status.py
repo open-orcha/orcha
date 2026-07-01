@@ -104,8 +104,9 @@ async def test_status_idle_when_lease_expired(client, make_agent, make_task, con
     await make_task("work", "done", assignee_alias="Lapsed")
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
-    # Force the lease into the past — held row, but no longer LIVE.
-    db.execute("UPDATE agent_wake_state SET wake_lease_until = now() - interval '60 seconds' "
+    # Force the lease into the past — held row, but no longer LIVE. GH #91/#90: a resident lives in
+    # the CONVERSATION lane, so expire conv_lease_until (the lane its claim actually wrote).
+    db.execute("UPDATE agent_wake_state SET conv_lease_until = now() - interval '60 seconds' "
                "WHERE agent_id=%s", (aid,))
 
     row = await _snapshot_agent(client, cid, aid)
@@ -178,9 +179,13 @@ async def test_stored_status_untouched_by_snapshot_and_reaper(
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
     # Simulate the lie: stored status stuck at 'working' though the agent owns no task,
-    # and the embodiment is now heartbeat-dead (reapable).
+    # and the embodiment is now heartbeat-dead (reapable). GH #91/#90: a resident is a CONVERSATION
+    # embodiment, so its heartbeat-death is on conv_last_heartbeat_at (the lane-scoped reaper keys
+    # the conversation branch strictly on that column).
     db.execute("UPDATE agents SET status='working' WHERE id=%s", (aid,))
     db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '2000 seconds' WHERE id=%s", (aid,))
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
+               "WHERE agent_id=%s", (aid,))
 
     # Surfaced status reads idle (no live lease + no task) even before the reap.
     row = await _snapshot_agent(client, cid, aid)

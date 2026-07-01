@@ -73,12 +73,13 @@ async def _rich_task_request(client, make_agent, make_request):
     return owner, target, req["id"]
 
 
-async def _answered_task_request(client, make_agent, make_request):
+async def _answered_task_request(client, make_agent, make_request, work_headers):
     """A task request taken all the way to ANSWERED: target accepts, then posts its result
     (accepted → answered), so the REQUESTER now owns the next move."""
     owner, target, rid = await _rich_task_request(client, make_agent, make_request)
     a = await client.post(f"/api/requests/{rid}/accept-task",
-                          json={"responder_agent_id": target["agent_id"]})
+                          json={"responder_agent_id": target["agent_id"]},
+                          headers=await work_headers(target["agent_id"]))
     assert a.status_code == 200, a.text
     rsp = await client.post(f"/api/requests/{rid}/respond",
                             json={"responder_agent_id": target["agent_id"], "response": "done"})
@@ -165,11 +166,11 @@ async def test_open_task_request_pokes_target_to_accept_reject_with_context(
 
 
 async def test_answered_task_request_pokes_requester_to_act_or_close(
-        client, make_agent, make_request, db):
+        client, make_agent, make_request, db, work_headers):
     """answered + type='task' → the REQUESTER is poked to act on the result or close it; the poke
     names the task and points at /orcha-close (not /orcha-respond / accept-reject)."""
     human = await make_agent("Boss", kind="human")
-    owner, target, rid = await _answered_task_request(client, make_agent, make_request)
+    owner, target, rid = await _answered_task_request(client, make_agent, make_request, work_headers)
     base = time.time()
     r = await client.post(f"/api/requests/{rid}/nudge",
                           json={"actor_agent_id": human["agent_id"]})
@@ -225,13 +226,14 @@ async def test_no_target_at_birth_is_noop(client, make_agent, make_request, db):
 
 # ---------- non-actionable states → 409, no poke, no state change ----------
 
-async def test_accepted_returns_409_and_is_unchanged(client, make_agent, make_request, db):
+async def test_accepted_returns_409_and_is_unchanged(client, make_agent, make_request, db, work_headers):
     """accepted → the request became a task; nudge the task, not the request. 409, status stays
     'accepted', spawned_task_id intact, no poke."""
     human = await make_agent("Boss", kind="human")
     owner, target, rid = await _task_request(client, make_agent, make_request)
     a = await client.post(f"/api/requests/{rid}/accept-task",
-                          json={"responder_agent_id": target["agent_id"]})
+                          json={"responder_agent_id": target["agent_id"]},
+                          headers=await work_headers(target["agent_id"]))
     assert a.status_code == 200, a.text
     spawned = a.json().get("spawned_task_id")
     base = time.time()

@@ -30,7 +30,7 @@ pytestmark = pytest.mark.asyncio
 MAX = 4000  # mirrors MAX_PAYLOAD_LEN / Field(max_length=...) on TaskMessage.body
 
 
-async def _done_task(client, make_agent, make_task):
+async def _done_task(client, make_agent, make_task, work_headers):
     """Helper: a task an AI worker has marked done → needs_verification, plus the
     human who will verify it. Returns (human_id, worker_id, task_id)."""
     human = await make_agent("Operator", kind="human")
@@ -38,7 +38,8 @@ async def _done_task(client, make_agent, make_task):
     task = await make_task("ship it", "it is shipped", assignee_alias="Worker")
     tid = task["id"]
     r = await client.post(f"/api/tasks/{tid}/done",
-                          json={"agent_id": worker["agent_id"], "result": "did the thing"})
+                          json={"agent_id": worker["agent_id"], "result": "did the thing"},
+                          headers=await work_headers(worker["agent_id"]))
     assert r.status_code == 200, r.text
     return human["agent_id"], worker["agent_id"], tid
 
@@ -81,8 +82,8 @@ async def test_non_length_validation_still_422(client, make_task):
 
 # ----------------------------------------------------------- P1: verify/reject
 
-async def test_verify_approve_completes_and_notifies(client, make_agent, make_task, db):
-    human_id, worker_id, tid = await _done_task(client, make_agent, make_task)
+async def test_verify_approve_completes_and_notifies(client, make_agent, make_task, db, work_headers):
+    human_id, worker_id, tid = await _done_task(client, make_agent, make_task, work_headers)
     r = await client.post(f"/api/tasks/{tid}/verify",
                           json={"approve": True, "actor_agent_id": human_id})
     assert r.status_code == 200, r.text
@@ -98,8 +99,8 @@ async def test_verify_approve_completes_and_notifies(client, make_agent, make_ta
     assert ev["task_id"] == tid and ev["approved"] is True
 
 
-async def test_verify_reject_sends_back_with_feedback(client, make_agent, make_task, db):
-    human_id, worker_id, tid = await _done_task(client, make_agent, make_task)
+async def test_verify_reject_sends_back_with_feedback(client, make_agent, make_task, db, work_headers):
+    human_id, worker_id, tid = await _done_task(client, make_agent, make_task, work_headers)
     r = await client.post(f"/api/tasks/{tid}/verify",
                           json={"approve": False, "feedback": "missing tests", "actor_agent_id": human_id})
     assert r.status_code == 200, r.text
@@ -117,8 +118,8 @@ async def test_verify_reject_sends_back_with_feedback(client, make_agent, make_t
     assert ev["feedback"] == "missing tests"
 
 
-async def test_verify_requires_human_actor(client, make_agent, make_task):
-    _, worker_id, tid = await _done_task(client, make_agent, make_task)
+async def test_verify_requires_human_actor(client, make_agent, make_task, work_headers):
+    _, worker_id, tid = await _done_task(client, make_agent, make_task, work_headers)
     # an AI agent cannot verify — the _require_kind(...,'human') gate the portal
     # identity picker is built around must hold server-side too.
     r = await client.post(f"/api/tasks/{tid}/verify",

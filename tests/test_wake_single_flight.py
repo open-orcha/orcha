@@ -186,48 +186,55 @@ async def test_claim_defaults_ephemeral_resident_explicit(client, make_agent):
 
 
 @pytest.mark.asyncio
-async def test_resident_lease_blocks_ephemeral_and_vice_versa(client, make_agent):
-    """E1 single-embodiment: a live RESIDENT lease blocks an ephemeral claim (with the
-    single-embodiment reason), and a live EPHEMERAL lease blocks a resident claim."""
+async def test_resident_and_work_leases_coexist_per_lane(client, make_agent):
+    """GH #91/#90: after the work/conversation lane split, a resident (CONVERSATION lane) and an
+    ephemeral work worker (WORK lane) hold INDEPENDENT lease slots and COEXIST — one lane's live
+    lease no longer blocks the other's claim. Single-flight is now enforced PER LANE, not across
+    the whole agent. (Cross-lane exclusion was the old single-embodiment model; the split is the
+    #91 fix so a resident conversation no longer blocks task work, and vice versa.)"""
     a = await make_agent("A")
     aid = a["agent_id"]
+    # resident claims the CONVERSATION lane
     assert (await client.post(f"/api/agents/{aid}/wake-claim",
                               json={"lease_ttl": 300, "lease_kind": "resident"})).json()["claimed"] is True
-    # an ephemeral wake can't spawn while the resident session holds the embodiment
+    # an ephemeral wake (WORK lane) claims SUCCESSFULLY alongside the resident — different lane
     r = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
-    assert r.json()["claimed"] is False
-    assert r.json()["lease_kind"] == "resident"
-    assert "single-embodiment" in r.json()["reason"]
+    assert r.json()["claimed"] is True
+    assert r.json()["lane"] == "work" and r.json()["lease_kind"] == "ephemeral"
 
-    # symmetric: a live ephemeral lease blocks a resident claim
-    b = await make_agent("B")
-    bid = b["agent_id"]
-    assert (await client.post(f"/api/agents/{bid}/wake-claim", json={"lease_ttl": 300})).json()["claimed"] is True
-    r = await client.post(f"/api/agents/{bid}/wake-claim", json={"lease_ttl": 300, "lease_kind": "resident"})
-    assert r.json()["claimed"] is False and r.json()["lease_kind"] == "ephemeral"
+    # ...but within a lane, single-flight still holds: a second WORK claim is refused.
+    r2 = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
+    assert r2.json()["claimed"] is False and r2.json()["lane"] == "work"
+    assert "single" in r2.json()["reason"]
+    # and a second CONVERSATION claim is refused by the resident already holding that lane.
+    r3 = await client.post(f"/api/agents/{aid}/wake-claim",
+                           json={"lease_ttl": 300, "lease_kind": "resident"})
+    assert r3.json()["claimed"] is False and r3.json()["lane"] == "conversation"
+    assert r3.json()["lease_kind"] == "resident"
 
 
 @pytest.mark.asyncio
 async def test_live_lease_claim_and_mutual_exclusion(client, make_agent):
-    """§3b: lease_kind='live' (an embedded-terminal embodiment) is a first-class single-flight
-    lease — it claims, and it excludes ephemeral/resident both ways (one embodiment per agent)."""
+    """§3b + GH #91/#90: lease_kind='live' (an embedded-terminal embodiment) is a WORK-lane lease —
+    it claims, and within the WORK lane it excludes ephemeral both ways (one work embodiment per
+    agent). It COEXISTS with a resident (CONVERSATION lane) after the lane split."""
     a = await make_agent("A")
     aid = a["agent_id"]
     r = await client.post(f"/api/agents/{aid}/wake-claim",
                           json={"lease_ttl": 300, "lease_kind": "live"})
-    assert r.json()["claimed"] is True and r.json()["lease_kind"] == "live"
-    # an ephemeral wake can't spawn while a live terminal holds the embodiment
+    assert r.json()["claimed"] is True and r.json()["lane"] == "work" and r.json()["lease_kind"] == "live"
+    # an ephemeral wake can't spawn while a live terminal holds the WORK embodiment (same lane)
     r = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
     assert r.json()["claimed"] is False and r.json()["lease_kind"] == "live"
-    assert "single-embodiment" in r.json()["reason"]
+    assert "single" in r.json()["reason"]
 
-    # symmetric: a live resident lease blocks a 'live' terminal claim
+    # coexistence: a resident (CONVERSATION lane) does NOT block a 'live' terminal (WORK lane) claim.
     b = await make_agent("B")
     bid = b["agent_id"]
     assert (await client.post(f"/api/agents/{bid}/wake-claim",
                               json={"lease_ttl": 300, "lease_kind": "resident"})).json()["claimed"] is True
     r = await client.post(f"/api/agents/{bid}/wake-claim", json={"lease_ttl": 300, "lease_kind": "live"})
-    assert r.json()["claimed"] is False and r.json()["lease_kind"] == "resident"
+    assert r.json()["claimed"] is True and r.json()["lane"] == "work" and r.json()["lease_kind"] == "live"
 
 
 @pytest.mark.asyncio
@@ -254,35 +261,40 @@ async def test_invalid_lease_kind_rejected(client, make_agent):
 
 
 @pytest.mark.asyncio
-async def test_resident_lease_suppresses_wake_scan_with_reason(client, container, make_agent, make_request):
-    """E1: wake-scan excludes an agent holding a live resident lease, and says why."""
+async def test_resident_lease_does_not_suppress_work_wake_scan(client, container, make_agent, make_request):
+    """GH #91/#90 (the core #91 fix): wake-scan governs the WORK lane only. A live resident holds
+    the CONVERSATION lane, so it NO LONGER suppresses a work wake — B still wakes to do the pending
+    task work while its resident conversation stays live. (Old behavior: a resident blocked every
+    ephemeral wake; that is exactly the pain #91 removes.)"""
     a = await make_agent("A")
     b = await make_agent("B")
     await make_request(a["agent_id"], "need input", target_alias="B")     # B has pending work
     await client.post(f"/api/agents/{b['agent_id']}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
     _, cand = await _scan(client, container["id"], b["agent_id"])
-    assert cand["lease_active"] is True
-    assert cand["lease_kind"] == "resident"
-    assert cand["should_wake"] is False
-    assert "resident session is live (single-embodiment)" in cand["reason"]
+    # the resident holds the conversation lane...
+    assert cand["conv_lease_active"] is True
+    # ...but the WORK lane is free, so the work wake is NOT suppressed.
+    assert cand["lease_active"] is False
+    assert cand["lease_kind"] is None
+    assert cand["should_wake"] is True
 
 
 @pytest.mark.asyncio
 async def test_wake_scan_hides_lease_kind_once_lease_expired(client, container, make_agent, make_request, db):
     """E1 review (P2): expiry is the crash/orphan recovery path and does NOT clear the row, so a
-    raw projection would surface a stale 'resident' embodiment after the lease lapsed. wake-scan
-    must report lease_kind=NULL (no embodiment) the moment the lease is observed expired —
-    consistent with lease_active=false / should_wake=true — or future resident orchestration
-    misreads a dead session as live."""
+    raw projection would surface a stale embodiment after the lease lapsed. wake-scan must report
+    lease_kind=NULL (no embodiment) the moment the WORK lease is observed expired — consistent with
+    lease_active=false / should_wake=true — or a dead session is misread as live. (Exercised on the
+    WORK lane, which is what wake-scan's lease_kind/lease_active surface after the GH #91/#90 split.)"""
     a = await make_agent("A")
     b = await make_agent("B")
     await make_request(a["agent_id"], "need input", target_alias="B")   # B has pending work
     await client.post(f"/api/agents/{b['agent_id']}/wake-claim",
-                      json={"lease_ttl": 300, "lease_kind": "resident"})
-    # While live: scan exposes the resident embodiment and suppresses the wake.
+                      json={"lease_ttl": 300})                          # ephemeral -> WORK lane
+    # While live: scan exposes the work embodiment and suppresses the wake.
     _, cand = await _scan(client, container["id"], b["agent_id"])
-    assert cand["lease_active"] is True and cand["lease_kind"] == "resident"
+    assert cand["lease_active"] is True and cand["lease_kind"] == "ephemeral"
     # Force the lease into the past (crash-safe TTL expiry, row left intact — no release).
     db.execute("UPDATE agent_wake_state SET wake_lease_until = now() - interval '1 second' "
                "WHERE agent_id = %s", (b["agent_id"],))
@@ -297,52 +309,62 @@ async def test_wake_scan_hides_lease_kind_once_lease_expired(client, container, 
 
 @pytest.mark.asyncio
 async def test_release_clears_lease_kind(client, make_agent, db):
-    """E1: releasing the lease (wake-ack release_lease) clears the embodiment label to NULL —
-    a released agent shows no embodiment, not a stale kind."""
+    """E1 + GH #91/#90: releasing the CONVERSATION lease (wake-ack release_lease, lane=conversation)
+    clears the resident embodiment label to NULL — a released agent shows no embodiment, not a stale
+    kind."""
     a = await make_agent("A")
     aid = a["agent_id"]
     await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300, "lease_kind": "resident"})
-    assert db.execute("SELECT lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]["lease_kind"] == "resident"
-    ack = await client.post(f"/api/agents/{aid}/wake-ack", json={"kind": "resident", "release_lease": True})
+    assert db.execute("SELECT conv_lease_kind FROM agent_wake_state WHERE agent_id=%s",
+                      (aid,))[0]["conv_lease_kind"] == "resident"
+    ack = await client.post(f"/api/agents/{aid}/wake-ack",
+                            json={"kind": "resident", "release_lease": True, "lane": "conversation"})
     assert ack.status_code == 200
-    row = db.execute("SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["wake_lease_until"] is None and row["lease_kind"] is None
+    row = db.execute("SELECT conv_lease_until, conv_lease_kind FROM agent_wake_state WHERE agent_id=%s",
+                     (aid,))[0]
+    assert row["conv_lease_until"] is None and row["conv_lease_kind"] is None
 
 
-# ---------- ISS-69(b): terminal-preempts-an-idle-resident yield request ----------
+# ---------- GH #91/#90: embodiments coexist per-lane; the ISS-69(b) preempt path is now inert ----------
+# The old "live terminal preempts an idle resident via a yield request" flow (ISS-69(b)) is gone:
+# a resident is a CONVERSATION-lane embodiment and a live terminal is a WORK-lane one, so they hold
+# INDEPENDENT lease slots and COEXIST — a live/ephemeral WORK claim never blocks on a resident, so no
+# yield hand-off is needed. The preempt columns + branch are kept-but-inert (Open Q3): the branch is
+# gated `lane=='work' and held_kind=='resident'`, and a resident never sits in the WORK lane, so it
+# cannot fire. These tests pin the new coexistence contract and that preempt stays inert cross-lane;
+# within a lane, single-flight (and the no-yield-for-non-resident refusal) still holds.
 
 async def _claim(client, aid, **body):
     return (await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300, **body})).json()
 
 
 @pytest.mark.asyncio
-async def test_preempt_records_yield_request_against_idle_resident(client, make_agent, db):
-    """A live-terminal claim with preempt=1, blocked by a RESIDENT, does NOT just refuse: it records
-    a yield request on the held row (reason 'yield_pending') so the daemon can hand off the idle
-    resident. The lease is NOT taken here — single-flight still holds until the resident releases."""
+async def test_live_claim_coexists_with_resident_no_yield(client, make_agent, db):
+    """A live-terminal (WORK lane) claim while a resident holds the CONVERSATION lane now SUCCEEDS —
+    the two lanes coexist, so preempt=True records NO yield request (the cross-lane preempt path is
+    inert). The resident keeps its conversation lease untouched."""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
     r = await _claim(client, aid, lease_kind="live", preempt=True)
-    assert r["claimed"] is False
-    assert r["reason"] == "yield_pending"
-    assert r["preempt_requested"] is True
-    assert r["lease_kind"] == "resident"                      # holder unchanged (no steal)
-    row = db.execute("SELECT lease_kind, preempt_requested_at, preempt_for "
+    assert r["claimed"] is True                               # coexists — not blocked, not a yield
+    assert r["lane"] == "work" and r["lease_kind"] == "live"
+    assert r.get("reason") != "yield_pending"
+    row = db.execute("SELECT conv_lease_kind, preempt_requested_at, preempt_for, conv_preempt_requested_at "
                      "FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["lease_kind"] == "resident"                    # resident STILL holds the lease
-    assert row["preempt_requested_at"] is not None            # ...but a yield is now requested
-    assert row["preempt_for"] == "live"
+    assert row["conv_lease_kind"] == "resident"              # resident lease intact
+    assert row["preempt_requested_at"] is None and row["preempt_for"] is None    # WORK lane: no yield
+    assert row["conv_preempt_requested_at"] is None          # CONVERSATION lane: no yield
 
 
 @pytest.mark.asyncio
 async def test_preempt_has_no_effect_on_ephemeral_holder(client, make_agent, db):
-    """Only a resident yields. An ephemeral wake worker is doing task work — preempt must NOT flag it;
-    the terminal stays a hard refusal (single-embodiment), no yield request recorded."""
+    """Within the WORK lane single-flight still holds: an ephemeral work worker blocks a live claim
+    (same lane), and preempt must NOT flag it — the terminal stays a hard refusal, no yield."""
     a = await make_agent("A")
     aid = a["agent_id"]
-    assert (await _claim(client, aid))["claimed"] is True     # ephemeral (default)
-    r = await _claim(client, aid, lease_kind="live", preempt=True)
+    assert (await _claim(client, aid))["claimed"] is True     # ephemeral (default) -> WORK lane
+    r = await _claim(client, aid, lease_kind="live", preempt=True)   # live -> WORK lane, same slot
     assert r["claimed"] is False
     assert r["reason"] != "yield_pending" and "single" in r["reason"]
     row = db.execute("SELECT preempt_requested_at FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
@@ -350,25 +372,26 @@ async def test_preempt_has_no_effect_on_ephemeral_holder(client, make_agent, db)
 
 
 @pytest.mark.asyncio
-async def test_ephemeral_claim_with_preempt_cannot_evict_resident(client, make_agent, db):
-    """[review blocking] ISS-69(b) is scoped to the HUMAN terminal 'Pair anyway' path. An autonomous
-    EPHEMERAL wake that sets preempt=true while a resident holds the lease must NOT yield the warm
-    resident — it gets the normal single-embodiment denial, with NO yield request recorded. The
-    preempt branch is gated on the REQUESTING kind being 'live', not just on preempt=true."""
+async def test_ephemeral_claim_coexists_with_resident(client, make_agent, db):
+    """An autonomous EPHEMERAL wake (WORK lane) claims SUCCESSFULLY alongside a resident
+    (CONVERSATION lane) — different slots, so no eviction and NO yield request, with or without the
+    preempt flag (which is inert cross-lane)."""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
     r = await _claim(client, aid, lease_kind="ephemeral", preempt=True)   # ephemeral, NOT live
-    assert r["claimed"] is False
-    assert r["reason"] != "yield_pending" and "single-embodiment" in r["reason"]
+    assert r["claimed"] is True and r["lane"] == "work"
     assert r.get("preempt_requested") is not True
-    row = db.execute("SELECT preempt_requested_at, preempt_for FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["preempt_requested_at"] is None and row["preempt_for"] is None   # resident not flagged to yield
+    row = db.execute("SELECT conv_preempt_requested_at, conv_preempt_for, preempt_requested_at "
+                     "FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
+    assert row["conv_preempt_requested_at"] is None and row["conv_preempt_for"] is None  # resident not flagged
+    assert row["preempt_requested_at"] is None
 
 
 @pytest.mark.asyncio
 async def test_preempt_has_no_effect_on_another_live_terminal(client, make_agent, db):
-    """A second live terminal does not preempt the first — two humans don't auto-evict each other."""
+    """A second live terminal does not preempt the first — two humans (both WORK lane) don't
+    auto-evict each other; same-lane single-flight refuses the second with no yield."""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="live"))["claimed"] is True
@@ -379,63 +402,21 @@ async def test_preempt_has_no_effect_on_another_live_terminal(client, make_agent
 
 
 @pytest.mark.asyncio
-async def test_no_preempt_flag_without_the_flag(client, make_agent, db):
-    """Default (preempt omitted/false): a resident-blocked claim is the unchanged single-embodiment
-    refusal — no yield request. Mutation guard: the flag must be OPT-IN."""
+async def test_wake_renew_surfaces_no_preempt_after_lane_split(client, make_agent):
+    """wake-renew still returns the preempt_requested field on each heartbeat, but after the lane
+    split a resident (conversation) and a work claim coexist, so no cross-lane yield is ever recorded
+    — the field stays False. (Kept-but-inert per Open Q3.)"""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    r = await _claim(client, aid, lease_kind="live")          # no preempt
-    assert r["claimed"] is False
-    assert r["reason"] != "yield_pending" and r.get("preempt_requested") is not True
-    row = db.execute("SELECT preempt_requested_at FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["preempt_requested_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_wake_renew_surfaces_preempt_requested(client, make_agent):
-    """The daemon reads the yield request back on the heartbeat it already sends each tick:
-    wake-renew returns preempt_requested True once a yield is pending, False otherwise."""
-    a = await make_agent("A")
-    aid = a["agent_id"]
-    assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    # before any preempt: heartbeat says no yield pending
-    r0 = await client.post(f"/api/agents/{aid}/wake-renew", json={"lease_ttl": 300})
+    r0 = await client.post(f"/api/agents/{aid}/wake-renew",
+                           json={"lease_ttl": 300, "lane": "conversation"})
     assert r0.json()["renewed"] is True and r0.json()["preempt_requested"] is False
-    # a terminal preempts → heartbeat now flags it
-    assert (await _claim(client, aid, lease_kind="live", preempt=True))["reason"] == "yield_pending"
-    r1 = await client.post(f"/api/agents/{aid}/wake-renew", json={"lease_ttl": 300})
-    assert r1.json()["renewed"] is True and r1.json()["preempt_requested"] is True
-
-
-@pytest.mark.asyncio
-async def test_release_clears_preempt_flag(client, make_agent, db):
-    """When the idle resident yields (wake-ack release), the pending yield request is cleared — the
-    next embodiment never inherits a stale flag."""
-    a = await make_agent("A")
-    aid = a["agent_id"]
-    assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    assert (await _claim(client, aid, lease_kind="live", preempt=True))["reason"] == "yield_pending"
-    await client.post(f"/api/agents/{aid}/wake-ack", json={"kind": "resident_preempted", "release_lease": True})
-    row = db.execute("SELECT wake_lease_until, lease_kind, preempt_requested_at, preempt_for "
-                     "FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["wake_lease_until"] is None and row["lease_kind"] is None
-    assert row["preempt_requested_at"] is None and row["preempt_for"] is None
-
-
-@pytest.mark.asyncio
-async def test_fresh_claim_clears_stale_preempt_flag(client, make_agent, db):
-    """After the resident yields and the terminal claims 'live', the new holder's row carries NO
-    stale yield request (a fresh claim clears it)."""
-    a = await make_agent("A")
-    aid = a["agent_id"]
-    assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    assert (await _claim(client, aid, lease_kind="live", preempt=True))["reason"] == "yield_pending"
-    # resident yields (release), then the terminal wins the lease
-    await client.post(f"/api/agents/{aid}/wake-ack", json={"kind": "resident_preempted", "release_lease": True})
-    assert (await _claim(client, aid, lease_kind="live"))["claimed"] is True
-    row = db.execute("SELECT lease_kind, preempt_requested_at FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["lease_kind"] == "live" and row["preempt_requested_at"] is None
+    # a live terminal claims the WORK lane (coexists) — no yield is recorded against the resident
+    assert (await _claim(client, aid, lease_kind="live", preempt=True))["claimed"] is True
+    r1 = await client.post(f"/api/agents/{aid}/wake-renew",
+                           json={"lease_ttl": 300, "lane": "conversation"})
+    assert r1.json()["renewed"] is True and r1.json()["preempt_requested"] is False
 
 
 # ---------- the global kill-switch ----------
@@ -836,7 +817,7 @@ def test_reap_keeps_lease_for_live_worker(monkeypatch):
     # the only post is a lease renewal (no release/finish for a live, progressing worker)
     renew = [(u, b) for u, b in posts if u.endswith("/wake-renew")]
     assert renew == [("http://x/api/agents/agent-X/wake-renew",
-                      {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS})]
+                      {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS, "lane": "work"})]
     assert not [u for u, _ in posts if u.endswith("/wake-ack") or u.endswith("/finish")]
 
 

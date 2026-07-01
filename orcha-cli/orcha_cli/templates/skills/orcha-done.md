@@ -27,10 +27,11 @@ User arguments: `$ARGUMENTS`
 
 3. **Read `.claude/orcha.json`** for `api_base_url`.
 
-4. **POST** the done signal:
+4. **POST** the done signal. This is a WORK-lane endpoint: if `$ORCHA_RUN_TOKEN` is set in the env, pass it as the `X-Orcha-Run-Token` header so the server's work-lane gate accepts it; when it is UNSET (a human/no-token caller), OMIT the header (a bare call correctly 403s on this gated endpoint). Use the shell-safe expansion so an unset var adds nothing:
    ```bash
    curl -fsS -X POST "<api_base_url>/api/tasks/<task_id>/done" \
      -H 'Content-Type: application/json' \
+     ${ORCHA_RUN_TOKEN:+-H "X-Orcha-Run-Token: $ORCHA_RUN_TOKEN"} \
      -d '{"agent_id": "<agent_id>", "result": "<result>"}'
    ```
    Response: `{"task_id": "...", "status": "needs_verification"}`

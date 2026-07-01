@@ -131,9 +131,13 @@ def test_conversation_turn_send_ok_still_opens_run(monkeypatch, tmp_path):
 
 
 def test_inbox_drain_yield_opens_no_in_session_run(monkeypatch, tmp_path):
-    """TEETH (Part 1 / ISS-78): the warm-session inbox-drain path no longer exists. An idle resident
-    with queued non-conversation inbox work yields/releases the lease, opens no resident run, and lets
-    the next ephemeral worker drain the backlog in its own session."""
+    """TEETH (Part 1 / ISS-78 → GH #91/#90 default): a warm resident with queued NON-conversation
+    inbox work opens NO in-session resident run — the original ISS-stranded orphan (a POST /runs on the
+    warm session) never happens. Under the lane split (RESIDENT_WORK_TEARDOWN_ENABLED=False, the default)
+    the resident also does NOT yield/tear down its CONVERSATION lease for that work: the WORK lane drains
+    the backlog independently via its own work lease + work worker_run, so the two lanes coexist. The
+    resident just stays warm and renews. Mutation tooth: reintroduce a warm-session inbox-drain run and a
+    /runs POST appears here → RED (the stranded-orphan vector this file guards is back)."""
     import time
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
@@ -154,13 +158,12 @@ def test_inbox_drain_yield_opens_no_in_session_run(monkeypatch, tmp_path):
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
     assert not any(u.endswith("/runs") for u, _ in posts), \
-        "an inbox-drain yield must NOT POST a resident worker_run"
-    assert live == {}
-    assert proc.stdin.closed is True
-    assert sigs and sigs[0] == (4321, notifier.signal.SIGTERM)
-    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
-    assert ack["kind"] == "resident_inbox_drain_yield" and ack["release_lease"] is True
-    assert notifier._RESIDENT_DRAIN_YIELD["C1"][0] == 100
+        "an inbox-drain must NOT POST a resident worker_run (else it strands a 'running' orphan)"
+    # GH #91/#90 default (flag OFF): no work-yield/teardown — the CONVERSATION resident stays warm.
+    assert "C1" in live                                         # warm resident kept (not torn down)
+    assert not sigs                                             # not graceful-killed/yielded
+    assert not any(u.endswith("/wake-ack") for u, _ in posts)   # lease NOT released (no work teardown)
+    assert "C1" not in notifier._RESIDENT_DRAIN_YIELD           # never entered the yield/drain branch
 
 
 # ======================== Part 2 — server reconcile on lease release ========================
@@ -221,16 +224,23 @@ async def test_wake_ack_release_does_not_touch_finished_run(client, make_agent):
 async def test_orphan_lease_reaper_reconciles_running_run(client, make_agent, container, db):
     """TEETH (Part 2, reaper fold-in): a lease that OUTLIVED its embodiment (daemon turnover) is
     force-released by the ISS-60-B reaper, which now ALSO reconciles the agent's stranded
-    'running' runs to 'orphaned' — covering orphans the in-process release path never sees."""
+    'running' runs to 'orphaned' — covering orphans the in-process release path never sees.
+
+    GH #91/#90: the reaper is lane-scoped. A resident is a CONVERSATION-lane embodiment — its claim
+    lands on the conv_* lease slot and its run is lane='conversation'. The conversation reaper branch
+    keys idle STRICTLY on conv_last_heartbeat_at (no pre-030 legacy fallback), so we stale that column
+    (NOT agents.last_heartbeat_at, which the WORK branch reads) and tag the run lane='conversation' so
+    the conversation branch reconciles it."""
     cid = container["id"]
     a = await make_agent("Ghost")
     aid = a["agent_id"]
     await client.post(f"/api/agents/{aid}/wake-claim",
-                      json={"lease_ttl": 300, "lease_kind": "resident"})
+                      json={"lease_ttl": 300, "lease_kind": "resident"})   # -> CONVERSATION lease slot
     rid = (await client.post(f"/api/agents/{aid}/runs",
-                             json={"wake_kind": "resident"})).json()["run_id"]
-    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '2000 seconds' WHERE id=%s",
-               (aid,))
+                             json={"wake_kind": "resident", "lane": "conversation"})).json()["run_id"]
+    # conversation branch keys on conv_last_heartbeat_at; stale IT (a once-alive-now-gone conv lease).
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
+               "WHERE agent_id=%s", (aid,))
 
     r = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
     assert [x["agent_id"] for x in r.json()["reaped"]] == [aid]
@@ -313,28 +323,38 @@ async def test_resident_runs_unknown_agent_404(client):
 
 async def test_dead_pid_release_unsuppresses_event_wake(client, make_agent, container, db):
     """TEETH (919050a5 c, server seam): the plan's headline invariant — a dead-pid resident lease
-    must NOT keep suppressing event wakes. Seed a resident lease + a running resident run; the host's
-    dead-pid reap (wake-ack release_lease) clears the lease so wake-scan stops suppressing AND the
-    e4b77f3f reconcile orphans the stranded run."""
+    must NOT keep pinning its embodiment. Seed a resident lease + a running resident run; the host's
+    dead-pid reap (wake-ack release_lease) clears the lease AND the e4b77f3f reconcile orphans the
+    stranded run.
+
+    GH #91/#90: a resident is a CONVERSATION-lane embodiment — its claim lands on the conv_* lease slot
+    and its run is lane='conversation'. So the seeded state shows up as conv_lease_active /
+    conv_embodiment_running (NOT the work-lane lease_active — the two lanes are independent now, and a
+    live conversation resident deliberately does NOT suppress work wakes). The dead-pid release is
+    therefore a lane='conversation' ack, which clears the conv lease and reconciles the conv run."""
     cid = container["id"]
     a = await make_agent("Stall")
     aid = a["agent_id"]
     await client.post(f"/api/agents/{aid}/wake-claim",
-                      json={"lease_ttl": 300, "lease_kind": "resident"})
+                      json={"lease_ttl": 300, "lease_kind": "resident"})   # -> CONVERSATION lease slot
     await client.post(f"/api/agents/{aid}/runs",
-                      json={"wake_kind": "resident", "pid": _DEAD_PID})
+                      json={"wake_kind": "resident", "lane": "conversation", "pid": _DEAD_PID})
 
     scan = await client.get(f"/api/containers/{cid}/wake-scan?cooldown=0&min_idle=0")
     me = [c for c in scan.json()["candidates"] if c["agent_id"] == aid][0]
-    assert me["lease_active"] is True                       # the orphan lease blocks wakes (ISS-74)
+    assert me["conv_lease_active"] is True                  # the resident holds the CONVERSATION lease
+    assert me["conv_embodiment_running"] is True            # its running conv run is live
+    assert me["lease_active"] is False                      # lane split: work lane is untouched/free
 
-    # the host detects the dead pid and reaps it = release the resident lease
+    # the host detects the dead pid and reaps it = release the CONVERSATION-lane resident lease
     await client.post(f"/api/agents/{aid}/wake-ack",
-                      json={"kind": "resident_dead_pid", "release_lease": True})
+                      json={"kind": "resident_dead_pid", "release_lease": True,
+                            "lane": "conversation"})
 
     scan2 = await client.get(f"/api/containers/{cid}/wake-scan?cooldown=0&min_idle=0")
     me2 = [c for c in scan2.json()["candidates"] if c["agent_id"] == aid][0]
-    assert me2["lease_active"] is False                     # wake no longer suppressed
+    assert me2["conv_lease_active"] is False                # conv lease released
+    assert me2["conv_embodiment_running"] is False          # run reconciled → no live conv embodiment
     run = (await client.get(f"/api/agents/{aid}/resident-runs")).json()["runs"][0]
     assert run["status"] == "orphaned"
 

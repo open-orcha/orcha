@@ -69,15 +69,15 @@ async def test_not_ready_excluded_from_ready_queue(client, container):
     assert "open" in titles and "held" not in titles
 
 
-async def test_not_ready_NOT_claimable_via_next(client, container, worker):
+async def test_not_ready_NOT_claimable_via_next(client, container, worker, work_headers):
     """TOOTH (B3 core): a held task is the ONLY row, yet /orcha-next yields nothing — held work
     is never silently grabbed. If create_task set 'ready' instead of 'not_ready', this fails."""
     await _create(client, container, title="held", not_ready=True)
-    r = await client.post(f"/api/agents/{worker}/next")
+    r = await client.post(f"/api/agents/{worker}/next", headers=await work_headers(worker))
     assert r.json()["task"] is None
 
 
-async def test_release_then_assign_makes_claimable(client, container, worker, human):
+async def test_release_then_assign_makes_claimable(client, container, worker, human, work_headers):
     # #341 (open claim pool deleted): a released held task is ready+unassigned and NOT self-claimable;
     # the lead assigns it, and only then does the assignee's /next claim it. Held + release + assign
     # + claim is the full continuity hand-off under the assignment-only model.
@@ -88,7 +88,7 @@ async def test_release_then_assign_makes_claimable(client, container, worker, hu
     aa = await client.post(f"/api/tasks/{tid}/assign",
                            json={"agent_id": worker, "actor_agent_id": human})
     assert aa.status_code == 200
-    r = await client.post(f"/api/agents/{worker}/next")
+    r = await client.post(f"/api/agents/{worker}/next", headers=await work_headers(worker))
     assert r.json()["task"] and r.json()["task"]["id"] == tid
 
 
@@ -108,11 +108,11 @@ async def test_readiness_human_only(client, container, worker):
     assert r.status_code == 403
 
 
-async def test_readiness_refuses_in_progress(client, container, worker, human):
+async def test_readiness_refuses_in_progress(client, container, worker, human, work_headers):
     # #341 assignment-only: assign the task to the worker so /next can claim it into in_progress
     # (an unassigned ready task is no longer self-claimable via the deleted open pool).
     tid = await _create(client, container, title="x", assignee_alias="dev")
-    await client.post(f"/api/agents/{worker}/next")            # claim → in_progress
+    await client.post(f"/api/agents/{worker}/next", headers=await work_headers(worker))            # claim → in_progress
     r = await client.post(f"/api/tasks/{tid}/readiness", json={"actor_agent_id": human, "ready": False})
     assert r.status_code == 409
 
@@ -151,10 +151,10 @@ async def test_list_default_ordering_unchanged(client, container):
 
 # ===================== B2 — unassign =====================
 
-async def test_unassign_clears_owner_and_returns_to_ready(client, container, worker, human):
+async def test_unassign_clears_owner_and_returns_to_ready(client, container, worker, human, work_headers):
     """TOOTH (B2): an in_progress assigned task → unassign → status 'ready', no active assignee."""
     tid = await _create(client, container, title="x", assignee_alias="dev")
-    await client.post(f"/api/agents/{worker}/next")            # → in_progress
+    await client.post(f"/api/agents/{worker}/next", headers=await work_headers(worker))            # → in_progress
     r = await client.post(f"/api/tasks/{tid}/unassign", json={"actor_agent_id": human})
     assert r.status_code == 200
     assert r.json()["status"] == "ready" and worker in r.json()["released"]
@@ -175,15 +175,15 @@ async def test_unassign_idempotent_when_no_assignee(client, container, human):
     assert r.status_code == 200 and r.json()["already"] is True and r.json()["released"] == []
 
 
-async def test_unassigned_not_self_claimable_via_next(client, container, worker, human, make_agent):
+async def test_unassigned_not_self_claimable_via_next(client, container, worker, human, make_agent, work_headers):
     """#341 (open claim pool deleted): after unassign the row is ready+unassigned and stays VISIBLE
     in the ready-queue for human/lead routing, but is NOT self-claimable by any worker via /next.
     Re-adding the free-pool fall-through to /next would return the task here instead of None."""
     tid = await _create(client, container, title="x", assignee_alias="dev")
-    await client.post(f"/api/agents/{worker}/next")
+    await client.post(f"/api/agents/{worker}/next", headers=await work_headers(worker))
     await client.post(f"/api/tasks/{tid}/unassign", json={"actor_agent_id": human})
     other = await make_agent("dev2", "eng")
-    r = await client.post(f"/api/agents/{other['agent_id']}/next")
+    r = await client.post(f"/api/agents/{other['agent_id']}/next", headers=await work_headers(other['agent_id']))
     assert r.json()["task"] is None
     # still surfaced in the ready-queue view so a human/lead can re-route it
     q = await client.get(f"/api/containers/{container['id']}/tasks",
@@ -193,9 +193,9 @@ async def test_unassigned_not_self_claimable_via_next(client, container, worker,
 
 # ===================== A1 — protocol every-wake read =====================
 
-async def test_get_agent_protocol_returns_active_task_protocol(client, container, worker, human):
+async def test_get_agent_protocol_returns_active_task_protocol(client, container, worker, human, work_headers):
     tid = await _create(client, container, title="x", assignee_alias="dev")
-    await client.post(f"/api/agents/{worker}/next")            # → in_progress
+    await client.post(f"/api/agents/{worker}/next", headers=await work_headers(worker))            # → in_progress
     await client.patch(f"/api/tasks/{tid}/protocol",
                        json={"actor_agent_id": human, "notes": "drain ready rows in priority order",
                              "review_chain": "dev -> Lens -> Gate"})

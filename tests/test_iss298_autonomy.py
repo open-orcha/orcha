@@ -26,36 +26,39 @@ async def test_default_level_is_plan(client, container, db):
     assert rows[0]["autonomy_level"] == "plan"
 
 
-async def test_plan_done_stops_at_needs_verification(client, make_agent, make_task):
+async def test_plan_done_stops_at_needs_verification(client, make_agent, make_task, work_headers):
     """plan (default): /done -> needs_verification (the human is still in the loop)."""
     dev = await make_agent("dev", "eng")
     t = await make_task("work", "done", assignee_alias="dev")
     r = await client.post(f"/api/tasks/{t['task_id']}/done",
-                          json={"agent_id": dev["agent_id"], "result": "x"})
+                          json={"agent_id": dev["agent_id"], "result": "x"},
+                          headers=await work_headers(dev["agent_id"]))
     assert r.status_code == 200 and r.json()["status"] == "needs_verification"
 
 
-async def test_pr_done_stops_at_needs_verification(client, container, make_agent, make_task):
+async def test_pr_done_stops_at_needs_verification(client, container, make_agent, make_task, work_headers):
     """pr: build-to-PR still keeps the human verify gate — only `full` auto-completes."""
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
     assert (await _set_autonomy(client, container["id"], "pr", human["agent_id"])).status_code == 200
     t = await make_task("work", "done", assignee_alias="dev")
     r = await client.post(f"/api/tasks/{t['task_id']}/done",
-                          json={"agent_id": dev["agent_id"], "result": "x"})
+                          json={"agent_id": dev["agent_id"], "result": "x"},
+                          headers=await work_headers(dev["agent_id"]))
     assert r.status_code == 200 and r.json()["status"] == "needs_verification"
 
 
 # ---------------------------------------------------------------- full gate (the hard auto-complete)
 
-async def test_full_done_auto_completes(client, container, make_agent, make_task, db):
+async def test_full_done_auto_completes(client, container, make_agent, make_task, db, work_headers):
     """full: /done AUTO-COMPLETES (no needs_verification, no human verify)."""
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
     await _set_autonomy(client, container["id"], "full", human["agent_id"])
     t = await make_task("work", "done", assignee_alias="dev")
     r = await client.post(f"/api/tasks/{t['task_id']}/done",
-                          json={"agent_id": dev["agent_id"], "result": "x"})
+                          json={"agent_id": dev["agent_id"], "result": "x"},
+                          headers=await work_headers(dev["agent_id"]))
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "completed" and body["auto_completed"] is True
@@ -63,7 +66,7 @@ async def test_full_done_auto_completes(client, container, make_agent, make_task
     assert rows[0]["status"] == "completed" and rows[0]["completed_at"] is not None
 
 
-async def test_full_done_unblocks_downstream(client, container, make_agent, make_task, db):
+async def test_full_done_unblocks_downstream(client, container, make_agent, make_task, db, work_headers):
     """full auto-completion runs the SAME downstream-unblock as a human /verify approve."""
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
@@ -72,13 +75,14 @@ async def test_full_done_unblocks_downstream(client, container, make_agent, make
     downstream = await make_task("downstream", "done", depends_on=[blocker["task_id"]])
     assert downstream["status"] == "pending"
     r = await client.post(f"/api/tasks/{blocker['task_id']}/done",
-                          json={"agent_id": dev["agent_id"], "result": "x"})
+                          json={"agent_id": dev["agent_id"], "result": "x"},
+                          headers=await work_headers(dev["agent_id"]))
     assert downstream["task_id"] in r.json().get("unblocked", [])
     rows = db.execute("SELECT status FROM tasks WHERE id=%s", (downstream["task_id"],))
     assert rows[0]["status"] == "ready"
 
 
-async def test_full_done_audits_auto_completed(client, container, make_agent, make_task, db):
+async def test_full_done_audits_auto_completed(client, container, make_agent, make_task, db, work_headers):
     """The audit row records the resolved level + auto_completed so a post-hoc reviewer can SEE
     the engine auto-completed (vs a human verifying)."""
     human = await make_agent("op", "operator", kind="human")
@@ -86,7 +90,8 @@ async def test_full_done_audits_auto_completed(client, container, make_agent, ma
     await _set_autonomy(client, container["id"], "full", human["agent_id"])
     t = await make_task("work", "done", assignee_alias="dev")
     await client.post(f"/api/tasks/{t['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "x"})
+                      json={"agent_id": dev["agent_id"], "result": "x"},
+                      headers=await work_headers(dev["agent_id"]))
     rows = db.execute(
         "SELECT detail FROM events WHERE entity_id=%s AND event_type='status_changed' ORDER BY id",
         (t["task_id"],))
@@ -95,7 +100,7 @@ async def test_full_done_audits_auto_completed(client, container, make_agent, ma
     assert last["auto_completed"] is True
 
 
-async def test_full_done_emits_no_verification(client, container, make_agent, make_task, db):
+async def test_full_done_emits_no_verification(client, container, make_agent, make_task, db, work_headers):
     """Tooth (Gate, PR #317): full-autonomy /done AUTO-COMPLETES but is NOT a verification.
     The `verified` audit row and the `task_verified` assignee wake belong ONLY to the human
     /verify path — an engine auto-completion has no human verifier. If the full branch ever
@@ -108,7 +113,8 @@ async def test_full_done_emits_no_verification(client, container, make_agent, ma
     await _set_autonomy(client, container["id"], "full", human["agent_id"])
     t = await make_task("work", "done", assignee_alias="dev")
     r = await client.post(f"/api/tasks/{t['task_id']}/done",
-                          json={"agent_id": dev["agent_id"], "result": "x"})
+                          json={"agent_id": dev["agent_id"], "result": "x"},
+                          headers=await work_headers(dev["agent_id"]))
     assert r.status_code == 200 and r.json()["status"] == "completed", r.text
     evs = db.execute(
         "SELECT event_type, detail FROM events WHERE entity_id=%s ORDER BY id", (t["task_id"],))
@@ -173,7 +179,7 @@ async def test_get_container_exposes_level(client, container, make_agent):
     assert r.json()["container"]["autonomy_level"] == "pr"
 
 
-async def test_next_payload_carries_level(client, container, make_agent, make_task):
+async def test_next_payload_carries_level(client, container, make_agent, make_task, work_headers):
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
     await _set_autonomy(client, container["id"], "full", human["agent_id"])
@@ -181,14 +187,15 @@ async def test_next_payload_carries_level(client, container, make_agent, make_ta
     ar = await client.post(f"/api/tasks/{t['id']}/assign",
                            json={"actor_agent_id": human["agent_id"], "agent_id": dev["agent_id"]})
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
-    r = await client.post(f"/api/agents/{dev['agent_id']}/next")
+    r = await client.post(f"/api/agents/{dev['agent_id']}/next",
+                          headers=await work_headers(dev["agent_id"]))
     assert r.status_code == 200, r.text
     assert r.json()["autonomy_level"] == "full"
 
 
 # ---------------------------------------------------------------- shared-helper DRIFT tooth
 
-async def test_shared_helper_drift_tooth(client, container, make_agent, make_task, db, monkeypatch):
+async def test_shared_helper_drift_tooth(client, container, make_agent, make_task, db, monkeypatch, work_headers):
     """Both /verify-approve AND full-/done MUST route completion through the single shared
     _complete_and_unblock. If either re-inlines its own completion (drift), this bites: we
     replace the helper with a no-op and assert NEITHER path reaches 'completed' in the DB.
@@ -201,7 +208,8 @@ async def test_shared_helper_drift_tooth(client, container, make_agent, make_tas
     # Path 1: human /verify approve — with the helper stubbed, the task must NOT complete.
     t1 = await make_task("via-verify", "done", assignee_alias="dev")
     await client.post(f"/api/tasks/{t1['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "x"})
+                      json={"agent_id": dev["agent_id"], "result": "x"},
+                      headers=await work_headers(dev["agent_id"]))
     await client.post(f"/api/tasks/{t1['task_id']}/verify",
                       json={"approve": True, "actor_agent_id": human["agent_id"]})
     r1 = db.execute("SELECT status FROM tasks WHERE id=%s", (t1["task_id"],))
@@ -211,6 +219,7 @@ async def test_shared_helper_drift_tooth(client, container, make_agent, make_tas
     await _set_autonomy(client, container["id"], "full", human["agent_id"])
     t2 = await make_task("via-done", "done", assignee_alias="dev")
     await client.post(f"/api/tasks/{t2['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "x"})
+                      json={"agent_id": dev["agent_id"], "result": "x"},
+                      headers=await work_headers(dev["agent_id"]))
     r2 = db.execute("SELECT status FROM tasks WHERE id=%s", (t2["task_id"],))
     assert r2[0]["status"] != "completed", "full-/done bypassed the shared helper (drift)"

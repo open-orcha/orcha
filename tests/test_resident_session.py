@@ -1006,7 +1006,13 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     cold re-boot and defeating §5.1). It spawns a THROWAWAY drain sidecar in its OWN session — keeping
     the warm conversation AND the embodiment lease. The lease is NOT released, nothing is fed into the
     warm session, the sidecar runs in the BASE checkout with the per-agent model + the lean (no
-    task-start) prompt, and its handle is tracked on the resident."""
+    task-start) prompt, and its handle is tracked on the resident.
+
+    GH #91/#90: this covers the RETAINED sidecar/work-teardown path, which is gated OFF by default
+    (RESIDENT_WORK_TEARDOWN_ENABLED=False) now that the WORK lane drains independently via wake_scan.
+    We flip the flag ON to exercise the restore-hatch mechanics; the default-OFF (no-yield/no-sidecar)
+    behavior is asserted by test_service_residents_no_work_teardown_by_default."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
@@ -1078,7 +1084,10 @@ def test_service_residents_drain_fires_on_new_event_despite_recent_attempt(monke
     """#247 B3: the anti-thrash backstop only throttles a STALLED repeat — a genuinely NEW event (a
     higher inbox_ack_ts than the last drain attempt's) clears `stalled` and spawns a fresh drain
     sidecar immediately, even within the cooldown window. Forward progress is never delayed, and the
-    warm session is KEPT (no yield)."""
+    warm session is KEPT (no yield).
+
+    GH #91/#90: retained sidecar path — gated OFF by default; flip the restore-hatch flag ON here."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 1, "inbox_ack_ts": 45.0, "model": "claude-opus-4-8"}   # NEW event
@@ -1126,7 +1135,13 @@ def test_service_residents_yields_on_auto_wake_due(monkeypatch, tmp_path):
     """#266: an idle warm resident (no in-flight turn, no pending human) whose clock auto-wake is DUE
     yields the lease — same snapshot+release seam as the inbox-drain, NEVER injecting the heartbeat
     into the warm human session. Crucially the release passes stamp_woken=False so it does NOT reset
-    the cadence clock out from under the very auto_wake_due that should fire the ephemeral wake next."""
+    the cadence clock out from under the very auto_wake_due that should fire the ephemeral wake next.
+
+    GH #91/#90: the auto-wake work-yield is now a RETAINED path gated OFF by default (the WORK lane
+    fires its own ephemeral off its own work lease). We flip the restore-hatch flag ON to keep the
+    yield mechanics covered; test_service_residents_no_work_teardown_by_default asserts the default-OFF
+    behavior (no yield even with auto_wake_due)."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 0, "inbox_ack_ts": None, "auto_wake_due": True}
@@ -1144,6 +1159,34 @@ def test_service_residents_yields_on_auto_wake_due(monkeypatch, tmp_path):
     assert fed == []                                            # NOTHING injected into the warm session
     assert not any(u.endswith("/conversations/C1/turns") for u, _ in posts)   # no conversation reply
     assert not any(u.endswith("/runs") for u, _ in posts)       # no in-session heartbeat run opened
+
+
+def test_service_residents_no_work_teardown_by_default(monkeypatch, tmp_path):
+    """GH #91/#90 (default OFF): with RESIDENT_WORK_TEARDOWN_ENABLED at its default False, a warm idle
+    resident with BOTH a queued non-conversation inbox AND a due clock auto-wake does NOT spawn a drain
+    sidecar and does NOT yield its conversation lease — the WORK lane now drains independently via its
+    own work lease + work worker_run, so the two lanes coexist. The resident stays warm and only renews.
+    Mutation tooth: revert the flag guard to always-on and this resident is torn down (live=={} + a
+    wake-ack release) → RED. It also proves the retained-path tests above owe their behavior to the
+    flag flip, not to the default."""
+    assert notifier.RESIDENT_WORK_TEARDOWN_ENABLED is False       # guard the default the whole test relies on
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
+            "auto_wake_due": True}                               # both work triggers armed
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert "C1" in live and proc.killed is False                 # warm CONVERSATION lease KEPT
+    assert spawns == []                                          # NO drain sidecar (work lane owns it)
+    assert not sigs                                             # NOT graceful-killed/yielded
+    assert not any(u.endswith("/wake-ack") for u, _ in posts)   # lease NOT released — no work teardown
+    assert fed == []                                           # nothing injected into the warm session
+    assert any(u.endswith("/wake-renew") for u, _ in posts)     # just renews — stays a pure conversation body
 
 
 def test_service_residents_no_auto_wake_yield_when_not_due(monkeypatch, tmp_path):
@@ -1345,7 +1388,10 @@ def test_service_residents_drain_sidecar_spawn_failure_falls_open_to_yield(monke
     """#247 B3 §8 fail-open: if the drain sidecar can't be spawned (spawn raises / returns not-sent),
     the resident falls back to the A2 idle-YIELD — graceful close + lease release so the next tick's
     ephemeral drains the backlog. Never crashes, never strands. Mutation tooth: remove the try/except +
-    fallback and a spawn exception propagates (the call raises instead of cleanly yielding)."""
+    fallback and a spawn exception propagates (the call raises instead of cleanly yielding).
+
+    GH #91/#90: retained sidecar/fail-open path — gated OFF by default; flip the flag ON here."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8"}
