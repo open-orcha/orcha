@@ -48,6 +48,14 @@ window.OrchaData = (function () {
     return mapThread(d.messages, agents);
   }
 
+  // Approval–diff binding: the task's reviewable diff + its binding digest
+  // ({task_id, diff_digest, runs:[{run_id, agent_id, started_at, diff}]}). The verify
+  // gate renders exactly this and echoes diff_digest back on approve, so the approval
+  // is bound to the diff the human actually saw.
+  async function diffOf(tid) {
+    return getJSON("/api/tasks/" + encodeURIComponent(tid) + "/diff");
+  }
+
   // pure: raw FastAPI snapshot ({container, agents, tasks, requests}) -> component shape.
   function mapSnapshot(raw) {
     raw = raw || {};
@@ -204,5 +212,5 @@ window.OrchaData = (function () {
     connect();
   }
 
-  return { mapSnapshot, resolveCid, refresh, start, startEventStream, aliasFor, mapThread, threadOf, _cidOf: () => _cid };
+  return { mapSnapshot, resolveCid, refresh, start, startEventStream, aliasFor, mapThread, threadOf, diffOf, _cidOf: () => _cid };
 })();

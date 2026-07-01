@@ -143,6 +143,12 @@
   // (the render shows a "Failed to load — tap to retry" affordance) so a persistent failure can't hammer
   // the endpoint every 3s repaint. Cleared on an explicit retry or once a fetch succeeds with content.
   const threadError = {};
+  /* Approval–diff binding: the verify gate's reviewable-diff state. diffCache[tid] holds the
+     GET /api/tasks/{tid}/diff payload; Accept sends its diff_digest so the approval is bound
+     to exactly what was rendered. Same latch discipline as the thread loaders above. */
+  const diffCache = {};
+  const diffLoading = {};
+  const diffError = {};
   // #301: attachment staging for the composer. Files upload immediately on pick/drop/paste; each
   // staged entry holds its real server ref once done. Reset when the selected task changes. Survives
   // no-op 3s repaints (O.patch only re-runs wire() on actual DOM change) and is re-rendered from this
@@ -171,6 +177,19 @@
         if (sel === t.id) renderDetail();
       })
       .catch(() => { threadLoading[t.id] = false; threadError[t.id] = true; if (sel === t.id) renderDetail(); });
+  }
+
+  /* Approval–diff binding: lazy-load the verify gate's reviewable diff. Mirrors
+     maybeLoadThread's latch discipline (no refetch storms on the 3s repaint tick). */
+  function maybeLoadGateDiff(t, manual) {
+    if (t.status !== "needs_verification") return;
+    if (diffLoading[t.id]) return;
+    if (manual) { diffError[t.id] = false; diffCache[t.id] = null; }
+    else if (diffCache[t.id] || diffError[t.id]) return;
+    diffLoading[t.id] = true;
+    window.OrchaData.diffOf(t.id)
+      .then((d) => { diffLoading[t.id] = false; diffCache[t.id] = d; if (sel === t.id) renderDetail(); })
+      .catch(() => { diffLoading[t.id] = false; diffError[t.id] = true; if (sel === t.id) renderDetail(); });
   }
   // optimistic one-shot: tasks acted on THIS session (plan decided / verified). Suppress the
   // gate immediately so the 3s repaint can't double-submit before the snapshot reflects it.
@@ -298,6 +317,7 @@
     </div>`;
 
     /* the human-authority gate — plan-approval (B10) OR verify (Epic B), never a dead-end */
+    maybeLoadGateDiff(t);   /* approval–diff binding: fetch the reviewable diff for the gate */
     html += gateSurface(t);
 
     /* SPEC-4 — per-task hand-off protocol, directly under the gate / above Assignment:
@@ -384,6 +404,7 @@
           <div class="tx" style="white-space:pre-wrap;max-height:300px;overflow-y:auto">${O.linkify(isPlan ? (pm.body || "") : (t.result || "—"))}</div></div>
         <div class="field" style="margin-top:14px"><div class="lbl">${O.icon("check", "")}Definition of done</div>
           <div class="dod">${O.esc(t.definition_of_done || "—")}</div></div>
+        ${isVerify ? gateDiffPanel(t) : ""}
         <div class="actions">
           <button class="btn approve" data-act="approve" ${disabled}>${O.icon("check", "")}${isPlan ? "Approve plan" : "Accept"}</button>
           <button class="btn ghost" data-act="reject" ${disabled}>${isPlan ? "Request changes…" : "Reject…"}</button>
@@ -400,6 +421,21 @@
       </div></div>`;
   }
   function who(t) { return t.assignee || "the assignee"; }
+
+  /* Approval–diff binding: the reviewable diff INSIDE the verify gate. What renders here is
+     exactly what GET /api/tasks/{tid}/diff digested — Accept sends that digest back, so the
+     recorded decision means "this human saw exactly this diff", not "a human typed approve". */
+  function gateDiffPanel(t) {
+    const wrap = (inner) => `<div class="field" style="margin-top:14px"><div class="lbl">${O.icon("dot", "")}Code diff</div>${inner}</div>`;
+    if (diffError[t.id]) return wrap(`<div class="tx">Couldn’t load the diff. <button class="btn subtle" data-act="retry-diff">Retry</button></div>`);
+    const d = diffCache[t.id];
+    if (!d) return wrap(`<div class="tx">Loading reviewable diff…</div>`);
+    if (!d.diff_digest) return wrap(`<div class="tx">No captured code diff for this task (research/coordination work) — the approval won’t carry a diff binding.</div>`);
+    const runs = d.runs.map((r, i) => `<div style="margin-top:${i ? 10 : 0}px">${d.runs.length > 1 ? `<div class="lbl">run ${i + 1} · ${O.esc((r.started_at || "").slice(0, 19).replace("T", " "))}</div>` : ""}${O.renderDiff(r.diff)}</div>`).join("");
+    return wrap(
+      `<details open><summary style="cursor:pointer;color:var(--info);font-size:12.5px;font-weight:600">reviewable diff — ${d.runs.length} run${d.runs.length > 1 ? "s" : ""} · your approval is bound to exactly this (${O.esc(d.diff_digest.slice(0, 17))}…)</summary>
+       <div style="max-height:420px;overflow-y:auto;margin-top:8px">${runs}</div></details>`);
+  }
 
   /* ---------- SPEC-4 protocol panel — collapsible hand-off rules on the task itself ----------
      Reads `t.protocol` (Ledger: tasks.protocol JSONB {review_chain,handoff_to,autonomy,notes},
@@ -766,8 +802,12 @@
     if (ta) ta.addEventListener("input", () => { cr.disabled = !ta.value.trim(); });
     gate.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
       const act = b.dataset.act;
+      if (act === "retry-diff") { maybeLoadGateDiff(t, true); renderDetail(); return; }
       if (act === "approve") {
         const h = actorOrWarn(); if (!h) return;
+        // Approval–diff binding: don't let an Accept race the diff it must be bound to.
+        if (kind !== "plan" && diffLoading[t.id]) { O.toast("The reviewable diff is still loading — one moment", "danger"); return; }
+        if (kind !== "plan" && diffError[t.id]) { O.toast("Load the code diff before accepting (Retry in the gate)", "danger"); return; }
         // ISS-59: a plan approval may carry an OPTIONAL answer/guidance to the agent (decision
         // `reason` → its next wake + the task thread via ISS-48). Verify-complete stays a plain confirm.
         O.modal({
@@ -796,7 +836,20 @@
         postJSON("/api/decisions", { subject_type: "plan_approval", subject_id: t.id, decision: approve ? "approve" : "reject",
           reason: reason || undefined, actor_agent_id: h.id, target_agent_id: authorId || undefined }).then(done);
       } else {
-        postJSON("/api/tasks/" + encodeURIComponent(t.id) + "/verify", { approve, actor_agent_id: h.id, feedback: approve ? undefined : reason }).then(done);
+        // Approval–diff binding: echo the digest of the diff that was ON SCREEN. A 409 means
+        // a new run landed a diff after review — reload the panel instead of approving blind.
+        const bound = diffCache[t.id];
+        postJSON("/api/tasks/" + encodeURIComponent(t.id) + "/verify",
+                 { approve, actor_agent_id: h.id, feedback: approve ? undefined : reason,
+                   diff_digest: approve ? ((bound && bound.diff_digest) || undefined) : undefined })
+          .then((r) => {
+            if (approve && !r.ok && r.status === 409) {
+              O.toast("The diff changed since you reviewed it — reloading for re-review", "danger");
+              maybeLoadGateDiff(t, true);
+              return;
+            }
+            done(r);
+          });
       }
     }
   }
