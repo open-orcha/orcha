@@ -60,7 +60,7 @@ fun ManualConnectScreen(
             Text("Connect by address", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Use your computer's local network address and Orcha port. The phone and computer need to be on the same Wi-Fi.",
+                "Use your computer's Wi-Fi address and Orcha port. Do not use localhost from a phone.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(20.dp))
@@ -70,7 +70,7 @@ fun ManualConnectScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 label = { Text("Server address") },
-                placeholder = { Text("http://192.168.1.8:8001") },
+                placeholder = { Text("192.168.1.8:8001") },
             )
             Spacer(Modifier.height(14.dp))
             Button(
@@ -91,4 +91,3 @@ fun ManualConnectScreen(
         }
     }
 }
-

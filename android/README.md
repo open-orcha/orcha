@@ -26,5 +26,5 @@ export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
 The debug APK is written to:
 
 ```text
-android/app/build/outputs/apk/debug/app-debug.apk
+android/app/build/intermediates/apk/debug/app-debug.apk
 ```

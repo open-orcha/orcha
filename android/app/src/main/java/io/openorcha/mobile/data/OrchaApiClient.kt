@@ -27,17 +27,16 @@ class OrchaApiClient {
     }
 
     suspend fun listContainers(baseUrl: String): ContainersResponse = withTimeout(6_000) {
-        client.get("${baseUrl.clean()}/api/containers").body()
+        client.get("${baseUrl.endpoint()}/api/containers").body()
     }
 
     suspend fun getSnapshot(baseUrl: String, containerId: String): ContainerSnapshot = withTimeout(8_000) {
-        client.get("${baseUrl.clean()}/api/containers/$containerId").body()
+        client.get("${baseUrl.endpoint()}/api/containers/$containerId").body()
     }
 
     suspend fun getTaskMessages(baseUrl: String, taskId: String): TaskMessagesResponse = withTimeout(8_000) {
-        client.get("${baseUrl.clean()}/api/tasks/$taskId/messages").body()
+        client.get("${baseUrl.endpoint()}/api/tasks/$taskId/messages").body()
     }
 
-    private fun String.clean(): String = trim().trimEnd('/')
+    private fun String.endpoint(): String = OrchaServerAddress.normalize(this)
 }
-
