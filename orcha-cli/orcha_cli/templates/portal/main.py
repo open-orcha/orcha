@@ -2218,6 +2218,16 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                       -- #266: the configured clock-driven auto-wake cadence (NULL = off) so the
                       -- portal can render/edit it on the agent card without a second call.
                       a.auto_wake_interval_secs,
+                      -- GH#89: count of UNACKNOWLEDGED wake reasons (the agent-card bell badge).
+                      -- Classifiable events (excluding _NOTIF_SUPPRESSED) newer than the human read
+                      -- cursor — the SAME set /notifications/pending returns as total_pending, so the
+                      -- badge and the panel agree. Acknowledging advances read_through_ts → shrinks it.
+                      (SELECT count(*) FROM agent_events ev
+                        WHERE ev.event_key = a.id::text
+                          AND ev.event_name <> ALL(%s)
+                          AND ev.ts > COALESCE((SELECT ns.read_through_ts
+                                                  FROM agent_notification_state ns
+                                                 WHERE ns.agent_id = a.id), 0)) AS pending_notifications,
                       -- A short glanceable prompt preview for the agent view; the FULL
                       -- system_prompt stays on GET /api/agents/{aid}/persona (lazy-loaded
                       -- on expand) so we don't ride 8KB x N prompts on every roster poll.
@@ -2319,7 +2329,7 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                ) w ON w.requester_id = a.id
                WHERE a.container_id=%s AND a.terminated_at IS NULL
                ORDER BY a.created_at""",
-            (cid, cid),
+            (list(_NOTIF_SUPPRESSED), cid, cid),
         )
         agents = cur.fetchall()
 
@@ -3530,6 +3540,29 @@ class NotificationsRead(BaseModel):
         None,
         description="advance the read cursor to this bus ts (epoch seconds); omit to mark ALL "
                     "current notifications read (cursor jumps to the agent's newest event ts)")
+    suppress_wake: bool = Field(
+        False,
+        description="GH#89: also advance the daemon delivery cursor (agent_wake_state.delivered_ts) "
+                    "to the same ts — a human override that removes these events from the agent's "
+                    "wake queue so they won't trigger the next scheduled scan. Default false keeps "
+                    "the legacy behaviour (mark-read only, wake untouched).")
+
+
+class NotificationAck(BaseModel):
+    suppress_wake: bool = Field(
+        True,
+        description="GH#89: advance the daemon delivery cursor (agent_wake_state.delivered_ts) past "
+                    "this event so it no longer wakes the agent. Default true — acknowledging a "
+                    "notification IS a human veto on the wake. Set false to only mark it read.")
+
+
+class WakeSnooze(BaseModel):
+    until_ts: Optional[float] = Field(
+        None, description="GH#89: absolute epoch-seconds instant to suppress clock-driven wakes "
+                          "until. Mutually exclusive with snooze_seconds.")
+    snooze_seconds: Optional[float] = Field(
+        None, gt=0, description="GH#89: relative snooze window in seconds from now(). Mutually "
+                                "exclusive with until_ts.")
 
 
 @app.get("/api/agents/{aid}/notifications")
@@ -3652,6 +3685,43 @@ def agent_notifications(aid: str, zone: Optional[str] = None,
             "next_before_ts": next_before_ts, "next_before_id": next_before_id}
 
 
+def _advance_read_cursor(cur, aid: str, target_ts: float) -> float:
+    """Advance agent_notification_state.read_through_ts to `target_ts` (monotonic GREATEST upsert).
+
+    Shared by the bulk mark-read and the GH#89 per-notification acknowledge. Returns the resulting
+    read_through_ts (never < the stored value — a stale client can't un-read)."""
+    cur.execute(
+        """INSERT INTO agent_notification_state (agent_id, read_through_ts, updated_at)
+           VALUES (%s, %s, now())
+           ON CONFLICT (agent_id) DO UPDATE
+             SET read_through_ts = GREATEST(agent_notification_state.read_through_ts,
+                                            EXCLUDED.read_through_ts),
+                 updated_at = now()
+           RETURNING read_through_ts""",
+        (aid, target_ts),
+    )
+    return cur.fetchone()["read_through_ts"]
+
+
+def _suppress_wake_through(cur, aid: str, target_ts: float) -> float:
+    """GH#89 — advance the daemon delivery cursor (agent_wake_state.delivered_ts) to `target_ts`.
+
+    This is the wake-VETO half of acknowledge: pushing delivered_ts forward removes every event at
+    ts <= target_ts from the notifier's work queue, so the next wake-scan no longer counts them as a
+    reason to wake. GREATEST-guarded so it NEVER moves backward — acknowledging an event the daemon
+    already acted on (delivered_ts already past it) is a harmless no-op. Upserts the row (creating a
+    default one) so a never-woken agent can still be suppressed. Returns the resulting delivered_ts."""
+    cur.execute(
+        """INSERT INTO agent_wake_state (agent_id, delivered_ts)
+           VALUES (%s, %s)
+           ON CONFLICT (agent_id) DO UPDATE
+             SET delivered_ts = GREATEST(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)
+           RETURNING delivered_ts""",
+        (aid, target_ts),
+    )
+    return cur.fetchone()["delivered_ts"]
+
+
 @app.post("/api/agents/{aid}/notifications/read", status_code=200)
 def agent_notifications_read(aid: str, body: NotificationsRead):
     """#247 — advance this agent's notification read cursor (monotonic).
@@ -3661,7 +3731,10 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
     read up to here"). NEVER moves backward — a stale client can't un-read via GREATEST().
 
     This OPERATOR read cursor is deliberately SEPARATE from agent_wake_state.delivered_ts (the
-    notifier daemon's wake-ack cursor); the two must never cross-clear.
+    notifier daemon's wake-ack cursor); the two normally must never cross-clear. GH#89 adds ONE
+    deliberate crossing: with ``suppress_wake: true`` (bulk "Acknowledge all") the read cursor
+    advance is mirrored onto delivered_ts, so the acknowledged events are also dropped from the
+    daemon's wake queue. Default false preserves the legacy mark-read-only behaviour.
     """
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -3671,19 +3744,203 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
         if target is None:
             cur.execute("SELECT COALESCE(MAX(ts), 0) AS mx FROM agent_events WHERE event_key=%s", (aid,))
             target = cur.fetchone()["mx"]
-        cur.execute(
-            """INSERT INTO agent_notification_state (agent_id, read_through_ts, updated_at)
-               VALUES (%s, %s, now())
-               ON CONFLICT (agent_id) DO UPDATE
-                 SET read_through_ts = GREATEST(agent_notification_state.read_through_ts,
-                                                EXCLUDED.read_through_ts),
-                     updated_at = now()
-               RETURNING read_through_ts""",
-            (aid, target),
-        )
-        read_through = cur.fetchone()["read_through_ts"]
+        read_through = _advance_read_cursor(cur, aid, target)
+        delivered_ts = None
+        if body.suppress_wake:
+            delivered_ts = _suppress_wake_through(cur, aid, target)
         conn.commit()
-    return {"agent_id": aid, "read_through_ts": read_through}
+    return {"agent_id": aid, "read_through_ts": read_through,
+            "suppress_wake": body.suppress_wake, "delivered_ts": delivered_ts}
+
+
+# ---------- GH#89: pending notifications + per-notification acknowledge (wake veto) ----------
+
+@app.get("/api/agents/{aid}/notifications/pending")
+def agent_notifications_pending(aid: str, limit: int = 50,
+                                before_ts: Optional[float] = None,
+                                before_id: Optional[int] = None):
+    """GH#89 — the agent's UNACKNOWLEDGED wake reasons, for the human veto panel.
+
+    Same classify-over-the-bus shape as GET /notifications, but purpose-built for the acknowledge
+    workflow:
+      * lower-bounds on the read cursor — only events with ``ts > read_through_ts`` (an
+        acknowledged/read item drops out on re-fetch, because acknowledge advanced that cursor);
+      * spans BOTH zones (no zone filter) — the panel shows every pending wake reason, needs-you
+        and earlier alike;
+      * carries the bus row ``id`` on each row (the notif_id the per-row acknowledge targets);
+      * adds ``total_pending`` — the exact count of classifiable unacknowledged events (the badge),
+        computed over the whole tail, not just this page.
+    Keyset paging is identical to the main feed (compound (ts, id) cursor); pass next_before_ts /
+    next_before_id back verbatim. Response:
+    ``{notifications: [...], read_through_ts, total_pending, next_before_ts, next_before_id}``.
+    """
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    limit = max(1, min(limit, 200))
+    fetch_cap = limit * 4
+    with db_cursor() as (_, cur):
+        _require_agent(cur, aid)
+        cur.execute("SELECT read_through_ts FROM agent_notification_state WHERE agent_id=%s", (aid,))
+        crow = cur.fetchone()
+        read_through = crow["read_through_ts"] if crow else 0.0
+        # total_pending = every classifiable unacknowledged event. The classifier suppresses ONLY
+        # _NOTIF_SUPPRESSED names, so excluding those names in SQL matches the rendered set exactly
+        # (no need to classify each row just to count) — and matches the container-snapshot badge.
+        cur.execute(
+            """SELECT count(*) AS n FROM agent_events
+                 WHERE event_key = %s AND ts > %s AND event_name <> ALL(%s)""",
+            (aid, read_through, list(_NOTIF_SUPPRESSED)),
+        )
+        total_pending = cur.fetchone()["n"] or 0
+        # Newest-first page over the unacknowledged tail. before_ts caps the top (keyset resume);
+        # read_through floors the bottom (only unacknowledged). idx_agent_events_key_ts covers it.
+        before_ts_eff = before_ts if before_ts is not None else 9e18
+        if before_id is not None:
+            cur.execute(
+                """SELECT id, event_name, ts, payload FROM agent_events
+                     WHERE event_key = %s AND ts > %s
+                       AND (ts < %s OR (ts = %s AND id < %s))
+                     ORDER BY ts DESC, id DESC LIMIT %s""",
+                (aid, read_through, before_ts_eff, before_ts_eff, before_id, fetch_cap),
+            )
+        else:
+            cur.execute(
+                """SELECT id, event_name, ts, payload FROM agent_events
+                     WHERE event_key = %s AND ts > %s AND ts < %s
+                     ORDER BY ts DESC, id DESC LIMIT %s""",
+                (aid, read_through, before_ts_eff, fetch_cap),
+            )
+        raw = cur.fetchall()
+        ids: set[str] = set()
+        for r in raw:
+            p = r["payload"] or {}
+            for f in _NOTIF_ACTOR_FIELDS:
+                if p.get(f):
+                    ids.add(str(p[f]))
+        people: dict[str, dict] = {}
+        if ids:
+            cur.execute("SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),))
+            people = {str(a["id"]): a for a in cur.fetchall()}
+
+    out = []
+    truncated = False
+    last_emitted = None
+    for r in raw:
+        p = r["payload"] or {}
+        requester_is_human = False
+        if r["event_name"] == "request_created":
+            fa = str(p["from_agent_id"]) if p.get("from_agent_id") else None
+            requester_is_human = bool(fa and (people.get(fa) or {}).get("kind") == "human")
+        n = _classify_notification(r["event_name"], p, requester_is_human=requester_is_human)
+        if n is None:
+            continue
+        actor = people.get(n["actor_ref"]) or {} if n["actor_ref"] else {}
+        out.append({
+            "id": r["id"], "event_name": r["event_name"],
+            "type": n["type"], "zone": n["zone"], "priority": n["priority"],
+            "actor_ref": n["actor_ref"], "actor_alias": actor.get("alias"),
+            "actor_kind": actor.get("kind"),
+            "deeplink": n["deeplink"], "preview": n["preview"],
+            "ts": r["ts"], "read": r["ts"] <= read_through,
+        })
+        last_emitted = r
+        if len(out) >= limit:
+            truncated = True
+            break
+
+    if truncated:
+        next_before_ts = last_emitted["ts"]
+        next_before_id = last_emitted["id"]
+    elif len(raw) >= fetch_cap:
+        next_before_ts = raw[-1]["ts"]
+        next_before_id = raw[-1]["id"]
+    else:
+        next_before_ts = None
+        next_before_id = None
+    return {"notifications": out, "read_through_ts": read_through,
+            "total_pending": total_pending,
+            "next_before_ts": next_before_ts, "next_before_id": next_before_id}
+
+
+@app.post("/api/agents/{aid}/notifications/{notif_id}/acknowledge", status_code=200)
+def agent_notification_acknowledge(aid: str, notif_id: int, body: NotificationAck):
+    """GH#89 — acknowledge ONE notification: a human veto on the agent acting on it.
+
+    The driving question is not "did the human see it?" but "should the agent still act on it?".
+    Acknowledging:
+      1. advances the read cursor (agent_notification_state.read_through_ts) to this event's ts,
+         so it drops out of the pending feed on re-fetch (same GREATEST monotonicity as mark-read);
+      2. when ``suppress_wake`` (default true) advances the daemon delivery cursor
+         (agent_wake_state.delivered_ts) to the same ts — the piece that removes it from the wake
+         queue so the NEXT scan won't wake the agent for it.
+    Both advances are GREATEST-guarded, so acknowledging an event the agent has ALREADY been woken
+    for (delivered_ts already past it) is a harmless no-op — never an error, never a backward move.
+    It does NOT cancel an in-flight wake (out of scope); it only prevents the next scan.
+
+    404 if the event id isn't one of THIS agent's bus rows (event_key scoping) — a human can't
+    acknowledge another agent's notification.
+    """
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        _require_agent(cur, aid)
+        cur.execute(
+            "SELECT ts FROM agent_events WHERE id=%s AND event_key=%s", (notif_id, aid))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, f"notification {notif_id} not found for agent {aid}")
+        target_ts = row["ts"]
+        read_through = _advance_read_cursor(cur, aid, target_ts)
+        delivered_ts = None
+        if body.suppress_wake:
+            delivered_ts = _suppress_wake_through(cur, aid, target_ts)
+        conn.commit()
+    return {"agent_id": aid, "notif_id": notif_id, "acknowledged_ts": target_ts,
+            "read_through_ts": read_through, "suppress_wake": body.suppress_wake,
+            "delivered_ts": delivered_ts}
+
+
+@app.post("/api/agents/{aid}/wake/snooze", status_code=200)
+def agent_wake_snooze(aid: str, body: WakeSnooze):
+    """GH#89 — snooze this agent's CLOCK-driven (auto_wake_interval) wakes until an instant.
+
+    Clock wakes aren't bus events — they fire purely from time elapsed since last_woken_at — so a
+    human can't veto them by acknowledging a row. This sets agent_wake_state.snooze_until (epoch
+    seconds); wake-scan skips the auto_wake term while now() < snooze_until. It does NOT disable
+    auto-wake (the interval is untouched) and does NOT touch EVENT-triggered wakes — a real request
+    still wakes the agent during a snooze. Absolute set (not GREATEST) so a human can shorten,
+    extend, or (with a past ts) clear the snooze.
+
+    Body: exactly one of ``until_ts`` (absolute epoch seconds) or ``snooze_seconds`` (relative).
+    """
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    if (body.until_ts is None) == (body.snooze_seconds is None):
+        raise HTTPException(422, "provide exactly one of until_ts or snooze_seconds")
+    with db_cursor() as (conn, cur):
+        _require_agent(cur, aid)
+        # Compute snooze_until server-side (SQL clock) so a relative window is anchored to the same
+        # now() wake-scan compares against — no client/server clock-skew window.
+        if body.until_ts is not None:
+            cur.execute(
+                """INSERT INTO agent_wake_state (agent_id, snooze_until)
+                   VALUES (%s, %s)
+                   ON CONFLICT (agent_id) DO UPDATE SET snooze_until = EXCLUDED.snooze_until
+                   RETURNING snooze_until""",
+                (aid, body.until_ts),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO agent_wake_state (agent_id, snooze_until)
+                   VALUES (%s, EXTRACT(EPOCH FROM now()) + %s)
+                   ON CONFLICT (agent_id) DO UPDATE
+                     SET snooze_until = EXTRACT(EPOCH FROM now()) + %s
+                   RETURNING snooze_until""",
+                (aid, body.snooze_seconds, body.snooze_seconds),
+            )
+        snooze_until = cur.fetchone()["snooze_until"]
+        conn.commit()
+    return {"agent_id": aid, "snooze_until": snooze_until}
 
 
 # ---------- reachability (Epic A: wake & self-movement) ----------
@@ -4274,6 +4531,11 @@ def active_conversations(cid: str):
                       -- injected — ISS-78). Same truth table as wake_scan's auto_wake_due.
                       a.auto_wake_interval_secs, a.turns_used, a.turn_budget,
                       EXTRACT(EPOCH FROM (now() - ws.last_woken_at)) AS _secs_since_woken,
+                      -- GH#89: a live clock-wake snooze must also stop the warm-resident YIELD (the
+                      -- resident only yields to let the ephemeral clock wake fire — if that wake is
+                      -- snoozed, don't yield). Same truth table as wake_scan's snooze_active.
+                      (ws.snooze_until IS NOT NULL
+                       AND ws.snooze_until > EXTRACT(EPOCH FROM now())) AS _snooze_active,
                       -- ISS-70: force a one-shot COLD boot when this agent's latest memory digest is
                       -- NEWER than when the resident's session was pinned (a digest written by another
                       -- embodiment the warm --resume would never re-read). FALSE when no session is
@@ -4328,10 +4590,12 @@ def active_conversations(cid: str):
             _ssw = r["_secs_since_woken"]
             r["auto_wake_due"] = bool(
                 _auto_iv is not None
-                and (_ssw is None or _ssw >= _auto_iv))
+                and (_ssw is None or _ssw >= _auto_iv)
+                and not r["_snooze_active"])   # GH#89: snoozed → no clock yield
             r.pop("turns_used", None)
             r.pop("turn_budget", None)
             r.pop("_secs_since_woken", None)
+            r.pop("_snooze_active", None)
             # GAP A (resident): the model the daemon spawns this resident with, resolved
             # server-side (retired model → DEFAULT_MODEL). Pairs with GAP B: set_agent_model
             # clears the pinned session_id on a model change so the next boot is COLD and
@@ -4557,6 +4821,13 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                       r.tmux_target, r.headless_cwd, r.headless_flags,
                       COALESCE(w.delivered_ts, 0)    AS delivered_ts,
                       w.last_woken_at,
+                      -- GH#89: the clock-wake snooze. snooze_until is epoch seconds; snooze_active
+                      -- is the live "is a snooze in effect right now?" flag wake-scan gates the
+                      -- auto_wake term on (event wakes ignore it). Compared against the SAME SQL
+                      -- now() the cooldown uses, so no client/server clock-skew window.
+                      w.snooze_until,
+                      (w.snooze_until IS NOT NULL
+                       AND w.snooze_until > EXTRACT(EPOCH FROM now())) AS snooze_active,
                       EXTRACT(EPOCH FROM (now() - a.last_heartbeat_at)) AS idle_seconds,
                       -- #266: seconds since the clock anchor (NULL if never woken) — drives the
                       -- auto_wake_due term below. Reuses last_woken_at (stamped on every wake-ack)
@@ -4681,9 +4952,15 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # GH #39: the turns_used<turn_budget cost ceiling that previously gated clock wakes is removed.
             auto_interval = a["auto_wake_interval_secs"]
             secs_since_woken = a["secs_since_woken"]
+            # GH#89: a human snooze suppresses the CLOCK term only — while snooze_active, the cadence
+            # never contributes a wake reason. Event/task wakes below are untouched (a real event
+            # still wakes a snoozed agent). The interval itself is preserved, so the clock resumes
+            # firing once the snooze window lapses.
+            snooze_active = bool(a["snooze_active"])
             auto_wake_due = bool(
                 auto_interval is not None
-                and (secs_since_woken is None or secs_since_woken >= auto_interval))
+                and (secs_since_woken is None or secs_since_woken >= auto_interval)
+                and not snooze_active)
             has_work = pending > 0 or len(auto_tasks) > 0 or auto_wake_due
             wake_enabled = a["wake_enabled"]
             in_cooldown = bool(a["in_cooldown"])
@@ -4762,6 +5039,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
                 # can show why an idle agent is being woken on a clock.
                 "auto_wake_due": auto_wake_due, "auto_wake_interval_secs": auto_interval,
+                # GH#89: the clock-wake snooze state — surfaced so the portal/debug can show WHY an
+                # interval-set agent isn't clock-waking (snoozed until this instant) and can offer
+                # an un-snooze. snooze_until is epoch seconds (null when not snoozed).
+                "snooze_until": a["snooze_until"], "snooze_active": snooze_active,
                 # #288: the wake-suppression hint (None unless the sole pending signal is a single
                 # FYI/answer event). The notifier daemon makes the final call and fails open.
                 "triage_hint": triage_hint,

@@ -1510,7 +1510,225 @@ window.Orcha = (function () {
     });
   }
 
+  /* ---- GH#89: per-agent PENDING-notifications panel (human wake veto) -----
+   * A human's authoritative, per-notification veto over an agent's wake reasons. Distinct from the
+   * topbar notification center (that is the acting-human's OWN feed) — this is opened FROM an agent
+   * card and acts on THAT agent's queue: acknowledging advances the agent's read + daemon-delivery
+   * cursors server-side (POST .../acknowledge), so the item stops waking it. Clock-driven wakes have
+   * no bus row to acknowledge, so a separate Snooze suppresses the next scheduled wake. */
+  const PN_VIS = {
+    directed:         { icon: "bell",     col: "warn" },
+    request_created:  { icon: "requests", col: "warn" },
+    escalation:       { icon: "flag",     col: "danger" },
+    agent_suggested:  { icon: "spark",    col: "warn" },
+    agent_blocked:    { icon: "x",        col: "danger" },
+    plan_decided:     { icon: "shield",   col: "violet" },
+    request_answered: { icon: "arrow",    col: "info" },
+    request_closed:   { icon: "check",    col: "idle" },
+    task_assigned:    { icon: "tasks",    col: "info" },
+    task_ready:       { icon: "tasks",    col: "info" },
+    task_message:     { icon: "requests", col: "info" },
+    task_verified:    { icon: "check",    col: "violet" },
+    task_unassigned:  { icon: "x",        col: "idle" },
+  };
+  // Plain-English one-liner per notification — NO Orcha-internal jargon (issue §5). Falls back to a
+  // humanised type for a future/unknown registry type (graceful degrade, mirrors the feed).
+  function pnTitle(n) {
+    const who = n.actor_alias || "someone";
+    const ctx = n.preview ? ": " + trunc(n.preview, 60) : "";
+    switch (n.type) {
+      case "directed":         return "Nudge from " + who;
+      case "request_created":  return "New request from " + who + ctx;
+      case "escalation":       return who + " needs your input" + ctx;
+      case "agent_suggested":  return who + " proposed a plan" + ctx;
+      case "agent_blocked":    return who + " rejected your task request" + ctx;
+      case "request_answered": return who + " answered your request" + ctx;
+      case "request_closed":   return "Request closed" + ctx;
+      case "plan_decided":     return "Decision made" + ctx;
+      case "task_assigned":    return "Task assigned" + ctx;
+      case "task_ready":       return "Task ready" + ctx;
+      case "task_message":     return "New message on task" + ctx;
+      case "task_verified":    return "Task verified" + ctx;
+      case "task_unassigned":  return "Task unassigned" + ctx;
+      default:                 return ncHumanize(n.type) + ctx;
+    }
+  }
+
+  // The bell + count badge for an agent card / roster row. Renders only for AI agents (humans aren't
+  // woken). The numeric badge shows only when >0 (disappears at zero); the bell itself stays as the
+  // access point. `data-pnbell` carries the agent id so a delegated click opens the panel.
+  function pendingBellHTML(a, size) {
+    if (!a || a.kind === "human") return "";
+    const n = a.pending_notifications || 0;
+    const cls = "pnbell" + (size === "lg" ? " lg" : "") + (n > 0 ? " active" : "");
+    const badge = n > 0 ? `<span class="cnt">${n > 99 ? "99+" : n}</span>` : "";
+    const title = n > 0 ? `${n} pending notification${n === 1 ? "" : "s"} — view & acknowledge`
+                        : "Pending notifications — none";
+    // A span[role=button], not a <button>, so it can nest inside the roster row's <button> without
+    // an invalid-nesting warning; the delegated click handler intercepts [data-pnbell] first.
+    return `<span class="${cls}" role="button" tabindex="0" title="${esc(title)}"
+      data-pnbell="${esc(a.id)}" data-pnalias="${esc(a.alias)}"
+      data-pninterval="${a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : ""}"
+      aria-label="${esc(title)}">${icon("bell", "")}${badge}</span>`;
+  }
+
+  let _pn = { aid: null, alias: "", interval: null, rows: [], total: 0,
+              beforeTs: null, beforeId: null, more: false, loading: false, snoozing: false };
+
+  function pnRowHTML(n) {
+    const vis = PN_VIS[n.type] || { icon: null, col: "idle" };
+    const when = n.ts != null ? relTime(n.ts * 1000) : "";
+    return `<div class="nrow${n.read ? "" : " unread"}" data-pnrow="${n.id}">
+      ${ncIcon(vis.icon, vis.col)}
+      <div class="b"><div class="ti">${esc(pnTitle(n))}</div>
+        <div class="me">${n.actor_alias ? esc(n.actor_alias) + "<span>·</span>" : ""}<span class="when">${esc(when)}</span></div></div>
+      <button type="button" class="btn ghost sm pn-ack" data-pnack="${n.id}">Acknowledge</button>
+    </div>`;
+  }
+
+  function pnSnoozeOptions() {
+    const now = new Date();
+    const tm = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
+    return [
+      { label: "1 hour", body: { snooze_seconds: 3600 } },
+      { label: "4 hours", body: { snooze_seconds: 14400 } },
+      { label: "Until tomorrow", body: { until_ts: Math.floor(tm.getTime() / 1000) } },
+    ];
+  }
+
+  function pnRender() {
+    const ov = document.getElementById("__pnov");
+    if (!ov) return;
+    let listHTML;
+    if (_pn.loading && !_pn.rows.length) {
+      listHTML = '<div class="nc-empty">Loading…</div>';
+    } else if (!_pn.rows.length) {
+      listHTML = '<div class="nc-empty">Nothing pending — this agent has no unacknowledged wake reasons.</div>';
+    } else {
+      listHTML = _pn.rows.map(pnRowHTML).join("");
+    }
+    const foot = _pn.more ? '<div class="nc-foot" id="__pnmore">… Load earlier</div>' : "";
+    const snoozeBtn = _pn.interval != null
+      ? `<button type="button" class="btn ghost sm" id="__pnsnooze" title="Suppress the next scheduled clock wake">${icon("clock", "")}Snooze wake</button>` : "";
+    const snoozeRow = _pn.snoozing
+      ? `<div class="pn-snooze">Snooze clock wake for:${
+          pnSnoozeOptions().map((o, i) => `<button type="button" class="btn sm subtle" data-pnsz="${i}">${esc(o.label)}</button>`).join("")}</div>` : "";
+    ov.innerHTML = `<div class="modal pnmodal ncenter" role="dialog" aria-modal="true">
+      <div class="nc-h"><h3>Pending — ${esc(_pn.alias)}</h3>
+        <span class="ct" style="margin-left:8px;color:var(--faint);font-weight:700">${_pn.total}</span>
+        <span style="flex:1"></span>${snoozeBtn}
+        ${_pn.rows.length ? '<button type="button" class="btn ghost sm" id="__pnackall">Acknowledge all</button>' : ""}
+        <button type="button" class="pnx" id="__pnclose" aria-label="Close">${icon("x", "")}</button></div>
+      ${snoozeRow}
+      <div class="nc-list pn-list">${listHTML}</div>${foot}</div>`;
+    ov.classList.add("show");
+    const close = document.getElementById("__pnclose");
+    if (close) close.addEventListener("click", pnClose);
+    const more = document.getElementById("__pnmore");
+    if (more) more.addEventListener("click", () => pnLoad(false));
+    const ackAll = document.getElementById("__pnackall");
+    if (ackAll) ackAll.addEventListener("click", pnAckAll);
+    const sn = document.getElementById("__pnsnooze");
+    if (sn) sn.addEventListener("click", () => { _pn.snoozing = !_pn.snoozing; pnRender(); });
+    ov.querySelectorAll("[data-pnsz]").forEach((b) =>
+      b.addEventListener("click", () => pnSnooze(pnSnoozeOptions()[+b.dataset.pnsz].body)));
+    ov.querySelectorAll("[data-pnack]").forEach((b) =>
+      b.addEventListener("click", () => pnAck(b.dataset.pnack)));
+  }
+
+  function pnLoad(reset) {
+    if (_pn.loading) return;
+    if (reset) { _pn.beforeTs = null; _pn.beforeId = null; }
+    _pn.loading = true;
+    if (reset) pnRender();
+    let url = "/api/agents/" + encodeURIComponent(_pn.aid) + "/notifications/pending?limit=25";
+    if (!reset && _pn.beforeTs != null) {
+      url += "&before_ts=" + encodeURIComponent(_pn.beforeTs);
+      if (_pn.beforeId != null) url += "&before_id=" + encodeURIComponent(_pn.beforeId);
+    }
+    fetch(url)
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((res) => {
+        const rows = res.notifications || [];
+        _pn.rows = reset ? rows : _pn.rows.concat(rows);
+        _pn.total = res.total_pending != null ? res.total_pending : _pn.rows.length;
+        _pn.beforeTs = res.next_before_ts;
+        _pn.beforeId = res.next_before_id;
+        _pn.more = res.next_before_ts != null;
+        _pn.loading = false;
+        pnRender();
+      })
+      .catch((e) => { _pn.loading = false; pnRender(); toast("Could not load notifications: " + e.message, "danger"); });
+  }
+
+  // Acknowledge ONE — optimistic: drop the row immediately, then POST. On failure, re-fetch (server
+  // state is canonical, so a failed ack simply repaints the item back). Because acknowledge advances
+  // the read/delivery cursor to the TARGET ts server-side (issue spec: GREATEST to the event ts), it
+  // subsumes every OLDER item too — so drop all rows at/below the acked row's ts here to stay
+  // consistent with what a re-fetch will report (newer rows, ts > target, remain pending).
+  function pnAck(id) {
+    const row = _pn.rows.find((n) => String(n.id) === String(id));
+    if (row != null) {
+      // rows are loaded newest-first, so everything at/below the acked ts is subsumed by the cursor,
+      // including any not-yet-loaded older rows → remaining pending == the rows still above the cut.
+      _pn.rows = _pn.rows.filter((n) => n.ts > row.ts);
+      _pn.total = _pn.rows.length;
+      _pn.more = false;
+    } else {
+      _pn.rows = _pn.rows.filter((n) => String(n.id) !== String(id));
+      _pn.total = Math.max(0, _pn.total - 1);
+    }
+    pnRender();
+    fetch("/api/agents/" + encodeURIComponent(_pn.aid) + "/notifications/" + encodeURIComponent(id) + "/acknowledge",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ suppress_wake: true }) })
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
+      .catch((e) => { toast("Could not acknowledge: " + e.message, "danger"); pnLoad(true); });
+  }
+
+  // Acknowledge ALL — needs a confirm (single click is too easy to fat-finger). Bulk mark-read with
+  // suppress_wake advances both cursors to the newest event ts server-side.
+  function pnAckAll() {
+    modal({
+      title: "Acknowledge all pending?", danger: true, primary: "Acknowledge all",
+      desc: `This removes all ${_pn.total} pending wake reason(s) for ${_pn.alias} — the agent won't be woken for them.`,
+      onPrimary: () => {
+        closeModal();
+        _pn.rows = []; _pn.total = 0; _pn.more = false; pnRender();
+        fetch("/api/agents/" + encodeURIComponent(_pn.aid) + "/notifications/read",
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ suppress_wake: true }) })
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
+          .catch((e) => { toast("Could not acknowledge all: " + e.message, "danger"); pnLoad(true); });
+      },
+    });
+  }
+
+  function pnSnooze(body) {
+    _pn.snoozing = false; pnRender();
+    fetch("/api/agents/" + encodeURIComponent(_pn.aid) + "/wake/snooze",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => toast("Clock wake snoozed for " + _pn.alias, "ok"))
+      .catch((e) => toast("Could not snooze: " + e.message, "danger"));
+  }
+
+  function pnClose() { const ov = document.getElementById("__pnov"); if (ov) ov.classList.remove("show"); _pn.snoozing = false; }
+
+  function pendingPanel(aid, alias, interval) {
+    let ov = document.getElementById("__pnov");
+    if (!ov) {
+      ov = document.createElement("div");
+      ov.id = "__pnov"; ov.className = "overlay";
+      document.body.appendChild(ov);
+      ov.addEventListener("click", (e) => { if (e.target === ov) pnClose(); });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") pnClose(); });
+    }
+    _pn = { aid: aid, alias: alias || "agent", interval: (interval != null ? interval : null),
+            rows: [], total: 0, beforeTs: null, beforeId: null, more: false, loading: false, snoozing: false };
+    pnLoad(true);
+  }
+
   return {
+    pendingPanel, pendingBellHTML,
     D, applySnapshot, esc, linkify, mdText, trunc, shortId, relTime, clockTime, recencyTs, recencyBand, avatar, icon, pill, statusClass, glyph,
     sortState, sortControlHtml, sortComparator, wireSortControl,
     kindBadge, agentLink, taskLink, requestLink, taskByRef, taskRefs, attnItems, mountShell, modal, closeModal,

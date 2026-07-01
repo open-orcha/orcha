@@ -751,3 +751,32 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 .ncenter .c-violet { color: var(--violet); background: var(--violet-soft); border: 1px solid var(--violet-line); }
 .ncenter .c-info { color: var(--info); background: var(--info-soft); border: 1px solid var(--info-line); }
 .ncenter .c-idle { color: var(--idle); background: var(--idle-soft); border: 1px solid var(--idle-line); }
+
+/* GH#89 — per-agent pending-notifications: the bell+badge on an agent card and the veto panel. */
+.pnbell { position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px;
+  border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  cursor: pointer; flex: none; }
+.pnbell:hover { color: var(--text); border-color: var(--accent-line); background: var(--hover); }
+.pnbell svg { width: 15px; height: 15px; }
+.pnbell.active { color: var(--warn); border-color: var(--warn-line); background: var(--warn-soft); }
+.pnbell .cnt { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: var(--warn); color: #1c1304; font-size: 10px; font-weight: 800;
+  line-height: 16px; text-align: center; }
+.pnbell.lg { width: 34px; height: 34px; border-radius: 10px; }
+.pnbell.lg svg { width: 17px; height: 17px; }
+/* compact roster variant (inside .rrow) — no border box, just the glyph + badge */
+.rrow .pnbell { width: 24px; height: 24px; align-self: center; border: 0; background: transparent; }
+.rrow .pnbell:hover { background: var(--hover); }
+.rrow .pnbell svg { width: 14px; height: 14px; }
+.rrow .pnbell .cnt { top: -4px; right: -4px; min-width: 15px; height: 15px; line-height: 15px; font-size: 9.5px; }
+.modal.pnmodal { width: min(460px, 100%); padding: 0; overflow: hidden; }
+.pnmodal .nc-h { border-bottom: 1px solid var(--border); }
+.pnmodal .pn-list { max-height: min(56vh, 460px); }
+.pnmodal .nrow { align-items: center; }
+.pnmodal .nrow .pn-ack { flex: none; align-self: center; }
+.pnx { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; border: 0;
+  background: transparent; color: var(--muted); cursor: pointer; }
+.pnx:hover { color: var(--text); background: var(--hover); }
+.pnx svg { width: 15px; height: 15px; }
+.pn-snooze { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px;
+  border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
