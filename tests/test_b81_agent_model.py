@@ -24,13 +24,13 @@ async def test_set_model_persists_and_flows_through_read_payload(client, contain
     aid = a["agent_id"]
     assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-4-8"
 
-    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-sonnet-4-6"})
+    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-sonnet-5"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["agent_id"] == aid and body["model"] == "claude-sonnet-4-6"
+    assert body["agent_id"] == aid and body["model"] == "claude-sonnet-5"
     assert body["cold_reset_conversations"] == []   # no active conversation to cold-reset
     # D7 read payload reflects the update
-    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-sonnet-4-6"
+    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-sonnet-5"
 
 
 @pytest.mark.asyncio
