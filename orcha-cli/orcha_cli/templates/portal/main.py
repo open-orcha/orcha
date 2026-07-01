@@ -5357,9 +5357,14 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
         # GH #91/#90: unbound-token backstop — a token minted for a spawn that NEVER created its run
         # (crash between mint and /runs) would otherwise linger valid forever with run_id NULL. Revoke
         # any unbound token older than 2 minutes (well beyond a normal mint->spawn->/runs window).
+        # PR R5: EXCEPT kind='resident' — a resident token is PROCESS-scoped by design (one warm
+        # resident spans many per-turn runs, so its run_id stays NULL for its whole life; the daemon
+        # revokes it at resident teardown). Sweeping it here contradicted the documented lifecycle
+        # and would break any future "valid conversation token" check mid-conversation.
         cur.execute(
             """UPDATE embodiment_tokens SET revoked_at=now()
                WHERE run_id IS NULL AND revoked_at IS NULL
+                 AND kind <> 'resident'
                  AND created_at < now() - interval '2 minutes'""")
         conn.commit()
     reaped = list(work_reaped) + list(conv_reaped)

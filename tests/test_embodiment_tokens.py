@@ -123,3 +123,31 @@ async def test_finish_run_revokes_bound_token(client, make_agent, db):
     assert fin.status_code == 200, fin.text
     rows = db.execute("SELECT revoked_at FROM embodiment_tokens WHERE run_token=%s", (tok,))
     assert rows and rows[0]["revoked_at"] is not None
+
+
+async def test_orphan_reaper_keeps_unbound_resident_token(client, make_agent, db):
+    """Resident tokens are process-scoped, so they stay run_id=NULL while the resident is alive.
+
+    The unbound-token backstop should still revoke stale headless spawn tokens, but must not revoke a
+    resident token just because it is not bound to a per-turn worker_runs row.
+    """
+    a = await make_agent("A")
+    aid = a["agent_id"]
+    headless_tok = await _mint(client, aid, "work", kind="headless")
+    resident_tok = await _mint(client, aid, "conversation", kind="resident")
+    db.execute(
+        "UPDATE embodiment_tokens SET created_at=now() - interval '5 minutes' "
+        "WHERE run_token IN (%s, %s)",
+        (headless_tok, resident_tok),
+    )
+
+    r = await client.post(f"/api/containers/{a['container_id']}/reap-orphan-leases")
+    assert r.status_code == 200, r.text
+
+    rows = db.execute(
+        "SELECT run_token, revoked_at FROM embodiment_tokens WHERE run_token IN (%s, %s)",
+        (headless_tok, resident_tok),
+    )
+    by_token = {r["run_token"]: r["revoked_at"] for r in rows}
+    assert by_token[headless_tok] is not None
+    assert by_token[resident_tok] is None

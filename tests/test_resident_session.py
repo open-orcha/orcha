@@ -483,7 +483,8 @@ def test_service_residents_cold_boot_and_feeds_turn(monkeypatch, tmp_path):
     assert any("wake-claim" in u and b.get("lease_kind") == "resident" for u, b in posts)
     assert any(u.endswith("/runs") for u, _ in posts)                    # per-turn run opened
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "hello"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("hello"))   # PR R5: every fed turn carries the lane reminder
     r = live["C1"]
     assert r["awaiting_result"] is True and r["serviced_seq"] == 1 and r["current_run_id"] == "RUN-1"
     assert r["runtime"] == notifier.RUNTIME_CLAUDE
@@ -613,7 +614,7 @@ def test_service_residents_restarts_existing_idle_resident_when_cold_required(mo
     assert live["C1"]["proc"] is new_proc and live["C1"]["cold"] is True
     new_proc.stdin.seek(0)
     sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
-    assert sent == "fresh question"                              # delivered only to the fresh boot
+    assert sent == notifier._wrap_conversation_turn("fresh question")   # delivered only to the fresh boot (+ lane reminder, PR R5)
     assert any(u.endswith("/wake-ack") and b["kind"] == "resident_digest_resync"
                and b["release_lease"] is True for u, b in posts)
 
@@ -1524,7 +1525,8 @@ def test_cold_boot_injects_history_prefix_and_feeds_unanswered_turn(monkeypatch,
     assert "PERSONA" in sp and "## Conversation so far" in sp and "old q;old a" in sp
     assert spawned[0][1]["resume_session_id"] is None                    # cold boot
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("new q"))
     assert live["C1"]["serviced_seq"] == 3                               # fed seq3, skipped seq1
 
 
@@ -1548,7 +1550,8 @@ def test_cold_boot_skips_already_answered_turns_without_formatter(monkeypatch, t
 
     assert spawned[0][1]["system_prompt"] == "PERSONA"                   # persona only, no history
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("new q"))
     assert live["C1"]["serviced_seq"] == 3
 
 
@@ -1570,7 +1573,8 @@ def test_cold_boot_cursor_uses_newest_agent_reply_not_oldest_page(monkeypatch, t
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "latest pending"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("latest pending"))
     assert live["C1"]["serviced_seq"] == 301              # newest agent (300) → feed 301, not an old turn
 
 
@@ -1594,7 +1598,8 @@ def test_warm_resume_skips_history_and_persona(monkeypatch, tmp_path):
     assert spawned[0][1]["system_prompt"] is None                        # warm — nothing injected
     assert spawned[0][1]["resume_session_id"] == "sess-9"
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("new q"))
     assert live["C1"]["serviced_seq"] == 3
 
 

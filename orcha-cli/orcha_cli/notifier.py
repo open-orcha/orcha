@@ -2456,7 +2456,8 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         _revoke_or_defer(api_base, new_tok)
         _teardown_worktree(base_cwd, worktree, branch)
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": "worker_checkpoint_respawn_failed", "release_lease": True})
+                   {"kind": "worker_checkpoint_respawn_failed", "release_lease": True,
+                    "lane": w.get("lane", "work")})
         w["run_token"] = new_tok
         _retire_headless(api_base, live_workers, aid)
         if not quiet:
@@ -2464,15 +2465,16 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
                   f"worktree torn down + lease released")
         return
 
-    # GH #91/#90: a respawned worker is WORK lane; carry the minted token_id so the server binds
-    # embodiment_tokens.run_id to this run (durable EOL backstop).
+    # GH #91/#90: a respawned worker continues on ITS OWN lane (stamped at first spawn; today
+    # always 'work' — tick ephemerals are work-lane by construction, PR R5); carry the minted
+    # token_id so the server binds embodiment_tokens.run_id to this run (durable EOL backstop).
     run = _post_json(f"{api_base}/api/agents/{aid}/runs",
                      {"wake_kind": "ephemeral", "wake_event": "checkpoint_respawn",
                       "task_id": ctx.get("task_id"),
                       "log_path": str(log_path) if log_path else None,
                       "pid": newproc.pid, "runtime": ctx.get("model_runtime"),
                       "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
-                      "lane": "work", "token_id": new_tok})
+                      "lane": w.get("lane", "work"), "token_id": new_tok})
     now = time.time()
     live_workers[aid] = {
         "proc": newproc,
@@ -2481,12 +2483,13 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         "run_id": (run or {}).get("run_id"), "log_path": log_path,
         "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
         "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
-        "cap": cap, "respawns": n, "respawn_ctx": ctx,
+        "cap": cap, "respawns": n, "respawn_ctx": ctx, "lane": w.get("lane", "work"),
         "run_token": new_tok}   # GH #91/#90: track the fresh work token for teardown revoke
     # Non-releasing ack: keep the single-flight lease (the new worker continues under it) but
     # record the checkpoint for portal/event visibility + refresh the cooldown debounce.
     _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-               {"kind": "worker_checkpoint_respawn", "release_lease": False})
+               {"kind": "worker_checkpoint_respawn", "release_lease": False,
+                "lane": w.get("lane", "work")})
     if not quiet:
         print(f"[notifier] worker for {aid} (pid {proc.pid}) crossed the soft hard-cap while "
               f"still progressing — checkpointed (C1 digest) + respawned (pid {newproc.pid}, "
@@ -2515,6 +2518,10 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
     now = time.time()
     for aid, w in list(live_workers.items()):
         proc = w["proc"]
+        # GH #91/#90 (PR R5): renew/release against the lane THIS worker's lease lives on (stamped
+        # at spawn) — a hardcoded 'work' would renew/release the wrong lane's lease if a
+        # conversation-lane worker ever landed in this dict. Default 'work' covers legacy entries.
+        w_lane = w.get("lane", "work")
         # ISS-39: flush the worker's latest stream-json lines to the DB every tick (this is the
         # live feed) AND right before any finish below — the daemon posts a run's final lines
         # before its status flips, so the SSE never emits `done` ahead of a tail line.
@@ -2524,7 +2531,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             _finish_run(api_base, w.get("run_id"), "exited", proc.returncode, w.get("log_path"), diff)
             _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "released", "release_lease": True, "lane": "work"})
+                       {"kind": "released", "release_lease": True, "lane": w_lane})
             _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
@@ -2535,7 +2542,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # one the daemon stops tracking, is NOT renewed, so its lease lapses within
         # WAKE_LEASE_TTL_SECS and a fresh high-priority event can wake a new worker promptly.
         renew = _post_json(f"{api_base}/api/agents/{aid}/wake-renew",
-                           {"lease_ttl": WAKE_LEASE_TTL_SECS, "lane": "work"})
+                           {"lease_ttl": WAKE_LEASE_TTL_SECS, "lane": w_lane})
         # #240/ISS-72: a human requested a graceful STOP of THIS tracked run (surfaced on the renew
         # above — zero new poll). Vet stop_run_id == the run THIS daemon tracks (run-id identity
         # check, the #276 pattern at run level — never kill a stale/foreign run), then reap it with
@@ -2552,7 +2559,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                         diff, kill_reason=json.dumps(diag))
             _safe_teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "worker_human_stopped", "release_lease": True, "lane": "work"})
+                       {"kind": "worker_human_stopped", "release_lease": True, "lane": w_lane})
             _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, run {w.get('run_id')}) "
@@ -2606,7 +2613,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             _finish_run(api_base, w.get("run_id"), "exited", exit_code, w.get("log_path"), diff)
             _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "worker_completed_reaped", "release_lease": True, "lane": "work"})
+                       {"kind": "worker_completed_reaped", "release_lease": True, "lane": w_lane})
             _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}) completed but lingered "
@@ -2674,7 +2681,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         disp = _safe_teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
         kind = "worker_stalled_killed" if (stalled and not over_cap) else "worker_timeout_killed"
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": kind, "release_lease": True, "lane": "work"})
+                   {"kind": kind, "release_lease": True, "lane": w_lane})
         _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
         # #270: emit the kill diagnostic AT KILL TIME, unconditionally — a watchdog kill is a rare,
         # important event and this line is the whole on-host record of WHY it fired.
@@ -2908,8 +2915,9 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
         prompt = build_wake_prompt(cand)
         kind = select_transport(cand)
         event = derive_wake_event(cand)
-        ephemeral_lane = "work"   # GH #91/#90: resolved per-cand below for an ephemeral spawn; the
-                                  # default keeps the wake-ack lane well-defined for tmux/unreachable.
+        ephemeral_lane = "work"   # GH #91/#90 (PR R5): every scan_and_wake wake is WORK-lane — the
+                                  # scan's pending count runs against the work cursor, so the ack
+                                  # must advance that same cursor (tmux/unreachable included).
         # #288 wake-suppression: a NO-ACTION ephemeral wake (a bare FYI / pure-ack answer) costs a
         # full subprocess spawn for zero work. Gate ONLY the ephemeral spawn — resident/tmux wakes
         # are cheap (a prompt to a live pane) and are NEVER gated. The decision (server-provided
@@ -2969,19 +2977,16 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # --once has no reaper to renew, so it keeps its own (already-short) lease and lets
             # it expire. The watchdog hard cap (`cap`) is unchanged and lives on hard_deadline.
             claim_ttl = WAKE_LEASE_TTL_SECS if live_workers is not None else cap
-            # GH #91/#90: resolve this ephemeral's LANE from the wake context (same signal that steers
-            # the prompt into accept-and-do). WORK when there is real task authority to exercise —
-            # an owed/unaccepted task request (uncapped `has_pending_task_request`), an in-band
-            # task-request notification (`is_task_request`), an auto-start/ready task, or an
-            # originating-task code wake (`wake_task_id`). Otherwise it is a pure conversation /
-            # info-drain wake → the conversation lane (which the gated work endpoints will 403).
-            _ephemeral_has_task_request = (
-                bool(cand.get("has_pending_task_request"))
-                or any(n.get("is_task_request") for n in (cand.get("notifications") or [])))
-            ephemeral_lane = "work" if (
-                _ephemeral_has_task_request
-                or bool(cand.get("auto_start_task_ids"))
-                or bool(cand.get("wake_task_id"))) else "conversation"
+            # GH #91/#90 (PR R5): a tick ephemeral is ALWAYS the WORK lane. Every scan candidate is
+            # driven by the WORK pending count (wake_scan counts events past `delivered_ts`, with
+            # bare `conversation_turn` filtered out), so this wake's ack MUST advance the WORK
+            # cursor — an earlier revision routed taskless drain wakes (info requests, answered
+            # notifications, nudges, clock auto-wakes) to the conversation lane, whose ack advances
+            # only `conv_delivered_ts`; the driving events never left the work pending count and the
+            # daemon respawned a no-op worker forever. The conversation lane belongs exclusively to
+            # genuine chat embodiments (the Claude warm resident / Codex per-turn conversation
+            # runner, both spawned by service_residents), never to a scan_and_wake ephemeral.
+            ephemeral_lane = "work"
             # R2.4 single-flight: win an exclusive, TTL-bounded lease BEFORE spawning.
             # If we don't win, a worker is already live for this agent (or the global
             # kill-switch is off) — skip without spawning and without touching the
@@ -3105,7 +3110,14 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     # GH #91/#90: track the token so _retire_headless revokes it on teardown. Stored
                     # even when POST /runs came back falsy ("running unseen") — the worker still holds
                     # the token, so it must still be revoked when later reaped.
-                    "run_token": ephemeral_tok}
+                    "run_token": ephemeral_tok,
+                    # GH #91/#90 (PR R5): the lane this worker's lease lives on. reap_workers reads
+                    # it for every renew/release so the reaper is structurally lane-correct. Today
+                    # this is always 'work' (tick ephemerals are work-lane by construction, and
+                    # conversation embodiments are tracked in live_residents, not here) — which is
+                    # also why keying live_workers by agent_id alone stays sound: one work-lane
+                    # worker per agent is exactly the work lane's single-flight invariant.
+                    "lane": ephemeral_lane}
             elif worktree and not sent:
                 # spawn failed after we made a worktree — clean it up (no orphan)
                 _teardown_worktree(hc, worktree, branch)
@@ -4295,7 +4307,13 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # on a broken pipe, hit `continue` WITHOUT setting current_run_id — orphaning the row forever
         # (the exact stall Page hit) and re-POSTing a fresh orphan every tick. A broken pipe now just
         # skips this tick (the resident is reaped via proc.poll()/idle), creating no row.
-        if not _send_user_turn(r["proc"], nxt["content"]):  # pipe gone → reaped next tick, no orphan row
+        # GH #91/#90 (PR R5): every turn fed to the resident carries the stable one-line lane
+        # reminder (_wrap_conversation_turn) — the full CONVERSATION_LANE_DIRECTIVE rode in on the
+        # cold-boot persona, but a long-lived warm resident (and a resumed pre-merge session, which
+        # never saw the directive at all) answers many turns off that one boot, so the lane is
+        # re-asserted per turn. Wrapped at the send (not stored) so the reminder never leaks into
+        # conversation records.
+        if not _send_user_turn(r["proc"], _wrap_conversation_turn(nxt["content"])):  # pipe gone → reaped next tick, no orphan row
             continue
         run = _post_json(f"{api_base}/api/agents/{c['agent_id']}/runs",
                          {"wake_kind": "resident", "wake_event": "conversation_turn",

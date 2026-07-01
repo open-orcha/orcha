@@ -15,6 +15,7 @@ from importlib.metadata import version as _pkg_version
 import json
 import os
 import pathlib
+import re
 import secrets
 import shutil
 import socket
@@ -1727,6 +1728,17 @@ _CONV_BLOCKED_SLASH = ("orcha-next", "orcha-accept-task", "orcha-done")
 # File-mutating tools a conversation responder shouldn't reach for (it dispatches code work to a task,
 # it doesn't do the edits itself). Dispatch + read + conversation-reply tools stay allowed.
 _CONV_BLOCKED_TOOLS = ("Edit", "Write", "NotebookEdit")
+# PR R5: the ONE file surface a conversation embodiment must keep — its persistent Claude Code
+# file-memory (~/.claude/projects/<project>/memory/...). A warm resident that can't write memory
+# silently stops persisting what it learns across sessions; memory writes are self-bookkeeping,
+# not the "code work" the lane guard exists to farm out.
+_CONV_MEMORY_DIR_RE = re.compile(r"/\.claude/projects/[^/]+/memory/")
+
+
+def _conv_is_memory_write(tool_input: dict) -> bool:
+    """True when a blocked file tool is targeting the agent's file-memory directory."""
+    path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    return bool(_CONV_MEMORY_DIR_RE.search(path.replace("\\", "/")))
 
 
 def cmd_conv_guard(_: argparse.Namespace) -> None:
@@ -1753,11 +1765,11 @@ def cmd_conv_guard(_: argparse.Namespace) -> None:
         tool_input = {}
 
     blocked_reason = None
-    if tool_name in _CONV_BLOCKED_TOOLS:
+    if tool_name in _CONV_BLOCKED_TOOLS and not _conv_is_memory_write(tool_input):
         blocked_reason = (
             f"{tool_name} is blocked for a conversation embodiment. You are the conversation "
             "responder: dispatch code work to an assigned task (with a clear title/DoD/protocol) "
-            "instead of editing files inline."
+            "instead of editing files inline. (Writes to your own memory directory are allowed.)"
         )
     elif tool_name == "SlashCommand":
         # SlashCommand passes the invoked command as tool_input.command, e.g. "/orcha-next --alias x".

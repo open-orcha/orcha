@@ -622,6 +622,51 @@ def test_tick_spawns_when_claim_won(monkeypatch):
     assert w["run_id"] == "RUN-1" and w["log_path"] is not None  # A2: run tracked for /finish
 
 
+def test_taskless_ephemeral_wake_uses_work_lane(monkeypatch):
+    """GH #91/#90 PR R5: wake_scan's pending count is a WORK cursor count, so a taskless
+    scan-driven ephemeral (info request, nudge, clock wake) must still claim and ack the WORK lane.
+
+    The old resolver sent this shape to the CONVERSATION lane; its ack advanced conv_delivered_ts
+    while delivered_ts stayed stale, so the same event respawned a no-op worker forever."""
+    cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
+            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
+            "latest_event": "request_answered", "max_event_ts": 5.0, "headless_flags": None}
+    monkeypatch.setattr(notifier, "_get_json",
+                        lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
+    posts = []
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        if "wake-claim" in url:
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "RUN-1"}
+        return {}
+
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    spawned = []
+    monkeypatch.setattr(
+        notifier, "spawn_headless",
+        lambda *a, **k: spawned.append(k) or (True, "cmd", FakeProc(pid=7)))
+    live = {}
+
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0,
+                  quiet=True, live_workers=live)
+
+    claim = next(b for u, b in posts if "wake-claim" in u)
+    run = next(b for u, b in posts if u.endswith("/runs"))
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert claim["lane"] == "work"
+    assert run["lane"] == "work"
+    assert ack["lane"] == "work" and ack["delivered_ts"] == 5.0
+    assert live[cand["agent_id"]]["lane"] == "work"
+    assert spawned[0]["conversation"] is False
+
+
 def test_tick_isolates_task_message_wake_in_worktree(monkeypatch):
     """PR #132 review [P1]: a task_message wake is actionable (ISS-55 — worker reads the thread
     and may edit code, e.g. 'rebase onto main'). With no auto-start task it must STILL provision
@@ -819,6 +864,35 @@ def test_reap_keeps_lease_for_live_worker(monkeypatch):
     assert renew == [("http://x/api/agents/agent-X/wake-renew",
                       {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS, "lane": "work"})]
     assert not [u for u, _ in posts if u.endswith("/wake-ack") or u.endswith("/finish")]
+
+
+def test_reap_uses_tracked_worker_lane_for_renew_and_release(monkeypatch):
+    """GH #91/#90 PR R5: reap_workers must operate on the lane stamped on the tracked worker.
+
+    This covers both paths Informer flagged: the live-worker renew and the terminal release. Before
+    the fix both hardcoded lane='work', which would leave a conversation-lane worker's lease wedged.
+    """
+    posts = []
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)))
+    live = {"agent-X": {"proc": FakeProc(exited=False), "hard_deadline": time.time() + 100,
+                         "last_size": 0, "last_progress_ts": time.time(),
+                         "run_id": None, "log_path": None, "worktree": None,
+                         "lane": "conversation"}}
+
+    notifier.reap_workers("http://x", live, quiet=True)
+
+    assert posts == [("http://x/api/agents/agent-X/wake-renew",
+                      {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS, "lane": "conversation"})]
+
+    posts.clear()
+    live["agent-X"]["proc"].returncode = 0
+    notifier.reap_workers("http://x", live, quiet=True)
+
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "released"
+    assert ack["release_lease"] is True
+    assert ack["lane"] == "conversation"
+    assert live == {}
 
 
 # ---------- FT-ENGINE: workers observable (A1/ISS-17) + watchdog (ISS-15) ----------
