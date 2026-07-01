@@ -725,7 +725,12 @@ _TRIAGE_SYSTEM = (
     "You decide whether an autonomous agent must be WOKEN for an incoming event, or whether "
     "waking would burn tokens for no action. Wake if the event needs a human-or-agent response, "
     "changes task state, or asks a question. Skip pure acknowledgements/FYIs that need no action. "
-    "When uncertain, prefer to WAKE."
+    "Review verdicts are workflow commands, not acknowledgements: if the incoming message is a "
+    "review verdict for a task, plan, pull request, implementation review, or approval loop, return "
+    "wake=true. Verdicts include CLEAN, APPROVED, PASS, LGTM, NEEDS CHANGES, REQUEST CHANGES, "
+    "BLOCKED, and similar. CLEAN/APPROVED means the requester should continue the workflow, move to "
+    "the next step, create or update the PR, or mark the item complete; NEEDS CHANGES means the "
+    "requester must revise. When uncertain, prefer to WAKE."
 )
 
 
@@ -834,6 +839,9 @@ _HANDOFF_ACK_SYSTEM = (
     "to one of its own questions, or an approval of work it completed. Decide whether the only "
     "appropriate next step is a brief acknowledgement that closes the loop (ack=true), or whether "
     "the message actually asks for more work — a change, a rebase, a question, a decision (ack=false). "
+    "Never auto-ack and close a review verdict. If the message is a verdict such as CLEAN, APPROVED, "
+    "PASS, LGTM, NEEDS CHANGES, REQUEST CHANGES, or BLOCKED, return ack=false so the full agent wakes "
+    "and handles the next workflow step. "
     "When ack=true, also compose a short, warm one-sentence acknowledgement in the agent's voice. "
     "When in ANY doubt, return ack=false so a full agent handles it."
 )
