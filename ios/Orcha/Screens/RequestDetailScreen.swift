@@ -51,7 +51,7 @@ struct RequestDetailScreen: View {
         let isRequester = req.requesterId == model.humanId
         let isTarget = req.targetId == model.humanId || req.targetId == nil
 
-        RequestFlowHeader(request: req, isRequester: isRequester, isTarget: isTarget)
+        RequestFlowHeader(request: req, isRequester: isRequester, isTarget: isTarget, agents: model.snapshot?.agents ?? [])
 
         if req.parentRequestId != nil {
             OrchaCard {
@@ -245,16 +245,21 @@ private struct RequestFlowHeader: View {
     let request: RequestDto
     let isRequester: Bool
     let isTarget: Bool
+    var agents: [AgentDto] = []
+
+    private var requesterAlias: String? { MobileUx.aliasFor(request.requesterId, in: agents) }
+    private var targetAlias: String? { MobileUx.aliasFor(request.targetId, in: agents) }
+    private var escalated: Bool { request.status == "open" && MobileUx.isToHuman(request, agents: agents) }
 
     var body: some View {
         let expiry = MobileUx.expiryChip(request.expiresAt)
         OrchaCard {
             HStack(spacing: 10) {
-                AgentAvatar(alias: request.requesterAlias ?? "?", human: isRequester)
+                AgentAvatar(alias: requesterAlias ?? (isRequester ? "you" : "A"), human: isRequester)
                 Text("→").font(.system(size: 17)).foregroundStyle(p.faint)
-                AgentAvatar(alias: request.targetId == nil ? "H" : (request.targetAlias ?? "?"), human: isTarget)
+                AgentAvatar(alias: request.targetId == nil ? "H" : (targetAlias ?? "A"), human: isTarget)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(isRequester ? "you" : (request.requesterAlias ?? "agent")) → \(isTarget ? "you" : (request.targetAlias ?? "agent"))")
+                    Text("\(isRequester ? "you" : (requesterAlias ?? "agent")) → \(isTarget ? "you" : (targetAlias ?? "agent"))")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(p.text)
                     Text(metaLine)
@@ -262,7 +267,7 @@ private struct RequestFlowHeader: View {
                         .foregroundStyle(p.muted)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                StatusPill(status: request.status, domain: .request)
+                RequestStatusPill(status: request.status, escalated: escalated)
             }
             switch expiry {
             case let .warn(label): MetaTag(text: label, tint: p.warn)

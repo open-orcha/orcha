@@ -31,6 +31,12 @@ final class AppModel {
     private let store = ContainerStore()
     private let api = OrchaApiClient()
     private var pollTask: Task<Void, Never>?
+    /// Issue 3 — the live run-log collector; cancelled on leaving RunDetailScreen.
+    private var runStreamTask: Task<Void, Never>?
+    private var lastRunSeq = -1
+    /// Issue 4 — task-thread keyset cursor (echoed back as before/before_id to load earlier).
+    private var threadNextBefore: String?
+    private var threadNextBeforeId: String?
 
     // navigation
     var containers: [StoredContainer]
@@ -56,6 +62,9 @@ final class AppModel {
     var actionInFlight = false
     var error: String?
     var toast: String?
+    var runLogStreaming = false      // Issue 3 — waiting on the live run stream
+    var threadHasMore = false        // Issue 4 — an older task-thread page is available
+    var threadLoadingEarlier = false
 
     var humanId: String? { selectedContainer?.humanAgentId }
 
@@ -217,11 +226,49 @@ final class AppModel {
 
     // MARK: detail loads
 
+    /// Issue 4: load the NEWEST page of the thread (keyset), not the whole thread. The older
+    /// pages are revealed on demand via `loadEarlierThreadMessages`.
     func loadTaskDetail(_ taskId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            taskMessages = try await api.taskMessages(sel.baseUrl, taskId).messages
+            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20)
+            taskMessages = page.messages
+            threadHasMore = page.hasMore
+            threadNextBefore = page.nextBefore
+            threadNextBeforeId = page.nextBeforeId
             taskRuns = try await api.taskRuns(sel.baseUrl, taskId).runs
+        } catch {
+            self.error = friendly(error)
+        }
+    }
+
+    /// Issue 4: "Load earlier" — fetch the next older keyset page and PREPEND it (messages come
+    /// back ASC; dedup at the seam). Must not disturb the reader's scroll to the bottom.
+    func loadEarlierThreadMessages(_ taskId: String) async {
+        guard let sel = selectedContainer, threadHasMore, !threadLoadingEarlier,
+              let before = threadNextBefore, let beforeId = threadNextBeforeId else { return }
+        threadLoadingEarlier = true
+        defer { threadLoadingEarlier = false }
+        do {
+            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20, before: before, beforeId: beforeId)
+            taskMessages = MobileUx.prependMessages(page.messages, before: taskMessages)
+            threadHasMore = page.hasMore
+            threadNextBefore = page.nextBefore
+            threadNextBeforeId = page.nextBeforeId
+        } catch {
+            self.error = friendly(error)
+        }
+    }
+
+    /// Issue 4: after posting, re-fetch only the newest page and merge in the new message(s),
+    /// instead of re-fetching the whole thread.
+    private func reloadNewestThreadPage(_ taskId: String) async {
+        guard let sel = selectedContainer else { return }
+        do {
+            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20)
+            let have = Set(taskMessages.compactMap { $0.messageId })
+            let fresh = page.messages.filter { m in m.messageId.map { !have.contains($0) } ?? true }
+            taskMessages.append(contentsOf: fresh)
         } catch {
             self.error = friendly(error)
         }
@@ -253,6 +300,74 @@ final class AppModel {
         }
     }
 
+    /// Issue 3: start showing a run's log. A RUNNING run is consumed incrementally over SSE
+    /// (never a buffered one-shot that would time out); a finished run keeps the one-shot fetch.
+    func startRunLog(_ run: RunDto) {
+        stopRunLogStream()
+        lastRunSeq = -1
+        runLines = []
+        error = nil
+        if run.status == "running" {
+            streamRunLog(run)
+        } else {
+            Task { await loadRunLog(run) }
+        }
+    }
+
+    /// Cancel the live collector (leaving RunDetailScreen, or before a one-shot refresh).
+    func stopRunLogStream() {
+        runStreamTask?.cancel()
+        runStreamTask = nil
+        runLogStreaming = false
+    }
+
+    private func streamRunLog(_ run: RunDto) {
+        guard let sel = selectedContainer, let aid = run.agentId else { return }
+        runLogStreaming = true
+        runStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var attempt = 0
+            while !Task.isCancelled {
+                do {
+                    streaming: for try await event in api.runStream(sel.baseUrl, aid, run.runId) {
+                        if Task.isCancelled { return }
+                        switch event {
+                        case let .line(seq, text):
+                            appendRunLine(seq: seq, text: text)
+                            attempt = 0
+                        case let .done(_, status):
+                            if status == "stream_timeout" {
+                                break streaming          // server 30-min cap — reopen, run still live
+                            }
+                            runLines.append("run \(status)")
+                            runLogStreaming = false
+                            await refresh()              // sync the run row elsewhere in the UI
+                            return
+                        }
+                    }
+                    attempt = 0                          // clean close / timeout → reopen shortly
+                } catch {
+                    if Task.isCancelled { return }
+                    attempt = min(attempt + 1, 5)
+                    runLines.append("log stream interrupted — retrying")
+                }
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .seconds(attempt == 0 ? 0.3 : Double(attempt)))
+            }
+        }
+    }
+
+    /// Append a streamed line with the web's monotonic-`seq` dedup + 400-line retention cap.
+    private func appendRunLine(seq: Int, text: String) {
+        if seq >= 0 {
+            guard seq > lastRunSeq else { return }
+            lastRunSeq = seq
+        }
+        runLines.append(text)
+        if runLines.count > 400 { runLines.removeFirst(runLines.count - 400) }
+    }
+
+    /// One-shot read for a FINISHED run (server closes the stream immediately).
     func loadRunLog(_ run: RunDto) async {
         guard let sel = selectedContainer, let aid = run.agentId else { return }
         loading = true
@@ -265,12 +380,30 @@ final class AppModel {
         }
     }
 
+    /// Issue 4: initial mount pulls the most-recent window (?limit=80); the screen reveals
+    /// older turns client-side. Refreshes delta-append via `after_seq` (see below).
     func loadConversation(_ agentId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            let response = try await api.conversation(sel.baseUrl, agentId)
+            let response = try await api.conversation(sel.baseUrl, agentId, limit: 80)
             conversation = response.conversation
             turns = response.turns
+        } catch {
+            self.error = friendly(error)
+        }
+    }
+
+    /// Issue 4: append only the turns created after the last-held seq, instead of full-replacing
+    /// the transcript (web parity, `conversation.js:586`). Falls back to a full load if unmounted.
+    func refreshConversationDelta(_ agentId: String) async {
+        guard let sel = selectedContainer, let conv = conversation else {
+            await loadConversation(agentId)
+            return
+        }
+        do {
+            let lastSeq = turns.map(\.seq).max() ?? 0
+            let delta = try await api.conversationTurns(sel.baseUrl, conv.id, afterSeq: lastSeq, limit: 50).turns
+            turns = MobileUx.appendTurns(turns, delta: delta)
         } catch {
             self.error = friendly(error)
         }
@@ -301,7 +434,7 @@ final class AppModel {
     func sendTaskMessage(_ taskId: String, body: String) async -> Bool {
         await humanAction("Message sent") { base, actor in
             try await api.postTaskMessage(base, taskId, actor: actor, body: body)
-            await loadTaskDetail(taskId)
+            await reloadNewestThreadPage(taskId)
         }
     }
 
@@ -418,7 +551,7 @@ final class AppModel {
             }
             guard let conv = conversation else { throw URLError(.badServerResponse) }
             try await api.sendTurn(base, conv.id, actor: actor, content: content)
-            await loadConversation(agentId)
+            await refreshConversationDelta(agentId)
         }
     }
 
@@ -433,7 +566,8 @@ final class AppModel {
     func stopRun(_ run: RunDto) async -> Bool {
         await humanAction("Stop requested") { base, actor in
             try await api.stopRun(base, run.runId, actor: actor)
-            await loadRunLog(run)
+            stopRunLogStream()               // the run is closing — end the live collector
+            await loadRunLog(run)            // one-shot now returns the full final log
         }
     }
 

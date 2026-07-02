@@ -9,6 +9,9 @@ struct TasksTabView: View {
     @State private var filter = "All"
     @State private var query = ""
     @State private var showTerminals = false
+    @State private var shown = TASKS_PAGE
+
+    private static let TASKS_PAGE = 10
 
     var body: some View {
         Group {
@@ -37,7 +40,17 @@ struct TasksTabView: View {
             $0.title.localizedCaseInsensitiveContains(query) ||
                 ($0.description ?? "").localizedCaseInsensitiveContains(query)
         }
-        let groups = Dictionary(grouping: filtered, by: \.status)
+        // Issue 4: cap the flat status/priority-ordered list to `shown`, then group THAT slice
+        // (web mechanism, tasks.html:246-250); "Load more" reveals the next page.
+        let ordered = filtered.sorted { a, b in
+            let ra = MobileUx.taskGroupRank(a.status), rb = MobileUx.taskGroupRank(b.status)
+            if ra != rb { return ra < rb }
+            let pa = a.priority ?? 100, pb = b.priority ?? 100
+            if pa != pb { return pa < pb }
+            return (a.createdAt ?? "") > (b.createdAt ?? "")
+        }
+        let visible = Array(ordered.prefix(shown))
+        let groups = Dictionary(grouping: visible, by: \.status)
             .sorted { MobileUx.taskGroupRank($0.key) < MobileUx.taskGroupRank($1.key) }
 
         return ScrollView {
@@ -65,13 +78,21 @@ struct TasksTabView: View {
                         }
                     }
                     if !terminal || showTerminals {
-                        ForEach(rows.sorted { ($0.priority ?? 100, $1.createdAt ?? "") < ($1.priority ?? 100, $0.createdAt ?? "") }) { task in
+                        ForEach(rows) { task in
                             NavigationLink(value: WorkspaceRoute.task(task.id)) {
                                 TaskRowCard(task: task)
                             }
                             .buttonStyle(.plain)
                         }
                     }
+                }
+                if ordered.count > visible.count {
+                    Button("Load more · \(visible.count) of \(ordered.count)") { shown += Self.TASKS_PAGE }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(p.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                 }
                 if filtered.isEmpty {
                     OrchaCard {
@@ -83,6 +104,8 @@ struct TasksTabView: View {
             .padding(16)
         }
         .searchable(text: $query, prompt: "Search tasks")
+        .onChange(of: filter) { shown = Self.TASKS_PAGE }
+        .onChange(of: query) { shown = Self.TASKS_PAGE }
         .refreshable { await model.refresh() }
     }
 }

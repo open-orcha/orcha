@@ -110,6 +110,37 @@ struct StatusPill: View {
     }
 }
 
+/// Issue 1 — request status pill with a per-type GLYPH (mobile adaptation of the web's
+/// text pill). `escalated` (open + human-targeted) overrides the tint to danger and shows
+/// an octagon-X, matching the web `requests.html:135` escalated marker.
+struct RequestStatusPill: View {
+    @Environment(\.palette) private var palette
+    let status: String
+    var escalated: Bool = false
+
+    var body: some View {
+        let name = escalated ? "danger" : statusColorName(status, .request)
+        let tint = palette.tint(name)
+        let label = escalated ? "escalated" : MobileUx.statusCopy(status.lowercased())
+        return HStack(spacing: 6) {
+            Image(systemName: MobileUx.requestStatusGlyph(status.lowercased(), escalated: escalated))
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(tint.color)
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .tracking(0.2)
+                .foregroundStyle(tint.color)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .padding(.vertical, 3)
+        .background(tint.soft, in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.line, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+    }
+}
+
 /// 2s opacity pulse — the portal `.pill.s-working` parity.
 struct PulseDot: View {
     let color: Color
