@@ -6907,6 +6907,24 @@ def _require_request(cur, rid, for_update=False):
     return r
 
 
+@app.get("/api/requests/{rid}")
+def get_request(rid: str):
+    """Read a single request by id. Read-only, localhost posture like wake-scan/wake-ack.
+
+    GH#36: the notifier daemon calls this to decide whether a graded `ack_close` wake is still
+    ACTIONABLE (status='answered' — there is a real answer to acknowledge + close) or a resolved
+    NO-OP (closed/escalated/gone) it should NOT spend a full headless boot on. Booting a worker for
+    an already-resolved request is exactly the empty-inbox boot→stall→watchdog-kill loop this read
+    breaks: the daemon advances the wake cursor instead of spawning."""
+    if not _valid_uuid(rid):
+        raise HTTPException(400, "request_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        r = _require_request(cur, rid)   # 404 if missing
+        return {"request_id": str(r["id"]), "type": r["type"], "status": r["status"],
+                "requester_id": str(r["requester_id"]) if r["requester_id"] else None,
+                "target_id": str(r["target_id"]) if r["target_id"] else None}
+
+
 @app.post("/api/requests/{rid}/respond", status_code=200)
 def respond_request(rid: str, body: RequestRespond):
     if not _valid_uuid(rid):

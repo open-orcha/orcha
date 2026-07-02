@@ -296,6 +296,32 @@ def _log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
         pass
 
 
+def _advance_wake_cursor(api_base: str, cand: dict, event) -> None:
+    """Advance the wake cursor WITHOUT spawning — the no-spawn ack shared by the T2 cheap-act
+    success path and the GH#36 already-resolved no-op path (mirrors _suppress_wake exactly).
+    Acks only THROUGH the surfaced batch (ack_through_ts), falling back to max_event_ts."""
+    ack_ts = cand.get("ack_through_ts")
+    if ack_ts is None:
+        ack_ts = cand.get("max_event_ts")
+    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
+               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+
+
+def _request_actionable(api_base: str, rid: str) -> Optional[bool]:
+    """GH#36: True iff request `rid` is still in 'answered' state (a real ack_close to perform);
+    False if it's a resolved NO-OP (closed/escalated/any non-answered status); None if we can't
+    tell (API unreachable, or a 404 _get_json can't distinguish from a dead API). The caller treats
+    None CONSERVATIVELY — escalate to a full boot — so a transient read failure never silently drops
+    a still-actionable request; only a DEFINITIVE non-answered status suppresses the boot."""
+    data = _get_json(f"{api_base}/api/requests/{rid}")
+    if not isinstance(data, dict):
+        return None
+    status = data.get("status")
+    if not status:
+        return None
+    return status == "answered"
+
+
 def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                     quiet: bool, ack_config: Optional[dict] = None,
                     ack_api_key: Optional[str] = None) -> bool:
@@ -309,6 +335,18 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
         verdict.get("task_id") if action == "ack_verify" else None)
     if not target:
         return False                       # nothing to act on → escalate
+    # GH#36: an ack_close whose request is NO LONGER actionable (already closed/escalated/gone) is a
+    # pure no-op — advance the cursor and DON'T escalate to a full headless boot (the empty-inbox
+    # boot→stall→watchdog-kill loop). Checked BEFORE the cheap substrate so a flaky/absent ack model
+    # can't turn an already-resolved request into an endless boot. Only a DEFINITIVE non-answered
+    # status suppresses; None (unreachable / can't tell) and 'answered' fall through to the normal
+    # cheap-act → boot escalation, so a still-open answer is never silently dropped.
+    if action == "ack_close" and _request_actionable(api_base, target) is False:
+        if not quiet:
+            print(f"[notifier] ack_close for {cand.get('alias')} is already resolved "
+                  f"(request {str(target)[:8]} not 'answered') — advancing cursor, NO boot (GH#36)")
+        _advance_wake_cursor(api_base, cand, event)
+        return True
     if _llm_util is None:
         return False                       # no cheap substrate → escalate
     try:
@@ -332,11 +370,7 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                   f"— escalating to a full boot (cursor not advanced)", file=sys.stderr)
         return False                       # write failed → DON'T advance the cursor; re-grade later
     # Write landed → advance the cursor WITHOUT spawning (mirrors _suppress_wake exactly).
-    ack_ts = cand.get("ack_through_ts")
-    if ack_ts is None:
-        ack_ts = cand.get("max_event_ts")
-    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
-               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+    _advance_wake_cursor(api_base, cand, event)
     return True
 
 
@@ -2475,8 +2509,16 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # (_safe_teardown_worktree); the preserved path is logged so a human can find it.
         disp = _safe_teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
         kind = "worker_stalled_killed" if (stalled and not over_cap) else "worker_timeout_killed"
-        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": kind, "release_lease": True})
+        # GH#36 backstop: a NO-OP ephemeral worker (no task attributed AND no uncommitted work) that
+        # stalls into a watchdog kill must not leave its trigger un-acked — re-assert the cursor
+        # advance to the trigger ts this boot consumed so the SAME wake can't re-arm into another
+        # empty-inbox boot→stall→kill cycle (the spawn-time ack already set it; this is the idempotent
+        # safety net for a transient ack failure). A worker that DID make progress (a task wake or a
+        # dirty diff) leaves the cursor ALONE: its work isn't finished, so it must be free to re-wake.
+        kill_ack = {"kind": kind, "release_lease": True}
+        if not w.get("wake_task_id") and not (diff or "").strip() and w.get("wake_ack_ts") is not None:
+            kill_ack["delivered_ts"] = w.get("wake_ack_ts")
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack", kill_ack)
         live_workers.pop(aid, None)
         # #270: emit the kill diagnostic AT KILL TIME, unconditionally — a watchdog kill is a rare,
         # important event and this line is the whole on-host record of WHY it fired.
@@ -2856,6 +2898,14 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     # ISS-76: everything reap_workers needs to CHECKPOINT-RESPAWN this worker on
                     # the same worktree if it's still progressing when it crosses the soft cap.
                     "cap": cap, "respawns": 0,
+                    # GH#36: the trigger this boot consumed — so a NO-OP stall/cap kill (no task
+                    # attributed AND no uncommitted diff) can re-assert the cursor advance to this
+                    # ts and never re-arm the SAME wake into another empty-inbox boot→stall→kill.
+                    "wake_event": event,
+                    "wake_task_id": auto[0] if auto else cand.get("wake_task_id"),
+                    "wake_ack_ts": (cand.get("ack_through_ts")
+                                    if cand.get("ack_through_ts") is not None
+                                    else cand.get("max_event_ts")),
                     # [P2 #218] carry the resolved model: the replacement worker must come up
                     # on the agent's model, not claude's default (per-agent contract, #202)
                     "respawn_ctx": {"prompt": prompt, "flags": cand.get("headless_flags"),
