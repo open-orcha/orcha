@@ -187,3 +187,28 @@ class TaskResultShapeTest {
         assertEquals(null, n.result)
     }
 }
+
+class ExpiryAndDividerTest {
+    private val now = 1_751_400_000_000L
+
+    private fun iso(deltaMs: Long): String = java.time.Instant.ofEpochMilli(now + deltaMs).toString()
+
+    @Test
+    fun expiryChipWarnsUnderTwoHoursAndExpiresPast() {
+        // flow 07: warn pill with countdown when expires_at − now < 2h; past → "expired" + dim
+        assertEquals(null, MobileUx.expiryChip(null, now))
+        assertEquals(null, MobileUx.expiryChip(iso(3 * 3_600_000), now))              // 3h out: no chip
+        assertEquals(ExpiryChip.Warn("expires in 1h 30m"), MobileUx.expiryChip(iso(90 * 60_000), now))
+        assertEquals(ExpiryChip.Warn("expires in 12m"), MobileUx.expiryChip(iso(12 * 60_000), now))
+        assertEquals(ExpiryChip.Expired, MobileUx.expiryChip(iso(-60_000), now))
+    }
+
+    @Test
+    fun dayKeyGroupsTurnsByCalendarDay() {
+        // flow 10: day dividers between calendar days (UTC keying is deterministic for tests)
+        assertEquals("2026-07-01", MobileUx.dayKey("2026-07-01T21:40:00Z"))
+        assertEquals("2026-07-02", MobileUx.dayKey("2026-07-02T00:10:00Z"))
+        assertEquals(null, MobileUx.dayKey(null))
+        assertEquals("Jul 1", MobileUx.dayLabel("2026-07-01T21:40:00Z"))
+    }
+}

@@ -243,7 +243,7 @@ fun Avatar(alias: String, human: Boolean, size: AvatarSize = AvatarSize.Md, modi
     }
 }
 
-/** `.brandmark` — orca tile on the radial brand gradient (#0e2d33 → #06171c). */
+/** `.brandmark` — the real orca glyph on the radial brand tile (foundations §5). */
 @Composable
 fun BrandMark(size: Dp = 34.dp, modifier: Modifier = Modifier) {
     Box(
@@ -255,7 +255,11 @@ fun BrandMark(size: Dp = 34.dp, modifier: Modifier = Modifier) {
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text("🐋", fontSize = (size.value * 0.5f).sp)
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(io.openorcha.mobile.R.drawable.orca_glyph),
+            contentDescription = "Orcha",
+            modifier = Modifier.size(size * 24f / 34f),
+        )
     }
 }
 

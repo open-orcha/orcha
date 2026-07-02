@@ -69,6 +69,7 @@ import io.openorcha.mobile.ui.components.SegControl
 import io.openorcha.mobile.ui.components.StatusDomain
 import io.openorcha.mobile.ui.components.StatusPill
 import io.openorcha.mobile.ui.components.pulseAlpha
+import androidx.compose.ui.unit.sp
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.MonoStyle
 import io.openorcha.mobile.ui.theme.Orcha
@@ -88,12 +89,17 @@ fun AgentDetailScreen(
     onModel: (String) -> Unit,
     onAutoWake: (Int?) -> Unit,
     onRetire: () -> Unit,
+    onRename: (String) -> Unit,
     onOpenTask: (String) -> Unit,
     onOpenRun: (RunDto) -> Unit,
+    onOpenRequests: () -> Unit,
 ) {
     val p = Orcha.palette
     val agent = state.selectedAgent
     var menuOpen by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var newAlias by remember { mutableStateOf("") }
+    var personaOpen by remember { mutableStateOf(false) }
     var confirmRetire by remember { mutableStateOf(false) }
     var modelSheet by remember { mutableStateOf(false) }
     var wakeSheet by remember { mutableStateOf(false) }
@@ -111,6 +117,10 @@ fun AgentDetailScreen(
                     if (agent?.kind == "ai" && !dead) {
                         IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, "More") }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                onClick = { menuOpen = false; newAlias = agent.alias; renaming = true },
+                            )
                             DropdownMenuItem(
                                 text = { Text("Retire agent…", color = p.danger) },
                                 onClick = { menuOpen = false; confirmRetire = true },
@@ -132,6 +142,19 @@ fun AgentDetailScreen(
         ) {
             if (dead) {
                 item { Banner(BannerKind.Danger, "Retired${MobileUx.agoLabel(agent.terminatedAt)?.let { " $it" } ?: ""} — this agent no longer wakes.") }
+            }
+            // flow 09 §1: gate callout parity for this agent's tasks
+            val gated = state.snapshot?.tasks.orEmpty().filter { t ->
+                (t.assignees.contains(agent.alias) || t.ownerAlias == agent.alias) &&
+                    (t.status == "needs_verification" || (t.status == "in_progress" && t.planMessage != null && t.planDecision == null))
+            }
+            items(gated, key = { "gate-${it.id}" }) { t ->
+                Banner(
+                    if (t.status == "needs_verification") BannerKind.Info else BannerKind.Warn,
+                    if (t.status == "needs_verification") "Task awaiting your verification: ${t.title}" else "Plan awaiting your approval: ${t.title}",
+                    action = "Open",
+                    onAction = { onOpenTask(t.id) },
+                )
             }
             // header
             item {
@@ -217,10 +240,61 @@ fun AgentDetailScreen(
                     }
                 }
             }
-            // persona preview (full prompt fetch is a follow-up; snapshot preview renders)
-            agent.promptPreview?.takeIf { it.isNotBlank() }?.let {
-                item { SectionH("Persona") }
-                item { OrchaCard { Text(it, color = p.text2, style = MaterialTheme.typography.bodyMedium) } }
+            // persona — collapsed preview; expanding shows the full system prompt (flow 09 §6)
+            val personaFull = state.agentExtras.persona?.systemPrompt
+            val preview = agent.promptPreview ?: personaFull?.take(160)
+            if (!preview.isNullOrBlank()) {
+                item {
+                    SectionH("Persona", trailing = {
+                        if (!personaFull.isNullOrBlank()) Text(
+                            if (personaOpen) "collapse" else "expand",
+                            style = MaterialTheme.typography.labelMedium, color = p.accent,
+                            modifier = Modifier.clickable { personaOpen = !personaOpen },
+                        )
+                    })
+                }
+                item {
+                    OrchaCard {
+                        if (personaOpen && !personaFull.isNullOrBlank()) {
+                            Text(personaFull, color = p.text2, style = MonoSmStyle.copy(fontSize = 12.sp, lineHeight = 17.sp))
+                        } else {
+                            Text(preview, color = p.text2, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            // memory digest (flow 09 §7)
+            state.agentExtras.digest?.let { d ->
+                item { SectionH("Memory", MobileUx.agoLabel(d.createdAt) ?: "") }
+                item {
+                    OrchaCard {
+                        d.currentFocus?.takeIf { it.isNotBlank() }?.let {
+                            Text("FOCUS", style = MaterialTheme.typography.labelMedium, color = p.accent)
+                            Text(it, color = p.text, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        if (d.decisions.isNotEmpty()) {
+                            Text("DECISIONS · ${d.decisions.size}", style = MaterialTheme.typography.labelMedium, color = p.muted)
+                            d.decisions.take(3).forEach { Text("• ${it.text}", color = p.text2, style = MaterialTheme.typography.bodyMedium) }
+                        }
+                        if (d.openThreads.isNotEmpty()) {
+                            Text("OPEN THREADS · ${d.openThreads.size}", style = MaterialTheme.typography.labelMedium, color = p.muted)
+                            d.openThreads.take(3).forEach { Text("• ${it.text}", color = p.text2, style = MaterialTheme.typography.bodyMedium) }
+                        }
+                    }
+                }
+            }
+            // requests summary rows (flow 09 §8)
+            if (state.agentExtras.inboxCount != null || state.agentExtras.outboxOpen != null) {
+                item { SectionH("Requests") }
+                item {
+                    OrchaCard(onClick = onOpenRequests) {
+                        KVRow("Incoming open", "${state.agentExtras.inboxCount ?: 0}")
+                        state.agentExtras.inboxPreview?.let {
+                            Text("“$it”", color = p.muted, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        KVRow("Outgoing open / answered", "${state.agentExtras.outboxOpen ?: 0} / ${state.agentExtras.outboxAnswered ?: 0}")
+                    }
+                }
             }
             item { SectionH("Recent runs", "${state.agentRuns.size}") }
             if (state.agentRuns.isEmpty()) {
@@ -233,6 +307,28 @@ fun AgentDetailScreen(
         }
     }
 
+    if (renaming && agent != null) {
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text("Rename ${agent.alias}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OrchaField(newAlias, { newAlias = it }, label = "Alias")
+                    Text(
+                        "Renaming orphans the laptop's CLI binding for the old alias — the agent re-binds on its next registration.",
+                        style = MaterialTheme.typography.bodyMedium, color = p.muted,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { renaming = false; onRename(newAlias.trim()) }, enabled = newAlias.isNotBlank()) {
+                    Text("Rename", color = p.accent, fontWeight = FontWeight.W700)
+                }
+            },
+            dismissButton = { TextButton(onClick = { renaming = false }) { Text("Cancel", color = p.muted) } },
+            containerColor = p.raised,
+        )
+    }
     if (confirmRetire && agent != null) {
         AlertDialog(
             onDismissRequest = { confirmRetire = false },
@@ -360,8 +456,10 @@ fun ConversationScreen(
     val p = Orcha.palette
     val agent = state.selectedAgent
     var draft by remember { mutableStateOf("") }
+    var pendingTurn by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var confirmEnd by remember { mutableStateOf(false) }
+    val unsentTurn = if (state.error != null) pendingTurn else null
     val listState = rememberLazyListState()
     LaunchedEffect(state.turns.size) {
         if (state.turns.isNotEmpty()) listState.animateScrollToItem(state.turns.size - 1)
@@ -413,9 +511,39 @@ fun ConversationScreen(
                             Text("No conversation yet. Send a message to wake ${agent?.alias ?: "the agent"}.", color = p.muted)
                         }
                     }
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("What are you working on?", "Any blockers?", "Status update, please").forEach { hint ->
+                                AssigneeChip(hint, false) { draft = hint }
+                            }
+                        }
+                    }
                 }
-                items(state.turns, key = { it.id ?: "${it.seq}" }) { turn ->
-                    TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id)
+                var lastDay: String? = null
+                state.turns.forEach { turn ->
+                    val day = MobileUx.dayKey(turn.createdAt)
+                    if (day != null && day != lastDay) {
+                        lastDay = day
+                        item(key = "day-$day") {
+                            Bubble(BubbleKind.System, MobileUx.dayLabel(turn.createdAt) ?: day)
+                        }
+                    }
+                    item(key = turn.id ?: "${turn.seq}") {
+                        TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id)
+                    }
+                }
+                unsentTurn?.let { text ->
+                    item(key = "unsent") {
+                        Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
+                            Bubble(BubbleKind.Mine, text)
+                            Text(
+                                "Not sent · Tap to retry",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = p.danger,
+                                modifier = Modifier.padding(top = 2.dp).clickable { onSend(text) },
+                            )
+                        }
+                    }
                 }
                 if (working) {
                     item {
@@ -441,7 +569,7 @@ fun ConversationScreen(
                     maxLines = 4,
                 )
                 IconButton(
-                    onClick = { onSend(draft.trim()); draft = "" },
+                    onClick = { pendingTurn = draft.trim(); onSend(draft.trim()); draft = "" },
                     enabled = draft.isNotBlank() && !state.actionInFlight,
                     colors = IconButtonDefaults.iconButtonColors(
                         containerColor = p.accent, contentColor = p.accentInk,

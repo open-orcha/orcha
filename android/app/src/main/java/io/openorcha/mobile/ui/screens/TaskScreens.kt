@@ -1,5 +1,6 @@
 package io.openorcha.mobile.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -38,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -79,6 +81,8 @@ fun TaskDetailScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onOpenThread: () -> Unit,
+    onOpenTask: (String) -> Unit,
+    onPrepareClose: () -> Unit,
     onCancelTask: (String?) -> Unit,
     onVerify: (Boolean, String?) -> Unit,
     onDecidePlan: (Boolean, String?) -> Unit,
@@ -91,6 +95,7 @@ fun TaskDetailScreen(
     var closeReason by remember { mutableStateOf("") }
     var showVerify by remember { mutableStateOf(false) }
     var showPlan by remember { mutableStateOf(false) }
+    var allRuns by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = p.bg,
@@ -107,7 +112,7 @@ fun TaskDetailScreen(
                         DropdownMenuItem(
                             text = { Text("Close task…", color = if (closable) p.danger else p.faint) },
                             enabled = closable,
-                            onClick = { menuOpen = false; closing = true },
+                            onClick = { menuOpen = false; onPrepareClose(); closing = true },
                         )
                     }
                 },
@@ -174,6 +179,19 @@ fun TaskDetailScreen(
                     }
                 }
             }
+            if (task.dependsOn.isNotEmpty()) {
+                item { SectionH("Depends on", "${task.dependsOn.size}") }
+                items(task.dependsOn, key = { "dep-$it" }) { depId ->
+                    val dep = state.snapshot?.tasks?.firstOrNull { it.id == depId }
+                    OrchaCard(onClick = { onOpenTask(depId) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(if (dep?.status == "completed") "✓" else "🔒", color = if (dep?.status == "completed") p.ok else p.warn)
+                            Text(dep?.title ?: depId, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            dep?.let { StatusPill(it.status, StatusDomain.Task) }
+                        }
+                    }
+                }
+            }
             item { SectionH("Thread", "${state.taskMessages.size}") }
             item {
                 OrchaCard(onClick = onOpenThread) {
@@ -196,7 +214,15 @@ fun TaskDetailScreen(
             if (state.taskRuns.isEmpty()) {
                 item { OrchaCard { Text("No runs yet — appears when a worker wakes for this task.", color = p.muted) } }
             }
-            items(state.taskRuns, key = { it.runId }) { run -> RunRow(run, onOpenRun) }
+            val visibleRuns = if (allRuns) state.taskRuns else state.taskRuns.take(3)
+            items(visibleRuns, key = { it.runId }) { run -> RunRow(run, onOpenRun) }
+            if (!allRuns && state.taskRuns.size > 3) {
+                item {
+                    TextButton(onClick = { allRuns = true }) {
+                        Text("All runs (${state.taskRuns.size})", color = p.accent, fontWeight = FontWeight.W700)
+                    }
+                }
+            }
             state.error?.let { item { Banner(BannerKind.Danger, it) } }
         }
     }
@@ -207,7 +233,12 @@ fun TaskDetailScreen(
             title = { Text("Close ${task.title}?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("The task is force-closed and anything waiting on it unblocks. A reason is routed to the assignee.")
+                    val implications = state.closeImplications
+                    if (implications != null) {
+                        implications.forEach { Text("• $it") }
+                    } else {
+                        Text("The task is force-closed and anything waiting on it unblocks. A reason is routed to the assignee.")
+                    }
                     OrchaField(closeReason, { closeReason = it }, label = "Reason (recommended)", minLines = 2)
                 }
             },
@@ -263,6 +294,9 @@ fun TaskThreadScreen(
     val p = Orcha.palette
     val task = state.selectedTask
     var draft by remember { mutableStateOf("") }
+    var pendingSend by remember { mutableStateOf<String?>(null) }
+    // a send that errored keeps its text as an unsent bubble with a retry chip
+    val unsent = if (state.error != null) pendingSend else null
     Scaffold(
         containerColor = p.bg,
         topBar = {
@@ -298,7 +332,22 @@ fun TaskThreadScreen(
                 items(state.taskMessages, key = { it.messageId ?: "${it.createdAt}-${it.body.hashCode()}" }) { msg ->
                     ThreadBubble(msg, state.selectedContainer?.humanAgentId)
                 }
-                state.error?.let { item { Banner(BannerKind.Danger, it) } }
+                unsent?.let { text ->
+                    item {
+                        Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
+                            Bubble(BubbleKind.Mine, text)
+                            Text(
+                                "Not sent · Tap to retry",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = p.danger,
+                                modifier = Modifier
+                                    .padding(top = 2.dp)
+                                    .clickable { onSendMessage(text) },
+                            )
+                        }
+                    }
+                }
+                if (unsent == null) state.error?.let { item { Banner(BannerKind.Danger, it) } }
             }
             // `.composer` — rounded field + round send button
             Row(
@@ -313,7 +362,7 @@ fun TaskThreadScreen(
                     maxLines = 4,
                 )
                 IconButton(
-                    onClick = { onSendMessage(draft.trim()); draft = "" },
+                    onClick = { pendingSend = draft.trim(); onSendMessage(draft.trim()); draft = "" },
                     enabled = draft.isNotBlank() && !state.actionInFlight,
                     colors = androidx.compose.material3.IconButtonDefaults.iconButtonColors(
                         containerColor = p.accent, contentColor = p.accentInk,
@@ -352,10 +401,19 @@ fun RunDetailScreen(
 ) {
     val p = Orcha.palette
     val run = state.selectedRun
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var confirmStop by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val atBottom by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
+        }
+    }
     LaunchedEffect(state.runLines.size) {
-        if (state.runLines.isNotEmpty()) listState.animateScrollToItem(state.runLines.size - 1)
+        // pin-to-bottom only while the user hasn't scrolled up (flow 06 §auto-scroll)
+        if (state.runLines.isNotEmpty() && atBottom) listState.animateScrollToItem(state.runLines.size - 1)
     }
     Scaffold(
         containerColor = p.bg,
@@ -397,8 +455,17 @@ fun RunDetailScreen(
                 if (state.runLines.isEmpty()) {
                     Text(if (state.loading) "Loading stream…" else "No log lines yet.", color = p.muted)
                 } else {
-                    LazyColumn(state = listState) {
-                        items(state.runLines.size) { i -> LogLine(state.runLines[i]) }
+                    androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth()) {
+                        LazyColumn(state = listState) {
+                            items(state.runLines.size) { i -> LogLine(state.runLines[i]) }
+                        }
+                        if (!atBottom) {
+                            androidx.compose.material3.SuggestionChip(
+                                onClick = { scope.launch { listState.animateScrollToItem(state.runLines.size - 1) } },
+                                label = { Text("Auto-scroll paused · Jump to latest", style = MaterialTheme.typography.labelMedium) },
+                                modifier = Modifier.align(Alignment.BottomCenter),
+                            )
+                        }
                     }
                 }
             }
