@@ -2159,15 +2159,24 @@ def _capture_diff(worktree, cap: int = 200_000):
     return out
 
 
+def _branch_commit_count(base_cwd, branch) -> int:
+    """GH#110: how many commits `branch` has beyond origin/main (0 when the branch is unset,
+    missing, or exactly at origin/main). Used to (a) keep a PR-ready/committed branch on teardown
+    and (b) word the saved-work feed line correctly when a worker committed EARLIER in the run but
+    left a clean tree this reap (PR #121 review note a), and (c) gate the §2c terminal-task branch
+    delete (never drop a branch that still carries commits / an open PR — a PR branch has commits)."""
+    if not branch:
+        return 0
+    rc, out = _run_git(["rev-list", "--count", f"origin/main..{branch}"], cwd=base_cwd)
+    return int(out.strip()) if rc == 0 and out.strip().isdigit() else 0
+
+
 def _teardown_worktree(base_cwd, worktree, branch):
     """Remove the worktree dir on finish. Keep the branch if it has commits beyond
     origin/main (PR-ready); delete it otherwise (nothing worth keeping)."""
     if not worktree:
         return
-    has_commits = False
-    if branch:
-        rc, out = _run_git(["rev-list", "--count", f"origin/main..{branch}"], cwd=base_cwd)
-        has_commits = rc == 0 and out.strip().isdigit() and int(out.strip()) > 0
+    has_commits = _branch_commit_count(base_cwd, branch) > 0
     _run_git(["worktree", "remove", "--force", worktree], cwd=base_cwd)
     if branch and not has_commits:
         _run_git(["branch", "-D", branch], cwd=base_cwd)
@@ -2178,11 +2187,15 @@ def _is_git_repo(cwd) -> bool:
     return bool(cwd) and _run_git(["rev-parse", "--git-dir"], cwd=cwd)[0] == 0
 
 
-def _worktree_is_dirty(worktree) -> bool:
-    """True if the worktree has uncommitted changes (staged, unstaged, or untracked)."""
+def _worktree_is_dirty(worktree, excludes=None) -> bool:
+    """True if the worktree has uncommitted changes (staged, unstaged, or untracked). `excludes`
+    (pathspecs) drops paths that aren't the worker's work — notably the overlaid runtime config
+    (_DIFF_EXCLUDES): _overlay_runtime_config copies in the TRACKED .claude/settings.json, so
+    without excluding it EVERY task worktree reads dirty (GH#110 §2c would then never reclaim one)."""
     if not worktree:
         return False
-    rc, out = _run_git(["status", "--porcelain"], cwd=worktree)
+    args = ["status", "--porcelain"] + (["--", *excludes] if excludes else [])
+    rc, out = _run_git(args, cwd=worktree)
     return rc == 0 and bool(out.strip())
 
 
@@ -2337,11 +2350,43 @@ def _parse_rate_limit_reset(log_path) -> float:
 
 def _saved_ref(w, checkpoint_sha, diff) -> dict:
     """GH#110: the durable pointer recorded on a preserved task worker — where its work lives so a
-    human (and the next wake) can find it. Additive; no UUIDs/SHAs leak into human-facing text."""
-    return {"branch": w.get("branch"), "worktree": w.get("worktree"),
+    human (and the next wake) can find it. Additive; no UUIDs/SHAs leak into human-facing text.
+    `has_commits` reflects the BRANCH (not just this reap's checkpoint) so a worker that committed
+    on an earlier tick but left a clean tree now is still recorded as having committed work."""
+    branch = w.get("branch")
+    return {"branch": branch, "worktree": w.get("worktree"),
             "checkpoint_sha": checkpoint_sha,
-            "has_commits": bool(checkpoint_sha),
+            "has_commits": bool(checkpoint_sha) or _branch_commit_count(w.get("base_cwd"), branch) > 0,
             "patch_captured": bool((diff or "").strip())}
+
+
+def _saved_human_line(base_cwd, branch, sha) -> str:
+    """GH#110: the plain-language 'where the work is' line for a preserved task worker (no UUIDs,
+    no long SHAs — just the short checkpoint id). Distinguishes a checkpoint committed THIS reap,
+    work the worker committed EARLIER in the run (branch already has commits, nothing new to commit
+    now — PR #121 review note a: the old wording called this 'uncommitted', which was misleading),
+    and a purely-uncommitted preserved tree."""
+    if sha:
+        return f"work saved on branch {branch} (checkpoint {sha})"
+    if _branch_commit_count(base_cwd, branch) > 0:
+        return f"work saved on branch {branch} (committed on the branch, preserved)"
+    return f"work saved on branch {branch} (uncommitted, preserved)"
+
+
+def _reclaim_task_worktree(base_cwd, worktree, branch) -> str:
+    """GH#110 §2c: safe-teardown for a TERMINAL task's durable worktree. Unlike the resident
+    _safe_teardown_worktree, 'dirty' here EXCLUDES the overlaid runtime config (_DIFF_EXCLUDES) —
+    _overlay_runtime_config copies in the TRACKED .claude/settings.json, so a plain dirty-check
+    would read EVERY task worktree as dirty and never reclaim one. Removes only when there is no
+    un-preserved WORKER work: committed work stays on the branch (kept by _teardown_worktree when
+    the branch has commits — which is exactly the open-PR case), and a genuinely dirty tree is
+    PRESERVED. Returns 'removed' | 'preserved-dirty' | 'noop'."""
+    if not worktree:
+        return "noop"
+    if _worktree_is_dirty(worktree, excludes=_DIFF_EXCLUDES):
+        return "preserved-dirty"
+    _teardown_worktree(base_cwd, worktree, branch)
+    return "removed"
 
 
 def _record_task_saved_ref(api_base, w, saved_ref, human_line) -> None:
@@ -2485,14 +2530,32 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
                                          runtime=ctx.get("model_runtime"),
                                          log_path=log_path)
     if not (sent and newproc is not None):
-        # Respawn failed to spawn — don't strand the agent holding a worktree + lease forever.
-        _teardown_worktree(base_cwd, worktree, branch)
+        # Respawn failed to spawn — release the lease so the agent isn't stranded. GH#110 (PR #121
+        # review, BLOCKER 1): a DURABLE task worktree must be PRESERVED here, NOT force-removed —
+        # the graceful checkpoint above already snapshotted the work, so tearing it down would
+        # discard exactly the uncommitted build we exist to keep (Andrew's scenario, on the
+        # long-build path most likely to cross the cap). Checkpoint-commit + record the saved ref
+        # + synthesize the continuity digest (the clean-exit success shape); only a disposable
+        # ephemeral worktree is torn down. The cursor stays WITHHELD (no delivered_ts) so a later
+        # wake retries from the preserved state.
+        is_task_wt = bool(w.get("task_worktree"))
+        if is_task_wt:
+            t_id = ctx.get("task_id")
+            sha = _checkpoint_task_worktree(base_cwd, worktree, branch, t_id, w.get("run_id"))
+            if sha or (diff or "").strip():
+                saved = _saved_ref(w, sha, diff)
+                human = _saved_human_line(base_cwd, branch, sha)
+                _record_task_saved_ref(api_base, w, saved, human)
+                _synthesize_task_digest(api_base, aid, t_id, saved, w.get("started_ts"), human)
+        else:
+            _teardown_worktree(base_cwd, worktree, branch)
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
                    {"kind": "worker_checkpoint_respawn_failed", "release_lease": True})
         live_workers.pop(aid, None)
         if not quiet:
             print(f"[notifier] checkpoint-respawn for {aid} FAILED to spawn a fresh worker — "
-                  f"worktree torn down + lease released")
+                  f"{'task worktree preserved' if is_task_wt else 'worktree torn down'} + "
+                  f"lease released")
         return
 
     run = _post_json(f"{api_base}/api/agents/{aid}/runs",
@@ -2508,6 +2571,15 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         "last_size": 0, "last_progress_ts": now,
         "run_id": (run or {}).get("run_id"), "log_path": log_path,
         "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
+        # GH#110 (PR #121 review, BLOCKER 1): a checkpoint-respawned TASK worker MUST stay a task
+        # worker across the swap. Without these keys the reaper reads task_worktree=False on the
+        # respawned worker's clean exit and _teardown_worktree FORCE-REMOVES the durable task
+        # worktree (Andrew's data-loss scenario), skips the checkpoint/saved_ref/digest, and drops
+        # the withheld cursor (pending_ack_ts) so drained events redeliver. Carry them through.
+        "task_worktree": bool(w.get("task_worktree")),
+        "pending_ack_ts": w.get("pending_ack_ts"),
+        "started_ts": w.get("started_ts"),
+        "agent_id": w.get("agent_id") or aid,
         "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
         "cap": cap, "respawns": n, "respawn_ctx": ctx}
     # Non-releasing ack: keep the single-flight lease (the new worker continues under it) but
@@ -2574,7 +2646,12 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                 # GH#110: PRESERVE the task worktree (never teardown), record the run as
                 # rate_limited/failed, and DON'T advance the wake cursor — the events stay pending
                 # so the next wake retries from the preserved state — bounded by FAILED_DRAIN_MAX.
-                _finish_run(api_base, w.get("run_id"), status, proc.returncode, w.get("log_path"), diff)
+                # PR #121 review note (b): tag the run with WHY it drained non-successfully so the
+                # feed/meter shows a structured cause (rate_limited vs failed), not a bare status.
+                _finish_run(api_base, w.get("run_id"), status, proc.returncode, w.get("log_path"),
+                            diff, kill_reason=json.dumps({"run_id": str(w.get("run_id")),
+                                                          "agent_id": aid, "cause": status,
+                                                          "task_id": task_id}))
                 key = (aid, task_id)
                 failed_drains[key] = failed_drains.get(key, 0) + 1
                 n = failed_drains[key]
@@ -2620,8 +2697,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                 failed_drains.pop((aid, task_id), None)
                 if sha or (diff or "").strip():
                     saved = _saved_ref(w, sha, diff)
-                    human = (f"work saved on branch {w.get('branch')}"
-                             + (f" (checkpoint {sha})" if sha else " (uncommitted, preserved)"))
+                    human = _saved_human_line(w.get("base_cwd"), w.get("branch"), sha)
                     _record_task_saved_ref(api_base, w, saved, human)
                     _synthesize_task_digest(api_base, aid, task_id, saved,
                                             w.get("started_ts"), human)
@@ -2723,8 +2799,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                 failed_drains.pop((aid, task_id), None)
                 if sha or (diff or "").strip():
                     saved = _saved_ref(w, sha, diff)
-                    human = (f"work saved on branch {w.get('branch')}"
-                             + (f" (checkpoint {sha})" if sha else " (uncommitted, preserved)"))
+                    human = _saved_human_line(w.get("base_cwd"), w.get("branch"), sha)
                     _record_task_saved_ref(api_base, w, saved, human)
                     _synthesize_task_digest(api_base, aid, task_id, saved,
                                             w.get("started_ts"), human)
@@ -2904,6 +2979,83 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
                   f"({'finished orphans, kept lease (live sibling)' if live_sibling else 'released lease'}) "
                   f"(#342)")
     return reaped
+
+
+# GH#110 §2c: a task's terminal states. A durable per-(agent+task) worktree is preserved across
+# wakes precisely so a worker resumes prior state; once the task reaches one of these, nothing will
+# resume it, so the worktree/branch must be reclaimed (else orcha/task-* trees accumulate forever).
+# `verified` collapses to `completed` in this schema (POST /verify approve → status='completed'),
+# so the two stored terminal statuses are completed + cancelled.
+_TERMINAL_TASK_STATES = ("completed", "cancelled")
+
+
+def reap_terminal_task_worktrees(api_base: str, cid: str, base_cwd: Optional[str],
+                                 live_workers: dict, swept_tasks: set, quiet: bool,
+                                 failed_drains: Optional[dict] = None) -> int:
+    """GH#110 §2c: reclaim a durable per-(agent+task) worktree once its task is TERMINAL.
+
+    The clean-exit/rate-limit paths PRESERVE a task worktree so the next same-(agent+task) wake
+    resumes prior state. Nothing tears it down while the task is live — correct. But once the task
+    is completed/cancelled, nothing will ever resume it, so without this sweep every `orcha/task-*`
+    worktree + branch would live forever (the exact "teardown half doesn't exist" gap PR #121's
+    first review caught). CONSERVATIVE by construction — it never risks losing work:
+      * skips a worktree still tracked in `live_workers` (an in-flight worker still holds it);
+      * PRESERVES a DIRTY tree (uncommitted work is never discarded — _reclaim_task_worktree
+        removes only a worktree that is CLEAN after excluding the overlaid runtime config);
+      * deletes the branch ONLY when it has no commits beyond origin/main (via _teardown_worktree's
+        has-commits guard) — a committed / open-PR branch is KEPT, since a branch with an open PR
+        necessarily carries commits beyond main, so the has-commits guard already means "no open
+        PR captured the work" without shelling out to `gh`.
+    `swept_tasks` is a DAEMON-SCOPE set so each terminal task is processed at most once (a daemon
+    restart re-scans, but a safe_teardown of an already-gone worktree is a cheap noop). Reads the
+    run rows (§2d recorded worktree/branch/base_cwd there) to map a task → its worktree without
+    reversing the on-disk slug. Best-effort: any error is swallowed so cleanup never takes down the
+    daemon loop. Returns the number of worktrees removed this pass."""
+    if not base_cwd or not _is_git_repo(base_cwd):
+        return 0
+    live_wts = {w.get("worktree") for w in live_workers.values() if w.get("worktree")}
+    removed = 0
+    for state in _TERMINAL_TASK_STATES:
+        data = _get_json(f"{api_base}/api/containers/{cid}/tasks?status={state}&limit=100") or {}
+        for t in data.get("tasks", []):
+            tid = t.get("id")
+            if not tid or tid in swept_tasks:
+                continue
+            runs = _get_json(f"{api_base}/api/tasks/{tid}/runs") or {}
+            seen: set = set()
+            defer_sweep = False   # a live worktree or a preserved-dirty tree → retry on a later pass
+            for r in runs.get("runs", []):
+                wt, br = r.get("worktree"), r.get("branch")
+                # only DURABLE per-task worktrees (orcha/task-*), never a disposable ephemeral one
+                if not wt or not br or not str(br).startswith("orcha/task-") or wt in seen:
+                    continue
+                seen.add(wt)
+                if wt in live_wts:
+                    defer_sweep = True         # an active worker still holds it — reclaim once it exits
+                    continue
+                try:
+                    outcome = _reclaim_task_worktree(r.get("base_cwd") or base_cwd, wt, br)
+                except Exception:
+                    outcome = "preserved-dirty"   # be conservative on any error — don't mark swept
+                if outcome == "removed":
+                    removed += 1
+                    if not quiet:
+                        print(f"[notifier] reclaimed durable task worktree {wt} (branch {br}) — "
+                              f"task terminal ({state}), clean tree")
+                elif outcome == "preserved-dirty":
+                    defer_sweep = True
+                    if not quiet:
+                        print(f"[notifier] task {tid} terminal but its worktree {wt} has "
+                              f"uncommitted work — PRESERVED for a human, not reclaimed")
+            # PR #121 review note (c): a terminal task can no longer fail-drain — clear its counter.
+            if failed_drains is not None:
+                for key in [k for k in failed_drains if k[1] == tid]:
+                    failed_drains.pop(key, None)
+            # mark swept only once nothing needs a retry — a live worktree (worker still running) or
+            # a preserved-dirty tree (uncommitted work) stays reclaimable on a subsequent pass.
+            if not defer_sweep:
+                swept_tasks.add(tid)
+    return removed
 
 
 # ISS-29: once a worker has emitted its terminal `result`, the agent loop is DONE — but the
@@ -4929,6 +5081,7 @@ def cmd_notifier(args) -> None:
     # limited agent. Reset on daemon restart (a fresh N / cleared holds), which is acceptable.
     failed_drains: dict = {}       # {(agent_id, task_id): consecutive failed/rate-limited drains}
     agent_hold_until: dict = {}    # {agent_id: epoch-secs until the rate-limit hold-down lifts}
+    swept_tasks: set = set()       # GH#110 §2c: terminal tasks whose durable worktree we reclaimed
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
     try:
@@ -4956,6 +5109,12 @@ def cmd_notifier(args) -> None:
                     r["proc"].pid for r in live_residents.values() if r.get("proc") is not None
                 )
                 reap_orphaned_runs(api_base, cid, live_pids, quiet=args.quiet)
+                # GH#110 §2c: reclaim durable per-(agent+task) worktrees whose task went terminal
+                # (completed/cancelled) so orcha/task-* trees don't accumulate forever — conservative
+                # (never touches a live worktree, preserves any dirty tree, keeps committed/PR
+                # branches). Daemon-scope swept_tasks bounds it to one pass per terminal task.
+                reap_terminal_task_worktrees(api_base, cid, project_cwd, live_workers,
+                                             swept_tasks, args.quiet, failed_drains=failed_drains)
                 # E3: drive warm resident conversation sessions (capture replies, feed new turns,
                 # idle-reap) BEFORE tick() — a live resident holds the embodiment lease, so the
                 # ephemeral scan correctly suppresses a double-spawn for the same agent.

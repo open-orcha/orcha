@@ -171,6 +171,18 @@ GH #110 gives task-wake code workers cross-wake continuity, for **both runtimes*
   `.claude/settings.json`) and **keeps** the worktree. Never auto-pushes, never opens a PR, never
   bypasses review. The worktree/branch is only torn down once the task is
   completed/verified/cancelled or a PR has captured the work.
+- **Terminal-task reclaim.** A tick-time reaper (`reap_terminal_task_worktrees`) sweeps durable
+  `orcha/task-*` worktrees once their task reaches a terminal state (`completed`/`cancelled`;
+  `verified` collapses to `completed` in this schema) — otherwise the preserved trees would
+  accumulate forever. It is conservative by construction: it skips a worktree an in-flight worker
+  still holds, **preserves** any dirty tree (uncommitted work is never discarded, excluding the
+  overlaid runtime config), and deletes the branch **only** when it carries no commits beyond
+  `origin/main` — so a committed branch (necessarily true for any open PR) is always kept. A
+  daemon-scope `swept_tasks` set bounds it to one pass per terminal task, and it clears that task's
+  bounded-redelivery counter (a terminal task can no longer fail-drain). A checkpoint respawn's
+  rebuilt worker now also carries the `task_worktree` flag + withheld cursor across the swap, so a
+  respawned task worker's later clean exit still preserves (never force-removes) its durable
+  worktree.
 - **Reap-time digest synthesis.** Because Codex has no SessionEnd hook, `_synthesize_task_digest`
   posts a minimal continuity digest (`POST /api/agents/{id}/digest`) straight from `reap_workers`
   after a meaningful run — so the next boot resumes from prior state **without** relying on a

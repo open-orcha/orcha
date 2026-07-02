@@ -29,12 +29,19 @@ def _make_repo(tmp_path):
     _git(["config", "user.email", "t@t"], work)
     _git(["config", "user.name", "t"], work)
     (work / "README.md").write_text("hi\n")
+    # Mirror production: .claude/settings.json is TRACKED (overlaid per-worktree by
+    # _overlay_runtime_config), while orcha.json + orcha-tabs are gitignored (absent from a fresh
+    # origin/main checkout). Without a tracked file under .claude, git collapses the whole
+    # untracked dir to a single '?? .claude/' line and the overlay can't be excluded from a
+    # dirty-check — which is exactly the §2c-reaper edge this suite must exercise faithfully.
+    (work / ".gitignore").write_text(".claude/orcha.json\n.claude/orcha-tabs/\n.orcha-worktrees/\n")
+    (work / ".claude").mkdir()
+    (work / ".claude" / "settings.json").write_text('{"hooks": {}}')
     _git(["add", "-A"], work)
     _git(["commit", "-m", "init"], work)
     _git(["remote", "add", "origin", str(origin)], work)
     _git(["push", "-u", "origin", "main"], work)
-    (work / ".claude").mkdir()
-    (work / ".claude" / "orcha.json").write_text('{}')
+    (work / ".claude" / "orcha.json").write_text('{}')   # gitignored runtime config
     return work
 
 
@@ -210,3 +217,142 @@ def test_failed_drain_bound_advances_cursor_after_N_and_clears_on_success(tmp_pa
     assert any("failed to finish" in (b.get("body") or "").lower()
                for u, b in posts if u.endswith("/messages"))        # human-visible failure line
     assert ("agent-X", "flaky") not in fd                           # counter cleared after release
+
+
+# ---------- BLOCKER 1 (PR #121 review): checkpoint-respawn keeps task-worktree protection ----------
+
+def _respawn_worker(work, wt, branch, runtime, *, task_id, pending_ack_ts=42.0):
+    """A tracked worker carrying the respawn_ctx + GH#110 continuity keys _checkpoint_and_respawn
+    reads, mirroring the shape spawn_headless builds."""
+    return {"proc": _ExitedProc(), "run_id": "RUN-A", "log_path": None,
+            "base_cwd": str(work), "worktree": wt, "branch": branch,
+            "task_worktree": True, "pending_ack_ts": pending_ack_ts, "started_ts": 1.0,
+            "agent_id": "agent-X", "cap": 1200, "respawns": 0,
+            "respawn_ctx": {"prompt": "p", "flags": None, "alias": "Andrew", "model": None,
+                            "model_runtime": runtime, "task_id": task_id,
+                            "task_worktree": True, "event": "task_message"}}
+
+
+def test_checkpoint_respawn_preserves_task_worktree_and_cursor(tmp_path, monkeypatch):
+    # Fails on OLD behavior: the rebuilt live_workers[aid] dropped task_worktree/pending_ack_ts, so
+    # the respawned worker's clean exit force-removed the durable worktree (Andrew's vanished APK).
+    work = _make_repo(tmp_path)
+    wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "long-build")
+    (pathlib.Path(wt) / "apk.txt").write_text("android build artifact\n")
+
+    monkeypatch.setattr(notifier, "_kill_worker", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wtree, **k: "diff")
+    new_proc = _ExitedProc(pid=1234)
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (True, "cmd", new_proc))
+
+    posts = []
+    _wire(monkeypatch, posts)
+    live = {"agent-X": _respawn_worker(work, wt, branch, notifier.RUNTIME_CLAUDE, task_id="long-build")}
+    notifier._checkpoint_and_respawn("http://x", "agent-X", live["agent-X"], live, quiet=True)
+
+    rebuilt = live["agent-X"]                                        # the respawned worker
+    assert rebuilt["task_worktree"] is True                         # STILL a task worker (carried through)
+    assert rebuilt["pending_ack_ts"] == 42.0                        # withheld cursor carried through
+    assert rebuilt["started_ts"] == 1.0 and rebuilt["agent_id"] == "agent-X"
+
+    posts2 = []
+    _wire(monkeypatch, posts2)
+    notifier.reap_workers("http://x", live, quiet=True, failed_drains={}, agent_hold_until={})
+    assert pathlib.Path(wt).is_dir()                                # NOT force-removed
+    assert (pathlib.Path(wt) / "apk.txt").read_text() == "android build artifact\n"
+    rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
+    assert out.strip() == "1"                                       # checkpoint-committed
+    ack = next(b for u, b in posts2 if u.endswith("/wake-ack"))
+    assert ack.get("delivered_ts") == 42.0                          # stashed cursor advanced on success
+
+
+def test_checkpoint_respawn_spawn_failure_preserves_task_worktree(tmp_path, monkeypatch):
+    # The respawn-FAILURE branch must PRESERVE (not force-teardown) a durable task worktree.
+    work = _make_repo(tmp_path)
+    wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "rf-task")
+    (pathlib.Path(wt) / "wip.txt").write_text("in-flight\n")
+
+    monkeypatch.setattr(notifier, "_kill_worker", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wtree, **k: "diff")
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (False, "cmd", None))
+
+    posts = []
+    _wire(monkeypatch, posts)
+    live = {"agent-X": _respawn_worker(work, wt, branch, notifier.RUNTIME_CLAUDE, task_id="rf-task")}
+    notifier._checkpoint_and_respawn("http://x", "agent-X", live["agent-X"], live, quiet=True)
+
+    assert "agent-X" not in live                                    # worker released
+    assert pathlib.Path(wt).is_dir()                                # task worktree PRESERVED
+    rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
+    assert out.strip() == "1"                                       # checkpoint-committed before release
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert "delivered_ts" not in ack                               # cursor withheld → retry next wake
+    assert ack["kind"] == "worker_checkpoint_respawn_failed"
+    assert any(u.endswith("/messages") for u, _ in posts)          # saved-ref surfaced to the feed
+
+
+# ---------- BLOCKER 2 (PR #121 review): §2c terminal-task worktree reaper ----------
+
+def test_terminal_task_worktrees_reclaimed_conservatively(tmp_path, monkeypatch):
+    # Fails on OLD behavior: no §2c reaper existed, so durable orcha/task-* worktrees accumulated
+    # forever after a task went terminal.
+    work = _make_repo(tmp_path)
+    wt_clean, br_clean = notifier._provision_task_worktree(str(work), "Andrew", "done-clean")
+    wt_dirty, br_dirty = notifier._provision_task_worktree(str(work), "Andrew", "done-dirty")
+    (pathlib.Path(wt_dirty) / "uncommitted.txt").write_text("not saved\n")   # real worker work → keep
+    wt_live, br_live = notifier._provision_task_worktree(str(work), "Ethan", "still-live")
+
+    def fake_get(url, **k):
+        if "/runs" in url:
+            if "TC/runs" in url:
+                return {"runs": [{"worktree": wt_clean, "branch": br_clean, "base_cwd": str(work)}]}
+            if "TD/runs" in url:
+                return {"runs": [{"worktree": wt_dirty, "branch": br_dirty, "base_cwd": str(work)}]}
+            if "TL/runs" in url:
+                return {"runs": [{"worktree": wt_live, "branch": br_live, "base_cwd": str(work)}]}
+            return {"runs": []}
+        if "status=completed" in url:
+            return {"tasks": [{"id": "TC"}, {"id": "TD"}, {"id": "TL"}]}
+        return {"tasks": []}                                        # cancelled → none
+    monkeypatch.setattr(notifier, "_get_json", fake_get)
+
+    live_workers = {"agent-Ethan": {"worktree": wt_live}}           # a live worker still holds TL's tree
+    swept, fd = set(), {("agent-X", "TC"): 3}
+    removed = notifier.reap_terminal_task_worktrees("http://x", "CID", str(work), live_workers,
+                                                    swept, quiet=True, failed_drains=fd)
+
+    assert removed == 1                                             # only the clean, non-live worktree
+    assert not pathlib.Path(wt_clean).exists()                     # reclaimed
+    rc, _ = notifier._run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{br_clean}"], cwd=work)
+    assert rc != 0                                                  # no-commit branch deleted
+    assert pathlib.Path(wt_dirty).is_dir()                         # dirty tree PRESERVED (work never lost)
+    assert (pathlib.Path(wt_dirty) / "uncommitted.txt").exists()
+    assert pathlib.Path(wt_live).is_dir()                          # live worktree left alone
+    assert ("agent-X", "TC") not in fd                             # note (c): fail-drain counter cleared
+    assert "TC" in swept                                           # clean → swept once
+    assert "TD" not in swept and "TL" not in swept                 # dirty + live → deferred for retry
+
+
+def test_terminal_task_worktree_with_commits_keeps_branch(tmp_path, monkeypatch):
+    # A branch that carries commits beyond origin/main (the open-PR case) must be KEPT when its
+    # worktree is reclaimed — never delete work a PR was cut from.
+    work = _make_repo(tmp_path)
+    wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "pr-task")
+    (pathlib.Path(wt) / "feature.py").write_text("shipped\n")
+    notifier._checkpoint_task_worktree(str(work), wt, branch, "pr-task", "RUN-1")   # commit, clean tree
+
+    def fake_get(url, **k):
+        if "/runs" in url:
+            return {"runs": [{"worktree": wt, "branch": branch, "base_cwd": str(work)}]}
+        if "status=completed" in url:
+            return {"tasks": [{"id": "TP"}]}
+        return {"tasks": []}
+    monkeypatch.setattr(notifier, "_get_json", fake_get)
+
+    removed = notifier.reap_terminal_task_worktrees("http://x", "CID", str(work), {}, set(), quiet=True)
+    assert removed == 1                                            # clean tree → worktree removed
+    assert not pathlib.Path(wt).exists()
+    rc, _ = notifier._run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=work)
+    assert rc == 0                                                 # branch with commits KEPT (PR-safe)
