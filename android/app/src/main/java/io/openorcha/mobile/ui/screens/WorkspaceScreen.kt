@@ -49,6 +49,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +69,10 @@ import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.domain.ExpiryChip
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.domain.OrchaSelectors
+import io.openorcha.mobile.domain.RequestChip
+import io.openorcha.mobile.domain.RequestSort
+import io.openorcha.mobile.domain.RequestsView
+import io.openorcha.mobile.domain.SortKey
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.WorkspaceTab
 import io.openorcha.mobile.ui.components.Avatar
@@ -83,6 +88,7 @@ import io.openorcha.mobile.ui.components.PrimaryButton
 import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.Skeleton
 import io.openorcha.mobile.ui.components.StateLayout
+import io.openorcha.mobile.ui.components.RequestStatusPill
 import io.openorcha.mobile.ui.components.StatusDomain
 import io.openorcha.mobile.ui.components.StatusPill
 import io.openorcha.mobile.ui.components.StatTile
@@ -206,7 +212,7 @@ fun WorkspaceScreen(
                         onPlanSheet = { planSheetTask = it }, onVerifySheet = { verifySheetTask = it },
                     )
                     WorkspaceTab.Tasks -> TasksTab(snapshot.tasks, snapshot.agents, onOpenTask)
-                    WorkspaceTab.Requests -> RequestsTab(requestGroups, snapshot.agents, humanId, onOpenRequest)
+                    WorkspaceTab.Requests -> RequestsTab(snapshot.requests, snapshot.agents, humanId, onOpenRequest)
                     WorkspaceTab.Agents -> AgentsTab(snapshot.agents, onOpenAgent)
                 }
                 }
@@ -339,17 +345,19 @@ private fun HomeTab(
             }
         }
         items(requestsForMe, key = { "req-${it.id}" }) { req ->
+            // server rows never carry requester_alias — resolve from snapshot.agents (web data.js parity)
+            val fromAlias = RequestsView.aliasFor(snapshot.agents, req.requesterId) ?: req.requesterAlias
             OrchaCard(onClick = { onOpenRequest(req.id) }) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("REQUEST FOR YOU", style = MaterialTheme.typography.labelMedium, color = p.info)
                     Spacer(Modifier.weight(1f))
-                    StatusPill(req.status, StatusDomain.Request)
+                    RequestStatusPill(req.status, escalated = RequestsView.isEscalatedOpen(req, snapshot.agents))
                 }
                 Text("“${req.payload}”", style = MaterialTheme.typography.titleSmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Avatar(req.requesterAlias ?: "?", human = false, size = AvatarSize.Sm)
+                    Avatar(fromAlias ?: "?", human = RequestsView.kindFor(snapshot.agents, req.requesterId) == "human", size = AvatarSize.Sm)
                     Text(
-                        "${req.requesterAlias ?: "agent"} → you${MobileUx.agoLabel(req.createdAt)?.let { " · $it" } ?: ""}",
+                        "${fromAlias ?: "agent"} → you${MobileUx.agoLabel(req.createdAt)?.let { " · $it" } ?: ""}",
                         style = MaterialTheme.typography.bodyMedium, color = p.text2,
                     )
                     Spacer(Modifier.weight(1f))
@@ -420,7 +428,10 @@ private fun TasksTab(tasks: List<TaskDto>, agents: List<AgentDto>, onOpenTask: (
     var filter by rememberSaveable { mutableStateOf("All") }
     var query by rememberSaveable { mutableStateOf("") }
     var expandedTerminals by rememberSaveable { mutableStateOf(false) }
+    // issue 4: web-parity render cap (tasks.html: 10/page + "Load more"); resets on filter change
+    var shown by rememberSaveable { mutableStateOf(TASKS_PAGE) }
     val aiAgents = agents.filter { it.kind == "ai" }
+    LaunchedEffect(filter, query) { shown = TASKS_PAGE }
 
     val scoped = when (filter) {
         "All" -> tasks
@@ -464,6 +475,12 @@ private fun TasksTab(tasks: List<TaskDto>, agents: List<AgentDto>, onOpenTask: (
             }
         }
         val groups = filtered.groupBy { it.status }.toList().sortedBy { MobileUx.taskGroupRank(it.first) }
+        // issue 4: the render cap spans the whole tab (web tasks.html renders one capped
+        // list); group headers keep their true counts so nothing hides silently.
+        val visibleTotal = groups.sumOf { (status, rows) ->
+            if (!MobileUx.isTerminalGroup(status) || expandedTerminals) rows.size else 0
+        }
+        var remaining = shown
         groups.forEach { (status, rows) ->
             val terminal = MobileUx.isTerminalGroup(status)
             item(key = "h-$status") {
@@ -476,9 +493,16 @@ private fun TasksTab(tasks: List<TaskDto>, agents: List<AgentDto>, onOpenTask: (
                 })
             }
             if (!terminal || expandedTerminals) {
-                items(rows.sortedWith(compareBy<TaskDto> { it.priority ?: 100 }.thenByDescending { it.createdAt ?: "" }), key = { it.id }) { task ->
-                    TaskRow(task, onOpenTask)
-                }
+                val page = rows
+                    .sortedWith(compareBy<TaskDto> { it.priority ?: 100 }.thenByDescending { it.createdAt ?: "" })
+                    .take(remaining.coerceAtLeast(0))
+                remaining -= page.size
+                items(page, key = { it.id }) { task -> TaskRow(task, onOpenTask) }
+            }
+        }
+        if (visibleTotal > shown) {
+            item(key = "tasks-load-more") {
+                LoadMoreRow(shown, visibleTotal) { shown += TASKS_PAGE }
             }
         }
         if (filtered.isEmpty()) item { OrchaCard { Text("No tasks here yet. Create one with the plus button.", color = p.muted) } }
@@ -522,72 +546,133 @@ fun TaskRow(task: TaskDto, onOpenTask: (String) -> Unit) {
     }
 }
 
-/* ---------- Requests tab (flow 07 R1): the four binding groups ---------- */
+/* ---------- Requests tab: ALL container requests + web-parity chips & sort ---------- */
+
+/** Web page sizes (issue 4): tasks.html renders 10/page, requests.html 15/page. */
+private const val TASKS_PAGE = 10
+private const val REQUESTS_PAGE = 15
 
 @Composable
 private fun RequestsTab(
-    groups: io.openorcha.mobile.domain.RequestGroups,
+    requests: List<RequestDto>,
     agents: List<AgentDto>,
     humanId: String?,
     onOpenRequest: (String) -> Unit,
 ) {
     val p = Orcha.palette
-    var showDone by rememberSaveable { mutableStateOf(false) }
+    // issue 1: the web requests page's five single-select chips + Time|Priority sort
+    // (requests.html:88-148, app.js:1600-1673), client-side over the snapshot like web.
+    var chipName by rememberSaveable { mutableStateOf(RequestChip.All.name) }
+    var sortKeyName by rememberSaveable { mutableStateOf(SortKey.Time.name) }
+    var sortAsc by rememberSaveable { mutableStateOf(false) }
+    // issue 4: web-parity render cap (requests.html: 15/page + "Load more")
+    var shown by rememberSaveable { mutableStateOf(REQUESTS_PAGE) }
+    val chip = RequestChip.valueOf(chipName)
+    val sortKey = SortKey.valueOf(sortKeyName)
+    LaunchedEffect(chipName, sortKeyName, sortAsc) { shown = REQUESTS_PAGE }
+
+    val filtered = requests.filter { RequestsView.matchesChip(it, chip, agents) }
+    val sorted = RequestsView.sort(filtered, RequestSort(sortKey, sortAsc))
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        fun androidx.compose.foundation.lazy.LazyListScope.group(title: String, rows: List<RequestDto>) {
-            if (rows.isEmpty()) return
-            item(key = "h-$title") { SectionH(title, "${rows.size}") }
-            items(rows, key = { it.id }) { req -> RequestRow(req, humanId, onOpenRequest) }
-        }
-        group("Needs your answer", groups.needsYourAnswer)
-        group("Waiting on others", groups.waitingOnOthers)
-        group("Answered — act on it", groups.answeredActOnIt)
-        if (groups.done.isNotEmpty()) {
-            item(key = "h-done") {
-                SectionH("Done", "${groups.done.size}", trailing = {
-                    Text(
-                        if (showDone) "hide" else "show",
-                        style = MaterialTheme.typography.labelMedium, color = p.accent,
-                        modifier = Modifier.clickable { showDone = !showDone },
-                    )
-                })
+        item(key = "req-chips") {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(RequestChip.entries, key = { it.name }) { c ->
+                    FilterChipText(c.label, on = c == chip) { chipName = c.name }
+                }
             }
-            if (showDone) items(groups.done, key = { it.id }) { req -> RequestRow(req, humanId, onOpenRequest) }
         }
-        if (groups.needsYourAnswer.isEmpty() && groups.waitingOnOthers.isEmpty() && groups.answeredActOnIt.isEmpty() && groups.done.isEmpty()) {
-            item { OrchaCard { Text("You're all caught up — no requests involve you.", color = p.muted) } }
+        item(key = "req-sort") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Sort", style = MaterialTheme.typography.labelMedium, color = p.faint)
+                FilterChipText("Time", on = sortKey == SortKey.Time) { sortKeyName = SortKey.Time.name }
+                FilterChipText("Priority", on = sortKey == SortKey.Priority) { sortKeyName = SortKey.Priority.name }
+                Spacer(Modifier.weight(1f))
+                FilterChipText(if (sortAsc) "↑ asc" else "↓ desc", on = true) { sortAsc = !sortAsc }
+            }
         }
+        items(sorted.take(shown), key = { it.id }) { req -> RequestRow(req, agents, humanId, onOpenRequest) }
+        if (sorted.size > shown) {
+            item(key = "req-load-more") { LoadMoreRow(shown, sorted.size) { shown += REQUESTS_PAGE } }
+        }
+        if (sorted.isEmpty()) {
+            item {
+                OrchaCard {
+                    Text(
+                        if (requests.isEmpty()) "No requests in this container yet." else "Nothing matches this filter.",
+                        color = p.muted,
+                    )
+                }
+            }
+        }
+        item { Spacer(Modifier.height(72.dp)) }
+    }
+}
+
+/** Small single-select chip (shared by the requests chips + sort control). */
+@Composable
+private fun FilterChipText(label: String, on: Boolean, onClick: () -> Unit) {
+    val p = Orcha.palette
+    Text(
+        label,
+        modifier = Modifier
+            .background(if (on) p.accentSoft else p.surface2, RoundedCornerShape(999.dp))
+            .border(BorderStroke(1.dp, if (on) p.accentLine else p.border), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W600),
+        color = if (on) p.accent else p.muted,
+    )
+}
+
+/** Web "Load more · N of M" row (tasks.html:272 / requests.html:148). */
+@Composable
+private fun LoadMoreRow(shownCount: Int, total: Int, onMore: () -> Unit) {
+    val p = Orcha.palette
+    OrchaCard(onClick = onMore) {
+        Text(
+            "Load more · showing $shownCount of $total",
+            style = MaterialTheme.typography.labelLarge,
+            color = p.accent,
+            modifier = Modifier.fillMaxWidth(),
+            fontWeight = FontWeight.W700,
+        )
     }
 }
 
 @Composable
-fun RequestRow(req: RequestDto, humanId: String?, onOpenRequest: (String) -> Unit) {
+fun RequestRow(req: RequestDto, agents: List<AgentDto>, humanId: String?, onOpenRequest: (String) -> Unit) {
     val p = Orcha.palette
     val expiry = MobileUx.expiryChip(req.expiresAt)
+    // server rows never carry aliases — resolve from snapshot.agents (web data.js:118-119)
+    val fromAlias = RequestsView.aliasFor(agents, req.requesterId) ?: req.requesterAlias
+    val toAlias = RequestsView.aliasFor(agents, req.targetId) ?: req.targetAlias
+    val fromHuman = req.requesterId == humanId || RequestsView.kindFor(agents, req.requesterId) == "human"
+    val toHuman = req.targetId == null || req.targetId == humanId || RequestsView.kindFor(agents, req.targetId) == "human"
     OrchaCard(
         modifier = Modifier.alpha(if (expiry == ExpiryChip.Expired) 0.65f else 1f),
         onClick = { onOpenRequest(req.id) },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Avatar(req.requesterAlias ?: "?", human = req.requesterId == humanId, size = AvatarSize.Sm)
+            Avatar(fromAlias ?: "?", human = fromHuman, size = AvatarSize.Sm)
             Text("→", color = p.faint)
             Avatar(
-                if (req.targetId == null) "H" else req.targetAlias ?: "?",
-                human = req.targetId == humanId || req.targetId == null,
+                if (req.targetId == null) "H" else toAlias ?: "?",
+                human = toHuman,
                 size = AvatarSize.Sm,
             )
             Text(
-                "${if (req.requesterId == humanId) "you" else req.requesterAlias ?: "agent"} → ${if (req.targetId == humanId || req.targetId == null) "you" else req.targetAlias ?: "agent"}",
+                "${if (req.requesterId == humanId) "you" else fromAlias ?: "agent"} → ${if (req.targetId == humanId || req.targetId == null) "you" else toAlias ?: "agent"}",
                 style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
         Text(req.payload, style = MaterialTheme.typography.bodyMedium, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatusPill(req.status, StatusDomain.Request)
+            RequestStatusPill(req.status, escalated = RequestsView.isEscalatedOpen(req, agents))
             MetaTag(req.type)
             if (req.chainDepth > 0) MetaTag("↳ chain")
             when (expiry) {

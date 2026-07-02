@@ -26,6 +26,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -486,4 +490,74 @@ fun LogLine(line: String) {
         lineHeight = 17.sp,
         color = logLineColor(line),
     )
+}
+
+/* ---------- worker-run feed rows (web .feed .row-* parity, no raw JSON) ---------- */
+
+@Composable
+private fun feedTint(type: String): Color {
+    val p = Orcha.palette
+    return when (type) {
+        "boot" -> p.faint
+        "think" -> p.muted
+        "tool" -> p.accent
+        "result" -> p.text2
+        "subagent" -> p.info
+        "decision" -> p.violet
+        "error" -> p.danger
+        "done" -> p.ok
+        else -> p.text // narrate
+    }
+}
+
+/**
+ * One classified run-feed row (A2): label tag + body text; narration reads as plain
+ * prose, everything else is label-tinted; `detail` starts collapsed and expands on tap
+ * (the web's <details> affordance).
+ */
+@Composable
+fun FeedRow(type: String, label: String, text: String, detail: String? = null) {
+    val p = Orcha.palette
+    var expanded by remember { mutableStateOf(false) }
+    val tint = feedTint(type)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (!detail.isNullOrBlank()) Modifier.clickable { expanded = !expanded } else Modifier)
+            .padding(vertical = 3.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                label.uppercase(),
+                style = MonoSmStyle.copy(fontSize = 9.5.sp, letterSpacing = 0.6.sp),
+                color = tint,
+                fontWeight = FontWeight.W700,
+            )
+            if (!detail.isNullOrBlank()) {
+                Text(if (expanded) "▾" else "▸", color = p.faint, fontSize = 10.sp)
+            }
+        }
+        if (text.isNotBlank()) {
+            Text(
+                text,
+                style = if (type == "narrate") MaterialTheme.typography.bodyMedium
+                else MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily, fontSize = 11.5.sp, lineHeight = 16.sp),
+                color = if (type == "narrate") p.text else tint,
+            )
+        }
+        if (expanded && !detail.isNullOrBlank()) {
+            Text(
+                detail,
+                fontFamily = MonoFontFamily,
+                fontSize = 10.5.sp,
+                lineHeight = 15.sp,
+                color = p.muted,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Orcha.palette.surface2, RoundedCornerShape(8.dp))
+                    .padding(8.dp),
+            )
+        }
+    }
 }

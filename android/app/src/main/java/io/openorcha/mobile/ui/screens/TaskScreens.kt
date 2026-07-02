@@ -3,12 +3,16 @@ package io.openorcha.mobile.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,7 +61,7 @@ import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.Bubble
 import io.openorcha.mobile.ui.components.BubbleKind
 import io.openorcha.mobile.ui.components.DangerTonalButton
-import io.openorcha.mobile.ui.components.LogLine
+import io.openorcha.mobile.ui.components.FeedRow
 import io.openorcha.mobile.ui.components.MetaTag
 import io.openorcha.mobile.ui.components.OrchaCard
 import io.openorcha.mobile.ui.components.OrchaField
@@ -283,13 +287,14 @@ fun RunRow(run: RunDto, onOpenRun: (RunDto) -> Unit) {
 
 /* ---------- flow 05 T8 — the task thread (chat surface + composer) ---------- */
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TaskThreadScreen(
     state: OrchaUiState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSendMessage: (String) -> Unit,
+    onLoadEarlier: () -> Unit,
 ) {
     val p = Orcha.palette
     val task = state.selectedTask
@@ -297,6 +302,13 @@ fun TaskThreadScreen(
     var pendingSend by remember { mutableStateOf<String?>(null) }
     // a send that errored keeps its text as an unsent bubble with a retry chip
     val unsent = if (state.error != null) pendingSend else null
+    val listState = rememberLazyListState()
+    val imeVisible = WindowInsets.isImeVisible
+    // issue 2: keep the newest messages in view when the keyboard opens or a message lands
+    LaunchedEffect(state.taskMessages.size, imeVisible) {
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last >= 0 && (imeVisible || state.taskMessages.isNotEmpty())) listState.animateScrollToItem(last)
+    }
     Scaffold(
         containerColor = p.bg,
         topBar = {
@@ -313,12 +325,30 @@ fun TaskThreadScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+        // issue 2: consumeWindowInsets stops imePadding re-adding the nav-bar inset the
+        // Scaffold padding already applied (with adjustResize, that was the visible gap)
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             LazyColumn(
                 modifier = Modifier.weight(1f),
+                state = listState,
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // issue 4: keyset "Load earlier" — older pages prepend above (web reveal affordance)
+                if (state.threadHasMore) {
+                    item(key = "load-earlier") {
+                        androidx.compose.material3.TextButton(
+                            onClick = onLoadEarlier,
+                            enabled = !state.threadLoadingEarlier,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                if (state.threadLoadingEarlier) "Loading…" else "Load earlier messages",
+                                color = p.accent, fontWeight = FontWeight.W700,
+                            )
+                        }
+                    }
+                }
                 if (state.taskMessages.isEmpty()) {
                     item {
                         OrchaCard {
@@ -411,9 +441,9 @@ fun RunDetailScreen(
             info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
         }
     }
-    LaunchedEffect(state.runLines.size) {
+    LaunchedEffect(state.runFeed.size) {
         // pin-to-bottom only while the user hasn't scrolled up (flow 06 §auto-scroll)
-        if (state.runLines.isNotEmpty() && atBottom) listState.animateScrollToItem(state.runLines.size - 1)
+        if (state.runFeed.isNotEmpty() && atBottom) listState.animateScrollToItem(state.runFeed.size - 1)
     }
     Scaffold(
         containerColor = p.bg,
@@ -451,17 +481,28 @@ fun RunDetailScreen(
                     Banner(kind, "Run ${MobileUx.statusCopy(it.status)}${MobileUx.agoLabel(it.endedAt)?.let { t -> " · $t" } ?: ""}")
                 }
             }
+            state.runStreamNote?.let { Banner(BannerKind.Info, it) }
             OrchaCard(Modifier.weight(1f)) {
-                if (state.runLines.isEmpty()) {
-                    Text(if (state.loading) "Loading stream…" else "No log lines yet.", color = p.muted)
+                if (state.runFeed.isEmpty()) {
+                    Text(
+                        when {
+                            state.loading -> "Loading stream…"
+                            run?.status == "running" -> "Streaming — waiting for the first log line…"
+                            else -> "No log lines yet."
+                        },
+                        color = p.muted,
+                    )
                 } else {
                     androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth()) {
                         LazyColumn(state = listState) {
-                            items(state.runLines.size) { i -> LogLine(state.runLines[i]) }
+                            items(state.runFeed.size) { i ->
+                                val row = state.runFeed[i]
+                                FeedRow(row.type, row.label, row.text, row.detail)
+                            }
                         }
                         if (!atBottom) {
                             androidx.compose.material3.SuggestionChip(
-                                onClick = { scope.launch { listState.animateScrollToItem(state.runLines.size - 1) } },
+                                onClick = { scope.launch { listState.animateScrollToItem(state.runFeed.size - 1) } },
                                 label = { Text("Auto-scroll paused · Jump to latest", style = MaterialTheme.typography.labelMedium) },
                                 modifier = Modifier.align(Alignment.BottomCenter),
                             )
