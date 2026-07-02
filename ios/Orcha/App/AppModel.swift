@@ -71,6 +71,13 @@ final class AppModel {
                 openContainer(id)
             }
         }
+        // Dev/UI-test seam: `-orchaScanPayload <json>` runs a scanned QR payload
+        // through the real pairing path on launch (what the scanner delegate calls).
+        if let idx = ProcessInfo.processInfo.arguments.firstIndex(of: "-orchaScanPayload"),
+           idx + 1 < ProcessInfo.processInfo.arguments.count {
+            let payload = ProcessInfo.processInfo.arguments[idx + 1]
+            Task { await connect(payload) }
+        }
     }
 
     // MARK: theme + store
@@ -103,19 +110,26 @@ final class AppModel {
         error = nil
         defer { connecting = false }
         do {
-            let base = try OrchaServerAddress.normalize(raw)
+            let payload = try OrchaServerAddress.parse(raw)
+            let base = payload.baseUrl
             guard let container = try await api.listContainers(base).containers.first else {
                 error = "No Orcha container was found at this address."
                 return false
             }
             let snap = try await api.snapshot(base, container.id)
-            let human = snap.agents.first { $0.kind == "human" }
+            // Prefer the operator named in the QR (disambiguates multi-human containers);
+            // fall back to the sole human in the snapshot for manual entry. Verify the
+            // paired id is actually a human on this container before trusting it.
+            let humans = snap.agents.filter { $0.kind == "human" }
+            let pairedHuman = payload.humanAgentId.flatMap { id in humans.first { $0.id == id } }
+            let human = pairedHuman ?? (humans.count == 1 ? humans.first : nil)
             let stored = StoredContainer(
                 id: container.id,
                 displayName: container.name,
                 baseUrl: base,
-                humanAgentId: human?.id,
-                humanAlias: human?.alias
+                humanAgentId: human?.id ?? payload.humanAgentId,
+                humanAlias: human?.alias ?? payload.humanAgentAlias,
+                pairingToken: payload.token
             )
             containers = store.upsert(stored)
             selectedContainer = stored

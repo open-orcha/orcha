@@ -8,10 +8,13 @@ struct StoredContainer: Codable, Identifiable, Equatable {
     var baseUrl: String
     var humanAgentId: String?
     var humanAlias: String?
+    /// Short-lived QR pairing token (A2 device-token exchange is a backend follow-up;
+    /// held now so the exchange has it once that ships). Absent for manual entry.
+    var pairingToken: String?
     var lastOpenedAt: Date = .now
 
     enum CodingKeys: String, CodingKey {
-        case id, displayName, baseUrl, humanAgentId, humanAlias, lastOpenedAt
+        case id, displayName, baseUrl, humanAgentId, humanAlias, pairingToken, lastOpenedAt
     }
 }
 
