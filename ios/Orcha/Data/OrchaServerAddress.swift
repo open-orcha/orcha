@@ -20,9 +20,23 @@ enum OrchaServerAddress {
         }
     }
 
-    /// Accepts `host:port`, full http(s) URLs, or an `orcha-pair` JSON payload.
-    static func normalize(_ raw: String) throws -> String {
-        var input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The scanned/pasted `orcha-pair` QR payload (portal
+    /// `GET /api/containers/{cid}/pairing`). The `humanAgentId` disambiguates which
+    /// operator the phone acts as when a container has several humans; `token` is the
+    /// short-lived pairing token (device-token exchange is the A2 follow-up).
+    struct Payload {
+        let baseUrl: String
+        let containerId: String?
+        let humanAgentId: String?
+        let humanAgentAlias: String?
+        let token: String?
+    }
+
+    /// Parse a raw scan/paste into either a plain normalized base URL or a full pairing
+    /// payload. A leading `{` means an `orcha-pair` JSON code; anything else is treated
+    /// as a `host:port` / URL and only its base URL is captured.
+    static func parse(_ raw: String) throws -> Payload {
+        let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { throw AddressError.invalid }
 
         if input.hasPrefix("{") {
@@ -34,9 +48,24 @@ enum OrchaServerAddress {
                 throw AddressError.notPairingCode
             }
             guard let base = obj["baseUrl"] as? String else { throw AddressError.notPairingCode }
-            input = base
+            return Payload(
+                baseUrl: try normalizeBaseURL(base),
+                containerId: obj["containerId"] as? String,
+                humanAgentId: obj["humanAgentId"] as? String,
+                humanAgentAlias: obj["humanAgentAlias"] as? String,
+                token: obj["token"] as? String
+            )
         }
+        return Payload(baseUrl: try normalizeBaseURL(input), containerId: nil, humanAgentId: nil, humanAgentAlias: nil, token: nil)
+    }
 
+    /// Back-compat: just the normalized base URL (host:port / URL / pairing JSON).
+    static func normalize(_ raw: String) throws -> String {
+        try parse(raw).baseUrl
+    }
+
+    private static func normalizeBaseURL(_ raw: String) throws -> String {
+        var input = raw
         if !input.hasPrefix("http://") && !input.hasPrefix("https://") {
             input = "http://" + input
         }

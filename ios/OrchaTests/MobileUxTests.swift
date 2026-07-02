@@ -170,6 +170,40 @@ private let fixedNow = Date(timeIntervalSince1970: 1_751_400_000)
     }
 }
 
+@Suite struct PairingPayloadTests {
+    // The exact QR shape emitted by GET /api/containers/{cid}/pairing on main.
+    private let qr = """
+    {"v":1,"kind":"orcha-pair","baseUrl":"http://192.168.1.24:8001",\
+    "containerId":"c-1","containerName":"demo","humanAgentId":"h-2",\
+    "humanAgentAlias":"Kedar","token":"tok_abc","shortCode":"7Q4F","expiresAt":"2026-07-01T21:40:00Z"}
+    """
+
+    @Test func parsesOrchaPairPayload() throws {
+        let p = try OrchaServerAddress.parse(qr)
+        #expect(p.baseUrl == "http://192.168.1.24:8001")
+        #expect(p.containerId == "c-1")
+        #expect(p.humanAgentId == "h-2")
+        #expect(p.humanAgentAlias == "Kedar")
+        #expect(p.token == "tok_abc")
+    }
+
+    @Test func plainAddressCarriesNoPairingFields() throws {
+        let p = try OrchaServerAddress.parse("192.168.1.24:8001")
+        #expect(p.baseUrl == "http://192.168.1.24:8001")
+        #expect(p.humanAgentId == nil)
+        #expect(p.token == nil)
+    }
+
+    @Test func rejectsForeignQrAndLocalhost() {
+        #expect(throws: OrchaServerAddress.AddressError.self) {
+            _ = try OrchaServerAddress.parse(#"{"kind":"some-other-qr","baseUrl":"x"}"#)
+        }
+        #expect(throws: OrchaServerAddress.AddressError.self) {
+            _ = try OrchaServerAddress.parse("localhost:8001")
+        }
+    }
+}
+
 @Suite struct ExpiryAndDividerTests {
 
     private func iso(_ deltaSeconds: TimeInterval) -> String {
