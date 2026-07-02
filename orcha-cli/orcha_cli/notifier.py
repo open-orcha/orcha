@@ -3559,7 +3559,30 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                                   delivered_ts=delivered_ts,
                                                   release_lease=False))
                 _finish_run(api_base, r["current_run_id"], "exited", 0, r.get("log_path"))
-                if not r.get("session_pinned"):        # pin the session for later --resume
+                # GH#88: if the agent's model was switched (same claude runtime) WHILE this
+                # cold-booted turn was in flight, set_agent_model already NULLed the server-side
+                # session_id so the next boot cold-starts on the new model. Re-pinning the OLD
+                # model's session here would undo that clear and make the switch stick to the old
+                # model — the recycle would then rely solely on the in-memory _RESIDENT_RESUME_FAILED
+                # flag, which is dropped at spawn (so a crash / ISS-72 stop / hard-cap / daemon
+                # restart before the next turn silently warm-resumes the old-model session). Leaving
+                # the server pin NULL keeps the next boot cold BY CONSTRUCTION — the durable signal
+                # is the server clear, not daemon memory. cand is non-None here: the conversation-
+                # ended check above (conv_id in active_ids) guarantees it.
+                model_switched = (
+                    _resident_runtime(r) == RUNTIME_CLAUDE
+                    and cand is not None
+                    and cand.get("model") is not None
+                    and r.get("model") is not None
+                    and cand.get("model") != r.get("model")
+                )
+                if model_switched:
+                    _RESIDENT_RESUME_FAILED.add(conv_id)   # belt-and-suspenders next-boot-cold flag
+                    if not quiet:
+                        print(f"[notifier] resident {r.get('alias')} model switched mid-turn "
+                              f"{r.get('model')}→{cand.get('model')} — captured old reply but "
+                              f"leaving session UNPINNED so the next boot cold-starts (GH#88)")
+                if not r.get("session_pinned") and not model_switched:   # pin the session for later --resume
                     sid = res.get("session_id") or _extract_session_id(r.get("log_path"))
                     if sid:
                         _post_json(f"{api_base}/api/conversations/{conv_id}/session",

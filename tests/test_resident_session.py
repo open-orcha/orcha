@@ -1109,6 +1109,55 @@ def test_service_residents_recycles_before_feeding_after_model_change_capture(mo
     assert old_proc.stdin.closed is True
 
 
+def test_service_residents_does_not_repin_old_session_when_model_switched_mid_turn(monkeypatch, tmp_path):
+    """GH#88 blocker (PR #100 round 1): a resident that COLD-booted (session_pinned=False) finishes a
+    turn just as the agent's model is switched (same claude runtime) — set_agent_model has already
+    NULLed the server session_id so active-conversations reports the NEW model + no session. The
+    capture path must NOT re-pin the OLD-model session id back onto the conversation (doing so would
+    undo the clear and make the switch stick to the old model). The old reply is still captured; the
+    resident then recycles + cold-boots on the new model before the queued turn is fed."""
+    log = tmp_path / "c.ndjson"
+    log.write_text(
+        '{"type":"result","subtype":"success","num_turns":1,'
+        '"session_id":"old-session","result":"old answer"}\n'
+    )
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-sonnet-5", "model_runtime": "claude",
+            "session_id": None, "pending_human": True, "last_turn_seq": 5}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 5, "role": "human", "content": "next on new model"}])
+    old_proc = ResidentProc(pid=1111)
+    new_proc = ResidentProc(pid=2222)
+    killed = []
+    spawned = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc.pid))
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", new_proc))
+    # session_pinned=False → this is the vulnerable cold-boot capture path (the existing race test
+    # defaults session_pinned=True, so its capture pin block never runs and can't catch this).
+    live = {"C1": _idle_resident(tmp_path, proc=old_proc, model="claude-opus-4-8",
+                                 log_path=log, session_id=None, session_pinned=False,
+                                 cold=True, awaiting_result=True, awaiting_since=time.time(),
+                                 current_run_id="RUN-OLD", run_id="RUN-OLD", serviced_seq=3)}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    # old reply IS still captured to the thread...
+    assert any(u.endswith("/conversations/C1/turns")
+               and b["role"] == "agent" and b["content"] == "old answer"
+               for u, b in posts)
+    # ...but the old-model session id is NOT pinned back onto the conversation (the blocker fix).
+    assert not any(u.endswith("/conversations/C1/session") for u, _ in posts)
+    # and the resident recycles + cold-boots on the NEW model before feeding the queued turn.
+    assert killed == [old_proc.pid]
+    assert spawned and spawned[0][1]["model"] == "claude-sonnet-5"
+    assert spawned[0][1]["resume_session_id"] is None
+    assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
+    new_proc.stdin.seek(0)
+    sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
+    assert sent == "next on new model"
+
+
 def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path):
     """#247 B3 (§5.2 warm-zone): an idle warm resident with queued NON-conversation events
     (pending_inbox>0) NO LONGER yields its lease (the A2 yield tore down the warm session, forcing a
