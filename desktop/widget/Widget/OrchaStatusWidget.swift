@@ -94,7 +94,7 @@ extension OrchaStatus {
               alias: "Plum", kind: "ai", status: "working", model: "opus-4-8",
               task: "Foundation layer: migration runner + schema + audit"),
             .init(alias: "Atlas", kind: "ai", status: "awaiting_request", model: "opus-4-8", task: nil),
-            .init(alias: "Crimson", kind: "ai", status: "idle", model: "sonnet-4-6", task: nil),
+            .init(alias: "Crimson", kind: "ai", status: "idle", model: "sonnet-5", task: nil),
           ],
           tasks: .init(inProgress: 1, needsVerification: 1, ready: 2)
         ),
