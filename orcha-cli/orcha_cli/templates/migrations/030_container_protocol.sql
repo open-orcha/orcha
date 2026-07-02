@@ -1,0 +1,14 @@
+-- GH#70: container-level `protocol` — a single free-form working agreement that sets the default
+-- behavioral context for ALL tasks/agents in the container. Mirrors the per-task protocol
+-- (migration 015) but scoped to the whole container, and DELIBERATELY simpler: one free-text
+-- column (not the SPEC-4 JSONB sub-fields), no templating, no inheritance merge.
+--
+-- Precedence (resolved server-side in GET /api/agents/{aid}/protocol): a task-level protocol
+-- OVERRIDES this; the container protocol is the fallback/base served only when the waking agent's
+-- task carries no protocol of its own. Empty (NULL) by default = no constraint, so this is zero
+-- behaviour change until an operator types something in Settings.
+--
+-- Edited via PATCH /api/containers/{cid}/settings/protocol; takes effect on the very next wake
+-- (the notifier loads the protocol FRESH every wake — never cached). ADD-only + nullable: every
+-- existing container keeps NULL. Applied on portal boot by the R1 migration runner (no wipe).
+ALTER TABLE containers ADD COLUMN IF NOT EXISTS protocol TEXT;

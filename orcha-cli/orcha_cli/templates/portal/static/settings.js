@@ -675,6 +675,87 @@
     });
   }
 
+  /* ====================================================================== *
+   *  Workspace protocol (GH#70) — one free-form text area: the container-  *
+   *  wide default working agreement. A task's own protocol overrides it.   *
+   *    GET   .../settings/protocol                 -> {protocol}           *
+   *    PATCH .../settings/protocol {protocol, actor_agent_id}              *
+   *  Human-gated write (mirrors the key/autonomy actions). NULL = unset.   *
+   * ====================================================================== */
+  let PROTO = null;        // last SAVED text ("" when unset) or null until loaded
+  let protoErr = false;    // GET failed → inline retry
+  let protoBusy = false;   // a save is in flight
+
+  function protoUrl() { return "/api/containers/" + encodeURIComponent(CID) + "/settings/protocol"; }
+
+  async function loadProtocol() {
+    if (!CID) return;
+    protoErr = false;
+    const res = await api("GET", protoUrl());
+    if (res.ok && res.body) { PROTO = res.body.protocol || ""; }
+    else { PROTO = null; protoErr = true; }
+    renderProtocol();
+  }
+
+  function protoField() { const el = $("protoInput"); return el ? el.value : ""; }
+  function protoDirty() { return PROTO != null && protoField().trim() !== (PROTO || "").trim(); }
+
+  function syncProto() {
+    const save = $("protoSave");
+    if (save) save.disabled = protoBusy || !protoDirty();
+  }
+
+  function renderProtocol(force) {
+    const host = $("protocolCard");
+    if (!host) return;
+    if (protoErr) {
+      O.patch(host, `<div class="sc-banner err"><div class="bt">${icon("x", "")}<span>Couldn't load the workspace protocol.</span></div><button class="btn sm ghost" id="protoRetry">Retry</button></div>`, force);
+      const rb = $("protoRetry"); if (rb) rb.addEventListener("click", loadProtocol);
+      return;
+    }
+    if (PROTO == null) {
+      O.patch(host, `<div class="sc-banner muted"><div class="bt">${icon("clock", "")}<span>Loading workspace protocol…</span></div></div>`, force);
+      return;
+    }
+    O.patch(host, `
+      <textarea id="protoInput" class="sc-textarea" spellcheck="true"
+        placeholder="e.g. Always open a draft PR and tag @reviewer before merging. Prefer small, focused changes.">${esc(PROTO)}</textarea>
+      <div class="sc-acts">
+        <button class="btn sm" id="protoSave" disabled>${icon("check", "")}Save protocol</button>
+      </div>
+      <div class="sc-hint" id="protoHint">${PROTO ? "Applied to every task without its own protocol." : "Empty — no workspace-wide protocol is in effect."}</div>`, force);
+    const input = $("protoInput"), save = $("protoSave");
+    if (input) input.addEventListener("input", syncProto);
+    if (save) save.addEventListener("click", doSaveProtocol);
+    syncProto();
+  }
+
+  // explicit render after a user action; restores the typed draft onto the fresh textarea node.
+  function renderProtoForce(keepDraft) {
+    const draft = keepDraft ? protoField() : null;
+    renderProtocol(true);
+    if (draft != null) { const el = $("protoInput"); if (el) el.value = draft; }
+    syncProto();
+  }
+
+  async function doSaveProtocol() {
+    if (protoBusy || !protoDirty()) return;
+    if (!requireHuman("save")) return;
+    const who = actingHuman();
+    const v = protoField().trim();
+    protoBusy = true; renderProtoForce(true);
+    const res = await api("PATCH", protoUrl(), { protocol: v, actor_agent_id: who && who.id });
+    protoBusy = false;
+    if (res.ok && res.body) {
+      PROTO = res.body.protocol || "";
+      O.toast(v ? "Workspace protocol saved." : "Workspace protocol cleared.", "ok");
+      renderProtoForce(false);
+    } else {
+      O.toast("Couldn't save the protocol (" + res.status + "). Your edits are preserved.", "danger");
+      renderProtoForce(true);
+    }
+  }
+
   /* ---- boot: live shell off the snapshot; key status fetched once ------ */
   let booted = false;
   function render() {
@@ -683,7 +764,7 @@
   }
   window.OrchaData.start(() => {
     render();
-    if (!booted) { booted = true; renderKey(); renderProviderKeys(); renderModels(); }   // paint loading cards once the shell exists
+    if (!booted) { booted = true; renderKey(); renderProviderKeys(); renderModels(); renderProtocol(); }   // paint loading cards once the shell exists
   }, 3000);
 
   (async function init() {
@@ -691,6 +772,7 @@
     loadKey();
     loadProviderKeys();
     loadModels();
+    loadProtocol();
   })();
 
   // expose the pure view-model helpers for node tests
