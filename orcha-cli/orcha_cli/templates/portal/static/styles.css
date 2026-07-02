@@ -339,6 +339,29 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 .acting .lbl { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
 .acting .who { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
 
+/* #103 — notifier-health chip (topbar). Sits next to the autonomy switch; the tone is the whole
+   at-a-glance read: green healthy / amber stale / red offline. When not healthy it's clickable
+   (opens the manual-recovery modal). Tokens all pre-exist in :root. */
+.notif-health { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 650; white-space: nowrap;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); }
+.notif-health svg { width: 14px; height: 14px; }
+.notif-health.ok   { color: var(--ok);     background: var(--ok-soft);     border-color: var(--ok-line); }
+.notif-health.warn { color: var(--warn);   background: var(--warn-soft);   border-color: var(--warn-line); }
+.notif-health.bad  { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.notif-health.actionable { cursor: pointer; }
+.notif-health.actionable:hover { filter: brightness(1.08); }
+.notif-health.bad svg { animation: pulse 1.6s infinite; }
+
+/* #103 — copyable command row (recovery modal + resume warning) */
+.cmd-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.cmd-row code { flex: 1; padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+  background: var(--surface-3); border: 1px solid var(--border); color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; }
+.notif-warn { padding: 11px 13px; border-radius: 10px; font-size: 13px;
+  background: var(--warn-soft); border: 1px solid var(--warn-line); }
+.notif-warn p { margin: 0 0 6px; }
+
 /* icon button (theme toggle etc.) */
 .iconbtn {
   width: 36px; height: 36px; flex: none; display: grid; place-items: center;
