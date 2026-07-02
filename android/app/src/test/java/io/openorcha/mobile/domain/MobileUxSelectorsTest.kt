@@ -158,3 +158,32 @@ class MobileUxSelectorsTest {
         assertEquals(null, MobileUx.agoLabel("not-a-date", now))
     }
 }
+
+class TaskResultShapeTest {
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun resultDecodesFromJsonbObjectShape() {
+        // /done stores tasks.result as JSONB {"result": <text>, "by_agent_id": ...} —
+        // the portal had the same bug ([object Object]); the app must unwrap it.
+        val t = json.decodeFromString(
+            io.openorcha.mobile.data.TaskDto.serializer(),
+            """{"id":"t1","title":"x","result":{"result":"Typed errors implemented.","by_agent_id":"a-1"}}""",
+        )
+        assertEquals("Typed errors implemented.", t.result)
+    }
+
+    @Test
+    fun resultDecodesFromPlainStringAndNull() {
+        val s = json.decodeFromString(
+            io.openorcha.mobile.data.TaskDto.serializer(),
+            """{"id":"t1","title":"x","result":"legacy plain"}""",
+        )
+        assertEquals("legacy plain", s.result)
+        val n = json.decodeFromString(
+            io.openorcha.mobile.data.TaskDto.serializer(),
+            """{"id":"t1","title":"x","result":null}""",
+        )
+        assertEquals(null, n.result)
+    }
+}

@@ -45,7 +45,22 @@ class ContainerStore(context: Context) {
         return next
     }
 
+    /** Rename is LOCAL ONLY (flow 04): edits the phone's display name, never the server. */
+    fun rename(id: String, displayName: String): List<StoredContainer> {
+        val next = load().map { if (it.id == id) it.copy(displayName = displayName) else it }
+        save(next)
+        return next
+    }
+
+    /** Theme setting (foundations §7): Auto (default) / Light / Dark, applied instantly. */
+    fun loadThemeMode(): String = prefs.getString(THEME_KEY, "auto") ?: "auto"
+
+    fun saveThemeMode(mode: String) {
+        prefs.edit().putString(THEME_KEY, mode).apply()
+    }
+
     private companion object {
         const val KEY = "containers"
+        const val THEME_KEY = "theme_mode"
     }
 }

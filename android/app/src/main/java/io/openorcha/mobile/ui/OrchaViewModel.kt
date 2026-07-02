@@ -31,17 +31,29 @@ enum class AppRoute {
     AddContainer,
     Workspace,
     TaskDetail,
+    TaskThread,
     RequestDetail,
     AgentDetail,
     RunDetail,
     Conversation,
     CreateTask,
+    Settings,
 }
 
 enum class WorkspaceTab { Home, Tasks, Requests, Agents }
 
+/** Per-card reachability + glance counts for the Containers home (flow 04 H1). */
+data class ContainerHealth(
+    val state: String,               // live | polling | unreachable | probing
+    val agents: Int = 0,
+    val tasks: Int = 0,
+    val needsYou: Int = 0,
+)
+
 data class OrchaUiState(
     val route: AppRoute = AppRoute.Containers,
+    val themeMode: io.openorcha.mobile.ui.theme.ThemeMode = io.openorcha.mobile.ui.theme.ThemeMode.Auto,
+    val containerHealth: Map<String, ContainerHealth> = emptyMap(),
     val containers: List<StoredContainer> = emptyList(),
     val selectedContainer: StoredContainer? = null,
     val snapshot: ContainerSnapshot? = null,
@@ -70,17 +82,75 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     private val json = Json { ignoreUnknownKeys = true }
     private var pollingJob: Job? = null
 
-    private val _uiState = MutableStateFlow(OrchaUiState(containers = store.load()))
+    private val _uiState = MutableStateFlow(
+        OrchaUiState(
+            containers = store.load(),
+            themeMode = runCatching {
+                io.openorcha.mobile.ui.theme.ThemeMode.valueOf(
+                    store.loadThemeMode().replaceFirstChar { it.uppercase() },
+                )
+            }.getOrDefault(io.openorcha.mobile.ui.theme.ThemeMode.Auto),
+        ),
+    )
     val uiState: StateFlow<OrchaUiState> = _uiState
 
     init {
         val first = _uiState.value.containers.firstOrNull()
-        if (first != null) openContainer(first.id)
+        if (first != null) openContainer(first.id) else probeContainers()
     }
 
     fun showContainers() {
         pollingJob?.cancel()
         _uiState.update { it.copy(route = AppRoute.Containers, error = null, selectedTask = null, selectedRequest = null, selectedAgent = null) }
+        probeContainers()
+    }
+
+    fun showSettings() {
+        _uiState.update { it.copy(route = AppRoute.Settings, error = null) }
+    }
+
+    fun setThemeMode(mode: io.openorcha.mobile.ui.theme.ThemeMode) {
+        store.saveThemeMode(mode.name.lowercase())
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+
+    fun renameContainer(id: String, name: String) {
+        if (name.isBlank()) return
+        val containers = store.rename(id, name.trim())
+        _uiState.update { st ->
+            st.copy(
+                containers = containers,
+                selectedContainer = st.selectedContainer?.let { sel ->
+                    containers.firstOrNull { it.id == sel.id } ?: sel
+                },
+            )
+        }
+    }
+
+    /** Flow 04: per-card reachability probe + glance counts, non-blocking per card. */
+    fun probeContainers() {
+        val targets = _uiState.value.containers
+        targets.forEach { stored ->
+            viewModelScope.launch {
+                _uiState.update { it.copy(containerHealth = it.containerHealth + (stored.id to (it.containerHealth[stored.id]?.copy(state = "probing") ?: ContainerHealth("probing")))) }
+                val health = runCatching { api.getSnapshot(stored.baseUrl, stored.id) }
+                    .map { snap ->
+                        val needs = io.openorcha.mobile.domain.OrchaSelectors.needsYou(snap).total
+                        ContainerHealth("polling", snap.agents.size, snap.tasks.size, needs)
+                    }
+                    .getOrElse { ContainerHealth("unreachable") }
+                _uiState.update { it.copy(containerHealth = it.containerHealth + (stored.id to health)) }
+            }
+        }
+    }
+
+    fun openThread() {
+        if (_uiState.value.selectedTask == null) return
+        _uiState.update { it.copy(route = AppRoute.TaskThread, error = null) }
+    }
+
+    fun backToTaskDetail() {
+        _uiState.update { it.copy(route = AppRoute.TaskDetail, error = null) }
     }
 
     fun showAddContainer() {
@@ -150,6 +220,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 startPolling()
             }.onFailure { err ->
+                android.util.Log.w("OrchaApp", "connect failed", err)
                 _uiState.update { it.copy(connecting = false, error = friendlyConnectionError(err)) }
             }
         }
@@ -315,6 +386,22 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         refreshSelectedTask()
         refreshSelected()
     }
+
+    /** Flow 08: verify straight from the Home-tab queue card (no navigation). */
+    fun verifyTaskById(taskId: String, approve: Boolean, feedback: String?) =
+        runHumanAction(if (approve) "Task accepted · completed" else "Task sent back") { selected, actor ->
+            api.verifyTask(selected.baseUrl, taskId, actor, approve, feedback)
+            refreshSelected()
+        }
+
+    /** Flow 08: plan decision straight from the Home-tab queue card. */
+    fun decidePlanById(taskId: String, approve: Boolean, reason: String?) =
+        runHumanAction(if (approve) "Plan approved" else "Changes requested") { selected, actor ->
+            val task = _uiState.value.snapshot?.tasks?.firstOrNull { it.id == taskId }
+            val target = task?.ownerId ?: task?.createdByAgentId
+            api.decidePlan(selected.baseUrl, taskId, actor, approve, reason, target)
+            refreshSelected()
+        }
 
     fun decideSelectedPlan(approve: Boolean, reason: String?) = runHumanAction(if (approve) "Plan approved" else "Plan changes sent") { selected, actor ->
         val task = _uiState.value.selectedTask ?: error("No task selected")
