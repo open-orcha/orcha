@@ -46,8 +46,8 @@ def test_build_spawn_env_pins_model_and_runtime():
     """#297: the bridge hands the agent's resolved model+runtime down to cmd_use via env so the
     live boot pins the selection without a SECOND fail-open /persona round-trip."""
     env = tb.build_spawn_env("Vault", cold=True, base_env={},
-                             model="claude-sonnet-4-6", runtime="claude")
-    assert env["ORCHA_LIVE_MODEL"] == "claude-sonnet-4-6"
+                             model="claude-sonnet-5", runtime="claude")
+    assert env["ORCHA_LIVE_MODEL"] == "claude-sonnet-5"
     assert env["ORCHA_LIVE_RUNTIME"] == "claude"
 
 

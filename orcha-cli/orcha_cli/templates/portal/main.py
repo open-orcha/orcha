@@ -98,6 +98,12 @@ except ImportError:  # host daemon / pytest: import from the package on sys.path
 
 DB = os.environ["DATABASE_URL"]
 ONBOARDING_LOG = logging.getLogger("orcha.onboarding")
+PAIRING_TTL_SECONDS = 5 * 60
+PAIRING_TOKEN_EXCHANGE_FOLLOWUP = {
+    "status": "follow_up",
+    "endpoint": "POST /api/pair/device-token",
+    "note": "Mobile device-token exchange/auth is not implemented in this slice.",
+}
 
 # ---------- Phase 3 / Orcha#5 + Orcha#25: durable DB-backed event bus ----------
 # This was an in-process ring buffer (_event_buf): events published while no
@@ -319,7 +325,7 @@ AVAILABLE_MODELS = [
     # with ZERO breakage — the persisted agents.model choice is left intact, so re-adding the
     # entry restores it automatically. To retire Fable: just delete this one line.
     {"id": "claude-fable-5", "name": "Fable 5", "runtime": "claude"},
-    {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "runtime": "claude"},
+    {"id": "claude-sonnet-5", "name": "Sonnet 5", "runtime": "claude"},
     {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5", "runtime": "claude"},
     {"id": "gpt-5.5", "name": "GPT-5.5", "runtime": "codex"},
     {"id": "gpt-5.4", "name": "GPT-5.4", "runtime": "codex"},
@@ -2200,6 +2206,152 @@ def terminal_config():
     bridge is a SEPARATE host-side server (not a portal route), so the browser connects directly
     to `ws_url` + `/api/agents/<aid>/terminal?actor_agent_id=<human>`. Localhost/trusted-local."""
     return {"ws_url": TERMINAL_WS_URL}
+
+
+def _is_local_pairing_host(host: Optional[str]) -> bool:
+    h = (host or "").strip().strip("[]").lower()
+    if not h:
+        return True
+    if h in {"localhost", "0.0.0.0", "::", "::1"}:
+        return True
+    if h.startswith("127."):
+        return True
+    return False
+
+
+def _pairing_warning(reason: str) -> dict:
+    return {
+        "reachable": False,
+        "reason": reason,
+        "title": "Phones can't reach this Orcha yet",
+        "message": (
+            "The portal only has a localhost address right now, so a phone on Wi-Fi would not "
+            "know how to reach this computer."
+        ),
+        "remedy": (
+            "Connect this Mac to the same Wi-Fi as the phone, run `orcha up` from this workspace, "
+            "and allow the Orcha portal port through macOS Firewall or Local Network prompts."
+        ),
+    }
+
+
+def _pairing_base_url(request: Request) -> tuple[Optional[str], Optional[dict]]:
+    env_host = (os.environ.get("ORCHA_PAIRING_HOST") or "").strip()
+    req_host = request.url.hostname or ""
+    if env_host and not _is_local_pairing_host(env_host):
+        host = env_host
+    elif req_host and not _is_local_pairing_host(req_host):
+        host = req_host
+    else:
+        return None, _pairing_warning("no_lan_address")
+
+    port = request.url.port
+    scheme = request.url.scheme or "http"
+    default_port = (scheme == "http" and port in (None, 80)) or (scheme == "https" and port in (None, 443))
+    authority = host if default_port else f"{host}:{port}"
+    return f"{scheme}://{authority}", None
+
+
+def _short_pairing_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    raw = "".join(secrets.choice(alphabet) for _ in range(8))
+    return raw[:4] + "-" + raw[4:]
+
+
+def _qr_svg(payload: dict) -> tuple[str, str]:
+    import qrcode
+    import qrcode.image.svg
+
+    qr_text = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_text)
+    qr.make(fit=True)
+    img = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
+    svg = img.to_string(encoding="unicode")
+    return qr_text, svg
+
+
+@app.get("/api/containers/{cid}/pairing")
+def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[str] = Query(default=None)):
+    """Return the portal-to-phone QR pairing payload.
+
+    This implements the A1 pairing payload/UI contract. The returned token is short-lived and
+    forward-compatible, but there is intentionally no device-token exchange in this slice; A2 is
+    represented explicitly in `tokenExchange` so mobile auth is not silently implied.
+    """
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if human_agent_id is not None and not _valid_uuid(human_agent_id):
+        raise HTTPException(400, "human_agent_id is not a valid UUID")
+
+    base_url, warning = _pairing_base_url(request)
+    if warning:
+        raise HTTPException(409, warning)
+
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT id, name FROM containers WHERE id=%s", (cid,))
+        c = cur.fetchone()
+        if not c:
+            raise HTTPException(404, f"container {cid} not found")
+        cur.execute(
+            "SELECT id, alias FROM agents WHERE container_id=%s AND kind='human' "
+            "AND terminated_at IS NULL ORDER BY created_at, alias",
+            (cid,),
+        )
+        humans = cur.fetchall()
+
+    if not humans:
+        raise HTTPException(409, {
+            "reachable": False,
+            "reason": "no_human",
+            "title": "No human can pair this phone",
+            "message": "Add a human operator to this Orcha before pairing a phone.",
+        })
+    if human_agent_id:
+        human = next((h for h in humans if str(h["id"]) == str(human_agent_id)), None)
+        if not human:
+            raise HTTPException(400, "human_agent_id must be a human in this container")
+    elif len(humans) == 1:
+        human = humans[0]
+    else:
+        raise HTTPException(400, {
+            "reason": "choose_human",
+            "message": "Choose which human to pair as, then request the pairing payload again.",
+            "humans": [{"id": str(h["id"]), "alias": h["alias"]} for h in humans],
+        })
+
+    expires = datetime.now(timezone.utc).timestamp() + PAIRING_TTL_SECONDS
+    expires_at = datetime.fromtimestamp(expires, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    payload = {
+        "v": 1,
+        "kind": "orcha-pair",
+        "baseUrl": base_url,
+        "containerId": str(c["id"]),
+        "containerName": c["name"],
+        "humanAgentId": str(human["id"]),
+        "humanAgentAlias": human["alias"],
+        "token": secrets.token_urlsafe(24),
+        "shortCode": _short_pairing_code(),
+        "expiresAt": expires_at,
+        "tokenExchange": PAIRING_TOKEN_EXCHANGE_FOLLOWUP,
+    }
+    qr_payload = {k: payload[k] for k in (
+        "v", "kind", "baseUrl", "containerId", "containerName", "humanAgentId",
+        "humanAgentAlias", "token", "shortCode", "expiresAt",
+    )}
+    qr_text, svg = _qr_svg(qr_payload)
+    return {
+        **payload,
+        "expiresInSeconds": PAIRING_TTL_SECONDS,
+        "reachable": True,
+        "qrText": qr_text,
+        "qrSvg": svg,
+    }
 
 
 @app.get("/api/containers/{cid}")

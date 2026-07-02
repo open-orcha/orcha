@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import importlib.resources as pkg_res
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -34,6 +35,7 @@ PKG_TEMPLATES = PKG_ROOT / "templates"
 # auto-generates + persists one to .orcha/.env on up/upgrade so stored-key storage works
 # out of the box; see _ensure_secret_key.
 _MASTER_KEY_ENV = "ORCHA_SECRET_KEY"
+_PAIRING_HOST_ENV = "ORCHA_PAIRING_HOST"
 
 
 # Pure-stdlib shared modules that the portal container imports top-level (`import <name>`) but
@@ -268,6 +270,62 @@ def _tighten_env_file(env_file: pathlib.Path) -> None:
         pass
 
 
+def _usable_pairing_ip(value: str) -> Optional[str]:
+    """Return a phone-reachable LAN-ish IP, or None for localhost/link-local/etc."""
+    try:
+        ip = ipaddress.ip_address((value or "").strip())
+    except ValueError:
+        return None
+    if ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local:
+        return None
+    # Prefer private LANs for the direct phone-to-laptop story. If a site uses a routed
+    # corporate address, allow it as long as it is not one of the known non-reachable classes.
+    if ip.version == 4 and str(ip).startswith("169.254."):
+        return None
+    return str(ip)
+
+
+def _discover_pairing_host() -> Optional[str]:
+    """Best-effort host LAN IP discovery for mobile pairing.
+
+    This runs on the Mac/host before Docker starts. Doing it inside the portal container would
+    usually find Docker's bridge address, which a phone cannot reach.
+    """
+    supplied = _usable_pairing_ip(os.environ.get(_PAIRING_HOST_ENV, ""))
+    if supplied:
+        return supplied
+
+    candidates: list[str] = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(0.2)
+            s.connect(("1.1.1.1", 80))
+            candidates.append(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for family, _typ, _proto, _canon, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+            if family == socket.AF_INET and sockaddr:
+                candidates.append(sockaddr[0])
+    except OSError:
+        pass
+
+    for c in candidates:
+        ip = _usable_pairing_ip(c)
+        if ip:
+            return ip
+    return None
+
+
+def _export_pairing_host() -> None:
+    """Expose the host LAN IP to docker compose for the portal's pairing endpoint."""
+    if os.environ.get(_PAIRING_HOST_ENV):
+        return
+    host = _discover_pairing_host()
+    if host:
+        os.environ[_PAIRING_HOST_ENV] = host
+
+
 def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
     if "up" in args:
         # SSE: the portal bind-mounts the host wake-log dir (../.claude/.orcha-wakes). Create
@@ -289,6 +347,7 @@ def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: b
         # #294 Item 1: ensure the secret_box master key exists + is exported so the portal env
         # gets it on this up (init / up / upgrade all funnel through here).
         _ensure_secret_key(orcha_dir)
+        _export_pairing_host()
     cmd = ["docker", "compose", "-f", str(orcha_dir / "docker-compose.yml"), *args]
     return subprocess.run(cmd, check=check, capture_output=capture, text=capture)
 
@@ -779,6 +838,8 @@ def _full_project(project_name: str) -> str:
 
 def _by_project(project_name: str, *args: str) -> None:
     """Run `docker compose -p orcha-<name> <args...>` from anywhere."""
+    if "up" in args:
+        _export_pairing_host()
     cmd = ["docker", "compose", "-p", _full_project(project_name), *args]
     subprocess.run(cmd, check=True)
 

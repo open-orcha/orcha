@@ -229,6 +229,19 @@
     if (clear) clear.addEventListener("click", doClear);
   }
 
+  /* ---- phone pairing settings entry ----------------------------------- */
+  function renderPairingCard(force) {
+    const host = $("pairingCard");
+    if (!host) return;
+    O.patch(host, `<div class="sc-banner muted">
+      <div class="bt">${icon("phone", "")}<span>Open the same pairing code that is available from the top bar.</span></div>
+      <button class="btn sm" id="settingsPairPhone" type="button">${icon("phone", "")}Pair phone</button>
+    </div>
+    <div class="sc-hint">Your phone talks directly to this computer on your network. Nothing goes through the cloud.</div>`, force);
+    const btn = $("settingsPairPhone");
+    if (btn) btn.addEventListener("click", () => O.openPairingModal && O.openPairingModal());
+  }
+
   async function doSave() {
     const v = fieldValue();
     if (!v || busy) return;
@@ -683,7 +696,7 @@
   }
   window.OrchaData.start(() => {
     render();
-    if (!booted) { booted = true; renderKey(); renderProviderKeys(); renderModels(); }   // paint loading cards once the shell exists
+    if (!booted) { booted = true; renderPairingCard(); renderKey(); renderProviderKeys(); renderModels(); }   // paint loading cards once the shell exists
   }, 3000);
 
   (async function init() {
