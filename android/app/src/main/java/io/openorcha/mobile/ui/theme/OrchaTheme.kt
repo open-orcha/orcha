@@ -172,29 +172,6 @@ val OrchaLightPalette = OrchaPalette(
 
 val LocalOrchaPalette = staticCompositionLocalOf { OrchaDarkPalette }
 
-/** Transitional alias while screens migrate to [Orcha.palette] — dark values only. */
-@Deprecated("Use Orcha.palette (theme-aware) instead")
-object OrchaColors {
-    val Bg = OrchaDarkPalette.bg
-    val Surface = OrchaDarkPalette.surface
-    val Surface2 = OrchaDarkPalette.surface2
-    val Surface3 = OrchaDarkPalette.surface3
-    val Border = OrchaDarkPalette.border
-    val Border2 = OrchaDarkPalette.border2
-    val Text = OrchaDarkPalette.text
-    val Text2 = OrchaDarkPalette.text2
-    val Muted = OrchaDarkPalette.muted
-    val Faint = OrchaDarkPalette.faint
-    val Accent = OrchaDarkPalette.accent
-    val AccentInk = OrchaDarkPalette.accentInk
-    val Ok = OrchaDarkPalette.ok
-    val Info = OrchaDarkPalette.info
-    val Warn = OrchaDarkPalette.warn
-    val Danger = OrchaDarkPalette.danger
-    val Violet = OrchaDarkPalette.violet
-    val Idle = OrchaDarkPalette.idle
-}
-
 /** `Orcha.palette` — the full token palette for the active theme. */
 object Orcha {
     val palette: OrchaPalette

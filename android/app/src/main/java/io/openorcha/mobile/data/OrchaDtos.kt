@@ -1,8 +1,45 @@
 package io.openorcha.mobile.data
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * tasks.result is a JSONB column: /done writes `{"result": <text>, "by_agent_id": ...}`,
+ * legacy rows may hold a bare string, and unset is null. The portal shipped the same
+ * wrong assumption once (rendered "[object Object]") — this serializer accepts all
+ * three shapes and yields the human-readable text.
+ */
+object FlexibleResultSerializer : KSerializer<String?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("FlexibleTaskResult", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): String? {
+        val input = decoder as? JsonDecoder ?: return decoder.decodeString()
+        return when (val el = input.decodeJsonElement()) {
+            is JsonNull -> null
+            is JsonPrimitive -> el.contentOrNull
+            is JsonObject -> (el["result"] as? JsonPrimitive)?.contentOrNull ?: el.toString()
+            else -> el.toString()
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: String?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeString(value)
+    }
+}
 
 @Serializable
 data class ContainersResponse(
@@ -75,6 +112,7 @@ data class TaskDto(
     @SerialName("definition_of_done") val definitionOfDone: String? = null,
     val status: String = "unknown",
     val priority: Int? = null,
+    @Serializable(with = FlexibleResultSerializer::class)
     val result: String? = null,
     @SerialName("is_root") val isRoot: Boolean = false,
     @SerialName("created_by_agent_id") val createdByAgentId: String? = null,

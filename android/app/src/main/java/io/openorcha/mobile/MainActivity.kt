@@ -3,19 +3,22 @@ package io.openorcha.mobile
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import io.openorcha.mobile.ui.AppRoute
 import io.openorcha.mobile.ui.OrchaViewModel
-import io.openorcha.mobile.ui.screens.ContainersHomeScreen
 import io.openorcha.mobile.ui.screens.AgentDetailScreen
+import io.openorcha.mobile.ui.screens.ContainersHomeScreen
 import io.openorcha.mobile.ui.screens.ConversationScreen
 import io.openorcha.mobile.ui.screens.CreateTaskScreen
 import io.openorcha.mobile.ui.screens.ManualConnectScreen
 import io.openorcha.mobile.ui.screens.RequestDetailScreen
 import io.openorcha.mobile.ui.screens.RunDetailScreen
+import io.openorcha.mobile.ui.screens.SettingsScreen
 import io.openorcha.mobile.ui.screens.TaskDetailScreen
+import io.openorcha.mobile.ui.screens.TaskThreadScreen
 import io.openorcha.mobile.ui.screens.WorkspaceScreen
 import io.openorcha.mobile.ui.theme.OrchaTheme
 
@@ -24,16 +27,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
-            OrchaTheme {
-                val state by viewModel.uiState.collectAsState()
+            val state by viewModel.uiState.collectAsState()
+            OrchaTheme(mode = state.themeMode) {
                 when (state.route) {
                     AppRoute.Containers -> ContainersHomeScreen(
                         state = state,
                         onAdd = viewModel::showAddContainer,
                         onOpen = viewModel::openContainer,
                         onForget = viewModel::forgetContainer,
-                        onRefresh = viewModel::refreshSelected,
+                        onRename = viewModel::renameContainer,
+                        onRefresh = viewModel::probeContainers,
+                        onSettings = viewModel::showSettings,
                     )
 
                     AppRoute.AddContainer -> ManualConnectScreen(
@@ -42,27 +48,46 @@ class MainActivity : ComponentActivity() {
                         onConnect = viewModel::connectManual,
                     )
 
+                    AppRoute.Settings -> SettingsScreen(
+                        state = state,
+                        onBack = viewModel::showContainers,
+                        onTheme = viewModel::setThemeMode,
+                        onOpen = viewModel::openContainer,
+                        onForget = viewModel::forgetContainer,
+                        onAdd = viewModel::showAddContainer,
+                    )
+
                     AppRoute.Workspace -> WorkspaceScreen(
                         state = state,
                         onBack = viewModel::showContainers,
                         onRefresh = viewModel::refreshSelected,
                         onForget = viewModel::forgetSelectedContainer,
+                        onSettings = viewModel::showSettings,
                         onTab = viewModel::selectTab,
                         onOpenTask = viewModel::openTask,
                         onOpenRequest = viewModel::openRequest,
                         onOpenAgent = viewModel::openAgent,
                         onCreateTask = viewModel::showCreateTask,
+                        onDecidePlanFor = viewModel::decidePlanById,
+                        onVerifyFor = viewModel::verifyTaskById,
                     )
 
                     AppRoute.TaskDetail -> TaskDetailScreen(
                         state = state,
                         onBack = viewModel::showWorkspace,
                         onRefresh = viewModel::refreshSelectedTask,
-                        onSendMessage = viewModel::sendTaskMessage,
+                        onOpenThread = viewModel::openThread,
                         onCancelTask = viewModel::cancelSelectedTask,
                         onVerify = viewModel::verifySelectedTask,
                         onDecidePlan = viewModel::decideSelectedPlan,
                         onOpenRun = viewModel::openRun,
+                    )
+
+                    AppRoute.TaskThread -> TaskThreadScreen(
+                        state = state,
+                        onBack = viewModel::backToTaskDetail,
+                        onRefresh = viewModel::refreshSelectedTask,
+                        onSendMessage = viewModel::sendTaskMessage,
                     )
 
                     AppRoute.RequestDetail -> RequestDetailScreen(
@@ -75,6 +100,7 @@ class MainActivity : ComponentActivity() {
                         onAcceptTask = viewModel::acceptSelectedTaskRequest,
                         onRejectTask = viewModel::rejectSelectedTaskRequest,
                         onConvert = viewModel::convertSelectedRequest,
+                        onOpenTask = viewModel::openTask,
                     )
 
                     AppRoute.AgentDetail -> AgentDetailScreen(
