@@ -116,7 +116,7 @@ const DETAIL_AGENTS = [
     alias: 'Plum',
     kind: 'ai',
     status: 'working',
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     current_task: { id: 't9', title: 'Wire the widget bridge' }
   },
   { id: 'human-1', alias: 'husseinmohamed', kind: 'human' }
@@ -161,7 +161,7 @@ describe('fetchStackAttention', () => {
   it('summarizes agents working-first then alias, with model (claude- prefix stripped) and current task title', async () => {
     const result = await fetchStackAttention(stack, walkFetch())
     expect(result.agents).toEqual([
-      { alias: 'Plum', kind: 'ai', status: 'working', model: 'sonnet-4-6', task: 'Wire the widget bridge' },
+      { alias: 'Plum', kind: 'ai', status: 'working', model: 'sonnet-5', task: 'Wire the widget bridge' },
       { alias: 'Atlas', kind: 'ai', status: 'idle', model: 'opus-4-8', task: null },
       { alias: 'husseinmohamed', kind: 'human', status: 'idle', model: null, task: null }
     ])

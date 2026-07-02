@@ -1,6 +1,6 @@
 [project]
 name = "orcha-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "Orcha: human-authoritative multi-agent orchestration via Claude Code skills"
 readme = "README.md"
 license = "MIT"
