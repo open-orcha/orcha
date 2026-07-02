@@ -12,15 +12,23 @@ import io.openorcha.mobile.data.OrchaApiClient
 import io.openorcha.mobile.data.OrchaServerAddress
 import io.openorcha.mobile.data.RequestDto
 import io.openorcha.mobile.data.RunDto
+import io.openorcha.mobile.data.RunStream
+import io.openorcha.mobile.data.RunStreamEvent
 import io.openorcha.mobile.data.StoredContainer
 import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.data.TurnDto
+import io.openorcha.mobile.domain.Paging
+import io.openorcha.mobile.domain.RunFeed
+import io.openorcha.mobile.domain.RunFeedRow
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -73,12 +81,19 @@ data class OrchaUiState(
     val selectedTab: WorkspaceTab = WorkspaceTab.Home,
     val selectedTask: TaskDto? = null,
     val taskMessages: List<TaskMessageDto> = emptyList(),
+    // thread keyset paging (issue 4): cursors point at the OLDEST loaded message
+    val threadHasMore: Boolean = false,
+    val threadNextBefore: String? = null,
+    val threadNextBeforeId: String? = null,
+    val threadLoadingEarlier: Boolean = false,
     val taskRuns: List<RunDto> = emptyList(),
     val selectedRequest: RequestDto? = null,
     val selectedAgent: AgentDto? = null,
     val agentRuns: List<RunDto> = emptyList(),
     val selectedRun: RunDto? = null,
-    val runLines: List<String> = emptyList(),
+    val runFeed: List<RunFeedRow> = emptyList(),
+    // neutral stream-health note (issue 3): never the Wi-Fi banner for a mid-stream drop
+    val runStreamNote: String? = null,
     val models: List<ModelDto> = emptyList(),
     val conversation: ConversationDto? = null,
     val turns: List<TurnDto> = emptyList(),
@@ -94,6 +109,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     private val api = OrchaApiClient()
     private val json = Json { ignoreUnknownKeys = true }
     private var pollingJob: Job? = null
+    private var runStreamJob: Job? = null
 
     private val _uiState = MutableStateFlow(
         OrchaUiState(
@@ -114,6 +130,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun showContainers() {
         pollingJob?.cancel()
+        cancelRunStream()
         _uiState.update { it.copy(route = AppRoute.Containers, error = null, selectedTask = null, selectedRequest = null, selectedAgent = null) }
         probeContainers()
     }
@@ -146,10 +163,13 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         targets.forEach { stored ->
             viewModelScope.launch {
                 _uiState.update { it.copy(containerHealth = it.containerHealth + (stored.id to (it.containerHealth[stored.id]?.copy(state = "probing") ?: ContainerHealth("probing")))) }
-                val health = runCatching { api.getSnapshot(stored.baseUrl, stored.id) }
+                // issue 4: the home cards need counts only — fetch a slim snapshot window
+                // (server orders needs-attention rows first, so needsYou stays accurate)
+                // and read totals from task_total/request_total instead of row counts.
+                val health = runCatching { api.getSnapshot(stored.baseUrl, stored.id, taskLimit = PROBE_LIMIT, requestLimit = PROBE_LIMIT) }
                     .map { snap ->
                         val needs = io.openorcha.mobile.domain.OrchaSelectors.needsYou(snap).total
-                        ContainerHealth("polling", snap.agents.size, snap.tasks.size, needs)
+                        ContainerHealth("polling", snap.agents.size, snap.taskTotal ?: snap.tasks.size, needs)
                     }
                     .getOrElse { ContainerHealth("unreachable") }
                 _uiState.update { it.copy(containerHealth = it.containerHealth + (stored.id to health)) }
@@ -163,6 +183,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun backToTaskDetail() {
+        cancelRunStream()
         _uiState.update { it.copy(route = AppRoute.TaskDetail, error = null) }
     }
 
@@ -181,6 +202,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showWorkspace() {
+        cancelRunStream()
         _uiState.update {
             it.copy(
                 route = AppRoute.Workspace,
@@ -189,9 +211,13 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
                 selectedAgent = null,
                 selectedRun = null,
                 taskMessages = emptyList(),
+                threadHasMore = false,
+                threadNextBefore = null,
+                threadNextBeforeId = null,
                 taskRuns = emptyList(),
                 agentRuns = emptyList(),
-                runLines = emptyList(),
+                runFeed = emptyList(),
+                runStreamNote = null,
                 conversation = null,
                 turns = emptyList(),
                 error = null,
@@ -300,7 +326,14 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTask(taskId: String) {
         val task = _uiState.value.snapshot?.tasks?.firstOrNull { it.id == taskId } ?: return
-        _uiState.update { it.copy(route = AppRoute.TaskDetail, selectedTask = task, taskMessages = emptyList(), taskRuns = emptyList(), error = null) }
+        cancelRunStream()
+        _uiState.update {
+            it.copy(
+                route = AppRoute.TaskDetail, selectedTask = task, taskMessages = emptyList(),
+                threadHasMore = false, threadNextBefore = null, threadNextBeforeId = null,
+                taskRuns = emptyList(), error = null,
+            )
+        }
         refreshSelectedTask()
     }
 
@@ -310,14 +343,51 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.update { it.copy(loading = true, error = null) }
             runCatching {
-                val messages = api.getTaskMessages(selected.baseUrl, task.id).messages
+                // newest thread page only (issue 4) — older pages load on demand
+                val messages = api.getTaskMessages(selected.baseUrl, task.id)
                 val runs = api.getTaskRuns(selected.baseUrl, task.id).runs
                 messages to runs
-            }.onSuccess { (messages, runs) ->
-                _uiState.update { it.copy(taskMessages = messages, taskRuns = runs, loading = false) }
+            }.onSuccess { (resp, runs) ->
+                _uiState.update {
+                    it.copy(
+                        taskMessages = resp.messages,
+                        threadHasMore = resp.hasMore == true,
+                        threadNextBefore = resp.nextBefore,
+                        threadNextBeforeId = resp.nextBeforeId,
+                        taskRuns = runs,
+                        loading = false,
+                    )
+                }
             }.onFailure { err ->
                 _uiState.update { it.copy(loading = false, error = friendlyConnectionError(err)) }
             }
+        }
+    }
+
+    /** Issue 4: "Load earlier" — fetch the page before the oldest loaded message and prepend. */
+    fun loadEarlierMessages() {
+        val selected = _uiState.value.selectedContainer ?: return
+        val task = _uiState.value.selectedTask ?: return
+        val before = _uiState.value.threadNextBefore ?: return
+        val beforeId = _uiState.value.threadNextBeforeId
+        if (_uiState.value.threadLoadingEarlier) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(threadLoadingEarlier = true) }
+            runCatching { api.getTaskMessages(selected.baseUrl, task.id, before = before, beforeId = beforeId) }
+                .onSuccess { resp ->
+                    _uiState.update { st ->
+                        st.copy(
+                            taskMessages = Paging.prependOlder(st.taskMessages, resp.messages, ::messageKey),
+                            threadHasMore = resp.hasMore == true,
+                            threadNextBefore = resp.nextBefore,
+                            threadNextBeforeId = resp.nextBeforeId,
+                            threadLoadingEarlier = false,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update { it.copy(threadLoadingEarlier = false, error = friendlyConnectionError(err)) }
+                }
         }
     }
 
@@ -328,6 +398,7 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openAgent(agentId: String) {
         val agent = _uiState.value.snapshot?.agents?.firstOrNull { it.id == agentId } ?: return
+        cancelRunStream()
         _uiState.update { it.copy(route = AppRoute.AgentDetail, selectedAgent = agent, agentRuns = emptyList(), models = emptyList(), error = null) }
         refreshAgentDetail()
     }
@@ -399,28 +470,121 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openRun(run: RunDto) {
-        _uiState.update { it.copy(route = AppRoute.RunDetail, selectedRun = run, runLines = emptyList(), error = null) }
+        cancelRunStream()
+        _uiState.update { it.copy(route = AppRoute.RunDetail, selectedRun = run, runFeed = emptyList(), runStreamNote = null, error = null) }
         refreshRunLog()
     }
 
+    /**
+     * Issue 3: a RUNNING run gets a live collector on the same SSE endpoint the web
+     * streams (incremental read, per-request infinite timeout); a finished run keeps
+     * the one-shot fetch (the server closes those streams immediately).
+     */
     fun refreshRunLog() {
         val selected = _uiState.value.selectedContainer ?: return
         val run = _uiState.value.selectedRun ?: return
         val agentId = run.agentId ?: _uiState.value.selectedAgent?.id ?: return
+        cancelRunStream()
+        if (run.status == "running") {
+            _uiState.update { it.copy(loading = false, error = null, runStreamNote = null, runFeed = emptyList()) }
+            runStreamJob = viewModelScope.launch { collectRunStream(selected.baseUrl, agentId, run) }
+            return
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(loading = true, error = null) }
+            _uiState.update { it.copy(loading = true, error = null, runStreamNote = null) }
             runCatching {
-                parseSseLines(api.getRunStreamText(selected.baseUrl, agentId, run.runId))
-            }.onSuccess { lines ->
-                _uiState.update { it.copy(runLines = lines, loading = false) }
+                feedFromStreamText(api.getRunStreamText(selected.baseUrl, agentId, run.runId))
+            }.onSuccess { rows ->
+                _uiState.update { it.copy(runFeed = rows, loading = false) }
             }.onFailure { err ->
                 _uiState.update { it.copy(loading = false, error = friendlyConnectionError(err)) }
             }
         }
     }
 
+    /**
+     * Web startRunStream parity (app.js:1444-1468): monotonic-seq dedup, immediate reopen
+     * on the 30-min stream_timeout, terminal done marks the run finished. A mid-stream
+     * drop retries with backoff behind a neutral note — never the Wi-Fi banner.
+     */
+    private suspend fun collectRunStream(baseUrl: String, agentId: String, run: RunDto) {
+        var maxSeq = 0
+        var backoffMs = 1_000L
+        while (currentCoroutineContext().isActive) {
+            var terminal: RunStreamEvent.Done? = null
+            val attempt = runCatching {
+                api.streamRun(baseUrl, agentId, run.runId).collect { event ->
+                    when (event) {
+                        is RunStreamEvent.Line -> if (event.seq > maxSeq) { // drops reconnect replay
+                            maxSeq = event.seq
+                            backoffMs = 1_000L
+                            val rows = RunFeed.classifyLine(event.line)
+                            if (rows.isNotEmpty()) {
+                                _uiState.update { st ->
+                                    st.copy(runFeed = (st.runFeed + rows).takeLast(RUN_FEED_CAP), runStreamNote = null)
+                                }
+                            }
+                        }
+                        is RunStreamEvent.Done -> {
+                            if (event.seq > maxSeq) maxSeq = event.seq
+                            terminal = event
+                        }
+                    }
+                }
+            }
+            currentCoroutineContext().ensureActive() // a cancelled collect must not fall into retry
+            val done = terminal
+            when {
+                done != null && done.status == "stream_timeout" -> Unit // server cap: reopen immediately
+                done != null -> {
+                    val status = done.status ?: "exited"
+                    _uiState.update { st ->
+                        st.copy(
+                            runFeed = (st.runFeed + RunFeedRow("done", "run-complete", status)).takeLast(RUN_FEED_CAP),
+                            selectedRun = st.selectedRun?.takeIf { it.runId == run.runId }?.copy(status = status)
+                                ?: st.selectedRun,
+                            runStreamNote = null,
+                        )
+                    }
+                    return
+                }
+                else -> { // connection dropped (or errored) without a terminal frame
+                    if (attempt.isFailure) {
+                        android.util.Log.w("OrchaApp", "run stream dropped", attempt.exceptionOrNull())
+                    }
+                    _uiState.update { it.copy(runStreamNote = "Log stream interrupted — reconnecting…") }
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(15_000L)
+                }
+            }
+        }
+    }
+
+    /** Classify a finished run's buffered SSE text into feed rows (same seq dedup). */
+    private fun feedFromStreamText(text: String): List<RunFeedRow> {
+        val rows = mutableListOf<RunFeedRow>()
+        var maxSeq = 0
+        text.lineSequence().forEach { raw ->
+            when (val event = RunStream.parse(raw)) {
+                is RunStreamEvent.Line -> if (event.seq > maxSeq) {
+                    maxSeq = event.seq
+                    rows += RunFeed.classifyLine(event.line)
+                }
+                is RunStreamEvent.Done -> rows += RunFeedRow("done", "run-complete", event.status ?: "ended")
+                null -> Unit
+            }
+        }
+        return rows.takeLast(RUN_FEED_CAP)
+    }
+
+    private fun cancelRunStream() {
+        runStreamJob?.cancel()
+        runStreamJob = null
+    }
+
     fun openConversation(agentId: String) {
         val agent = _uiState.value.snapshot?.agents?.firstOrNull { it.id == agentId } ?: return
+        cancelRunStream()
         _uiState.update { it.copy(route = AppRoute.Conversation, selectedAgent = agent, conversation = null, turns = emptyList(), error = null) }
         refreshConversation()
     }
@@ -429,6 +593,23 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         val selected = _uiState.value.selectedContainer ?: return
         val agent = _uiState.value.selectedAgent ?: return
         viewModelScope.launch {
+            // issue 4 (web conversation.js poll): once mounted, refresh via an after_seq
+            // DELTA append instead of re-fetching + replacing the whole transcript.
+            val conversation = _uiState.value.conversation
+            val lastSeq = _uiState.value.turns.lastOrNull()?.seq ?: 0
+            if (conversation != null && lastSeq > 0) {
+                runCatching { api.getConversationTurns(selected.baseUrl, conversation.id, afterSeq = lastSeq) }
+                    .onSuccess { response ->
+                        if (response.turns.isNotEmpty()) {
+                            _uiState.update { st -> st.copy(turns = Paging.appendTurns(st.turns, response.turns), error = null) }
+                        }
+                    }
+                    .onFailure { err ->
+                        _uiState.update { it.copy(error = friendlyConnectionError(err)) }
+                    }
+                return@launch
+            }
+            // initial mount fetch (web parity: one ?limit=80 load)
             _uiState.update { it.copy(loading = true, error = null) }
             runCatching { api.getConversation(selected.baseUrl, agent.id) }
                 .onSuccess { response ->
@@ -442,7 +623,18 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
     fun sendTaskMessage(body: String) = runHumanAction("Message sent") { selected, actor ->
         val task = _uiState.value.selectedTask ?: error("No task selected")
         api.postTaskMessage(selected.baseUrl, task.id, actor, body)
-        refreshSelectedTask()
+        // issue 4: re-fetch only the NEWEST page; earlier-loaded pages (and their
+        // cursors) stay put instead of collapsing back to one page.
+        val resp = api.getTaskMessages(selected.baseUrl, task.id)
+        _uiState.update { st ->
+            val firstLoad = st.taskMessages.isEmpty()
+            st.copy(
+                taskMessages = Paging.mergeNewest(st.taskMessages, resp.messages, ::messageKey),
+                threadHasMore = if (firstLoad) resp.hasMore == true else st.threadHasMore,
+                threadNextBefore = if (firstLoad) resp.nextBefore else st.threadNextBefore,
+                threadNextBeforeId = if (firstLoad) resp.nextBeforeId else st.threadNextBeforeId,
+            )
+        }
     }
 
     fun cancelSelectedTask(reason: String?) = runHumanAction("Task closed") { selected, actor ->
@@ -641,18 +833,6 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun parseSseLines(text: String): List<String> =
-        text.lineSequence()
-            .filter { it.startsWith("data:") }
-            .mapNotNull { raw ->
-                val payload = raw.removePrefix("data:").trim()
-                runCatching {
-                    val obj = json.parseToJsonElement(payload).jsonObject
-                    obj["line"]?.jsonPrimitive?.content ?: obj["status"]?.jsonPrimitive?.content?.let { "run $it" }
-                }.getOrNull()
-            }
-            .toList()
-
     private fun pairingBaseUrl(raw: String): String {
         val trimmed = raw.trim()
         if (!trimmed.startsWith("{")) return trimmed
@@ -675,6 +855,13 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         if (err is IllegalArgumentException && !err.message.isNullOrBlank()) {
             return err.message.orEmpty()
         }
+        // A data-shape mismatch (the phone reached Orcha but couldn't read part of the
+        // reply) must NOT be dressed up as a Wi-Fi/"reach" failure — that sends the user
+        // chasing their network for an app-side problem. Keep the word "reach" out of this
+        // copy so the connect screen shows a plain banner, not the unreachable checklist.
+        if (isDataShapeError(err)) {
+            return "This app version couldn't read part of Orcha's reply. Your laptop and network are fine — update the app to the latest version."
+        }
         val message = err?.message.orEmpty()
         return when {
             message.contains("403") -> "This action is not allowed for the paired human."
@@ -683,5 +870,35 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
             message.isNotBlank() && message.length < 140 -> message
             else -> "Could not reach Orcha at this address. Check that Orcha is running and your phone is on the same Wi-Fi."
         }
+    }
+
+    /**
+     * True when the failure is a JSON deserialization / content-negotiation error — i.e. the
+     * phone talked to Orcha but the reply didn't match the app's models. Walk the cause chain
+     * because Ktor wraps the underlying kotlinx serialization error in a convert exception.
+     */
+    private fun isDataShapeError(err: Throwable?): Boolean {
+        var cause: Throwable? = err
+        while (cause != null) {
+            val name = cause::class.qualifiedName ?: cause::class.java.name
+            if (name.contains("Serialization") || name.contains("JsonConvert") ||
+                name.contains("JsonDecoding") || name.contains("ContentConvert")
+            ) {
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
+    }
+
+    private fun messageKey(message: TaskMessageDto): Any =
+        message.messageId ?: "${message.createdAt}-${message.body.hashCode()}"
+
+    companion object {
+        /** Web-parity retained-line cap for the run feed (app.js:1284). */
+        private const val RUN_FEED_CAP = 400
+
+        /** Slim snapshot window for the home-card probes (issue 4). */
+        private const val PROBE_LIMIT = 50
     }
 }

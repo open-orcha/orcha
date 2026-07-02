@@ -16,6 +16,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -142,6 +149,41 @@ fun pulseAlpha(): Float {
         label = "pulseAlpha",
     )
     return alpha
+}
+
+/**
+ * Request-status pill with a status GLYPH (web STAT/glyph parity, app.js:320-353):
+ * open=warning-triangle, accepted=play, answered=check, rejected=✕, converted=arrow,
+ * closed=neutral dot. `escalated` (an OPEN human-targeted request, requests.html:135)
+ * relabels the pill and tints it danger. Tints stay on the app's binding token map.
+ */
+@Composable
+fun RequestStatusPill(status: String, escalated: Boolean = false, modifier: Modifier = Modifier) {
+    val shown = if (escalated && status.lowercase() == "open") "escalated" else status.lowercase()
+    val tint = Orcha.palette.tint(if (shown == "escalated") "danger" else statusColorName(status, StatusDomain.Request))
+    val icon: androidx.compose.ui.graphics.vector.ImageVector? = when (shown) {
+        "open" -> Icons.Rounded.WarningAmber
+        "accepted" -> Icons.Rounded.PlayArrow
+        "answered" -> Icons.Rounded.Check
+        "rejected", "escalated" -> Icons.Rounded.Close
+        "converted_to_task" -> Icons.AutoMirrored.Rounded.ArrowForward
+        else -> null // closed & unknown keep the neutral dot
+    }
+    Row(
+        modifier = modifier
+            .background(tint.soft, RoundedCornerShape(999.dp))
+            .border(BorderStroke(1.dp, tint.line), RoundedCornerShape(999.dp))
+            .padding(start = 8.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = tint.color, modifier = Modifier.size(12.dp))
+        } else {
+            Box(Modifier.size(7.dp).background(tint.color, CircleShape))
+        }
+        Text(MobileUx.statusCopy(shown), color = tint.color, style = MaterialTheme.typography.labelMedium)
+    }
 }
 
 /** Back-compat alias used across screens. */

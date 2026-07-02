@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
                         onBack = viewModel::backToTaskDetail,
                         onRefresh = viewModel::refreshSelectedTask,
                         onSendMessage = viewModel::sendTaskMessage,
+                        onLoadEarlier = viewModel::loadEarlierMessages,
                     )
 
                     AppRoute.RequestDetail -> RequestDetailScreen(

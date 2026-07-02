@@ -3,12 +3,16 @@ package io.openorcha.mobile.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -443,7 +447,11 @@ fun AutoWakeSheet(
    Flow 10 — Converse: honest presence, bubbles, composer, end confirm.
    ============================================================================= */
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Web conversation reveal sizes (conversation.js:26-27): show last 10, +20 per tap. */
+private const val CONV_REVEAL_INITIAL = 10
+private const val CONV_REVEAL_STEP = 20
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ConversationScreen(
     state: OrchaUiState,
@@ -461,8 +469,15 @@ fun ConversationScreen(
     var confirmEnd by remember { mutableStateOf(false) }
     val unsentTurn = if (state.error != null) pendingTurn else null
     val listState = rememberLazyListState()
-    LaunchedEffect(state.turns.size) {
-        if (state.turns.isNotEmpty()) listState.animateScrollToItem(state.turns.size - 1)
+    // issue 4: the web's client-side reveal (conversation.js REVEAL) — render the newest
+    // 10 turns, "Load earlier" reveals +20 (the fetch already holds up to 80).
+    var reveal by remember(agent?.id) { mutableStateOf(CONV_REVEAL_INITIAL) }
+    val visibleTurns = if (state.turns.size > reveal) state.turns.takeLast(reveal) else state.turns
+    val imeVisible = WindowInsets.isImeVisible
+    // issue 2: keep the newest turns in view when the keyboard opens or a turn lands
+    LaunchedEffect(state.turns.size, imeVisible) {
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last >= 0 && (imeVisible || state.turns.isNotEmpty())) listState.animateScrollToItem(last)
     }
     val working = agent?.status == "working"
 
@@ -491,7 +506,9 @@ fun ConversationScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+        // issue 2: consumeWindowInsets stops imePadding re-adding the nav-bar inset the
+        // Scaffold padding already applied (with adjustResize, that was the visible gap)
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             if (working && agent?.currentTask != null) {
                 Banner(
                     BannerKind.Info,
@@ -519,8 +536,21 @@ fun ConversationScreen(
                         }
                     }
                 }
+                if (state.turns.size > reveal) {
+                    item(key = "conv-load-earlier") {
+                        TextButton(
+                            onClick = { reveal += CONV_REVEAL_STEP },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                "Load earlier · showing ${visibleTurns.size} of ${state.turns.size}",
+                                color = p.accent, fontWeight = FontWeight.W700,
+                            )
+                        }
+                    }
+                }
                 var lastDay: String? = null
-                state.turns.forEach { turn ->
+                visibleTurns.forEach { turn ->
                     val day = MobileUx.dayKey(turn.createdAt)
                     if (day != null && day != lastDay) {
                         lastDay = day
