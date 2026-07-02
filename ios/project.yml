@@ -1,0 +1,56 @@
+# Orcha iOS companion — XcodeGen project definition (GH #30, design package
+# docs/design/mobile). Generate with `xcodegen generate`; no Xcode GUI needed.
+name: Orcha
+options:
+  bundleIdPrefix: io.openorcha
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGNING_ALLOWED: "NO"
+targets:
+  Orcha:
+    type: application
+    platform: iOS
+    sources:
+      - path: Orcha
+    info:
+      path: Orcha/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: Orcha
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSCameraUsageDescription: "Orcha uses the camera only to scan the pairing QR from your portal."
+        # A2 (doc 13): LAN base URLs are runtime IPs — the clean ATS carve-out is
+        # local networking, not arbitrary loads.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: "Orcha connects to the Orcha server running on your computer over your local network."
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.openorcha.mobile.ios
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets:
+        - OrchaTests
+      gatherCoverageData: false
+  OrchaTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: OrchaTests
+    dependencies:
+      - target: Orcha
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Orcha.app/Orcha"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: "YES"
