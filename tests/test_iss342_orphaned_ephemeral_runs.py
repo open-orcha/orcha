@@ -297,6 +297,10 @@ def test_daemon_tick_invokes_reaper_before_tick(monkeypatch, tmp_path):
     monkeypatch.setattr(notifier, "service_residents", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "reap_orphaned_runs", _fake_reap)
     monkeypatch.setattr(notifier, "tick", _fake_tick)
+    # #103: the loop now emits a health heartbeat each iteration — a per-tick neighbour like the
+    # reapers above. Stub it so this in-process loop driver makes no real network call (an unmocked
+    # urllib call here also trips the macOS objc fork-safety segfault on a later subprocess spawn).
+    monkeypatch.setattr(notifier, "_post_heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(notifier.signal, "signal", lambda *a, **k: None)
 
     args = types.SimpleNamespace(

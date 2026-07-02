@@ -10,6 +10,13 @@ missing.
 
 ## [Unreleased]
 
+### Added
+- Notifier health in the portal: the autonomy switch shows a live/stale/offline
+  chip, and a warning banner appears when wakes are on but no notifier is
+  polling — the previously silent "Running but nothing waking agents" failure.
+  A **Restart notifier** button re-execs a live notifier in place; if none is
+  running it shows the exact host command (`orcha notifier --restart`).
+
 ## [0.4.0] - 2026-07-04
 
 ### Added
