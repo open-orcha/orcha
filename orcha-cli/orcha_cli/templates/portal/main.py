@@ -4798,6 +4798,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 "prompt_messages": prompt_messages, "wake_task_id": wake_task_id,
                 "notifications": notifications, "notifications_truncated": notifications_truncated,
                 "max_event_ts": max_ts, "ack_through_ts": ack_through_ts,
+                # #110: the per-agent wake cursor BEFORE this wake. The daemon stashes it on the
+                # live worker so a failed/rate-limited drain can REWIND to it (POST /wake-reopen),
+                # re-surfacing events the drain never actually handled instead of losing them.
+                "delivered_ts": a["delivered_ts"],
                 "auto_start_task_ids": auto_tasks,
                 # #266: surface the scheduled-wake verdict + the configured cadence so the notifier
                 # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
@@ -4905,6 +4909,45 @@ def wake_ack(aid: str, body: WakeAck):
                    "release_lease": body.release_lease})
         conn.commit()
     return {"agent_id": aid, **row}
+
+
+class WakeReopen(BaseModel):
+    before_ts: float = Field(
+        ..., description="#110: rewind the wake cursor to (at most) this ts — the pre-wake cursor")
+
+
+@app.post("/api/agents/{aid}/wake-reopen", status_code=200)
+def wake_reopen(aid: str, body: WakeReopen):
+    """#110: REWIND the per-agent wake cursor to `before_ts`.
+
+    wake-ack advances `delivered_ts` monotonically (GREATEST) at DISPATCH, before the daemon knows
+    whether the drain actually succeeded. When a task worker exits failed/rate-limited (a Codex
+    429), the events it 'consumed' were never handled — advancing past them silently drops a human's
+    nudge. This is the single, deliberate reverse of that invariant: set
+    delivered_ts = LEAST(delivered_ts, before_ts) so those events re-surface on a later wake-scan.
+    Only ever lowers the cursor, and never below the caller-supplied pre-wake value."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        ag = _require_agent(cur, aid)
+        cur.execute(
+            """UPDATE agent_wake_state
+                 SET delivered_ts = LEAST(delivered_ts, %s)
+               WHERE agent_id = %s
+               RETURNING delivered_ts""",
+            (body.before_ts, aid))
+        row = cur.fetchone()
+        if row is None:
+            # no wake-state row yet → nothing was ever advanced; seed the cursor at before_ts.
+            cur.execute(
+                "INSERT INTO agent_wake_state (agent_id, delivered_ts) VALUES (%s, %s) "
+                "ON CONFLICT (agent_id) DO NOTHING RETURNING delivered_ts",
+                (aid, body.before_ts))
+            row = cur.fetchone() or {"delivered_ts": body.before_ts}
+        log_event(cur, str(ag["container_id"]), "system", None, "agent", aid, "wake_reopened",
+                  {"before_ts": body.before_ts, "delivered_ts": row["delivered_ts"]})
+        conn.commit()
+    return {"agent_id": aid, "delivered_ts": row["delivered_ts"]}
 
 
 @app.post("/api/agents/{aid}/wake-claim", status_code=200)

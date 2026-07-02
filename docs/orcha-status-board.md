@@ -50,6 +50,7 @@ All three "untested-seam" integration bugs (found in functional test, not unit t
 | V1 ENGINE bundle — wake-and-act (ISS-55/56) · B5 assign | 🟠 building | Forge | task `0795bbd3` |
 | R2 P1 — ISS-69(b) (#181): preempt-yield BACKEND (daemon-side resident handoff — terminal preempts idle resident; the server-side holder-yield seam) | 🟠 awaiting verify | Forge | task `bffbe274`; PR #181 NEEDS REVIEW; lights up Frame's UX PR #179 (APPROVED). Kedar approved plan, asked for testing instructions w/ completion req — human-verify pending |
 | R2 P1 — ISS-69 (#179): embodiment-contention UX (name holder + resident hand-off) | 🟢 APPROVED | Frame | task `b8259ec7`; awaiting merge |
+| R2 — **ISS-110 (#110): worker continuity — durable task worktree; preserve/reattach across wakes; Codex 429 classify + cursor rewind; post-run digest** — **URGENT** | 🟠 awaiting verify | (this session) | branch `iss110-worker-continuity`; tests `test_iss110_worker_continuity.py`, `test_iss110_wake_reopen.py`; full suite 1432 passed |
 
 **Staged P1–P3** (folded once P0 plans clear): ISS-69 terminal contention/handoff UX · ISS-72 abort · ISS-59 approve-carries-answers (#159) · ISS-62 attach (#157) · ISS-63 collapse (#158) · ISS-64 draft-loss (#156) · ISS-68/#167 actionability-tiered lazy load · turn-budget reset+UI · ISS-9 per-agent gh cred isolation · ISS-60 Part B heartbeat-keyed orphan backstop. (GH labels: **5 URGENT** (incl. #183/ISS-74) + 14 HIGH — the 14th HIGH is #166/ISS-67 embedded-terminal slow reconnect.)
 

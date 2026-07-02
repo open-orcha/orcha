@@ -1650,6 +1650,68 @@ def _codex_result_status(log_path) -> Optional[str]:
     return last_turn_status if last_signal == "turn_end" else None
 
 
+def _codex_rate_limited_exit(log_path):
+    """#110: did a Codex one-shot worker EXIT because it hit a rate limit / usage cap (a 429),
+    rather than complete its turn? This is DISTINCT from `_codex_is_rate_limit`/`_worker_is_live`,
+    which flag a mid-run backoff a STILL-ALIVE worker is sleeping off. Here the process has ALREADY
+    exited (the reaper's clean-exit branch), so a rate-limit signal in the tail with NO successful
+    turn completion means the run FAILED on a 429 — it must be classified failed/rate_limited, not
+    a clean drain (which would advance the cursor + discard work).
+
+    Signals (per the issue's evidence): a `rate_limit_event` with rejected status, an error event
+    with `api_error_status: 429` / `is_error: true`, or a synthetic final "session/usage limit"
+    message. Returns a reason dict `{"cause": "rate_limited", "reset_at": <epoch|secs|None>}` or
+    None. Tolerant on schema (codex isn't installed on the dev host)."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            f.seek(max(0, end - 65536))
+            tail = f.read()
+    except OSError:
+        return None
+    saw_rl = False
+    reset_at = None
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            low = s.decode("utf-8", "replace").lower()
+            if "session limit" in low or "usage limit" in low:
+                saw_rl = True
+            continue
+        if not isinstance(obj, dict):
+            continue
+        msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+        typ = ((obj.get("type") or "") + " " + (msg.get("type") or "")).lower()
+        if "rate_limit_event" in typ:
+            saw_rl = True
+        for src in (obj, msg):
+            if str(src.get("api_error_status")) == "429":
+                saw_rl = True
+            for field in (src.get("message"), src.get("error"), src.get("status")):
+                if isinstance(field, str):
+                    low = field.lower()
+                    if ("session limit" in low or "usage limit" in low or "429" in low
+                            or "too many requests" in low or "rejected" in low and "rate" in low):
+                        saw_rl = True
+            for k in ("reset_at", "resets_at", "retry_after", "reset_after_seconds"):
+                v = src.get(k)
+                if v is not None and reset_at is None:
+                    reset_at = v
+    if not saw_rl:
+        return None
+    # a genuinely completed turn overrides — success is not a rate-limit exit.
+    if _codex_result_status(log_path) == "success":
+        return None
+    return {"cause": "rate_limited", "reset_at": reset_at}
+
+
 def _worker_is_live(log_path, runtime=None) -> bool:
     """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
     stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
@@ -2106,6 +2168,37 @@ def _provision_live_worktree(base_cwd, alias):
     return str(wt), branch
 
 
+def _provision_task_worktree(base_cwd, alias, task_id):
+    """#110: a DURABLE per-(agent+task) worktree for a task-linked code worker — a deterministic
+    path + branch REUSED across wakes, so a nudge continues the SAME task on the SAME files
+    instead of a fresh origin/main checkout (Andrew's lost-APK incident). Mirrors
+    _provision_live_worktree / _provision_resident_worktree, keyed on the task:
+      * dir exists    -> reuse it (prior task files intact);
+      * branch exists -> re-add the worktree FROM THE BRANCH (dir was pruned) — NOT origin/main;
+      * neither       -> first wake: create the branch from origin/main.
+    (None, None) on non-git / no task_id / failure → caller falls back to the disposable path."""
+    if not base_cwd or not task_id or _run_git(["rev-parse", "--git-dir"], cwd=base_cwd)[0] != 0:
+        return None, None
+    base = pathlib.Path(base_cwd)
+    _ensure_worktree_exclude(base_cwd)
+    slug = f"{_safe_ref(alias)}-{_safe_ref(task_id)[:12]}"
+    branch = f"orcha/task-{slug}"
+    wt = base / ".orcha-worktrees" / f"task-{slug}"
+    if wt.exists():
+        return str(wt), branch                       # reuse → prior task files intact
+    _run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)   # best-effort fresh base
+    # reattach from the surviving branch (dir pruned but work committed) BEFORE falling back to a
+    # fresh origin/main checkout — this is what makes a nudge resume prior task state (#110 item 2).
+    rc, _ = _run_git(["worktree", "add", str(wt), branch], cwd=base_cwd, timeout=60)
+    if rc != 0:
+        rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), "origin/main"],
+                         cwd=base_cwd, timeout=60)    # first wake → fresh from origin/main
+        if rc != 0:
+            return None, None
+    _overlay_runtime_config(base, wt)
+    return str(wt), branch
+
+
 # the runtime config we overlay into a worktree (see _provision_worktree) is NOT the
 # worker's change — exclude it from the captured diff so it's not noise.
 _DIFF_EXCLUDES = ("." , ":(exclude).claude/orcha.json", ":(exclude).claude/orcha-tabs")
@@ -2139,6 +2232,57 @@ def _teardown_worktree(base_cwd, worktree, branch):
     _run_git(["worktree", "remove", "--force", worktree], cwd=base_cwd)
     if branch and not has_commits:
         _run_git(["branch", "-D", branch], cwd=base_cwd)
+
+
+def _checkpoint_commit(worktree, message) -> bool:
+    """#110: commit a durable task worker's UNCOMMITTED work to its branch when the wake ends,
+    so the source survives even if the worktree dir is later pruned — the branch is the durable
+    fallback the next wake re-adds from (_provision_task_worktree). NO push: review is untouched.
+    Excludes the overlaid runtime config (same pathspec as _capture_diff). Returns True iff a
+    commit was actually made."""
+    if not worktree or not _worktree_is_dirty(worktree):
+        return False
+    _run_git(["add", "-A", "--", *_DIFF_EXCLUDES], cwd=worktree)
+    # nothing staged once the overlay config is excluded (only ignored/config files changed) → skip
+    if _run_git(["diff", "--cached", "--quiet", "--", *_DIFF_EXCLUDES], cwd=worktree)[0] == 0:
+        return False
+    rc, _ = _run_git(["commit", "--no-verify", "-m", message], cwd=worktree)
+    return rc == 0
+
+
+def _remove_task_worktree_keep_branch(base_cwd, worktree) -> None:
+    """#110: remove a DURABLE task worktree dir but ALWAYS keep its branch — the branch is the
+    durable record of the work (a nudge re-adds the worktree from it), so a task worktree is never
+    `branch -D`'d (unlike _teardown_worktree). Called only once the task is completed/cancelled."""
+    if not worktree:
+        return
+    _run_git(["worktree", "remove", "--force", worktree], cwd=base_cwd)
+
+
+def _prune_finished_task_worktrees(api_base: str, cid: str, base_cwd) -> None:
+    """#110: reclaim disk by removing durable task worktrees whose task is DONE. Task worktrees are
+    kept across wakes (so a nudge resumes prior state) and are ONLY deleted once the task is
+    completed or cancelled — never mid-flight. The branch is always kept (the work stays
+    recoverable). Best-effort: any error just leaves the worktree for the next pass."""
+    if not base_cwd:
+        return
+    root = pathlib.Path(base_cwd) / ".orcha-worktrees"
+    if not root.is_dir():
+        return
+    dirs = [p for p in root.iterdir() if p.is_dir() and p.name.startswith("task-")]
+    if not dirs:
+        return
+    tasks = (_get_json(f"{api_base}/api/containers/{cid}/tasks?limit=500") or {}).get("tasks") or []
+    done = {"completed", "cancelled"}
+    for t in tasks:
+        tid = t.get("id")
+        if t.get("status") not in done or not tid:
+            continue
+        # dir name is task-<aliasslug>-<task12>; match on the task-id suffix (alias-independent).
+        suffix = f"-{_safe_ref(str(tid))[:12]}"
+        for p in dirs:
+            if p.name.endswith(suffix):
+                _remove_task_worktree_keep_branch(base_cwd, str(p))
 
 
 def _is_git_repo(cwd) -> bool:
@@ -2314,6 +2458,109 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
               f"respawn {n}/{HARD_CAP_RESPAWN_MAX}) on the same worktree")
 
 
+def _diff_file_summary(diff, cap: int = 20) -> str:
+    """#110: a short 'files touched' list parsed from a unified diff's `diff --git` headers, for
+    the post-run continuity digest. Capped so a huge diff doesn't bloat the snapshot."""
+    if not diff:
+        return ""
+    files = []
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split(" b/", 1)
+            if len(parts) == 2:
+                files.append(parts[1].strip())
+    if not files:
+        return ""
+    shown = files[:cap]
+    extra = len(files) - len(shown)
+    return ", ".join(shown) + (f" (+{extra} more)" if extra > 0 else "")
+
+
+def _reopen_wake_cursor(api_base: str, aid: str, before_ts) -> None:
+    """#110: rewind this agent's wake cursor to `before_ts` so events a FAILED/rate-limited drain
+    'consumed' at dispatch re-surface for a later wake — the drain didn't actually handle them
+    (issue item 6). No-op if we never captured the pre-wake cursor."""
+    if before_ts is None:
+        return
+    _post_json(f"{api_base}/api/agents/{aid}/wake-reopen", {"before_ts": before_ts})
+
+
+def _synthesize_post_run_digest(api_base: str, aid: str, w: dict, diff,
+                                *, checkpoint_committed: bool = False) -> None:
+    """#110: after a durable TASK worker finishes, write a continuity snapshot so the NEXT boot
+    (via _build_persona) resumes from real progress WITHOUT relying on the agent voluntarily
+    running /orcha-snapshot. Critical for Codex workers, which run no claude SessionEnd hook and so
+    never update the digest (Andrew's digest still said 'paused at plan-review' after the APK was
+    built). Carries forward prior decisions/learnings/audience (mirrors cmd_snapshot — never
+    fabricates reasoning); derives current_focus/open_threads from concrete run facts."""
+    task_id = w.get("task_id")
+    branch = w.get("branch")
+    worktree = w.get("worktree")
+    prior = (_get_json(f"{api_base}/api/agents/{aid}/digest") or {}).get("digest") or {}
+    files = _diff_file_summary(diff)
+    focus = (f"Task {task_id}: work in progress, preserved on branch {branch}."
+             if task_id else f"Work in progress, preserved on branch {branch}.")
+    note = (f"Resume task {task_id}: durable worktree {worktree} on branch {branch}. "
+            + ("Checkpoint commit made. " if checkpoint_committed
+               else "Uncommitted work preserved in the worktree. ")
+            + (f"Files touched: {files}. " if files else "")
+            + "The next wake reattaches here — do NOT restart from origin/main.")
+    # replace any prior #110 resume-note so the thread list doesn't grow unbounded across wakes.
+    threads = [t for t in (prior.get("open_threads") or [])
+               if not (isinstance(t, str) and t.startswith("Resume task"))]
+    threads.append(note)
+    body = {"current_focus": focus,
+            "decisions": prior.get("decisions") or [],
+            "learnings": prior.get("learnings") or [],
+            "open_threads": threads}
+    if prior.get("audience"):
+        body["audience"] = prior["audience"]
+    _post_json(f"{api_base}/api/agents/{aid}/digest", body)
+
+
+def _finish_worker_clean(api_base: str, aid: str, w: dict, quiet: bool, exit_code,
+                         *, ack_kind: str = "released") -> str:
+    """#110: finish a worker that exited cleanly (or was reaped just after completing).
+
+      * DISPOSABLE worker (no task) — finish 'exited', force-remove the worktree (unchanged).
+      * DURABLE task worker, Codex rate-limit exit — classify 'killed'/rate_limited, PRESERVE the
+        worktree, and REWIND the wake cursor so the nudge isn't silently dropped.
+      * DURABLE task worker, normal exit — checkpoint any uncommitted work to the branch, PRESERVE
+        the worktree for the next wake, and synthesize a post-run continuity digest.
+
+    Returns a disposition string ('released' | 'rate_limited' | 'preserved') for the caller's log."""
+    worktree, branch, base_cwd = w.get("worktree"), w.get("branch"), w.get("base_cwd")
+    run_id, log_path = w.get("run_id"), w.get("log_path")
+    diff = _capture_diff(worktree)
+    w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+
+    if not w.get("durable"):
+        _finish_run(api_base, run_id, "exited", exit_code, log_path, diff)
+        _teardown_worktree(base_cwd, worktree, branch)
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                   {"kind": ack_kind, "release_lease": True})
+        return "released"
+
+    rl = _codex_rate_limited_exit(log_path) if w_runtime == RUNTIME_CODEX else None
+    if rl:
+        _finish_run(api_base, run_id, "killed", exit_code, log_path, diff,
+                    kill_reason=json.dumps({"agent_id": aid,
+                                            "run_id": str(run_id) if run_id else None, **rl}))
+        # worktree PRESERVED (work intact); rewind the cursor so the unhandled events re-wake.
+        _reopen_wake_cursor(api_base, aid, w.get("prev_delivered_ts"))
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                   {"kind": "worker_rate_limited", "release_lease": True})
+        return "rate_limited"
+
+    committed = _checkpoint_commit(worktree, f"orcha: checkpoint task {w.get('task_id')} @ wake exit")
+    _finish_run(api_base, run_id, "exited", exit_code, log_path, diff)
+    # KEEP the worktree (no teardown) so the next same-task wake reuses it directly.
+    _synthesize_post_run_digest(api_base, aid, w, diff, checkpoint_committed=committed)
+    _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+               {"kind": ack_kind, "release_lease": True})
+    return "preserved"
+
+
 def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: float = 120.0) -> None:
     """R2.4 reaper + ISS-15/ISS-31 watchdog: for each tracked worker, either release its
     lease on clean exit OR kill it — but kill on STALL, not a fixed deadline. A2: finishes
@@ -2341,15 +2588,11 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # before its status flips, so the SSE never emits `done` ahead of a tail line.
         _pump_one(api_base, aid, w)
         if proc.poll() is not None:    # exited — poll() has reaped the zombie
-            diff = _capture_diff(w.get("worktree"))
-            _finish_run(api_base, w.get("run_id"), "exited", proc.returncode, w.get("log_path"), diff)
-            _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
-            _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "released", "release_lease": True})
+            disp = _finish_worker_clean(api_base, aid, w, quiet, proc.returncode)
             live_workers.pop(aid, None)
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
-                      f"exited — lease released")
+                      f"exited — {disp}")
             continue
         # Wake-latency fix: this worker is still alive — renew its short single-flight lease so
         # it doesn't expire mid-run (which would let a second worker spawn). A crashed worker, or
@@ -2422,16 +2665,15 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             if now - seen <= GRACEFUL_EXIT_SECS:
                 continue               # within the graceful window — let it exit on its own
             _kill_worker(proc, graceful=True)   # SIGTERM (let teardown run) then SIGKILL
-            diff = _capture_diff(w.get("worktree"))
             exit_code = 0 if rstatus == "success" else proc.returncode
-            _finish_run(api_base, w.get("run_id"), "exited", exit_code, w.get("log_path"), diff)
-            _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
-            _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "worker_completed_reaped", "release_lease": True})
+            # #110: durable-aware finish (preserve task worktree / rate-limit classify) instead of
+            # the old unconditional force-teardown.
+            disp = _finish_worker_clean(api_base, aid, w, quiet, exit_code,
+                                        ack_kind="worker_completed_reaped")
             live_workers.pop(aid, None)
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}) completed but lingered "
-                      f">{GRACEFUL_EXIT_SECS:.0f}s after result — reaped as exited")
+                      f">{GRACEFUL_EXIT_SECS:.0f}s after result — reaped as exited ({disp})")
             continue
         # ISS-45: a stalled-looking worker can be log-silent yet ALIVE — waiting on an in-flight
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
@@ -2530,6 +2772,10 @@ HARD_CAP_RESPAWN_MAX = 3
 # within this window instead of squatting for the full 1200s hard-cap — which is what starved a
 # fresh high-priority event for minutes. Renew interval (the tick) must stay well under this.
 WAKE_LEASE_TTL_SECS = 180.0
+
+# #110: how often the daemon prunes durable task worktrees whose task is completed/cancelled.
+# Off the hot path — a task finishing minutes before its worktree is reclaimed is fine.
+TASK_WORKTREE_PRUNE_SECS = 300.0
 
 
 def reap_orphan_leases(api_base: str, cid: str, quiet: bool) -> None:
@@ -2828,9 +3074,19 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             _single_noncode = ((cand.get("pending_events") or 0) <= 1
                                and cand.get("latest_event") in _NONCODE)
             is_code_wake = bool(auto) or bool(cand.get("wake_task_id")) or not _single_noncode
+            # #110: a task-linked code wake gets a DURABLE per-(agent+task) worktree (reused +
+            # reattachable across wakes) so a nudge continues the SAME task on the SAME files;
+            # a non-task code wake keeps the disposable per-wake worktree. `durable` flags the
+            # reaper to PRESERVE the tree on clean exit instead of force-removing it.
+            wake_task_id = auto[0] if auto else cand.get("wake_task_id")
             worktree = branch = None
+            durable = False
             if is_code_wake and hc and not dry_run and live_workers is not None:
-                worktree, branch = _provision_worktree(hc, cand.get("alias"))
+                if wake_task_id:
+                    worktree, branch = _provision_task_worktree(hc, cand.get("alias"), wake_task_id)
+                    durable = worktree is not None
+                if not worktree:
+                    worktree, branch = _provision_worktree(hc, cand.get("alias"))
             run_cwd = worktree or hc
             sent, cmd, proc = spawn_headless(run_cwd, prompt,
                                        cand.get("headless_flags"), dry_run,
@@ -2850,7 +3106,7 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                 # and the run was invisible in the thread it was answering.
                 run = _post_json(f"{api_base}/api/agents/{cand['agent_id']}/runs",
                                  {"wake_kind": "ephemeral", "wake_event": event,
-                                  "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                  "task_id": wake_task_id,
                                   "log_path": str(log_path) if log_path else None,
                                   "pid": getattr(proc, "pid", None),
                                   "runtime": cand.get("model_runtime"),
@@ -2870,6 +3126,11 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     "last_size": 0, "last_progress_ts": time.time(),
                     "run_id": run_id, "log_path": log_path,
                     "worktree": worktree, "branch": branch, "base_cwd": hc,
+                    # #110: durable task worktree — the reaper PRESERVES it (checkpoint-commits
+                    # dirty work to the branch) on clean exit instead of force-removing it, and
+                    # captures the pre-wake cursor so a rate-limited/failed drain can rewind it.
+                    "durable": durable, "task_id": wake_task_id,
+                    "prev_delivered_ts": cand.get("delivered_ts"),
                     # ISS-39: per-worker cursor for streaming stream-json lines into the DB
                     "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
                     # ISS-76: everything reap_workers needs to CHECKPOINT-RESPAWN this worker on
@@ -2881,11 +3142,17 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                     "alias": cand.get("alias"),
                                     "model": cand.get("model"),
                                     "model_runtime": cand.get("model_runtime"),
-                                    "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                    "task_id": wake_task_id,
+                                    "durable": durable,
                                     "event": event}}
             elif worktree and not sent:
-                # spawn failed after we made a worktree — clean it up (no orphan)
-                _teardown_worktree(hc, worktree, branch)
+                # spawn failed after we made a worktree — clean it up (no orphan). A DURABLE task
+                # worktree is torn down safely (dirty work preserved; #110); a disposable one is
+                # force-removed as before.
+                if durable:
+                    _safe_teardown_worktree(hc, worktree, branch)
+                else:
+                    _teardown_worktree(hc, worktree, branch)
         else:
             sent, cmd = False, "(no tmux pane / headless cwd recorded — unreachable)"
 
@@ -4568,6 +4835,7 @@ def cmd_notifier(args) -> None:
               f"(cooldown={args.cooldown}s, min-idle={args.min_idle}s). Ctrl-C to stop.")
     live_workers: dict = {}   # {agent_id: pid} — for releasing leases on worker exit
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
+    last_task_prune = 0.0     # #110: throttle the finished-task-worktree prune (see below)
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
     # #103: an immediate "I'm up" beat so the portal shows healthy the moment the daemon starts,
@@ -4607,6 +4875,11 @@ def cmd_notifier(args) -> None:
                      min_idle=args.min_idle, quiet=args.quiet,
                      lease_ttl=getattr(args, "lease_ttl", 1200.0),
                      live_workers=live_workers, base_cwd=project_cwd)
+                # #110: on a low cadence, reclaim durable task worktrees whose task is now
+                # completed/cancelled (kept across wakes; branch preserved). Off the hot path.
+                if time.time() - last_task_prune > TASK_WORKTREE_PRUNE_SECS:
+                    last_task_prune = time.time()
+                    _prune_finished_task_worktrees(api_base, cid, str(cwd))
             except Exception as e:  # a daemon must not die on a transient error
                 tick_error = str(e)
                 if not args.quiet:
