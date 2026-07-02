@@ -133,3 +133,91 @@ async def test_taskless_wake_stays_unattributed(client, make_agent):
     assert f.status_code == 200
     run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
     assert run["task_id"] is None
+
+
+# ---------- non-task-work gate (GH #83 R2): conversation & live runs stay NULL ----------
+#
+# A resident/ephemeral per-turn conversation reply or a live terminal session posts a run with
+# no task_id because it is definitionally NOT task work. Without the gate the lazy inference would
+# stamp it onto the agent's SOLE in_progress task (the common case for a loop agent), regressing
+# the GH #340 activity label and polluting /api/tasks/{tid}/runs. Each test below gives the agent
+# EXACTLY ONE in_progress task, so an unattributed result proves the gate — not the absence of a
+# candidate — is what keeps the run NULL.
+
+
+async def test_resident_conversation_turn_run_stays_unattributed(client, make_agent, make_task):
+    """A resident per-turn conversation reply (wake_kind='resident', wake_event='conversation_turn')
+    is not task work: it stays NULL at start AND finish even though the agent has one in_progress
+    task the inference would otherwise pick."""
+    a = await make_agent("W", "eng")
+    aid = a["agent_id"]
+    await make_task("T", "dod", assignee_alias="W")   # the single in_progress task the gate must ignore
+
+    r = await client.post(f"/api/agents/{aid}/runs",
+                          json={"wake_kind": "resident", "wake_event": "conversation_turn"})
+    assert r.status_code == 201, r.text
+    assert r.json()["task_id"] is None                # gate skipped inference at start
+
+    f = await client.post(f"/api/runs/{r.json()['run_id']}/finish", json={"status": "exited"})
+    assert f.status_code == 200
+    run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
+    assert run["task_id"] is None                     # gate skipped the finish backstop too
+
+
+async def test_codex_conversation_run_with_conversation_id_stays_unattributed(
+        client, make_agent, make_task):
+    """A Codex ephemeral conversation turn carries a conversation_id — the gate flags it as
+    non-task work and leaves it NULL at start AND finish despite the agent's sole in_progress task."""
+    human = await make_agent("Kedar", "human", kind="human")
+    a = await make_agent("W", "eng")
+    aid = a["agent_id"]
+    await make_task("T", "dod", assignee_alias="W")   # single in_progress task the gate must ignore
+    conv = (await client.post(f"/api/agents/{aid}/conversations",
+                              json={"actor_agent_id": human["agent_id"]})).json()["conversation"]["id"]
+
+    r = await client.post(f"/api/agents/{aid}/runs",
+                          json={"wake_kind": "ephemeral", "wake_event": "conversation_turn",
+                                "conversation_id": conv})
+    assert r.status_code == 201, r.text
+    assert r.json()["task_id"] is None                # conversation_id → gated at start
+
+    f = await client.post(f"/api/runs/{r.json()['run_id']}/finish", json={"status": "exited"})
+    assert f.status_code == 200
+    run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
+    assert run["task_id"] is None                     # still gated on finish
+
+
+async def test_live_terminal_run_stays_unattributed(client, make_agent, make_task):
+    """A live terminal session (wake_kind='live') is not task work — it stays NULL at start AND
+    finish even with a single in_progress task available to the inference."""
+    a = await make_agent("W", "eng")
+    aid = a["agent_id"]
+    await make_task("T", "dod", assignee_alias="W")   # single in_progress task the gate must ignore
+
+    r = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "live"})
+    assert r.status_code == 201, r.text
+    assert r.json()["task_id"] is None                # wake_kind='live' → gated at start
+
+    f = await client.post(f"/api/runs/{r.json()['run_id']}/finish", json={"status": "exited"})
+    assert f.status_code == 200
+    run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
+    assert run["task_id"] is None                     # still gated on finish
+
+
+async def test_explicit_task_id_on_conversation_run_still_attaches(client, make_agent, make_task):
+    """The gate only skips the INFERENCE fallback — it never blocks an explicit task_id. A run
+    flagged as conversation work that nonetheless supplies a task_id is honoured and attached,
+    at start and through finish."""
+    a = await make_agent("W", "eng")
+    aid = a["agent_id"]
+    tid = (await make_task("T", "dod", assignee_alias="W"))["id"]
+
+    r = await client.post(f"/api/agents/{aid}/runs",
+                          json={"wake_kind": "resident", "wake_event": "conversation_turn",
+                                "task_id": tid})
+    assert r.status_code == 201, r.text
+    assert r.json()["task_id"] == tid                 # explicit link honoured despite the gate
+
+    await client.post(f"/api/runs/{r.json()['run_id']}/finish", json={"status": "exited"})
+    run = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
+    assert run["task_id"] == tid                      # finish did not drop the explicit link

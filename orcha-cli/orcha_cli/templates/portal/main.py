@@ -5284,6 +5284,19 @@ def _infer_agent_active_task(cur, aid: str) -> Optional[str]:
     return str(rows[0]["id"]) if len(rows) == 1 else None
 
 
+def _is_non_task_work(wake_kind, wake_event, conversation_id) -> bool:
+    """GH #83: some spawn paths post a run with no task_id because the run is definitionally NOT
+    task work — a resident/ephemeral per-turn conversation reply or a live terminal session. Those
+    are meant to stay task_id=NULL: attributing them to the agent's sole in_progress task would
+    (a) regress the GH #340 activity label (home.html activity() takes the task_id branch before
+    the conversation/live label) and (b) pollute /api/tasks/{tid}/runs with non-task work. This
+    predicate flags exactly those runs so the lazy-attribution inference is skipped for them. An
+    explicit task_id is always honored — this only gates the inference fallback, never an override."""
+    return (wake_event == "conversation_turn"
+            or wake_kind == "live"
+            or conversation_id is not None)
+
+
 @app.post("/api/agents/{aid}/runs", status_code=201)
 def start_worker_run(aid: str, body: WorkerRunStart):
     """A2: the notifier records a worker it just spawned (status=running). Returns run_id;
@@ -5301,10 +5314,11 @@ def start_worker_run(aid: str, body: WorkerRunStart):
         lazy_attributed = False
         if task_id is not None:
             _require_task(cur, task_id)   # 404 on a valid-but-unknown task, not a 500 FK violation
-        else:
+        elif not _is_non_task_work(body.wake_kind, body.wake_event, body.conversation_id):
             # GH #83: the wake path gave us no task link — lazily attribute the run to the
             # agent's current in_progress task so accept-task / checkpoint-respawn / any
-            # task_id-less wake never leaves the worker run floating unattached.
+            # task_id-less wake never leaves the worker run floating unattached. Skipped for
+            # conversation/live runs (see _is_non_task_work): those stay NULL by design.
             task_id = _infer_agent_active_task(cur, aid)
             lazy_attributed = task_id is not None
         if body.conversation_id is not None:
@@ -5399,16 +5413,22 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
     if body.status not in ("exited", "killed"):
         raise HTTPException(422, "status must be 'exited' or 'killed'")
     with db_cursor() as (conn, cur):
-        cur.execute("SELECT run_id, agent_id, task_id FROM worker_runs WHERE run_id=%s", (run_id,))
+        cur.execute(
+            "SELECT run_id, agent_id, task_id, wake_kind, wake_event, conversation_id "
+            "FROM worker_runs WHERE run_id=%s", (run_id,))
         existing = cur.fetchone()
         if not existing:
             raise HTTPException(404, f"worker run {run_id} not found")
         # GH #83: backstop the lazy attribution — if the run started with no task link and one
         # is determinable now (e.g. the task only reached in_progress AFTER spawn), reconcile it
         # on reap so the finished run still surfaces under its task. COALESCE so a run that was
-        # already attributed (at spawn or a prior finish) is never overwritten.
+        # already attributed (at spawn or a prior finish) is never overwritten. Skip the
+        # inference for conversation/live runs — they are meant to stay NULL (see _is_non_task_work).
         late_task_id = (_infer_agent_active_task(cur, str(existing["agent_id"]))
-                        if existing["task_id"] is None else None)
+                        if existing["task_id"] is None
+                        and not _is_non_task_work(existing["wake_kind"], existing["wake_event"],
+                                                  existing["conversation_id"])
+                        else None)
         cur.execute(
             """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
                       task_id=COALESCE(task_id, %s),
