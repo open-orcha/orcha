@@ -3486,38 +3486,48 @@ def agent_inbox(aid: str, since: Optional[str] = None):
 
 
 @app.get("/api/agents/{aid}/outbox")
-def agent_outbox(aid: str, status: Optional[str] = None):
+def agent_outbox(aid: str, status: Optional[str] = None,
+                 include_recently_closed: bool = False, closed_window_hours: int = 24):
     """Outgoing requests where this agent is the requester.
 
     Use `?status=answered` to see only requests waiting for me to close (or resume the parent).
     Default: all non-closed (open, answered, escalated-via-target-null still open).
+
+    GH #71: pass `?include_recently_closed=true` to also see requests closed within the last
+    `closed_window_hours` (default 24) — non-closed first, then recently-closed, each newest-first.
+    This lets a sender check their own outbox (open AND recently-resolved) before re-asking, so a
+    just-answered-and-closed request doesn't look gone and trigger a duplicate ask. Ignored when an
+    explicit `status` filter is given.
     """
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
+    cols = """SELECT r.id, r.type, r.status, r.priority, r.payload, r.response,
+                     r.created_at, r.responded_at, r.expires_at, r.closed_at,
+                     r.target_id, t.alias AS target_alias, r.requester_id,
+                     r.parent_request_id, r.chain_depth
+              FROM requests r
+              LEFT JOIN agents t ON t.id = r.target_id """
     with db_cursor() as (_, cur):
         _require_agent(cur, aid)
         if status:
             cur.execute(
-                """SELECT r.id, r.type, r.status, r.priority, r.payload, r.response,
-                          r.created_at, r.responded_at, r.expires_at, r.closed_at,
-                          r.target_id, t.alias AS target_alias, r.requester_id,
-                          r.parent_request_id, r.chain_depth
-                   FROM requests r
-                   LEFT JOIN agents t ON t.id = r.target_id
-                   WHERE r.requester_id = %s AND r.status = %s
-                   ORDER BY r.created_at DESC""",
+                cols + "WHERE r.requester_id = %s AND r.status = %s ORDER BY r.created_at DESC",
                 (aid, status),
+            )
+        elif include_recently_closed:
+            # bound the window (avoid an unbounded closed backlog); clamp to a sane 1h–7d range.
+            hours = max(1, min(closed_window_hours, 168))
+            cur.execute(
+                cols + """WHERE r.requester_id = %s
+                            AND (r.status <> 'closed'
+                                 OR (r.status = 'closed'
+                                     AND r.closed_at >= now() - (%s || ' hours')::interval))
+                          ORDER BY (r.status = 'closed'), r.created_at DESC""",
+                (aid, str(hours)),
             )
         else:
             cur.execute(
-                """SELECT r.id, r.type, r.status, r.priority, r.payload, r.response,
-                          r.created_at, r.responded_at, r.expires_at, r.closed_at,
-                          r.target_id, t.alias AS target_alias, r.requester_id,
-                          r.parent_request_id, r.chain_depth
-                   FROM requests r
-                   LEFT JOIN agents t ON t.id = r.target_id
-                   WHERE r.requester_id = %s AND r.status <> 'closed'
-                   ORDER BY r.created_at DESC""",
+                cols + "WHERE r.requester_id = %s AND r.status <> 'closed' ORDER BY r.created_at DESC",
                 (aid,),
             )
         return {"outgoing_requests": _annotate_request_ownership(cur.fetchall())}
@@ -6681,6 +6691,38 @@ class TaskRequestPayload(BaseModel):
     protocol: Optional[ProtocolFields] = None
 
 
+# GH #71: sizable work (code review / sign-off, writing docs, actual coding) must be sent as a
+# `task` request — not `info` — so it gets its own task-bound lifecycle instead of being closed by a
+# drain turn the moment it's answered (see #72). This is the deterministic *backstop*; the primary
+# path is the `/orcha-ask` prompt guidance. The patterns are intentionally HIGH-PRECISION — we'd
+# rather miss a borderline case (the prompt catches it) than reject a genuine quick question. A bare
+# verb ("review this", "can you help") never trips it; only a work verb paired with a work artifact
+# (pr / code / plan / diff / docs / endpoint / test / migration …) does.
+_WORK_REQUEST_PATTERNS = [
+    # review / sign-off / approve a concrete artifact
+    re.compile(
+        r"\b(review|sign[\s-]?off(?:\s+on)?|approve)\b[^.?!]{0,60}"
+        r"\b(pr|prs|mr|code|plan|diff|patch|change|changes|implementation|design|spec|"
+        r"doc|docs|document|documentation|migration)\b",
+        re.I,
+    ),
+    # implement / write / build / fix a concrete artifact
+    re.compile(
+        r"\b(implement|build|refactor|code\s+up|write|create|add|update|fix|patch)\b[^.?!]{0,60}"
+        r"\b(feature|endpoint|api|function|method|module|class|component|page|ui|"
+        r"test|tests|migration|script|bug|code|documentation|docs)\b",
+        re.I,
+    ),
+]
+
+
+def _looks_like_work(payload: Optional[str]) -> bool:
+    """GH #71: True when an info-request payload reads like sizable work that should be a task."""
+    if not payload:
+        return False
+    return any(p.search(payload) for p in _WORK_REQUEST_PATTERNS)
+
+
 class RequestCreate(BaseModel):
     requester_agent_id: str
     target_alias: Optional[str] = Field(default=None, max_length=64)   # mutually exclusive with target_agent_id
@@ -6825,6 +6867,23 @@ def create_request(cid: str, body: RequestCreate):
                     "participates in (owns/assignee/creator/collaborator)",
                 )
             originating_task_id = body.originating_task_id
+
+        # GH #71: an info request to another AI that reads like sizable work (review / sign-off /
+        # docs / coding) is rejected with a nudge to resend as a task — so the work gets its own
+        # task-bound lifecycle and can't be silently closed by a drain turn (#72). A question
+        # escalated to a human is legitimately `info`, so this never fires on a human target.
+        if body.type == "info":
+            cur.execute("SELECT kind FROM agents WHERE id=%s", (target_id,))
+            trow = cur.fetchone()
+            target_is_human = bool(trow) and trow["kind"] == "human"
+            if not target_is_human and _looks_like_work(body.payload):
+                raise HTTPException(
+                    422,
+                    "This reads like a work request (review / sign-off / documentation / coding). "
+                    "Send it as a task so it gets its own task-bound lifecycle: add "
+                    "`--task --task-dod \"...\"`. Plain `info` requests are for quick questions "
+                    "answered from the target's own knowledge.",
+                )
 
         # Phase 3 (Orcha#5): type='task' carries a TaskRequestPayload in body.task
         # which gets stuffed into the JSONB `detail` column. The task itself is

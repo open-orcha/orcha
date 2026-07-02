@@ -54,6 +54,24 @@ dev  →  Lens (Reviewer I)  →  Gate (Reviewer II)  →  Helm (lead)  →  Ked
 - Every hand-off **returns to Helm** first. **Nothing reaches Kedar except through Helm.**
 - One task in progress per agent at a time.
 
+### 3a. Reviews and sizable work go out as **task** requests (GH #71)
+
+When you hand work to another agent, the request **type** is not arbitrary:
+
+- **Task request** (`/orcha-ask <alias> "..." --task --task-dod "..."`) — for any sizable /
+  actionable work you want *done*: **code review or sign-off, writing/updating documentation,
+  writing or changing code**, or anything that produces an artifact or a PR. A task request gets
+  its own task-bound lifecycle (accept → work → answer → close).
+- **Info request** (plain `/orcha-ask`) — only for a genuine quick question the target answers
+  from their own knowledge, when you truly can't get the answer yourself. **If in doubt, it's a
+  task.**
+
+Why it matters: an info request answered while the requester already has a live "body" can be
+consumed by a drain turn that only *closes* it — the unblocked work never starts (the wake/drain
+root cause is tracked separately in #72). Sending reviews and sign-offs as **task** requests gives
+them a proper lifecycle and an auditable trail. The server backstops this — an info request that
+reads like work is rejected with a nudge to add `--task`.
+
 ## 4. API source of truth — Swagger / OpenAPI
 
 The API contract's single source of truth is the live **Swagger / OpenAPI** surface that
