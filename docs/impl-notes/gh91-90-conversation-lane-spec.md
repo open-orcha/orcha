@@ -121,6 +121,11 @@ terminal is minted a WORK token (terminal_bridge), so it passes.
   code/tests/PRs/long investigation, CREATE an assigned task (clear title/description/DoD +
   protocol that says to POST findings back to the task thread), reply with a one-line ack + the
   task link, and STOP — do not do the work inline. Judge up front OR mid-flight.
+- Self-referential handoff carve-out: when the conversation worker assigns a task to itself and the
+  task overlaps live conversation context only the resident currently holds, do only the tiny
+  context-only slice first and record that result into the initial task description/protocol (or
+  create unassigned, post the note, then assign). Unrelated tasks keep the normal fresh-worker
+  handoff path. This remains model-facing because only the resident can judge live-context overlap.
 - `format_persona(..., lane="work")`: when lane=='conversation', append CONVERSATION_LANE_DIRECTIVE.
 - `_build_persona(..., lane="work")`: thread through.
 - `_wrap_conversation_turn(content) -> str`: prepend one short STABLE reminder sentence.

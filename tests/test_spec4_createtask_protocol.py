@@ -19,6 +19,7 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
+SKILLS = REPO / "orcha-cli" / "orcha_cli" / "templates" / "skills"
 
 
 # ---------- protoEmpty: real JS execution ----------
@@ -129,3 +130,18 @@ def test_new_task_form_human_gated_posts_to_real_route():
     openf = html[html.index("function openNewTaskModal"):]
     openf = openf[: openf.index("function ", 10)]
     assert "actorOrWarn()" in openf, "New-Task modal not gated on an acting human"
+
+
+def test_orcha_task_new_skill_preserves_self_referential_context_before_post():
+    """Conversation-lane self-handoff must be checked before the create call can wake a worker."""
+    skill = (SKILLS / "orcha-task-new.md").read_text()
+    check = skill[skill.index("Conversation-lane self-handoff check before POST"):]
+    post_idx = skill.index("**POST** the task")
+    post = skill[post_idx:]
+    assert skill.index("Conversation-lane self-handoff check before POST") < post_idx
+    assert "ORCHA_CONVERSATION_WORKER=1" in check
+    assert "self-referential/overlap case" in check
+    assert "initial `description` or `protocol.notes`" in check
+    assert "create the task unassigned first, post the note, then assign it" in check
+    assert "normal fresh handoff path" in check
+    assert "curl -fsS -X POST" in post

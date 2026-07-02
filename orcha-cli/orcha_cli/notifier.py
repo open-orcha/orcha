@@ -769,6 +769,21 @@ HUMAN_COMMS_GUARDRAIL = (
 )
 
 
+# GH #91/#90: create-time rule for the one duplicate-work case left after the lane split. This is
+# intentionally advisory/model-facing, not a backend gate: only the conversation embodiment can judge
+# whether the new task overlaps state that exists solely in its live chat context.
+_SELF_REFERENTIAL_HANDOFF_RULE = (
+    "Self-referential handoffs: before creating a task assigned to yourself/current agent, check "
+    "whether the task asks you to continue, finish, or act on work that overlaps this live context "
+    "from the conversation. If yes, and only if yes, do the tiny resident-only slice that depends on "
+    "that live context before task creation, then bake the result into the initial task description "
+    "or protocol notes as already completed so the spawned worker inherits it and does not redo it. "
+    "If a separate thread note is needed, create the task unassigned, post that note, then assign it; "
+    "do not assign first. For unrelated tasks, or for work larger than a tiny context-only slice, do "
+    "no work inline and use the normal fresh handoff path."
+)
+
+
 # GH #91/#90: the conversation-lane directive. A conversation embodiment (resident, or an ephemeral
 # woken purely to talk) is the RESPONDER on the human's chat — but it must NOT silently swallow real
 # work inline. The split is: quick asks (questions, brainstorm, status, a one-line lookup) get
@@ -794,7 +809,8 @@ CONVERSATION_LANE_DIRECTIVE = (
     "exactly one line, e.g. \"I'll handle this in the background — follow the task thread: <link>\".\n"
     "You may decide up front (the ask is obviously long) OR mid-flight — if a quick reply is turning "
     "into a long investigation, hand it off at that point rather than grinding it out inline. Only "
-    "genuinely long work becomes a task; pure questions, brainstorming, and status stay inline."
+    "genuinely long work becomes a task; pure questions, brainstorming, and status stay inline.\n"
+    f"{_SELF_REFERENTIAL_HANDOFF_RULE}"
 )
 
 
@@ -864,7 +880,9 @@ def _render_task_body(protocol: Optional[dict]) -> Optional[str]:
 _CONVERSATION_TURN_REMINDER = (
     "[conversation lane] Answer directly if quick. If this needs real work (investigation, code, "
     "tests, PR) or more than ~3-4 min, create an assigned task with a protocol and reply with a "
-    "one-line ack + the task link instead of doing it now."
+    "one-line ack + the task link instead of doing it now. For a self-referential task that overlaps "
+    "your live context, first do only the tiny context-only slice and put that result in the task's "
+    "initial task description/notes before assignment, so the spawned worker does not redo it."
 )
 
 
@@ -3235,7 +3253,10 @@ _CONVERSATION_DISPATCH_DIRECTIVE = (
     "a definition of done; and a protocol note telling the assigned worker to POST its findings back "
     "to the task thread), then make your chat reply ONE short line plus the task link, e.g. \"I'll "
     "handle this in the background — follow the task thread: <link>\". You may decide up front or "
-    "mid-reply. Do not call `/orcha-listen`."
+    "mid-reply. For a self-referential task assigned to yourself/current agent that overlaps your "
+    "live context from this conversation, do only the tiny resident-only slice first and include its result in "
+    "the initial task description or protocol notes before assignment, so the worker inherits it and "
+    "does not redo it; unrelated tasks keep the normal fresh handoff path. Do not call `/orcha-listen`."
 )
 
 

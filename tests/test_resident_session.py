@@ -247,6 +247,37 @@ def test_codex_resume_prompt_omits_history():
     assert "RESUMES your existing Codex session" in p
 
 
+def test_conversation_prompts_preserve_self_referential_context_slice():
+    """GH #91/#90 follow-up: the remaining duplicate-work path is self-referential handoff.
+
+    Old behavior told the resident to create an assigned task immediately. That woke a fresh worker
+    before the resident-only live-context slice was recorded, so the worker redid it. The
+    conversation prompts must now require that tiny slice to be completed and baked into the initial
+    task state before assignment wakes the worker, while leaving unrelated handoffs on the fresh path.
+    """
+    cold_persona = notifier.format_persona({"system_prompt": "You are Vox."}, None,
+                                           lane="conversation")
+    warm_turn = notifier._wrap_conversation_turn("please make yourself finish this")
+    codex_cold = notifier._conversation_worker_prompt(
+        "Vox",
+        [{"seq": 7, "role": "human", "content": "please make yourself finish this"}],
+        [],
+    )
+    codex_resume = notifier._codex_resume_prompt(
+        "Vox",
+        [{"seq": 8, "role": "human", "content": "continue that as a task for yourself"}],
+    )
+
+    for prompt in (cold_persona, warm_turn, codex_cold, codex_resume):
+        lower = prompt.lower()
+        assert "self-referential" in lower
+        assert "live context" in lower
+        assert "initial task description" in lower
+        assert "does not redo it" in lower
+    assert "unrelated tasks" in cold_persona
+    assert "normal fresh handoff path" in cold_persona
+
+
 def test_reconcile_codex_conversation_runs_reattaches_live_pid(monkeypatch, tmp_path):
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "model": "gpt-5.5", "model_runtime": "codex",
