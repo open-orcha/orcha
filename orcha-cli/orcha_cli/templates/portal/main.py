@@ -2277,12 +2277,20 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                          FROM worker_runs wr
                          LEFT JOIN tasks t3 ON t3.id = wr.task_id
                         WHERE wr.agent_id = a.id AND wr.status = 'running'
-                          -- GH #91/#90: a live lease in EITHER lane means the agent is embodied, so
-                          -- surface its run — a warm CONVERSATION resident (conv_lease_until) is just
-                          -- as live as a WORK worker (wake_lease_until). Without the conv arm a resident
-                          -- drain run read idle (the #340 regression, re-opened by the lane split).
-                          AND ((ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now())
-                               OR (ws.conv_lease_until IS NOT NULL AND ws.conv_lease_until > now()))
+                          -- GH #91/#90: keep active_run on the SAME lane surfaced by embodiment.
+                          -- Work wins when both lanes are live; otherwise a live conversation lease
+                          -- surfaces its conversation run. Without this, a newer resident run could
+                          -- bind the portal's activity/terminal state while the row reports a WORK
+                          -- embodiment.
+                          AND (
+                              (ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
+                               AND wr.lane = 'work')
+                              OR (
+                                  NOT (ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now())
+                                  AND ws.conv_lease_until IS NOT NULL AND ws.conv_lease_until > now()
+                                  AND wr.lane = 'conversation'
+                              )
+                          )
                         ORDER BY wr.started_at DESC LIMIT 1) AS active_run,
                       -- §3b: the agent's current EMBODIMENT (the live single-flight lease kind, else
                       -- 'idle') so the portal can render the live-session indicator + lock/guard the
