@@ -10,6 +10,8 @@ data class StoredContainer(
     val id: String,
     val displayName: String,
     val baseUrl: String,
+    val humanAgentId: String? = null,
+    val humanAlias: String? = null,
     val lastOpenedAt: Long = System.currentTimeMillis(),
 )
 
@@ -47,4 +49,3 @@ class ContainerStore(context: Context) {
         const val KEY = "containers"
     }
 }
-

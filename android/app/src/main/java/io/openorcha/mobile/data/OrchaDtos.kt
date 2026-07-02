@@ -26,6 +26,8 @@ data class ContainerDto(
     val description: String? = null,
     val status: String = "unknown",
     @SerialName("root_task_id") val rootTaskId: String? = null,
+    @SerialName("wakes_enabled") val wakesEnabled: Boolean? = null,
+    @SerialName("autonomy_level") val autonomyLevel: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("completed_at") val completedAt: String? = null,
 )
@@ -38,10 +40,14 @@ data class AgentDto(
     val kind: String = "ai",
     val status: String? = null,
     val model: String? = null,
+    @SerialName("prompt_preview") val promptPreview: String? = null,
     @SerialName("wake_enabled") val wakeEnabled: Boolean? = null,
     @SerialName("auto_wake_interval_secs") val autoWakeIntervalSecs: Int? = null,
     @SerialName("current_task") val currentTask: AgentTaskRef? = null,
     @SerialName("active_run") val activeRun: ActiveRunDto? = null,
+    @SerialName("last_active") val lastActive: String? = null,
+    @SerialName("heartbeat_age_secs") val heartbeatAgeSecs: Double? = null,
+    @SerialName("terminated_at") val terminatedAt: String? = null,
 )
 
 @Serializable
@@ -71,7 +77,13 @@ data class TaskDto(
     val priority: Int? = null,
     val result: String? = null,
     @SerialName("is_root") val isRoot: Boolean = false,
+    @SerialName("created_by_agent_id") val createdByAgentId: String? = null,
+    @SerialName("owner_alias") val ownerAlias: String? = null,
+    @SerialName("owner_id") val ownerId: String? = null,
     val assignees: List<String> = emptyList(),
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("completed_at") val completedAt: String? = null,
     @SerialName("message_summary") val messageSummary: MessageSummaryDto? = null,
     @SerialName("plan_message") val planMessage: TaskMessageDto? = null,
     @SerialName("plan_decision") val planDecision: String? = null,
@@ -102,12 +114,26 @@ data class RequestDto(
     val priority: Int? = null,
     val payload: String = "",
     val response: String? = null,
+    @SerialName("rejection_reason") val rejectionReason: String? = null,
     @SerialName("requester_id") val requesterId: String? = null,
     @SerialName("requester_alias") val requesterAlias: String? = null,
     @SerialName("target_id") val targetId: String? = null,
     @SerialName("target_alias") val targetAlias: String? = null,
+    @SerialName("parent_request_id") val parentRequestId: String? = null,
+    @SerialName("chain_depth") val chainDepth: Int = 0,
+    @SerialName("spawned_task_id") val spawnedTaskId: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("responded_at") val respondedAt: String? = null,
+    @SerialName("closed_at") val closedAt: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    val detail: JsonElement? = null,
+    @SerialName("task_link") val taskLink: TaskLinkDto? = null,
+)
+
+@Serializable
+data class TaskLinkDto(
+    @SerialName("task_id") val taskId: String? = null,
+    val title: String? = null,
 )
 
 @Serializable
@@ -124,3 +150,206 @@ data class TaskHeaderDto(
     @SerialName("definition_of_done") val definitionOfDone: String? = null,
 )
 
+@Serializable
+data class RunsResponse(
+    @SerialName("task_id") val taskId: String? = null,
+    @SerialName("agent_id") val agentId: String? = null,
+    val runs: List<RunDto> = emptyList(),
+)
+
+@Serializable
+data class RunDto(
+    @SerialName("run_id") val runId: String,
+    @SerialName("agent_id") val agentId: String? = null,
+    @SerialName("agent_alias") val agentAlias: String? = null,
+    @SerialName("task_id") val taskId: String? = null,
+    @SerialName("task_title") val taskTitle: String? = null,
+    val status: String = "unknown",
+    @SerialName("wake_kind") val wakeKind: String? = null,
+    @SerialName("wake_event") val wakeEvent: String? = null,
+    val runtime: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
+)
+
+@Serializable
+data class ModelsResponse(
+    val models: List<ModelDto> = emptyList(),
+    val default: String? = null,
+)
+
+@Serializable
+data class ModelDto(
+    val id: String,
+    val name: String? = null,
+    val provider: String? = null,
+    val runtime: String? = null,
+)
+
+@Serializable
+data class ConversationDto(
+    val id: String,
+    @SerialName("agent_id") val agentId: String? = null,
+    val status: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("last_turn_at") val lastTurnAt: String? = null,
+)
+
+@Serializable
+data class ConversationResponse(
+    val conversation: ConversationDto? = null,
+    val turns: List<TurnDto> = emptyList(),
+    val created: Boolean? = null,
+)
+
+@Serializable
+data class TurnsResponse(
+    @SerialName("conversation_id") val conversationId: String? = null,
+    val turns: List<TurnDto> = emptyList(),
+)
+
+@Serializable
+data class TurnDto(
+    val id: String? = null,
+    val seq: Int = 0,
+    val role: String = "human",
+    @SerialName("author_agent_id") val authorAgentId: String? = null,
+    val content: String = "",
+    @SerialName("run_id") val runId: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+)
+
+@Serializable
+data class TaskMessageBody(
+    @SerialName("author_agent_id") val authorAgentId: String? = null,
+    val body: String,
+)
+
+@Serializable
+data class TaskVerifyBody(
+    val approve: Boolean,
+    val feedback: String? = null,
+    @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+data class TaskCancelBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+    val reason: String? = null,
+)
+
+@Serializable
+data class DecisionBody(
+    @SerialName("subject_type") val subjectType: String,
+    @SerialName("subject_id") val subjectId: String,
+    val decision: String,
+    val reason: String? = null,
+    @SerialName("actor_agent_id") val actorAgentId: String,
+    @SerialName("target_agent_id") val targetAgentId: String? = null,
+)
+
+@Serializable
+data class RequestRespondBody(
+    @SerialName("responder_agent_id") val responderAgentId: String,
+    val response: String,
+)
+
+@Serializable
+data class RequestActorBody(
+    @SerialName("requester_agent_id") val requesterAgentId: String,
+    val reason: String? = null,
+)
+
+@Serializable
+data class NudgeBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+    val note: String? = null,
+)
+
+@Serializable
+data class TaskRequestAcceptBody(
+    @SerialName("responder_agent_id") val responderAgentId: String,
+    val note: String? = null,
+)
+
+@Serializable
+data class TaskRequestRejectBody(
+    @SerialName("responder_agent_id") val responderAgentId: String,
+    val reason: String,
+)
+
+@Serializable
+data class RequestConvertBody(
+    @SerialName("requester_agent_id") val requesterAgentId: String,
+    val title: String,
+    @SerialName("definition_of_done") val definitionOfDone: String,
+    val priority: Int = 100,
+    @SerialName("assignee_alias") val assigneeAlias: String? = null,
+)
+
+@Serializable
+data class AgentModelBody(
+    val model: String,
+)
+
+@Serializable
+data class AutoWakeBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+    @SerialName("interval_secs") val intervalSecs: Int? = null,
+)
+
+@Serializable
+data class AgentRetireBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+data class ConversationStartBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+data class ConversationActorBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+data class TurnAppendBody(
+    val role: String,
+    @SerialName("author_agent_id") val authorAgentId: String,
+    val content: String,
+)
+
+@Serializable
+data class TaskCreateBody(
+    val title: String,
+    val description: String? = null,
+    @SerialName("definition_of_done") val definitionOfDone: String,
+    val priority: Int = 100,
+    @SerialName("created_by_agent_id") val createdByAgentId: String? = null,
+    @SerialName("assignee_alias") val assigneeAlias: String? = null,
+    @SerialName("depends_on") val dependsOn: List<String> = emptyList(),
+    @SerialName("not_ready") val notReady: Boolean = false,
+)
+
+@Serializable
+data class AssignTaskBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+    @SerialName("agent_id") val agentId: String,
+    val reassign: Boolean = false,
+)
+
+@Serializable
+data class WorkerRunStopBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+data class GenericIdResponse(
+    val id: String? = null,
+    @SerialName("task_id") val taskId: String? = null,
+    @SerialName("request_id") val requestId: String? = null,
+    @SerialName("spawned_task_id") val spawnedTaskId: String? = null,
+    val status: String? = null,
+)
