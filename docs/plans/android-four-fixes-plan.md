@@ -32,7 +32,9 @@ draws the literal `?` tile. The web instead resolves aliases client-side from th
 ### Fix
 1. **Show all requests with web-parity chips + sort.** Feed RequestsTab from the full
    `snapshot.requests` (no involvement filter). Add the web's five single-select chips —
-   All / Open / Answered / Escalations (`targetId == null && status == "open"`) / Task reqs
+   All / Open / Answered / Escalations (`targetId == null || resolved target agent kind ==
+   "human"` — web `isToHuman`, `app.js:247-256`; NO status filter, reusing the same
+   `snapshot.agents` selector added for alias resolution in step 2) / Task reqs
    (`type == "task"`) — and a Time|Priority + asc/desc sort control, sorting inside the web's
    status bucket (open → answered → rest), unchosen key as tiebreaker, priority ascending =
    higher priority first (mirror `app.js:1632-1648`). Default: time desc, like web.
@@ -50,6 +52,9 @@ draws the literal `?` tile. The web instead resolves aliases client-side from th
    pill with icon+tint per state: open=warning-triangle, accepted=play, answered=check,
    rejected=X, converted_to_task=arrow, closed=neutral-dot, escalated(open, human-targeted)=X
    with danger tint. Request *type* stays a text tag (`task`/`info`) — that's what the web does.
+   (Icon+tint pills are a deliberate mobile adaptation — web pills are text+tint only. The
+   danger-tint escalated glyph keeps the stricter open + human-targeted rule, matching web
+   `requests.html:135`; the Escalations *chip* above uses the broader no-status `isToHuman`.)
 4. **Pagination of this list** is Issue 4 (render cap 15 + Load more).
 
 ---
@@ -103,7 +108,10 @@ the screen looked functional in testing.
 1. **`OrchaApiClient`: add a streaming reader** returning `Flow<RunStreamEvent>` using Ktor
    `prepareGet(...) { timeout { requestTimeoutMillis = INFINITE; socketTimeoutMillis = INFINITE } }
    .execute { resp -> resp.bodyAsChannel() … readUTF8Line() loop }`. Per-request timeout
-   override is load-bearing (global 10s cap stays for everything else). Parse only
+   override is load-bearing (global 10s cap stays for everything else). The call path must
+   also be free of coroutine-level `withTimeout` wrappers — today's `refreshRunLog` wraps
+   `getRunStreamText` in `withTimeout(20_000)`, which would kill the stream even with the
+   Ktor plugin timeouts overridden; the new collector must not inherit it. Parse only
    `data: `-prefixed lines into `{seq, line}` / `{seq, done, status}` (server never uses
    `event:`/`id:` fields; 1s heartbeat comments keep the socket alive). Sealed
    `RunStreamEvent { Line(seq, line), Done(seq, status) }`.
