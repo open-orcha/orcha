@@ -73,6 +73,7 @@ import io.openorcha.mobile.ui.theme.ThemeMode
 fun ContainersHomeScreen(
     state: OrchaUiState,
     onAdd: () -> Unit,
+    onScan: () -> Unit,
     onOpen: (String) -> Unit,
     onForget: (String) -> Unit,
     onRename: (String, String) -> Unit,
@@ -93,7 +94,7 @@ fun ContainersHomeScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = onAdd,
+                onClick = onScan,
                 containerColor = Orcha.palette.accent,
                 contentColor = Orcha.palette.accentInk,
                 icon = { Icon(Icons.Rounded.QrCodeScanner, null) },
@@ -110,7 +111,7 @@ fun ContainersHomeScreen(
                 glyph = { BrandMark(44.dp) },
             ) {
                 Spacer(Modifier.height(6.dp))
-                PrimaryButton("Add your Orcha", onAdd, leading = { Icon(Icons.Rounded.QrCodeScanner, null, tint = Orcha.palette.accentInk) })
+                PrimaryButton("Add your Orcha", onScan, leading = { Icon(Icons.Rounded.QrCodeScanner, null, tint = Orcha.palette.accentInk) })
                 TextButton(onClick = onAdd) { Text("Enter address manually", color = Orcha.palette.accent, fontWeight = FontWeight.W700) }
             }
         } else {
@@ -229,6 +230,7 @@ private fun ContainerCard(
 fun ManualConnectScreen(
     state: OrchaUiState,
     onBack: () -> Unit,
+    onScan: () -> Unit,
     onConnect: (String) -> Unit,
 ) {
     var address by remember { mutableStateOf("") }
@@ -269,9 +271,10 @@ fun ManualConnectScreen(
             item {
                 Banner(
                     BannerKind.Info,
-                    "QR pairing arrives with the portal's Pair-phone endpoint (in review). Until then, paste the QR payload or enter the laptop's Wi-Fi address.",
+                    "The portal's Pair-phone QR endpoint is still in review — until it ships, scan any orcha-pair QR, paste its payload, or enter the laptop's Wi-Fi address.",
                 )
             }
+            item { NeutralButton("Scan a QR instead", onScan, modifier = Modifier.fillMaxWidth()) }
             item {
                 OrchaField(
                     address, { address = it },

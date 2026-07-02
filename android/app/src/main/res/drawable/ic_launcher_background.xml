@@ -1,4 +1,23 @@
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#0B0F16" />
-</shape>
-
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Orcha launcher background — the brand tile's radial gradient from
+     desktop/resources/icon.svg (#0e2d33 at 50%/30% → #06171c), full-bleed per
+     the adaptive-icon export matrix (foundations §6). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="32.4"
+                android:gradientRadius="130">
+                <item android:offset="0" android:color="#FF0E2D33" />
+                <item android:offset="1" android:color="#FF06171C" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

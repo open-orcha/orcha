@@ -8,6 +8,14 @@ import java.time.Instant
 /** Priority bands (flow 11 §priority + flow 05 card tinting): Low/Normal/High ↔ 300/100/20. */
 enum class PriorityBand { Low, Normal, Elevated, High }
 
+/** Flow 07 expiry chip: warn countdown under 2h, expired past `expires_at` (row dims). */
+sealed class ExpiryChip {
+    data class Warn(val label: String) : ExpiryChip()
+    object Expired : ExpiryChip() {
+        override fun toString(): String = "Expired"
+    }
+}
+
 /** The four request groups of flow 07 — a BINDING matrix from the design package. */
 data class RequestGroups(
     val needsYourAnswer: List<RequestDto>,
@@ -113,6 +121,33 @@ object MobileUx {
     fun isTerminalGroup(status: String): Boolean = status == "completed" || status == "cancelled"
 
     // ---------- shared: compact relative time ----------
+
+    /** Flow 07: expiry chip state. No chip ≥2h out; warn countdown inside 2h; expired past. */
+    fun expiryChip(expiresAt: String?, nowMs: Long = System.currentTimeMillis()): ExpiryChip? {
+        if (expiresAt.isNullOrBlank()) return null
+        val then = runCatching { Instant.parse(if (expiresAt.endsWith("Z") || expiresAt.contains("+")) expiresAt else expiresAt + "Z") }
+            .getOrNull() ?: return null
+        val deltaMin = (then.toEpochMilli() - nowMs) / 60_000
+        return when {
+            deltaMin < 0 -> ExpiryChip.Expired
+            deltaMin >= 120 -> null
+            deltaMin >= 60 -> ExpiryChip.Warn("expires in ${deltaMin / 60}h ${deltaMin % 60}m")
+            else -> ExpiryChip.Warn("expires in ${deltaMin}m")
+        }
+    }
+
+    /** Flow 10 day dividers: stable calendar-day key + short label (UTC-keyed). */
+    fun dayKey(iso: String?): String? {
+        if (iso.isNullOrBlank()) return null
+        return runCatching { iso.substring(0, 10).also { java.time.LocalDate.parse(it) } }.getOrNull()
+    }
+
+    fun dayLabel(iso: String?): String? {
+        val key = dayKey(iso) ?: return null
+        val d = java.time.LocalDate.parse(key)
+        val month = d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.US)
+        return "$month ${d.dayOfMonth}"
+    }
 
     fun agoLabel(iso: String?, nowMs: Long = System.currentTimeMillis()): String? {
         if (iso.isNullOrBlank()) return null

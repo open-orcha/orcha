@@ -125,6 +125,7 @@ data class TaskDto(
     @SerialName("message_summary") val messageSummary: MessageSummaryDto? = null,
     @SerialName("plan_message") val planMessage: TaskMessageDto? = null,
     @SerialName("plan_decision") val planDecision: String? = null,
+    @SerialName("depends_on") val dependsOn: List<String> = emptyList(),
 )
 
 @Serializable
@@ -381,6 +382,57 @@ data class AssignTaskBody(
 @Serializable
 data class WorkerRunStopBody(
     @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+class EmptyBody
+
+/* ---------- flow 09: agent detail lazy sections ---------- */
+
+@Serializable
+data class PersonaResponse(
+    @SerialName("agent_id") val agentId: String? = null,
+    val alias: String? = null,
+    val role: String? = null,
+    val model: String? = null,
+    @SerialName("system_prompt") val systemPrompt: String? = null,
+)
+
+@Serializable
+data class DigestItem(val text: String = "")
+
+@Serializable
+data class DigestDto(
+    @SerialName("current_focus") val currentFocus: String? = null,
+    val decisions: List<DigestItem> = emptyList(),
+    val learnings: List<DigestItem> = emptyList(),
+    @SerialName("open_threads") val openThreads: List<DigestItem> = emptyList(),
+    @SerialName("created_at") val createdAt: String? = null,
+)
+
+@Serializable
+data class DigestResponse(val digest: DigestDto? = null)
+
+@Serializable
+data class InboxResponse(@SerialName("open_requests") val openRequests: List<RequestDto> = emptyList())
+
+@Serializable
+data class OutboxResponse(@SerialName("outgoing_requests") val outgoingRequests: List<RequestDto> = emptyList())
+
+@Serializable
+data class AgentUpdateBody(
+    @SerialName("actor_agent_id") val actorAgentId: String,
+    val alias: String? = null,
+    val role: String? = null,
+    @SerialName("system_prompt") val systemPrompt: String? = null,
+)
+
+/** Lenient: server copy varies; render whatever strings it offers, else generic copy. */
+@Serializable
+data class CloseImplicationsResponse(
+    val implications: List<String> = emptyList(),
+    val summary: String? = null,
+    val detail: JsonElement? = null,
 )
 
 @Serializable

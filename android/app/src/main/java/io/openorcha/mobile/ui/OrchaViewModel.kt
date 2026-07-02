@@ -28,6 +28,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 enum class AppRoute {
     Containers,
+    Scanner,
     AddContainer,
     Workspace,
     TaskDetail,
@@ -50,10 +51,22 @@ data class ContainerHealth(
     val needsYou: Int = 0,
 )
 
+/** Flow 09: lazily-fetched agent-detail sections (each best-effort, absent on failure). */
+data class AgentExtras(
+    val persona: io.openorcha.mobile.data.PersonaResponse? = null,
+    val digest: io.openorcha.mobile.data.DigestDto? = null,
+    val inboxCount: Int? = null,
+    val inboxPreview: String? = null,
+    val outboxOpen: Int? = null,
+    val outboxAnswered: Int? = null,
+)
+
 data class OrchaUiState(
     val route: AppRoute = AppRoute.Containers,
     val themeMode: io.openorcha.mobile.ui.theme.ThemeMode = io.openorcha.mobile.ui.theme.ThemeMode.Auto,
     val containerHealth: Map<String, ContainerHealth> = emptyMap(),
+    val agentExtras: AgentExtras = AgentExtras(),
+    val closeImplications: List<String>? = null,
     val containers: List<StoredContainer> = emptyList(),
     val selectedContainer: StoredContainer? = null,
     val snapshot: ContainerSnapshot? = null,
@@ -155,6 +168,16 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun showAddContainer() {
         _uiState.update { it.copy(route = AppRoute.AddContainer, error = null) }
+    }
+
+    fun showScanner() {
+        _uiState.update { it.copy(route = AppRoute.Scanner, error = null) }
+    }
+
+    /** Flow 03: a scanned QR payload runs through the same parse+probe as manual entry. */
+    fun connectScanned(payload: String) {
+        _uiState.update { it.copy(route = AppRoute.AddContainer) }
+        connectManual(payload)
     }
 
     fun showWorkspace() {
@@ -313,9 +336,12 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         val selected = _uiState.value.selectedContainer ?: return
         val agent = _uiState.value.selectedAgent ?: return
         viewModelScope.launch {
-            _uiState.update { it.copy(loading = true, error = null) }
+            _uiState.update { it.copy(loading = true, error = null, agentExtras = AgentExtras()) }
             runCatching {
-                val runs = api.getAgentRuns(selected.baseUrl, agent.id).runs
+                // flow 09 §9: headless + resident runs merged, newest first
+                val headless = api.getAgentRuns(selected.baseUrl, agent.id).runs
+                val resident = runCatching { api.getResidentRuns(selected.baseUrl, agent.id).runs }.getOrDefault(emptyList())
+                val runs = (headless + resident).distinctBy { it.runId }.sortedByDescending { it.startedAt ?: "" }
                 val models = api.listModels(selected.baseUrl).models
                 runs to models
             }.onSuccess { (runs, models) ->
@@ -323,7 +349,53 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure { err ->
                 _uiState.update { it.copy(loading = false, error = friendlyConnectionError(err)) }
             }
+            // lazy sections — each best-effort, independent of the core fetch (flow 09 §states)
+            val persona = runCatching { api.getPersona(selected.baseUrl, agent.id) }.getOrNull()
+            val digest = runCatching { api.getDigest(selected.baseUrl, agent.id).digest }.getOrNull()
+            val inbox = runCatching { api.getInbox(selected.baseUrl, agent.id).openRequests }.getOrNull()
+            val outbox = runCatching { api.getOutbox(selected.baseUrl, agent.id).outgoingRequests }.getOrNull()
+            _uiState.update {
+                it.copy(
+                    agentExtras = AgentExtras(
+                        persona = persona,
+                        digest = digest,
+                        inboxCount = inbox?.size,
+                        inboxPreview = inbox?.firstOrNull()?.payload,
+                        outboxOpen = outbox?.count { r -> r.status == "open" },
+                        outboxAnswered = outbox?.count { r -> r.status == "answered" },
+                    ),
+                )
+            }
         }
+    }
+
+    /** Flow 05: fetch the close-implications preview before showing the destructive confirm. */
+    fun fetchCloseImplications() {
+        val selected = _uiState.value.selectedContainer ?: return
+        val task = _uiState.value.selectedTask ?: return
+        viewModelScope.launch {
+            val imp = runCatching { api.getCloseImplications(selected.baseUrl, task.id) }.getOrNull()
+            val lines = buildList {
+                imp?.summary?.takeIf { it.isNotBlank() }?.let { add(it) }
+                addAll(imp?.implications.orEmpty())
+            }
+            _uiState.update { it.copy(closeImplications = lines.ifEmpty { null }) }
+        }
+    }
+
+    /** Flow 07: human triage-close for stale requests (neither requester nor target). */
+    fun triageCloseSelectedRequest() = runHumanAction("Request closed (triage)") { selected, _ ->
+        val request = _uiState.value.selectedRequest ?: error("No request selected")
+        api.triageCloseRequest(selected.baseUrl, request.id)
+        refreshSelected()
+        showWorkspace()
+    }
+
+    /** Flow 09: rename an agent (overflow → Details). PARTIAL update, human-gated. */
+    fun renameSelectedAgent(alias: String) = runHumanAction("Agent renamed") { selected, actor ->
+        val agent = _uiState.value.selectedAgent ?: error("No agent selected")
+        api.updateAgent(selected.baseUrl, agent.id, actor, alias, null)
+        refreshSelected()
     }
 
     fun openRun(run: RunDto) {

@@ -46,6 +46,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import io.openorcha.mobile.data.AgentDto
 import io.openorcha.mobile.data.RequestDto
 import io.openorcha.mobile.data.TaskDto
+import io.openorcha.mobile.domain.ExpiryChip
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.domain.OrchaSelectors
 import io.openorcha.mobile.ui.OrchaUiState
@@ -196,6 +198,7 @@ fun WorkspaceScreen(
                         onAction = onRefresh,
                     )
                 }
+                PullToRefreshBox(isRefreshing = state.loading, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
                 when (state.selectedTab) {
                     WorkspaceTab.Home -> HomeTab(
                         state, needsYou.planApprovals, needsYou.verifications, needsYou.requests,
@@ -205,6 +208,7 @@ fun WorkspaceScreen(
                     WorkspaceTab.Tasks -> TasksTab(snapshot.tasks, snapshot.agents, onOpenTask)
                     WorkspaceTab.Requests -> RequestsTab(requestGroups, snapshot.agents, humanId, onOpenRequest)
                     WorkspaceTab.Agents -> AgentsTab(snapshot.agents, onOpenAgent)
+                }
                 }
             }
         }
@@ -414,13 +418,18 @@ private fun HomeTab(
 private fun TasksTab(tasks: List<TaskDto>, agents: List<AgentDto>, onOpenTask: (String) -> Unit) {
     val p = Orcha.palette
     var filter by rememberSaveable { mutableStateOf("All") }
+    var query by rememberSaveable { mutableStateOf("") }
     var expandedTerminals by rememberSaveable { mutableStateOf(false) }
     val aiAgents = agents.filter { it.kind == "ai" }
 
-    val filtered = when (filter) {
+    val scoped = when (filter) {
         "All" -> tasks
         "Needs me" -> MobileUx.needsMe(tasks)
         else -> tasks.filter { it.assignees.contains(filter) || it.ownerAlias == filter }
+    }
+    // search composes with the active filter (flow 05: "search within filtered set")
+    val filtered = if (query.isBlank()) scoped else scoped.filter {
+        it.title.contains(query, ignoreCase = true) || (it.description ?: "").contains(query, ignoreCase = true)
     }
 
     LazyColumn(
@@ -428,6 +437,13 @@ private fun TasksTab(tasks: List<TaskDto>, agents: List<AgentDto>, onOpenTask: (
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item {
+            io.openorcha.mobile.ui.components.OrchaField(
+                query, { query = it },
+                placeholder = "Search tasks…",
+                maxLines = 1,
+            )
+        }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val chips = listOf("All", "Needs me") + aiAgents.map { it.alias }
@@ -551,7 +567,11 @@ private fun RequestsTab(
 @Composable
 fun RequestRow(req: RequestDto, humanId: String?, onOpenRequest: (String) -> Unit) {
     val p = Orcha.palette
-    OrchaCard(onClick = { onOpenRequest(req.id) }) {
+    val expiry = MobileUx.expiryChip(req.expiresAt)
+    OrchaCard(
+        modifier = Modifier.alpha(if (expiry == ExpiryChip.Expired) 0.65f else 1f),
+        onClick = { onOpenRequest(req.id) },
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Avatar(req.requesterAlias ?: "?", human = req.requesterId == humanId, size = AvatarSize.Sm)
             Text("→", color = p.faint)
@@ -570,6 +590,11 @@ fun RequestRow(req: RequestDto, humanId: String?, onOpenRequest: (String) -> Uni
             StatusPill(req.status, StatusDomain.Request)
             MetaTag(req.type)
             if (req.chainDepth > 0) MetaTag("↳ chain")
+            when (expiry) {
+                is ExpiryChip.Warn -> MetaTag(expiry.label, tint = p.warn)
+                ExpiryChip.Expired -> MetaTag("expired", tint = p.danger)
+                null -> Unit
+            }
             Spacer(Modifier.weight(1f))
             Text(MobileUx.agoLabel(req.createdAt) ?: "", style = MonoSmStyle, color = p.faint)
         }

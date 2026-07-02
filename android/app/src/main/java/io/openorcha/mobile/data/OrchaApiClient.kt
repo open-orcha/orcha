@@ -78,6 +78,39 @@ class OrchaApiClient {
         client.get("${baseUrl.endpoint()}/api/tasks/$taskId/runs").body()
     }
 
+    // flow 09 lazy sections
+    suspend fun getPersona(baseUrl: String, agentId: String): PersonaResponse = withTimeout(8_000) {
+        client.get("${baseUrl.endpoint()}/api/agents/$agentId/persona").body()
+    }
+
+    suspend fun getDigest(baseUrl: String, agentId: String): DigestResponse = withTimeout(8_000) {
+        client.get("${baseUrl.endpoint()}/api/agents/$agentId/digest").body()
+    }
+
+    suspend fun getInbox(baseUrl: String, agentId: String): InboxResponse = withTimeout(8_000) {
+        client.get("${baseUrl.endpoint()}/api/agents/$agentId/inbox").body()
+    }
+
+    suspend fun getOutbox(baseUrl: String, agentId: String): OutboxResponse = withTimeout(8_000) {
+        client.get("${baseUrl.endpoint()}/api/agents/$agentId/outbox").body()
+    }
+
+    suspend fun getResidentRuns(baseUrl: String, agentId: String): RunsResponse = withTimeout(8_000) {
+        client.get("${baseUrl.endpoint()}/api/agents/$agentId/resident-runs").body()
+    }
+
+    suspend fun updateAgent(baseUrl: String, agentId: String, actorId: String, alias: String?, role: String?): GenericIdResponse =
+        patchJson("${baseUrl.endpoint()}/api/agents/$agentId", AgentUpdateBody(actorId, alias.blankToNull(), role.blankToNull()))
+
+    // flow 05: implications preview before the destructive close confirm
+    suspend fun getCloseImplications(baseUrl: String, taskId: String): CloseImplicationsResponse = withTimeout(5_000) {
+        client.get("${baseUrl.endpoint()}/api/tasks/$taskId/close-implications").body()
+    }
+
+    // flow 07: human triage-close for stale requests
+    suspend fun triageCloseRequest(baseUrl: String, requestId: String): GenericIdResponse =
+        postJson("${baseUrl.endpoint()}/api/requests/$requestId/triage-close", EmptyBody())
+
     suspend fun getAgentRuns(baseUrl: String, agentId: String): RunsResponse = withTimeout(8_000) {
         client.get("${baseUrl.endpoint()}/api/agents/$agentId/runs").body()
     }

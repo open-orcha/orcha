@@ -83,6 +83,7 @@ fun RequestDetailScreen(
     onAcceptTask: (String?) -> Unit,
     onRejectTask: (String) -> Unit,
     onConvert: (String, String, String?, Int) -> Unit,
+    onTriageClose: () -> Unit,
     onOpenTask: (String) -> Unit,
 ) {
     val p = Orcha.palette
@@ -109,6 +110,7 @@ fun RequestDetailScreen(
                             }
                             if (req.status in setOf("open", "answered") && !isRequester && req.targetId != humanId) {
                                 DropdownMenuItem(text = { Text("Close with reason…") }, onClick = { menuOpen = false; sheet = RequestSheet.CloseWithReason })
+                                DropdownMenuItem(text = { Text("Triage-close (stale)") }, onClick = { menuOpen = false; onTriageClose() })
                             }
                         }
                     }
