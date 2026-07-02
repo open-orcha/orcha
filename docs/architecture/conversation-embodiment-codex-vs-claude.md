@@ -148,6 +148,45 @@ writing — the fix for this gap.)
 Codex runs at daemon boot (finish them; re-read `--output-last-message` to recover the reply if
 present). Ideally fold into / depend on PR #225 rather than duplicating the mechanism.
 
+## Task-worker continuity (GH #110)
+
+The asymmetry above — **Codex has no SessionEnd hook, so it never writes a continuity digest on
+its own**, while Claude's SessionEnd `orcha snapshot` hook only fires on a voluntary clean close —
+also bit the *task-wake* code-worker path (a different path from the conversation embodiment above:
+`tick` → `spawn_headless` → `reap_workers`, runtime-agnostic). There, a code-touching task worker
+that exited cleanly with **uncommitted** changes lost its whole worktree, because `reap_workers`
+force-removed the ephemeral worktree (`_teardown_worktree`) after capturing the ≤200 KB diff text.
+The next same-agent+same-task wake re-provisioned a fresh **timestamped** worktree from
+`origin/main` and started blind. (This is how Andrew's Android APK — built in a timestamped worker
+folder — vanished and had to be reconstructed from run logs.)
+
+GH #110 gives task-wake code workers cross-wake continuity, for **both runtimes**:
+
+- **Durable per-(agent+task) worktree/branch.** `_provision_task_worktree` keys a stable
+  `orcha/task-<alias>-<task>` branch + `.orcha-worktrees/task-<slug>` worktree (not timestamped).
+  First wake creates it from `origin/main`; later wakes **reuse** the dir or **re-add from the
+  branch** — never restart from `origin/main`.
+- **Preserve on clean exit.** On a clean exit with a dirty tree, `reap_workers` makes a local
+  **checkpoint commit** on the task branch (excluding overlaid config like the tracked
+  `.claude/settings.json`) and **keeps** the worktree. Never auto-pushes, never opens a PR, never
+  bypasses review. The worktree/branch is only torn down once the task is
+  completed/verified/cancelled or a PR has captured the work.
+- **Reap-time digest synthesis.** Because Codex has no SessionEnd hook, `_synthesize_task_digest`
+  posts a minimal continuity digest (`POST /api/agents/{id}/digest`) straight from `reap_workers`
+  after a meaningful run — so the next boot resumes from prior state **without** relying on a
+  voluntary `/orcha-snapshot`. For Claude it augments the SessionEnd hook; it never clobbers a
+  newer agent-written digest.
+- **Codex 429 is a failed drain, not a success.** A Codex `rate_limit_event` / `api_error_status:429`
+  on a clean exit is classified `rate_limited` (via the existing `_codex_result_status` /
+  `_codex_is_rate_limit` scanners), records `status="rate_limited"` on the run, **preserves** the
+  worktree, does **not** advance the wake cursor, and does **not** ack/close pending notifications —
+  with a bounded-redelivery counter and a rate-limit hold-down so a still-limited worker doesn't
+  hot-loop.
+
+This is the task-path analog of the restart-safety gap described in the blocker above: the
+conversation path still needs the pid-persist fix; the task path now persists work as a durable
+branch + digest instead of holding it only in the daemon's memory.
+
 ## Trade-offs
 
 - **One-shot Codex per turn** is simple and crash-isolated *per turn*, but loses warm in-session

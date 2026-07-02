@@ -5,6 +5,7 @@ working clone), plus the tick-level heuristic (worktree only for code-touching w
 """
 import pathlib
 import subprocess
+import time
 
 from orcha_cli import notifier  # noqa: E402 (conftest puts orcha-cli on sys.path)
 
@@ -253,3 +254,166 @@ def test_once_path_does_not_create_dangling_run(monkeypatch):
 class _FakeP:
     pid = 1
     def poll(self): return None
+
+
+# ---------- GH#110: durable per-(agent+task) worktree continuity across wakes ----------
+
+class _ExitedProc:
+    """A subprocess.Popen stand-in that has already exited (poll() -> returncode)."""
+    def __init__(self, pid=999, returncode=0):
+        self.pid = pid
+        self.returncode = returncode
+    def poll(self): return self.returncode
+    def kill(self): pass
+    def wait(self, timeout=None): return self.returncode
+
+
+def _task_worker(work, wt, branch, log_path, runtime, *, task_id, code=0, pending_ack_ts=42.0):
+    """A live_workers entry shaped exactly like tick() builds for a DURABLE task-worktree wake."""
+    return {"proc": _ExitedProc(returncode=code),
+            "run_id": "RUN-1", "log_path": str(log_path),
+            "worktree": wt, "branch": branch, "base_cwd": str(work),
+            "task_worktree": True, "started_ts": 1.0, "pending_ack_ts": pending_ack_ts,
+            "agent_id": "agent-X",
+            "hard_deadline": time.time() + 100, "last_size": 0, "last_progress_ts": time.time(),
+            "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
+            "cap": 1200, "respawns": 0,
+            "respawn_ctx": {"model_runtime": runtime, "task_id": task_id, "alias": "Andrew"}}
+
+
+def _codex_success_log(tmp_path, name="codex.log"):
+    log = tmp_path / name
+    log.write_text('{"type":"item.completed","item":{"id":"1"}}\n{"type":"turn.completed"}\n')
+    return log
+
+
+def _wire_reap(monkeypatch, posts, *, digest=None):
+    monkeypatch.setattr(notifier, "_post_json",
+                        lambda url, body, **k: posts.append((url, body)) or {})
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"digest": digest})
+
+
+def test_codex_task_worker_preserved_on_clean_exit(tmp_path, monkeypatch):
+    """GH#110 test 1: a Codex task worker that writes an uncommitted file (Andrew's APK) then exits
+    0 is PRESERVED by the reaper — worktree kept + checkpoint-committed — so the next same-task wake
+    resumes from it. Old behavior force-removed the worktree, losing the APK."""
+    work = _make_repo(tmp_path)
+    (work / ".claude").mkdir()
+    (work / ".claude" / "orcha.json").write_text('{}')
+    wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "apk-task-1")
+    assert wt and "task-Andrew-apk-task-1" in wt          # stable, NOT timestamped
+    # the worker builds an APK in a timestamped folder (uncommitted) then exits cleanly
+    (pathlib.Path(wt) / "android").mkdir()
+    (pathlib.Path(wt) / "android" / "app.apk").write_text("APK BYTES\n")
+
+    posts = []
+    _wire_reap(monkeypatch, posts)
+    live = {"agent-X": _task_worker(work, wt, branch, _codex_success_log(tmp_path),
+                                    notifier.RUNTIME_CODEX, task_id="apk-task-1")}
+    notifier.reap_workers("http://x", live, quiet=True, failed_drains={}, agent_hold_until={})
+
+    assert pathlib.Path(wt).is_dir()                       # PRESERVED (not torn down)
+    assert (pathlib.Path(wt) / "android" / "app.apk").read_text() == "APK BYTES\n"
+    rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
+    assert out.strip() == "1"                              # checkpoint commit on the durable branch
+    # next same-(agent+task) wake reuses the SAME worktree, APK intact — not a fresh origin/main
+    wt2, b2 = notifier._provision_task_worktree(str(work), "Andrew", "apk-task-1")
+    assert (wt2, b2) == (wt, branch)
+    assert (pathlib.Path(wt2) / "android" / "app.apk").exists()
+    finish = next(b for u, b in posts if "/finish" in u)
+    assert finish["status"] == "exited"
+
+
+def test_task_worker_saved_ref_visible_from_run_and_feed(tmp_path, monkeypatch):
+    """GH#110 test 4: a clean task-worker exit with a non-empty diff records a durable saved_ref —
+    the run's /finish carries the patch, the checkpoint lands on the branch, and a plain-language
+    task-feed line names where the work was saved."""
+    work = _make_repo(tmp_path)
+    (work / ".claude").mkdir()
+    (work / ".claude" / "orcha.json").write_text('{}')
+    wt, branch = notifier._provision_task_worktree(str(work), "Dana", "feature-x")
+    (pathlib.Path(wt) / "feature.py").write_text("print('new feature')\n")
+
+    posts = []
+    _wire_reap(monkeypatch, posts)
+    live = {"agent-X": _task_worker(work, wt, branch, _codex_success_log(tmp_path),
+                                    notifier.RUNTIME_CLAUDE, task_id="feature-x")}
+    notifier.reap_workers("http://x", live, quiet=True, failed_drains={}, agent_hold_until={})
+
+    finish = next(b for u, b in posts if "/finish" in u)
+    assert finish["diff"] and "feature.py" in finish["diff"]          # patch captured on the run
+    msg = next(b for u, b in posts if u.endswith("/messages"))
+    assert branch in msg["body"] and "saved" in msg["body"].lower()   # feed names the branch, plainly
+    rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
+    assert out.strip() == "1"
+
+
+def test_task_worktree_reattaches_to_branch_across_wakes(tmp_path):
+    """GH#110 test 5: the durable worktree DIR can be removed but its branch survives — the next
+    wake RE-ATTACHES to that branch (its prior commits), NOT a fresh origin/main."""
+    work = _make_repo(tmp_path)
+    (work / ".claude").mkdir()
+    (work / ".claude" / "orcha.json").write_text('{}')
+    wt1, b1 = notifier._provision_task_worktree(str(work), "Andrew", "resume-me")
+    (pathlib.Path(wt1) / "wip.txt").write_text("prior wake work\n")
+    _git(["add", "-A"], wt1)
+    _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "wip"], wt1)
+    # the dir is removed (e.g. a manual cleanup) but the branch keeps the commit
+    notifier._run_git(["worktree", "remove", "--force", wt1], cwd=str(work))
+    assert not pathlib.Path(wt1).exists()
+
+    wt2, b2 = notifier._provision_task_worktree(str(work), "Andrew", "resume-me")
+    assert (wt2, b2) == (wt1, b1)                                     # same stable path + branch
+    assert (pathlib.Path(wt2) / "wip.txt").read_text() == "prior wake work\n"   # prior state, not origin/main
+
+
+def test_checkpoint_excludes_settings_json_and_skips_when_clean(tmp_path):
+    """GH#110 R2: the overlaid runtime config (notably the TRACKED .claude/settings.json) must NEVER
+    land on the durable task branch a PR is cut from. A worktree whose ONLY churn is settings.json
+    checkpoints to nothing (skip) and the file stays off the branch history."""
+    work = _make_repo(tmp_path)
+    (work / ".claude").mkdir()
+    (work / ".claude" / "orcha.json").write_text('{}')
+    (work / ".claude" / "settings.json").write_text('{"hooks": {}}')
+    _git(["add", "-A"], work)
+    _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "cfg"], work)
+    _git(["push", "origin", "main"], work)
+
+    wt, branch = notifier._provision_task_worktree(str(work), "A", "t1")
+    # only the overlaid settings.json churns (as _overlay_runtime_config would do per-worktree)
+    (pathlib.Path(wt) / ".claude" / "settings.json").write_text('{"hooks": {"changed": 1}}')
+    sha = notifier._checkpoint_task_worktree(str(work), wt, branch, "t1", "run1")
+    assert sha is None                                               # clean after exclusions → no commit
+    rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
+    assert out.strip() == "0"                                        # nothing committed onto the branch
+
+
+def test_noncode_wake_uses_no_task_worktree(monkeypatch):
+    """GH#110 test 3: a non-code request-answer wake stays on the cheap disposable path — NEITHER
+    the durable task worktree NOR the ephemeral one is provisioned; a task wake gets the durable one."""
+    tcalls, ecalls = [], []
+    monkeypatch.setattr(notifier, "_provision_task_worktree",
+                        lambda b, a, t: tcalls.append(t) or ("/fake/task-wt", "orcha/task-x"))
+    monkeypatch.setattr(notifier, "_provision_worktree",
+                        lambda b, a: ecalls.append(a) or (None, None))
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_post_json",
+                        lambda url, body, **k: {"claimed": True} if "wake-claim" in url
+                        else ({"run_id": "R"} if url.endswith("/runs") else {}))
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (True, "cmd", _FakeP()))
+
+    def scan(latest, pending, auto=None):
+        return {"active": True, "candidates": [{
+            "agent_id": "00000000-0000-0000-0000-000000000009", "alias": "B", "should_wake": True,
+            "headless_cwd": "/proj", "tmux_target": None, "pending_events": pending,
+            "auto_start_task_ids": auto or [], "reason": "w", "latest_event": latest,
+            "max_event_ts": 1.0, "headless_flags": None}]}
+
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: scan("request_answered", 1))
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})
+    assert tcalls == [] and ecalls == []                            # no worktree at all for a no-code wake
+
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: scan("task_assigned", 1, auto=["task-9"]))
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})
+    assert tcalls == ["task-9"] and ecalls == []                    # task wake → durable, not ephemeral

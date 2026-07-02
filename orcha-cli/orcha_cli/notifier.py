@@ -2087,9 +2087,60 @@ def _provision_live_worktree(base_cwd, alias):
     return str(wt), branch
 
 
-# the runtime config we overlay into a worktree (see _provision_worktree) is NOT the
-# worker's change — exclude it from the captured diff so it's not noise.
-_DIFF_EXCLUDES = ("." , ":(exclude).claude/orcha.json", ":(exclude).claude/orcha-tabs")
+def _provision_task_worktree(base_cwd, alias, task_id):
+    """GH#110: a STABLE per-(agent+task) worktree — deterministic path + branch, REUSED across
+    wakes (vs _provision_worktree's fresh-timestamp-per-call, which restarts every wake from a
+    clean origin/main checkout and loses the prior wake's uncommitted work). This is what lets a
+    code-touching TASK worker resume from its prior state: first wake creates the branch from
+    origin/main; a later wake re-attaches to that branch (its checkpoint commits + preserved tree),
+    NOT a fresh origin/main. Runtime-agnostic (Claude + Codex). Mirrors the reuse-then-reattach
+    shape of _provision_resident_worktree / _provision_live_worktree. (None, None) on failure so
+    the caller falls back to the disposable ephemeral worktree."""
+    if not base_cwd or not task_id or _run_git(["rev-parse", "--git-dir"], cwd=base_cwd)[0] != 0:
+        return None, None
+    base = pathlib.Path(base_cwd)
+    _ensure_worktree_exclude(base_cwd)
+    slug = f"{_safe_ref(alias)}-{_safe_ref(task_id)[:12]}"
+    branch = f"orcha/task-{slug}"
+    wt = base / ".orcha-worktrees" / f"task-{slug}"
+    if wt.exists():
+        # already a live/registered worktree for this (agent, task) → REUSE it as-is (its prior
+        # checkpoint commits + preserved dirty tree carry over). No fetch/add/overlay churn.
+        rc, _ = _run_git(["-C", str(wt), "rev-parse", "--git-dir"], cwd=base_cwd)
+        if rc == 0:
+            return str(wt), branch
+    # a dir that was manually removed can leave a stale worktree registration — prune it so the
+    # `worktree add` below doesn't fail with "already registered".
+    _run_git(["worktree", "prune"], cwd=base_cwd)
+    # branch survives even when its worktree dir was pruned — re-attach to the PRIOR state
+    # (its commits) rather than restarting from origin/main. Check local then origin.
+    rc_local, _ = _run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=base_cwd)
+    rc_remote, _ = _run_git(["rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+                            cwd=base_cwd)
+    if rc_local == 0:
+        rc, _ = _run_git(["worktree", "add", str(wt), branch], cwd=base_cwd, timeout=60)
+    elif rc_remote == 0:
+        rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), f"origin/{branch}"],
+                         cwd=base_cwd, timeout=60)
+    else:
+        # first wake for this (agent, task): create the durable branch from a fresh origin/main.
+        _run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
+        rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), "origin/main"],
+                         cwd=base_cwd, timeout=60)
+    if rc != 0:
+        return None, None
+    _overlay_runtime_config(base, wt)
+    return str(wt), branch
+
+
+# the runtime config we overlay into a worktree (see _provision_worktree /
+# _overlay_runtime_config) is NOT the worker's change — exclude it from the captured diff
+# so it's not noise. GH#110: settings.json is TRACKED and copied in per-worktree by
+# _overlay_runtime_config, so without this exclusion the local hook config would (a) show up
+# in every captured diff and (b) — new for GH#110 — get committed onto the durable task branch
+# a PR is cut from. Excluding it fixes both.
+_DIFF_EXCLUDES = ("." , ":(exclude).claude/orcha.json", ":(exclude).claude/orcha-tabs",
+                  ":(exclude).claude/settings.json")
 
 
 def _capture_diff(worktree, cap: int = 200_000):
@@ -2150,6 +2201,180 @@ def _safe_teardown_worktree(base_cwd, worktree, branch) -> str:
         return "preserved-dirty"
     _teardown_worktree(base_cwd, worktree, branch)
     return "removed"
+
+
+# ---------- GH#110: task-worker continuity (preserve worktree/diff across wakes) ----------
+
+# After this many CONSECUTIVE failed/rate-limited drains of the same (agent, task) task worker,
+# advance the wake cursor anyway + emit a human-visible failure event, so a deterministically
+# failing worker can't hot-loop forever on the withheld cursor. Daemon-scope (see main()); a
+# daemon restart resets it (a fresh N), which is acceptable — the loop we bound is intra-daemon.
+FAILED_DRAIN_MAX = 3
+
+# Fallback hold-down when a Codex rate-limit event carries no parseable reset/retry-after — long
+# enough to clear a typical 429 cooldown without stranding the agent.
+RATE_LIMIT_DEFAULT_BACKOFF_SECS = 60.0
+
+
+def _checkpoint_task_worktree(base_cwd, worktree, branch, task_id, run_id):
+    """GH#110: on a CLEAN task-worker exit with a dirty tree, commit the work as a LOCAL checkpoint
+    on the durable task branch and KEEP the worktree, so the next same-(agent+task) wake resumes
+    from it. NEVER pushes, never opens a PR (that stays a human/review step). Commits with the same
+    exclusion pathspecs used for diff capture (_DIFF_EXCLUDES) so the overlaid runtime config —
+    notably the TRACKED .claude/settings.json — never lands on the branch a PR is cut from. If the
+    tree is clean after exclusions, SKIPS the commit (nothing to preserve). Returns the checkpoint
+    commit sha (short) on commit, or None when nothing was committed."""
+    if not worktree:
+        return None
+    # stage everything the worker touched, minus the overlaid runtime config
+    _run_git(["add", "-A", "--", *_DIFF_EXCLUDES], cwd=worktree)
+    rc, staged = _run_git(["diff", "--cached", "--name-only", "--", *_DIFF_EXCLUDES], cwd=worktree)
+    if rc != 0 or not staged.strip():
+        return None                          # clean after exclusions → nothing worth committing
+    msg = f"orcha: checkpoint task {task_id or '?'} run {run_id or '?'}"
+    rc, _ = _run_git(["-c", "user.email=orcha@localhost", "-c", "user.name=orcha",
+                      "commit", "-m", msg], cwd=worktree)
+    if rc != 0:
+        return None
+    rc, sha = _run_git(["rev-parse", "--short", "HEAD"], cwd=worktree)
+    return sha.strip() if rc == 0 and sha.strip() else None
+
+
+def _codex_exit_status(log_path, returncode) -> str:
+    """GH#110: classify a CLEAN-exit Codex worker's terminal state from its `codex exec --json` log
+    (not the raw returncode alone). A Codex worker that dies on a 429 / rate_limit_event still
+    exits 0, so a returncode-only read wrongly logs it as a successful drain and advances the wake
+    cursor past unhandled work. Delegates to the existing tolerant classifiers (no new scanner):
+      * a rate-limit/backoff as the last meaningful signal → 'rate_limited';
+      * a terminal turn that FAILED (or a non-zero exit) → 'failed';
+      * otherwise → 'exited' (a normally-finished turn, or nothing terminal to say it failed).
+    Returns one of 'rate_limited' | 'failed' | 'exited'."""
+    if _codex_tail_is_rate_limited(log_path):
+        return "rate_limited"
+    rstatus = _codex_result_status(log_path)
+    if rstatus == "error":
+        return "failed"
+    if rstatus is None and returncode not in (0, None):
+        return "failed"                      # exited non-zero with no clean terminal turn
+    return "exited"
+
+
+def _codex_tail_is_rate_limited(log_path) -> bool:
+    """GH#110: is the LAST meaningful signal in a Codex log a rate-limit / 429 backoff (worker died
+    mid-cooldown)? Mirrors _codex_result_status's tail read but keys on _codex_is_rate_limit as the
+    terminal signal. Tolerant/fail-open parsing (codex unpinned on this host)."""
+    if not log_path:
+        return False
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            f.seek(max(0, end - 65536))
+            tail = f.read()
+    except OSError:
+        return False
+    last = None                              # 'rate_limit' | 'turn_end' | 'start' | 'end'
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_rate_limit(obj):
+            last = "rate_limit"
+        elif _codex_is_turn_end(obj):
+            last = "turn_end"
+        else:
+            phase, _iid = _codex_event_phase(obj)
+            if phase in ("start", "end"):
+                last = phase
+    return last == "rate_limit"
+
+
+def _parse_rate_limit_reset(log_path) -> float:
+    """GH#110: best-effort seconds-until-retry for a rate-limited Codex worker, parsed from the
+    `retry_after` field (or a 'retry after N s' message) of the last rate-limit event in the log.
+    Falls back to RATE_LIMIT_DEFAULT_BACKOFF_SECS when nothing is parseable (codex's exact 429 event
+    spelling is unpinned on this host). Clamped to a sane [5s, 1h] range."""
+    secs = None
+    if log_path:
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                end = f.tell()
+                f.seek(max(0, end - 65536))
+                tail = f.read()
+        except OSError:
+            tail = b""
+        for raw in tail.split(b"\n"):
+            s = raw.strip()
+            if not s:
+                continue
+            try:
+                obj = json.loads(s)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or not _codex_is_rate_limit(obj):
+                continue
+            msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+            ra = obj.get("retry_after") or msg.get("retry_after")
+            if isinstance(ra, (int, float)) and ra > 0:
+                secs = float(ra)
+                continue
+            for field in (msg.get("message"), msg.get("error"), obj.get("error"), obj.get("message")):
+                if isinstance(field, str):
+                    m = re.search(r"retry[ _-]?after[^0-9]*([0-9]+(?:\.[0-9]+)?)", field.lower())
+                    if m:
+                        secs = float(m.group(1))
+    if not secs or secs <= 0:
+        secs = RATE_LIMIT_DEFAULT_BACKOFF_SECS
+    return max(5.0, min(secs, 3600.0))
+
+
+def _saved_ref(w, checkpoint_sha, diff) -> dict:
+    """GH#110: the durable pointer recorded on a preserved task worker — where its work lives so a
+    human (and the next wake) can find it. Additive; no UUIDs/SHAs leak into human-facing text."""
+    return {"branch": w.get("branch"), "worktree": w.get("worktree"),
+            "checkpoint_sha": checkpoint_sha,
+            "has_commits": bool(checkpoint_sha),
+            "patch_captured": bool((diff or "").strip())}
+
+
+def _record_task_saved_ref(api_base, w, saved_ref, human_line) -> None:
+    """GH#110: surface a preserved task worker's saved_ref on the task feed in PLAIN language (no
+    UUIDs/SHAs), so a non-engineer sees where the work was saved. Best-effort — a failed post is
+    swallowed (the run row already carries branch/worktree, so the ref isn't lost)."""
+    task_id = (w.get("respawn_ctx") or {}).get("task_id")
+    agent_id = w.get("agent_id")
+    if not (task_id and agent_id and human_line):
+        return
+    _post_json(f"{api_base}/api/tasks/{task_id}/messages",
+               {"author_agent_id": agent_id, "body": human_line})
+
+
+def _synthesize_task_digest(api_base, agent_id, task_id, saved_ref, run_started_ts, human_line) -> None:
+    """GH#110 §2f: after a meaningful task-worker finish, inject a continuity snapshot WITHOUT
+    relying on the agent voluntarily calling /orcha-snapshot — Codex `exec` has no SessionEnd hook,
+    so this is its ONLY digest write; for Claude it augments the hook. Never clobbers a NEWER
+    agent-written digest: skip if the stored digest is already newer than this run's start (the
+    agent composed a richer one during the run)."""
+    if not (agent_id and task_id):
+        return
+    existing = _get_json(f"{api_base}/api/agents/{agent_id}/digest")
+    dg = (existing or {}).get("digest")
+    if dg and run_started_ts and (dg.get("snapshot_ts") or 0) > run_started_ts:
+        return                               # a newer agent-written digest exists — don't clobber
+    branch = saved_ref.get("branch")
+    focus = (human_line or "work in progress on the current task")[:400]
+    _post_json(f"{api_base}/api/agents/{agent_id}/digest",
+               {"current_focus": focus,
+                "open_threads": [{"text": f"Resume task {task_id}: work is saved on branch "
+                                          f"{branch or '(none)'}; reuse that worktree/branch "
+                                          f"instead of starting fresh from origin/main."}]})
 
 
 def _is_stream_event_line(line: str) -> bool:
@@ -2295,10 +2520,19 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
               f"respawn {n}/{HARD_CAP_RESPAWN_MAX}) on the same worktree")
 
 
-def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: float = 120.0) -> None:
+def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: float = 120.0,
+                 failed_drains: Optional[dict] = None,
+                 agent_hold_until: Optional[dict] = None) -> None:
     """R2.4 reaper + ISS-15/ISS-31 watchdog: for each tracked worker, either release its
     lease on clean exit OR kill it — but kill on STALL, not a fixed deadline. A2: finishes
     the worker_runs row (status + output + ISS-8 diff) on the way out.
+
+    GH#110: `failed_drains` {(agent_id, task_id): int} and `agent_hold_until` {agent_id: float}
+    are DAEMON-SCOPE dicts (created once in main(), survive the per-reap `live_workers.pop`). They
+    bound the withheld-cursor task-worker path: `failed_drains` counts consecutive failed/rate-
+    limited drains so the cursor is force-advanced after FAILED_DRAIN_MAX; `agent_hold_until`
+    records a rate-limit cooldown so tick skips re-waking a still-limited agent. Both default to a
+    throwaway dict for the pre-GH#110 callers (tests, --once) that don't thread them.
 
     The daemon tracks {agent_id: {proc, hard_deadline, last_size, last_progress_ts, run_id,
     log_path, worktree, branch, base_cwd}}. Each tick:
@@ -2314,6 +2548,10 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
     Before ISS-31 the kill was a fixed deadline regardless of output, so it reaped workers
     that were still producing. proc.poll() (not os.kill(pid,0)) detects exit: an exited child
     is a zombie until the parent reaps it, and kill(pid,0) reports a zombie as alive."""
+    if failed_drains is None:
+        failed_drains = {}
+    if agent_hold_until is None:
+        agent_hold_until = {}
     now = time.time()
     for aid, w in list(live_workers.items()):
         proc = w["proc"]
@@ -2323,14 +2561,83 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         _pump_one(api_base, aid, w)
         if proc.poll() is not None:    # exited — poll() has reaped the zombie
             diff = _capture_diff(w.get("worktree"))
-            _finish_run(api_base, w.get("run_id"), "exited", proc.returncode, w.get("log_path"), diff)
-            _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
-            _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "released", "release_lease": True})
+            # GH#110: a clean exit (returncode-only) is NOT automatically a successful drain. A
+            # Codex worker that died on a 429 still exits 0; read its runtime's classifiers so a
+            # rate-limited/failed drain is recorded as such — never as a cursor-advancing success.
+            w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+            status = "exited"
+            if w_runtime == RUNTIME_CODEX:
+                status = _codex_exit_status(w.get("log_path"), proc.returncode)
+            is_task_wt = bool(w.get("task_worktree"))
+            task_id = (w.get("respawn_ctx") or {}).get("task_id")
+            if is_task_wt and status in ("rate_limited", "failed"):
+                # GH#110: PRESERVE the task worktree (never teardown), record the run as
+                # rate_limited/failed, and DON'T advance the wake cursor — the events stay pending
+                # so the next wake retries from the preserved state — bounded by FAILED_DRAIN_MAX.
+                _finish_run(api_base, w.get("run_id"), status, proc.returncode, w.get("log_path"), diff)
+                key = (aid, task_id)
+                failed_drains[key] = failed_drains.get(key, 0) + 1
+                n = failed_drains[key]
+                if status == "rate_limited":
+                    hold = _parse_rate_limit_reset(w.get("log_path"))
+                    agent_hold_until[aid] = now + hold
+                    human = ("worker hit a rate limit (Codex 429) — work saved and preserved; "
+                             "it will retry after the cooldown")
+                else:
+                    human = "worker exited without finishing — work saved and preserved; it will retry"
+                _record_task_saved_ref(api_base, w, _saved_ref(w, None, diff), human)
+                if n >= FAILED_DRAIN_MAX:
+                    # bounded redelivery: stop the hot-loop — advance the cursor (stashed ts) and
+                    # surface a plain-language failure so a human can look, then clear the counter.
+                    _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                               {"delivered_ts": w.get("pending_ack_ts"),
+                                "kind": "worker_drain_failed_released", "release_lease": True})
+                    _record_task_saved_ref(
+                        api_base, w, _saved_ref(w, None, diff),
+                        f"heads up: this worker has failed to finish {n} times in a row — "
+                        f"releasing it for now so it doesn't loop; the work is saved on its branch")
+                    failed_drains.pop(key, None)
+                else:
+                    # withhold the cursor (no delivered_ts) but release the lease so a later wake
+                    # can retry. GH#110 DoD(3): do NOT ack/close pending notifications here.
+                    _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                               {"kind": ("worker_rate_limited" if status == "rate_limited"
+                                         else "worker_drain_failed"), "release_lease": True})
+                live_workers.pop(aid, None)
+                if not quiet:
+                    print(f"[notifier] task worker for {aid} (pid {proc.pid}) drained {status} "
+                          f"({n}/{FAILED_DRAIN_MAX}) — worktree PRESERVED, cursor "
+                          f"{'advanced (bound hit)' if n >= FAILED_DRAIN_MAX else 'withheld'}")
+                continue
+            _finish_run(api_base, w.get("run_id"), status, proc.returncode, w.get("log_path"), diff)
+            if is_task_wt:
+                # GH#110 SUCCESS: checkpoint-commit the dirty tree onto the durable branch + KEEP
+                # the worktree (next same-task wake resumes from it), record the saved_ref + inject
+                # a continuity digest, clear the failed-drain counter, and advance the cursor with
+                # the ts stashed at spawn (the work actually drained now).
+                sha = _checkpoint_task_worktree(w.get("base_cwd"), w.get("worktree"),
+                                                w.get("branch"), task_id, w.get("run_id"))
+                failed_drains.pop((aid, task_id), None)
+                if sha or (diff or "").strip():
+                    saved = _saved_ref(w, sha, diff)
+                    human = (f"work saved on branch {w.get('branch')}"
+                             + (f" (checkpoint {sha})" if sha else " (uncommitted, preserved)"))
+                    _record_task_saved_ref(api_base, w, saved, human)
+                    _synthesize_task_digest(api_base, aid, task_id, saved,
+                                            w.get("started_ts"), human)
+                _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                           {"delivered_ts": w.get("pending_ack_ts"),
+                            "kind": "released", "release_lease": True})
+            else:
+                _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
+                _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                           {"kind": "released", "release_lease": True})
             live_workers.pop(aid, None)
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
-                      f"exited — lease released")
+                      f"exited ({status}) — "
+                      f"{'task worktree preserved' if is_task_wt else 'worktree torn down'}, "
+                      f"lease released")
             continue
         # Wake-latency fix: this worker is still alive — renew its short single-flight lease so
         # it doesn't expire mid-run (which would let a second worker spawn). A crashed worker, or
@@ -2406,9 +2713,28 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             diff = _capture_diff(w.get("worktree"))
             exit_code = 0 if rstatus == "success" else proc.returncode
             _finish_run(api_base, w.get("run_id"), "exited", exit_code, w.get("log_path"), diff)
-            _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
-            _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "worker_completed_reaped", "release_lease": True})
+            # GH#110: a COMPLETED task worker preserves its worktree exactly like the clean-exit
+            # success path (checkpoint-commit + keep + saved_ref + digest + advance the stashed
+            # cursor); only a non-task ephemeral worker is torn down here.
+            if bool(w.get("task_worktree")):
+                task_id = (w.get("respawn_ctx") or {}).get("task_id")
+                sha = _checkpoint_task_worktree(w.get("base_cwd"), w.get("worktree"),
+                                                w.get("branch"), task_id, w.get("run_id"))
+                failed_drains.pop((aid, task_id), None)
+                if sha or (diff or "").strip():
+                    saved = _saved_ref(w, sha, diff)
+                    human = (f"work saved on branch {w.get('branch')}"
+                             + (f" (checkpoint {sha})" if sha else " (uncommitted, preserved)"))
+                    _record_task_saved_ref(api_base, w, saved, human)
+                    _synthesize_task_digest(api_base, aid, task_id, saved,
+                                            w.get("started_ts"), human)
+                _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                           {"delivered_ts": w.get("pending_ack_ts"),
+                            "kind": "worker_completed_reaped", "release_lease": True})
+            else:
+                _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
+                _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                           {"kind": "worker_completed_reaped", "release_lease": True})
             live_workers.pop(aid, None)
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}) completed but lingered "
@@ -2622,12 +2948,20 @@ _CODEX_RESUME_FAILED = set()
 
 def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
          min_idle: float, quiet: bool, lease_ttl: float = 1200.0,
-         live_workers: Optional[dict] = None, base_cwd: Optional[str] = None) -> dict:
+         live_workers: Optional[dict] = None, base_cwd: Optional[str] = None,
+         agent_hold_until: Optional[dict] = None) -> dict:
     """One scan-and-wake pass. Returns a summary dict (also used by tests).
 
     `live_workers` (daemon-loop state, {agent_id: pid}) is updated with each ephemeral
     worker spawned so `reap_workers` can release its lease on exit. `base_cwd` is the daemon's
-    project dir, used to auto-record reachability for portal-created agents (see below)."""
+    project dir, used to auto-record reachability for portal-created agents (see below).
+
+    GH#110: `agent_hold_until` {agent_id: float} is the daemon-scope rate-limit hold-down that
+    reap_workers writes on a Codex 429 drain; this loop SKIPS a still-held agent as a wake
+    candidate (client-side, no API change) so a rate-limited worker isn't re-woken on cooldown
+    cadence and burning the retry budget. None (tests/--once) means no holds are active."""
+    if agent_hold_until is None:
+        agent_hold_until = {}
     scan = _get_json(
         f"{api_base}/api/containers/{cid}/wake-scan?cooldown={cooldown}&min_idle={min_idle}"
     )
@@ -2690,9 +3024,21 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
     _ack_key = _unseal_scan_key(scan, "ack_key_enc")
     _autonomy_level = scan.get("autonomy_level")
     _t2_enabled = (_autonomy_level == "full")
+    _hold_now = time.time()
     for cand in scan.get("candidates", []):
         if not cand.get("should_wake"):
             continue
+        # GH#110: a Codex worker that drained on a 429 recorded a rate-limit hold on its agent;
+        # skip re-waking it until the cooldown elapses (client-side, no server change). Drop the
+        # key once it lapses so the agent is a normal candidate again.
+        hold = agent_hold_until.get(cand.get("agent_id"))
+        if hold is not None:
+            if _hold_now < hold:
+                if not quiet:
+                    print(f"[notifier] skip {cand.get('alias')} — rate-limit hold-down "
+                          f"({hold - _hold_now:.0f}s left)")
+                continue
+            agent_hold_until.pop(cand.get("agent_id"), None)
         prompt = build_wake_prompt(cand)
         kind = select_transport(cand)
         event = derive_wake_event(cand)
@@ -2809,9 +3155,18 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             _single_noncode = ((cand.get("pending_events") or 0) <= 1
                                and cand.get("latest_event") in _NONCODE)
             is_code_wake = bool(auto) or bool(cand.get("wake_task_id")) or not _single_noncode
+            # GH#110: a code wake that is LINKED to a task gets the DURABLE per-(agent+task)
+            # worktree so uncommitted work survives a clean exit and the next same-task wake
+            # resumes from it; a code wake with no task id keeps the disposable ephemeral worktree.
+            wt_task_id = (auto[0] if auto else cand.get("wake_task_id"))
             worktree = branch = None
+            task_worktree = False
             if is_code_wake and hc and not dry_run and live_workers is not None:
-                worktree, branch = _provision_worktree(hc, cand.get("alias"))
+                if wt_task_id:
+                    worktree, branch = _provision_task_worktree(hc, cand.get("alias"), wt_task_id)
+                    task_worktree = worktree is not None
+                if worktree is None:            # no task id, or task-worktree provisioning failed
+                    worktree, branch = _provision_worktree(hc, cand.get("alias"))
             run_cwd = worktree or hc
             sent, cmd, proc = spawn_headless(run_cwd, prompt,
                                        cand.get("headless_flags"), dry_run,
@@ -2851,6 +3206,13 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     "last_size": 0, "last_progress_ts": time.time(),
                     "run_id": run_id, "log_path": log_path,
                     "worktree": worktree, "branch": branch, "base_cwd": hc,
+                    # GH#110: a DURABLE task worktree is preserved (checkpoint-committed + kept) on
+                    # a clean exit instead of torn down; started_ts guards the digest-clobber check;
+                    # pending_ack_ts is the cursor advance withheld at spawn, emitted only on a
+                    # SUCCESSFUL drain (set in the ack block below).
+                    "task_worktree": task_worktree, "started_ts": time.time(),
+                    "pending_ack_ts": None,
+                    "agent_id": cand["agent_id"],
                     # ISS-39: per-worker cursor for streaming stream-json lines into the DB
                     "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
                     # ISS-76: everything reap_workers needs to CHECKPOINT-RESPAWN this worker on
@@ -2863,6 +3225,9 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                     "model": cand.get("model"),
                                     "model_runtime": cand.get("model_runtime"),
                                     "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                    # GH#110: carry the task-worktree flag through a checkpoint-
+                                    # respawn so the respawned worker is still preserved on exit.
+                                    "task_worktree": task_worktree,
                                     "event": event}}
             elif worktree and not sent:
                 # spawn failed after we made a worktree — clean it up (no orphan)
@@ -2894,6 +3259,15 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             if ack_ts is None:
                 ack_ts = cand.get("max_event_ts")
             delivered_ts = ack_ts if (sent and cand.get("pending_events")) else None
+            # GH#110: for a DURABLE task-worktree wake, WITHHOLD the cursor at spawn — a Codex 429
+            # (or any failed drain) must not advance the cursor past unhandled work. Stash the
+            # intended ts on the tracked worker; reap_workers emits it only on a SUCCESSFUL drain
+            # (or once FAILED_DRAIN_MAX is hit). Read the flag off the tracked worker so this is
+            # correct regardless of the local branch's scope.
+            tracked = live_workers.get(cand["agent_id"]) if live_workers is not None else None
+            if tracked and tracked.get("task_worktree") and delivered_ts is not None:
+                tracked["pending_ack_ts"] = ack_ts
+                delivered_ts = None
             # We claim a single-flight lease ONLY for an ephemeral spawn. If that spawn
             # then failed (no claude, bad cwd, Popen error), no worker exists — release
             # the lease we just won so the agent isn't suppressed for the whole TTL.
@@ -4549,6 +4923,12 @@ def cmd_notifier(args) -> None:
               f"(cooldown={args.cooldown}s, min-idle={args.min_idle}s). Ctrl-C to stop.")
     live_workers: dict = {}   # {agent_id: pid} — for releasing leases on worker exit
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
+    # GH#110: DAEMON-SCOPE continuity state (survives the per-reap live_workers.pop, so it persists
+    # across a wake→fail→re-wake). failed_drains bounds the withheld-cursor task-worker path;
+    # agent_hold_until is the Codex rate-limit cooldown that keeps tick from re-waking a still-
+    # limited agent. Reset on daemon restart (a fresh N / cleared holds), which is acceptable.
+    failed_drains: dict = {}       # {(agent_id, task_id): consecutive failed/rate-limited drains}
+    agent_hold_until: dict = {}    # {agent_id: epoch-secs until the rate-limit hold-down lifts}
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
     try:
@@ -4557,7 +4937,8 @@ def cmd_notifier(args) -> None:
                 # Release leases of workers that finished since the last tick, BEFORE
                 # scanning, so a just-finished agent with fresh work is wakeable now.
                 reap_workers(api_base, live_workers, args.quiet,
-                             stall_secs=getattr(args, "stall_secs", 120.0))
+                             stall_secs=getattr(args, "stall_secs", 120.0),
+                             failed_drains=failed_drains, agent_hold_until=agent_hold_until)
                 # ISS-60(B): TTL-independent backstop for an orphan lease that outlived its
                 # embodiment (daemon restart / externally-spawned resident the in-memory
                 # live_workers/live_residents maps no longer track, so neither reap path above
@@ -4583,7 +4964,8 @@ def cmd_notifier(args) -> None:
                 tick(api_base, cid, dry_run=args.dry_run, cooldown=args.cooldown,
                      min_idle=args.min_idle, quiet=args.quiet,
                      lease_ttl=getattr(args, "lease_ttl", 1200.0),
-                     live_workers=live_workers, base_cwd=project_cwd)
+                     live_workers=live_workers, base_cwd=project_cwd,
+                     agent_hold_until=agent_hold_until)
             except Exception as e:  # a daemon must not die on a transient error
                 if not args.quiet:
                     print(f"[notifier] tick error (continuing): {e}", file=sys.stderr)

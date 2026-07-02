@@ -5366,7 +5366,7 @@ class WorkerRunStart(BaseModel):
 
 class WorkerRunFinish(BaseModel):
     """Notifier finishes a run on reap (clean exit or ISS-15 kill)."""
-    status: str = Field(..., description="exited | killed")
+    status: str = Field(..., description="exited | killed | rate_limited | failed")
     exit_code: Optional[int] = None
     output: Optional[str] = Field(default=None, description="captured stream-json text from the per-wake log")
     diff: Optional[str] = Field(default=None, description="ISS-8: net `git diff` vs origin/main from the worker's isolated worktree")
@@ -5512,8 +5512,13 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
     just overwrites the terminal fields."""
     if not _valid_uuid(run_id):
         raise HTTPException(400, "run_id is not a valid UUID")
-    if body.status not in ("exited", "killed"):
-        raise HTTPException(422, "status must be 'exited' or 'killed'")
+    # GH#110: a code-touching task worker can now finish 'rate_limited' (Codex 429 / rate_limit_event)
+    # or 'failed' (exited without a clean terminal turn) — the notifier preserves the worktree and
+    # withholds the wake cursor on these, so the run row must be able to record them. worker_runs.status
+    # is free TEXT with no CHECK constraint (same reason 'orphaned' needs no migration), so widening
+    # the accepted set here is sufficient — no DB migration.
+    if body.status not in ("exited", "killed", "rate_limited", "failed"):
+        raise HTTPException(422, "status must be 'exited', 'killed', 'rate_limited', or 'failed'")
     with db_cursor() as (conn, cur):
         cur.execute("SELECT run_id, agent_id FROM worker_runs WHERE run_id=%s", (run_id,))
         if not cur.fetchone():
