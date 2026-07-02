@@ -751,3 +751,20 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 .ncenter .c-violet { color: var(--violet); background: var(--violet-soft); border: 1px solid var(--violet-line); }
 .ncenter .c-info { color: var(--info); background: var(--info-soft); border: 1px solid var(--info-line); }
 .ncenter .c-idle { color: var(--idle); background: var(--idle-soft); border: 1px solid var(--idle-line); }
+
+/* ===== GH #89: per-agent pending notifications (roster bell + veto panel) ===== */
+.pbell { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; align-self: center;
+  font-size: 10.5px; font-weight: 700; color: var(--warn); background: var(--warn-soft);
+  border: 1px solid var(--warn-line); border-radius: 999px; padding: 2px 8px; cursor: pointer; }
+.pbell:hover { filter: brightness(1.12); }
+.pbell svg { width: 12px; height: 12px; }
+.pnfloat { position: fixed; top: 92px; right: 26px; }
+.pnrow { cursor: default; }
+.pnrow .pn-ack { align-self: center; flex: none; white-space: nowrap; }
+.pn-hint { font-size: 11px; color: var(--faint); margin-top: 3px; line-height: 1.35; }
+.nc-h .mark.confirm { color: var(--danger); font-weight: 700; }
+.pn-snooze { display: flex; align-items: center; gap: 7px; padding: 11px 16px;
+  border-top: 1px solid var(--border); flex-wrap: wrap; }
+.pn-snooze .lbl { font-size: 11.5px; font-weight: 650; color: var(--muted); }
+.pn-snooze .grow { flex: 1; }
+.pn-snoozed { font-size: 11.5px; color: var(--violet); font-weight: 620; }
