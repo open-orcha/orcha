@@ -304,8 +304,12 @@ fun TaskThreadScreen(
     val unsent = if (state.error != null) pendingSend else null
     val listState = rememberLazyListState()
     val imeVisible = WindowInsets.isImeVisible
-    // issue 2: keep the newest messages in view when the keyboard opens or a message lands
-    LaunchedEffect(state.taskMessages.size, imeVisible) {
+    // issue 2: keep the newest messages in view when the keyboard opens or a message lands.
+    // Keyed on the NEWEST message's identity (same expression as the item keys), not the list
+    // size — a "Load earlier" prepend grows the size but leaves the newest message unchanged,
+    // so the effect stays put and LazyColumn's key-based anchoring holds the viewport at the seam.
+    val newestMessageKey = state.taskMessages.lastOrNull()?.let { it.messageId ?: "${it.createdAt}-${it.body.hashCode()}" }
+    LaunchedEffect(newestMessageKey, imeVisible) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last >= 0 && (imeVisible || state.taskMessages.isNotEmpty())) listState.animateScrollToItem(last)
     }
