@@ -71,8 +71,11 @@ async def test_present_listener_suppresses_then_releases_wake(client, container,
     assert cand["should_wake"] is False
     assert "active" in cand["reason"]            # "agent active (idle Ns < 60s)"
 
-    # Once the listener goes quiet past min_idle, the daemon resumes waking it.
+    # Once the listener goes quiet past min_idle, the daemon resumes waking it. GH #91/#90: the
+    # WORK-idle gate keys on work_last_heartbeat_at (which the poll now also bumps), so age BOTH.
     db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '5 minutes' WHERE id=%s", (bid,))
+    db.execute("UPDATE agent_wake_state SET work_last_heartbeat_at = now() - interval '5 minutes' "
+               "WHERE agent_id=%s", (bid,))
     r = await client.get(f"/api/containers/{container['id']}/wake-scan", params={"min_idle": 60})
     cand = next(c for c in r.json()["candidates"] if c["agent_id"] == bid)
     assert cand["should_wake"] is True

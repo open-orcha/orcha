@@ -172,17 +172,20 @@ async def test_active_lease_still_blocks(client, container, make_agent, db):
     aid = (await make_agent("Live"))["agent_id"]
     _arm_clock_wake(db, aid)
 
+    # GH #91/#90: WORK single-flight is what suppresses a WORK wake, so hold a WORK-lane lease
+    # (ephemeral). A 'resident' claim now lands in the CONVERSATION lane and would NOT block a work
+    # wake/claim (the lanes are independent) — the lane-correct regression guard uses a work lease.
     r = await client.post(f"/api/agents/{aid}/wake-claim",
-                          json={"lease_ttl": 300, "lease_kind": "resident"})
+                          json={"lease_ttl": 300, "lease_kind": "ephemeral"})
     assert r.json()["claimed"] is True            # first claim wins the lease
 
     cand = await _scan(client, cid, aid)
     assert cand["lease_active"] is True
-    assert cand["should_wake"] is False           # live lease suppresses regardless of B2
+    assert cand["should_wake"] is False           # live WORK lease suppresses regardless of B2
 
     r2 = await client.post(f"/api/agents/{aid}/wake-claim",
                            json={"lease_ttl": 300, "lease_kind": "ephemeral"})
-    assert r2.json()["claimed"] is False          # single-flight: second claim refused
+    assert r2.json()["claimed"] is False          # single-flight: second WORK claim refused
 
 
 # ---------- tooth 5: a DEAD orphan (status='orphaned') no longer suppresses — reaper self-heals ----------

@@ -57,8 +57,8 @@ async def test_active_run_surfaces_live_conversation_drain_no_task(
                       json={"lease_ttl": 300, "lease_kind": "resident"})
     # A running worker run with NO task — an inbox-drain / conversation-turn wake.
     db.execute(
-        "INSERT INTO worker_runs (agent_id, task_id, status, wake_kind, wake_event) "
-        "VALUES (%s, NULL, 'running', 'resident', 'request_answered')",
+        "INSERT INTO worker_runs (agent_id, task_id, status, wake_kind, wake_event, lane) "
+        "VALUES (%s, NULL, 'running', 'resident', 'request_answered', 'conversation')",
         (aid,),
     )
 
@@ -116,8 +116,8 @@ async def test_active_run_diverges_from_stale_working_claim(
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
     db.execute(
-        "INSERT INTO worker_runs (agent_id, task_id, status, wake_kind, wake_event) "
-        "VALUES (%s, NULL, 'running', 'resident', 'checkpoint_respawn')",
+        "INSERT INTO worker_runs (agent_id, task_id, status, wake_kind, wake_event, lane) "
+        "VALUES (%s, NULL, 'running', 'resident', 'checkpoint_respawn', 'conversation')",
         (aid,),
     )
 
@@ -129,6 +129,48 @@ async def test_active_run_diverges_from_stale_working_claim(
     assert row["active_run"] is not None
     assert row["active_run"]["task_id"] is None
     assert row["active_run"]["wake_event"] == "checkpoint_respawn"
+
+
+@pytest.mark.asyncio
+async def test_active_run_follows_work_lane_when_both_lanes_live(
+        client, make_agent, make_task, container, db):
+    """GH #91/#90 PR review: when both lane leases are live, `embodiment` reports
+    the work lane. `active_run` must select the work-lane run too, even if a newer
+    conversation run exists, so the portal does not mix work status with resident
+    activity details."""
+    cid = container["id"]
+    a = await make_agent("Mixed")
+    aid = a["agent_id"]
+    t = await make_task("active work", "done", assignee_alias="Mixed")
+    tid = t["id"]
+
+    await client.post(f"/api/agents/{aid}/wake-claim",
+                      json={"lease_ttl": 300, "lease_kind": "resident"})
+    await client.post(f"/api/agents/{aid}/wake-claim",
+                      json={"lease_ttl": 300, "lease_kind": "ephemeral"})
+    db.execute(
+        """INSERT INTO worker_runs
+             (agent_id, task_id, status, wake_kind, wake_event, lane, started_at)
+           VALUES
+             (%s, %s, 'running', 'ephemeral', 'task_assigned', 'work',
+              now() - interval '1 minute')""",
+        (aid, tid),
+    )
+    db.execute(
+        """INSERT INTO worker_runs
+             (agent_id, task_id, status, wake_kind, wake_event, lane, started_at)
+           VALUES
+             (%s, NULL, 'running', 'resident', 'conversation_turn', 'conversation',
+              now())""",
+        (aid,),
+    )
+
+    row = await _snapshot_agent(client, cid, aid)
+    assert row["embodiment"] == "ephemeral"
+    assert row["active_run"] is not None
+    assert row["active_run"]["wake_event"] == "task_assigned"
+    assert row["active_run"]["task_id"] == tid
+    assert row["active_run"]["task_title"] == "active work"
 
 
 @pytest.mark.asyncio

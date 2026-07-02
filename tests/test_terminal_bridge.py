@@ -232,6 +232,10 @@ def _wire_handle(monkeypatch):
         posts.append((url, body))
         if url.endswith("/runs"):
             return {"run_id": "live-run-1", "status": "running"}
+        if url.endswith("/embodiment-tokens"):
+            # GH #91/#90: the live terminal mints a WORK token before spawning; hand one back so the
+            # run-record path binds it (token_id on the /runs POST).
+            return {"run_token": "live-tok-1", "token_id": "live-tok-1"}
         return {}
     monkeypatch.setattr(notifier, "_post_json", _post)
     return spawned, killed, released, posts
@@ -331,7 +335,10 @@ def test_start_live_run_posts_live_kind_and_returns_run_id(monkeypatch):
     assert rid == "R1"
     url, body = posts[0]
     assert url.endswith("/api/agents/AID/runs")
-    assert body == {"wake_kind": "live", "wake_event": "live_terminal"}
+    # GH #91/#90: the live run is a WORK embodiment; start_live_run posts lane + (here defaulted) pid
+    # and token_id so the server binds the token and the dead-pid sweep won't false-orphan it.
+    assert body == {"wake_kind": "live", "wake_event": "live_terminal",
+                    "lane": "work", "pid": None, "token_id": None}
 
 
 def test_start_live_run_best_effort_returns_none_on_failed_post(monkeypatch):
@@ -378,7 +385,10 @@ async def test_handle_connection_records_and_finishes_live_run(monkeypatch):
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     starts = [b for (u, b) in posts if u.endswith("/api/agents/AID/runs")]
     finishes = [(u, b) for (u, b) in posts if u.endswith("/api/runs/live-run-1/finish")]
-    assert starts == [{"wake_kind": "live", "wake_event": "live_terminal"}]
+    # GH #91/#90: the run binds the real PTY pid (4321 from the stubbed spawn_pty) + the minted WORK
+    # token (live-tok-1 from the stubbed mint), and is tagged lane='work'.
+    assert starts == [{"wake_kind": "live", "wake_event": "live_terminal",
+                       "lane": "work", "pid": 4321, "token_id": "live-tok-1"}]
     assert len(finishes) == 1 and finishes[0][1]["status"] == "exited"
 
 

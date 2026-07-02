@@ -203,6 +203,21 @@ async def make_request(client, container):
     return _make
 
 
+@pytest_asyncio.fixture
+def work_headers(client):
+    """GH #91/#90: mint a WORK-lane embodiment token for an agent and return the header dict
+    ({"X-Orcha-Run-Token": tok}) that the four work-lane-gated task endpoints (/next,
+    accept-task->working, /tasks/{id}/done) now require. A worker process holds such a token in
+    production; tests that claim/work/complete a task must present one or the server returns 403.
+    Usage:  headers=await work_headers(agent_id)"""
+    async def _mint(agent_id, *, kind="headless"):
+        r = await client.post(f"/api/agents/{agent_id}/embodiment-tokens",
+                              json={"lane": "work", "kind": kind})
+        assert r.status_code == 201, r.text
+        return {"X-Orcha-Run-Token": r.json()["run_token"]}
+    return _mint
+
+
 async def next_event(client, agent_id, *, since_ts=0.0, timeout=2):
     """Module-level helper (awaitable repeatedly) wrapping GET /wait.
 

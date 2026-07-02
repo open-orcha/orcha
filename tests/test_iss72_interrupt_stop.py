@@ -28,14 +28,14 @@ from orcha_cli import notifier  # noqa: E402 (conftest puts orcha-cli on sys.pat
 
 # ====================== API: POST /api/runs/{run_id}/stop ======================
 
-async def _running_run(client, aid, *, task_id=None):
+async def _running_run(client, aid, *, task_id=None, lane="work"):
     """Claim a single-flight lease (so wake-renew has a LIVE lease to surface against) and record
     a running worker_run for `aid`. Returns the run_id."""
-    cl = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
+    cl = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300, "lane": lane})
     assert cl.status_code == 200, cl.text
     r = await client.post(f"/api/agents/{aid}/runs",
                           json={"wake_kind": "headless", "wake_event": "task_message",
-                                "task_id": task_id})
+                                "task_id": task_id, "lane": lane})
     assert r.status_code == 201, r.text
     return r.json()["run_id"]
 
@@ -161,6 +161,33 @@ async def test_renew_stop_not_surfaced_once_run_finished(client, make_agent):
     body = (await client.post(f"/api/agents/{worker['agent_id']}/wake-renew",
                               json={"lease_ttl": 300})).json()
     assert body["stop_requested"] is False
+
+
+@pytest.mark.asyncio
+async def test_renew_surfaces_stop_only_for_renewed_lane(client, make_agent):
+    """GH #91/#90: stop lookup is lane-scoped. A stopped conversation turn must not ride a
+    work-lane renew, where the daemon would reject the foreign run_id and the real conversation
+    stop could stay hidden."""
+    worker = await make_agent("W")
+    human = await make_agent("Boss", kind="human")
+    aid = worker["agent_id"]
+    conversation_run = await _running_run(client, aid, lane="conversation")
+    work_run = await _running_run(client, aid, lane="work")
+    await client.post(f"/api/runs/{conversation_run}/stop",
+                      json={"actor_agent_id": human["agent_id"]})
+
+    work = (await client.post(f"/api/agents/{aid}/wake-renew",
+                              json={"lease_ttl": 300, "lane": "work"})).json()
+    assert work["renewed"] is True
+    assert work["stop_requested"] is False
+    assert work["stop_run_id"] is None
+
+    conv = (await client.post(f"/api/agents/{aid}/wake-renew",
+                              json={"lease_ttl": 300, "lane": "conversation"})).json()
+    assert conv["renewed"] is True
+    assert conv["stop_requested"] is True
+    assert conv["stop_run_id"] == conversation_run
+    assert conv["stop_run_id"] != work_run
 
 
 # ====================== Notifier: reap_workers enforcement ======================

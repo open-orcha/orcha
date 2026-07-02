@@ -130,6 +130,15 @@ def test_service_residents_starts_codex_conversation_worker(monkeypatch, tmp_pat
     assert live["c1"]["conversation_ack_ts"] == 42.0
     assert spawned[0][1]["resume_session_id"] is None     # no pinned session → cold
     assert live["c1"]["resume_session_id"] is None
+    # GH #91/#90 (R3): the PRODUCTION Codex conversation spawn must stamp the CONVERSATION lane and
+    # carry the conversation token — else the run defaults to lane='work' and wake_scan counts a live
+    # conversation as a work embodiment, suppressing work wakes (the exact bug this PR fixes).
+    assert any("embodiment-tokens" in u and b.get("lane") == "conversation" for u, b in posts)
+    assert spawned[0][1]["conversation"] is True          # PreToolUse backstop marker
+    assert spawned[0][1]["run_token"] == "TOK-1"          # capability rides the process env
+    assert run_post["lane"] == "conversation"             # NOT the 'work' default
+    assert run_post["token_id"] == "TOK-1"                # bound for server revoke-on-terminal
+    assert live["c1"]["run_token"] == "TOK-1"             # tracked for _retire_resident teardown revoke
 
 
 # ---------- #286: Codex session-resume (capture + reattach, fail-open) ----------
@@ -440,6 +449,8 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
         if "wake-claim" in url:
             return {"claimed": claim, "reason": "blocked" if not claim else None,
                     "lease_kind": "resident"}
+        if "embodiment-tokens" in url:                    # GH #91/#90: conversation-lane mint
+            return {"run_token": "TOK-1"}
         if url.endswith("/runs"):
             return {"run_id": "RUN-1", "status": "running"}
         if "/conversations/" in url and url.endswith("/turns"):
@@ -472,10 +483,61 @@ def test_service_residents_cold_boot_and_feeds_turn(monkeypatch, tmp_path):
     assert any("wake-claim" in u and b.get("lease_kind") == "resident" for u, b in posts)
     assert any(u.endswith("/runs") for u, _ in posts)                    # per-turn run opened
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "hello"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("hello"))   # PR R5: every fed turn carries the lane reminder
     r = live["C1"]
     assert r["awaiting_result"] is True and r["serviced_seq"] == 1 and r["current_run_id"] == "RUN-1"
     assert r["runtime"] == notifier.RUNTIME_CLAUDE
+
+
+def test_service_residents_resident_boot_stamps_conversation_lane(monkeypatch, tmp_path):
+    """GH #91/#90 (R3): the PRODUCTION Claude-resident boot must build a CONVERSATION-lane persona,
+    mint + carry a conversation token, and stamp lane='conversation' on the per-turn run — else the
+    run defaults to lane='work' and wake_scan counts the warm resident as a WORK embodiment,
+    suppressing work wakes. The token is PROCESS-scoped (one resident spans many per-turn runs), so
+    it is tracked in the live dict for teardown revoke and is NOT bound to the per-turn run."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": None, "pending_human": True, "last_turn_seq": 1}
+    posts = _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hello"}])
+    persona_calls = []
+    monkeypatch.setattr(notifier, "_build_persona",
+                        lambda *a, **k: persona_calls.append(k.get("lane")) or "PERSONA")
+    proc = ResidentProc()
+    spawned = []
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", proc))
+    live = {}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert persona_calls == ["conversation"]                       # cold persona built in the conv lane
+    assert any("embodiment-tokens" in u and b.get("lane") == "conversation" for u, b in posts)
+    assert spawned[0][1]["conversation"] is True                   # PreToolUse backstop marker
+    assert spawned[0][1]["run_token"] == "TOK-1"                   # capability rides the resident env
+    run_post = next(b for u, b in posts if u.endswith("/runs"))
+    assert run_post["lane"] == "conversation"                      # NOT the 'work' default
+    assert "token_id" not in run_post                              # process-scoped, not per-turn-bound
+    assert live["C1"]["run_token"] == "TOK-1"                      # teardown revoke tracks it
+
+
+def test_service_residents_resident_spawn_failure_releases_conversation_lane(monkeypatch, tmp_path):
+    """GH #91/#90 (R3): if spawn_resident fails after the conversation token is minted, the wake-ack
+    must release the CONVERSATION lane (not the 'work' default, which would strand the conv lease)
+    and the orphaned token must be revoked."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": None, "pending_human": True, "last_turn_seq": 1}
+    posts = _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hello"}])
+    monkeypatch.setattr(notifier, "spawn_resident", lambda *a, **k: (False, "repr", None))
+    revoked = []
+    monkeypatch.setattr(notifier, "_revoke_or_defer", lambda api, tok: revoked.append(tok))
+    live = {}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    ack = next(b for u, b in posts if "wake-ack" in u)
+    assert ack["release_lease"] is True and ack["lane"] == "conversation"
+    assert revoked == ["TOK-1"]                                    # orphaned token revoked
+    assert "C1" not in live                                        # no resident recorded
 
 
 def test_service_residents_cold_boot_forced_by_cold_required(monkeypatch, tmp_path):
@@ -552,7 +614,7 @@ def test_service_residents_restarts_existing_idle_resident_when_cold_required(mo
     assert live["C1"]["proc"] is new_proc and live["C1"]["cold"] is True
     new_proc.stdin.seek(0)
     sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
-    assert sent == "fresh question"                              # delivered only to the fresh boot
+    assert sent == notifier._wrap_conversation_turn("fresh question")   # delivered only to the fresh boot (+ lane reminder, PR R5)
     assert any(u.endswith("/wake-ack") and b["kind"] == "resident_digest_resync"
                and b["release_lease"] is True for u, b in posts)
 
@@ -1006,7 +1068,13 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     cold re-boot and defeating §5.1). It spawns a THROWAWAY drain sidecar in its OWN session — keeping
     the warm conversation AND the embodiment lease. The lease is NOT released, nothing is fed into the
     warm session, the sidecar runs in the BASE checkout with the per-agent model + the lean (no
-    task-start) prompt, and its handle is tracked on the resident."""
+    task-start) prompt, and its handle is tracked on the resident.
+
+    GH #91/#90: this covers the RETAINED sidecar/work-teardown path, which is gated OFF by default
+    (RESIDENT_WORK_TEARDOWN_ENABLED=False) now that the WORK lane drains independently via wake_scan.
+    We flip the flag ON to exercise the restore-hatch mechanics; the default-OFF (no-yield/no-sidecar)
+    behavior is asserted by test_service_residents_no_work_teardown_by_default."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
@@ -1078,7 +1146,10 @@ def test_service_residents_drain_fires_on_new_event_despite_recent_attempt(monke
     """#247 B3: the anti-thrash backstop only throttles a STALLED repeat — a genuinely NEW event (a
     higher inbox_ack_ts than the last drain attempt's) clears `stalled` and spawns a fresh drain
     sidecar immediately, even within the cooldown window. Forward progress is never delayed, and the
-    warm session is KEPT (no yield)."""
+    warm session is KEPT (no yield).
+
+    GH #91/#90: retained sidecar path — gated OFF by default; flip the restore-hatch flag ON here."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 1, "inbox_ack_ts": 45.0, "model": "claude-opus-4-8"}   # NEW event
@@ -1126,7 +1197,13 @@ def test_service_residents_yields_on_auto_wake_due(monkeypatch, tmp_path):
     """#266: an idle warm resident (no in-flight turn, no pending human) whose clock auto-wake is DUE
     yields the lease — same snapshot+release seam as the inbox-drain, NEVER injecting the heartbeat
     into the warm human session. Crucially the release passes stamp_woken=False so it does NOT reset
-    the cadence clock out from under the very auto_wake_due that should fire the ephemeral wake next."""
+    the cadence clock out from under the very auto_wake_due that should fire the ephemeral wake next.
+
+    GH #91/#90: the auto-wake work-yield is now a RETAINED path gated OFF by default (the WORK lane
+    fires its own ephemeral off its own work lease). We flip the restore-hatch flag ON to keep the
+    yield mechanics covered; test_service_residents_no_work_teardown_by_default asserts the default-OFF
+    behavior (no yield even with auto_wake_due)."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 0, "inbox_ack_ts": None, "auto_wake_due": True}
@@ -1144,6 +1221,34 @@ def test_service_residents_yields_on_auto_wake_due(monkeypatch, tmp_path):
     assert fed == []                                            # NOTHING injected into the warm session
     assert not any(u.endswith("/conversations/C1/turns") for u, _ in posts)   # no conversation reply
     assert not any(u.endswith("/runs") for u, _ in posts)       # no in-session heartbeat run opened
+
+
+def test_service_residents_no_work_teardown_by_default(monkeypatch, tmp_path):
+    """GH #91/#90 (default OFF): with RESIDENT_WORK_TEARDOWN_ENABLED at its default False, a warm idle
+    resident with BOTH a queued non-conversation inbox AND a due clock auto-wake does NOT spawn a drain
+    sidecar and does NOT yield its conversation lease — the WORK lane now drains independently via its
+    own work lease + work worker_run, so the two lanes coexist. The resident stays warm and only renews.
+    Mutation tooth: revert the flag guard to always-on and this resident is torn down (live=={} + a
+    wake-ack release) → RED. It also proves the retained-path tests above owe their behavior to the
+    flag flip, not to the default."""
+    assert notifier.RESIDENT_WORK_TEARDOWN_ENABLED is False       # guard the default the whole test relies on
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
+            "auto_wake_due": True}                               # both work triggers armed
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert "C1" in live and proc.killed is False                 # warm CONVERSATION lease KEPT
+    assert spawns == []                                          # NO drain sidecar (work lane owns it)
+    assert not sigs                                             # NOT graceful-killed/yielded
+    assert not any(u.endswith("/wake-ack") for u, _ in posts)   # lease NOT released — no work teardown
+    assert fed == []                                           # nothing injected into the warm session
+    assert any(u.endswith("/wake-renew") for u, _ in posts)     # just renews — stays a pure conversation body
 
 
 def test_service_residents_no_auto_wake_yield_when_not_due(monkeypatch, tmp_path):
@@ -1345,7 +1450,10 @@ def test_service_residents_drain_sidecar_spawn_failure_falls_open_to_yield(monke
     """#247 B3 §8 fail-open: if the drain sidecar can't be spawned (spawn raises / returns not-sent),
     the resident falls back to the A2 idle-YIELD — graceful close + lease release so the next tick's
     ephemeral drains the backlog. Never crashes, never strands. Mutation tooth: remove the try/except +
-    fallback and a spawn exception propagates (the call raises instead of cleanly yielding)."""
+    fallback and a spawn exception propagates (the call raises instead of cleanly yielding).
+
+    GH #91/#90: retained sidecar/fail-open path — gated OFF by default; flip the flag ON here."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8"}
@@ -1417,7 +1525,8 @@ def test_cold_boot_injects_history_prefix_and_feeds_unanswered_turn(monkeypatch,
     assert "PERSONA" in sp and "## Conversation so far" in sp and "old q;old a" in sp
     assert spawned[0][1]["resume_session_id"] is None                    # cold boot
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("new q"))
     assert live["C1"]["serviced_seq"] == 3                               # fed seq3, skipped seq1
 
 
@@ -1441,7 +1550,8 @@ def test_cold_boot_skips_already_answered_turns_without_formatter(monkeypatch, t
 
     assert spawned[0][1]["system_prompt"] == "PERSONA"                   # persona only, no history
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("new q"))
     assert live["C1"]["serviced_seq"] == 3
 
 
@@ -1463,7 +1573,8 @@ def test_cold_boot_cursor_uses_newest_agent_reply_not_oldest_page(monkeypatch, t
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "latest pending"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("latest pending"))
     assert live["C1"]["serviced_seq"] == 301              # newest agent (300) → feed 301, not an old turn
 
 
@@ -1487,7 +1598,8 @@ def test_warm_resume_skips_history_and_persona(monkeypatch, tmp_path):
     assert spawned[0][1]["system_prompt"] is None                        # warm — nothing injected
     assert spawned[0][1]["resume_session_id"] == "sess-9"
     proc.stdin.seek(0)
-    assert json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"] == "new q"
+    assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
+            == notifier._wrap_conversation_turn("new q"))
     assert live["C1"]["serviced_seq"] == 3
 
 

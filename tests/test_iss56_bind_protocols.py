@@ -156,14 +156,15 @@ async def test_request_answered_event_carries_originating_task_id(
 # ===================== Point 4 — accepted → answered → closed =====================
 
 async def test_accepted_request_can_be_answered_then_requester_closes(
-        client, container, make_agent, make_request, db):
+        client, container, make_agent, make_request, db, work_headers):
     a = await make_agent("areq", "eng")
     b = await make_agent("bb", "eng")
     req = await make_request(a["agent_id"], "build X", target_alias="bb",
                              type="task", task=_task_payload())
     rid = req["request_id"]
     acc = await client.post(f"/api/requests/{rid}/accept-task",
-                            json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=await work_headers(b["agent_id"]))
     assert acc.status_code == 200 and acc.json()["status"] == "accepted"
     # accepter posts the real result → accepted → answered (Point 4)
     ans = await client.post(f"/api/requests/{rid}/respond",
@@ -181,13 +182,14 @@ async def test_accepted_request_can_be_answered_then_requester_closes(
 # ===================== Point 6 — accept does not wake the requester =====================
 
 async def test_accept_task_does_not_wake_requester(
-        client, container, make_agent, make_request, db):
+        client, container, make_agent, make_request, db, work_headers):
     a = await make_agent("areq", "eng")
     b = await make_agent("bb", "eng")
     req = await make_request(a["agent_id"], "build X", target_alias="bb",
                              type="task", task=_task_payload())
     await client.post(f"/api/requests/{req['request_id']}/accept-task",
-                      json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                      json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                      headers=await work_headers(b["agent_id"]))
     # No wake-worthy event toward the requester from the accept alone (only the answer wakes).
     evs = db.event_rows(a["agent_id"])
     assert not [e for e in evs if e["event_name"] in ("task_request_accepted", "request_answered")]
@@ -196,7 +198,7 @@ async def test_accept_task_does_not_wake_requester(
 # ===================== Point 5 — backstop auto-answers a stranded accept =====================
 
 async def test_backstop_auto_answers_when_accepter_task_terminal(
-        client, container, make_agent, make_task, make_request, db):
+        client, container, make_agent, make_task, make_request, db, work_headers):
     """If the accepter's spawned task reaches needs_verification/completed while the request is
     STILL 'accepted' (no report-back), the backstop auto-answers it so the requester's loop closes.
     The wake event is flagged backstop=true and an auto_answered audit row is logged."""
@@ -207,11 +209,13 @@ async def test_backstop_auto_answers_when_accepter_task_terminal(
                              type="task", task=_task_payload(), originating_task_id=a_task["id"])
     rid = req["request_id"]
     acc = await client.post(f"/api/requests/{rid}/accept-task",
-                            json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=await work_headers(b["agent_id"]))
     spawned = acc.json()["spawned_task_id"]
     # accepter marks the spawned task done WITHOUT reporting back → backstop fires.
     done = await client.post(f"/api/tasks/{spawned}/done",
-                             json={"agent_id": b["agent_id"], "result": "did it"})
+                             json={"agent_id": b["agent_id"], "result": "did it"},
+                             headers=await work_headers(b["agent_id"]))
     assert done.status_code == 200, done.text
     assert db.execute("SELECT status FROM requests WHERE id=%s", (rid,))[0]["status"] == "answered"
     # requester got a backstop-flagged answer carrying the originating task link

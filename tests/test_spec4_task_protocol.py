@@ -108,7 +108,7 @@ async def test_unset_protocol_is_null_not_empty_object(client, container, make_t
 
 
 # ── 4. worker reads its protocol on claim/wake ────────────────────────────────
-async def test_protocol_rides_the_worker_claim_payload(client, container, make_agent, make_task):
+async def test_protocol_rides_the_worker_claim_payload(client, container, make_agent, make_task, work_headers):
     """The whole point: the claiming/woken agent gets its protocol in the /next payload.
     TEETH: drop `protocol` from agent_next's SELECT or return dict → this goes red."""
     cid = container["id"]
@@ -122,7 +122,8 @@ async def test_protocol_rides_the_worker_claim_payload(client, container, make_a
                            json={"actor_agent_id": human_id, "agent_id": wid})
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
 
-    r = await client.post(f"/api/agents/{wid}/next")
+    r = await client.post(f"/api/agents/{wid}/next",
+                          headers=await work_headers(wid))
     assert r.status_code == 200, r.text
     claimed = r.json()["task"]
     assert claimed["id"] == t["id"]
