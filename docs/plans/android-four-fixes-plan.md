@@ -109,9 +109,10 @@ the screen looked functional in testing.
    `prepareGet(...) { timeout { requestTimeoutMillis = INFINITE; socketTimeoutMillis = INFINITE } }
    .execute { resp -> resp.bodyAsChannel() … readUTF8Line() loop }`. Per-request timeout
    override is load-bearing (global 10s cap stays for everything else). The call path must
-   also be free of coroutine-level `withTimeout` wrappers — today's `refreshRunLog` wraps
-   `getRunStreamText` in `withTimeout(20_000)`, which would kill the stream even with the
-   Ktor plugin timeouts overridden; the new collector must not inherit it. Parse only
+   also be free of coroutine-level `withTimeout` wrappers — today's `getRunStreamText`
+   wraps its own body in `withTimeout(20_000)` (`OrchaApiClient.kt:118`), which would kill
+   the stream even with the Ktor plugin timeouts overridden; the new streaming reader must
+   not carry that wrapper (nor gain one at the call site). Parse only
    `data: `-prefixed lines into `{seq, line}` / `{seq, done, status}` (server never uses
    `event:`/`id:` fields; 1s heartbeat comments keep the socket alive). Sealed
    `RunStreamEvent { Line(seq, line), Done(seq, status) }`.
