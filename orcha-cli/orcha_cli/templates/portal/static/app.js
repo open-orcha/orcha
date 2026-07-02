@@ -952,8 +952,9 @@ window.Orcha = (function () {
   // predicate wake-scan uses, so badge == panel rows == what would wake the agent. The panel is
   // the human's per-notification VETO surface: per-row Acknowledge stamps human_acked_at
   // (POST .../notifications/{event_id}/acknowledge), "Acknowledge all" bulk-acks the feed
-  // (POST .../notifications/read {suppress_wake:true}, with a confirm step), and — only when the
-  // agent has a clock auto-wake configured — a snooze control (POST .../wake/snooze).
+  // (POST .../notifications/read {suppress_wake:true, ack_event_ids:[...]}, with a confirm step),
+  // and — only when the agent has a clock auto-wake configured — a snooze control
+  // (POST .../wake/snooze).
   const PN_PAGE = 200;
   // agentId doubles as the open flag; snoozeUntil: null = trust the snapshot's a.snooze_until,
   // a number (ms epoch, 0 = cleared) = this panel session's own POST result wins until close.
@@ -1086,7 +1087,8 @@ window.Orcha = (function () {
     const a = pnAgent();
     if (!a) return;
     const tsVals = _pn.rows.map((n) => n.ts).filter((ts) => typeof ts === "number");
-    if (_pn.hasMore || tsVals.length !== _pn.rows.length || !_pn.rows.length) return;
+    const ackIds = _pn.rows.map((n) => n.event_id).filter((id) => id != null);
+    if (_pn.hasMore || tsVals.length !== _pn.rows.length || ackIds.length !== _pn.rows.length || !_pn.rows.length) return;
     if (!_pn.confirmAll) { _pn.confirmAll = true; pnRenderPanel(); return; }
     _pn.confirmAll = false;
     const throughTs = Math.max.apply(Math, tsVals);
@@ -1096,7 +1098,7 @@ window.Orcha = (function () {
     pnRenderPanel();
     fetch("/api/agents/" + encodeURIComponent(a.id) + "/notifications/read", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suppress_wake: true, through_ts: throughTs }),
+      body: JSON.stringify({ suppress_wake: true, through_ts: throughTs, ack_event_ids: ackIds }),
     })
       .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
       .catch((e) => {

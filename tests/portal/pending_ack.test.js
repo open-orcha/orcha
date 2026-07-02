@@ -5,7 +5,8 @@
    panel is the human's per-notification VETO surface: per-row Acknowledge POSTs
    .../notifications/{event_id}/acknowledge {suppress_wake:true} and optimistically
    removes the row (rollback on failure); "Acknowledge all" needs a confirm step
-   before POSTing .../notifications/read {suppress_wake:true, through_ts:<loaded max>};
+   before POSTing .../notifications/read {suppress_wake:true, through_ts:<loaded max>,
+   ack_event_ids:<loaded ids>};
    the snooze control renders ONLY for an agent with a clock auto-wake configured.
 
    Dependency-free vm-sandbox harness, same pattern as notification_center.test.js:
@@ -225,6 +226,8 @@ async function run() {
     assert(!!bulk && bulk.method === "POST" && bulk.body && bulk.body.suppress_wake === true,
            "second click POSTs notifications/read {suppress_wake:true}");
     assert(bulk.body.through_ts === 1718000100, "bulk ack is bounded to the loaded rows' max ts");
+    assert(JSON.stringify(bulk.body.ack_event_ids) === JSON.stringify([11, 12]),
+           "bulk ack suppression is bounded to the loaded row event ids");
     assert(/Nothing pending/.test(s.reg.pnFloat.innerHTML), "list clears to the empty state");
   }
 

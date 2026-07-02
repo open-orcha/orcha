@@ -3580,12 +3580,16 @@ class NotificationsRead(BaseModel):
         None,
         description="advance the read cursor to this bus ts (epoch seconds); omit to mark ALL "
                     "current notifications read (cursor jumps to the agent's newest event ts)")
+    ack_event_ids: Optional[list[int]] = Field(
+        None,
+        description="GH #89 'Acknowledge all': exact loaded notification event IDs to suppress. "
+                    "Required when suppress_wake=true; through_ts is only the visual read-cursor "
+                    "bound.")
     suppress_wake: bool = Field(
         False,
-        description="GH #89 'Acknowledge all': also stamp human_acked_at on every feed-visible row "
-                    "up to an explicit through_ts, so those events stop counting toward "
-                    "wakes/drains. _NOTIF_SUPPRESSED rows are excluded — you can only ack what "
-                    "the feed can show.")
+        description="GH #89 'Acknowledge all': also stamp human_acked_at on each supplied "
+                    "ack_event_ids row, so those exact events stop counting toward wakes/drains. "
+                    "_NOTIF_SUPPRESSED rows are excluded — you can only ack what the feed can show.")
 
 
 class NotificationAck(BaseModel):
@@ -3887,9 +3891,10 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
     notifier daemon's wake-ack cursor); the two must never cross-clear.
 
     GH #89 (``suppress_wake: true`` — "Acknowledge all"): additionally stamps human_acked_at on
-    every feed-visible row up to an explicit through_ts, so those events stop counting toward
-    wakes/drains. The explicit bound is required: otherwise a client that loaded a pending panel
-    and waited for confirmation could suppress a notification that arrived after the panel load.
+    explicit ``ack_event_ids`` only, so those exact events stop counting toward wakes/drains.
+    The ID bound is required: otherwise a client that loaded a pending panel and waited for
+    confirmation could suppress a notification that arrived after the panel load, including an
+    equal-timestamp/later-id row that a timestamp bound cannot distinguish.
     The _NOTIF_SUPPRESSED exclusion is load-bearing: you can only ack what the feed can show you —
     without it a bulk ack would stamp un-consumed conversation_turn rows and the resident drain
     would skip the human's own pending chat messages (a silent message-eater). Response gains
@@ -3900,15 +3905,31 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
     with db_cursor() as (conn, cur):
         _require_agent(cur, aid)
         target = body.through_ts
-        if body.suppress_wake and target is None:
+        ack_ids = list(dict.fromkeys(body.ack_event_ids or []))
+        if body.suppress_wake and not ack_ids:
             raise HTTPException(
                 400,
-                "through_ts is required when suppress_wake=true; bound the acknowledge-all action "
-                "to the notifications the human actually loaded",
+                "ack_event_ids is required when suppress_wake=true; bound the acknowledge-all "
+                "action to the notifications the human actually loaded",
             )
+        if len(ack_ids) > 200:
+            raise HTTPException(400, "ack_event_ids is limited to 200 rows")
+        ack_max_ts = None
+        if body.suppress_wake:
+            cur.execute(
+                """SELECT count(*) AS n, COALESCE(MAX(ts), 0) AS mx
+                   FROM agent_events WHERE event_key = %s AND id = ANY(%s)""",
+                (aid, ack_ids))
+            arow = cur.fetchone()
+            if not arow or not arow["n"]:
+                raise HTTPException(400, "ack_event_ids did not match any notifications for this agent")
+            ack_max_ts = arow["mx"]
         if target is None:
-            cur.execute("SELECT COALESCE(MAX(ts), 0) AS mx FROM agent_events WHERE event_key=%s", (aid,))
-            target = cur.fetchone()["mx"]
+            if ack_max_ts is not None:
+                target = ack_max_ts
+            else:
+                cur.execute("SELECT COALESCE(MAX(ts), 0) AS mx FROM agent_events WHERE event_key=%s", (aid,))
+                target = cur.fetchone()["mx"]
         cur.execute(
             """INSERT INTO agent_notification_state (agent_id, read_through_ts, updated_at)
                VALUES (%s, %s, now())
@@ -3924,9 +3945,9 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
         if body.suppress_wake:
             cur.execute(
                 """UPDATE agent_events SET human_acked_at = now()
-                   WHERE event_key = %s AND ts <= %s AND human_acked_at IS NULL
+                   WHERE event_key = %s AND id = ANY(%s) AND human_acked_at IS NULL
                      AND event_name <> ALL(%s)""",
-                (aid, target, list(_NOTIF_SUPPRESSED)),
+                (aid, ack_ids, list(_NOTIF_SUPPRESSED)),
             )
             suppressed_count = cur.rowcount
         conn.commit()

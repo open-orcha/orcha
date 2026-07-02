@@ -13,7 +13,7 @@ Coverage, mirroring the plan (docs/plans/issue-89-plan.md §7):
   3. lane coverage — the veto holds on the resident-drain (conversation) surface
   4. directed-message veto — an acked `prompt` is not injected into the wake prompt
   5. idempotency + guards (double-ack no-op, foreign/unknown 404, suppressed-name 400)
-  6. bulk ack via notifications/read {suppress_wake, through_ts} + the explicit-bound guard +
+  6. bulk ack via notifications/read {suppress_wake, through_ts, ack_event_ids} + the exact-id guard +
      the conversation_turn message-eater guard
   7. pending feed + total_pending + event_id; acked rows stay in the REGULAR feed as read
   8. read-but-unacked regression (Round-1 review fix): read alone neither hides nor suppresses
@@ -219,8 +219,11 @@ async def test_bulk_ack_bounded_and_spares_conversation_turns(client, container,
     assert r.status_code == 200 and r.json()["suppressed_count"] == 0
     assert all(row["human_acked_at"] is None for row in _rows(db, aid))
 
+    ack_ids = [row["id"] for row in _rows(db, aid)
+               if row["event_name"] == "prompt" and row["ts"] <= mid_ts]
     r = await client.post(f"/api/agents/{aid}/notifications/read",
-                          json={"through_ts": mid_ts, "suppress_wake": True})
+                          json={"through_ts": mid_ts, "suppress_wake": True,
+                                "ack_event_ids": ack_ids})
     assert r.status_code == 200, r.text
     assert r.json()["suppressed_count"] == 2      # the two prompts; NOT the conversation_turn
     by_name = {}
@@ -254,12 +257,41 @@ async def test_bulk_ack_requires_loaded_bound_and_spares_later_arrivals(
                               json={"suppress_wake": True})).status_code == 400
 
     r = await client.post(f"/api/agents/{aid}/notifications/read",
-                          json={"through_ts": bound, "suppress_wake": True})
+                          json={"through_ts": bound, "suppress_wake": True,
+                                "ack_event_ids": [n["event_id"] for n in loaded["notifications"]]})
     assert r.status_code == 200, r.text
     rows = _rows(db, aid)
     by_message = {row["payload"]["message"]: row for row in rows}
     assert by_message["visible in the panel"]["human_acked_at"] is not None
     assert by_message["arrived after panel load"]["human_acked_at"] is None
+
+    cand = _cand(await _scan(client, container["id"]), aid)
+    assert cand["should_wake"] is True and cand["pending_events"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_ack_spares_same_timestamp_later_event_id(
+        client, container, make_agent, db):
+    """A timestamp-only acknowledge-all bound still swallows an unseen row when the later arrival
+    has the same ts. The exact loaded event-id list is the real suppression bound."""
+    a = await make_agent("Vox89f3", "eng")
+    aid = a["agent_id"]
+    await _prompt(client, aid, "visible same-ts row")
+    loaded = (await client.get(f"/api/agents/{aid}/notifications/pending")).json()
+    loaded_ids = [n["event_id"] for n in loaded["notifications"]]
+    bound = max(n["ts"] for n in loaded["notifications"])
+
+    await _prompt(client, aid, "same ts but not loaded")
+    late = max(_rows(db, aid), key=lambda row: row["id"])
+    db.execute("UPDATE agent_events SET ts=%s WHERE id=%s", (bound, late["id"]))
+
+    r = await client.post(f"/api/agents/{aid}/notifications/read",
+                          json={"through_ts": bound, "suppress_wake": True,
+                                "ack_event_ids": loaded_ids})
+    assert r.status_code == 200, r.text
+    by_message = {row["payload"]["message"]: row for row in _rows(db, aid)}
+    assert by_message["visible same-ts row"]["human_acked_at"] is not None
+    assert by_message["same ts but not loaded"]["human_acked_at"] is None
 
     cand = _cand(await _scan(client, container["id"]), aid)
     assert cand["should_wake"] is True and cand["pending_events"] == 1
