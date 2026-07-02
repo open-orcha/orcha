@@ -188,3 +188,39 @@ no `after_seq` delta. No list carries paging state; nothing watches scroll.
   portal, before requesting PR review.
 - Gate per task protocol: this plan → Code Reviewer until CLEAN → implement → PR → Code
   Reviewer until CLEAN → needs_verification → Kedar merges and does the on-phone check.
+
+---
+
+## Addendum — two kedar-directed additions (thread msg 2026-07-02; exempt from further
+## plan approval per kedar: "no need to get additional plan approval for these extra changes")
+
+### A1 (folds into Issue 1) — Respond button hidden when the request body is long
+**Root cause:** `TextSheet` (`ui/screens/RequestScreens.kt:258-286`) renders the full
+request payload as the sheet title with no line cap, and the sheet `Column` has no
+`verticalScroll`; a long payload fills the `ModalBottomSheet` and pushes the answer field
+and Respond/Cancel buttons off-screen with no way to reach them.
+**Fix:** cap the title (`maxLines = 4`, `overflow = Ellipsis` — the full body remains
+readable on the detail screen behind the sheet) AND make the sheet content column
+scrollable (`verticalScroll`) with `imePadding()`-aware bottom padding so field + buttons
+are always reachable, long body or not. Applies to all four TextSheet uses (respond /
+reject / nudge / close-reason) and the Convert-to-task sheet gets the same scroll guard.
+**Test:** emulator check with a multi-thousand-char payload; buttons reachable with
+keyboard open.
+
+### A2 (folds into Issue 3/4's run screen) — Worker-run narration as formatted text, not JSON
+**Root cause:** `runLines` is `List<String>` of raw stream-json lines rendered verbatim
+(`OrchaViewModel.kt:413`, `parseSseLines` at :644 strips SSE framing only). The web instead
+classifies every line into typed feed rows (`app.js classifyLine/classifyCodex:1288-1439`):
+assistant text → "narration", thinking → collapsed "(thinking)", tool_use → tool name +
+detail, tool_result/result/system → labeled rows; non-JSON lines fall back to plain "log".
+**Fix:** port `classifyLine` to Kotlin (`domain/RunFeed.kt`: `classifyRunLine(line):
+List<RunFeedRow>` where `RunFeedRow(type, label, text, detail?)` mirrors the web's 9 type
+tokens incl. the orcha-action/self-action regex and codex mapping). Run detail renders
+rows as label-tagged formatted text (narration as plain body text; detail collapsed) —
+web-parity, no raw JSON blocks. The new streaming collector (Issue 3) and the static
+fetch both feed this classifier. **Tests:** classifier unit tests against captured real
+lines (assistant text, thinking, tool_use, tool_result, system init, result, codex
+reasoning/exec, non-JSON fallback).
+
+These ship in the same PR and go through the same PR-review gate; they are exempt only
+from the *plan*-approval round.
