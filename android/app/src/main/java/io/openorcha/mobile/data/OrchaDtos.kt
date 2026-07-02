@@ -210,6 +210,10 @@ data class TaskMessagesResponse(
     @SerialName("task_id") val taskId: String,
     val task: TaskHeaderDto? = null,
     val messages: List<TaskMessageDto> = emptyList(),
+    // keyset paging (issue 4): older pages via ?before=<next_before>&before_id=<next_before_id>
+    @SerialName("has_more") val hasMore: Boolean? = null,
+    @SerialName("next_before") val nextBefore: String? = null,
+    @SerialName("next_before_id") val nextBeforeId: String? = null,
 )
 
 @Serializable
