@@ -2183,6 +2183,38 @@ def terminal_config():
     return {"ws_url": TERMINAL_WS_URL}
 
 
+# #103: notifier-health thresholds (seconds since the last daemon heartbeat). The daemon beats
+# every loop tick (default --interval 2s), so 20s is generous headroom for a slow/busy tick before
+# we call it 'stale'; past 90s we treat it as 'offline'. These assume the default cadence — a daemon
+# run with a much larger --interval would read stale sooner than its operator expects.
+NOTIFIER_HEALTHY_SECS = 20.0
+NOTIFIER_STALE_SECS = 90.0
+
+
+def _notifier_health(row: Optional[dict]) -> dict:
+    """Classify the notifier daemon's liveness from its heartbeat row (or None if never seen).
+
+    status: 'healthy' (age <= NOTIFIER_HEALTHY_SECS) | 'stale' (<= NOTIFIER_STALE_SECS) |
+    'offline' (no row / never beat / older). The age of last_seen_at IS the signal — there is no
+    stored status to drift from reality.
+    """
+    if not row or row.get("last_seen_at") is None:
+        return {"status": "offline", "last_seen_secs": None,
+                "version": None, "last_error": None, "pid": None}
+    age = float(row["age_secs"]) if row.get("age_secs") is not None else None
+    if age is None or age > NOTIFIER_STALE_SECS:
+        status = "offline"
+    elif age > NOTIFIER_HEALTHY_SECS:
+        status = "stale"
+    else:
+        status = "healthy"
+    return {"status": status,
+            "last_seen_secs": round(age, 1) if age is not None else None,
+            "version": row.get("version"),
+            "last_error": row.get("last_error"),
+            "pid": row.get("pid")}
+
+
 @app.get("/api/containers/{cid}")
 def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
     """The portal's 5s poll. ISS-68 (#167): the snapshot no longer ships each task's full
@@ -2356,6 +2388,15 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                         priority, created_at DESC, id
                LIMIT %s OFFSET 0""", (cid, request_limit))
         requests = _annotate_request_ownership(cur.fetchall())
+
+        # #103: fold notifier health into the container object so it rides the 5s poll and the
+        # frontend reads it as D.container.notifier (no data.js change — data.js maps raw.container
+        # verbatim). Age computed in SQL so 'now()' is the DB clock, consistent with last_seen_at.
+        cur.execute(
+            """SELECT last_seen_at, version, pid, last_error,
+                      EXTRACT(EPOCH FROM (now() - last_seen_at)) AS age_secs
+                 FROM notifier_state WHERE container_id=%s""", (cid,))
+        c["notifier"] = _notifier_health(cur.fetchone())
 
     return {"container": c, "agents": agents, "tasks": tasks, "requests": requests,
             "task_total": task_total, "request_total": request_total}
@@ -5124,6 +5165,17 @@ class WakesToggle(BaseModel):
     actor_agent_id: Optional[str] = Field(default=None, description="who flipped it (for the audit row)")
 
 
+# #103: the host-side notifier daemon's liveness beat. The daemon UPSERTs this each loop tick so
+# the portal can surface notifier health (healthy | stale | offline) next to the wake control —
+# closing the silent "wakes on, but no host process is polling" failure mode. Unauthenticated, like
+# the other daemon-reporting endpoints (wake-renew / reap-orphan-leases): it is the trusted-local
+# daemon reporting about itself, not a human authority action.
+class NotifierHeartbeat(BaseModel):
+    version: Optional[str] = Field(default=None, description="orcha-cli version of the daemon")
+    pid: Optional[int] = Field(default=None, description="daemon host pid (informational)")
+    error: Optional[str] = Field(default=None, description="last tick error, if any (else null)")
+
+
 # #298: the autonomy SLIDER write body. `level` is the engine enum; `actor_agent_id` MUST be a
 # kind='human' agent — moving the slider changes the one hard completion gate (at 'full' a /done
 # auto-completes with no human verify), so it is a deliberate human authority action (stricter than
@@ -5156,6 +5208,33 @@ def set_wakes_enabled(cid: str, body: WakesToggle):
                   "wakes_toggled", {"enabled": body.enabled})
         conn.commit()
     return {"container_id": cid, "wakes_enabled": row["wakes_enabled"]}
+
+
+@app.post("/api/containers/{cid}/notifier/heartbeat", status_code=200)
+def notifier_heartbeat(cid: str, body: NotifierHeartbeat):
+    """#103: the host-side `orcha notifier` daemon reports it is alive and polling this container.
+
+    UPSERTs notifier_state.last_seen_at=now(); the portal derives health (healthy | stale |
+    offline) from the row's age in the container snapshot. Unauthenticated by design — this is the
+    trusted-local daemon reporting about itself (same posture as wake-renew / reap-orphan-leases),
+    not a human authority action.
+    """
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        _require_container(cur, cid)
+        cur.execute(
+            """INSERT INTO notifier_state (container_id, last_seen_at, version, pid, last_error, updated_at)
+               VALUES (%s, now(), %s, %s, %s, now())
+               ON CONFLICT (container_id) DO UPDATE
+                 SET last_seen_at = now(),
+                     version      = EXCLUDED.version,
+                     pid          = EXCLUDED.pid,
+                     last_error   = EXCLUDED.last_error,
+                     updated_at   = now()""",
+            (cid, body.version, body.pid, body.error))
+        conn.commit()
+    return {"container_id": cid, "ok": True}
 
 
 @app.post("/api/containers/{cid}/autonomy", status_code=200)

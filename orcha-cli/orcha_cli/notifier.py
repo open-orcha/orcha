@@ -506,6 +506,25 @@ def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
         return None
 
 
+def _report_heartbeat(api_base: str, cid: str, error: Optional[str] = None) -> None:
+    """#103: tell the portal this daemon is alive and polling `cid`.
+
+    Best-effort and fully swallowed: a heartbeat POST must NEVER destabilise the wake loop, so any
+    failure (portal down, network blip) is silently ignored — the portal simply ages the last beat
+    into 'stale'/'offline' on its own. `error` carries the last tick error (if any) so a daemon that
+    is running but persistently failing reports stale-with-error rather than looking healthy.
+    """
+    try:
+        try:
+            from orcha_cli import __version__ as _v
+        except Exception:
+            _v = None
+        _post_json(f"{api_base}/api/containers/{cid}/notifier/heartbeat",
+                   {"version": _v, "pid": os.getpid(), "error": error})
+    except Exception:
+        pass
+
+
 def _extract_attachment_text(attachments, api_base: Optional[str] = None) -> dict:
     """#338 Codex image->text. Read upload/validation-time cached OCR text from attachment refs and
     return ``{attachment-id: text}`` for the feed renderer. ``api_base`` is kept for compatibility
@@ -4551,8 +4570,12 @@ def cmd_notifier(args) -> None:
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
+    # #103: an immediate "I'm up" beat so the portal shows healthy the moment the daemon starts,
+    # not only after the first full tick completes.
+    _report_heartbeat(api_base, cid)
     try:
         while not stop["flag"]:
+            tick_error: Optional[str] = None
             try:
                 # Release leases of workers that finished since the last tick, BEFORE
                 # scanning, so a just-finished agent with fresh work is wakeable now.
@@ -4585,8 +4608,12 @@ def cmd_notifier(args) -> None:
                      lease_ttl=getattr(args, "lease_ttl", 1200.0),
                      live_workers=live_workers, base_cwd=project_cwd)
             except Exception as e:  # a daemon must not die on a transient error
+                tick_error = str(e)
                 if not args.quiet:
                     print(f"[notifier] tick error (continuing): {e}", file=sys.stderr)
+            # #103: liveness beat once per loop. Carries the tick error (if any) so a running-but-
+            # failing daemon reports stale-with-error rather than silently looking healthy.
+            _report_heartbeat(api_base, cid, error=tick_error)
             slept = 0.0
             while slept < args.interval and not stop["flag"]:
                 time.sleep(min(0.25, args.interval - slept))

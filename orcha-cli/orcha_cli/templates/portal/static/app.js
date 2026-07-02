@@ -28,6 +28,9 @@ window.Orcha = (function () {
     // SPEC-1: reconcile the topbar autonomy switch with the fresh snapshot (the topbar is
     // built once by mountShell; the 5s poll updates D.container but not the topbar markup).
     try { paintAutonomy(); } catch (e) {}
+    // #103: keep the notifier-health chip fresh on every poll so a daemon that dies mid-session
+    // ages into stale/offline in the topbar without a page reload.
+    try { paintNotifierHealth(); } catch (e) {}
     // SPEC-3: keep the notification badge (NEEDS-YOU count) fresh, and repaint the open
     // panel's live action-queue zone, on every poll/event-stream refresh.
     try { paintNotifications(); } catch (e) {}
@@ -495,6 +498,7 @@ window.Orcha = (function () {
             <span class="aut-lab">autonomy</span>
             <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy"></div>
           </div>
+          <div class="notif-health" id="notifHealth" role="button" tabindex="0" title="Notifier status"></div>
           <div class="acting" title="You are the human authority on this container">
             <span class="lbl">acting as</span>
             <span class="who" id="actingWho">${actingHTML}</span>
@@ -510,6 +514,8 @@ window.Orcha = (function () {
       // each *.html) so the control is identical on every page.
       ensurePausebar(topbar);
       paintAutonomy();
+      // #103: render the notifier-health chip from the current snapshot (like paintAutonomy).
+      paintNotifierHealth();
       // SPEC-3: turn the "Needs you" pill into the notification-center dropdown trigger.
       wireNotifPill();
       const gs = document.getElementById("globalSearch");
@@ -620,17 +626,113 @@ window.Orcha = (function () {
     }
   }
 
+  /* ---- #103: notifier-health chip + manual recovery ------------------- */
+  // The host-side `orcha notifier` daemon's liveness, from the 5s snapshot
+  // (D.container.notifier, set by GET /api/containers/{cid}). Absent on a pre-#103 backend →
+  // null, and we hide the chip rather than show a false "offline".
+  function notifierHealth() {
+    return (D.container && D.container.notifier) || null;
+  }
+  const NOTIF_TONE = { healthy: "ok", stale: "warn", offline: "bad" };
+  const NOTIF_LABEL = { healthy: "Notifier · healthy", stale: "Notifier · stale", offline: "Notifier · offline" };
+  function fmtSecs(s) {
+    if (s == null) return "never";
+    if (s < 60) return Math.round(s) + "s";
+    if (s < 3600) return Math.round(s / 60) + "m";
+    return Math.round(s / 3600) + "h";
+  }
+  // Render the chip from the snapshot. Idempotent + null-safe (no #notifHealth → no-op), so the
+  // 5s poll can reconcile it. Healthy = a quiet green read; stale/offline = amber/red + clickable
+  // for the manual recovery steps.
+  function paintNotifierHealth() {
+    const el = document.getElementById("notifHealth");
+    if (!el) return;
+    const h = notifierHealth();
+    if (!h || !h.status) { el.style.display = "none"; return; }   // pre-#103 backend: no chip
+    el.style.display = "";
+    const tone = NOTIF_TONE[h.status] || "warn";
+    const actionable = h.status !== "healthy";
+    el.className = "notif-health " + tone + (actionable ? " actionable" : "");
+    const bits = [];
+    if (h.version) bits.push("v" + h.version);
+    bits.push(h.last_seen_secs != null ? "last beat " + fmtSecs(h.last_seen_secs) + " ago" : "never seen");
+    if (h.last_error) bits.push("error: " + h.last_error);
+    const tip = (NOTIF_LABEL[h.status] || h.status) + " — " + bits.join(" · ")
+      + (actionable ? " · click for recovery steps" : "");
+    el.innerHTML = icon("refresh", "") + `<span>${esc(NOTIF_LABEL[h.status] || h.status)}</span>`;
+    el.title = tip;
+    el.setAttribute("aria-label", tip);
+    // only expose it as an interactive control when there's a recovery action to take
+    if (actionable) { el.setAttribute("role", "button"); el.setAttribute("tabindex", "0"); }
+    else { el.removeAttribute("role"); el.setAttribute("tabindex", "-1"); }
+    el.onclick = actionable ? () => notifierRecoveryModal(h) : null;
+    el.onkeydown = actionable
+      ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); notifierRecoveryModal(h); } }
+      : null;
+  }
+  // A copyable command row for the recovery modal.
+  function cmdRow(cmd) {
+    return `<div class="cmd-row"><code>${esc(cmd)}</code>`
+      + `<button class="btn subtle sm" data-cmd="${esc(cmd)}">${icon("copy", "")}Copy</button></div>`;
+  }
+  // Phase-A fallback: the portal (in a container) can't run host processes, so when the notifier is
+  // stale/offline we explain the state plainly and show the exact terminal commands the human can
+  // run. (Phase B will add a host helper that runs these from the button directly.)
+  function notifierRecoveryModal(h) {
+    const seen = h.last_seen_secs != null ? "last beat " + fmtSecs(h.last_seen_secs) + " ago" : "never seen";
+    const errLine = h.last_error ? `<p class="muted" style="margin-top:8px">Last error: ${esc(h.last_error)}</p>` : "";
+    const desc = h.status === "offline"
+      ? "The notifier daemon isn't reporting in. Wakes may be enabled, but no host process is polling — so assigned agents won't start until it's running again."
+      : "The notifier daemon's last heartbeat is old — it may be stuck or shutting down. Agents may wake slowly or not at all until it's healthy.";
+    modal({
+      title: "Notifier " + h.status,
+      desc: desc,
+      body: `<div class="notif-recover">
+          <p class="muted">${esc(seen)}${h.version ? " · v" + esc(h.version) : ""}</p>
+          ${errLine}
+          <p style="margin:12px 0 6px">Run one of these on the machine hosting Orcha:</p>
+          <p class="lbl" style="margin:10px 0 2px">Restart the notifier</p>
+          ${cmdRow("orcha notifier --restart")}
+          <p class="lbl" style="margin:12px 0 2px">Update &amp; restart the runtime</p>
+          ${cmdRow("orcha up")}
+        </div>`,
+      primary: "Done",
+      cancel: "Close",
+      onOpen: (ov) => {
+        ov.querySelectorAll("[data-cmd]").forEach((b) => {
+          b.addEventListener("click", () => copyText(b.getAttribute("data-cmd")));
+        });
+      },
+      onPrimary: () => closeModal(),
+    });
+  }
+
   function onAutClick(rung) {
     if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
     if (rung === 0) {
       const paused = wakesPaused();
       if (paused) {
-        // resume → Running
+        // resume → Running. #103: if the notifier isn't healthy, warn — enabling wakes won't wake
+        // anything while no host process is polling, and show the manual restart command inline.
+        const h = notifierHealth();
+        const unhealthy = h && h.status && h.status !== "healthy";
         modal({
           title: "Resume autonomy?",
           desc: "Agents resume waking at the current autonomy level. Restores the global wake switch to ON (Running).",
+          body: unhealthy
+            ? `<div class="notif-warn">
+                 <p><strong>Heads up:</strong> the notifier is <strong>${esc(h.status)}</strong>. Turning wakes back on
+                 won't wake agents until the host-side notifier is running again. Restart it with:</p>
+                 ${cmdRow("orcha notifier --restart")}
+               </div>`
+            : "",
           primary: "Resume",
           onPrimary: () => { closeModal(); setWakes(true); },
+          onOpen: (ov) => {
+            ov.querySelectorAll("[data-cmd]").forEach((b) => {
+              b.addEventListener("click", () => copyText(b.getAttribute("data-cmd")));
+            });
+          },
         });
       } else {
         // pause → kill-switch

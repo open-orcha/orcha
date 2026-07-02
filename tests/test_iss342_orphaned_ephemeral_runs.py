@@ -206,6 +206,10 @@ def test_daemon_tick_invokes_reaper_before_tick(monkeypatch, tmp_path):
     monkeypatch.setattr(notifier, "service_residents", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "reap_orphaned_runs", _fake_reap)
     monkeypatch.setattr(notifier, "tick", _fake_tick)
+    # #103: the daemon now beats a heartbeat to the portal at startup + each loop pass. Stub it
+    # like every other per-tick seam above — otherwise it makes a real urlopen to the fake api_base,
+    # and on macOS the getaddrinfo thread that spins up poisons a later subprocess fork (segfault).
+    monkeypatch.setattr(notifier, "_report_heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(notifier.signal, "signal", lambda *a, **k: None)
 
     args = types.SimpleNamespace(
