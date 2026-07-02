@@ -3440,6 +3440,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
             if not quiet:
                 print(f"[notifier] resident {r.get('alias')} model changed "
                       f"{r.get('model')}→{desired_model} — recycling for cold reboot (GH#88)")
+            _RESIDENT_RESUME_FAILED.add(conv_id)
             _close_resident(api_base, r, reason="model_changed")
             live_residents.pop(conv_id, None)
             continue
@@ -3885,6 +3886,19 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         serviced = r.get("serviced_seq", 0) if r else 0
         if c.get("last_turn_seq", 0) <= serviced:
             continue                                        # nothing newer than we've fed
+        desired_model = c.get("model")
+        if (r is not None
+                and _resident_runtime(r) == RUNTIME_CLAUDE
+                and desired_model is not None
+                and r.get("model") is not None
+                and desired_model != r.get("model")):
+            if not quiet:
+                print(f"[notifier] resident {r.get('alias')} model changed "
+                      f"{r.get('model')}→{desired_model} — recycling before feed (GH#88)")
+            _RESIDENT_RESUME_FAILED.add(conv_id)
+            _close_resident(api_base, r, reason="model_changed")
+            live_residents.pop(conv_id, None)
+            r = None
         if r is None:                                       # boot a resident for this conversation
             # 919050a5 (b): single-flight reap-prior. Before claiming a NEW resident lease, reap any
             # prior resident run for this agent whose pid is dead (a crash/turnover between POST-run

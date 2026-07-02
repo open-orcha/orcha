@@ -1066,6 +1066,49 @@ def test_service_residents_defers_model_change_while_claude_turn_inflight(monkey
                    for u, b in posts)
 
 
+def test_service_residents_recycles_before_feeding_after_model_change_capture(monkeypatch, tmp_path):
+    """GH#88 race: if an old-model turn finishes and a newer human turn is already queued, capture
+    the old reply but cold-boot before feeding the queued turn."""
+    log = tmp_path / "c.ndjson"
+    log.write_text(
+        '{"type":"result","subtype":"success","num_turns":1,'
+        '"session_id":"old-session","result":"old answer"}\n'
+    )
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-sonnet-5", "model_runtime": "claude",
+            "session_id": None, "pending_human": True, "last_turn_seq": 5}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 5, "role": "human", "content": "next on new model"}])
+    old_proc = ResidentProc(pid=1111)
+    new_proc = ResidentProc(pid=2222)
+    killed = []
+    spawned = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc.pid))
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", new_proc))
+    live = {"C1": _idle_resident(tmp_path, proc=old_proc, model="claude-opus-4-8",
+                                 log_path=log, awaiting_result=True,
+                                 awaiting_since=time.time(), current_run_id="RUN-OLD",
+                                 run_id="RUN-OLD", serviced_seq=3)}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    assert any(u.endswith("/conversations/C1/turns")
+               and b["role"] == "agent" and b["content"] == "old answer"
+               for u, b in posts)
+    assert any(u.endswith("/runs/RUN-OLD/finish") for u, _ in posts)
+    assert killed == [old_proc.pid]
+    assert any(u.endswith("/wake-ack") and b["kind"] == "resident_model_changed"
+               and b["release_lease"] is True for u, b in posts)
+    assert spawned and spawned[0][1]["model"] == "claude-sonnet-5"
+    assert spawned[0][1]["resume_session_id"] is None
+    assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
+    new_proc.stdin.seek(0)
+    sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
+    assert sent == "next on new model"
+    assert old_proc.stdin.closed is True
+
+
 def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path):
     """#247 B3 (§5.2 warm-zone): an idle warm resident with queued NON-conversation events
     (pending_inbox>0) NO LONGER yields its lease (the A2 yield tore down the warm session, forcing a
