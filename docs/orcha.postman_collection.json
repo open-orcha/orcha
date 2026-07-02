@@ -394,7 +394,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-6\"\n}"
+              "raw": "{\n  \"model\": \"claude-sonnet-5\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/agents/{{aid}}/model",
