@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 07a Nudge / Close ANY request</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  /* flow-local helpers (shared with 07-requests) */
+  .flowrow { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 650; min-width: 0; }
+  .flowrow .arr { flex: none; color: var(--faint); display: flex; }
+  .flowrow .arr svg { width: 14px; height: 14px; display: block; }
+  .flowrow .who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl .ev { display: flex; gap: 11px; align-items: flex-start; font-size: 13.5px; }
+  .tl .nd { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex: none; }
+  .tl .t { color: var(--faint); font-size: 11px; font-family: "JetBrains Mono", monospace; margin-left: 6px; }
+  .actionbar { flex: none; display: flex; gap: 10px; padding: 10px 16px 12px; border-top: .5px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 88%, transparent); }
+  /* NEW — operator note + tier label */
+  .op-note { display: flex; gap: 9px; align-items: flex-start; border: 1px solid var(--violet-line);
+    background: var(--violet-soft); border-radius: 12px; padding: 10px 12px; font-size: 12px; line-height: 1.5;
+    color: var(--text-2); }
+  .op-note .flag { color: var(--violet); flex: none; margin-top: 1px; }
+  .op-note .flag svg { width: 15px; height: 15px; display: block; }
+  .op-note b { color: var(--violet); font-weight: 750; }
+  .tier-h { font-size: 10.5px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase;
+    color: var(--faint); padding: 2px 2px 0; }
+  .add-note { font-size: 11.5px; color: var(--muted); text-align: center; padding: 2px 8px 0; line-height: 1.4; }
+  /* list swipe (iOS) + quick actions (Android) */
+  .swiperow { position: relative; overflow: hidden; border-radius: 12px; }
+  .swipe-act { position: absolute; top: 0; bottom: 0; width: 84px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px; font-size: 12px; font-weight: 700; color: #fff; }
+  .swipe-act svg { width: 20px; height: 20px; }
+  .swipe-act.lead { left: 0; background: var(--info); }
+  .swipe-act.trail { right: 0; background: var(--danger); }
+  .swipe-front { position: relative; z-index: 2; transform: translateX(64px); }
+  .swipe-front.left { transform: translateX(-72px); }
+  .qmenu { position: absolute; z-index: 9; background: var(--raised); border: 1px solid var(--border-2);
+    border-radius: 14px; min-width: 180px; overflow: hidden; box-shadow: var(--shadow-lg); }
+  .qmenu .mi { display: flex; align-items: center; gap: 11px; padding: 13px 16px; font-size: 15px;
+    border-bottom: .5px solid var(--border); }
+  .qmenu .mi:last-child { border-bottom: none; }
+  .qmenu .mi svg { width: 18px; height: 18px; color: var(--muted); flex: none; }
+  .qmenu .mi.danger { color: var(--danger); } .qmenu .mi.danger svg { color: var(--danger); }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>07a — Nudge or close ANY request</h1>
+  <p>Issue #30 sub-scope: the phone already <b>lists</b> every request in the container (agent↔agent
+     included), but a human can only <i>answer</i> the ones aimed at them. This flow promotes
+     <b>Nudge</b> and <b>Close</b> to a universal <b>operator action tier</b> on the request
+     detail — matching the web portal, where the human arbitrates <i>any</i> request. All endpoints
+     exist today (<span class="mono">/nudge</span>, <span class="mono">/close</span>); no backend
+     change. The daemon-only <span class="mono">triage-close</span> is retired from the human UI.
+     Spec: <span class="mono">flows/07a-nudge-close-any-request.md</span>.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ N1: Detail — agent↔agent, neither role (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Request</div>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="rowline">
+              <span class="avatar sm">CC</span>
+              <span class="arr" style="color:var(--faint);display:flex;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+              <span class="avatar sm">CR</span>
+              <div class="grow">
+                <div class="c-title" style="font-size:14px;">CodeCleanupAgent → Code&nbsp;Reviewer</div>
+                <div class="c-sub" style="font-size:12px;">task · opened 5h ago</div>
+              </div>
+              <span class="pill s-info"><span class="dot"></span>open</span>
+            </div>
+          </div>
+          <div class="section-h">Payload</div>
+          <div class="card"><div class="c-sub" style="color:var(--text);font-size:14px;">Re-review PR #118 at head c1976f5 — the scroll-yank blocker fix. Need a fresh CLEAN / NEEDS-CHANGES before tonight's merge window.</div></div>
+
+          <div class="op-note">
+            <span class="flag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21V4m0 0l11 2-2 5 2 5-11-2"/></svg></span>
+            <span>Acting as operator (<b>you</b>). This isn't your request — closing it needs a reason, which is sent to <b>CodeCleanupAgent</b> so they know why. Every action is logged.</span>
+          </div>
+
+          <div class="section-h">Timeline</div>
+          <div class="card tl"><div class="ev"><span class="nd" style="background:var(--accent);"></span><span>created<span class="t">5h ago</span></span></div></div>
+        </div>
+        <div class="actionbar">
+          <div class="tier-h" style="position:absolute;transform:translateY(-16px);">Operator actions</div>
+          <a class="btn tonal block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>Nudge</a>
+          <a class="btn danger-tonal block">Close…</a>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N1 · Detail — an agent↔agent request, you're neither party <span class="plat">Android</span></div>
+      <div class="cap-note">No "Respond/Accept" — those are role-specific. The new <b>Operator actions</b> tier (Nudge · Close) lights up on any request you can see. The violet operator note appears only when you're neither requester nor target; "Close…" (danger-tonal) signals a reason is required.</div>
+      <div class="cap-api">POST /api/requests/{rid}/nudge <b>{actor_agent_id, note?}</b> · POST /api/requests/{rid}/close <b>{requester_agent_id, reason}</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N2: Detail — agent↔agent, neither role (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="15" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="backbtn"><svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 2L2 10l8 8"/></svg><span class="blabel">Requests</span></button>
+          <div class="title" style="text-align:center;">Request</div>
+          <span style="width:64px;"></span>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="rowline">
+              <span class="avatar sm">A</span>
+              <span class="arr" style="color:var(--faint);display:flex;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+              <span class="avatar sm">E</span>
+              <div class="grow">
+                <div class="c-title" style="font-size:14px;">Andrew → Ethan</div>
+                <div class="c-sub" style="font-size:12px;">info · opened 3h ago</div>
+              </div>
+              <span class="pill s-info"><span class="dot"></span>open</span>
+            </div>
+          </div>
+          <div class="section-h">Payload</div>
+          <div class="card"><div class="c-sub" style="color:var(--text);font-size:14px;">Does the iOS verify sheet need medium→large detents, or medium only? Matching the Android bottom-sheet behaviour.</div></div>
+
+          <div class="op-note">
+            <span class="flag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21V4m0 0l11 2-2 5 2 5-11-2"/></svg></span>
+            <span>Acting as operator (<b>you</b>). Nudge wakes <b>Ethan</b> (they owe the answer); closing needs a reason, sent to <b>Andrew</b>.</span>
+          </div>
+
+          <div class="section-h">Timeline</div>
+          <div class="card tl"><div class="ev"><span class="nd" style="background:var(--accent);"></span><span>created<span class="t">3h ago</span></span></div></div>
+        </div>
+        <div class="actionbar" style="flex-direction:column;gap:8px;">
+          <div class="tier-h" style="align-self:flex-start;">Operator actions</div>
+          <div style="display:flex;gap:10px;width:100%;">
+            <a class="btn tonal block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>Nudge</a>
+            <a class="btn danger-tonal block">Close…</a>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N2 · Same, iOS — buttons below the operator note <span class="plat">iOS</span></div>
+      <div class="cap-note">Identical model, HIG surfaces: the old ellipsis overflow (which hid "Close with reason" + the mislabeled "Triage-close") is gone — Nudge and Close are first-class. Sub-copy names who Nudge wakes and where the close reason goes.</div>
+      <div class="cap-api">Nudge is <b>human-only</b>; open → wakes target, answered → wakes requester. State-invariant (never mutates the request).</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N3: Nudge sheet (Android modal bottom sheet, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="title">Request</div></div>
+        <div class="scroll" style="opacity:.5;">
+          <div class="card"><div class="rowline"><span class="avatar sm">CC</span><span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span><span class="avatar sm">CR</span><div class="grow"><div class="c-title" style="font-size:14px;">CodeCleanupAgent → Code&nbsp;Reviewer</div></div><span class="pill s-info"><span class="dot"></span>open</span></div></div>
+          <div class="section-h">Payload</div>
+          <div class="card"><div class="c-sub">Re-review PR #118 at head c1976f5…</div></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div style="font-size:11px;font-weight:800;letter-spacing:.8px;color:var(--accent);">NUDGE</div>
+          <div class="sh-title">Nudge this request</div>
+          <div class="sh-sub">Wakes <b style="color:var(--text);">Code&nbsp;Reviewer</b> — they still owe an answer. This does <b style="color:var(--text);">not</b> change the request; it just prompts them to act.</div>
+          <div class="input area"><span class="ph">Optional note to include in the nudge…</span></div>
+          <div style="display:flex;gap:10px;margin-top:2px;">
+            <a class="btn neutral block">Cancel</a>
+            <a class="btn primary block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>Nudge</a>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N3 · Nudge sheet — M3 modal bottom sheet <span class="plat">Android</span></div>
+      <div class="cap-note">Drag handle, IME-aware. Optional note. Sub-copy is state-routed: on an <b>open</b> request it names the target ("wakes Code Reviewer"); on an <b>answered</b> one it names the requester. Same shared one-field sheet as respond/reject/close.</div>
+      <div class="cap-api">On 200 <b>{nudged:true}</b> → snackbar "Nudged Code Reviewer". On <b>{nudged:false}</b> → info snackbar, not an error (N7).</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N4: Close-with-reason sheet (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="15" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 2L2 10l8 8"/></svg></button><div class="title" style="text-align:center;">Request</div><span style="width:40px;"></span></div>
+        <div class="scroll" style="opacity:.5;">
+          <div class="card"><div class="rowline"><span class="avatar sm">CC</span><span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span><span class="avatar sm">CR</span><div class="grow"><div class="c-title" style="font-size:14px;">CodeCleanupAgent → Code&nbsp;Reviewer</div></div></div></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div style="font-size:11px;font-weight:800;letter-spacing:.8px;color:var(--danger);">CLOSE REQUEST</div>
+          <div class="sh-title">Close CodeCleanupAgent's request?</div>
+          <div class="sh-sub"><b style="color:var(--text);">Required.</b> Your reason is sent to <b style="color:var(--text);">CodeCleanupAgent</b> so they know why you closed it.</div>
+          <div class="input area focus" style="color:var(--text);align-items:flex-start;">Superseded — Mahima already landed this via PR #118; a re-review isn't needed.</div>
+          <div style="display:flex;gap:10px;margin-top:2px;">
+            <a class="btn neutral block">Cancel</a>
+            <a class="btn danger-tonal block">Close request</a>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N4 · Close-with-reason — sheet with detents <span class="plat">iOS</span></div>
+      <div class="cap-note">Closing another agent's request always requires a reason (server 422s without it, so "Close request" stays disabled until the field is non-empty). The reason is routed to the owner. Closing <i>your own</i> request skips this — a plain confirmationDialog, no text.</div>
+      <div class="cap-api">POST /api/requests/{rid}/close <b>{requester_agent_id, reason}</b> — a human may force-close any non-closed request.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N5: Detail — inbound, I'm target (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="15" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 2L2 10l8 8"/></svg><span class="blabel">Requests</span></button><div class="title" style="text-align:center;">Request</div><span style="width:64px;"></span></div>
+        <div class="scroll">
+          <div class="card">
+            <div class="rowline">
+              <span class="avatar sm">D</span>
+              <span class="arr" style="color:var(--faint);display:flex;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+              <span class="avatar sm human">K</span>
+              <div class="grow"><div class="c-title" style="font-size:14px;">Dana → you</div><div class="c-sub" style="font-size:12px;">info · opened 20m ago</div></div>
+              <span class="pill s-info"><span class="dot"></span>open</span>
+            </div>
+          </div>
+          <div class="section-h">Payload</div>
+          <div class="card"><div class="c-sub" style="color:var(--text);font-size:14px;">Should the operator note say "arbitrating" or "acting as operator"? Want the phone wording to match the portal.</div></div>
+          <div class="section-h">Your move</div>
+          <a class="btn primary block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H7l-3 3z"/></svg>Respond</a>
+          <div class="add-note">…or, if it no longer needs an answer, close it out below.</div>
+        </div>
+        <div class="actionbar" style="flex-direction:column;gap:8px;">
+          <div class="tier-h" style="align-self:flex-start;">Operator actions</div>
+          <a class="btn danger-tonal block">Close…</a>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N5 · Inbound request you're the target of <span class="plat">iOS</span></div>
+      <div class="cap-note">"Respond" stays the primary role action. What's <b>new</b>: you can now <b>Close</b> an inbound request instead of only answering it (still reason-required — you're not the owner). <b>Nudge is hidden here</b> — you're the one who owes the answer, so nudging would only wake yourself.</div>
+      <div class="cap-api">showNudge skips <b>(open &amp;&amp; target==you)</b> — no pointless self-nudge.</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N6: Nudge success (Android snackbar) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="title">Request</div></div>
+        <div class="scroll">
+          <div class="card"><div class="rowline"><span class="avatar sm">CC</span><span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span><span class="avatar sm">CR</span><div class="grow"><div class="c-title" style="font-size:14px;">CodeCleanupAgent → Code&nbsp;Reviewer</div><div class="c-sub" style="font-size:12px;">task · opened 5h ago</div></div><span class="pill s-info"><span class="dot"></span>open</span></div></div>
+          <div class="section-h">Payload</div>
+          <div class="card"><div class="c-sub" style="color:var(--text);font-size:14px;">Re-review PR #118 at head c1976f5 — the scroll-yank blocker fix.</div></div>
+          <div class="op-note"><span class="flag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21V4m0 0l11 2-2 5 2 5-11-2"/></svg></span><span>Acting as operator (<b>you</b>). Nudge wakes <b>Code Reviewer</b>.</span></div>
+        </div>
+        <div class="snackbar"><svg viewBox="0 0 24 24" fill="none" stroke="#7dd7db" stroke-width="2" style="width:17px;height:17px;"><path d="M20 6L9 17l-5-5"/></svg>Nudged Code Reviewer — wake sent.</div>
+        <div class="actionbar">
+          <a class="btn tonal block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>Nudge</a>
+          <a class="btn danger-tonal block">Close…</a>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N6 · Nudge succeeded — snackbar <span class="plat">Android</span></div>
+      <div class="cap-note">The request state is unchanged (nudge never mutates it); the row does not move groups. One-shot confirmation names who was woken. iOS shows the same as a top toast banner.</div>
+      <div class="cap-api">200 {nudged:true, nudged_role:"target", nudged_agent_id:…}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N7: Nudge no-op (iOS toast) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="15" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 2L2 10l8 8"/></svg></button><div class="title" style="text-align:center;">Request</div><span style="width:40px;"></span></div>
+        <div class="toast" style="left:24px;right:24px;"><svg viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3h.01"/></svg><span style="color:var(--text-2);">No agent to wake — a human owns the next action.</span></div>
+        <div class="scroll">
+          <div class="card"><div class="rowline"><span class="avatar sm human">K</span><span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span><span class="avatar sm human">M</span><div class="grow"><div class="c-title" style="font-size:14px;">kedar → Mahima (human)</div><div class="c-sub" style="font-size:12px;">info · escalated</div></div><span class="pill s-danger"><span class="dot"></span>open</span></div></div>
+          <div class="section-h">Payload</div>
+          <div class="card"><div class="c-sub" style="color:var(--text);font-size:14px;">Can you confirm the merge window tonight?</div></div>
+          <div class="op-note"><span class="flag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21V4m0 0l11 2-2 5 2 5-11-2"/></svg></span><span>The next action sits with a person, so there's no agent to wake — the nudge is a clean no-op.</span></div>
+        </div>
+        <div class="actionbar"><a class="btn tonal block">Nudge</a><a class="btn danger-tonal block">Close…</a></div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N7 · Nudge no-op — a human owns the next action <span class="plat">iOS</span></div>
+      <div class="cap-note">When the routed recipient is a person (escalated-to-human, a human target, or a cleared target), the server returns <span class="mono">{nudged:false}</span>. The app treats this as <b>information, not an error</b> — a neutral toast, not a red banner. Nothing changes state.</div>
+      <div class="cap-api">200 {nudged:false, reason:"a human owns the next action — nothing to wake"}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N8: List swipe actions (iOS light) — enhancement ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="15" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large"><div class="row"><div class="big-title" style="flex:1;">Requests</div></div></div>
+        <div class="scroll" style="gap:9px;">
+          <div class="seg" style="margin-bottom:2px;"><span class="opt on">All</span><span class="opt">Open</span><span class="opt">Answered</span><span class="opt">Task</span></div>
+          <div class="section-h" style="padding-top:2px;">All requests <span class="cnt">14</span></div>
+
+          <!-- a row swiped to reveal trailing Close -->
+          <div class="swiperow">
+            <div class="swipe-act trail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>Close</div>
+            <div class="card swipe-front left" style="margin:0;">
+              <div class="flowrow"><span class="avatar sm">CC</span><span class="who">CodeCleanupAgent</span>
+                <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+                <span class="avatar sm">CR</span><span class="who">Code Reviewer</span></div>
+              <div class="c-sub">Re-review PR #118 at head c1976f5…</div>
+              <div class="c-meta"><span class="pill s-info"><span class="dot"></span>open</span><span class="tag">task</span></div>
+            </div>
+          </div>
+
+          <!-- a normal row -->
+          <div class="card"><div class="flowrow"><span class="avatar sm">A</span><span class="who">Andrew</span>
+            <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+            <span class="avatar sm">E</span><span class="who">Ethan</span></div>
+            <div class="c-sub">Detent sizes for the verify sheet?</div>
+            <div class="c-meta"><span class="pill s-info"><span class="dot"></span>open</span><span class="tag">info</span></div></div>
+
+          <!-- a row swiped the other way to reveal leading Nudge -->
+          <div class="swiperow">
+            <div class="swipe-act lead"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>Nudge</div>
+            <div class="card swipe-front" style="margin:0;">
+              <div class="flowrow"><span class="avatar sm human">K</span><span class="who">you</span>
+                <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+                <span class="avatar sm">H</span><span class="who">HomebrewAgent</span></div>
+              <div class="c-sub">Rotate the TAP token…</div>
+              <div class="c-meta"><span class="pill s-info"><span class="dot"></span>open</span><span class="tag">info</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N8 · List swipe actions — fast triage <span class="plat">iOS · enhancement</span></div>
+      <div class="cap-note"><b>Beyond portal parity.</b> Swipe a row: leading = <b>Nudge</b> (blue), trailing = <b>Close</b> (red, opens the reason sheet when it isn't yours). Lets a human clear a backlog of stuck asks without opening each one. Ship the detail tier (N1–N7) first; this can follow.</div>
+      <div class="cap-api">.swipeActions — leading Nudge (.tint blue) · trailing Close (role .destructive)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N9: List quick actions (Android dark) — enhancement ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar"><div class="title">openorcha</div><span class="conn"><span class="dot"></span>live</span></div>
+        <div class="scroll" style="gap:8px;">
+          <div class="seg" style="margin-bottom:2px;"><span class="opt on">All</span><span class="opt">Open</span><span class="opt">Answered</span><span class="opt">Task</span></div>
+          <div class="section-h">All requests <span class="cnt">14</span></div>
+          <div class="card">
+            <div class="rowline"><div class="flowrow grow"><span class="avatar sm">CC</span><span class="who">CodeCleanupAgent</span>
+              <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+              <span class="avatar sm">CR</span><span class="who">Code&nbsp;Reviewer</span></div>
+              <button class="iconbtn" style="width:28px;height:28px;"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></div>
+            <div class="c-sub">Re-review PR #118 at head c1976f5…</div>
+            <div class="c-meta"><span class="pill s-info"><span class="dot"></span>open</span><span class="tag">task</span></div>
+          </div>
+          <div class="card"><div class="rowline"><div class="flowrow grow"><span class="avatar sm human">K</span><span class="who">you</span>
+            <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-5-5l5 5-5 5"/></svg></span>
+            <span class="avatar sm">H</span><span class="who">HomebrewAgent</span></div>
+            <button class="iconbtn" style="width:28px;height:28px;"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></div>
+            <div class="c-sub">Rotate the TAP token…</div></div>
+        </div>
+        <div class="qmenu" style="top:150px;right:22px;">
+          <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>Nudge</div>
+          <div class="mi danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>Close…</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N9 · List quick actions — trailing overflow <span class="plat">Android · enhancement</span></div>
+      <div class="cap-note">Android's equivalent: a trailing overflow (or a <span class="mono">SwipeToDismissBox</span>) on each row exposes <b>Nudge</b> and <b>Close…</b> without opening the detail. Close routes to the reason sheet when it isn't yours. Same universal gating as the detail tier.</div>
+      <div class="cap-api">Both list actions reuse the exact detail endpoints — no new API.</div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

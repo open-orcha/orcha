@@ -3,6 +3,8 @@
 Mockups: [`../mockups/07-requests.html`](../mockups/07-requests.html) · Screens S9/S10 in
 [doc 02](../02-ia-navigation.md).
 
+> **See also [`07a-nudge-close-any-request.md`](07a-nudge-close-any-request.md)** — promotes Nudge + Close to universal operator actions (close/nudge ANY request, incl. agent↔agent), superseding the §3 matrix's neither-role row and the "Triage-close" affordance.
+
 > **Status: buildable against the existing API.** Everything here is served by endpoints already in
 > `/openapi.json`. The only client-side work is filtering/grouping — the list endpoint returns the
 > whole container's traffic and the app scopes it to the paired human.
