@@ -197,8 +197,9 @@ struct TaskMessageDto: Decodable {
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
     }
 
-    init(body: String, authorAlias: String? = nil, authorId: String? = nil, isHuman: Bool = false, createdAt: String? = nil) {
+    init(body: String, messageId: String? = nil, authorAlias: String? = nil, authorId: String? = nil, isHuman: Bool = false, createdAt: String? = nil) {
         self.body = body
+        self.messageId = messageId
         self.authorAlias = authorAlias
         self.authorId = authorId
         self.isHuman = isHuman
@@ -266,13 +267,14 @@ struct RequestDto: Decodable, Identifiable {
 
     init(
         id: String, type: String = "info", status: String = "open", payload: String = "",
-        requesterId: String? = nil, targetId: String? = nil,
+        priority: Int? = nil, requesterId: String? = nil, targetId: String? = nil,
         createdAt: String? = nil, closedAt: String? = nil, expiresAt: String? = nil
     ) {
         self.id = id
         self.type = type
         self.status = status
         self.payload = payload
+        self.priority = priority
         self.requesterId = requesterId
         self.targetId = targetId
         self.createdAt = createdAt
@@ -293,6 +295,21 @@ struct TaskLinkDto: Decodable {
 
 struct TaskMessagesResponse: Decodable {
     var messages: [TaskMessageDto] = []
+    /// ISS-68 keyset paging (`main.py:5940`): present only when `limit`>0 was requested.
+    var hasMore: Bool = false
+    var nextBefore: String?
+    var nextBeforeId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case messages
+        case hasMore = "has_more"
+        case nextBefore = "next_before"
+        case nextBeforeId = "next_before_id"
+    }
+}
+
+struct TurnsResponse: Decodable {
+    var turns: [TurnDto] = []
 }
 
 struct RunsResponse: Decodable {

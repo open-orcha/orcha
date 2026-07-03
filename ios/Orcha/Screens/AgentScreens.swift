@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // UIResponder keyboard notifications (Issue 2 — scroll composer above keyboard)
 
 /* =============================================================================
    Flow 09 — Agent detail (header, Now, Controls, persona, memory, requests, runs)
@@ -504,6 +505,10 @@ struct ConversationScreen: View {
     @State private var draft = ""
     @State private var confirmEnd = false
     @State private var pulse = false
+    /// Issue 4 — client-side reveal window over the already-fetched turns (web parity:
+    /// start at the last 10, +20 per "Load earlier" tap). No refetch; the fetch window is 80.
+    @State private var revealed = 10
+    private static let revealStep = 20
 
     private var agent: AgentDto? {
         model.snapshot?.agents.first { $0.id == agentId }
@@ -512,19 +517,13 @@ struct ConversationScreen: View {
     private let hints = ["What are you working on?", "Any blockers?", "Status update, please"]
 
     var body: some View {
-        VStack(spacing: 0) {
-            if working, agent?.currentTask != nil {
-                Banner(
-                    kind: .info,
-                    text: "\(agent?.alias ?? "The agent") is working on a task — your message queues."
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-            }
-            transcript
-            composer
-        }
-        .navigationTitle(agent?.alias ?? "Conversation")
+        // Issue 2: composer pinned via `.safeAreaInset(edge: .bottom)` (like TaskThreadScreen)
+        // so SwiftUI lifts it directly above the keyboard and shrinks the scroll area — no gap,
+        // no obscured transcript. The "working" banner is a top inset so it never scrolls away.
+        transcript
+            .safeAreaInset(edge: .top, spacing: 0) { workingBanner }
+            .safeAreaInset(edge: .bottom) { composer }
+            .navigationTitle(agent?.alias ?? "Conversation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -544,12 +543,39 @@ struct ConversationScreen: View {
         .task { await model.loadConversation(agentId) }
     }
 
+    // MARK: working banner (top inset)
+
+    @ViewBuilder
+    private var workingBanner: some View {
+        if working, agent?.currentTask != nil {
+            Banner(
+                kind: .info,
+                text: "\(agent?.alias ?? "The agent") is working on a task — your message queues."
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(p.bg)
+        }
+    }
+
     // MARK: transcript
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    // Issue 4: "Load earlier" widens the reveal window over the already-fetched
+                    // turns (no refetch); it changes only the TOP, so it must not scroll to bottom.
+                    if model.turns.count > revealed {
+                        Button { revealed += Self.revealStep } label: {
+                            Text("Load earlier messages")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(p.accent)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                    }
                     if model.turns.isEmpty {
                         OrchaCard {
                             Text("No conversation yet. Send a message to wake \(agent?.alias ?? "the agent").")
@@ -577,9 +603,16 @@ struct ConversationScreen: View {
                 }
                 .padding(16)
             }
-            .onChange(of: model.turns.count) { _, _ in
+            // Scroll to bottom on a NEW/sent turn (newest seq changes) or when the keyboard
+            // opens — never on a "Load earlier" reveal (which only widens the top).
+            .onChange(of: model.turns.last?.seq) {
                 withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .refreshable { await model.refreshConversationDelta(agentId) }
         }
     }
 
@@ -588,7 +621,7 @@ struct ConversationScreen: View {
     private var turnRows: some View {
         let humanId = model.humanId
         let alias = agent?.alias ?? "agent"
-        let rows = withDayDividers(model.turns)
+        let rows = withDayDividers(Array(model.turns.suffix(revealed)))
         ForEach(rows) { row in
             switch row {
             case let .day(label):
