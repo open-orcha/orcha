@@ -356,3 +356,39 @@ def test_terminal_task_worktree_with_commits_keeps_branch(tmp_path, monkeypatch)
     assert not pathlib.Path(wt).exists()
     rc, _ = notifier._run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=work)
     assert rc == 0                                                 # branch with commits KEPT (PR-safe)
+
+
+def test_terminal_reaper_paginates_past_page_one(tmp_path, monkeypatch):
+    # PR #121 R3 regression: the list endpoint clamps limit→100, and terminal tasks are never
+    # deleted — so a NEWLY-terminal task (the one owning a fresh durable worktree) sits beyond the
+    # first page once a container has >100 completed tasks. A one-shot limit=100 GET is permanently
+    # blind to it. Fails on OLD (unpaginated) behavior: the page-2 task is never seen → removed==0
+    # and its worktree survives forever. Passes on NEW behavior: the reaper walks all pages.
+    work = _make_repo(tmp_path)
+    wt_new, br_new = notifier._provision_task_worktree(str(work), "Andrew", "page2-task")   # clean tree
+
+    # Page 1 = 100 OLD, already-swept-shaped tasks with no durable worktree; page 2 = the new task.
+    page1 = [{"id": f"OLD{i}"} for i in range(100)]
+    page2 = [{"id": "NEW"}]
+
+    def fake_get(url, **k):
+        if "/runs" in url:
+            if "NEW/runs" in url:
+                return {"runs": [{"worktree": wt_new, "branch": br_new, "base_cwd": str(work)}]}
+            return {"runs": []}                                     # old tasks own nothing durable
+        if "status=completed" in url:
+            if "offset=0" in url:
+                return {"tasks": page1, "total": 101, "has_more": True}
+            if "offset=100" in url:
+                return {"tasks": page2, "total": 101, "has_more": False}
+            return {"tasks": [], "has_more": False}
+        return {"tasks": [], "has_more": False}                    # cancelled → none
+    monkeypatch.setattr(notifier, "_get_json", fake_get)
+
+    swept: set = set()
+    removed = notifier.reap_terminal_task_worktrees("http://x", "CID", str(work), {}, swept, quiet=True)
+
+    assert removed == 1                                            # the page-2 task's worktree reclaimed
+    assert not pathlib.Path(wt_new).exists()                      # reclaimed despite being past page 1
+    assert "NEW" in swept                                         # swept once
+    assert "OLD0" in swept and "OLD99" in swept                  # page 1 also fully processed

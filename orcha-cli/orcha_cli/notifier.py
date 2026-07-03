@@ -2987,6 +2987,13 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
 # `verified` collapses to `completed` in this schema (POST /verify approve → status='completed'),
 # so the two stored terminal statuses are completed + cancelled.
 _TERMINAL_TASK_STATES = ("completed", "cancelled")
+# PR #121 R3: the terminal-worktree sweep must PAGINATE (the list endpoint clamps limit→100).
+# Terminal tasks are never deleted, so a container accrues them without bound (this one already
+# has 98 completed + 39 cancelled). A page cap is a pure runaway backstop — 200 pages = 20k
+# terminal tasks of one status, far beyond any real container — never a functional limit; if a
+# container ever exceeds it the oldest already-swept pages are simply skipped by swept_tasks.
+_TERMINAL_SWEEP_MAX_PAGES = 200
+_TERMINAL_SWEEP_PAGE_SIZE = 100
 
 
 def reap_terminal_task_worktrees(api_base: str, cid: str, base_cwd: Optional[str],
@@ -3016,45 +3023,67 @@ def reap_terminal_task_worktrees(api_base: str, cid: str, base_cwd: Optional[str
     live_wts = {w.get("worktree") for w in live_workers.values() if w.get("worktree")}
     removed = 0
     for state in _TERMINAL_TASK_STATES:
-        data = _get_json(f"{api_base}/api/containers/{cid}/tasks?status={state}&limit=100") or {}
-        for t in data.get("tasks", []):
-            tid = t.get("id")
-            if not tid or tid in swept_tasks:
-                continue
-            runs = _get_json(f"{api_base}/api/tasks/{tid}/runs") or {}
-            seen: set = set()
-            defer_sweep = False   # a live worktree or a preserved-dirty tree → retry on a later pass
-            for r in runs.get("runs", []):
-                wt, br = r.get("worktree"), r.get("branch")
-                # only DURABLE per-task worktrees (orcha/task-*), never a disposable ephemeral one
-                if not wt or not br or not str(br).startswith("orcha/task-") or wt in seen:
+        # PR #121 R3: PAGINATE. The list endpoint clamps limit→100 and, with a single-status
+        # filter, the default order collapses to (priority ASC, created_at ASC) — so a one-shot
+        # limit=100 GET sees only the ~100 OLDEST terminal tasks, forever. Terminal tasks are never
+        # deleted, so once a container has >100 of them every NEWLY-terminal task — exactly the ones
+        # owning a fresh orcha/task-* worktree post-merge — sits past the horizon and is never swept,
+        # silently re-opening the "worktrees accumulate forever" gap this reaper exists to close.
+        # Walk ALL pages, oldest-first with an id tiebreak (sort=time&dir=asc → deterministic tiling
+        # so no row falls between page boundaries); swept_tasks makes a re-visited page cheap (skip
+        # before the per-task /runs GET). Sweeping a worktree never changes a task's terminal status,
+        # so the query window is stable across a single pass — offset paging is safe here.
+        offset = 0
+        for _page in range(_TERMINAL_SWEEP_MAX_PAGES):
+            data = _get_json(
+                f"{api_base}/api/containers/{cid}/tasks"
+                f"?status={state}&sort=time&dir=asc"
+                f"&limit={_TERMINAL_SWEEP_PAGE_SIZE}&offset={offset}"
+            ) or {}
+            page_tasks = data.get("tasks", [])
+            for t in page_tasks:
+                tid = t.get("id")
+                if not tid or tid in swept_tasks:
                     continue
-                seen.add(wt)
-                if wt in live_wts:
-                    defer_sweep = True         # an active worker still holds it — reclaim once it exits
-                    continue
-                try:
-                    outcome = _reclaim_task_worktree(r.get("base_cwd") or base_cwd, wt, br)
-                except Exception:
-                    outcome = "preserved-dirty"   # be conservative on any error — don't mark swept
-                if outcome == "removed":
-                    removed += 1
-                    if not quiet:
-                        print(f"[notifier] reclaimed durable task worktree {wt} (branch {br}) — "
-                              f"task terminal ({state}), clean tree")
-                elif outcome == "preserved-dirty":
-                    defer_sweep = True
-                    if not quiet:
-                        print(f"[notifier] task {tid} terminal but its worktree {wt} has "
-                              f"uncommitted work — PRESERVED for a human, not reclaimed")
-            # PR #121 review note (c): a terminal task can no longer fail-drain — clear its counter.
-            if failed_drains is not None:
-                for key in [k for k in failed_drains if k[1] == tid]:
-                    failed_drains.pop(key, None)
-            # mark swept only once nothing needs a retry — a live worktree (worker still running) or
-            # a preserved-dirty tree (uncommitted work) stays reclaimable on a subsequent pass.
-            if not defer_sweep:
-                swept_tasks.add(tid)
+                runs = _get_json(f"{api_base}/api/tasks/{tid}/runs") or {}
+                seen: set = set()
+                defer_sweep = False   # a live worktree or a preserved-dirty tree → retry on a later pass
+                for r in runs.get("runs", []):
+                    wt, br = r.get("worktree"), r.get("branch")
+                    # only DURABLE per-task worktrees (orcha/task-*), never a disposable ephemeral one
+                    if not wt or not br or not str(br).startswith("orcha/task-") or wt in seen:
+                        continue
+                    seen.add(wt)
+                    if wt in live_wts:
+                        defer_sweep = True         # an active worker still holds it — reclaim once it exits
+                        continue
+                    try:
+                        outcome = _reclaim_task_worktree(r.get("base_cwd") or base_cwd, wt, br)
+                    except Exception:
+                        outcome = "preserved-dirty"   # be conservative on any error — don't mark swept
+                    if outcome == "removed":
+                        removed += 1
+                        if not quiet:
+                            print(f"[notifier] reclaimed durable task worktree {wt} (branch {br}) — "
+                                  f"task terminal ({state}), clean tree")
+                    elif outcome == "preserved-dirty":
+                        defer_sweep = True
+                        if not quiet:
+                            print(f"[notifier] task {tid} terminal but its worktree {wt} has "
+                                  f"uncommitted work — PRESERVED for a human, not reclaimed")
+                # PR #121 review note (c): a terminal task can no longer fail-drain — clear its counter.
+                if failed_drains is not None:
+                    for key in [k for k in failed_drains if k[1] == tid]:
+                        failed_drains.pop(key, None)
+                # mark swept only once nothing needs a retry — a live worktree (worker still running)
+                # or a preserved-dirty tree (uncommitted work) stays reclaimable on a subsequent pass.
+                if not defer_sweep:
+                    swept_tasks.add(tid)
+            # stop when the server says no more rows (or an empty/short final page) — has_more is the
+            # authoritative signal; the length guard just avoids a wasted extra GET on an exact boundary.
+            if not data.get("has_more") or not page_tasks:
+                break
+            offset += len(page_tasks)
     return removed
 
 
