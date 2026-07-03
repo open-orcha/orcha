@@ -34,7 +34,9 @@
   .nhead .kind { font-size:11.5px; color:var(--muted); font-weight:600; }
   .nhead .t { margin-left:auto; font-size:11px; color:var(--faint); font-family:"JetBrains Mono", monospace; flex:none; }
   .nprev { font-size:13px; color:var(--text-2); line-height:1.4; margin-top:2px; }
-  .nact { margin-top:8px; display:flex; align-items:center; gap:8px; }
+  .nhint { font-size:11.5px; color:var(--warn); line-height:1.4; margin-top:6px; display:flex; align-items:flex-start; gap:5px; }
+  .nhint svg { width:13px; height:13px; flex:none; margin-top:1px; }
+  .nact { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .divlabel { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; letter-spacing:.3px;
     text-transform:uppercase; color:var(--faint); padding:12px 2px 4px; }
   .divlabel::before, .divlabel::after { content:""; height:.5px; background:var(--border); flex:1; }
@@ -74,10 +76,12 @@
   <p>Two human controls over when an agent wakes: <b>Acknowledge</b> a single pending notification
      ("I've seen this — don't wake the agent for it") and <b>Snooze</b> an agent's scheduled clock
      check-in, neither disabling anything permanently. A per-agent <b>bell + count</b> on the roster,
-     a <b>pending-wakes panel</b> with per-row Acknowledge + a confirm-gated Acknowledge&nbsp;all, and
-     a <b>snooze</b> control shown only for clock-configured agents. Two honest scope boundaries: open
-     task-requests / assigned-ready tasks <b>can't be acked away</b> (they deep-link to the real veto),
-     and snooze pauses <b>only the clock reason</b> — real work still wakes the agent. Mobile
+     a <b>pending-wakes panel</b> with Acknowledge on <b>every row</b> (web-portal parity) + a
+     confirm-gated Acknowledge&nbsp;all, and a <b>snooze</b> control shown only for clock-configured
+     agents. Two honest scope boundaries: open task-requests / assigned-ready tasks can be acknowledged
+     like any row, but they <b>also carry a deep-link to the real veto</b> and an honest note that the
+     agent keeps waking while the work is open; and snooze pauses <b>only the clock reason</b> — real
+     work still wakes the agent. Mobile
      equivalent of <a href="https://github.com/open-orcha/orcha/pull/106">PR #106</a> /
      <a href="https://github.com/open-orcha/orcha/issues/89">#89</a>. Every surface ships on real
      PR&nbsp;#106 endpoints — <b>no new API ask</b>. Spec: <span class="mono">notifications/README.md</span>.</p>
@@ -199,8 +203,8 @@
           <div class="grabber"></div>
           <div style="padding:6px 18px 0; overflow:hidden; display:flex; flex-direction:column;">
             <div class="panel-head">
-              <div class="ph-title"><span class="bell" style="width:26px;height:26px;color:var(--accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></span>Pending wakes · <span class="cnt">3</span></div>
-              <div class="ph-sub">These will wake <b>Andrew</b> next time. Acknowledge to say you've seen it — the agent won't be woken for it.</div>
+              <div class="ph-title"><span class="bell" style="width:26px;height:26px;color:var(--accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></span>Pending wakes · <span class="cnt">4</span></div>
+              <div class="ph-sub">These will wake <b>Andrew</b> next time. Acknowledge to say you've seen it — Andrew won't be woken for that event.</div>
             </div>
           </div>
           <div class="scroll" style="padding:0 18px; gap:0;">
@@ -220,13 +224,13 @@
                 <div class="nact"><span class="btn tonal sm">Acknowledge</span></div>
               </div>
             </div>
-            <div class="divlabel">Still needs an answer</div>
             <div class="nrow">
               <div class="ntype t-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 4h16v12H8l-4 4z"/></svg></div>
               <div class="nbody">
-                <div class="nhead"><span class="who">Ethan</span><span class="kind">open task-request</span><span class="t">5m</span></div>
+                <div class="nhead"><span class="who">Ethan</span><span class="kind">task-request</span><span class="t">5m</span></div>
                 <div class="nprev">"review the notifications API shape"</div>
-                <div class="nact"><span class="dlchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Answer request</span></div>
+                <div class="nhint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>If it still has open work, Andrew keeps waking until you answer it.</div>
+                <div class="nact"><span class="btn tonal sm">Acknowledge</span><span class="dlchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Answer →</span></div>
               </div>
             </div>
             <div class="nrow">
@@ -234,13 +238,14 @@
               <div class="nbody">
                 <div class="nhead"><span class="who">Assigned</span><span class="kind">task ready</span><span class="t">12m</span></div>
                 <div class="nprev">"Publish the weekly digest"</div>
-                <div class="nact"><span class="dlchip warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Unassign task</span></div>
+                <div class="nhint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>A ready task still wakes Andrew until it's reassigned.</div>
+                <div class="nact"><span class="btn tonal sm">Acknowledge</span><span class="dlchip warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Unassign →</span></div>
               </div>
             </div>
           </div>
           <div class="panel-foot">
-            <span class="btn primary block">Acknowledge all 2</span>
-            <div class="foot-note">Only the 2 seen-notifications above. The 2 items that still need an answer are left alone.</div>
+            <span class="btn primary block">Acknowledge all 4</span>
+            <div class="foot-note">Marks all 4 as seen. Any with open work (a live request or a ready task) stay on your other lists until you resolve them.</div>
           </div>
         </div>
       </div>
@@ -248,7 +253,7 @@
     </div>
     <figcaption>
       <div class="cap-title">N3 · Pending-wakes panel — populated <span class="plat">iOS · dark · sheet</span></div>
-      <div class="cap-note">iOS <span class="mono">.sheet</span> (<span class="mono">.medium</span>/<span class="mono">.large</span> detents + grabber). Two <b>ackable event rows</b> (per-row Acknowledge → optimistic remove, rollback on non-2xx). Below the divider, the two <b>scope-boundary rows</b> carry no Acknowledge — an open task-request deep-links to <b>Answer</b> (flow 07), an assigned-ready task to <b>Unassign</b> (flow 05); acking them would only hide the row, not stop the wake. <b>Acknowledge all</b> counts the ackable rows only (2).</div>
+      <div class="cap-note">iOS <span class="mono">.sheet</span> (<span class="mono">.medium</span>/<span class="mono">.large</span> detents + grabber). <b>Every row has Acknowledge</b> (web-portal parity → optimistic remove, rollback on non-2xx). The two <b>stateful rows</b> (task-request, ready-task) keep Acknowledge <i>and</i> add an honest amber note + a deep-link chip — <b>Answer →</b> (flow 07) / <b>Unassign →</b> (flow 05) — because the underlying work can outlive the ack: the ack is accepted, the <i>wake</i> only persists while the work is open. <b>Acknowledge all</b> = all 4 loaded rows.</div>
       <div class="cap-api">GET …/notifications/pending · per-row POST …/{event_id}/acknowledge {suppress_wake:true} — <b>PR #106</b></div>
     </figcaption>
   </figure>
@@ -263,8 +268,8 @@
           <div class="grabber"></div>
           <div style="padding:6px 18px 0;">
             <div class="panel-head">
-              <div class="ph-title">Pending wakes · <span class="cnt">2</span></div>
-              <div class="ph-sub">These will wake <b>Andrew</b> next time. Acknowledge to say you've seen it — the agent won't be woken for it.</div>
+              <div class="ph-title">Pending wakes · <span class="cnt">3</span></div>
+              <div class="ph-sub">These will wake <b>Andrew</b> next time. Acknowledge to say you've seen it — Andrew won't be woken for that event.</div>
             </div>
           </div>
           <div class="scroll" style="padding:0 18px; gap:0;">
@@ -283,18 +288,18 @@
                 <div class="nact"><span class="btn tonal sm">Acknowledge</span></div>
               </div>
             </div>
-            <div class="divlabel">Still needs an answer</div>
             <div class="nrow">
               <div class="ntype t-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 4h16v12H8l-4 4z"/></svg></div>
               <div class="nbody">
-                <div class="nhead"><span class="who">Ethan</span><span class="kind">open task-request</span><span class="t">5m</span></div>
+                <div class="nhead"><span class="who">Ethan</span><span class="kind">task-request</span><span class="t">5m</span></div>
                 <div class="nprev">"review the notifications API shape"</div>
-                <div class="nact"><span class="dlchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Answer request</span></div>
+                <div class="nhint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>If it still has open work, Andrew keeps waking until you answer it.</div>
+                <div class="nact"><span class="btn tonal sm">Acknowledge</span><span class="dlchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Answer →</span></div>
               </div>
             </div>
           </div>
           <div class="panel-foot">
-            <span class="btn primary block">Acknowledge all 1</span>
+            <span class="btn primary block">Acknowledge all 3</span>
           </div>
         </div>
         <div class="snackbar">Acknowledged — Andrew won't be woken for it.<span class="sb-act">Undo</span></div>
@@ -303,7 +308,7 @@
     </div>
     <figcaption>
       <div class="cap-title">N4 · Panel — mid optimistic Acknowledge <span class="plat">Android · light · bottom sheet</span></div>
-      <div class="cap-note">M3 <span class="mono">ModalBottomSheet</span> with drag handle. The tapped message row is animating out (<span class="mono">AnimatedVisibility</span> shrink) and the header count already ticked 3→2 — <b>optimistic</b>. A <span class="mono">Snackbar</span> confirms with an <b>Undo</b> (re-inserts + re-acks is idempotent, so it's safe). If the POST returns non-2xx the row slides back and the snackbar flips to "Couldn't acknowledge — retry" (see N14).</div>
+      <div class="cap-note">M3 <span class="mono">ModalBottomSheet</span> with drag handle. The tapped message row is animating out (<span class="mono">AnimatedVisibility</span> shrink) and the header count already ticked 4→3 — <b>optimistic</b>. A <span class="mono">Snackbar</span> confirms with an <b>Undo</b> (re-inserts + re-acks is idempotent, so it's safe). If the POST returns non-2xx the row slides back and the snackbar flips to "Couldn't acknowledge — retry" (see N14).</div>
       <div class="cap-api">POST …/notifications/{event_id}/acknowledge {suppress_wake:true} — idempotent — <b>PR #106</b></div>
     </figcaption>
   </figure>
@@ -316,8 +321,8 @@
         <div class="scrim"></div>
         <div class="action-sheet">
           <div class="grp">
-            <div class="as-note">Acknowledge all 2 pending wakes?<br>Andrew won't be woken for any of them. The 2 items that still need an answer are left alone.</div>
-            <div class="as-btn bold">Acknowledge all 2</div>
+            <div class="as-note">Acknowledge all 4 pending wakes?<br>Andrew won't be woken for these events. Any that still have open work — a live request or a ready task — stay on your other lists until you resolve them.</div>
+            <div class="as-btn bold">Acknowledge all 4</div>
           </div>
           <div class="grp"><div class="as-btn">Cancel</div></div>
         </div>
@@ -326,8 +331,8 @@
     </div>
     <figcaption>
       <div class="cap-title">N5 · Acknowledge-all confirm <span class="plat">iOS · dark</span></div>
-      <div class="cap-note">iOS <span class="mono">confirmationDialog</span> (action sheet from the bottom). Bulk ack is the one multi-wake-suppressing moment, so it's confirm-gated (per-row ack is not). The count is the <b>ackable</b> total (2), matching exactly what the POST sends — scope-boundary rows are never bulk-acked, and the copy says so.</div>
-      <div class="cap-api">POST …/notifications/read {suppress_wake:true, through_ts, ack_event_ids:[…2 ids]} — <b>PR #106</b></div>
+      <div class="cap-note">iOS <span class="mono">confirmationDialog</span> (action sheet from the bottom). Bulk ack is the one multi-wake-suppressing moment, so it's confirm-gated (per-row ack is not). The count is <b>every loaded row</b> (4) — portal parity, so the number matches exactly what the POST sends. If the backlog exceeds 200 the client fans the ids out into sequential ≤200 batches behind this one confirm.</div>
+      <div class="cap-api">POST …/notifications/read {suppress_wake:true, through_ts, ack_event_ids:[…all loaded ids, ≤200/batch]} — <b>PR #106</b></div>
     </figcaption>
   </figure>
 
@@ -338,8 +343,8 @@
       <div class="screen">
         <div class="scrim"></div>
         <div class="dialog">
-          <div class="d-title">Acknowledge all 2?</div>
-          <div class="d-body">Andrew won't be woken for these 2 notifications. Items that still need an answer are left alone.</div>
+          <div class="d-title">Acknowledge all 4?</div>
+          <div class="d-body">Andrew won't be woken for these 4 notifications. Any that still have open work — a live request or a ready task — stay on your other lists until you resolve them.</div>
           <div class="d-actions">
             <span class="textbtn" style="color:var(--muted);">Cancel</span>
             <span class="textbtn">Acknowledge all</span>
@@ -350,7 +355,7 @@
     </div>
     <figcaption>
       <div class="cap-title">N6 · Acknowledge-all confirm <span class="plat">Android · dark</span></div>
-      <div class="cap-note">M3 <span class="mono">AlertDialog</span> — the clearest platform split from N5's action sheet. Same honest copy: the number is the ackable count, and "items that still need an answer are left alone" tells the user the scope-boundary rows survive. Cancel dismisses with no request.</div>
+      <div class="cap-note">M3 <span class="mono">AlertDialog</span> — the clearest platform split from N5's action sheet. Same honest copy: the number is every loaded row (parity), and "any that still have open work stay on your other lists" tells the user a request/ready-task is acknowledged but not resolved. Cancel dismisses with no request.</div>
       <div class="cap-api">POST …/notifications/read {suppress_wake:true, through_ts, ack_event_ids} — <b>PR #106</b></div>
     </figcaption>
   </figure>
@@ -386,7 +391,7 @@
           </div>
           <div class="panel-foot">
             <span class="btn primary block disabled">Acknowledge all</span>
-            <div class="foot-note">Load all 64 to acknowledge everything — this avoids silently skipping an older item you haven't seen.</div>
+            <div class="foot-note">Load all 64 to acknowledge everything — this avoids silently skipping an older item you haven't seen. Above 200 the app acknowledges in sequential batches of 200.</div>
           </div>
         </div>
       </div>
@@ -394,8 +399,8 @@
     </div>
     <figcaption>
       <div class="cap-title">N7 · Panel — partial-load guard <span class="plat">Android · light</span></div>
-      <div class="cap-note">When more rows are pending than were loaded (64 vs 20), <b>Acknowledge all</b> is <b>disabled</b> — bulk ack sends the loaded rows' explicit <span class="mono">event_id</span>s, so acking "all" on a partial page could skip an unseen older row. Mirrors the portal's "hide Acknowledge all when partially loaded" rule; per-row Acknowledge stays available. Loading the full set re-enables it.</div>
-      <div class="cap-api">bulk needs a full page: loaded_rows == total_pending; else per-row only — <b>PR #106</b></div>
+      <div class="cap-note">When more rows are pending than were loaded (64 vs 20), <b>Acknowledge all</b> is <b>disabled</b> — bulk ack sends the loaded rows' explicit <span class="mono">event_id</span>s, so acking "all" on a partial page could skip an unseen older row. Mirrors the portal's "hide Acknowledge all when partially loaded" rule; per-row Acknowledge stays available. Once the full set is loaded it re-enables, and because the server caps <span class="mono">ack_event_ids</span> at 200, a set larger than 200 is sent as sequential ≤200 batches under one confirm.</div>
+      <div class="cap-api">bulk needs a full page: loaded_rows == total_pending; ack_event_ids ≤ 200/call — <b>PR #106</b></div>
     </figcaption>
   </figure>
 

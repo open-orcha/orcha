@@ -29,24 +29,36 @@ Verified against the PR #106 diff (`feat/gh89-notification-ack`). None of these 
 |---|---|---|
 | Bell-badge count | `total_pending` rides the **container snapshot** (`get_container`) per agent — a batch count, no extra call per agent | Badge is a **roster property**, like a status pill — no new poll, no new endpoint |
 | Pending feed | `GET /api/agents/{aid}/notifications/pending?limit=&before_ts=&before_id=` → rows + envelope `total_pending`; returns **both zones** (work + conversation) | One paginated feed powers the whole panel |
-| Row shape | `{event_id, event_name, type, zone, priority, actor_ref, actor_alias, actor_kind, deeplink, preview, ts, read}` — `type` is the classified human kind; `deeplink` is `{kind, id}` or `null` | Row renders: type-tinted badge, actor, human phrasing (`preview`), relative time, and either an **Acknowledge** button or a **deep-link** |
-| The single veto | `POST /api/agents/{aid}/notifications/{event_id}/acknowledge` body `{suppress_wake:true}` (default **true**); response `{agent_id, event_id, suppressed, human_acked_at}`; **idempotent** (re-ack = 200 no-op); **404** if the event isn't the agent's | Per-row **Acknowledge** → optimistic row removal, rollback on non-2xx; safe to retry |
-| Bulk veto ("all") | `POST /api/agents/{aid}/notifications/read` body `{through_ts, suppress_wake:true, ack_event_ids:[…]}`; **requires a non-empty `ack_event_ids`** when `suppress_wake:true`; stamps exactly those loaded, agent-owned rows (a timestamp-only bound is rejected — it could swallow an unseen neighbor at the same `ts`) | **Acknowledge all** sends the loaded rows' `event_id`s, not a bare timestamp; it is offered **only when the loaded page is the full pending set** |
+| Row shape | `{event_id, event_name, type, zone, priority, actor_ref, actor_alias, actor_kind, deeplink, preview, ts, read}` — `type` is the classified human kind; `deeplink` is `{kind, id}` or `null`. The row does **NOT** ship `is_task_request` — the classifier computes it server-side but the feed route drops it (row shape verified in the route docstring) | Mobile can't branch a *task*-request row from an *info*-request row, so it doesn't try: **every row renders an Acknowledge button** (portal parity). The 5 "stateful" `event_name`s (`PN_STATEFUL`, §1 boundary box) *additionally* show an honest hint + a deep-link chip |
+| The single veto | `POST /api/agents/{aid}/notifications/{event_id}/acknowledge` body `{suppress_wake:true}` (default **true**); response `{agent_id, event_id, suppressed, human_acked_at}`; **idempotent** (re-ack = 200 no-op); **404** if the event isn't the agent's. Accepted on **every** row kind — the server stamps `human_acked_at` even on a request/task row (it does not 400 those) | Per-row **Acknowledge** on every row → optimistic removal, rollback on non-2xx; safe to retry. On a stateful row the ack is real; the *wake* just persists if open work remains |
+| Bulk veto ("all") | `POST /api/agents/{aid}/notifications/read` body `{through_ts, suppress_wake:true, ack_event_ids:[…]}`; **requires a non-empty `ack_event_ids`** when `suppress_wake:true`; **`ack_event_ids` is hard-capped at 200** (`400 "ack_event_ids is limited to 200 rows"`); stamps exactly those loaded, agent-owned rows (a timestamp-only bound is rejected — it could swallow an unseen neighbor at the same `ts`) | **Acknowledge all** sends **all** loaded rows' `event_id`s (every kind — portal parity), not a bare timestamp; offered **only when the loaded page is the full pending set**; a backlog **>200 is sent in sequential ≤200 batches** (§3) |
 | Snooze | `POST /api/agents/{aid}/wake/snooze` body `{snooze_seconds}` **or** `{until_ts}` (exactly one; 422 otherwise); `snooze_seconds:0` or a past `until_ts` **clears**; response `{agent_id, snooze_until}` | Snooze picker sends `snooze_seconds` for relative choices, `until_ts` for "until 9 AM"; **Clear** sends `snooze_seconds:0` |
 | Snooze read state | `snooze_until` rides the **container snapshot** per agent; the client computes `snoozed = snooze_until != null && snooze_until > now()` (same as the portal/wake-scan `snoozed` bool) | Active-snooze "wakes again at…" reads straight off the roster snapshot — no extra call |
 | Snooze visibility gate | Snooze is offered **only** when the agent has `auto_wake_interval_secs` set (already a live agent field) | The Snooze control **does not render at all** for agents with no clock/auto-wake configured |
 
-### The two scope boundaries (honest, load-bearing)
+### Portal parity + the two honest scope boundaries (load-bearing)
 
-PR #106 is deliberately narrow, and the UI has to say so or it will lie:
+The web portal renders **Acknowledge on every row** and its "Acknowledge all" **includes** the
+stateful rows. Mobile matches that exactly — anything else is an undisclosed web/mobile divergence
+that would tell the user two different stories. Since the feed row does not expose `is_task_request`,
+mobile *can't* branch anyway, and it *shouldn't*: acknowledge always means the same honest thing
+(*"I've seen this — don't wake {agent} for this event"*), and the server accepts it on every row.
+PR #106 is still deliberately narrow, so the UI has to state two boundaries or it will lie:
 
-- **Acknowledge suppresses EVENT-DRIVEN wake reasons only.** An **open task-request** keeps
-  `has_pending_task_request` true and an **assigned-ready task** keeps `auto_tasks` — the *work still
-  exists*, so the agent still wakes for it. Those rows appear in the pending feed (they can still make
-  the agent act), but they carry a `deeplink` and their `type` is a request/task kind. Mobile renders
-  them **without an Acknowledge button** — instead a one-line honest hint + a deep-link to the *real*
-  veto (**Answer / Reject** the request, or **Unassign** the task). Acknowledging one of these would
-  only hide the row; it would not stop the wake.
+- **Acknowledge suppresses EVENT-DRIVEN wake reasons only — and the row says so when work remains.**
+  For a purely event-driven row (a message, a closed loop, an **open info-request** — an info request
+  wakes purely via its event, so acking it *fully* stops the wake), Acknowledge is the whole story.
+  For the 5 "stateful" event names
+  **`PN_STATEFUL = {request_created, escalation, agent_suggested, task_assigned, task_ready}`**, the
+  underlying work can outlive the ack: an **open task-request** keeps `has_pending_task_request` true,
+  an **assigned-ready task** keeps `auto_tasks`. Those rows **still get an Acknowledge button** (the
+  ack is accepted — the server stamps `human_acked_at`), but they **additionally** show one true line
+  — *"Acknowledging marks it seen. If it still has open work — a live request or a ready task —
+  {agent} keeps waking until you resolve it."* — plus a **deep-link chip** from the row's `deeplink`:
+  **Answer →** (request), **Unassign →** (ready task), **Open →** (other). The hint is honest for all
+  five because it's conditional: acknowledging *does* mark it seen; the *wake* only persists **if** the
+  work still exists. (This corrects the earlier draft, which wrongly said these rows "can't be acked"
+  and that "the server would refuse to suppress their wake" — the server accepts the ack fine.)
 - **Snooze gates ONLY the clock (`auto_wake_due`) reason.** Event wakes, ready-task wakes and
   owed-request wakes **still fire through a snooze**. The snooze copy states this plainly: *"Snooze
   only pauses the scheduled check-in. Real work still wakes {agent}."* An expired snooze
@@ -78,43 +90,51 @@ feed and be dismissed with a swipe on both platforms.
 
 ```
 ╭──────────────────────────────── grabber ─────────────────────────────────╮
-│ Pending wakes · 3                                                    ✕ / — │
+│ Pending wakes · 4                                                    ✕ / — │
 │ These will wake Andrew next time. Acknowledge to say you've seen it —      │
-│ the agent won't be woken for it.                                          │
+│ Andrew won't be woken for that event.                                     │
 ├───────────────────────────────────────────────────────────────────────────┤
-│ [event]  💬 message from Kedar            "please review the plan"   2m  [Acknowledge] │
-│ [event]  🔁 loop closed                    "run finished · 0 open"   8m  [Acknowledge] │
-│ ── still needs an answer (acknowledging won't clear it) ───────────────────┤
-│ [req]    📥 open task-request from Ethan   "review the API shape"    5m  [ Answer → ] │
-│ [task]   ✅ assigned task ready            "Publish weekly digest"  12m  [Unassign → ] │
+│ 💬 message from Kedar          "please review the plan"    2m  [Acknowledge]│
+│ 🔁 loop closed                  "run finished · 0 open"    8m  [Acknowledge]│
+│ 📥 task-request from Ethan      "review the API shape"     5m  [Acknowledge]│
+│    ⚠ If it still has open work, Andrew keeps waking.          [ Answer → ] │
+│ ✅ assigned task ready          "Publish weekly digest"   12m  [Acknowledge]│
+│    ⚠ A ready task still wakes until it's reassigned.        [ Unassign → ] │
 ├───────────────────────────────────────────────────────────────────────────┤
-│                       [  Acknowledge all 2  ]                              │
+│                       [  Acknowledge all 4  ]                              │
 ╰───────────────────────────────────────────────────────────────────────────╯
 ```
 
 - **Header:** `Pending wakes · {total_pending}`; subtitle names the agent and states what
   Acknowledge means. Dismiss = swipe / grabber (both) plus an explicit **✕** (iOS) / back (Android).
-- **Event rows** (the ackable kind): type-tinted badge glyph, `actor_alias`, human `preview`, relative
-  `ts`, trailing **Acknowledge** button (`.btn.tonal.sm`).
+- **Every row is ackable** (portal parity): type-tinted badge glyph, `actor_alias`, human `preview`,
+  relative `ts`, trailing **Acknowledge** button (`.btn.tonal.sm`).
   - **Per-row Acknowledge** → `POST …/notifications/{event_id}/acknowledge {suppress_wake:true}`.
     **Optimistic:** the row animates out immediately and `total_pending` decrements. **Rollback:** on
     any non-2xx the row slides back in and a snackbar (Android) / toast (iOS) says *"Couldn't
     acknowledge — tap to retry."* Idempotent, so retry is always safe.
-- **Scope-boundary rows** (open task-request / assigned-ready task) sit under a subtle divider label
-  **"Still needs an answer — acknowledging won't clear it."** They carry **no Acknowledge button**;
-  instead a deep-link chip driven by the row's `deeplink`:
-  - `type` = request kind → **Answer →** / (**Reject** available inside) — routes to the request detail
-    (flow 07) where the real veto lives.
-  - `type` = ready-task kind → **Unassign →** — routes to the task detail (flow 05) assignee control.
-  - These count toward `total_pending` (they *are* pending) but are **excluded** from the
-    Acknowledge-all payload (see below).
+- **Stateful rows** (`event_name ∈ PN_STATEFUL`) keep their Acknowledge button but **add** an honest
+  hint line + a deep-link chip driven by the row's `deeplink` — because the underlying work can
+  outlive the ack:
+  - hint (true for all five, conditional): *"Acknowledging marks it seen. If it still has open work —
+    a live request or a ready task — {agent} keeps waking until you resolve it."*
+  - `request_created` (task-request) / `escalation` / `agent_suggested` → **Answer →** (Reject inside)
+    — routes to the request detail (flow 07) where the real veto lives.
+  - `task_assigned` / `task_ready` → **Unassign →** — routes to the task detail (flow 05) assignee
+    control.
+  - These are **still acknowledged** by Acknowledge-all (parity); the ack is accepted, the *wake* just
+    persists while the work exists — so the panel re-fetches after a bulk ack and any still-open
+    stateful row re-appears truthfully (dimmed `read=true`).
 - **Acknowledge all** (footer, primary-tonal, full width):
   - Sends `POST …/notifications/read {suppress_wake:true, through_ts:<max loaded ts>,
-    ack_event_ids:[<loaded ackable event_ids>]}`. **Only the ackable event rows** go in
-    `ack_event_ids` — scope-boundary rows are never bulk-acked (the server would refuse to suppress
-    their wake anyway; the work still exists).
+    ack_event_ids:[<ALL loaded event_ids>]}` — every loaded row, all kinds (portal parity).
+  - **200-cap batching:** `ack_event_ids` is hard-capped at **200** server-side. The common case
+    (≤200 pending) is a **single call**, identical to the portal. For a backlog **>200**, the client
+    sends the ids in **sequential batches of ≤200** (each batch's `through_ts` = the max `ts` in that
+    batch) under one confirm + a progress indicator; a failed batch **halts and re-fetches** (idempotent,
+    so already-acked rows stay acked and aren't re-sent).
   - **Confirm-gated** (see §4). On success the panel clears the acked rows optimistically, then
-    **re-fetches** the pending feed so any row that arrived after load, or any scope-boundary row,
+    **re-fetches** the pending feed so any row that arrived after load, or any still-open stateful row,
     re-appears truthfully.
   - **Partial-load guard:** the button is offered **only when the loaded page is the entire pending
     set** (`loaded_rows == total_pending`). If more pending rows exist than were loaded, the footer
@@ -132,11 +152,12 @@ confirm-gated, and the confirm is the clearest iOS-vs-Android divergence:
 | | Android (Material 3) | iOS (HIG) |
 |---|---|---|
 | Pattern | **`AlertDialog`** centered | **`confirmationDialog`** (action sheet from the bottom) |
-| Title | "Acknowledge all 2?" | (action-sheet note) "Acknowledge all 2 pending wakes? Andrew won't be woken for any of them." |
-| Body | "Andrew won't be woken for these 2 notifications. Items that still need an answer are left alone." | — |
-| Confirm | filled **Acknowledge all** button | **Acknowledge all 2** (bold, default) |
+| Title | "Acknowledge all 4?" | (action-sheet note) "Acknowledge all 4 pending wakes? Andrew won't be woken for any of them." |
+| Body | "Andrew won't be woken for these 4 notifications. Any that still have open work — a live request or a ready task — stay on your other lists until you resolve them." | — |
+| Confirm | filled **Acknowledge all** button | **Acknowledge all 4** (bold, default) |
 | Cancel | text **Cancel** | **Cancel** (separate group) |
-| Count | always the **ackable** count (excludes scope-boundary rows), so the number matches what actually happens |  |
+| Count | the **loaded** pending count — every row is acked (portal parity), so the number matches what actually happens |  |
+| >200 backlog | one confirm, then sequential ≤200 batches with a progress indicator (§3) | same |
 
 Per-row Acknowledge is **not** confirmed on either platform — it is a single, idempotent, optimistic
 action with rollback, exactly like archiving one mail. Only the bulk action gets a confirm.
@@ -212,11 +233,11 @@ Notes:
 |---|---|---|---|
 | N1 | Agents roster — bell badges + snooze chip | iOS · light | rows with `🔔 3`; one snoozed agent shows `zZ`; one agent with 0 pending has no badge |
 | N2 | Agents roster — bell badges | Android · dark | M3 list rows; badge on the bell; tap target note |
-| N3 | Pending-wakes panel — populated | iOS · dark (`.sheet`) | 2 ackable event rows (Acknowledge) + divider + 1 open-request + 1 ready-task deep-link row; **Acknowledge all 2** footer |
+| N3 | Pending-wakes panel — populated | iOS · dark (`.sheet`) | **Acknowledge on every row**; 2 plain event rows + 2 stateful rows (task-request, ready-task) that each keep Acknowledge *and* add an honest hint + a deep-link chip; **Acknowledge all 4** footer |
 | N4 | Pending-wakes panel — mid optimistic ack | Android · light (modal bottom sheet) | one event row collapsing out; count ticking 3→2; rest of feed intact |
-| N5 | Acknowledge-all confirm | iOS · dark | `confirmationDialog` action sheet; count = ackable only (2) |
-| N6 | Acknowledge-all confirm | Android · dark | M3 `AlertDialog`; body spells out "items that still need an answer are left alone" |
-| N7 | Panel — partial-load guard | Android · light | footer disabled + "Showing the newest 20 — scroll to load all" |
+| N5 | Acknowledge-all confirm | iOS · dark | `confirmationDialog` action sheet; count = **all loaded (4)** — parity |
+| N6 | Acknowledge-all confirm | Android · dark | M3 `AlertDialog`; body: "any that still have open work stay on your other lists until you resolve them" |
+| N7 | Panel — partial-load guard | Android · light | footer disabled + "Showing the newest 20 — scroll to load all"; note re >200 → ≤200 batches |
 | N8 | Agent detail — Wakes section, snooze **idle** | iOS · light | Pending-wakes row + "Checks in every hour · Snooze"; grouped-inset |
 | N9 | Snooze picker | Android · dark (bottom sheet) | 1 hour / 4 hours / Until 9 AM tomorrow |
 | N10 | Agent detail — snooze **active** | Android · dark | "Snoozed · wakes again 4:12 PM · Clear" + honest "real work still wakes" line |
@@ -276,6 +297,8 @@ Scoped for **Andrew** (Android) and **Ethan** (iOS) to build on top of the GH #3
 acknowledged. No new connectivity/auth/nav decisions — the badge count and snooze state ride the
 snapshot the roster already polls, and the veto/snooze actions are ordinary POSTs with optimistic +
 rollback (the pattern already used for task actions). The only cross-platform contract to keep aligned
-is the **scope-boundary rule** (§1): a request/task-kind row must deep-link, never offer a bare
-Acknowledge — same rule on both platforms and the web portal, so a user sees one consistent truth
-about what a veto can and can't stop.
+is **portal parity** (§1): **every** pending row offers Acknowledge on both platforms and the web
+portal, and the 5 `PN_STATEFUL` rows *additionally* carry an honest hint + a deep-link to the real
+veto (Answer / Unassign) — same rule everywhere, so a user sees one consistent truth about what a veto
+can and can't stop. Acknowledge-all sends every loaded id in ≤200 batches (identical to the portal's
+single call for the common ≤200 case).
