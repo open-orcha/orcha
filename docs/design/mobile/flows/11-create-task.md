@@ -6,6 +6,8 @@ Mockups: [`../mockups/11-create-task.html`](../mockups/11-create-task.html)
 > creates tasks with it today); the agent picker reads the snapshot; later reassignment is
 > `POST /api/tasks/{tid}/assign`. No new backend asks.
 
+> **Scheduled tasks:** the opt-in repeat interval (`schedule_interval_secs`, PR #68 / #27) is designed in [scheduled/README.md](../scheduled/README.md) — it lives in the Advanced section and is mutually exclusive with Depends on.
+
 ## 1. Story
 
 The human captures a piece of work — title, what "done" means, who should do it — in under a

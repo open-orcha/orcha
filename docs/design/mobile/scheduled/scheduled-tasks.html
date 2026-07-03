@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 14 Scheduled (repeating) tasks</title>
+<link rel="stylesheet" href="../mockups/mobile.css">
+<style>
+  .form { display:flex; flex-direction:column; gap:2px; }
+  .helper { font-size:11.5px; color:var(--faint); line-height:1.5; margin:5px 2px 8px; }
+  .helper.err { color:var(--danger); font-weight:600; }
+  .adv-head { display:flex; align-items:center; gap:8px; padding:12px 2px 6px; font-size:13px; font-weight:700; color:var(--text-2); }
+  .adv-head svg { width:14px; height:14px; color:var(--muted); }
+  .switchrow { display:flex; align-items:center; gap:12px; padding:10px 2px; }
+  .switchrow .sw { width:44px; height:26px; border-radius:13px; background:var(--border-2); position:relative; flex:none; }
+  .switchrow .sw::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:var(--surface); box-shadow:var(--shadow-sm); }
+  .switchrow .sw.on { background:var(--accent); }
+  .switchrow .sw.on::after { left:auto; right:3px; background:#fff; }
+  .pickrow { display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:.5px solid var(--border); }
+  .pickrow:last-child { border-bottom:none; }
+  .navbar-ios { display:flex; align-items:center; justify-content:space-between; padding:14px 18px 6px; }
+  .navbar-ios .nb-title { font-size:16.5px; font-weight:700; }
+  .depchip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--accent-line); background:var(--accent-soft);
+    color:var(--accent); border-radius:999px; padding:5px 12px; font-size:12px; font-weight:650; }
+  .depchip svg { width:12px; height:12px; }
+  /* --- scheduled-tasks extras --- */
+  .tag.sched { border-color:var(--accent-line); background:var(--accent-soft); color:var(--accent); font-weight:650; }
+  .chipwrap { display:flex; flex-wrap:wrap; gap:8px; padding:4px 2px 2px; }
+  .ichip { border:1px solid var(--border-2); border-radius:999px; padding:7px 14px; font-size:13px; font-weight:650; color:var(--text-2); background:var(--surface-2); }
+  .ichip.on { border-color:var(--accent-line); background:var(--accent-soft); color:var(--accent); }
+  .greyed { opacity:.4; }
+  .excl-note { font-size:11.5px; color:var(--faint); line-height:1.5; margin:4px 2px 2px; }
+  .menu { position:absolute; right:14px; top:52px; z-index:9; background:var(--raised); border:1px solid var(--border); border-radius:14px; padding:6px; box-shadow:var(--shadow-lg); display:flex; flex-direction:column; min-width:210px; }
+  .menu .mi { padding:11px 12px; font-size:14.5px; border-radius:9px; color:var(--text); }
+  .menu .mi.dis { color:var(--faint); } .menu .mi.destructive { color:var(--danger); }
+  .menu .mi .sub { display:block; font-size:11px; color:var(--faint); margin-top:2px; }
+  /* filter chips + list meta (self-contained copies from flow 05) */
+  .chips-row { flex:none; display:flex; gap:8px; padding:2px 0 4px; overflow:hidden; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px;
+    border:1px solid var(--border-2); background:var(--surface-2); font-size:12.5px; font-weight:650;
+    color:var(--text-2); white-space:nowrap; flex:none; }
+  .chip.on { background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent); }
+  .chip .n { font-weight:800; }
+  .tmeta { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted); }
+  .tmeta .ago { margin-left:auto; color:var(--faint); font-size:11px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>14 — Scheduled (repeating) tasks</h1>
+  <p>Opt a task into a repeat with a friendly interval picker that honours the server's 60-second
+     minimum; a <b>Repeats</b> badge on the task card; a <b>Schedule</b> section in task detail. The whole
+     feature is one create field (<span class="mono">schedule_interval_secs</span>) plus two read fields
+     that ride existing endpoints — firing is server-side, never a client action. Editing / turning off a
+     schedule on an existing task has no route yet and is flagged as new API ask <b>A7</b>. Mobile
+     equivalent of <a href="https://github.com/open-orcha/orcha/pull/68">PR #68</a> /
+     <a href="https://github.com/open-orcha/orcha/issues/27">#27</a>. Spec:
+     <span class="mono">scheduled/README.md</span>.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ R1: create form, Repeat off (iOS light, .large sheet) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg);">
+          <div class="navbar-ios">
+            <span class="textbtn" style="font-weight:500;">Cancel</span>
+            <span class="nb-title">New Task</span>
+            <span class="textbtn" style="font-weight:750;">Create</span>
+          </div>
+          <div class="scroll form" style="padding-top:8px;">
+            <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+            <div class="input" style="background:var(--surface);"><span>Publish the weekly digest</span></div>
+            <label class="fieldlabel">Definition of done <span style="color:var(--danger);">*</span></label>
+            <div class="input area" style="background:var(--surface);"><span style="color:var(--text-2);">The digest post is generated and pushed to the blog every week.</span></div>
+            <label class="fieldlabel">Priority</label>
+            <div class="seg" style="background:var(--surface);">
+              <div class="opt">Low</div>
+              <div class="opt on">Normal</div>
+              <div class="opt">High</div>
+            </div>
+            <div class="adv-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+              Advanced
+            </div>
+            <label class="fieldlabel">Depends on</label>
+            <div class="input" style="background:var(--surface);"><span class="ph">No dependencies</span>
+              <span class="chev" style="margin-left:auto;"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l6 6-6 6"/></svg></span></div>
+            <div class="switchrow">
+              <div class="grow">
+                <div style="font-size:14px; font-weight:650;">Repeat</div>
+                <div style="font-size:12px; color:var(--muted);">Re-runs on a schedule after each finish.</div>
+              </div>
+              <div class="sw"></div>
+            </div>
+            <div class="switchrow">
+              <div class="grow">
+                <div style="font-size:14px; font-weight:650;">Park it</div>
+                <div style="font-size:12px; color:var(--muted);">The agent won't start yet.</div>
+              </div>
+              <div class="sw"></div>
+            </div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R1 · Create — Repeat off (default) <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Repeat is <b>off by default</b>: for anyone who doesn't want a schedule the form is identical to flow 11 — <span class="mono">schedule_interval_secs</span> is simply omitted from the POST. The new row sits inside the existing Advanced disclosure between Depends on and Park it. iOS renders it as a grouped-inset <span class="mono">Toggle</span> row.</div>
+      <div class="cap-api">POST /api/containers/{cid}/tasks {title, definition_of_done, priority} <b>(no schedule field)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R2: create form, Repeat on + preset picker (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <div class="title">New task</div>
+          <span class="textbtn" style="font-size:15px;">Create</span>
+        </div>
+        <div class="scroll form">
+          <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+          <div class="input"><span>Publish the weekly digest</span></div>
+          <label class="fieldlabel">Definition of done <span style="color:var(--danger);">*</span></label>
+          <div class="input area"><span style="color:var(--text-2);">The digest post is generated and pushed to the blog on a schedule.</span></div>
+          <div class="adv-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+            Advanced
+          </div>
+          <div class="greyed">
+            <label class="fieldlabel">Depends on</label>
+            <div class="input"><span class="ph">Unavailable while Repeat is on</span></div>
+          </div>
+          <div class="excl-note">A repeating task can't have dependencies.</div>
+          <div class="switchrow">
+            <div class="grow">
+              <div style="font-size:14px; font-weight:650;">Repeat</div>
+              <div style="font-size:12px; color:var(--muted);">Re-runs on a schedule after each finish.</div>
+            </div>
+            <div class="sw on"></div>
+          </div>
+          <div class="chipwrap">
+            <span class="ichip">5 min</span>
+            <span class="ichip">15 min</span>
+            <span class="ichip on">1 hour</span>
+            <span class="ichip">6 hours</span>
+            <span class="ichip">Daily</span>
+            <span class="ichip">Custom…</span>
+          </div>
+          <div class="helper">Runs once, then re-runs this long after each finish. Cadence is measured from completion, so runs never overlap.</div>
+          <div class="switchrow">
+            <div class="grow">
+              <div style="font-size:14px; font-weight:650;">Park it</div>
+              <div style="font-size:12px; color:var(--muted);">Starts repeating only after it first completes.</div>
+            </div>
+            <div class="sw"></div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R2 · Create — Repeat on, preset picker <span class="plat">Android · dark</span></div>
+      <div class="cap-note">M3 full-screen dialog. Turning Repeat on reveals a single-select <span class="mono">FilterChip</span> row; default lands on <b>Every hour</b> (3600s) — safely above the 60s floor. Presets map 1:1 to the portal's <span class="mono">fmtInterval</span> so phone / portal / CLI say the same words. Depends-on greys out (mutual exclusion) the moment Repeat is on.</div>
+      <div class="cap-api">POST /api/containers/{cid}/tasks {…, schedule_interval_secs:3600} — <b>PR #68</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R3: create form, Custom + below-min error (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg);">
+          <div class="navbar-ios">
+            <span class="textbtn" style="font-weight:500;">Cancel</span>
+            <span class="nb-title">New Task</span>
+            <span class="textbtn" style="font-weight:750; opacity:.45;">Create</span>
+          </div>
+          <div class="scroll form" style="padding-top:8px;">
+            <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+            <div class="input" style="background:var(--surface);"><span>Sweep stale run logs</span></div>
+            <div class="adv-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="transform:rotate(-90deg);"><path d="M6 9l6 6 6-6"/></svg>
+              Advanced
+            </div>
+            <div class="switchrow">
+              <div class="grow">
+                <div style="font-size:14px; font-weight:650;">Repeat</div>
+                <div style="font-size:12px; color:var(--muted);">Re-runs on a schedule after each finish.</div>
+              </div>
+              <div class="sw on"></div>
+            </div>
+            <div class="chipwrap">
+              <span class="ichip">5 min</span>
+              <span class="ichip">15 min</span>
+              <span class="ichip">1 hour</span>
+              <span class="ichip">6 hours</span>
+              <span class="ichip">Daily</span>
+              <span class="ichip on">Custom…</span>
+            </div>
+            <div class="helper">The shortest repeat is 1 minute.</div>
+            <div class="pickrow" style="border-bottom:none; padding:2px;">
+              <div class="input" style="background:var(--surface); width:96px; border-color:var(--danger); box-shadow:0 0 0 3px var(--danger-soft);"><span>30</span></div>
+              <div class="seg" style="background:var(--surface); flex:1;">
+                <div class="opt on">Min</div>
+                <div class="opt">Hours</div>
+              </div>
+            </div>
+            <div class="helper err">Repeat interval must be a whole number of seconds ≥ 60 (or leave it blank).</div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R3 · Create — Custom + below-min error <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Custom opens a value × unit control (Minutes / Hours). "30 min"? fine — but a raw <b>30 sec</b> equivalent resolves below the floor: the value field gets the danger ring and Create stays dim. The inline error <b>mirrors the PR #68 server copy verbatim</b>; the friendly "shortest repeat is 1 minute" sits above the field. Create is blocked until the resolved seconds are a whole number ≥ 60.</div>
+      <div class="cap-api">POST /api/containers/{cid}/tasks {…, schedule_interval_secs} — <b>PR #68</b> · client rejects &lt; 60 before POST</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R4: create form, mutual exclusion Depends-on set (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <div class="title">New task</div>
+          <span class="textbtn" style="font-size:15px;">Create</span>
+        </div>
+        <div class="scroll form">
+          <label class="fieldlabel">Title <span style="color:var(--danger);">*</span></label>
+          <div class="input"><span>Publish v1.1.2 release notes</span></div>
+          <div class="adv-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+            Advanced
+          </div>
+          <label class="fieldlabel">Depends on</label>
+          <div><span class="depchip">Publish v1.1.2 release <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
+          <div class="switchrow greyed">
+            <div class="grow">
+              <div style="font-size:14px; font-weight:650;">Repeat</div>
+              <div style="font-size:12px; color:var(--muted);">Re-runs on a schedule after each finish.</div>
+            </div>
+            <div class="sw"></div>
+          </div>
+          <div class="excl-note">A repeating task can't have dependencies — clear the dependency to turn on repeat.</div>
+          <div class="switchrow">
+            <div class="grow">
+              <div style="font-size:14px; font-weight:650;">Park it</div>
+              <div style="font-size:12px; color:var(--muted);">The agent won't start yet.</div>
+            </div>
+            <div class="sw"></div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R4 · Create — mutual exclusion (Depends-on set) <span class="plat">Android · light</span></div>
+      <div class="cap-note">The server returns <b>400</b> if a scheduled task carries <span class="mono">depends_on</span> (either direction), so the UI never lets the two coexist: with a dependency chip present, the Repeat toggle greys out with an inline note. Symmetric to R2 (Repeat on → Depends-on greyed). The user can never build the combination the server rejects.</div>
+      <div class="cap-api">POST /api/containers/{cid}/tasks — server 400 on depends_on + schedule_interval_secs (<b>PR #68</b>)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R5: tasks list with Repeats badges (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title">Tasks</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="section-h">In progress <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-accent pulse"><span class="dot"></span>in_progress</span><span class="grow"></span></div>
+            <div class="c-title">Publish the weekly digest</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P100</span><span class="tag sched">↻ every hour</span><span>· next ~4:12 PM</span><span class="ago">8m ago</span></div>
+          </div>
+          <div class="section-h">Ready <span class="cnt">2</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-info"><span class="dot"></span>ready</span><span class="grow"></span></div>
+            <div class="c-title">Sweep stale run logs</div>
+            <div class="tmeta"><span class="avatar sm">E</span><span>Ethan</span><span class="tag">P60</span><span class="tag sched">↻ every 15 min</span><span class="ago">just now</span></div>
+          </div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-info"><span class="dot"></span>ready</span><span class="grow"></span></div>
+            <div class="c-title">Rotate the tap token</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P50</span><span class="ago">1h ago</span></div>
+          </div>
+        </div>
+        <div class="fab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="tabbar">
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>Home<span class="bdg">3</span></span>
+          <span class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg></span>Tasks</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>Requests<span class="bdg">2</span></span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg></span>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R5 · Tasks list — Repeats badges <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Scheduled tasks gain one accent-tinted <span class="mono">.tag.sched</span> "↻ every X" on the card meta row — metadata, not a status (status stays the pill). "Publish the weekly digest" has re-armed at least once, so it appends <b>· next ~4:12 PM</b>; "Sweep stale run logs" is brand-new and shows just the badge — <b>no countdown</b> before the first re-arm. Both read fields ride the list payload; no extra call.</div>
+      <div class="cap-api">GET /api/containers/{cid}/tasks → each task carries schedule_interval_secs, last_fired_at — <b>PR #68</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R6: tasks list, iOS light, badge on needs_verification ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="row"><span class="spacer"></span>
+            <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <div class="big-title">Tasks</div>
+        </div>
+        <div class="scroll">
+          <div class="chips-row" style="display:flex; gap:8px; padding:2px 0 4px;">
+            <span class="chip on">All</span>
+            <span class="chip">Needs me <span class="n">1</span></span>
+            <span class="chip">Andrew</span>
+            <span class="chip">Ethan</span>
+          </div>
+          <div class="section-h">Needs verification <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-violet"><span class="dot"></span>needs_verification</span><span class="grow"></span></div>
+            <div class="c-title">Back up the container database</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P40</span><span class="tag sched">↻ every 6 hours</span><span>· next ~10:00 PM</span><span class="ago">20m ago</span></div>
+          </div>
+          <div class="section-h">In progress <span class="cnt">1</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="pill s-accent pulse"><span class="dot"></span>in_progress</span><span class="grow"></span></div>
+            <div class="c-title">Publish the weekly digest</div>
+            <div class="tmeta"><span class="avatar sm">A</span><span>Andrew</span><span class="tag">P100</span><span class="tag sched">↻ every hour</span><span class="ago">8m ago</span></div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home<span class="bdg">3</span></span>
+          <span class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg>Tasks</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg>Requests<span class="bdg">2</span></span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R6 · Tasks list — Repeats badge <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Large-title list. A repeating task is grouped by its <b>live status</b> like any other — the "↻ every 6 hours" badge is <b>orthogonal</b> to the status grouping, so it shows on a needs-verification card just the same. iOS renders the badge as a bordered <span class="mono">Text</span> capsule. Next-fire ("· next ~10:00 PM") appears only because this one has already re-armed.</div>
+      <div class="cap-api">GET /api/containers/{cid}/tasks (schedule_interval_secs, last_fired_at) — <b>PR #68</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R7: task detail — Schedule section fired + overflow menu (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Tasks</span></span>
+          <div class="title" style="text-align:center;">Task</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="menu">
+          <div class="mi dis">Change interval…<span class="sub">Needs an app update — coming soon</span></div>
+          <div class="mi dis">Turn off repeat…<span class="sub">Needs an app update — coming soon</span></div>
+          <div class="mi destructive">Close task…</div>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750; letter-spacing:-.2px;">Publish the weekly digest</div>
+            <div class="c-meta">
+              <span class="pill s-accent pulse"><span class="dot"></span>in_progress</span>
+              <span class="tag">P100</span>
+              <span class="tag sched">↻ every hour</span>
+            </div>
+            <div class="rowline" style="margin-top:2px;"><span class="avatar sm">A</span><span style="font-size:13.5px;">Andrew</span><span style="font-size:12px; color:var(--faint);">· assignee</span></div>
+          </div>
+          <div class="section-h">Definition of done</div>
+          <div class="dod">
+            <div class="dl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg><span>The digest post is generated and pushed to the blog every run.</span></div>
+          </div>
+          <div class="section-h">Schedule</div>
+          <div class="card" style="gap:0; padding:2px 0;">
+            <div class="kv"><span class="k">Repeats</span><span class="v">every hour</span></div>
+            <div class="kv"><span class="k">Last run</span><span class="v">3:12 PM · 2h ago</span></div>
+            <div class="kv"><span class="k">Next run</span><span class="v">~4:12 PM · in 58m</span></div>
+            <div class="hr"></div>
+            <div style="font-size:12px; color:var(--muted); line-height:1.5; padding:8px 14px 10px;">Measured from each completion — runs never overlap.</div>
+          </div>
+          <div class="card tap"><div class="rowline"><span class="grow"><span class="c-title" style="font-size:14px;">Thread</span><span class="c-sub" style="display:block; margin-top:2px;">4 messages</span></span><span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span></div></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R7 · Task detail — Schedule section (fired) <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">The Schedule section sits right after Definition of done — for a scheduled task it takes the Dependencies slot (a repeat can never have deps). Grouped <span class="mono">LabeledContent</span> rows: cadence / last run / next run, populated because <span class="mono">last_fired_at</span> exists (Next run = last_fired_at + interval). The overflow <span class="mono">Menu</span> shows <b>Change interval…</b> and <b>Turn off repeat…</b> disabled with a footnote (both need <b>A7</b>); <b>Close task…</b> is always live.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages (task carries schedule fields) — <b>PR #68</b> · edit/turn-off = <b>NEW ask A7</b> · Close = POST /api/tasks/{tid}/cancel (exists)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R8: task detail — Schedule never re-armed + close confirm note (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="scroll" style="opacity:.4;">
+          <div class="appbar" style="padding-left:0; padding-right:0;">
+            <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+            <div class="title">Task</div>
+            <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </div>
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750;">Sweep stale run logs</div>
+            <div class="c-meta"><span class="pill s-idle"><span class="dot"></span>pending</span><span class="tag">P60</span><span class="tag sched">↻ every hour</span></div>
+            <div class="rowline"><span class="avatar sm">E</span><span style="font-size:13.5px;">Ethan</span></div>
+          </div>
+          <div class="section-h">Schedule</div>
+          <div class="card" style="gap:0; padding:2px 0;">
+            <div class="kv"><span class="k">Repeats</span><span class="v">every hour</span></div>
+            <div class="kv"><span class="k">Last run</span><span class="v">Hasn't re-armed yet</span></div>
+            <div class="kv"><span class="k">Next run</span><span class="v">After this run finishes</span></div>
+            <div class="hr"></div>
+            <div style="font-size:12px; color:var(--muted); line-height:1.5; padding:8px 14px 10px;">Measured from each completion — runs never overlap.</div>
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="dialog">
+          <div class="d-title">Close this task?</div>
+          <div class="d-body">Force-closes "Sweep stale run logs". <b>This also stops it from repeating.</b> Ethan is notified and the close is logged with your identity (kedar).</div>
+          <div class="input area"><span class="ph">Reason (optional) — Ethan sees this on the next wake</span></div>
+          <div class="d-actions">
+            <span class="textbtn">Keep task</span>
+            <span class="textbtn danger">Close task</span>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R8 · Task detail — Schedule (never re-armed) + Close confirm <span class="plat">Android · light</span></div>
+      <div class="cap-note">Before the first re-arm (<span class="mono">last_fired_at</span> null) the section is honest: "Last run" reads <b>Hasn't re-armed yet</b> and "Next run" reads <b>After this run finishes</b> — never a fictional countdown. Ending a repeat needs <b>no new API</b>: the normal Close-task (M3 <span class="mono">AlertDialog</span>) gains one line — <b>"This also stops it from repeating."</b> — because a cancelled task is never <span class="mono">completed</span> so it can't re-arm.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages — <b>PR #68</b> · Close = POST /api/tasks/{tid}/cancel {actor_agent_id, reason?} (exists)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R9: list loading skeleton (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="row"><span class="spacer"></span>
+            <button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <div class="big-title">Tasks</div>
+        </div>
+        <div class="scroll">
+          <div class="chips-row" style="display:flex; gap:8px; padding:2px 0 4px; opacity:.5;">
+            <span class="chip on">All</span><span class="chip">Needs me</span><span class="chip">Andrew</span><span class="chip">Ethan</span>
+          </div>
+          <div class="skel line" style="width:110px; margin:8px 2px 0;"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel line" style="width:80px; margin:8px 2px 0;"></div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h74"></div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home</span>
+          <span class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 5.5l1.5 1.5L7 4"/><path d="M3 11.5l1.5 1.5L7 10"/><path d="M3 17.5l1.5 1.5L7 16"/></svg>Tasks</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5a2 2 0 01-2 2H8l-5 4v-15a2 2 0 012-2h14a2 2 0 012 2z"/></svg>Requests</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8" r="3.2"/><path d="M2.5 19.5a6 6 0 0112 0"/><circle cx="17" cy="9" r="2.6"/><path d="M14.5 19.5a5 5 0 017-4.4"/></svg>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R9 · List loading skeleton <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Identical to flow 05's list skeleton — the <b>Repeats badge is just a card property</b>, not a separate row or section, so there's no special skeleton for it. First load only; subsequent visits render the cache instantly and refetch behind it.</div>
+      <div class="cap-api">GET /api/containers/{cid}/tasks <b>(loading)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ R10: detail — laptop unreachable (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">Task</div>
+          <button class="iconbtn" style="opacity:.4;"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="banner danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 16.5a5 5 0 017 0M5 13a10 10 0 0114 0M1.5 9.5a15 15 0 0121 0"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/><path d="M3 3l18 18"/></svg>
+            Can't reach your laptop — showing last-known
+            <span class="b-act">Retry</span>
+          </div>
+          <div class="card">
+            <div class="c-title" style="font-size:18px; font-weight:750;">Publish the weekly digest</div>
+            <div class="c-meta"><span class="pill s-idle"><span class="dot"></span>in_progress</span><span class="tag">P100</span><span class="tag sched">↻ every hour</span></div>
+            <div class="rowline"><span class="avatar sm">A</span><span style="font-size:13.5px;">Andrew</span></div>
+          </div>
+          <div class="section-h">Schedule</div>
+          <div class="card" style="gap:0; padding:2px 0; opacity:.55;">
+            <div class="kv"><span class="k">Repeats</span><span class="v">every hour</span></div>
+            <div class="kv"><span class="k">Last run</span><span class="v">3:12 PM · 2h ago</span></div>
+            <div class="kv"><span class="k">Next run</span><span class="v">~4:12 PM · in 58m</span></div>
+            <div class="hr"></div>
+            <div style="font-size:12px; color:var(--muted); line-height:1.5; padding:8px 14px 10px;">Measured from each completion — runs never overlap.</div>
+          </div>
+          <div class="excl-note" style="padding:2px 4px;">Firing is server-side — nothing to retry from the phone. Change interval, Turn off repeat and Close task are all disabled while unreachable.</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">R10 · Detail — laptop unreachable <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Reuses the shared flow-04 unreachable model wholesale: the danger banner pins under the app bar and the overflow disables. The A7-disabled items (Change interval / Turn off repeat) simply stay disabled; <b>Close task</b> disables too while unreachable. Because firing is <b>server-side</b>, the schedule keeps ticking on the laptop regardless — there's nothing for the phone to retry beyond the read.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages <b>(failed → cached)</b> · GET /api/containers/{cid} <b>(probe)</b></div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

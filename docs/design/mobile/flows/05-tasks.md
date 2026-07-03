@@ -17,6 +17,8 @@ dependencies, actions) → **thread** (chat-style read + send). Content parity t
 
 ## 2. Tasks list (tab root)
 
+> **Scheduled tasks:** the "Repeats" badge on the card and the Schedule section in detail are specced in [scheduled/README.md](../scheduled/README.md) (PR #68 / #27).
+
 ### Grouping — kanban order, active work first
 
 Sections in fixed order, each a `section-h` header with count. Empty groups are omitted:

@@ -26,6 +26,7 @@ with intent and the exact API endpoints it uses.
 | [flows/09-agents.md](flows/09-agents.md) | Agents list, agent detail, controls (model picker, wakes), agent runs |
 | [flows/10-converse.md](flows/10-converse.md) | Converse with an agent (text v1; attachments v2) |
 | [flows/11-create-task.md](flows/11-create-task.md) | Create task + assign to agent |
+| [scheduled/README.md](scheduled/README.md) | Scheduled (repeating) tasks — interval picker, Repeats badge, Schedule detail section, states (mobile equivalent of PR #68 / #27) |
 | [12-component-inventory.md](12-component-inventory.md) | Every component ↔ portal equivalent ↔ M3/SwiftUI counterpart; icon language; status copy |
 | [13-api-asks.md](13-api-asks.md) | Everything the backend can't serve today (pairing endpoint, mobile auth, …) — nothing silently assumed |
 | `mockups/` | `mobile.css` (shared kit) + one HTML gallery per flow, both platforms + empty/loading/error/unreachable states |
@@ -41,6 +42,7 @@ with intent and the exact API endpoints it uses.
 | Converse with agents | 10 |
 | Create tasks, assign to agents | 11 |
 | QR pairing, Add button, containers | 03, 04 |
+| Scheduled/repeating tasks (PR #68 / #27) | scheduled |
 
 ## Ground rules baked into every screen
 

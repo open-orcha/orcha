@@ -65,6 +65,28 @@ build against the final contracts once agreed.
 - `GET /api/tasks/{tid}` standalone (today task detail rides on `GET /api/tasks/{tid}/messages`
   which returns `{task, messages[]}` — works, slightly odd for a detail-only refresh).
 
+## A7 — Task-update endpoint (edit / turn off a schedule)  **(NEW)**
+
+- **What:** a route to change or clear `schedule_interval_secs` on an existing task — e.g.
+  `PATCH /api/tasks/{tid}` (or `POST /api/tasks/{tid}/schedule`) accepting
+  `{schedule_interval_secs}` where a value `>= 60` re-times the repeat and `null`/`0` turns repeat
+  off while keeping the task. Reuse the same `ge=60` validation and the same "no dependencies"
+  rejection as create (PR #68).
+- **Why:** PR #68 only ever SETS `schedule_interval_secs` at creation
+  (`POST /api/containers/{cid}/tasks`). The only mutations on an existing task are
+  cancel / done / verify / assign / protocol — none touch the schedule. So there is no way to
+  change an interval or turn a repeat off without a new endpoint. Verified against the PR #68 diff
+  (the field is not in live `/openapi.json` until #68 merges).
+- **What already works (so this is edit-only, not blocking):** *ending* a repeat needs no new API —
+  the existing `POST /api/tasks/{tid}/cancel` stops it, because re-arm matches only
+  `status='completed'` and a cancelled task never re-arms. A7 is only for *keeping the task alive
+  while changing the cadence or pausing the repeat.*
+- **Design stance:** the mobile detail (flows/scheduled/README.md §5) shows **Change interval…** and
+  **Turn off repeat…** in the overflow menu, rendered **disabled with an honest note** until A7
+  ships. No mockup silently assumes the endpoint exists.
+- **Owners:** backend + portal define the contract; Andrew (Android) and Ethan (iOS) wire the
+  affordance once agreed.
+
 ## Coordination
 
 The shared connectivity/auth/navigation model (02 §4 + this doc) is the contract Andrew and Ethan
