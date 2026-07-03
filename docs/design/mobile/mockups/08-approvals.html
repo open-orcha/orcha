@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 08 Approvals</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  .sheet { overflow:hidden; }
+  .sheet .plan-scroll { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; gap:10px;
+    -webkit-mask-image:linear-gradient(to bottom, #000 82%, transparent); mask-image:linear-gradient(to bottom, #000 82%, transparent); }
+  .plan-text { font-size:13.5px; line-height:1.6; color:var(--text-2); }
+  .plan-text b { color:var(--text); font-weight:700; }
+  .dod-card { border:1px solid var(--ok-line); border-radius:12px; overflow:hidden; }
+  .dod-card .dod-h { background:var(--ok-soft); color:var(--ok); font-size:11px; font-weight:800;
+    letter-spacing:.8px; text-transform:uppercase; padding:7px 12px; }
+  .dod-card .dod-b { padding:10px 12px; font-size:13.5px; line-height:1.55; color:var(--text-2); background:var(--surface); }
+  .quote { border-left:3px solid var(--accent-line); padding:2px 0 2px 12px; display:flex; flex-direction:column; gap:6px; }
+  .kicker { font-size:10.5px; font-weight:800; letter-spacing:1px; text-transform:uppercase; color:var(--accent); }
+  .sheet-btns { display:flex; flex-direction:column; gap:8px; padding-top:4px; border-top:.5px solid var(--border); margin:0 -18px; padding-left:18px; padding-right:18px; padding-top:12px; }
+  .attach-row { display:flex; gap:8px; overflow:hidden; }
+  .attach-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border-2); border-radius:999px;
+    padding:6px 12px; font-size:12px; color:var(--info); white-space:nowrap; }
+  .attach-chip svg { width:13px; height:13px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>08 — Approvals (plan approval · task verification)</h1>
+  <p>The two irreducibly human moments: approving an agent's plan before it burns turns, and verifying
+     finished work before it counts as done ("never self-certify"). Both are modal sheets over the
+     surfacing screen — the decision stays one thumb-reach away and the human never loses context.
+     Spec: <span class="mono">flows/08-approvals.md</span>. Ships on the existing API
+     (<span class="mono">POST /api/decisions</span> · <span class="mono">POST /api/tasks/{tid}/verify</span>).</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ V1: plan-approval sheet (Android, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="appbar large">
+            <div class="row"><div class="big-title" style="padding:0;">Home</div></div>
+          </div>
+          <div class="scroll">
+            <div class="section-h">Needs you <span class="cnt">· 2</span></div>
+            <div class="card"><div class="c-title">Plan approval — Website dark-mode screenshots</div></div>
+            <div class="card"><div class="c-title">Verify — CLI v0.3.1 release notes</div></div>
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:78%;">
+          <div class="grabber"></div>
+          <div class="kicker">Plan approval</div>
+          <div class="sh-title" style="line-height:1.3;">Add dark-mode screenshots to the website</div>
+          <div class="rowline">
+            <div class="avatar sm">A</div>
+            <span style="font-size:13px; color:var(--text-2); font-weight:650;">Andrew</span>
+            <span class="tag model">claude-sonnet-5</span>
+            <span style="font-size:11.5px; color:var(--faint); margin-left:auto;">proposed 4m ago</span>
+          </div>
+          <div class="plan-scroll">
+            <div class="plan-text">Here's my plan:<br><br>
+              <b>1.</b> Capture dark-mode screenshots of every page on openorcha.io (home, installation, usage, stats) at 1440×900 using the existing Playwright pipeline.<br>
+              <b>2.</b> Add a light/dark figure pair to the installation guide with a captioned theme-toggle callout.<br>
+              <b>3.</b> Rebuild the site preview and eyeball every figure in both themes.<br>
+              <b>4.</b> Open a draft PR with the screenshots + guide edit and post the link to this thread.<br><br>
+              Estimated 2 worker runs. No production config touched; PR stays draft until you approve it.</div>
+          </div>
+          <div class="sheet-btns">
+            <button class="btn primary block">Approve</button>
+            <button class="btn tonal block">Request changes</button>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">V1 · Plan-approval sheet <span class="plat">Android · dark</span></div>
+      <div class="cap-note">M3 modal bottom sheet over the Home "Needs you" queue: drag handle, kicker + task title + author row (avatar, alias, model tag), then the agent's plan — <b>full text, scrollable, never summarized</b> (portal B10 invariant). Buttons pinned at the sheet's bottom edge. Entry points: Home queue card, or a Task-detail banner when a plan awaits decision.</div>
+      <div class="cap-api">plan text: GET /api/tasks/{tid}/messages · approve: POST /api/decisions {subject_type:"plan_approval", subject_id, decision:"approve", actor_agent_id}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ V2: request changes expanded (iOS, light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1;"></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:88%;">
+          <div class="grabber"></div>
+          <div class="kicker">Plan approval · request changes</div>
+          <div class="sh-title" style="line-height:1.3;">Add dark-mode screenshots to the website</div>
+          <div class="quote">
+            <div class="plan-text" style="font-size:12.5px;">1. Capture dark-mode screenshots of every page… 2. Add a light/dark figure pair to the installation guide… 3. Rebuild the site preview… 4. Open a draft PR…</div>
+          </div>
+          <label class="fieldlabel" style="margin-bottom:2px;">What should change? <span style="color:var(--danger);">*</span></label>
+          <div class="input area focus" style="min-height:110px; align-items:flex-start;">
+            <span>Please also capture the /stats page — it has the most contrast issues in dark mode. And keep the PR in draft until I've seen the installation figures.</span>
+          </div>
+          <div style="font-size:11.5px; color:var(--faint); line-height:1.5;">Your feedback is posted to the task thread and Andrew sees it on his next wake.</div>
+          <div class="sheet-btns">
+            <button class="btn primary block">Send &amp; request changes</button>
+            <button class="btn neutral block">Back</button>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">V2 · Request changes — feedback required <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Tapping Request changes promotes the sheet .medium → .large (Android: sheet grows over the IME) and reveals a required feedback field — the confirm stays disabled until non-empty. The plan collapses to a quoted excerpt so the feedback field gets the room. Swipe-down with typed feedback asks "Discard feedback?" first.</div>
+      <div class="cap-api">POST /api/decisions {subject_type:"plan_approval", subject_id, decision:"reject", reason, actor_agent_id}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ V3: verify sheet (iOS, dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1;"></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:88%;">
+          <div class="grabber"></div>
+          <div class="kicker" style="color:var(--ok);">Verify task</div>
+          <div class="sh-title" style="line-height:1.3;">CLI v0.3.1 release notes</div>
+          <div class="rowline">
+            <div class="avatar sm">M</div>
+            <span style="font-size:13px; color:var(--text-2); font-weight:650;">MarketingMike</span>
+            <span class="pill s-warn"><span class="dot"></span>needs verification</span>
+          </div>
+          <div class="dod-card">
+            <div class="dod-h">Definition of done</div>
+            <div class="dod-b">Plain-English notes covering Mac app, website, and Homebrew changes; reviewed draft posted to the thread; nothing published without approval.</div>
+          </div>
+          <div class="quote">
+            <div class="rowline" style="gap:6px;">
+              <span style="font-size:11px; font-weight:700; color:var(--accent);">MarketingMike</span>
+              <span style="font-size:10.5px; color:var(--faint);" class="mono">21:04</span>
+            </div>
+            <div class="plan-text" style="font-size:13px;">Draft is ready. Three sections as agreed: what's new in the Mac app, website updates, and the Homebrew bump. Nothing has been published — the doc is in the repo for your read-through.</div>
+          </div>
+          <div class="attach-row">
+            <span class="attach-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.5-1.5"/></svg>release-notes-v0.3.1.md</span>
+            <span class="attach-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.5-1.5"/></svg>PR #114</span>
+          </div>
+          <div class="sheet-btns">
+            <button class="btn ok-tonal block" style="background:var(--ok); color:#04180f; border-color:transparent;">Approve &amp; complete</button>
+            <button class="btn neutral block">Send back with feedback</button>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">V3 · Task-completion (verify) sheet <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Top to bottom: kicker + title + agent row, the definition-of-done card (ok-tinted header — this is what the human verifies against), the agent's completion summary quoted from the thread, and attachment chips (in-app browser). Send back mirrors V2: required feedback, task returns to in_progress, agent wakes with it.</div>
+      <div class="cap-api">POST /api/tasks/{tid}/verify {approve, feedback?, actor_agent_id} · summary: GET /api/tasks/{tid}/messages</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ V4: loading skeleton (Android, light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1;"></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:70%;">
+          <div class="grabber"></div>
+          <div class="kicker">Plan approval</div>
+          <div class="sh-title" style="line-height:1.3;">Add dark-mode screenshots to the website</div>
+          <div class="skel line" style="width:88%;"></div>
+          <div class="skel line" style="width:96%;"></div>
+          <div class="skel line" style="width:92%;"></div>
+          <div class="skel line" style="width:60%;"></div>
+          <div class="skel line" style="width:84%; margin-top:8px;"></div>
+          <div class="skel line" style="width:78%;"></div>
+          <div class="sheet-btns">
+            <button class="btn primary block disabled">Approve</button>
+            <button class="btn tonal block disabled">Request changes</button>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">V4 · Sheet loading <span class="plat">Android · light</span></div>
+      <div class="cap-note">The sheet opens instantly with the title carried over from the queue card; the plan area shows text-line skeletons until the thread fetch lands. Buttons render disabled — a decision is never enabled before its subject is readable. Unreachable: same layout + the shared connectivity banner; the sheet can be read and dismissed but not decided.</div>
+      <div class="cap-api">GET /api/tasks/{tid}/messages (in flight)</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ D1: decision-post failure (iOS, dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1;"></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:82%;">
+          <div class="grabber"></div>
+          <div class="banner danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+            Couldn't record your decision
+            <span class="b-act">Retry</span>
+          </div>
+          <div class="kicker" style="color:var(--ok);">Verify task</div>
+          <div class="sh-title" style="line-height:1.3;">CLI v0.3.1 release notes</div>
+          <div class="quote">
+            <div class="plan-text" style="font-size:13px;">Draft is ready. Three sections as agreed: what's new in the Mac app, website updates, and the Homebrew bump…</div>
+          </div>
+          <label class="fieldlabel" style="margin-bottom:2px;">Feedback</label>
+          <div class="input area" style="min-height:84px; align-items:flex-start;">
+            <span>The Homebrew section still says 0.3.0 — please fix the version before this goes anywhere.</span>
+          </div>
+          <div class="sheet-btns">
+            <button class="btn primary block">Send back with feedback</button>
+            <button class="btn neutral block">Cancel</button>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">D1 · Decision-post failure <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">The POST failed (openorcha didn't answer): the sheet STAYS OPEN, a danger banner appears inside it with Retry, the typed feedback is preserved, and the buttons re-enable. Nothing the human wrote is ever lost to a network blip.</div>
+      <div class="cap-api">retry: POST /api/tasks/{tid}/verify {approve:false, feedback, actor_agent_id}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ D2: stale decision (Android, dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div style="opacity:.35; flex:1;"></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:74%;">
+          <div class="grabber"></div>
+          <div class="kicker">Plan approval</div>
+          <div class="sh-title" style="line-height:1.3;">Add dark-mode screenshots to the website</div>
+          <div class="rowline">
+            <div class="avatar sm">A</div>
+            <span style="font-size:13px; color:var(--text-2); font-weight:650;">Andrew</span>
+            <span class="tag model">claude-sonnet-5</span>
+          </div>
+          <div class="plan-scroll" style="opacity:.6;">
+            <div class="plan-text">1. Capture dark-mode screenshots of every page on openorcha.io… 2. Add a light/dark figure pair to the installation guide… 3. Rebuild the site preview… 4. Open a draft PR…</div>
+          </div>
+          <div class="banner info">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+            Already approved by kedar on the portal
+          </div>
+          <div style="font-size:11.5px; color:var(--faint); text-align:center;">Closing…</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">D2 · Stale decision (raced) <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Someone decided first — a 4xx-conflict on submit, or a snapshot arriving mid-sheet that shows the decision landed. The buttons are replaced by an info banner naming who decided where, and the sheet auto-dismisses after ~2s. Mirrors the portal's suppress-then-reconcile race handling.</div>
+      <div class="cap-api">conflict on POST /api/decisions · reconcile: SSE GET /api/containers/{cid}/events</div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

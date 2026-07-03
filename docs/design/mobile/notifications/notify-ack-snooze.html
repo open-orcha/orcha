@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 15 Notification acknowledge + clock-wake snooze</title>
+<link rel="stylesheet" href="../mockups/mobile.css">
+<style>
+  /* ---- feature-specific extras (built on the shared component library) ---- */
+  .bell { position:relative; display:flex; align-items:center; justify-content:center; width:34px; height:34px;
+    border-radius:50%; color:var(--muted); flex:none; }
+  .bell svg { width:21px; height:21px; }
+  .nbadge { position:absolute; top:-3px; right:-3px; min-width:17px; height:17px; padding:0 4px; border-radius:9px;
+    background:var(--danger); color:#fff; font-size:10.5px; font-weight:800; display:flex; align-items:center; justify-content:center;
+    border:2px solid var(--surface); }
+  .capsule-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 9px 3px 7px; border-radius:999px;
+    border:1px solid var(--danger-line); background:var(--danger-soft); color:var(--danger); font-size:11.5px; font-weight:750; }
+  .capsule-badge svg { width:13px; height:13px; }
+  .zzchip { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px;
+    border:1px solid var(--violet-line); background:var(--violet-soft); color:var(--violet); font-size:11px; font-weight:750; }
+
+  /* notification feed rows */
+  .nrow { display:flex; align-items:flex-start; gap:11px; padding:11px 2px; border-bottom:.5px solid var(--border); }
+  .nrow:last-child { border-bottom:none; }
+  .nrow.leaving { opacity:.25; }
+  .ntype { width:34px; height:34px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; }
+  .ntype svg { width:18px; height:18px; }
+  .ntype.t-info   { background:var(--info-soft);   color:var(--info);   border:1px solid var(--info-line); }
+  .ntype.t-accent { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-line); }
+  .ntype.t-violet { background:var(--violet-soft); color:var(--violet); border:1px solid var(--violet-line); }
+  .ntype.t-ok     { background:var(--ok-soft);     color:var(--ok);     border:1px solid var(--ok-line); }
+  .nbody { flex:1; min-width:0; }
+  .nhead { display:flex; align-items:baseline; gap:7px; }
+  .nhead .who { font-size:13.5px; font-weight:700; color:var(--text); }
+  .nhead .kind { font-size:11.5px; color:var(--muted); font-weight:600; }
+  .nhead .t { margin-left:auto; font-size:11px; color:var(--faint); font-family:"JetBrains Mono", monospace; flex:none; }
+  .nprev { font-size:13px; color:var(--text-2); line-height:1.4; margin-top:2px; }
+  .nact { margin-top:8px; display:flex; align-items:center; gap:8px; }
+  .divlabel { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; letter-spacing:.3px;
+    text-transform:uppercase; color:var(--faint); padding:12px 2px 4px; }
+  .divlabel::before, .divlabel::after { content:""; height:.5px; background:var(--border); flex:1; }
+  .dlchip { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; border-radius:999px;
+    border:1px solid var(--info-line); background:var(--info-soft); color:var(--info); font-size:12.5px; font-weight:700; }
+  .dlchip.warn { border-color:var(--warn-line); background:var(--warn-soft); color:var(--warn); }
+  .dlchip svg { width:13px; height:13px; }
+  .panel-head { padding:2px 2px 10px; }
+  .panel-head .ph-title { font-size:18px; font-weight:800; letter-spacing:-.2px; display:flex; align-items:center; gap:9px; }
+  .panel-head .ph-title .cnt { color:var(--accent); }
+  .panel-head .ph-sub { font-size:12.5px; color:var(--muted); line-height:1.5; margin-top:5px; }
+  .panel-foot { flex:none; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); border-top:.5px solid var(--border);
+    background:color-mix(in srgb, var(--surface) 92%, transparent); }
+  .foot-note { font-size:11.5px; color:var(--faint); text-align:center; line-height:1.5; margin-top:8px; }
+  .icontile { width:34px; height:34px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center;
+    background:var(--surface-2); border:1px solid var(--border); color:var(--muted); }
+  .icontile svg { width:18px; height:18px; }
+  .icontile.acc { background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent); }
+  .icontile.vio { background:var(--violet-soft); border-color:var(--violet-line); color:var(--violet); }
+  .wkrow { display:flex; align-items:center; gap:12px; padding:12px 14px; }
+  .wkrow .grow { flex:1; min-width:0; }
+  .wkrow .wl-title { font-size:14.5px; font-weight:650; color:var(--text); }
+  .wkrow .wl-sub { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.4; }
+  .snz-note { font-size:11.5px; color:var(--faint); line-height:1.5; padding:0 14px 12px; }
+  .menu .mi.destructive { color:var(--danger); }
+  .sheet .opt-row { display:flex; align-items:center; gap:12px; padding:15px 4px; border-bottom:.5px solid var(--border);
+    font-size:15.5px; font-weight:600; color:var(--text); }
+  .sheet .opt-row:last-child { border-bottom:none; }
+  .sheet .opt-row svg { width:19px; height:19px; color:var(--muted); }
+  .sheet .opt-row.destructive { color:var(--danger); } .sheet .opt-row.destructive svg { color:var(--danger); }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>15 — Notification acknowledge + clock-wake snooze</h1>
+  <p>Two human controls over when an agent wakes: <b>Acknowledge</b> a single pending notification
+     ("I've seen this — don't wake the agent for it") and <b>Snooze</b> an agent's scheduled clock
+     check-in, neither disabling anything permanently. A per-agent <b>bell + count</b> on the roster,
+     a <b>pending-wakes panel</b> with per-row Acknowledge + a confirm-gated Acknowledge&nbsp;all, and
+     a <b>snooze</b> control shown only for clock-configured agents. Two honest scope boundaries: open
+     task-requests / assigned-ready tasks <b>can't be acked away</b> (they deep-link to the real veto),
+     and snooze pauses <b>only the clock reason</b> — real work still wakes the agent. Mobile
+     equivalent of <a href="https://github.com/open-orcha/orcha/pull/106">PR #106</a> /
+     <a href="https://github.com/open-orcha/orcha/issues/89">#89</a>. Every surface ships on real
+     PR&nbsp;#106 endpoints — <b>no new API ask</b>. Spec: <span class="mono">notifications/README.md</span>.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ N1: Agents roster — bell badges + snooze chip (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="big-title">Agents</div>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">A</div>
+              <div class="grow"><div class="c-title">Andrew</div><div class="c-sub" style="font-size:12.5px;">Android Developer</div></div>
+              <div class="bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge">3</span></div>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">E</div>
+              <div class="grow"><div class="c-title">Ethan</div><div class="c-sub" style="font-size:12.5px;">iOS Developer</div></div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">R</div>
+              <div class="grow"><div class="c-title" style="display:flex; align-items:center; gap:7px;">Reporter <span class="zzchip"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M4 6h16v2l-11 8h11v2H4v-2l11-8H4z"/></svg>snoozed</span></div><div class="c-sub" style="font-size:12.5px;">Digest &amp; summaries</div></div>
+              <div class="bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge">1</span></div>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">M</div>
+              <div class="grow"><div class="c-title">MarketingMike</div><div class="c-sub" style="font-size:12.5px;">Growth &amp; content</div></div>
+              <span class="pill s-idle"><span class="dot"></span>idle</span>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 10l9-7 9 7v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Home</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/></svg>Tasks</div>
+          <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N1 · Agents roster — bell badges + snooze chip <span class="plat">iOS · light</span></div>
+      <div class="cap-note">The bell + count is a <b>metadata affordance</b>, not a status — it appears only when <span class="mono">total_pending&nbsp;&gt;&nbsp;0</span> (Andrew 3, Reporter 1); agents at 0 show none. Tapping the bell opens the pending-wakes panel; the rest of the row opens agent detail. A clock-configured agent that's <b>snoozed</b> also carries a <span class="mono">zZ</span> chip so the state reads from the list. iOS: bordered count capsule beside an SF Symbol bell in the trailing slot.</div>
+      <div class="cap-api">total_pending &amp; snooze_until per agent on GET /api/containers/{cid} snapshot — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N2: Agents roster — bell badges (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><div class="title">Agents</div></div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">A</div>
+              <div class="grow"><div class="c-title">Andrew</div><div class="c-sub" style="font-size:12.5px;">Android Developer</div></div>
+              <div class="bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge">3</span></div>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">C</div>
+              <div class="grow"><div class="c-title">Code Reviewer</div><div class="c-sub" style="font-size:12.5px;">Reviews plans &amp; PRs</div></div>
+              <span class="pill s-warn"><span class="dot"></span>blocked</span>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">R</div>
+              <div class="grow"><div class="c-title" style="display:flex; align-items:center; gap:7px;">Reporter <span class="zzchip"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M4 6h16v2l-11 8h11v2H4v-2l11-8H4z"/></svg>snoozed</span></div><div class="c-sub" style="font-size:12.5px;">Digest &amp; summaries</div></div>
+              <div class="bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge">1</span></div>
+            </div>
+          </div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">M</div>
+              <div class="grow"><div class="c-title">MarketingMike</div><div class="c-sub" style="font-size:12.5px;">Growth &amp; content</div></div>
+              <span class="pill s-idle"><span class="dot"></span>idle</span>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 10l9-7 9 7v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>Home</div>
+          <div class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/></svg></span>Tasks</div>
+          <div class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span>Agents</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N2 · Agents roster — bell badges <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Same roster property on Material 3: a <span class="mono">BadgedBox</span> over a bell <span class="mono">Icon</span> in the <span class="mono">ListItem</span> trailing slot. The bell's ripple opens the panel; the row's ripple opens detail — two distinct tap targets on one row. Zero new poll: the count rides the snapshot the roster already fetches.</div>
+      <div class="cap-api">GET /api/containers/{cid} → agents[].total_pending — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N3: Pending-wakes panel — populated (iOS dark, sheet) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:88%; display:flex; flex-direction:column; padding-bottom:0;">
+          <div class="grabber"></div>
+          <div style="padding:6px 18px 0; overflow:hidden; display:flex; flex-direction:column;">
+            <div class="panel-head">
+              <div class="ph-title"><span class="bell" style="width:26px;height:26px;color:var(--accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></span>Pending wakes · <span class="cnt">3</span></div>
+              <div class="ph-sub">These will wake <b>Andrew</b> next time. Acknowledge to say you've seen it — the agent won't be woken for it.</div>
+            </div>
+          </div>
+          <div class="scroll" style="padding:0 18px; gap:0;">
+            <div class="nrow">
+              <div class="ntype t-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 01-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1121 11.5z"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">Kedar</span><span class="kind">message</span><span class="t">2m</span></div>
+                <div class="nprev">"please review the plan when you get a sec"</div>
+                <div class="nact"><span class="btn tonal sm">Acknowledge</span></div>
+              </div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-accent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 12a9 9 0 11-3-6.7M21 4v5h-5"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">System</span><span class="kind">loop closed</span><span class="t">8m</span></div>
+                <div class="nprev">"run finished · 0 open threads"</div>
+                <div class="nact"><span class="btn tonal sm">Acknowledge</span></div>
+              </div>
+            </div>
+            <div class="divlabel">Still needs an answer</div>
+            <div class="nrow">
+              <div class="ntype t-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 4h16v12H8l-4 4z"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">Ethan</span><span class="kind">open task-request</span><span class="t">5m</span></div>
+                <div class="nprev">"review the notifications API shape"</div>
+                <div class="nact"><span class="dlchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Answer request</span></div>
+              </div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">Assigned</span><span class="kind">task ready</span><span class="t">12m</span></div>
+                <div class="nprev">"Publish the weekly digest"</div>
+                <div class="nact"><span class="dlchip warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Unassign task</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="panel-foot">
+            <span class="btn primary block">Acknowledge all 2</span>
+            <div class="foot-note">Only the 2 seen-notifications above. The 2 items that still need an answer are left alone.</div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N3 · Pending-wakes panel — populated <span class="plat">iOS · dark · sheet</span></div>
+      <div class="cap-note">iOS <span class="mono">.sheet</span> (<span class="mono">.medium</span>/<span class="mono">.large</span> detents + grabber). Two <b>ackable event rows</b> (per-row Acknowledge → optimistic remove, rollback on non-2xx). Below the divider, the two <b>scope-boundary rows</b> carry no Acknowledge — an open task-request deep-links to <b>Answer</b> (flow 07), an assigned-ready task to <b>Unassign</b> (flow 05); acking them would only hide the row, not stop the wake. <b>Acknowledge all</b> counts the ackable rows only (2).</div>
+      <div class="cap-api">GET …/notifications/pending · per-row POST …/{event_id}/acknowledge {suppress_wake:true} — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N4: Pending-wakes panel — mid optimistic ack (Android light, modal bottom sheet) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:90%; display:flex; flex-direction:column; padding-bottom:0;">
+          <div class="grabber"></div>
+          <div style="padding:6px 18px 0;">
+            <div class="panel-head">
+              <div class="ph-title">Pending wakes · <span class="cnt">2</span></div>
+              <div class="ph-sub">These will wake <b>Andrew</b> next time. Acknowledge to say you've seen it — the agent won't be woken for it.</div>
+            </div>
+          </div>
+          <div class="scroll" style="padding:0 18px; gap:0;">
+            <div class="nrow leaving">
+              <div class="ntype t-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 01-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1121 11.5z"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">Kedar</span><span class="kind">message</span><span class="t">acknowledged…</span></div>
+                <div class="nprev">"please review the plan when you get a sec"</div>
+              </div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-accent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 12a9 9 0 11-3-6.7M21 4v5h-5"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">System</span><span class="kind">loop closed</span><span class="t">8m</span></div>
+                <div class="nprev">"run finished · 0 open threads"</div>
+                <div class="nact"><span class="btn tonal sm">Acknowledge</span></div>
+              </div>
+            </div>
+            <div class="divlabel">Still needs an answer</div>
+            <div class="nrow">
+              <div class="ntype t-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 4h16v12H8l-4 4z"/></svg></div>
+              <div class="nbody">
+                <div class="nhead"><span class="who">Ethan</span><span class="kind">open task-request</span><span class="t">5m</span></div>
+                <div class="nprev">"review the notifications API shape"</div>
+                <div class="nact"><span class="dlchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Answer request</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="panel-foot">
+            <span class="btn primary block">Acknowledge all 1</span>
+          </div>
+        </div>
+        <div class="snackbar">Acknowledged — Andrew won't be woken for it.<span class="sb-act">Undo</span></div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N4 · Panel — mid optimistic Acknowledge <span class="plat">Android · light · bottom sheet</span></div>
+      <div class="cap-note">M3 <span class="mono">ModalBottomSheet</span> with drag handle. The tapped message row is animating out (<span class="mono">AnimatedVisibility</span> shrink) and the header count already ticked 3→2 — <b>optimistic</b>. A <span class="mono">Snackbar</span> confirms with an <b>Undo</b> (re-inserts + re-acks is idempotent, so it's safe). If the POST returns non-2xx the row slides back and the snackbar flips to "Couldn't acknowledge — retry" (see N14).</div>
+      <div class="cap-api">POST …/notifications/{event_id}/acknowledge {suppress_wake:true} — idempotent — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N5: Acknowledge-all confirm (iOS dark, confirmationDialog) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="action-sheet">
+          <div class="grp">
+            <div class="as-note">Acknowledge all 2 pending wakes?<br>Andrew won't be woken for any of them. The 2 items that still need an answer are left alone.</div>
+            <div class="as-btn bold">Acknowledge all 2</div>
+          </div>
+          <div class="grp"><div class="as-btn">Cancel</div></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N5 · Acknowledge-all confirm <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">iOS <span class="mono">confirmationDialog</span> (action sheet from the bottom). Bulk ack is the one multi-wake-suppressing moment, so it's confirm-gated (per-row ack is not). The count is the <b>ackable</b> total (2), matching exactly what the POST sends — scope-boundary rows are never bulk-acked, and the copy says so.</div>
+      <div class="cap-api">POST …/notifications/read {suppress_wake:true, through_ts, ack_event_ids:[…2 ids]} — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N6: Acknowledge-all confirm (Android dark, AlertDialog) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="dialog">
+          <div class="d-title">Acknowledge all 2?</div>
+          <div class="d-body">Andrew won't be woken for these 2 notifications. Items that still need an answer are left alone.</div>
+          <div class="d-actions">
+            <span class="textbtn" style="color:var(--muted);">Cancel</span>
+            <span class="textbtn">Acknowledge all</span>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N6 · Acknowledge-all confirm <span class="plat">Android · dark</span></div>
+      <div class="cap-note">M3 <span class="mono">AlertDialog</span> — the clearest platform split from N5's action sheet. Same honest copy: the number is the ackable count, and "items that still need an answer are left alone" tells the user the scope-boundary rows survive. Cancel dismisses with no request.</div>
+      <div class="cap-api">POST …/notifications/read {suppress_wake:true, through_ts, ack_event_ids} — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N7: Panel — partial-load guard (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:90%; display:flex; flex-direction:column; padding-bottom:0;">
+          <div class="grabber"></div>
+          <div style="padding:6px 18px 0;">
+            <div class="panel-head">
+              <div class="ph-title">Pending wakes · <span class="cnt">64</span></div>
+              <div class="ph-sub">Showing the newest 20. Scroll to load the rest before acknowledging everything.</div>
+            </div>
+          </div>
+          <div class="scroll" style="padding:0 18px; gap:0;">
+            <div class="nrow">
+              <div class="ntype t-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 01-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1121 11.5z"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">Kedar</span><span class="kind">message</span><span class="t">2m</span></div><div class="nprev">"please review the plan when you get a sec"</div><div class="nact"><span class="btn tonal sm">Acknowledge</span></div></div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-accent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 12a9 9 0 11-3-6.7M21 4v5h-5"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">System</span><span class="kind">loop closed</span><span class="t">8m</span></div><div class="nprev">"run finished · 0 open threads"</div><div class="nact"><span class="btn tonal sm">Acknowledge</span></div></div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 01-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1121 11.5z"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">Kedar</span><span class="kind">message</span><span class="t">31m</span></div><div class="nprev">"one more thing on the digest…"</div><div class="nact"><span class="btn tonal sm">Acknowledge</span></div></div>
+            </div>
+            <div style="text-align:center; padding:12px; font-size:12.5px; color:var(--muted);">Load older ↓</div>
+          </div>
+          <div class="panel-foot">
+            <span class="btn primary block disabled">Acknowledge all</span>
+            <div class="foot-note">Load all 64 to acknowledge everything — this avoids silently skipping an older item you haven't seen.</div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N7 · Panel — partial-load guard <span class="plat">Android · light</span></div>
+      <div class="cap-note">When more rows are pending than were loaded (64 vs 20), <b>Acknowledge all</b> is <b>disabled</b> — bulk ack sends the loaded rows' explicit <span class="mono">event_id</span>s, so acking "all" on a partial page could skip an unseen older row. Mirrors the portal's "hide Acknowledge all when partially loaded" rule; per-row Acknowledge stays available. Loading the full set re-enables it.</div>
+      <div class="cap-api">bulk needs a full page: loaded_rows == total_pending; else per-row only — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N8: Agent detail — Wakes section, snooze idle (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Agents</span></span>
+          <div class="title" style="text-align:center;">Agent</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="rowline"><div class="avatar lg">R</div><div class="grow"><div class="c-title" style="font-size:18px;">Reporter</div><div class="c-sub">Digest &amp; summaries</div></div><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+          </div>
+          <div class="section-h">Wakes</div>
+          <div class="card" style="padding:0;">
+            <div class="wkrow">
+              <div class="icontile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></div>
+              <div class="grow"><div class="wl-title">Pending wakes</div><div class="wl-sub">1 waiting to wake Reporter</div></div>
+              <span class="capsule-badge">1</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="wkrow">
+              <div class="icontile acc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+              <div class="grow"><div class="wl-title">Checks in every hour</div><div class="wl-sub">Next scheduled check-in ~4:12 PM</div></div>
+              <span class="btn tonal sm">Snooze</span>
+            </div>
+          </div>
+          <div class="snz-note">Snooze pauses only the scheduled check-in. Messages, ready tasks and open requests still wake Reporter.</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N8 · Agent detail — Wakes, snooze idle <span class="plat">iOS · light</span></div>
+      <div class="cap-note">A <b>Wakes</b> section high in agent detail: a <b>Pending wakes</b> row (opens the N3 panel; trailing count capsule) and the <b>Scheduled wake</b> row — rendered <b>only</b> because this agent has <span class="mono">auto_wake_interval_secs</span> set. Idle state shows the cadence + next check-in and a <b>Snooze</b> button. The honest footnote states snooze pauses only the clock reason. Grouped-inset <span class="mono">LabeledContent</span> rows.</div>
+      <div class="cap-api">auto_wake_interval_secs gates the Scheduled-wake row (existing field); snooze_until = idle here — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N9: Snooze picker (Android dark, bottom sheet) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="sh-title">Snooze scheduled wake</div>
+          <div class="sh-sub" style="margin-bottom:6px;">Pause only Reporter's hourly check-in. Real work still wakes it.</div>
+          <div class="opt-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>For 1 hour</div>
+          <div class="opt-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>For 4 hours</div>
+          <div class="opt-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3a9 9 0 109 9h-2a7 7 0 11-7-7z"/><path d="M12 8v4l3 2"/></svg>Until 9 AM tomorrow</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N9 · Snooze picker <span class="plat">Android · dark · bottom sheet</span></div>
+      <div class="cap-note">M3 <span class="mono">ModalBottomSheet</span> with three choices. <b>1 hour</b> / <b>4 hours</b> send <span class="mono">snooze_seconds</span> (3600 / 14400); <b>Until 9 AM tomorrow</b> sends a client-computed <span class="mono">until_ts</span> — exactly one field per call (the server 422s if both). iOS renders the same set as a <span class="mono">confirmationDialog</span> / <span class="mono">Menu</span>. When a snooze is already active, a destructive <b>Clear snooze</b> row joins the list.</div>
+      <div class="cap-api">POST …/wake/snooze {snooze_seconds:3600 | 14400} or {until_ts} — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N10: Agent detail — snooze active (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar">
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Reporter</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="rowline"><div class="avatar lg">R</div><div class="grow"><div class="c-title" style="font-size:18px; display:flex; align-items:center; gap:8px;">Reporter <span class="zzchip"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M4 6h16v2l-11 8h11v2H4v-2l11-8H4z"/></svg>snoozed</span></div><div class="c-sub">Digest &amp; summaries</div></div><span class="pill s-idle"><span class="dot"></span>idle</span></div>
+          </div>
+          <div class="section-h">Wakes</div>
+          <div class="card" style="padding:0;">
+            <div class="wkrow">
+              <div class="icontile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></div>
+              <div class="grow"><div class="wl-title">Pending wakes</div><div class="wl-sub">1 waiting to wake Reporter</div></div>
+              <span class="capsule-badge">1</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 1l5 6-5 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="wkrow">
+              <div class="icontile vio"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2l-11 8h11v2H4v-2l11-8H4z"/></svg></div>
+              <div class="grow"><div class="wl-title">Snoozed · wakes again 4:12 PM</div><div class="wl-sub">in 58m · was: checks in every hour</div></div>
+              <span class="btn neutral sm">Clear</span>
+            </div>
+          </div>
+          <div class="snz-note">Snooze pauses only the scheduled check-in. Messages, ready tasks and open requests still wake Reporter. Clears itself at 4:12 PM.</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N10 · Agent detail — snooze active <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Active snooze reads straight off the snapshot's <span class="mono">snooze_until</span> — "wakes again 4:12 PM" (absolute + relative). <b>Clear</b> sends <span class="mono">snooze_seconds:0</span> → <span class="mono">snooze_until:null</span> → reverts to the N8 idle row. Expiry is <b>silent</b>: past 4:12 PM the next snapshot returns <span class="mono">snoozed=false</span> and the row reverts with no user action and no write, so the copy never promises a wake that's already gone.</div>
+      <div class="cap-api">state from snooze_until (client computes snoozed); Clear = POST …/wake/snooze {snooze_seconds:0} — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N11: Panel — empty (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:70%; display:flex; flex-direction:column;">
+          <div class="grabber"></div>
+          <div class="panel-head" style="padding-left:2px;">
+            <div class="ph-title">Pending wakes · <span class="cnt" style="color:var(--muted)">0</span></div>
+          </div>
+          <div class="state" style="flex:1;">
+            <div class="glyph" style="color:var(--ok); background:var(--ok-soft); border-color:var(--ok-line);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg></div>
+            <div class="st-title">All caught up</div>
+            <div class="st-sub">Nothing pending. Andrew will only wake for real work — messages, ready tasks and open requests.</div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N11 · Panel — empty ("All caught up") <span class="plat">Android · light</span></div>
+      <div class="cap-note">When <span class="mono">total_pending == 0</span> the panel shows the flow-04 <span class="mono">state</span> component with a green check — no bell badge on the roster in this state. The copy reassures that acknowledging never mutes real work; it only vetoes event-driven wakes.</div>
+      <div class="cap-api">GET …/notifications/pending → [] · total_pending 0 — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N12: Panel — loading skeleton (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:80%; display:flex; flex-direction:column;">
+          <div class="grabber"></div>
+          <div class="panel-head" style="padding-left:2px;">
+            <div class="ph-title">Pending wakes</div>
+            <div class="ph-sub">Loading…</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:12px; padding:6px 2px;">
+            <div class="skel card-h74"></div>
+            <div class="skel card-h74"></div>
+            <div class="skel card-h74"></div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N12 · Panel — loading <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Three shimmer rows (<span class="mono">.skel.card-h74</span>) while the first page of the pending feed loads — the same skeleton the app uses everywhere, so nothing new to build. The footer (Acknowledge all) stays hidden until the count is known.</div>
+      <div class="cap-api">GET …/notifications/pending (in flight) — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N13: Panel — laptop unreachable (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="sheet" style="max-height:88%; display:flex; flex-direction:column; padding-bottom:0;">
+          <div class="grabber"></div>
+          <div style="padding:4px 16px 0;">
+            <div class="banner danger" style="margin-bottom:10px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+              Can't reach your laptop
+              <span class="b-act">Retry</span>
+            </div>
+            <div class="panel-head" style="padding-left:2px;">
+              <div class="ph-title" style="opacity:.55;">Pending wakes · 3</div>
+              <div class="ph-sub">Showing the last known list. Acknowledge is paused until your laptop is back.</div>
+            </div>
+          </div>
+          <div class="scroll" style="padding:0 18px; gap:0; opacity:.5;">
+            <div class="nrow">
+              <div class="ntype t-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 01-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1121 11.5z"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">Kedar</span><span class="kind">message</span><span class="t">2m</span></div><div class="nprev">"please review the plan when you get a sec"</div><div class="nact"><span class="btn tonal sm disabled">Acknowledge</span></div></div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-accent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 12a9 9 0 11-3-6.7M21 4v5h-5"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">System</span><span class="kind">loop closed</span><span class="t">8m</span></div><div class="nprev">"run finished · 0 open threads"</div><div class="nact"><span class="btn tonal sm disabled">Acknowledge</span></div></div>
+            </div>
+          </div>
+          <div class="panel-foot">
+            <span class="btn primary block disabled">Acknowledge all</span>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N13 · Panel — laptop unreachable <span class="plat">Android · dark</span></div>
+      <div class="cap-note">The shared flow-04 connectivity model: a pinned danger banner + <b>Retry</b>, the last-known feed dimmed, and <b>every Acknowledge disabled</b> — a veto only sticks after a 2xx, never on the assumption the laptop is up. Snooze/Clear are disabled the same way in detail. This is a transport failure, not a per-feature error, so the treatment is inherited, not reinvented.</div>
+      <div class="cap-api">no reachable host → actions disabled; reuses GH #30 unreachable model — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ N14: Per-row ack rollback (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="scrim"></div>
+        <div class="toast" style="background:var(--danger-soft); border:1px solid var(--danger-line);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--danger)"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+          <span style="color:var(--danger); font-weight:650;">Couldn't acknowledge — tap to retry</span>
+        </div>
+        <div class="sheet" style="max-height:80%; display:flex; flex-direction:column; padding-bottom:0;">
+          <div class="grabber"></div>
+          <div style="padding:6px 18px 0;">
+            <div class="panel-head"><div class="ph-title">Pending wakes · <span class="cnt">3</span></div></div>
+          </div>
+          <div class="scroll" style="padding:0 18px; gap:0;">
+            <div class="nrow" style="border:1px solid var(--danger-line); border-radius:12px; background:var(--danger-soft); padding:11px;">
+              <div class="ntype t-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 01-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1121 11.5z"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">Kedar</span><span class="kind">message</span><span class="t">2m</span></div><div class="nprev">"please review the plan when you get a sec"</div><div class="nact"><span class="btn danger-tonal sm">Retry</span></div></div>
+            </div>
+            <div class="nrow">
+              <div class="ntype t-accent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 12a9 9 0 11-3-6.7M21 4v5h-5"/></svg></div>
+              <div class="nbody"><div class="nhead"><span class="who">System</span><span class="kind">loop closed</span><span class="t">8m</span></div><div class="nprev">"run finished · 0 open threads"</div><div class="nact"><span class="btn tonal sm">Acknowledge</span></div></div>
+            </div>
+          </div>
+          <div class="panel-foot"><span class="btn primary block">Acknowledge all 2</span></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">N14 · Per-row Acknowledge — rollback <span class="plat">iOS · light</span></div>
+      <div class="cap-note">The optimistic path's failure case: the ack POST returned non-2xx, so the removed row <b>slid back in</b>, its count restored, the row flagged in danger, and a top toast offers <b>retry</b>. Because acknowledge is idempotent, retry is always safe — no double-suppression risk. Android shows the equivalent via a <span class="mono">Snackbar</span> action (N4).</div>
+      <div class="cap-api">non-2xx from POST …/acknowledge → restore row + retry (idempotent) — <b>PR #106</b></div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>

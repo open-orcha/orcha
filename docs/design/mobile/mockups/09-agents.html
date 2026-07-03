@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 09 Agents</title>
+<link rel="stylesheet" href="mobile.css">
+<style>
+  /* small local helpers for this gallery only */
+  .taskline { font-size: 13px; color: var(--text-2); display: flex; gap: 7px; align-items: center; }
+  .taskline svg { width: 13px; height: 13px; flex: none; color: var(--accent); }
+  .hb { font-size: 11px; color: var(--faint); margin-left: auto; font-family: "JetBrains Mono", monospace; }
+  .ctl-row { display: flex; align-items: center; gap: 10px; padding: 11px 0; }
+  .ctl-row .lbl { font-size: 14.5px; font-weight: 600; }
+  .ctl-row .desc { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .toggle { width: 46px; height: 28px; border-radius: 14px; background: var(--accent); position: relative; flex: none; }
+  .toggle::after { content: ""; position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .toggle.off { background: var(--border-2); }
+  .toggle.off::after { right: auto; left: 2px; }
+  .radio { width: 22px; height: 22px; flex: none; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>09 — Agents</h1>
+  <p>The Agents tab roster and the agent detail with human-authority controls (model, auto-wake,
+     converse, retire). Spec: <span class="mono">flows/09-agents.md</span>. Detail covers everything
+     the portal agents page shows today (portal-parity table in the spec §2). Converse is flow 10;
+     the run-log screen is flow 06. Frames mix dark/light and both platforms.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ A1: Agents list, Android dark ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title">openorcha</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="18.5" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="section-h" style="padding-top:2px;">AI agents <span class="cnt">· 5</span></div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">D</div>
+              <div class="grow">
+                <div class="c-title">Dana</div>
+                <div class="c-sub" style="font-size:12.5px;">Mobile Product Designer</div>
+              </div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+            <div class="taskline">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 7l5 5-5 5"/></svg>
+              Mobile app design (GH #30)
+            </div>
+            <div class="c-meta"><span class="tag model">claude-fable-5</span><span class="hb">2m ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">C</div>
+              <div class="grow">
+                <div class="c-title">CodeCleanupAgent</div>
+                <div class="c-sub" style="font-size:12.5px;">Team lead · plans &amp; PRs</div>
+              </div>
+              <span class="pill s-info"><span class="dot"></span>waiting</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-opus-4-8</span><span class="hb">18m ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">E</div>
+              <div class="grow">
+                <div class="c-title">Ethan</div>
+                <div class="c-sub" style="font-size:12.5px;">iOS Developer</div>
+              </div>
+              <span class="pill s-violet"><span class="dot"></span>needs human</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-sonnet-5</span><span class="hb">1h ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">C</div>
+              <div class="grow">
+                <div class="c-title">Code Reviewer</div>
+                <div class="c-sub" style="font-size:12.5px;">Reviews plans and PRs</div>
+              </div>
+              <span class="pill s-warn"><span class="dot"></span>blocked</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-opus-4-8</span><span class="hb">3h ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">A</div>
+              <div class="grow">
+                <div class="c-title">Andrew</div>
+                <div class="c-sub" style="font-size:12.5px;">Android Developer</div>
+              </div>
+              <span class="pill s-idle"><span class="dot"></span>idle</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-sonnet-5</span><span class="hb">5h ago</span></div>
+          </div>
+
+          <div class="section-h">Humans <span class="cnt">· 1</span></div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar human">K</div>
+              <div class="grow">
+                <div class="c-title">kedar</div>
+                <div class="c-sub" style="font-size:12.5px;">Human authority</div>
+              </div>
+              <span class="tag">you</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-7 8 7v8a1.5 1.5 0 01-1.5 1.5H14v-6h-4v6H5.5A1.5 1.5 0 014 19z"/></svg></span>Home<span class="bdg">3</span></span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12l2.5 2.5 5-5.5"/></svg></span>Tasks</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9h12l-3-3M19 15H7l3 3"/></svg></span>Requests<span class="bdg">2</span></span>
+          <span class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3"/><circle cx="16.5" cy="9.5" r="2.2"/><path d="M3.5 18.5c.5-3 2.7-4.6 5.5-4.6s5 1.6 5.5 4.6M15.8 14.6c2 .3 3.6 1.7 4.1 3.9"/></svg></span>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A1 · Agents list <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Agents tab root. Working agents pulse and name their current task; others show pill + model + heartbeat only. Sort: working → attention states → idle; humans in their own section (round violet avatar). SSE flips pills live without a refetch.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(agents slice)</b> · SSE GET /api/containers/{cid}/events</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I1: Agents list, iOS light ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar large" style="padding-bottom:4px;">
+          <div class="row"><span style="font-size:12px; color:var(--muted); font-weight:650;">openorcha</span><span class="spacer"></span>
+            <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></svg></button></div>
+          <div class="big-title">Agents</div>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="section-h" style="padding-top:0;">AI agents <span class="cnt">· 5</span></div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">D</div>
+              <div class="grow">
+                <div class="c-title">Dana</div>
+                <div class="c-sub" style="font-size:12.5px;">Mobile Product Designer</div>
+              </div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+            <div class="taskline">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 7l5 5-5 5"/></svg>
+              Mobile app design (GH #30)
+            </div>
+            <div class="c-meta"><span class="tag model">claude-fable-5</span><span class="hb">2m ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">E</div>
+              <div class="grow">
+                <div class="c-title">Ethan</div>
+                <div class="c-sub" style="font-size:12.5px;">iOS Developer</div>
+              </div>
+              <span class="pill s-violet"><span class="dot"></span>needs human</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-sonnet-5</span><span class="hb">1h ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">C</div>
+              <div class="grow">
+                <div class="c-title">Code Reviewer</div>
+                <div class="c-sub" style="font-size:12.5px;">Reviews plans and PRs</div>
+              </div>
+              <span class="pill s-warn"><span class="dot"></span>blocked</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-opus-4-8</span><span class="hb">3h ago</span></div>
+          </div>
+
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar">A</div>
+              <div class="grow">
+                <div class="c-title">Andrew</div>
+                <div class="c-sub" style="font-size:12.5px;">Android Developer</div>
+              </div>
+              <span class="pill s-idle"><span class="dot"></span>idle</span>
+            </div>
+            <div class="c-meta"><span class="tag model">claude-sonnet-5</span><span class="hb">5h ago</span></div>
+          </div>
+
+          <div class="section-h">Humans <span class="cnt">· 1</span></div>
+          <div class="card tap">
+            <div class="rowline">
+              <div class="avatar human">K</div>
+              <div class="grow">
+                <div class="c-title">kedar</div>
+                <div class="c-sub" style="font-size:12.5px;">Human authority</div>
+              </div>
+              <span class="tag">you</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-7 8 7v8a1.5 1.5 0 01-1.5 1.5H14v-6h-4v6H5.5A1.5 1.5 0 014 19z"/></svg>Home<span class="bdg">3</span></span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12l2.5 2.5 5-5.5"/></svg>Tasks</span>
+          <span class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9h12l-3-3M19 15H7l3 3"/></svg>Requests<span class="bdg">2</span></span>
+          <span class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3"/><circle cx="16.5" cy="9.5" r="2.2"/><path d="M3.5 18.5c.5-3 2.7-4.6 5.5-4.6s5 1.6 5.5 4.6M15.8 14.6c2 .3 3.6 1.7 4.1 3.9"/></svg>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I1 · Agents list <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Same card anatomy, large-title NavigationStack + TabView. Pill colors and status words are identical to Android and the portal — status is the interface (doc 01 §1). Tap pushes Agent detail; tab re-tap pops to root.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(agents slice)</b> · SSE GET /api/containers/{cid}/events</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I2: Agent detail, working (Dana), iOS dark ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Agents</span></span>
+          <div class="title" style="text-align:center;">Dana</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="padding-top:2px;">
+          <div class="card">
+            <div class="rowline">
+              <div class="avatar lg">D</div>
+              <div class="grow">
+                <div style="font-size:19px; font-weight:800; letter-spacing:-.3px;">Dana</div>
+                <div class="c-sub" style="font-size:13px;">Mobile Product Designer</div>
+              </div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+            <div class="rowline" style="padding-top:2px;">
+              <span class="tag model">claude-fable-5</span>
+              <span class="tag">AI</span>
+              <span class="hb">heartbeat 2m ago</span>
+            </div>
+          </div>
+
+          <button class="btn primary block">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-8 8c-1.6 0-3.1-.4-4.3-1.2L4 20l1.3-3.6A8 8 0 1120 12z"/></svg>
+            Converse with Dana
+          </button>
+
+          <div class="section-h">Now</div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="rowline" style="padding:10px 0;">
+              <div class="grow">
+                <div style="font-size:14.5px; font-weight:600;">Mobile app design (GH #30)</div>
+                <div style="font-size:12px; color:var(--muted); margin-top:1px;">Task · assigned 4d ago</div>
+              </div>
+              <span class="pill s-accent"><span class="dot"></span>in progress</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="rowline" style="padding:10px 0;">
+              <div class="grow">
+                <div style="font-size:14.5px; font-weight:600;">Resident run · streaming</div>
+                <div class="mono" style="font-size:11px; color:var(--muted); margin-top:2px;">started 21:12 · 14m</div>
+              </div>
+              <span class="conn"><span class="dot"></span>live</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+
+          <div class="section-h">Controls</div>
+          <div class="card" style="gap:0; padding:2px 14px;">
+            <div class="ctl-row">
+              <div class="grow"><div class="lbl">Model</div><div class="desc">Takes effect on next wake</div></div>
+              <span class="tag model">claude-fable-5</span>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="ctl-row">
+              <div class="grow"><div class="lbl">Auto-wake</div><div class="desc">Every 15m · next wake 21:45</div></div>
+              <div class="toggle"></div>
+            </div>
+            <div class="hr"></div>
+            <div class="ctl-row">
+              <div class="grow"><div class="lbl">Wake (daemon)</div><div class="desc">May wake on pending work</div></div>
+              <span class="pill s-ok"><span class="dot"></span>enabled</span>
+            </div>
+          </div>
+
+          <div class="section-h">Persona</div>
+          <div class="card">
+            <div class="c-sub" style="font-size:13px; line-height:1.5;">You are Dana, the Mobile Product Designer. You own the design language for the Orcha companion apps and produce specs the iOS and Android…</div>
+            <span class="textbtn" style="font-size:13px;">Show full charter</span>
+          </div>
+
+          <div class="section-h">Requests</div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="rowline" style="padding:10px 0;">
+              <div class="grow">
+                <div style="font-size:14.5px; font-weight:600;">Incoming · 2 open</div>
+                <div style="font-size:12px; color:var(--muted); margin-top:1px;">Code Reviewer: "Plan round 2 verdict…"</div>
+              </div>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+            <div class="hr"></div>
+            <div class="rowline" style="padding:10px 0;">
+              <div class="grow"><div style="font-size:14.5px; font-weight:600;">Outgoing · 1 answered</div></div>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+
+          <div class="section-h">Recent runs</div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="rowline" style="padding:10px 0;">
+              <span class="pill s-ok"><span class="dot"></span>finished</span>
+              <div class="grow mono" style="font-size:11px; color:var(--muted);">headless · 20:41 → 20:58</div>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I2 · Agent detail — working <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">Converse is the one promoted action. "Now" shows the live task + run (run row → flow 06 log). Below the fold: full run history and token/turn usage tiles. Overflow menu: Rename, Details (agent id/origin), Retire. Phone acts as the paired human, so controls are always enabled while reachable.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} · GET /api/agents/{aid}/persona · GET /api/agents/{aid}/inbox · /outbox<br>GET /api/agents/{aid}/runs · /resident-runs · GET /api/containers/{cid}/token-usage<br><b>run log → flow 06:</b> SSE GET /api/agents/{aid}/runs/{run_id}/stream</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A2: model picker sheet, Android dark ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="scroll" style="opacity:.35; padding-top:0;">
+          <div class="appbar" style="padding-left:0; padding-right:0;">
+            <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+            <div class="title">Dana</div>
+          </div>
+          <div class="card">
+            <div class="rowline">
+              <div class="avatar lg">D</div>
+              <div class="grow">
+                <div style="font-size:19px; font-weight:800;">Dana</div>
+                <div class="c-sub" style="font-size:13px;">Mobile Product Designer</div>
+              </div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+          </div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h96"></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="sh-title">Model</div>
+          <div class="sh-sub">Which model Dana wakes as — applies on their next wake, not the run in flight.</div>
+          <div class="section-h" style="padding-top:0;">Claude</div>
+          <div class="rowline" style="padding:7px 2px;">
+            <svg class="radio" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="var(--border-2)" stroke-width="1.6"/></svg>
+            <div class="grow"><div style="font-size:15px; font-weight:600;">Fable 5</div><div class="mono" style="font-size:11px; color:var(--muted);">claude-fable-5</div></div>
+            <span class="tag">current</span>
+          </div>
+          <div class="rowline" style="padding:7px 2px;">
+            <svg class="radio" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="var(--accent)" stroke-width="1.8"/><circle cx="11" cy="11" r="4.6" fill="var(--accent)"/></svg>
+            <div class="grow"><div style="font-size:15px; font-weight:600; color:var(--accent);">Opus 4.8</div><div class="mono" style="font-size:11px; color:var(--muted);">claude-opus-4-8</div></div>
+          </div>
+          <div class="rowline" style="padding:7px 2px;">
+            <svg class="radio" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="var(--border-2)" stroke-width="1.6"/></svg>
+            <div class="grow"><div style="font-size:15px; font-weight:600;">Sonnet 5</div><div class="mono" style="font-size:11px; color:var(--muted);">claude-sonnet-5</div></div>
+          </div>
+          <div class="rowline" style="padding:7px 2px;">
+            <svg class="radio" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="var(--border-2)" stroke-width="1.6"/></svg>
+            <div class="grow"><div style="font-size:15px; font-weight:600;">Haiku 4.5</div><div class="mono" style="font-size:11px; color:var(--muted);">claude-haiku-4-5</div></div>
+          </div>
+          <div class="section-h" style="padding-top:4px;">Codex</div>
+          <div class="rowline" style="padding:7px 2px;">
+            <svg class="radio" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="var(--border-2)" stroke-width="1.6"/></svg>
+            <div class="grow"><div style="font-size:15px; font-weight:600;">GPT-5.5</div><div class="mono" style="font-size:11px; color:var(--muted);">gpt-5.5</div></div>
+          </div>
+          <div class="rowline" style="padding:7px 2px;">
+            <svg class="radio" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="var(--border-2)" stroke-width="1.6"/></svg>
+            <div class="grow"><div style="font-size:15px; font-weight:600;">GPT-5.4 mini</div><div class="mono" style="font-size:11px; color:var(--muted);">gpt-5.4-mini</div></div>
+          </div>
+          <button class="btn primary block" style="margin-top:6px;">Change to Opus 4.8</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A2 · Model picker <span class="plat">Android</span></div>
+      <div class="cap-note">Modal bottom sheet from the Model control row. Options come from GET /api/models grouped by runtime; the confirm button stays disabled until a different model is picked (confirm-on-change), then names the choice. Failure keeps the sheet open + snackbar. iOS: same list in a medium-detent sheet.</div>
+      <div class="cap-api">GET /api/models · POST /api/agents/{aid}/model <b>{model}</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A3: terminated agent detail, Android light ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m6-7l-7 7 7 7"/></svg></span>
+          <div class="title">MarketingMike</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="18.5" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="padding-top:2px;">
+          <div class="banner danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
+            Retired 3d ago — this agent no longer wakes
+          </div>
+          <div class="card">
+            <div class="rowline" style="opacity:.55;">
+              <div class="avatar lg">M</div>
+              <div class="grow">
+                <div style="font-size:19px; font-weight:800; letter-spacing:-.3px;">MarketingMike</div>
+                <div class="c-sub" style="font-size:13px;">Marketing Lead</div>
+              </div>
+              <span class="pill s-danger"><span class="dot"></span>terminated</span>
+            </div>
+            <div class="rowline" style="padding-top:2px; opacity:.55;">
+              <span class="tag model">claude-sonnet-5</span>
+              <span class="tag">AI</span>
+              <span class="hb">last active 3d ago</span>
+            </div>
+          </div>
+
+          <button class="btn primary block disabled">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-8 8c-1.6 0-3.1-.4-4.3-1.2L4 20l1.3-3.6A8 8 0 1120 12z"/></svg>
+            Converse with MarketingMike
+          </button>
+
+          <div class="section-h">Now</div>
+          <div class="card"><div class="c-sub" style="font-size:13px;">Nothing running — retired agents never wake.</div></div>
+
+          <div class="section-h">Controls</div>
+          <div class="card" style="gap:0; padding:2px 14px; opacity:.45;">
+            <div class="ctl-row">
+              <div class="grow"><div class="lbl">Model</div><div class="desc">Unavailable for retired agents</div></div>
+              <span class="tag model">claude-sonnet-5</span>
+            </div>
+            <div class="hr"></div>
+            <div class="ctl-row">
+              <div class="grow"><div class="lbl">Auto-wake</div><div class="desc">Off</div></div>
+              <div class="toggle off"></div>
+            </div>
+            <div class="hr"></div>
+            <div class="ctl-row">
+              <div class="grow"><div class="lbl">Wake (daemon)</div><div class="desc">Never wakes</div></div>
+              <span class="pill s-idle"><span class="dot"></span>disabled</span>
+            </div>
+          </div>
+
+          <div class="section-h">Persona</div>
+          <div class="card">
+            <div class="c-sub" style="font-size:13px; line-height:1.5;">You are MarketingMike, the Marketing Lead. You own launch messaging, release notes and the public voice of…</div>
+            <span class="textbtn" style="font-size:13px;">Show full charter</span>
+          </div>
+
+          <div class="section-h">Recent runs</div>
+          <div class="card" style="gap:0; padding:4px 14px;">
+            <div class="rowline" style="padding:10px 0;">
+              <span class="pill s-ok"><span class="dot"></span>finished</span>
+              <div class="grow mono" style="font-size:11px; color:var(--muted);">headless · Jun 28 · 14:02 → 14:19</div>
+              <span class="chev"><svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 1l6 6-6 6"/></svg></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A3 · Agent detail — terminated <span class="plat">Android · light</span></div>
+      <div class="cap-note">Retirement freezes, never erases: header grays out with the s-danger pill, Converse and every control disable, and Retire disappears from the overflow — but persona, requests and run history stay readable. In the list this card sinks to the bottom, grayed.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(status=terminated → controls disabled client-side)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ I3: retire confirm, iOS dark ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="7" rx=".8"/><rect x="10" y="2" width="3" height="10" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="scroll" style="opacity:.35; padding-top:2px;">
+          <div class="appbar" style="padding-left:0; padding-right:0;">
+            <span class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Agents</span></span>
+            <div class="title" style="text-align:center;">Dana</div>
+            <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></svg></button>
+          </div>
+          <div class="card">
+            <div class="rowline">
+              <div class="avatar lg">D</div>
+              <div class="grow">
+                <div style="font-size:19px; font-weight:800;">Dana</div>
+                <div class="c-sub" style="font-size:13px;">Mobile Product Designer</div>
+              </div>
+              <span class="pill s-accent pulse"><span class="dot"></span>working</span>
+            </div>
+          </div>
+          <div class="skel card-h74"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel card-h96"></div>
+        </div>
+        <div class="scrim"></div>
+        <div class="action-sheet">
+          <div class="grp">
+            <div class="as-note">Retire Dana — they stop waking. Their tasks stay assigned and their history stays visible. You can't undo this from the app.</div>
+            <div class="as-btn destructive bold">Retire agent</div>
+          </div>
+          <div class="grp"><div class="as-btn bold">Cancel</div></div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">I3 · Retire — destructive confirm <span class="plat">iOS</span></div>
+      <div class="cap-note">Step 2 of the double confirm: step 1 is the "Retire agent…" item buried at the bottom of the overflow menu — never a visible button. confirmationDialog idiom with destructive role; Android uses an M3 AlertDialog. On confirm → pop to list where the agent renders terminated (A3).</div>
+      <div class="cap-api">POST /api/agents/{aid}/retire</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ A4: list loading skeleton, Android dark ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons">
+        <svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span>
+      </div>
+      <div class="screen">
+        <div class="appbar">
+          <div class="title">openorcha</div>
+          <button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="18.5" r="1.8"/></svg></button>
+        </div>
+        <div class="scroll" style="padding-top:0;">
+          <div class="skel line" style="width:110px; margin:8px 2px 2px;"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel card-h96"></div>
+          <div class="skel line" style="width:80px; margin:10px 2px 2px;"></div>
+          <div class="skel card-h74"></div>
+        </div>
+        <div class="tabbar">
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-7 8 7v8a1.5 1.5 0 01-1.5 1.5H14v-6h-4v6H5.5A1.5 1.5 0 014 19z"/></svg></span>Home</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12l2.5 2.5 5-5.5"/></svg></span>Tasks</span>
+          <span class="tab"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9h12l-3-3M19 15H7l3 3"/></svg></span>Requests</span>
+          <span class="tab active"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3"/><circle cx="16.5" cy="9.5" r="2.2"/><path d="M3.5 18.5c.5-3 2.7-4.6 5.5-4.6s5 1.6 5.5 4.6M15.8 14.6c2 .3 3.6 1.7 4.1 3.9"/></svg></span>Agents</span>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div>
+    <figcaption>
+      <div class="cap-title">A4 · List loading skeleton <span class="plat">Android · dark</span></div>
+      <div class="cap-note">First snapshot in flight: shimmer placeholders mirror the real layout (section header, 4 agent cards, humans). Tab bar stays interactive. If the fetch fails → the container-unreachable state from flow 04; badge counts appear only once the snapshot lands.</div>
+      <div class="cap-api">GET /api/snapshot/{cid} <b>(pending)</b></div>
+    </figcaption>
+  </figure>
+
+</div>
+</body>
+</html>
