@@ -302,13 +302,13 @@
             <span class="btn primary block">Acknowledge all 3</span>
           </div>
         </div>
-        <div class="snackbar">Acknowledged — Andrew won't be woken for it.<span class="sb-act">Undo</span></div>
+        <div class="snackbar">Acknowledged — Andrew won't be woken for it.</div>
       </div>
       <div class="homebar"></div>
     </div>
     <figcaption>
       <div class="cap-title">N4 · Panel — mid optimistic Acknowledge <span class="plat">Android · light · bottom sheet</span></div>
-      <div class="cap-note">M3 <span class="mono">ModalBottomSheet</span> with drag handle. The tapped message row is animating out (<span class="mono">AnimatedVisibility</span> shrink) and the header count already ticked 4→3 — <b>optimistic</b>. A <span class="mono">Snackbar</span> confirms with an <b>Undo</b> (re-inserts + re-acks is idempotent, so it's safe). If the POST returns non-2xx the row slides back and the snackbar flips to "Couldn't acknowledge — retry" (see N14).</div>
+      <div class="cap-note">M3 <span class="mono">ModalBottomSheet</span> with drag handle. The tapped message row is animating out (<span class="mono">AnimatedVisibility</span> shrink) and the header count already ticked 4→3 — <b>optimistic</b>, the <span class="mono">acknowledge</span> POST fires immediately. A <span class="mono">Snackbar</span> confirms; there is <b>no Undo</b> — PR #106 has no un-acknowledge endpoint, and the ack is already committed, so an Undo would be dishonest. If the POST returns non-2xx the row slides back and the snackbar flips to "Couldn't acknowledge — retry" (idempotent, so retry is safe; see N14).</div>
       <div class="cap-api">POST …/notifications/{event_id}/acknowledge {suppress_wake:true} — idempotent — <b>PR #106</b></div>
     </figcaption>
   </figure>

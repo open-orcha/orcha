@@ -123,8 +123,12 @@ feed and be dismissed with a swipe on both platforms.
   - `task_assigned` / `task_ready` → **Unassign →** — routes to the task detail (flow 05) assignee
     control.
   - These are **still acknowledged** by Acknowledge-all (parity); the ack is accepted, the *wake* just
-    persists while the work exists — so the panel re-fetches after a bulk ack and any still-open
-    stateful row re-appears truthfully (dimmed `read=true`).
+    persists while the work exists. Once acked, the row **leaves the pending panel for good** — the
+    pending feed's predicate is `human_acked_at IS NULL`, so an acked row never returns here even when
+    its work is still open (dimmed `read=true` rows are the *full* feed's behavior, `GET
+    …/notifications`, not this pending panel). The honesty is carried by the **ack-time hint** (above),
+    not by a re-appearing row; the still-open work stays visible on its own list (Requests / Tasks) via
+    the deep-link, which is where it actually gets resolved.
 - **Acknowledge all** (footer, primary-tonal, full width):
   - Sends `POST …/notifications/read {suppress_wake:true, through_ts:<max loaded ts>,
     ack_event_ids:[<ALL loaded event_ids>]}` — every loaded row, all kinds (portal parity).
@@ -134,8 +138,10 @@ feed and be dismissed with a swipe on both platforms.
     batch) under one confirm + a progress indicator; a failed batch **halts and re-fetches** (idempotent,
     so already-acked rows stay acked and aren't re-sent).
   - **Confirm-gated** (see §4). On success the panel clears the acked rows optimistically, then
-    **re-fetches** the pending feed so any row that arrived after load, or any still-open stateful row,
-    re-appears truthfully.
+    **re-fetches** the pending feed so any row that **arrived after load** re-appears. Acked rows do
+    **not** come back — the pending feed is `human_acked_at IS NULL` — so a still-open stateful row is
+    gone from this panel; its ack-time hint (not a re-appearing row) carried the honesty, and the open
+    work remains on its own Requests / Tasks list via the deep-link.
   - **Partial-load guard:** the button is offered **only when the loaded page is the entire pending
     set** (`loaded_rows == total_pending`). If more pending rows exist than were loaded, the footer
     instead reads *"Showing the newest {n} — scroll to load all before acknowledging everything,"* and
