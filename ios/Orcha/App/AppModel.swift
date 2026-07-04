@@ -51,7 +51,12 @@ final class AppModel {
     var taskRuns: [RunDto] = []
     var agentRuns: [RunDto] = []
     var agentExtras = AgentExtras()
-    var runLines: [String] = []
+    /// Issue 3 — the typed, classified run-log feed (web/Android parity). Classified once at
+    /// append (not on every render), keeping a 400-row retention cap.
+    var runFeed: [RunFeedRow] = []
+    /// Issue 3 — a neutral note shown above the feed when the live stream drops mid-run
+    /// (reconnecting), never a synthetic feed row. Cleared on the next accepted update.
+    var runStreamNote: String?
     var models: [ModelDto] = []
     var conversation: ConversationDto?
     var turns: [TurnDto] = []
@@ -305,7 +310,8 @@ final class AppModel {
     func startRunLog(_ run: RunDto) {
         stopRunLogStream()
         lastRunSeq = -1
-        runLines = []
+        runFeed = []
+        runStreamNote = nil
         error = nil
         if run.status == "running" {
             streamRunLog(run)
@@ -333,13 +339,14 @@ final class AppModel {
                         if Task.isCancelled { return }
                         switch event {
                         case let .line(seq, text):
-                            appendRunLine(seq: seq, text: text)
+                            appendRunRows(seq: seq, text: text)
                             attempt = 0
                         case let .done(_, status):
                             if status == "stream_timeout" {
                                 break streaming          // server 30-min cap — reopen, run still live
                             }
-                            runLines.append("run \(status)")
+                            appendFeed([RunFeedRow(type: "done", label: "run-complete", text: status)])
+                            runStreamNote = nil
                             runLogStreaming = false
                             await refresh()              // sync the run row elsewhere in the UI
                             return
@@ -349,7 +356,7 @@ final class AppModel {
                 } catch {
                     if Task.isCancelled { return }
                     attempt = min(attempt + 1, 5)
-                    runLines.append("log stream interrupted — retrying")
+                    runStreamNote = "Log stream interrupted — reconnecting…"
                 }
                 if Task.isCancelled { return }
                 try? await Task.sleep(for: .seconds(attempt == 0 ? 0.3 : Double(attempt)))
@@ -357,14 +364,24 @@ final class AppModel {
         }
     }
 
-    /// Append a streamed line with the web's monotonic-`seq` dedup + 400-line retention cap.
-    private func appendRunLine(seq: Int, text: String) {
+    /// Append a streamed line: web's monotonic-`seq` dedup → classify into typed rows →
+    /// skip-empty guard → append + 400-row cap → clear the interruption note (only inside a
+    /// non-empty update, matching Android VM:522-526).
+    private func appendRunRows(seq: Int, text: String) {
         if seq >= 0 {
             guard seq > lastRunSeq else { return }
             lastRunSeq = seq
         }
-        runLines.append(text)
-        if runLines.count > 400 { runLines.removeFirst(runLines.count - 400) }
+        let rows = RunFeed.classifyLine(text)
+        guard !rows.isEmpty else { return }
+        appendFeed(rows)
+        runStreamNote = nil
+    }
+
+    /// Append rows with the shared 400-row retention cap (classify happens at append, never render).
+    private func appendFeed(_ rows: [RunFeedRow]) {
+        runFeed.append(contentsOf: rows)
+        if runFeed.count > 400 { runFeed.removeFirst(runFeed.count - 400) }
     }
 
     /// One-shot read for a FINISHED run (server closes the stream immediately).
@@ -374,7 +391,7 @@ final class AppModel {
         defer { loading = false }
         do {
             let text = try await api.runStreamText(sel.baseUrl, aid, run.runId)
-            runLines = Self.parseSseLines(text)
+            runFeed = Self.feedFromStreamText(text)
         } catch {
             self.error = friendly(error)
         }
@@ -591,19 +608,27 @@ final class AppModel {
 
     // MARK: helpers
 
-    static func parseSseLines(_ text: String) -> [String] {
-        text.split(separator: "\n", omittingEmptySubsequences: true)
-            .filter { $0.hasPrefix("data:") }
-            .compactMap { line -> String? in
-                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                guard
-                    let data = payload.data(using: .utf8),
-                    let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                else { return nil }
-                if let text = obj["line"] as? String { return text }
-                if let status = obj["status"] as? String { return "run \(status)" }
-                return nil
+    /// Classify a FINISHED run's buffered SSE text into typed feed rows (Android
+    /// `feedFromStreamText`): parse each frame via `OrchaApiClient.parseSseEvent`, drop
+    /// reconnect-replay with `seq > maxSeq`, classify each line, and cap at 400 rows.
+    static func feedFromStreamText(_ text: String) -> [RunFeedRow] {
+        var rows: [RunFeedRow] = []
+        var maxSeq = 0
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            switch OrchaApiClient.parseSseEvent(String(raw)) {
+            case let .line(seq, line):
+                if seq > maxSeq {
+                    maxSeq = seq
+                    rows.append(contentsOf: RunFeed.classifyLine(line))
+                }
+            case let .done(_, status):
+                rows.append(RunFeedRow(type: "done", label: "run-complete", text: status))
+            case .none:
+                break
             }
+        }
+        if rows.count > 400 { rows.removeFirst(rows.count - 400) }
+        return rows
     }
 
     private func friendly(_ error: Error) -> String {

@@ -510,6 +510,9 @@ struct RunDetailScreen: View {
             if run.status != "running" {
                 terminalBanner
             }
+            if let note = model.runStreamNote {
+                Banner(kind: .info, text: note)
+            }
             logCard
             if let error = model.error {
                 Banner(kind: .danger, text: error, action: "Retry") {
@@ -561,7 +564,7 @@ struct RunDetailScreen: View {
 
     private var logCard: some View {
         OrchaCard {
-            if model.runLines.isEmpty {
+            if model.runFeed.isEmpty {
                 ScrollView {
                     Text(emptyLogText)
                         .font(.system(size: 13))
@@ -574,8 +577,8 @@ struct RunDetailScreen: View {
                     ZStack(alignment: .bottom) {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 2) {
-                                ForEach(Array(model.runLines.enumerated()), id: \.offset) { _, line in
-                                    LogLine(line: line)
+                                ForEach(Array(model.runFeed.enumerated()), id: \.offset) { _, row in
+                                    FeedRow(row: row)
                                 }
                                 Color.clear.frame(height: 1).id("log-bottom")
                             }
@@ -605,7 +608,7 @@ struct RunDetailScreen: View {
                             .padding(.bottom, 6)
                         }
                     }
-                    .onChange(of: model.runLines.count) {
+                    .onChange(of: model.runFeed.count) {
                         if pinned {
                             proxy.scrollTo("log-bottom", anchor: .bottom)
                         }
