@@ -127,6 +127,41 @@
 > — GET now working — renders the context and clears); the WORK-lane lease + cooldown already
 > rate-limit the retry, so this self-heals rather than hot-loops (§6.4, §7). New teeth: §9 item 19 (and
 > the notifier pure-function `resume_rendered=false → no clear` assertion).
+>
+> **Round 10 (this PR head).** Code Reviewer's round-9 verdict confirmed the round-8 fix and raised
+> two remaining blockers. **(B1 — the render is not tied to the scan's ride/defer decision.)** The
+> round-8 clear gate added `resume_rendered`, but the resume-context *render* itself was still decided
+> independently by `get_agent_protocol` (§6.3): it returns `resume_context` for **any** due eligible
+> self-wake row keyed on the requested `task_id`, with **no knowledge of the scan's auto-start /
+> pending-task-request deferral**. `wake_task_id` is resolved first by the *existing* directed-message /
+> pending-answer path (main.py:4957, 4969-4983) — independent of the self-wake. So an agent that has a
+> **due self-wake for task A** *and* a higher-precedence target (an assigned-ready auto-start task, or an
+> owed task request) *and* an independent reason `wake_task_id` resolves to **A** (a pending answer whose
+> `originating_task_id==A`, or a directed message for A) would: (i) §6.2 **defer** the self-wake
+> (`self_wake_injected=false`, row untouched — correct, nothing cleared); yet (ii) the notifier boots the
+> persona with `task_id=wake_task_id=A` (notifier.py:3058), and §6.3 injects **A**'s `resume_context`
+> because A's row is genuinely due — so the worker is shown the wait-point **while `build_wake_prompt`
+> steers it to claim the auto-start task / accept the task request**, and A's context re-renders later
+> when the self-wake finally rides. The render escaped the deferral. **Fixed:** the resume-context render
+> is now **threaded from the scan candidate's intent**, not re-derived by the protocol endpoint alone.
+> `_build_persona` (notifier.py:1016) takes the candidate's self-wake intent and renders `resume_context`
+> **only when `cand["self_wake_injected"]` is true AND the persona's `task_id == cand["self_wake_task_id"]`**;
+> `resume_rendered` is now exactly *"the resume section actually rendered into this persona"* —
+> `bool(self_wake_injected and task_id == self_wake_task_id and protocol and protocol.get("resume_context"))`.
+> During any deferral `self_wake_injected` is false, so the context never renders and never clears; §6.3
+> remains the data seam but the ride/defer **authority is the scan**, enforced at the render (§6.3, §6.4,
+> §7). New teeth: §9 items 15 & 17 now assert the persona omits `resume_context` even when `wake_task_id`
+> coincides with the deferred self-wake's task.
+> **(B2 — a blank/whitespace context would retry forever.)** `context` was nullable/bounded-only, but
+> `resume_rendered` keys on `bool(resume_context)`; an empty or whitespace-only payload renders no resume
+> section, so `resume_rendered` stays **false forever**, the clear never fires, and the row re-fires every
+> eligible scan — a hot-loop no protocol recovery can end (unlike the round-8 GET-blip case, which
+> self-heals). **Fixed:** `context` is now **required and non-empty** — `NOT NULL CHECK (btrim(context) <>
+> '')` at the DB (§5) and a **trim-and-reject-empty (422)** validation at the endpoint (§6.1), alongside
+> the existing length cap (now fixed at 2 KB, §11 item 2 resolved). A real row therefore always carries a
+> non-empty context, so `resume_rendered=false` can only mean a genuine non-ride (deferral / competing
+> task) or a transient protocol-GET blip that self-heals — never a permanent empty-payload loop. New
+> teeth: §9 item 20 (blank/whitespace context → 422).
 
 ## 1. Problem (from the issue)
 
@@ -243,15 +278,19 @@ worker EXITS (yields session)
                                      DELETEs the (agent,task) row           self_wake_task_id AND
                                      — other tasks' rows untouched          kind=='ephemeral' AND
                                                                            sent (spawn succeeded) AND
-                                                                           resume_rendered (protocol
-                                                                           GET returned resume_context),
+                                                                           resume_rendered (scan bound
+                                                                           the self-wake to THIS task
+                                                                           AND the protocol GET returned
+                                                                           resume_context — render gated
+                                                                           on scan intent, §6.3/§7),
                                                                            i.e. the context actually
                                                                            rode a booted headless
                                                                            persona (§6.4, §7). tmux /
                                                                            auto-start / pending
-                                                                           task-request / failed spawn
-                                                                           (ephemeral_failed) / protocol
-                                                                           GET blip ⇒ row survives
+                                                                           task-request (deferred:
+                                                                           render suppressed) / failed
+                                                                           spawn (ephemeral_failed) /
+                                                                           protocol GET blip ⇒ row survives
 ```
 
 ## 5. Data model / migration
@@ -273,7 +312,8 @@ CREATE TABLE agent_self_wake (
   agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   task_id     uuid NOT NULL REFERENCES tasks(id)  ON DELETE CASCADE,   -- B1: deleted task ⇒ row gone
   resume_at   timestamptz NOT NULL,                 -- one-shot fire time (delay floor 60s, §6.1)
-  context     text,                                 -- small free-text payload (bounded, §7)
+  context     text NOT NULL,                         -- required, non-empty (round-9 B2), bounded (§7)
+  CONSTRAINT agent_self_wake_context_nonempty CHECK (btrim(context) <> ''),  -- round-9 B2: no empty payload
   created_at  timestamptz NOT NULL DEFAULT now(),
   UNIQUE (agent_id, task_id)                         -- one pending self-wake PER task; re-sched = upsert
 );
@@ -295,7 +335,12 @@ Why a table (and how it closes both round-1 blockers):
   the agent must still participate), backed by eager delete on those transitions (§6.5) and a lazy
   delete in scan (§6.2). Belt (filter) + suspenders (eager + lazy delete).
 - **Context stays free text** (not JSONB): a plain human/agent-readable string that renders
-  directly into the wake prompt; a length cap (§7) is enforced at the API layer.
+  directly into the wake prompt. It is **required and non-empty** (`NOT NULL` + the
+  `btrim(context) <> ''` CHECK above — round-9 blocker B2): a blank/whitespace payload would render
+  no resume section, so `resume_rendered` (§6.4/§7) would stay false forever and the one-shot would
+  re-fire on every eligible scan without ever clearing — a hot-loop no protocol recovery can break
+  (unlike the round-8 transient-GET-blip case, which self-heals). A length cap (2 KB, §7) is enforced
+  at the API layer, and empty-after-trim is rejected there too (§6.1).
 - `ON DELETE CASCADE` on `agent_id` keeps the table clean if an agent row is ever removed.
 
 ## 6. Server changes (`main.py`)
@@ -322,7 +367,17 @@ gates on `_require_work_lane` (below).
   implementation time.
 - **Body** (`SelfWakeSet` Pydantic model): `resume_at` (or `delay_secs`, int ≥ 60 — reuse the
   same 60s floor the auto-wake DB CHECK enforces, main.py:4107), `task_id`, `context` (str,
-  bounded — see §7).
+  **required, non-empty after trim, ≤ 2 KB**).
+- **`context` validation (round-9 blocker B2 fix).** The endpoint **trims** `context` and **rejects
+  an empty/whitespace-only value with 422** (a Pydantic `min_length=1` after `.strip()`, or an
+  explicit `if not context.strip(): raise HTTPException(422, ...)`), and caps it at **2 KB** (§7,
+  §11 item 2 resolved). This is the API-layer twin of the DB `NOT NULL CHECK (btrim(context) <> '')`
+  (§5): a blank payload would make `resume_rendered` (§6.4) permanently false — no resume section ever
+  renders — so the one-shot could never clear and would re-fire on every eligible scan, a hot-loop no
+  protocol recovery can end. Storing the trimmed value guarantees any persisted row carries a
+  non-empty context, so `bool(resume_context)` is always true for a real row and `resume_rendered`
+  can only be false for a genuine non-ride or a transient GET blip. (Negative test: blank/whitespace
+  `context` → 422, §9 item 20.)
 - **`task_id` validation MUST match the due-scan grain (round-2 blocker fix).** Do **not** reuse
   `_agent_participates_in_task` (main.py:1381-1396): its own docstring calls it "the LOOSER
   participant check" — it accepts the task **creator** and **any historical `agent_tasks` row**
@@ -488,6 +543,17 @@ gates on `_require_work_lane` (below).
   (main.py:4719-4721) — a single lookup keyed on `(agent_id, task_id)`. Because the notifier
   passes `task_id=wake_task_id` (notifier.py:3058-3059), the context is served only for the task
   this wake actually resolved to.
+- **This endpoint is the DATA seam, not the ride/defer authority (round-9 blocker B1).** It knows
+  only "is a self-wake row due for this `task_id`" — it has **no** visibility into the scan's
+  auto-start / pending-task-request **deferral** (§6.2), which lives entirely in `wake_scan`. So a
+  due row here does **not** by itself mean the self-wake should surface: if the scan **deferred** the
+  self-wake yet `wake_task_id` independently resolved to that same task (a pending answer whose
+  `originating_task_id` is it, or a directed message for it — main.py:4957, 4969-4983), this endpoint
+  would still return `resume_context` for a wake the worker is being steered *away* from. The
+  **render decision is therefore made where the scan's intent is available — the notifier**, gated on
+  the candidate's `self_wake_injected` **and** `wake_task_id == self_wake_task_id` (§7). The endpoint
+  supplies the data; the notifier renders it **iff** the scan actually bound the self-wake to this
+  wake. (`resume_context` returned but not rendered is harmless — the notifier is its only consumer.)
 - **Eligibility-gate the lookup (round-3/4 blocker fix — no early/re-render, no stale inject).**
   The lookup MUST apply the **full eligibility predicate the §6.2 due-scan uses** — not just
   `resume_at <= now()`, but also the task is `in_progress` and the agent is an active assignee — so
@@ -621,15 +687,35 @@ unconditionally at these sites.
   **immediately after** the #33 task body (notifier.py:930-932), e.g.
   *"## Resuming — you scheduled this wake. You were waiting on: `<context>`. Check it first, then
   continue."* Rendered only when the protocol response carries `resume_context`.
-- **`_build_persona`** (notifier.py:1016-1045): change the return type from `Optional[str]` to
-  `(Optional[str], bool)` — the persona **and** `resume_rendered = bool(task_id and protocol and
-  protocol.get("resume_context"))`, i.e. whether the protocol GET at notifier.py:1043 actually returned
-  a non-empty `resume_context` for it to render (round-8 blocker; the same predicate
-  `_render_resume_context` renders on). This is the notifier's only signal that the resume-section
-  truly reached the spawned persona — `_get_json` swallows a failed GET as `None` (notifier.py:479-484),
-  after which `format_persona` renders no resume section but the spawn still succeeds. The four
-  non-self-wake call sites (notifier.py:2490, 3686, 4162, 4280) unpack-and-discard (`persona, _ =
-  _build_persona(...)`); only the ephemeral self-wake site (notifier.py:3058) keeps the flag.
+- **`_build_persona`** (notifier.py:1016-1045): two changes. **(a)** change the return type from
+  `Optional[str]` to `(Optional[str], bool)` — the persona **and** `resume_rendered`. **(b)** take the
+  scan's self-wake intent from the candidate — a new keyword arg, e.g. `self_wake:
+  Optional[dict]=None` carrying `{"injected": cand["self_wake_injected"], "task_id":
+  cand["self_wake_task_id"]}` — and thread it into `format_persona` so the resume section renders
+  **only when the scan actually bound the self-wake to this wake** (round-9 blocker B1). Concretely:
+
+  ```python
+  render_resume = bool(self_wake and self_wake["injected"]
+                       and task_id and task_id == self_wake["task_id"])
+  # format_persona renders the resume section iff render_resume; #33 body/RULES render unchanged
+  resume_rendered = bool(render_resume and protocol and protocol.get("resume_context"))
+  return format_persona(persona, digest, protocol, lane=lane,
+                        render_resume=render_resume), resume_rendered
+  ```
+
+  So `resume_rendered` is exactly *"the resume section actually rendered into this persona"*: the scan
+  bound the self-wake to **this** `task_id` **and** the protocol GET (notifier.py:1043) returned a
+  non-empty `resume_context`. `_get_json` swallows a failed GET as `None` (notifier.py:479-484), after
+  which `format_persona` renders no resume section but the spawn still succeeds — the round-8 hole,
+  still caught by the `protocol.get("resume_context")` term. And during an auto-start / task-request
+  **deferral** (`self_wake_injected=false`), `render_resume` is false so the context never renders even
+  if `get_agent_protocol` returned one for a coincidentally-resolved `wake_task_id` — the round-9 B1
+  hole. `format_persona` (notifier.py:896) gains a `render_resume: bool=False` param that gates the
+  `_render_resume_context` call **only** (the #33 body and RULES are unaffected). The four
+  **non-self-wake** call sites (notifier.py:2490, 3686, 4162, 4280) pass **no** `self_wake` (→
+  `render_resume=false`, resume never renders — they never carry one) and unpack-and-discard the flag
+  (`persona, _ = _build_persona(...)`); only the **ephemeral self-wake** site (notifier.py:3058) passes
+  `self_wake={...}` and keeps the flag.
 - **`build_wake_prompt`** (notifier.py:540): add a dedicated **self-wake branch** parallel to the
   `auto_wake_due` heartbeat branch (notifier.py:563-564). When `cand["self_wake_due"]` and it
   won the wake, the directive says the worker *scheduled this check-back itself* and the context
@@ -640,9 +726,11 @@ unconditionally at these sites.
 - **`tick` — set `clear_self_wake` + `self_wake_task_id`, successful-and-rendered ephemeral delivery
   only** (notifier.py:3040-3214): the post-drain WORK-lane ack payload (notifier.py:3211-3214) today
   sends only `{delivered_ts, kind, event, release_lease, lane}` and is the **shared tail** for the
-  tmux, ephemeral, and unreachable branches. Unpack the new render flag at the persona build
-  (`persona, resume_rendered = _build_persona(..., task_id=cand.get("wake_task_id"))`,
-  notifier.py:3058), then add **both** `clear_self_wake=true` and
+  tmux, ephemeral, and unreachable branches. Unpack the new render flag at the persona build, passing
+  the scan's self-wake intent so the render is gated on it (round-9 blocker B1):
+  `persona, resume_rendered = _build_persona(..., task_id=cand.get("wake_task_id"),
+  self_wake={"injected": cand["self_wake_injected"], "task_id": cand["self_wake_task_id"]})`
+  (notifier.py:3058), then add **both** `clear_self_wake=true` and
   `self_wake_task_id=cand["self_wake_task_id"]` to that ack dict **iff** `sent` is true **and** `kind ==
   "ephemeral"` **and** the candidate's `self_wake_injected` is true (i.e. `wake_task_id ==
   self_wake_task_id`, §6.2) **and** `resume_rendered` is true. All four are load-bearing:
@@ -657,15 +745,35 @@ unconditionally at these sites.
     never surfaced the context**, deleting the wait-point unread. Gate the new fields on `sent`
     (equivalently: emit them only when the payload `kind` is exactly `"ephemeral"`, never
     `"ephemeral_failed"`);
-  - the **`resume_rendered` guard (round-8 blocker)** — a *successful* spawn still boots a persona
-    with **no resume section** when the protocol GET inside `_build_persona` failed: `_get_json`
-    swallows the error as `None` (notifier.py:479-484), `format_persona` renders no resume-context
-    (notifier.py:1045), and `spawn_headless` returns `sent=true` regardless (notifier.py:3104).
-    `self_wake_injected` (scan intent, §6.2) cannot see that GET, so the clear must also require
-    `resume_rendered` (the flag `_build_persona` now returns). If the GET blipped, leave both fields
-    unset: the worker still drains its inbox, and because the row survives with `resume_at` already
-    past, the next eligible scan re-fires and — the GET now succeeding — renders and clears;
+  - the **`resume_rendered` guard (round-8 + round-9-B1 blockers)** — `resume_rendered` is true **iff
+    the resume section actually rendered into this persona**, which now requires **both** that the
+    scan bound the self-wake to this wake (`self_wake_injected` **and** `task_id ==
+    self_wake_task_id`, the round-9-B1 render gate) **and** that the protocol GET returned a non-empty
+    context. Two ways it goes false: **(round-8)** a *successful* spawn still boots a persona with
+    **no resume section** when the protocol GET inside `_build_persona` failed — `_get_json` swallows
+    the error as `None` (notifier.py:479-484), `format_persona` renders nothing (notifier.py:1045),
+    yet `spawn_headless` returns `sent=true` (notifier.py:3104); **(round-9 B1)** the scan **deferred**
+    the self-wake (auto-start / task request) so `self_wake_injected` is false, and even if
+    `get_agent_protocol` returned a `resume_context` for a coincidentally-resolved `wake_task_id`, the
+    `render_resume` gate suppresses it. In **either** case leave both ack fields unset: the row
+    survives and — once the deferral clears / the GET recovers — a later eligible scan re-fires,
+    renders, and clears;
   - the `self_wake_injected` guard — the resolved `wake_task_id` is the self-wake's task (§6.2).
+  - **`resume_rendered` now *is* "the resume section actually rendered into this persona" (round-9
+    blocker B1).** The round-8 draft defined it as `bool(task_id and protocol and
+    protocol.get("resume_context"))` — a pure protocol-GET check that did **not** consult the scan's
+    ride/defer intent, so during an auto-start / task-request **deferral** where `wake_task_id`
+    coincidentally resolved to the deferred self-wake's task, `get_agent_protocol` still returned a due
+    `resume_context`, `_build_persona` still rendered it, and `resume_rendered` went true — the render
+    escaped the deferral (the worker saw the wait-point while being steered elsewhere). The render is
+    now **gated on scan intent**: `_build_persona` renders the resume section **only when**
+    `cand["self_wake_injected"]` is true **and** `task_id == cand["self_wake_task_id"]`, and
+    `resume_rendered = bool(self_wake_injected and task_id == self_wake_task_id and protocol and
+    protocol.get("resume_context"))` — i.e. it is true **iff** the scan bound the self-wake to *this*
+    task **and** the protocol GET actually returned a non-empty context. During any deferral
+    `self_wake_injected` is false, so nothing renders and nothing clears (§6.3, §7). This makes the
+    `self_wake_injected` guard above **subsumed by** `resume_rendered` (kept spelled out for
+    defense-in-depth), and it closes the deferral-coincidence render hole.
 
   A **tmux** delivery (notifier.py:3015-3016, `send_tmux`), an **unreachable** candidate, a **failed
   ephemeral spawn (`ephemeral_failed`)**, **or a successful spawn whose protocol GET failed
@@ -757,15 +865,21 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     while **A**'s row **survives** and fires on the next scan. (The injected row is exactly the
     cleared row; no divergence, no double-render — the specific hole round 4 caught, where the old
     "globally earliest" pick chose A while the protocol injected B.)
-15. **Auto-start precedence — self-wake defers, row survives (round-5 blocker B1 teeth).** An agent
-    has a **due** self-wake for task **A** *and* an **assigned-ready** task **B** (so the scan's
-    `auto_tasks`/candidate `auto_start_task_ids` is non-empty). Assert the self-wake **does not ride
-    this scan**: `self_wake_due=false`, `self_wake_injected=false`, `wake_task_id` is **not** bound to
-    A by the self-wake, `get_agent_protocol` omits `resume_context`, and the run/prompt follow the
-    existing auto-start precedence (`derive_wake_event → auto_start`, attribution `auto[0]`). After an
-    ack **without** `clear_self_wake`, A's row is **still scheduled**; then with B claimed (no longer
-    auto-start-ready) a later scan fires A's self-wake normally and injects its context. (No
-    divergence between the injected/cleared row and the task the worker actually acts on.)
+15. **Auto-start precedence — self-wake defers, row survives, context not rendered (round-5 B1 +
+    round-9 B1 teeth).** An agent has a **due** self-wake for task **A** *and* an **assigned-ready**
+    task **B** (so the scan's `auto_tasks`/candidate `auto_start_task_ids` is non-empty). Assert the
+    self-wake **does not ride this scan**: `self_wake_due=false`, `self_wake_injected=false`,
+    `wake_task_id` is **not** bound to A by the self-wake, and the run/prompt follow the existing
+    auto-start precedence (`derive_wake_event → auto_start`, attribution `auto[0]`). **Round-9 B1
+    sub-case:** additionally arrange an *independent* reason `wake_task_id` resolves to **A** (a
+    pending answer whose `originating_task_id==A`, or a directed message for A) while B is still
+    auto-start-ready. Assert `get_agent_protocol(task_id=A)` still returns `resume_context` (it is the
+    data seam, A's row is due) but the **built persona omits the resume section** — `_build_persona`
+    with `self_wake={"injected": false, ...}` sets `render_resume=false` and `resume_rendered=false` —
+    so the worker never sees A's wait-point while being steered to claim B. After an ack **without**
+    `clear_self_wake`, A's row is **still scheduled**; then with B claimed (no longer auto-start-ready)
+    a later scan fires A's self-wake normally and *renders* its context. (No divergence, and the render
+    never escapes the deferral.)
 16. **tmux delivery never clears (round-5 blocker B2 teeth).** A due self-wake is delivered to a live
     **tmux** target (`choose_transport → "tmux"`, notifier.py:1224). Assert the notifier's ack
     **omits** `clear_self_wake`/`self_wake_task_id` (the `kind == "ephemeral"` gate, §7), so the row
@@ -773,16 +887,19 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     (persona built via `_build_persona`), injects `resume_context` and *its* ack (`kind ==
     "ephemeral"`, `self_wake_injected=true`) clears the row. (Clear-only-if-injected holds across
     transports — a wake that never rendered the context never consumes the wait-point.)
-17. **Pending task request — self-wake defers, row survives (round-6 blocker teeth).** An agent has a
-    **due** self-wake for task **A** *and* an **owed, unaccepted task request** pending (so the scan's
-    `has_pending_task_request` is true), with **no** auto-start task. Assert the self-wake **does not
-    ride this scan**: `self_wake_due=false`, `self_wake_injected=false`, `wake_task_id` is **not** bound
-    to A by the self-wake, `get_agent_protocol` omits `resume_context`, and the wake prompt follows the
-    existing task-request precedence (`build_wake_prompt` accept-task step, notifier.py:621-630). After
-    an ack **without** `clear_self_wake`, A's row is **still scheduled**; then once the task request is
-    accepted (no longer owed) a later scan fires A's self-wake normally and injects its context. (Same
-    inject-and-clear-without-acting divergence as auto-start, item 15, now on the task-request axis —
-    the row is never consumed on a scan the worker spends accepting a different task.)
+17. **Pending task request — self-wake defers, row survives, context not rendered (round-6 + round-9
+    B1 teeth).** An agent has a **due** self-wake for task **A** *and* an **owed, unaccepted task
+    request** pending (so the scan's `has_pending_task_request` is true), with **no** auto-start task.
+    Assert the self-wake **does not ride this scan**: `self_wake_due=false`,
+    `self_wake_injected=false`, `wake_task_id` is **not** bound to A by the self-wake, and the wake
+    prompt follows the existing task-request precedence (`build_wake_prompt` accept-task step,
+    notifier.py:621-630). **Round-9 B1 sub-case:** as in item 15, arrange an independent reason
+    `wake_task_id` resolves to **A** and assert the built persona **omits the resume section**
+    (`render_resume=false`, `resume_rendered=false`) even though `get_agent_protocol(task_id=A)`
+    returns `resume_context`. After an ack **without** `clear_self_wake`, A's row is **still
+    scheduled**; then once the task request is accepted (no longer owed) a later scan fires A's
+    self-wake normally and renders its context. (Same inject-and-clear-without-acting divergence as
+    auto-start, item 15, now on the task-request axis.)
 18. **Failed ephemeral spawn never clears — row survives (round-7 blocker teeth).** A due self-wake
     for task **A** is picked up on the **ephemeral** transport and injected (`self_wake_injected=true`,
     persona built), but `spawn_headless` returns **`sent=false`** (simulate the no-`claude` / bad-cwd /
@@ -806,12 +923,24 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     (`resume_rendered=true`) injects `resume_context` and *its* ack clears the row exactly once.
     (Clear-only-on-rendered-delivery: a worker that booted but never received the resume-section — an
     API blip on the protocol fetch — never consumes the wait-point; it re-fires and self-heals.)
+20. **Blank/whitespace context rejected — no empty-payload hot-loop (round-9 B2 teeth).** POST
+    `/self-wake` with `context=""` and with `context="   "` (whitespace only) → **422** at the
+    endpoint (the trim-and-reject validation, §6.1); assert **no** `agent_self_wake` row is written.
+    Also assert the DB CHECK (`btrim(context) <> ''`, §5) rejects a direct empty insert. Then a valid
+    non-empty context schedules and (item 3) clears normally. (Guarantees `resume_rendered=false` can
+    only mean a genuine non-ride or a transient GET blip — never a permanent empty-payload loop where
+    the one-shot re-fires on every scan and never clears.) Also assert `context` over 2 KB is rejected
+    (the length cap, §6.1/§11 item 2).
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
-`build_wake_prompt` self-wake branch text; `_render_resume_context` renders only when present;
-`_build_persona` returns `resume_rendered=true` when the protocol carries a non-empty `resume_context`
-and `false` when the (stubbed) protocol GET returns `None`; and the ack-field helper sets
+`build_wake_prompt` self-wake branch text; `_render_resume_context` renders only when present **and**
+`render_resume=true`; `_build_persona` returns `resume_rendered=true` **only** when the scan bound the
+self-wake (`self_wake={"injected": true, "task_id": T}`) **and** `task_id==T` **and** the protocol
+carries a non-empty `resume_context`, and `false` when any of those fails — the (stubbed) protocol GET
+returns `None` (round-8), **or** `self_wake["injected"]` is false / `task_id != self_wake["task_id"]`
+(round-9 B1 deferral: the persona omits the resume section even though the protocol carried one); and
+the ack-field helper sets
 `clear_self_wake` **only** for a **successful, rendered** ephemeral delivery — `sent=true` **and**
 `kind == "ephemeral"` **and** `self_wake_injected=true` **and** `resume_rendered=true` — asserting that
 tmux/unreachable, `self_wake_injected=false`, a failed spawn (`sent=false` → `ephemeral_failed`),
@@ -837,5 +966,7 @@ tmux/unreachable, `self_wake_injected=false`, a failed spawn (`sent=false` → `
    not ready require an explicit new `self-wake` call (current plan), or support an optional
    auto-reschedule/backoff? Plan keeps it explicit (one-shot) for simplicity; flag if a bounded
    auto-retry is wanted.
-2. **Context size cap.** Proposed a modest cap (e.g. 2 KB) on `context`; confirm the bound and
-   whether it should reuse an existing `MAX_*` constant.
+2. ~~**Context size cap.**~~ **Resolved (round-9 B2):** `context` is **required, non-empty after
+   trim, and capped at 2 KB** — enforced at the API layer (§6.1) and backed by the DB `NOT NULL
+   CHECK (btrim(context) <> '')` (§5). At implementation time, prefer an existing `MAX_*` byte
+   constant if one fits the 2 KB intent rather than introducing a new literal.
