@@ -54,6 +54,28 @@
 > the **full** due-scan eligibility (in_progress + active assignee, not just `resume_at <= now()`).
 > New teeth: §9 item 14 (two due self-wakes + a directed message for one of them → that task's
 > context injects **and** its row clears; the other survives).
+>
+> **Round 6 (this PR head).** Code Reviewer's round-5 verdict raised two remaining blockers, both
+> now fixed by tightening the single invariant — *a self-wake rides (is injected **and** cleared)
+> **only** when its resume-context actually surfaced on the wake the worker will act on* — to cover
+> the two transports/precedence the round-4 fix had not: **(B1 — auto-start precedence)** the
+> notifier's existing, test-locked precedence steers the worker to an **assigned-ready** task over a
+> scheduled wake — `build_wake_prompt` picks the `/orcha-next` step when `auto_start_task_ids` is set
+> (notifier.py:631), `derive_wake_event` ranks `auto_start` above the clock wake (notifier.py:1238),
+> and run attribution is `auto[0] if auto else wake_task_id` (notifier.py:3123). So an agent with a
+> due self-wake for task **A** *and* an assigned-ready task **B** would have had A's context injected
+> and cleared while the prompt + run metadata pointed at **B**. **Fixed:** §6.2 now **defers** the
+> self-wake entirely (`self_wake_due=false`, row untouched) whenever `auto_start_task_ids` is
+> non-empty — *auto-start wins, the self-wake row survives* — so no notifier precedence change is
+> needed and the row fires on a later scan once no auto-start competes (§6.2, §9 item 15).
+> **(B2 — tmux delivery clears without injecting)** the resume-context rides only the headless
+> `_build_persona` path (notifier.py:3058, the `kind == "ephemeral"` branch); a live **tmux** target
+> gets only `build_wake_prompt` (notifier.py:3015-3016) with no persona, yet the shared wake-ack tail
+> (notifier.py:3211-3214) would still clear the row when `self_wake_injected` was true. **Fixed:**
+> §6.4/§7 now gate `clear_self_wake` on `kind == "ephemeral"` — the *only* transport that built the
+> persona and surfaced the context — so a tmux/unreachable delivery leaves the row scheduled to fire
+> on a later ephemeral wake, keeping clear-only-if-injected honest and the feature inside its scoped
+> ephemeral lane (§6.4, §7, §9 item 16).
 
 ## 1. Problem (from the issue)
 
@@ -166,9 +188,12 @@ worker EXITS (yields session)
                                                                            build_wake_prompt
                                                                            self-wake branch
                                    wake-ack {clear_self_wake:true}   ◀──   ONLY if wake_task_id ==
-                                     DELETEs the (agent,task) row           self_wake_task_id, i.e.
-                                     — other tasks' rows untouched          the context actually
-                                                                           rode (§6.4)
+                                     DELETEs the (agent,task) row           self_wake_task_id AND
+                                     — other tasks' rows untouched          kind=='ephemeral', i.e.
+                                                                           the context actually rode
+                                                                           a headless persona (§6.4,
+                                                                           §7). tmux/auto-start ⇒
+                                                                           row survives
 ```
 
 ## 5. Data model / migration
@@ -287,6 +312,26 @@ gates on `_require_work_lane` (below).
   re-rendered and never cleared. The fix: the self-wake candidate is **always the row for the
   resolved `wake_task_id`**, so injection (§6.3) and clear (§6.4) target the identical row.
 
+- **Auto-start precedence — defer the self-wake when an assigned-ready task will be claimed
+  (round-5 blocker B1).** The notifier has an existing, **test-locked** precedence that steers the
+  worker to an *assigned-ready* task ahead of a scheduled clock wake: `build_wake_prompt` selects the
+  `/orcha-next` claim step whenever `auto_start_task_ids` is non-empty (notifier.py:631),
+  `derive_wake_event` ranks `auto_start` above the clock wake (notifier.py:1238), and the run is
+  attributed to `auto[0] if auto else wake_task_id` (notifier.py:3123, :3157) — precedence locked by
+  `tests/test_wake_single_flight.py`. If a self-wake were allowed to bind/inject while an auto-start
+  task is queued, the worker's prompt and `worker_run` would point at the auto-start task **B** while
+  the self-wake for **A** was injected and cleared — the exact divergence round 4 closed for directed
+  messages, now on the auto-start axis. **Rule (auto-start wins; row survives):** when the scan's
+  `auto_tasks` is non-empty (equivalently the candidate's `auto_start_task_ids`, surfaced at
+  main.py:5110-5146), the self-wake is **deferred this scan** — it does **not** bind `wake_task_id`,
+  `self_wake_due` stays **false**, and the row is **left untouched** to fire on a later scan once no
+  auto-start competes. `has_work` is already true from the auto-start task (main.py:5031), so nothing
+  is lost, and — because the notifier already gives auto-start precedence everywhere — **no notifier
+  precedence change and no `test_wake_single_flight` change is needed**; the scan simply declines to
+  ride. (Auto-start drains as the ready task is claimed → `in_progress`, so this is not starvation;
+  the self-wake fires on the next scan with no auto-start. §9 item 15.) The two branches below apply
+  **only when `auto_tasks` is empty.**
+
   The existing `wake_task_id` resolution runs **first and unchanged** — directed messages
   (`_collect_directed_messages`, main.py:4957) then a pending answer's `originating_task_id`
   (main.py:4969-4983). Define the shared **self-wake eligibility predicate** (identical to the
@@ -346,8 +391,10 @@ gates on `_require_work_lane` (below).
   `self_wake_due` itself** (a due eligible self-wake exists **for the resolved task**) and can no
   longer disagree with what the protocol actually injected — the round-4 fix. It is `true` both when
   the self-wake *bound* `wake_task_id` (no competing task) and when a competing message won a task
-  that *also* had a due self-wake; it is `false` only when the winning task had no due self-wake (a
-  different task's message consumed this wake — the row for that different task simply survives).
+  that *also* had a due self-wake; it is `false` when the winning task had no due self-wake (a
+  different task's message consumed this wake — the row for that different task simply survives) **and
+  whenever an auto-start task is queued** (the auto-start deferral at the top of §6.2 — the self-wake
+  never rides a scan the worker will spend claiming an assigned-ready task).
 - **Lazy cleanup (backstop).** When the scan encounters a self-wake row whose task is *not*
   `in_progress` / not participated (it fails the join above but the row still exists), delete it
   opportunistically (`DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s`), so orphaned
@@ -421,13 +468,20 @@ gates on `_require_work_lane` (below).
   self-wake is left intact** (the per-task grain). When `clear_self_wake` is false, or
   `self_wake_task_id` is missing/blank, leave all rows untouched so a not-yet-consumed self-wake
   re-fires on the next scan.
-- **Who sets it:** the daemon sets `clear_self_wake=true` **and** `self_wake_task_id =
-  cand["self_wake_task_id"]` on its ack **only when the self-wake actually rode this wake** — i.e.
-  the candidate's `self_wake_injected` was true (`wake_task_id == self_wake_task_id`, §6.2) and the
-  persona it built resolved that task (§7). If a directed message for a *different* task overrode
-  `wake_task_id` (`self_wake_injected=False`), the ack leaves **both** unset → the row stays
-  scheduled and re-fires cleanly next tick. This closes the silent-consumption hole: **the
-  wait-point is never marked delivered unless the resume-context was surfaced.**
+- **Who sets it — only on the ephemeral (persona) transport (round-5 blocker B2).** The daemon sets
+  `clear_self_wake=true` **and** `self_wake_task_id = cand["self_wake_task_id"]` on its ack **only
+  when the self-wake actually rode this wake** — which requires **both** (i) the candidate's
+  `self_wake_injected` was true (`wake_task_id == self_wake_task_id`, §6.2) **and** (ii) the wake was
+  delivered on the **ephemeral** transport (`kind == "ephemeral"`, notifier.py:3017) — the *only*
+  path that calls `_build_persona` (notifier.py:3058) and thus renders `resume_context`. A **tmux**
+  delivery (notifier.py:3015-3016) sends only `build_wake_prompt` output with **no persona**, so the
+  context never surfaced; the shared wake-ack tail (notifier.py:3211-3214) runs for tmux too, so
+  without this transport gate a tmux wake would clear a row it never injected. If either condition
+  fails — a directed message for a *different* task overrode `wake_task_id`
+  (`self_wake_injected=False`), **or** the wake went to tmux/unreachable — the ack leaves **both**
+  fields unset → the row stays scheduled and re-fires on a later **ephemeral** scan. This closes the
+  silent-consumption hole on both axes: **the wait-point is never marked delivered unless the
+  resume-context was actually surfaced to a headless worker** (the scoped ephemeral lane, §2).
 
 **6.5 Eager cleanup on terminal / owner-removal transitions (B1 hygiene).** The §6.2 join filter
 already guarantees a stale row *cannot fire*; this deletes the now-dead row promptly so it never
@@ -466,15 +520,21 @@ unconditionally at these sites.
   don't-claim step-2 (notifier.py:640-644) is misleading here; give self-wake its own step-2
   ("resume the task you scheduled this wake for; re-check the external step; if still not ready,
   reschedule another self-wake and exit"), so a worker never re-derives.
-- **`tick` — set `clear_self_wake` + `self_wake_task_id`** (notifier.py:3040-3214): the post-drain
-  WORK-lane ack payload (notifier.py:3212-3214) today sends only
-  `{delivered_ts, kind, event, release_lease, lane}`. Add **both** `clear_self_wake=true` and
-  `self_wake_task_id=cand["self_wake_task_id"]` to that dict **iff** the candidate's
-  `self_wake_injected` is true (i.e. `wake_task_id == self_wake_task_id`, §6.2) — the resume-context
-  rode this wake, so the fired `(agent, task)` row should be deleted, and the ack now carries the
-  exact task id the server needs to target it (§6.4). Otherwise send neither field (a competing
-  task won; the row survives to re-fire). The run is attributed to `wake_task_id` exactly as today
-  (notifier.py:3123).
+- **`tick` — set `clear_self_wake` + `self_wake_task_id`, ephemeral transport only**
+  (notifier.py:3040-3214): the post-drain WORK-lane ack payload (notifier.py:3211-3214) today sends
+  only `{delivered_ts, kind, event, release_lease, lane}` and is the **shared tail** for the tmux,
+  ephemeral, and unreachable branches. Add **both** `clear_self_wake=true` and
+  `self_wake_task_id=cand["self_wake_task_id"]` to that dict **iff** `kind == "ephemeral"` **and** the
+  candidate's `self_wake_injected` is true (i.e. `wake_task_id == self_wake_task_id`, §6.2). The
+  `kind == "ephemeral"` guard is load-bearing: only that branch built the persona
+  (`_build_persona`, notifier.py:3058) that rendered `resume_context`, so it is the only transport on
+  which the context actually surfaced. A **tmux** delivery (notifier.py:3015-3016, `send_tmux`) or an
+  **unreachable** candidate sends neither field → the row survives to re-fire on a later ephemeral
+  scan (round-5 blocker B2). Otherwise (competing task won, or non-ephemeral transport) send neither
+  field and the row re-fires cleanly. The run is attributed to `wake_task_id` exactly as today
+  (notifier.py:3123) — and note the auto-start deferral (§6.2) means a self-wake never rides a scan
+  where `auto_start_task_ids` is set, so the ack's `self_wake_task_id` can never disagree with the
+  `auto[0] if auto else wake_task_id` run attribution.
 
 ## 8. CLI command
 
@@ -554,10 +614,28 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     while **A**'s row **survives** and fires on the next scan. (The injected row is exactly the
     cleared row; no divergence, no double-render — the specific hole round 4 caught, where the old
     "globally earliest" pick chose A while the protocol injected B.)
+15. **Auto-start precedence — self-wake defers, row survives (round-5 blocker B1 teeth).** An agent
+    has a **due** self-wake for task **A** *and* an **assigned-ready** task **B** (so the scan's
+    `auto_tasks`/candidate `auto_start_task_ids` is non-empty). Assert the self-wake **does not ride
+    this scan**: `self_wake_due=false`, `self_wake_injected=false`, `wake_task_id` is **not** bound to
+    A by the self-wake, `get_agent_protocol` omits `resume_context`, and the run/prompt follow the
+    existing auto-start precedence (`derive_wake_event → auto_start`, attribution `auto[0]`). After an
+    ack **without** `clear_self_wake`, A's row is **still scheduled**; then with B claimed (no longer
+    auto-start-ready) a later scan fires A's self-wake normally and injects its context. (No
+    divergence between the injected/cleared row and the task the worker actually acts on.)
+16. **tmux delivery never clears (round-5 blocker B2 teeth).** A due self-wake is delivered to a live
+    **tmux** target (`choose_transport → "tmux"`, notifier.py:1224). Assert the notifier's ack
+    **omits** `clear_self_wake`/`self_wake_task_id` (the `kind == "ephemeral"` gate, §7), so the row
+    is **not** deleted; then assert the *same* self-wake, delivered on a subsequent **ephemeral** wake
+    (persona built via `_build_persona`), injects `resume_context` and *its* ack (`kind ==
+    "ephemeral"`, `self_wake_injected=true`) clears the row. (Clear-only-if-injected holds across
+    transports — a wake that never rendered the context never consumes the wait-point.)
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
-`build_wake_prompt` self-wake branch text; `_render_resume_context` renders only when present.
+`build_wake_prompt` self-wake branch text; `_render_resume_context` renders only when present; and
+the ack-field helper sets `clear_self_wake` **only** for `kind == "ephemeral"` with
+`self_wake_injected=true` (asserts tmux/unreachable/`self_wake_injected=false` all leave it unset).
 
 ## 10. Rollout
 
