@@ -106,6 +106,27 @@
 > never `"ephemeral_failed"`). A failed ephemeral spawn now leaves **both** ack fields unset and the
 > row scheduled to re-fire on a later successful ephemeral wake — clear-only-on-successful-delivery.
 > New teeth: §9 item 18 (and the notifier pure-function `sent=false → no clear` assertion).
+>
+> **Round 9 (this PR head).** Code Reviewer's round-8 verdict confirmed the failed-spawn fix and
+> raised one remaining blocker: even a **successful** ephemeral spawn (`sent=true`) can boot a worker
+> **without** the resume-context. The notifier fetches the protocol *inside* `_build_persona` via
+> `_get_json` (notifier.py:1043), which **silently returns `None`** on any fetch failure — URLError,
+> HTTP error, or bad JSON (notifier.py:479-484); `format_persona` then renders a persona with **no
+> resume section** (notifier.py:1045), yet `spawn_headless` still succeeds and returns `sent=true`
+> (notifier.py:3104). So `sent && kind == "ephemeral" && self_wake_injected` could all hold while the
+> resume-context **never reached the worker** — and the clear would still fire, deleting the
+> wait-point unread. `self_wake_injected` is a *scan-side intent* flag (§6.2: the scan bound a due
+> self-wake to `wake_task_id`); it does **not** attest that the notifier's separate protocol GET
+> actually rendered the context. **Fixed:** §6.4/§7 add a **fourth** clear condition —
+> `resume_rendered`, true iff the notifier's own protocol GET for this wake returned a non-empty
+> `resume_context` (`bool(protocol and protocol.get("resume_context"))`). `_build_persona` now returns
+> `(persona, resume_rendered)`; the four non-self-wake call sites unpack-and-discard the flag, only the
+> ephemeral self-wake site (notifier.py:3058) threads it into the ack gate. Clear now fires **iff
+> `sent and kind == "ephemeral" and self_wake_injected and resume_rendered`**. A protocol-GET blip
+> therefore leaves the row scheduled (the worker still drains its inbox, then a later scan re-fires and
+> — GET now working — renders the context and clears); the WORK-lane lease + cooldown already
+> rate-limit the retry, so this self-heals rather than hot-loops (§6.4, §7). New teeth: §9 item 19 (and
+> the notifier pure-function `resume_rendered=false → no clear` assertion).
 
 ## 1. Problem (from the issue)
 
@@ -193,7 +214,8 @@ keyed `(agent_id, task_id)` (one pending row per task, so several concurrently-b
 keep their own — see §5 rationale), picked up as a new OR-term in `wake_scan`, and surfaced
 through the **same** `wake_task_id` → protocol → `format_persona` path so the resume-context
 injects at the #33 seam. It fires **once**, then clears — but **only when the context actually
-rode the injection** (§6.4), and it can **never fire for a task that is no longer `in_progress`**
+rode the injection** — a booted headless persona whose protocol GET really rendered the
+resume-context (§6.4) — and it can **never fire for a task that is no longer `in_progress`**
 (§6.2 join filter + §6.5 eager cleanup).
 
 ```
@@ -220,14 +242,16 @@ worker EXITS (yields session)
                                    wake-ack {clear_self_wake:true}   ◀──   ONLY if wake_task_id ==
                                      DELETEs the (agent,task) row           self_wake_task_id AND
                                      — other tasks' rows untouched          kind=='ephemeral' AND
-                                                                           sent (spawn succeeded),
+                                                                           sent (spawn succeeded) AND
+                                                                           resume_rendered (protocol
+                                                                           GET returned resume_context),
                                                                            i.e. the context actually
                                                                            rode a booted headless
                                                                            persona (§6.4, §7). tmux /
                                                                            auto-start / pending
-                                                                           task-request / failed
-                                                                           spawn (ephemeral_failed)
-                                                                           ⇒ row survives
+                                                                           task-request / failed spawn
+                                                                           (ephemeral_failed) / protocol
+                                                                           GET blip ⇒ row survives
 ```
 
 ## 5. Data model / migration
@@ -515,35 +539,57 @@ gates on `_require_work_lane` (below).
   self-wake is left intact** (the per-task grain). When `clear_self_wake` is false, or
   `self_wake_task_id` is missing/blank, leave all rows untouched so a not-yet-consumed self-wake
   re-fires on the next scan.
-- **Who sets it — only on a *successfully delivered* ephemeral (persona) transport (round-5 blocker
-  B2 + round-7 blocker).** The daemon sets `clear_self_wake=true` **and** `self_wake_task_id =
-  cand["self_wake_task_id"]` on its ack **only when the self-wake actually rode this wake and a
-  headless worker actually received it** — which requires **all three** of: (i) the candidate's
-  `self_wake_injected` was true (`wake_task_id == self_wake_task_id`, §6.2); (ii) the wake was
-  delivered on the **ephemeral** transport (`kind == "ephemeral"`, notifier.py:3017) — the *only*
-  path that calls `_build_persona` (notifier.py:3058) and thus renders `resume_context`; **and (iii)
-  the spawn actually succeeded — `sent` is true (round-7 blocker).** The third condition is
-  load-bearing and easy to miss: the local `kind` variable stays `"ephemeral"` even when
-  `spawn_headless` returns `sent=false` (no `claude` binary, bad cwd, Popen error, single-flight
-  loss) — the failure is reflected **only** in the ack payload's own `kind` field, which the shared
-  tail sets to `f"{kind}_failed"` = `"ephemeral_failed"` precisely when `not sent`
-  (notifier.py:3213). So a clear keyed on the *selected transport* `kind == "ephemeral"` alone would
-  fire even though **no worker booted and the resume-context was never surfaced** — deleting the
-  wait-point while the worker that was supposed to see it never ran. Concretely: the ephemeral
-  branch builds the persona (notifier.py:3058) **before** `spawn_headless`, then — on failure — falls
-  through to the shared wake-ack tail (notifier.py:3211-3214) with `sent=false`, posting
-  `kind="ephemeral_failed"`. The clear condition must therefore be expressed as *successful
-  ephemeral delivery*, e.g. `sent and kind == "ephemeral" and cand["self_wake_injected"]` —
-  equivalently, **the final ack `kind` is exactly `"ephemeral"` (never `"ephemeral_failed"`)**. A
-  **tmux** delivery (notifier.py:3015-3016) sends only `build_wake_prompt` output with **no
-  persona**, so the context never surfaced; the shared wake-ack tail runs for tmux too, so without
-  this transport gate a tmux wake would clear a row it never injected. If **any** of the three
-  conditions fails — a directed message for a *different* task overrode `wake_task_id`
-  (`self_wake_injected=False`), the wake went to tmux/unreachable, **or the ephemeral spawn failed
-  (`sent=false`, `ephemeral_failed`)** — the ack leaves **both** fields unset → the row stays
-  scheduled and re-fires on a later **ephemeral** scan. This closes the silent-consumption hole on
-  all three axes: **the wait-point is never marked delivered unless the resume-context was actually
-  surfaced to a headless worker that actually booted** (the scoped ephemeral lane, §2).
+- **Who sets it — only on a *successfully delivered* ephemeral (persona) transport that actually
+  rendered the context (round-5 blocker B2 + round-7 + round-8 blockers).** The daemon sets
+  `clear_self_wake=true` **and** `self_wake_task_id = cand["self_wake_task_id"]` on its ack **only when
+  the self-wake actually rode this wake and a headless worker actually received the resume-context** —
+  which requires **all four** of: (i) the candidate's `self_wake_injected` was true (`wake_task_id ==
+  self_wake_task_id`, §6.2); (ii) the wake was delivered on the **ephemeral** transport (`kind ==
+  "ephemeral"`, notifier.py:3017) — the *only* path that calls `_build_persona` (notifier.py:3058) and
+  can render `resume_context`; **(iii) the spawn actually succeeded — `sent` is true (round-7
+  blocker)**; **and (iv) the resume-context was actually rendered into that persona — `resume_rendered`
+  is true (round-8 blocker).**
+  - **(iii)** is load-bearing and easy to miss: the local `kind` variable stays `"ephemeral"` even when
+    `spawn_headless` returns `sent=false` (no `claude` binary, bad cwd, Popen error, single-flight
+    loss) — the failure is reflected **only** in the ack payload's own `kind` field, which the shared
+    tail sets to `f"{kind}_failed"` = `"ephemeral_failed"` precisely when `not sent`
+    (notifier.py:3213). So a clear keyed on the *selected transport* `kind == "ephemeral"` alone would
+    fire even though **no worker booted and the resume-context was never surfaced** — deleting the
+    wait-point while the worker that was supposed to see it never ran. The ephemeral branch builds the
+    persona (notifier.py:3058) **before** `spawn_headless`, then — on failure — falls through to the
+    shared wake-ack tail (notifier.py:3211-3214) with `sent=false`, posting `kind="ephemeral_failed"`.
+  - **(iv)** is the round-8 hole: even a *successful* spawn (`sent=true`, `kind=="ephemeral"`,
+    `self_wake_injected=true`) can boot a worker with **no resume section**. `_build_persona` fetches the
+    protocol via `_get_json` (notifier.py:1043), which **silently returns `None`** on any URLError /
+    HTTPError / bad JSON (notifier.py:479-484); `format_persona` then renders a persona **without**
+    `resume_context` (notifier.py:1045), yet `spawn_headless` still returns `sent=true`
+    (notifier.py:3104). `self_wake_injected` is a *scan-side intent* flag (§6.2) — it attests the scan
+    bound a due row to `wake_task_id`, **not** that the notifier's own protocol GET succeeded. So the
+    clear must additionally confirm the render actually happened. **Implementation:** `_build_persona`
+    (notifier.py:1016-1045) now returns `(persona, resume_rendered)` where `resume_rendered =
+    bool(task_id and protocol and protocol.get("resume_context"))` — true iff the protocol GET returned
+    a non-empty `resume_context` (which is exactly what `_render_resume_context`/`format_persona`
+    renders, §7). The four **non-self-wake** call sites (notifier.py:2490, 3686, 4162, 4280) unpack and
+    discard the flag (`persona, _ = _build_persona(...)`); only the **ephemeral self-wake** site
+    (notifier.py:3058) keeps it and threads it into the ack gate.
+
+  Expressed together, the clear condition is `sent and kind == "ephemeral" and
+  cand["self_wake_injected"] and resume_rendered`. A **tmux** delivery (notifier.py:3015-3016) sends
+  only `build_wake_prompt` output with **no persona**, so the context never surfaced; the shared
+  wake-ack tail runs for tmux too, so without the transport gate a tmux wake would clear a row it never
+  injected. If **any** of the four conditions fails — a directed message for a *different* task
+  overrode `wake_task_id` (`self_wake_injected=False`), the wake went to tmux/unreachable, the ephemeral
+  spawn failed (`sent=false`, `ephemeral_failed`), **or the protocol GET blipped so no resume-context
+  rendered (`resume_rendered=false`)** — the ack leaves **both** fields unset → the row stays scheduled
+  and re-fires on a later **ephemeral** scan. On the round-8 axis the worker still boots and drains its
+  inbox; because its self-wake row survives (and `resume_at` is already past), the very next eligible
+  scan re-fires it and — the protocol GET now succeeding — renders the context and clears. The
+  WORK-lane single-flight lease + cooldown that gate every wake already rate-limit that retry to the
+  scan cadence, so an extended `/protocol` outage retries at that cadence rather than hot-looping, and
+  it clears the moment the API recovers — self-healing, the same failure posture as any wake during an
+  API blip. This closes the silent-consumption hole on **all four** axes: **the wait-point is never
+  marked delivered unless the resume-context was actually rendered into a headless worker that actually
+  booted** (the scoped ephemeral lane, §2).
 
 **6.5 Eager cleanup on terminal / owner-removal transitions (B1 hygiene).** The §6.2 join filter
 already guarantees a stale row *cannot fire*; this deletes the now-dead row promptly so it never
@@ -575,6 +621,15 @@ unconditionally at these sites.
   **immediately after** the #33 task body (notifier.py:930-932), e.g.
   *"## Resuming — you scheduled this wake. You were waiting on: `<context>`. Check it first, then
   continue."* Rendered only when the protocol response carries `resume_context`.
+- **`_build_persona`** (notifier.py:1016-1045): change the return type from `Optional[str]` to
+  `(Optional[str], bool)` — the persona **and** `resume_rendered = bool(task_id and protocol and
+  protocol.get("resume_context"))`, i.e. whether the protocol GET at notifier.py:1043 actually returned
+  a non-empty `resume_context` for it to render (round-8 blocker; the same predicate
+  `_render_resume_context` renders on). This is the notifier's only signal that the resume-section
+  truly reached the spawned persona — `_get_json` swallows a failed GET as `None` (notifier.py:479-484),
+  after which `format_persona` renders no resume section but the spawn still succeeds. The four
+  non-self-wake call sites (notifier.py:2490, 3686, 4162, 4280) unpack-and-discard (`persona, _ =
+  _build_persona(...)`); only the ephemeral self-wake site (notifier.py:3058) keeps the flag.
 - **`build_wake_prompt`** (notifier.py:540): add a dedicated **self-wake branch** parallel to the
   `auto_wake_due` heartbeat branch (notifier.py:563-564). When `cand["self_wake_due"]` and it
   won the wake, the directive says the worker *scheduled this check-back itself* and the context
@@ -582,30 +637,42 @@ unconditionally at these sites.
   don't-claim step-2 (notifier.py:640-644) is misleading here; give self-wake its own step-2
   ("resume the task you scheduled this wake for; re-check the external step; if still not ready,
   reschedule another self-wake and exit"), so a worker never re-derives.
-- **`tick` — set `clear_self_wake` + `self_wake_task_id`, successful-ephemeral delivery only**
-  (notifier.py:3040-3214): the post-drain WORK-lane ack payload (notifier.py:3211-3214) today sends
-  only `{delivered_ts, kind, event, release_lease, lane}` and is the **shared tail** for the tmux,
-  ephemeral, and unreachable branches. Add **both** `clear_self_wake=true` and
-  `self_wake_task_id=cand["self_wake_task_id"]` to that dict **iff** `sent` is true **and** `kind ==
+- **`tick` — set `clear_self_wake` + `self_wake_task_id`, successful-and-rendered ephemeral delivery
+  only** (notifier.py:3040-3214): the post-drain WORK-lane ack payload (notifier.py:3211-3214) today
+  sends only `{delivered_ts, kind, event, release_lease, lane}` and is the **shared tail** for the
+  tmux, ephemeral, and unreachable branches. Unpack the new render flag at the persona build
+  (`persona, resume_rendered = _build_persona(..., task_id=cand.get("wake_task_id"))`,
+  notifier.py:3058), then add **both** `clear_self_wake=true` and
+  `self_wake_task_id=cand["self_wake_task_id"]` to that ack dict **iff** `sent` is true **and** `kind ==
   "ephemeral"` **and** the candidate's `self_wake_injected` is true (i.e. `wake_task_id ==
-  self_wake_task_id`, §6.2). All three are load-bearing:
+  self_wake_task_id`, §6.2) **and** `resume_rendered` is true. All four are load-bearing:
   - the `kind == "ephemeral"` guard — only that branch built the persona (`_build_persona`,
-    notifier.py:3058) that rendered `resume_context`, so it is the only transport on which the
+    notifier.py:3058) that can render `resume_context`, so it is the only transport on which the
     context could surface;
   - the **`sent` guard (round-7 blocker)** — the ephemeral branch builds the persona *before*
     `spawn_headless`, and on a spawn failure (`sent=false`: no `claude`, bad cwd, Popen error) the
     local `kind` variable is **still `"ephemeral"`**; only the shared tail's own payload `kind` flips
     to `"ephemeral_failed"` via `kind if sent else f"{kind}_failed"` (notifier.py:3213). So without
     an explicit `sent` check the clear would fire on a failed spawn that **never booted a worker and
-    never surfaced the context**, deleting the wait-point unread. Gate the two new fields on `sent`
+    never surfaced the context**, deleting the wait-point unread. Gate the new fields on `sent`
     (equivalently: emit them only when the payload `kind` is exactly `"ephemeral"`, never
     `"ephemeral_failed"`);
+  - the **`resume_rendered` guard (round-8 blocker)** — a *successful* spawn still boots a persona
+    with **no resume section** when the protocol GET inside `_build_persona` failed: `_get_json`
+    swallows the error as `None` (notifier.py:479-484), `format_persona` renders no resume-context
+    (notifier.py:1045), and `spawn_headless` returns `sent=true` regardless (notifier.py:3104).
+    `self_wake_injected` (scan intent, §6.2) cannot see that GET, so the clear must also require
+    `resume_rendered` (the flag `_build_persona` now returns). If the GET blipped, leave both fields
+    unset: the worker still drains its inbox, and because the row survives with `resume_at` already
+    past, the next eligible scan re-fires and — the GET now succeeding — renders and clears;
   - the `self_wake_injected` guard — the resolved `wake_task_id` is the self-wake's task (§6.2).
 
-  A **tmux** delivery (notifier.py:3015-3016, `send_tmux`), an **unreachable** candidate, **or a
-  failed ephemeral spawn (`ephemeral_failed`)** sends neither field → the row survives to re-fire on
-  a later ephemeral scan (round-5 blocker B2 + round-7 blocker). Otherwise (competing task won,
-  non-ephemeral transport, or spawn failure) send neither field and the row re-fires cleanly. The run
+  A **tmux** delivery (notifier.py:3015-3016, `send_tmux`), an **unreachable** candidate, a **failed
+  ephemeral spawn (`ephemeral_failed`)**, **or a successful spawn whose protocol GET failed
+  (`resume_rendered=false`)** sends neither field → the row survives to re-fire on a later ephemeral
+  scan (round-5 blocker B2 + round-7 + round-8 blockers). Otherwise (competing task won, non-ephemeral
+  transport, spawn failure, or unrendered context) send neither field and the row re-fires cleanly.
+  The run
   is attributed to `wake_task_id` exactly as today (notifier.py:3123) — and note the
   higher-precedence-target deferral (§6.2) means a self-wake never rides a scan where
   `auto_start_task_ids` is set **or** a task request is pending, so the ack's `self_wake_task_id` can
@@ -727,14 +794,29 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     *its* ack (`kind == "ephemeral"`, `self_wake_injected=true`) clears the row exactly once.
     (Clear-only-on-successful-delivery: a persona that was built but never booted a worker never
     consumes the wait-point — the exact hole where a failed spawn would delete an unread wake.)
+19. **Successful spawn but unrendered context never clears — row survives (round-8 blocker teeth).** A
+    due self-wake for task **A** is picked up on the **ephemeral** transport (`self_wake_injected=true`)
+    and `spawn_headless` returns **`sent=true`**, but the protocol GET inside `_build_persona` **fails**
+    — simulate `_get_json` returning `None` for the `/protocol` URL (URLError/HTTP error/bad JSON,
+    notifier.py:479-484) so `format_persona` renders **no** resume section. Assert `_build_persona`
+    reports **`resume_rendered=false`**, that the notifier's ack payload (`kind="ephemeral"`,
+    `sent=true`) nonetheless **omits both** `clear_self_wake` and `self_wake_task_id` (the new
+    `resume_rendered` gate, §6.4/§7), so the server's `wake_ack` deletes **nothing** and A's self-wake
+    row is **still scheduled**; then assert a subsequent scan whose protocol GET **succeeds**
+    (`resume_rendered=true`) injects `resume_context` and *its* ack clears the row exactly once.
+    (Clear-only-on-rendered-delivery: a worker that booted but never received the resume-section — an
+    API blip on the protocol fetch — never consumes the wait-point; it re-fires and self-heals.)
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
-`build_wake_prompt` self-wake branch text; `_render_resume_context` renders only when present; and
-the ack-field helper sets `clear_self_wake` **only** for a **successful** ephemeral delivery —
-`sent=true` **and** `kind == "ephemeral"` **and** `self_wake_injected=true` — asserting that
-tmux/unreachable, `self_wake_injected=false`, **and a failed spawn (`sent=false` →
-`ephemeral_failed`)** all leave both `clear_self_wake` and `self_wake_task_id` unset.
+`build_wake_prompt` self-wake branch text; `_render_resume_context` renders only when present;
+`_build_persona` returns `resume_rendered=true` when the protocol carries a non-empty `resume_context`
+and `false` when the (stubbed) protocol GET returns `None`; and the ack-field helper sets
+`clear_self_wake` **only** for a **successful, rendered** ephemeral delivery — `sent=true` **and**
+`kind == "ephemeral"` **and** `self_wake_injected=true` **and** `resume_rendered=true` — asserting that
+tmux/unreachable, `self_wake_injected=false`, a failed spawn (`sent=false` → `ephemeral_failed`),
+**and a successful spawn with `resume_rendered=false`** all leave both `clear_self_wake` and
+`self_wake_task_id` unset.
 
 ## 10. Rollout
 
