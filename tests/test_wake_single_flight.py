@@ -1606,6 +1606,74 @@ def test_progressing_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_pa
     assert ack["kind"] == "worker_checkpoint_respawn" and ack["release_lease"] is False
 
 
+def test_checkpoint_respawn_uses_servers_task_id_not_stale_ctx(monkeypatch, tmp_path):
+    """GH #126: `ctx["task_id"]` is a snapshot captured at ORIGINAL spawn time — if the agent's live
+    run has since been reassigned to a different task server-side (e.g. the task-boundary guard in
+    _collect_directed_messages left the run on a NEW task while ctx still says the old one, or an
+    operator reassigned it), the respawned worker must carry the SERVER's current task_id forward,
+    not the stale ctx snapshot. `_get_json` is stubbed to return a DIFFERENT task_id ("T2") than
+    ctx's ("T1") for the just-finished run — the new /runs POST must stamp "T2", never "T1"."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_get_json",
+                        lambda url, **k: {"runs": [{"task_id": "T2"}]} if "/runs?limit=1" in url
+                        else None)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    def _spawn(cwd, prompt, flags, dry_run, **kw):
+        spawned.append({"cwd": cwd})
+        return True, "repr", newproc
+    monkeypatch.setattr(notifier, "spawn_headless", _spawn)
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1"
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned                                         # respawn actually happened
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["task_id"] == "T2"                      # SERVER's task_id wins, not stale ctx "T1"
+
+
+def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_fetch_fails(monkeypatch, tmp_path):
+    """GH #126 fail-open: if the server task_id re-fetch itself fails (e.g. API unreachable), the
+    respawn must still proceed using ctx.get("task_id") rather than silently dropping attribution
+    (task_id=None) — a failed GET is not the same as a real mismatch."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: None)   # fetch fails
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "repr", newproc))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1"
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["task_id"] == "T1"                      # fail-open to ctx, not dropped to None
+
+
 def _codex_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
     """A `_respawn_entry` over the CODEX runtime: past the soft cap, last_size=0 + a non-empty log
     so this tick sees growth (`stalled=False`), respawn_ctx tagged model_runtime='codex'."""

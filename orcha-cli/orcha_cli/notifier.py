@@ -2447,6 +2447,18 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     diff = _capture_diff(worktree)
     _finish_run(api_base, w.get("run_id"), "exited", 0, w.get("log_path"), diff)
 
+    # GH #126: don't trust the in-memory ctx["task_id"] snapshot captured at original spawn -- if
+    # the server's record for this agent's just-finished run has since diverged (e.g. the agent was
+    # reassigned to a different task mid-run), blindly carrying ctx.task_id forward would respawn
+    # the worker still claiming the OLD task while the server's truth says otherwise. Re-fetch the
+    # just-finished run's task_id from the server and use that; fail open to ctx.get("task_id")
+    # only if the fetch itself fails (server unreachable), never on a mismatch.
+    _server_runs = _get_json(f"{api_base}/api/agents/{aid}/runs?limit=1")
+    if _server_runs and _server_runs.get("runs"):
+        respawn_task_id = _server_runs["runs"][0].get("task_id")
+    else:
+        respawn_task_id = ctx.get("task_id")
+
     # GH #91/#90: the OLD process is dead — revoke its work token, then mint a FRESH work token for
     # the respawned process. Exactly one live token per live process. Revoke-old first (idempotent):
     old_tok = w.get("run_token")
@@ -2488,7 +2500,7 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     # token_id so the server binds embodiment_tokens.run_id to this run (durable EOL backstop).
     run = _post_json(f"{api_base}/api/agents/{aid}/runs",
                      {"wake_kind": "ephemeral", "wake_event": "checkpoint_respawn",
-                      "task_id": ctx.get("task_id"),
+                      "task_id": respawn_task_id,
                       "log_path": str(log_path) if log_path else None,
                       "pid": newproc.pid, "runtime": ctx.get("model_runtime"),
                       "worktree": worktree, "branch": branch, "base_cwd": base_cwd,

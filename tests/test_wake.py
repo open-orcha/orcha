@@ -398,6 +398,68 @@ async def test_task_assigned_for_finished_task_not_surfaced(client, container, m
     assert cand["ack_through_ts"] == cand["max_event_ts"]          # but acked (advances past it)
 
 
+# ---------- GH #126: task-boundary guard for live-worker task switching ----------
+
+@pytest.mark.asyncio
+async def test_task_assigned_guarded_when_agent_has_live_run_on_different_task(
+        client, container, make_agent, make_task, db):
+    """GH #126 repro: a live worker with a running work-lane run on Task A must NOT have a newly
+    assigned Task B's `task_assigned` event framed as "begin the work directly", nor win
+    wake_task_id -- either would silently attribute Task B's work to Task A's run (the live
+    incident this issue traces to). The guarded framing tells the worker to leave it for its next
+    wake instead."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    task_a = await make_task("Task A — in flight", "n/a", assignee_alias="B")
+    db.execute(
+        "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
+        (aid, task_a["id"]))
+    task_b = await make_task("Task B — newly assigned mid-run", "n/a", assignee_alias="B")
+
+    _, cand = await _scan(client, container["id"], aid, min_idle=0)
+    msgs = cand["prompt_messages"]
+    surfaced_b = next(m for m in msgs if task_b["id"] in m)
+    assert "begin the work directly" not in surfaced_b
+    assert "already have a live run on a different task" in surfaced_b
+    assert "do NOT start this one" in surfaced_b
+    # Task B must NOT win run attribution — Task A's own (unguarded) task_assigned event does.
+    assert cand["wake_task_id"] == task_a["id"]
+
+
+@pytest.mark.asyncio
+async def test_task_assigned_not_guarded_when_no_live_run(client, container, make_agent, make_task):
+    """Regression/specificity: with NO live worker_runs row for this agent, a task_assigned still
+    surfaces as "begin the work directly" and wins wake_task_id — the GH #126 guard only fires when
+    there is an actual conflicting live run, never as a blanket suppression."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    t = await make_task("no live run here", "n/a", assignee_alias="B")
+    _, cand = await _scan(client, container["id"], aid, min_idle=0)
+    msgs = cand["prompt_messages"]
+    surfaced = next(m for m in msgs if t["id"] in m)
+    assert "begin the work directly" in surfaced
+    assert cand["wake_task_id"] == t["id"]
+
+
+@pytest.mark.asyncio
+async def test_task_assigned_not_guarded_when_live_run_is_same_task(
+        client, container, make_agent, make_task, db):
+    """Specificity: a live run already bound to THIS SAME task must not trip the guard (re-surfacing
+    a task_assigned for the task the agent is already legitimately working)."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    t = await make_task("same task as the live run", "n/a", assignee_alias="B")
+    db.execute(
+        "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
+        (aid, t["id"]))
+    _, cand = await _scan(client, container["id"], aid, min_idle=0)
+    msgs = cand["prompt_messages"]
+    surfaced = next(m for m in msgs if t["id"] in m)
+    assert "begin the work directly" in surfaced
+    assert "already have a live run on a different task" not in surfaced
+    assert cand["wake_task_id"] == t["id"]
+
+
 @pytest.mark.asyncio
 async def test_paused_container_suppresses_wakes(client, container, make_agent, make_request):
     human = await make_agent("H", kind="human")
