@@ -4363,8 +4363,11 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     wake_task_id = None                              # ISS-56: attribute the run to its task
     ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
     cur.execute(
-        """SELECT task_id FROM worker_runs WHERE agent_id=%s AND status='running' AND lane='work'
-           ORDER BY started_at DESC LIMIT 1""",
+        """SELECT wr.task_id FROM worker_runs wr
+           JOIN agent_wake_state ws ON ws.agent_id = wr.agent_id
+           WHERE wr.agent_id=%s AND wr.status='running' AND wr.lane='work'
+             AND ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
+           ORDER BY wr.started_at DESC LIMIT 1""",
         (aid,))
     _live_row = cur.fetchone()
     live_task_id = _live_row["task_id"] if _live_row else None
@@ -4428,14 +4431,15 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
                      f"it may be waiting on dependencies before it's ready")
             # GH #126: this agent already has a LIVE work-lane run on a DIFFERENT task — do not let
             # this assignment win wake_task_id (that would silently attribute Task B's work to Task
-            # A's run) nor frame it as startable now; it surfaces again on the next wake once the
-            # live run ends.
+            # A's run) nor frame it as startable now. It must NOT be surfaced-and-acked here (an
+            # acked event is gone for good) — instead defer the ack cursor to just BEFORE this event,
+            # the same mechanism the batch-overflow branch below uses, so it (and anything after it,
+            # to preserve delivery order) stays pending and is re-evaluated on every subsequent
+            # wake/drain until the live run ends, at which point it flows through normally.
             if (m is not None and live_task_id is not None
                     and str(live_task_id) != str(ev_task_id)):
-                m = (f"[new task assigned to you: {title} (task {ev_task_id})] "
-                     f"— you already have a live run on a different task; do NOT start this one in "
-                     f"that run, it surfaces on your next wake")
-                ev_task_id = None
+                ack_through_ts = included_ts
+                break
         else:
             ev_task_id = None
             m = pl.get("message")

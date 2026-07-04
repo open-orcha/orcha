@@ -406,24 +406,48 @@ async def test_task_assigned_guarded_when_agent_has_live_run_on_different_task(
     """GH #126 repro: a live worker with a running work-lane run on Task A must NOT have a newly
     assigned Task B's `task_assigned` event framed as "begin the work directly", nor win
     wake_task_id -- either would silently attribute Task B's work to Task A's run (the live
-    incident this issue traces to). The guarded framing tells the worker to leave it for its next
-    wake instead."""
+    incident this issue traces to). The event must NOT be surfaced-and-acked either (an acked event
+    is gone for good with no inbox to recover it) -- the ack cursor stops BEFORE it, so it stays
+    pending and is re-evaluated on every subsequent wake until the live run ends."""
     b = await make_agent("B")
     aid = b["agent_id"]
     task_a = await make_task("Task A — in flight", "n/a", assignee_alias="B")
     db.execute(
         "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
         (aid, task_a["id"]))
+    db.execute(
+        """INSERT INTO agent_wake_state (agent_id, wake_lease_until, lease_kind)
+           VALUES (%s, now() + interval '1 hour', 'ephemeral')
+           ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until = EXCLUDED.wake_lease_until""",
+        (aid,))
     task_b = await make_task("Task B — newly assigned mid-run", "n/a", assignee_alias="B")
 
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     msgs = cand["prompt_messages"]
-    surfaced_b = next(m for m in msgs if task_b["id"] in m)
-    assert "begin the work directly" not in surfaced_b
-    assert "already have a live run on a different task" in surfaced_b
-    assert "do NOT start this one" in surfaced_b
+    surfaced_a = next(m for m in msgs if task_a["id"] in m)
+    assert "begin the work directly" in surfaced_a
+    # Task B's assignment must not be surfaced AT ALL this wake -- fully deferred, not delivered
+    # with a "come back later" framing.
+    assert not any(task_b["id"] in m for m in msgs)
     # Task B must NOT win run attribution — Task A's own (unguarded) task_assigned event does.
     assert cand["wake_task_id"] == task_a["id"]
+    # The ack cursor stops BEFORE Task B's event so it's never acked away un-surfaced.
+    assert cand["ack_through_ts"] < cand["max_event_ts"]
+
+    # While the live run continues, re-scanning (even after acking through the safe cursor) keeps
+    # deferring Task B — it never gets silently dropped.
+    await client.post(f"/api/agents/{aid}/wake-ack",
+                      json={"kind": "ephemeral", "delivered_ts": cand["ack_through_ts"]})
+    _, cand2 = await _scan(client, container["id"], aid, min_idle=0)
+    assert not any(task_b["id"] in m for m in cand2["prompt_messages"])
+
+    # Once the live run ends, Task B flows through normally on the next wake.
+    db.execute("UPDATE worker_runs SET status='exited' WHERE agent_id=%s AND task_id=%s",
+               (aid, task_a["id"]))
+    _, cand3 = await _scan(client, container["id"], aid, min_idle=0)
+    surfaced_b = next(m for m in cand3["prompt_messages"] if task_b["id"] in m)
+    assert "begin the work directly" in surfaced_b
+    assert cand3["wake_task_id"] == task_b["id"]
 
 
 @pytest.mark.asyncio
@@ -452,12 +476,42 @@ async def test_task_assigned_not_guarded_when_live_run_is_same_task(
     db.execute(
         "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
         (aid, t["id"]))
+    db.execute(
+        """INSERT INTO agent_wake_state (agent_id, wake_lease_until, lease_kind)
+           VALUES (%s, now() + interval '1 hour', 'ephemeral')
+           ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until = EXCLUDED.wake_lease_until""",
+        (aid,))
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     msgs = cand["prompt_messages"]
     surfaced = next(m for m in msgs if t["id"] in m)
     assert "begin the work directly" in surfaced
     assert "already have a live run on a different task" not in surfaced
     assert cand["wake_task_id"] == t["id"]
+
+
+@pytest.mark.asyncio
+async def test_task_assigned_not_guarded_by_stale_orphan_run_row(
+        client, container, make_agent, make_task, db):
+    """Specificity: a `worker_runs` row stuck at status='running' with NO live wake lease (e.g. the
+    daemon crashed mid-run and never flipped it to exited/killed) is a stale orphan, not a live
+    run -- it must not trip the guard and strand a fresh worker's assignment forever. Gated on the
+    same live-lease predicate as `active_run` (main.py), not raw status='running'."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    task_a = await make_task("Task A — orphaned run row", "n/a", assignee_alias="B")
+    db.execute(
+        "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
+        (aid, task_a["id"]))
+    # No agent_wake_state lease inserted -- the row is a stale orphan, nothing is actually live.
+    task_b = await make_task("Task B — assigned while orphan row lingers", "n/a", assignee_alias="B")
+
+    _, cand = await _scan(client, container["id"], aid, min_idle=0)
+    msgs = cand["prompt_messages"]
+    surfaced_b = next(m for m in msgs if task_b["id"] in m)
+    assert "begin the work directly" in surfaced_b
+    assert "already have a live run on a different task" not in surfaced_b
+    assert cand["wake_task_id"] == task_b["id"]
+    assert cand["ack_through_ts"] == cand["max_event_ts"]
 
 
 @pytest.mark.asyncio

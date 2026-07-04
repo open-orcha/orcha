@@ -1611,16 +1611,19 @@ def test_checkpoint_respawn_uses_servers_task_id_not_stale_ctx(monkeypatch, tmp_
     run has since been reassigned to a different task server-side (e.g. the task-boundary guard in
     _collect_directed_messages left the run on a NEW task while ctx still says the old one, or an
     operator reassigned it), the respawned worker must carry the SERVER's current task_id forward,
-    not the stale ctx snapshot. `_get_json` is stubbed to return a DIFFERENT task_id ("T2") than
-    ctx's ("T1") for the just-finished run — the new /runs POST must stamp "T2", never "T1"."""
+    not the stale ctx snapshot. `/runs` is newest-first across BOTH lanes, so the stub's first row
+    is a NEWER conversation-lane run (different run_id, task_id None) — the just-finished run
+    ("R1", matching `w["run_id"]`) is second in the page. The new /runs POST must stamp "T2" (R1's
+    task_id), proving the match is by run_id and not by list position."""
     posts, sigs, spawned = [], [], []
     def _post(url, body, **k):
         posts.append((url, body))
         return {"run_id": "R2"} if url.endswith("/runs") else {}
     monkeypatch.setattr(notifier, "_post_json", _post)
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"runs": [{"task_id": "T2"}]} if "/runs?limit=1" in url
-                        else None)
+                        lambda url, **k: {"runs": [{"run_id": "R-CONV", "task_id": None},
+                                                    {"run_id": "R1", "task_id": "T2"}]}
+                        if "/runs?limit=20" in url else None)
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
@@ -1635,7 +1638,7 @@ def test_checkpoint_respawn_uses_servers_task_id_not_stale_ctx(monkeypatch, tmp_
     log = tmp_path / "w.log"
     log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
     proc = FakeProc(pid=4321, exited=False)
-    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1"
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1", run_id "R1"
 
     notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
 
@@ -1672,6 +1675,39 @@ def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_fetch_fails(monkeypat
 
     runpost = next(b for u, b in posts if u.endswith("/runs"))
     assert runpost["task_id"] == "T1"                      # fail-open to ctx, not dropped to None
+
+
+def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_run_not_in_page(monkeypatch, tmp_path):
+    """GH #126 fail-open (not-found case): the server responds, but the just-finished run_id
+    ("R1") isn't in the returned page (e.g. it's an older run pushed off a 20-row window by newer
+    runs in other lanes) — must fall back to ctx.get("task_id"), not silently null out the
+    attribution."""
+    posts, sigs = [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_get_json",
+                        lambda url, **k: {"runs": [{"run_id": "R-OTHER", "task_id": "T9"}]}
+                        if "/runs?limit=20" in url else None)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "repr", newproc))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1", run_id "R1"
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["task_id"] == "T1"                      # fail-open to ctx, not T9 (unrelated run)
 
 
 def _codex_respawn_entry(proc, log, *, respawns=0, cap=1200.0):

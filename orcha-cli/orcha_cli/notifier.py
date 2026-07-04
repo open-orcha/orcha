@@ -2463,12 +2463,20 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     # reassigned to a different task mid-run), blindly carrying ctx.task_id forward would respawn
     # the worker still claiming the OLD task while the server's truth says otherwise. Re-fetch the
     # just-finished run's task_id from the server and use that; fail open to ctx.get("task_id")
-    # only if the fetch itself fails (server unreachable), never on a mismatch.
-    _server_runs = _get_json(f"{api_base}/api/agents/{aid}/runs?limit=1")
+    # only if the fetch itself fails OR the finished run isn't found, never on a mismatch.
+    #
+    # `/runs` is newest-run-first across BOTH lanes (work + conversation) -- NOT "the run that just
+    # finished". A conversation-lane run started after this checkpoint's work run (e.g. the human
+    # chatted with the agent mid-task) would sort first and could carry a different (often null)
+    # task_id, so we must match this checkpoint's own run_id explicitly rather than take runs[0].
+    finished_run_id = w.get("run_id")
+    _server_runs = _get_json(f"{api_base}/api/agents/{aid}/runs?limit=20")
+    respawn_task_id = ctx.get("task_id")
     if _server_runs and _server_runs.get("runs"):
-        respawn_task_id = _server_runs["runs"][0].get("task_id")
-    else:
-        respawn_task_id = ctx.get("task_id")
+        for _run in _server_runs["runs"]:
+            if _run.get("run_id") == finished_run_id:
+                respawn_task_id = _run.get("task_id")
+                break
 
     # GH #91/#90: the OLD process is dead — revoke its work token, then mint a FRESH work token for
     # the respawned process. Exactly one live token per live process. Revoke-old first (idempotent):
