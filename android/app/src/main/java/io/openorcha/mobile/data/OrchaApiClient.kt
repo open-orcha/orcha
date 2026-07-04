@@ -135,10 +135,6 @@ class OrchaApiClient {
         client.get("${baseUrl.endpoint()}/api/tasks/$taskId/close-implications").body()
     }
 
-    // flow 07: human triage-close for stale requests
-    suspend fun triageCloseRequest(baseUrl: String, requestId: String): GenericIdResponse =
-        postJson("${baseUrl.endpoint()}/api/requests/$requestId/triage-close", EmptyBody())
-
     suspend fun getAgentRuns(baseUrl: String, agentId: String): RunsResponse = withTimeout(8_000) {
         client.get("${baseUrl.endpoint()}/api/agents/$agentId/runs?limit=$RUNS_PAGE").body()
     }

@@ -418,9 +418,6 @@ data class WorkerRunStopBody(
     @SerialName("actor_agent_id") val actorAgentId: String,
 )
 
-@Serializable
-class EmptyBody
-
 /* ---------- flow 09: agent detail lazy sections ---------- */
 
 @Serializable
@@ -476,4 +473,8 @@ data class GenericIdResponse(
     @SerialName("request_id") val requestId: String? = null,
     @SerialName("spawned_task_id") val spawnedTaskId: String? = null,
     val status: String? = null,
+    // flow 07a: nudge returns {nudged: bool} (false = next action is a human — informative no-op);
+    // close returns {already_closed: bool} on an idempotent re-close (still a success).
+    val nudged: Boolean? = null,
+    @SerialName("already_closed") val alreadyClosed: Boolean? = null,
 )

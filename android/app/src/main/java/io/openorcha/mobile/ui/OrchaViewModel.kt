@@ -454,14 +454,6 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Flow 07: human triage-close for stale requests (neither requester nor target). */
-    fun triageCloseSelectedRequest() = runHumanAction("Request closed (triage)") { selected, _ ->
-        val request = _uiState.value.selectedRequest ?: error("No request selected")
-        api.triageCloseRequest(selected.baseUrl, request.id)
-        refreshSelected()
-        showWorkspace()
-    }
-
     /** Flow 09: rename an agent (overflow → Details). PARTIAL update, human-gated. */
     fun renameSelectedAgent(alias: String) = runHumanAction("Agent renamed") { selected, actor ->
         val agent = _uiState.value.selectedAgent ?: error("No agent selected")
@@ -689,10 +681,37 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         showWorkspace()
     }
 
-    fun nudgeSelectedRequest(note: String?) = runHumanAction("Nudge sent") { selected, actor ->
-        val request = _uiState.value.selectedRequest ?: error("No request selected")
-        api.nudgeRequest(selected.baseUrl, request.id, actor, note)
-        refreshSelected()
+    /**
+     * Flow 07a: nudge the next-action owner. The server never changes state; it returns
+     * `{nudged: false}` when the next action is a human's (nothing to wake) — that is an
+     * INFORMATIONAL outcome, not an error, so it still shows as a (non-alarming) snackbar.
+     * On `{nudged: true}` the routed recipient is deterministic client-side: the target on an
+     * `open` ask, the requester on an `answered` one (spec §5).
+     */
+    fun nudgeSelectedRequest(note: String?) {
+        val selected = _uiState.value.selectedContainer ?: return
+        val actor = selected.humanAgentId ?: run {
+            _uiState.update { it.copy(error = "Pairing is missing the human identity. Reconnect this Orcha first.") }
+            return
+        }
+        val request = _uiState.value.selectedRequest ?: return
+        val agents = _uiState.value.snapshot?.agents.orEmpty()
+        viewModelScope.launch {
+            _uiState.update { it.copy(actionInFlight = true, error = null) }
+            runCatching { api.nudgeRequest(selected.baseUrl, request.id, actor, note) }
+                .onSuccess { resp ->
+                    val recipientId = if (request.status == "open") request.targetId else request.requesterId
+                    val alias = io.openorcha.mobile.domain.RequestsView.aliasFor(agents, recipientId)
+                    val toast = if (resp.nudged == false) {
+                        "No agent to wake — a human owns the next action."
+                    } else {
+                        "Nudged ${alias ?: "the other agent"}"
+                    }
+                    refreshSelected()
+                    _uiState.update { it.copy(actionInFlight = false, toast = toast) }
+                }
+                .onFailure { err -> _uiState.update { it.copy(actionInFlight = false, error = friendlyConnectionError(err)) } }
+        }
     }
 
     fun escalateSelectedRequest(reason: String?) = runHumanAction("Request escalated") { selected, actor ->

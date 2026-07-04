@@ -147,7 +147,6 @@ class MainActivity : ComponentActivity() {
                         onAcceptTask = viewModel::acceptSelectedTaskRequest,
                         onRejectTask = viewModel::rejectSelectedTaskRequest,
                         onConvert = viewModel::convertSelectedRequest,
-                        onTriageClose = viewModel::triageCloseSelectedRequest,
                         onOpenTask = viewModel::openTask,
                     )
 

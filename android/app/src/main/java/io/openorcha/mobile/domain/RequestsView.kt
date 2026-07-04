@@ -14,6 +14,23 @@ enum class RequestChip(val label: String) {
 
 enum class SortKey { Time, Priority }
 
+/**
+ * Flow 07a operator-action tier — Nudge + Close on ANY request the human can see, computed
+ * purely from status + owner/target identity (spec `07a-nudge-close-any-request.md` §4). The
+ * role-specific "Your move" buttons layer above this; the operator tier itself does not depend
+ * on role, only on state. `you` = the paired human's agent id (null before pairing resolves).
+ */
+data class OperatorActions(
+    val showNudge: Boolean,
+    val showClose: Boolean,
+    /** Close needs a reason (routed to the owner) whenever the human didn't send the request. */
+    val closeNeedsReason: Boolean,
+    /** The "acting as operator" note — only when the human is neither requester nor target. */
+    val showOperatorNote: Boolean,
+    /** Who a nudge would wake: target on `open`, requester on `answered`; null when nudge hidden. */
+    val nudgeRecipientId: String?,
+)
+
 /** Web sort control state (app.js sortState): key + direction. Default: time desc. */
 data class RequestSort(val key: SortKey = SortKey.Time, val ascending: Boolean = false)
 
@@ -48,6 +65,37 @@ object RequestsView {
         RequestChip.Answered -> request.status == "answered"
         RequestChip.Escalations -> isToHuman(request, agents) // NO status filter (web parity)
         RequestChip.TaskReqs -> request.type == "task"
+    }
+
+    /**
+     * Flow 07a §4 rule-of-thumb, verbatim:
+     * - `showClose = status ∈ {open, answered, accepted}` (any non-terminal).
+     * - `showNudge = status ∈ {open, answered}` minus `(open && target==you)` and
+     *   `(answered && requester==you)` — nudging then would only wake yourself.
+     * - `closeNeedsReason = requesterId != you`.
+     * - operator note shows only when you are neither requester nor target.
+     *
+     * A `null` target means the ask was escalated to the paired human — the human is then its
+     * effective answerer, so it counts as `target==you` (nudging it would only wake a human).
+     */
+    fun operatorActions(request: RequestDto, humanId: String?): OperatorActions {
+        val status = request.status
+        val iAmRequester = humanId != null && request.requesterId == humanId
+        val iAmTarget = request.targetId == humanId || request.targetId == null
+        val showNudge = (status == "open" || status == "answered") &&
+            !(status == "open" && iAmTarget) &&
+            !(status == "answered" && iAmRequester)
+        return OperatorActions(
+            showNudge = showNudge,
+            showClose = status == "open" || status == "answered" || status == "accepted",
+            closeNeedsReason = !iAmRequester,
+            showOperatorNote = !iAmRequester && !iAmTarget,
+            nudgeRecipientId = when {
+                !showNudge -> null
+                status == "open" -> request.targetId
+                else -> request.requesterId
+            },
+        )
     }
 
     /** Web REQ_STATUS_RANK: the OUTER bucket stays open → answered → everything else. */
