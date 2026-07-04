@@ -9,6 +9,8 @@ struct PlanApprovalSheet: View {
     let task: TaskDto
     @State private var rejecting = false
     @State private var reason = ""
+    /// GH #140 — a tapped task-id link pushes onto this sheet's own `NavigationStack`.
+    @State private var linkedTaskId: String?
 
     var body: some View {
         NavigationStack {
@@ -28,9 +30,15 @@ struct PlanApprovalSheet: View {
                         }
                         SectionH(title: "Proposed plan")
                         OrchaCard(container: p.surface2) {
-                            Text(task.planMessage?.body ?? "No plan text found on the thread.")
-                                .font(.system(size: 15))
-                                .foregroundStyle(p.text)
+                            if let body = task.planMessage?.body, !body.isEmpty {
+                                LinkedMessageText(text: body, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(p.text)
+                            } else {
+                                Text("No plan text found on the thread.")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(p.text)
+                            }
                         }
                         if rejecting {
                             TextField("What should change?", text: $reason, axis: .vertical)
@@ -59,6 +67,7 @@ struct PlanApprovalSheet: View {
                 }
             }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
         }
         .presentationDetents([.medium, .large])
     }
@@ -72,6 +81,8 @@ struct VerifySheet: View {
     let task: TaskDto
     @State private var rejecting = false
     @State private var feedback = ""
+    /// GH #140 — a tapped task-id link pushes onto this sheet's own `NavigationStack`.
+    @State private var linkedTaskId: String?
 
     var body: some View {
         NavigationStack {
@@ -90,7 +101,8 @@ struct VerifySheet: View {
                         if let claimed = task.result ?? task.messageSummary?.last?.body {
                             SectionH(title: "Claimed result")
                             OrchaCard(container: p.surface2) {
-                                Text(claimed).font(.system(size: 15)).foregroundStyle(p.text2).lineLimit(8)
+                                LinkedMessageText(text: claimed, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
+                                    .font(.system(size: 15)).foregroundStyle(p.text2).lineLimit(8)
                             }
                         }
                         if rejecting {
@@ -120,6 +132,7 @@ struct VerifySheet: View {
                 }
             }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
         }
         .presentationDetents([.medium, .large])
     }

@@ -525,6 +525,8 @@ struct ConversationScreen: View {
     /// start at the last 10, +20 per "Load earlier" tap). No refetch; the fetch window is 80.
     @State private var revealed = 10
     private static let revealStep = 20
+    /// GH #140 — a tapped task-id link pushes onto the tab's NavigationStack.
+    @State private var linkedTaskId: String?
 
     private var agent: AgentDto? {
         model.snapshot?.agents.first { $0.id == agentId }
@@ -556,6 +558,7 @@ struct ConversationScreen: View {
         } message: {
             Text("\(agent?.alias ?? "The agent") goes back to their own work. The transcript stays here.")
         }
+        .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
         .task { await model.loadConversation(agentId) }
     }
 
@@ -651,12 +654,13 @@ struct ConversationScreen: View {
     @ViewBuilder
     private func turnBubble(_ turn: TurnDto, humanId: String?, alias: String) -> some View {
         let mine = turn.authorAgentId == humanId || turn.role == "human"
+        let tasks = model.snapshot?.tasks ?? []
         if turn.role == "system" {
-            Bubble(.system, turn.content)
+            Bubble(.system, turn.content, tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else if mine {
-            Bubble(.mine, turn.content, time: MobileUx.agoLabel(turn.createdAt))
+            Bubble(.mine, turn.content, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else {
-            Bubble(.theirs, turn.content, author: alias, time: MobileUx.agoLabel(turn.createdAt)) {
+            Bubble(.theirs, turn.content, author: alias, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 }) {
                 if let rid = turn.runId {
                     NavigationLink(value: WorkspaceRoute.run(RunDto(runId: rid, agentId: agentId, agentAlias: alias, status: "exited"))) {
                         Text("Open work log →")

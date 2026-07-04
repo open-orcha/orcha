@@ -342,6 +342,9 @@ struct TaskThreadScreen: View {
 
     @State private var draft = ""
     @State private var pendingSend: String?
+    /// GH #140 — a tapped task-id link pushes here, in addition to the tab's own
+    /// `WorkspaceRoute.task` destination; both target the same `TaskDetailScreen`.
+    @State private var linkedTaskId: String?
 
     private var task: TaskDto? { model.snapshot?.tasks.first { $0.id == taskId } }
     private var assignee: String? { task?.assignees.first ?? task?.ownerAlias }
@@ -429,19 +432,22 @@ struct TaskThreadScreen: View {
         }
         .task { await model.loadTaskDetail(taskId) }
         .refreshable { await model.loadTaskDetail(taskId) }
+        .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
     }
 
     @ViewBuilder
     private func threadBubble(_ msg: TaskMessageDto) -> some View {
+        let tasks = model.snapshot?.tasks ?? []
         if msg.authorId == nil, !msg.isHuman {
-            Bubble(.system, msg.body)
+            Bubble(.system, msg.body, tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else if msg.authorId != nil, msg.authorId == model.humanId {
-            Bubble(.mine, msg.body, time: MobileUx.agoLabel(msg.createdAt))
+            Bubble(.mine, msg.body, time: MobileUx.agoLabel(msg.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else {
             Bubble(
                 .theirs, msg.body,
                 author: msg.authorAlias ?? (msg.isHuman ? "human" : "agent"),
-                time: MobileUx.agoLabel(msg.createdAt)
+                time: MobileUx.agoLabel(msg.createdAt),
+                tasks: tasks, onTapTask: { linkedTaskId = $0 }
             )
         }
     }

@@ -151,7 +151,16 @@ struct TaskDto: Decodable, Identifiable {
         completedAt = try c.decodeIfPresent(String.self, forKey: .completedAt)
         messageSummary = try c.decodeIfPresent(MessageSummaryDto.self, forKey: .messageSummary)
         planMessage = try c.decodeIfPresent(TaskMessageDto.self, forKey: .planMessage)
-        planDecision = try c.decodeIfPresent(String.self, forKey: .planDecision)
+        // tolerant plan_decision: null | {"decision": string, "reason", "actor", "at"} (ISS-41
+        // shape — every caller only checks nil vs non-nil, never the string itself, so pulling
+        // just `.decision` out preserves that contract).
+        if let plain = try? c.decodeIfPresent(String.self, forKey: .planDecision) {
+            planDecision = plain
+        } else if let obj = try? c.decodeIfPresent([String: LenientValue].self, forKey: .planDecision) {
+            planDecision = obj["decision"]?.stringValue
+        } else {
+            planDecision = nil
+        }
         dependsOn = try c.decodeIfPresent([String].self, forKey: .dependsOn) ?? []
     }
 

@@ -17,6 +17,8 @@ struct RequestDetailScreen: View {
     @State private var sheet: Sheet?
     /// Flow 07a — owner-close (no reason needed) confirms via a dialog, not a sheet.
     @State private var showCloseConfirm = false
+    /// GH #140 — a tapped task-id link in the payload/response/rejection text pushes here.
+    @State private var linkedTaskId: String?
 
     private var request: RequestDto? {
         model.snapshot?.requests.first { $0.id == requestId }
@@ -43,6 +45,7 @@ struct RequestDetailScreen: View {
         .navigationTitle("Request")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarMenu }
+        .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
         .sheet(item: $sheet) { which in sheetView(which) }
         .confirmationDialog("Close this request?", isPresented: $showCloseConfirm, titleVisibility: .visible) {
             Button("Close request", role: .destructive, action: closeNow)
@@ -86,7 +89,7 @@ struct RequestDetailScreen: View {
 
         SectionH(title: "Payload")
         OrchaCard {
-            Text(req.payload)
+            LinkedMessageText(text: req.payload, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
                 .font(.system(size: 15))
                 .foregroundStyle(p.text)
         }
@@ -94,14 +97,16 @@ struct RequestDetailScreen: View {
         if let response = req.response {
             SectionH(title: "Response")
             OrchaCard(borderColor: p.okLine) {
-                Text(response).font(.system(size: 15)).foregroundStyle(p.text2)
+                LinkedMessageText(text: response, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
+                    .font(.system(size: 15)).foregroundStyle(p.text2)
             }
         }
 
         if let rejection = req.rejectionReason {
             SectionH(title: "Rejection")
             OrchaCard(borderColor: p.dangerLine) {
-                Text(rejection).font(.system(size: 15)).foregroundStyle(p.text2)
+                LinkedMessageText(text: rejection, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
+                    .font(.system(size: 15)).foregroundStyle(p.text2)
             }
         }
 
