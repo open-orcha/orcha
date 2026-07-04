@@ -76,6 +76,22 @@
 > persona and surfaced the context — so a tmux/unreachable delivery leaves the row scheduled to fire
 > on a later ephemeral wake, keeping clear-only-if-injected honest and the feature inside its scoped
 > ephemeral lane (§6.4, §7, §9 item 16).
+>
+> **Round 7 (this PR head).** Code Reviewer's round-6 verdict confirmed the round-4/5 fixes and
+> raised one remaining blocker: a **pending (owed, unaccepted) task request** is the *same*
+> precedence hazard as an auto-start task, but §6.2 only deferred for auto-start. `build_wake_prompt`'s
+> precedence is **task-request → auto-start → generic**: an owed task request selects the accept-task
+> step (notifier.py:621-644), and `has_pending_task_request` also forces a full boot on the ephemeral
+> grader (`decide_wake_tier`, notifier.py:254). So an agent with a **due self-wake for task A** and a
+> **pending task request** (and *no* auto-start) would have had §6.2 bind the self-wake, inject A's
+> context and clear A's row — while the prompt steered the worker to *accept and work the new task
+> request*: the exact inject-and-clear-without-acting divergence, now on the task-request axis.
+> **Fixed:** §6.2's deferral is generalised — the self-wake is deferred (`self_wake_due=false`, row
+> untouched) whenever **either** `auto_tasks` is non-empty **or** `has_pending_task_request` is true
+> (both already computed in the scan, main.py:4999/5009 and folded into `has_work` at main.py:5031).
+> Auto-start / the task request wins, the self-wake row survives, and it fires on a later scan once no
+> higher-precedence target competes — so, as with auto-start, **no notifier precedence change is
+> needed**. New teeth: §9 item 17.
 
 ## 1. Problem (from the issue)
 
@@ -192,7 +208,8 @@ worker EXITS (yields session)
                                      — other tasks' rows untouched          kind=='ephemeral', i.e.
                                                                            the context actually rode
                                                                            a headless persona (§6.4,
-                                                                           §7). tmux/auto-start ⇒
+                                                                           §7). tmux / auto-start /
+                                                                           pending task-request ⇒
                                                                            row survives
 ```
 
@@ -312,25 +329,37 @@ gates on `_require_work_lane` (below).
   re-rendered and never cleared. The fix: the self-wake candidate is **always the row for the
   resolved `wake_task_id`**, so injection (§6.3) and clear (§6.4) target the identical row.
 
-- **Auto-start precedence — defer the self-wake when an assigned-ready task will be claimed
-  (round-5 blocker B1).** The notifier has an existing, **test-locked** precedence that steers the
-  worker to an *assigned-ready* task ahead of a scheduled clock wake: `build_wake_prompt` selects the
-  `/orcha-next` claim step whenever `auto_start_task_ids` is non-empty (notifier.py:631),
-  `derive_wake_event` ranks `auto_start` above the clock wake (notifier.py:1238), and the run is
-  attributed to `auto[0] if auto else wake_task_id` (notifier.py:3123, :3157) — precedence locked by
-  `tests/test_wake_single_flight.py`. If a self-wake were allowed to bind/inject while an auto-start
-  task is queued, the worker's prompt and `worker_run` would point at the auto-start task **B** while
-  the self-wake for **A** was injected and cleared — the exact divergence round 4 closed for directed
-  messages, now on the auto-start axis. **Rule (auto-start wins; row survives):** when the scan's
-  `auto_tasks` is non-empty (equivalently the candidate's `auto_start_task_ids`, surfaced at
-  main.py:5110-5146), the self-wake is **deferred this scan** — it does **not** bind `wake_task_id`,
-  `self_wake_due` stays **false**, and the row is **left untouched** to fire on a later scan once no
-  auto-start competes. `has_work` is already true from the auto-start task (main.py:5031), so nothing
-  is lost, and — because the notifier already gives auto-start precedence everywhere — **no notifier
-  precedence change and no `test_wake_single_flight` change is needed**; the scan simply declines to
-  ride. (Auto-start drains as the ready task is claimed → `in_progress`, so this is not starvation;
-  the self-wake fires on the next scan with no auto-start. §9 item 15.) The two branches below apply
-  **only when `auto_tasks` is empty.**
+- **Higher-precedence-target deferral — defer the self-wake when the wake prompt will steer the
+  worker elsewhere (round-5 blocker B1 + round-6 blocker).** The notifier has an existing,
+  **test-locked** precedence that steers the worker to a *higher-priority* target ahead of a
+  scheduled clock wake, on **two** axes:
+  - **Auto-start (assigned-ready task).** `build_wake_prompt` selects the `/orcha-next` claim step
+    whenever `auto_start_task_ids` is non-empty (notifier.py:631), `derive_wake_event` ranks
+    `auto_start` above the clock wake (notifier.py:1238), and the run is attributed to
+    `auto[0] if auto else wake_task_id` (notifier.py:3123, :3157) — precedence locked by
+    `tests/test_wake_single_flight.py`.
+  - **Pending (owed, unaccepted) task request.** `build_wake_prompt`'s precedence is actually
+    **task-request → auto-start → generic**: an owed task request selects the *accept-and-do* step
+    ahead of even the auto-start step (`has_task_request` branch, notifier.py:621-630), and the
+    ephemeral grader forces a full boot for it (`decide_wake_tier`, notifier.py:254 — "owed task
+    request ALWAYS earns a full boot"). The scan already computes this as `has_pending_task_request`
+    (main.py:5009) and surfaces it on the candidate (main.py:5132).
+
+  If a self-wake were allowed to bind/inject while **either** competes, the worker's prompt and
+  `worker_run` would point at the auto-start task / the new task request **B** while the self-wake for
+  **A** was injected and cleared — the exact divergence round 4 closed for directed messages, now on
+  the auto-start / task-request axes. **Rule (higher-precedence target wins; row survives):** when the
+  scan's `auto_tasks` is non-empty (equivalently the candidate's `auto_start_task_ids`, surfaced at
+  main.py:5110-5146) **OR** `has_pending_task_request` is true (main.py:5009, :5132), the self-wake is
+  **deferred this scan** — it does **not** bind `wake_task_id`, `self_wake_due` stays **false**, and
+  the row is **left untouched** to fire on a later scan once no higher-precedence target competes.
+  `has_work` is already true from that target (`len(auto_tasks) > 0 or has_pending_task_request`,
+  main.py:5031), so nothing is lost, and — because the notifier already gives both targets precedence
+  everywhere — **no notifier precedence change and no `test_wake_single_flight` change is needed**; the
+  scan simply declines to ride. (Both drain: an auto-start task is claimed → `in_progress`; a task
+  request is accepted → it spawns/becomes the worker's task. So this is not starvation — the self-wake
+  fires on the next scan once neither competes. §9 items 15, 17.) The two branches below apply **only
+  when `auto_tasks` is empty AND `has_pending_task_request` is false.**
 
   The existing `wake_task_id` resolution runs **first and unchanged** — directed messages
   (`_collect_directed_messages`, main.py:4957) then a pending answer's `originating_task_id`
@@ -393,8 +422,9 @@ gates on `_require_work_lane` (below).
   the self-wake *bound* `wake_task_id` (no competing task) and when a competing message won a task
   that *also* had a due self-wake; it is `false` when the winning task had no due self-wake (a
   different task's message consumed this wake — the row for that different task simply survives) **and
-  whenever an auto-start task is queued** (the auto-start deferral at the top of §6.2 — the self-wake
-  never rides a scan the worker will spend claiming an assigned-ready task).
+  whenever a higher-precedence target is queued** (the deferral at the top of §6.2 — an auto-start
+  assigned-ready task *or* an owed pending task request — the self-wake never rides a scan the worker
+  will spend claiming that task / accepting that request).
 - **Lazy cleanup (backstop).** When the scan encounters a self-wake row whose task is *not*
   `in_progress` / not participated (it fails the join above but the row still exists), delete it
   opportunistically (`DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s`), so orphaned
@@ -532,9 +562,10 @@ unconditionally at these sites.
   **unreachable** candidate sends neither field → the row survives to re-fire on a later ephemeral
   scan (round-5 blocker B2). Otherwise (competing task won, or non-ephemeral transport) send neither
   field and the row re-fires cleanly. The run is attributed to `wake_task_id` exactly as today
-  (notifier.py:3123) — and note the auto-start deferral (§6.2) means a self-wake never rides a scan
-  where `auto_start_task_ids` is set, so the ack's `self_wake_task_id` can never disagree with the
-  `auto[0] if auto else wake_task_id` run attribution.
+  (notifier.py:3123) — and note the higher-precedence-target deferral (§6.2) means a self-wake never
+  rides a scan where `auto_start_task_ids` is set **or** a task request is pending, so the ack's
+  `self_wake_task_id` can never disagree with the `auto[0] if auto else wake_task_id` run attribution
+  nor be cleared on a scan the worker spends accepting a task request.
 
 ## 8. CLI command
 
@@ -630,6 +661,16 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     (persona built via `_build_persona`), injects `resume_context` and *its* ack (`kind ==
     "ephemeral"`, `self_wake_injected=true`) clears the row. (Clear-only-if-injected holds across
     transports — a wake that never rendered the context never consumes the wait-point.)
+17. **Pending task request — self-wake defers, row survives (round-6 blocker teeth).** An agent has a
+    **due** self-wake for task **A** *and* an **owed, unaccepted task request** pending (so the scan's
+    `has_pending_task_request` is true), with **no** auto-start task. Assert the self-wake **does not
+    ride this scan**: `self_wake_due=false`, `self_wake_injected=false`, `wake_task_id` is **not** bound
+    to A by the self-wake, `get_agent_protocol` omits `resume_context`, and the wake prompt follows the
+    existing task-request precedence (`build_wake_prompt` accept-task step, notifier.py:621-630). After
+    an ack **without** `clear_self_wake`, A's row is **still scheduled**; then once the task request is
+    accepted (no longer owed) a later scan fires A's self-wake normally and injects its context. (Same
+    inject-and-clear-without-acting divergence as auto-start, item 15, now on the task-request axis —
+    the row is never consumed on a scan the worker spends accepting a different task.)
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
