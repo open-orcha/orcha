@@ -37,15 +37,18 @@ async def test_run_without_task_id_attributes_to_current_in_progress_task(
 
 
 async def test_accept_task_spawned_run_is_attributed(
-        client, make_agent, make_request):
+        client, make_agent, make_request, work_headers):
     """The headline scenario: a worker created by ACCEPTING a task request must not float
     unattached. The accepter's next run (no task_id from the wake) links to the spawned task."""
     a = await make_agent("Requester", "lead")
     b = await make_agent("bb", "eng")
     req = await make_request(a["agent_id"], "build X", target_alias="bb",
                              type="task", task=_task_payload())
+    # GH #91/#90: accept-task is work-lane gated — the accepter must present a WORK token.
     acc = await client.post(f"/api/requests/{req['request_id']}/accept-task",
-                            json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=await work_headers(b["agent_id"]))
+    assert acc.status_code == 200, acc.text
     spawned = acc.json()["spawned_task_id"]
     assert spawned
 

@@ -394,10 +394,10 @@ async def test_handle_connection_records_and_finishes_live_run(monkeypatch):
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     starts = [b for (u, b) in posts if u.endswith("/api/agents/AID/runs")]
     finishes = [(u, b) for (u, b) in posts if u.endswith("/api/runs/live-run-1/finish")]
-    # GH #91/#90: the run binds the real PTY pid (4321 from the stubbed spawn_pty) + the minted WORK
-    # token (live-tok-1 from the stubbed mint), and is tagged lane='work'.
+    # GH #91/#90: the run binds the real PTY pid (_DEAD_PID from the stubbed spawn_pty) + the minted
+    # WORK token (live-tok-1 from the stubbed mint), and is tagged lane='work'.
     assert starts == [{"wake_kind": "live", "wake_event": "live_terminal",
-                       "lane": "work", "pid": 4321, "token_id": "live-tok-1"}]
+                       "lane": "work", "pid": _DEAD_PID, "token_id": "live-tok-1"}]
     assert len(finishes) == 1 and finishes[0][1]["status"] == "exited"
 
 
