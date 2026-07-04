@@ -28,6 +28,40 @@ def test_classify_sign_off_multiword():
     assert verdict == "task" and verb == "sign off"
 
 
+# ---------- round-1 review blockers (GH#71 PR #73) ----------
+
+def test_classify_underscore_identifier_stays_info():
+    # "test_wake_single_flight" must tokenize as ONE identifier, not fragment at the
+    # underscore into a bare "test" that false-promotes.
+    assert main.classify_request_type(
+        "test_wake_single_flight is flaky, see the logs") == ("info", None)
+
+
+def test_classify_noun_subject_fyis_stay_info():
+    fyis = [
+        "fix was deployed yesterday, all good",
+        "build 4711 failed overnight",
+        "test coverage dropped to 71%",
+        "review of the Q3 numbers is attached for your records",
+        "Draft attached FYI",
+        "sign-off attached for records",
+    ]
+    for payload in fyis:
+        assert main.classify_request_type(payload) == ("info", None), payload
+
+
+def test_classify_legit_imperatives_still_promote():
+    cases = [
+        ("please review my PR plan", "review"),
+        ("sign off on the release notes", "sign off"),
+        ("draft the v1.1 release notes", "draft"),
+        ("implement the include_closed param", "implement"),
+    ]
+    for payload, expected_verb in cases:
+        verdict, verb = main.classify_request_type(payload)
+        assert (verdict, verb) == ("task", expected_verb), payload
+
+
 # ---------- end-to-end through create_request ----------
 
 async def test_info_with_work_verb_promotes_to_task(client, make_agent, make_request, db):

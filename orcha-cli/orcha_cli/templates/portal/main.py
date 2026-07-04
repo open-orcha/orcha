@@ -7393,7 +7393,28 @@ _QUESTION_LEADERS = frozenset({
 # review ...") — we skip past these to find the verb in imperative position. "can"/"could"
 # are deliberately NOT here: they lead a question ("can you review?" → interrogative).
 _IMPERATIVE_LEADINS = frozenset({"please", "kindly", "pls", "plz", "go", "now", "then", "you", "to"})
-_WORD_RE = re.compile(r"[a-z][a-z\-']*")
+# Underscore MUST stay in the word charset: a code identifier like "test_wake_single_flight"
+# or "include_closed" is one token, not the bare verb "test"/"closed" it would otherwise
+# fragment into (GH#71 round-1 blocker 1).
+_WORD_RE = re.compile(r"[a-z][a-z_\-']*")
+# Copula/auxiliary forms — when one of these (or "of") follows the candidate verb anywhere
+# before sentence end, the verb is being used as a NOUN subject of a declarative sentence
+# ("fix was deployed", "review of the Q3 numbers is attached"), not an imperative. A bare
+# past-tense/participle word ("failed", "dropped", "attached") is the same signal, checked
+# separately below — underscore-joined identifiers are exempted so "include_closed" (which
+# ends in "ed") is never mistaken for one (GH#71 round-1 blocker 2).
+_DECLARATIVE_MARKERS = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "has", "have", "had", "of",
+})
+
+
+def _is_declarative_tail(words: "list[str]") -> bool:
+    for w in words:
+        if w in _DECLARATIVE_MARKERS:
+            return True
+        if "_" not in w and w.endswith("ed") and w not in WORK_VERBS:
+            return True
+    return False
 
 
 def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
@@ -7407,7 +7428,10 @@ def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
         position — i.e. it is the first meaningful word, or follows only imperative
         lead-ins like "please"/"go"/"you";
       * the payload is NOT interrogative — it must not open with a question word/auxiliary
-        AND must not end with '?'.
+        AND must not end with '?';
+      * the rest of the sentence is not declarative — no copula/auxiliary/"of" or bare
+        past-tense word follows the verb (else it's a noun subject, e.g. "build 4711 failed
+        overnight", not an imperative).
     Anything else stays info. Conservative by design (backstop only).
     """
     if not payload:
@@ -7427,14 +7451,18 @@ def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
         return ("info", None)
 
     # Multi-word verb form: "sign off" / "sign-off" in imperative position.
-    # Normalize the hyphenated form to the spaced form for a uniform prefix check.
+    # Normalize the hyphenated form to the spaced form for a uniform prefix check, then
+    # re-tokenize with the same word regex so the declarative-tail check below sees
+    # underscore-joined identifiers as single tokens, same as the single-word path.
     norm = re.sub(r"sign-off", "sign off", lowered)
-    norm_words = norm.split()
+    norm_words = _WORD_RE.findall(norm)
     idx = 0
-    while idx < len(norm_words) and norm_words[idx].strip(".,;:!") in _IMPERATIVE_LEADINS:
+    while idx < len(norm_words) and norm_words[idx] in _IMPERATIVE_LEADINS:
         idx += 1
     if idx + 1 < len(norm_words):
-        if norm_words[idx] == "sign" and norm_words[idx + 1].strip(".,;:!") == "off":
+        if norm_words[idx] == "sign" and norm_words[idx + 1] == "off":
+            if _is_declarative_tail(norm_words[idx + 2:]):
+                return ("info", None)
             return ("task", "sign off")
 
     # Single-word work verb in imperative position: scan past leading imperative lead-ins,
@@ -7443,6 +7471,8 @@ def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
     while pos < len(words) and words[pos] in _IMPERATIVE_LEADINS:
         pos += 1
     if pos < len(words) and words[pos] in WORK_VERBS:
+        if _is_declarative_tail(words[pos + 1:]):
+            return ("info", None)
         return ("task", words[pos])
     return ("info", None)
 
