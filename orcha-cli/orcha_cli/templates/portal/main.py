@@ -4434,6 +4434,45 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     return messages, wake_task_id, ack_through_ts
 
 
+def _resident_inbox_task_work_id(cur, aid: str, delivered_ts, max_ts):
+    """Return the newest pending task-work id a warm resident must leave for the WORK lane.
+
+    This is deliberately narrower than wake_scan's `wake_task_id`: only task-linked events for an
+    in-progress task this agent actively owns should bypass the resident drain sidecar. New ready
+    assignments and open task requests are still drain-safe for the sidecar prompt, whose job is to
+    avoid starting a second task embodiment from a warm chat session.
+    """
+    if max_ts is None:
+        return None
+    cur.execute(
+        """SELECT event_name, payload FROM agent_events
+           WHERE event_key = %s AND ts > %s AND ts <= %s
+             AND (event_name IN ('task_message', 'task_assigned')
+                  OR (event_name='request_answered'
+                      AND payload->>'originating_task_id' IS NOT NULL))
+           ORDER BY ts DESC, id DESC""",
+        (aid, delivered_ts, max_ts),
+    )
+    for ev in cur.fetchall():
+        pl = ev["payload"] or {}
+        tid = (pl.get("originating_task_id") if ev["event_name"] == "request_answered"
+               else pl.get("task_id"))
+        if not tid or not _valid_uuid(tid):
+            continue
+        cur.execute(
+            """SELECT 1 FROM tasks t
+               JOIN agent_tasks at ON at.task_id = t.id
+               WHERE t.id = %s AND at.agent_id = %s
+                 AND t.status = 'in_progress' AND t.is_root = false
+                 AND at.assignment_status IN ('assigned','accepted','working')
+               LIMIT 1""",
+            (tid, aid),
+        )
+        if cur.fetchone():
+            return tid
+    return None
+
+
 @app.get("/api/containers/{cid}/active-conversations")
 def active_conversations(cid: str):
     """E3: the resident-session manager's read-only discovery scan. Every ACTIVE
@@ -4542,9 +4581,12 @@ def active_conversations(cid: str):
                     cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
                 r["inbox_messages"] = msgs
                 r["inbox_ack_ts"] = ack_ts
+                r["inbox_wake_task_id"] = _resident_inbox_task_work_id(
+                    cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
             else:
                 r["inbox_messages"] = []
                 r["inbox_ack_ts"] = None
+                r["inbox_wake_task_id"] = None
             r.pop("_delivered_ts", None)
             r.pop("_inbox_max_ts", None)
     return {"container_id": cid, "conversations": convs}

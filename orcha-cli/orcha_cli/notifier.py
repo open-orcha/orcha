@@ -3998,6 +3998,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # circuits this tick (the `r["sidecar"]` block above), so we only get here with NO sidecar live.
         inbox = (cand or {}).get("pending_inbox", 0) or 0
         inbox_ack_ts = (cand or {}).get("inbox_ack_ts")
+        inbox_wake_task_id = (cand or {}).get("inbox_wake_task_id")
         # ISS-78 anti-thrash backstop (carries the ISS-75/#188 guard forward): don't spawn ANOTHER drain
         # pass when the inbox high-water mark (inbox_ack_ts) hasn't advanced past the last attempt's AND
         # we attempted within the cooldown — a stuck/echo event the drain can't ack away would otherwise
@@ -4014,6 +4015,15 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # here; it is torn down only by the pure idle-reap below or by a real conversation transition.
         if (RESIDENT_WORK_TEARDOWN_ENABLED
                 and not r.get("awaiting_result") and not pending and inbox > 0 and not stalled):
+            if inbox_wake_task_id:
+                # GH #131: this backlog is a resume on an in-progress task the agent already owns.
+                # Leave it on the WORK lane so wake_scan can spawn the normal isolated worker; the
+                # resident drain sidecar is only for no-task drains and new/other task claims.
+                if not quiet:
+                    print(f"[notifier] resident {r.get('alias')} has task-thread work queued "
+                          f"for an in-progress task — leaving inbox for the work worker; warm "
+                          f"conversation + lease KEPT (GH #131)")
+                continue
             _RESIDENT_DRAIN_YIELD[conv_id] = (inbox_ack_ts, time.time())   # mark this drain attempt
             spawned = _spawn_drain_sidecar(api_base, r, inbox,
                                            messages=(cand or {}).get("inbox_messages"),

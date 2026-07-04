@@ -1110,7 +1110,7 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
             # Gate P1b: directed messages have no other inbox surface — must reach the sidecar prompt.
-            "inbox_messages": ["[task-thread message on task T-7] review my diff — RESPOND on it"]}
+            "inbox_messages": ["please review this notification"]}
     posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
     sidecar = ResidentProc(pid=9999)
     spawns = _stub_spawn(monkeypatch, proc=sidecar)
@@ -1128,12 +1128,37 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     assert "do not claim or start a task" in spawns[0]["prompt"].lower()   # lean: NO task auto-start
     assert "/orcha-listen" in spawns[0]["prompt"]                # one-shot: explicitly no watch loop
     # Gate P1b tooth: the directed-message CONTENT is fed into the sidecar prompt (no other surface).
-    assert "review my diff — RESPOND on it" in spawns[0]["prompt"]
+    assert "please review this notification" in spawns[0]["prompt"]
     assert live["C1"]["sidecar"]["proc"] is sidecar             # handle tracked on the resident
     assert live["C1"]["sidecar"]["ack_ts"] == 30.0             # P1a: spawn-time cursor mark stashed
     assert fed == []                                            # NOTHING injected into the warm session
     assert not any(u.endswith("/runs") for u, _ in posts)        # sidecar registers NO worker_run (§3)
     assert notifier._RESIDENT_DRAIN_YIELD["C1"][0] == 30.0       # attempt mark recorded (anti-thrash)
+
+
+def test_service_residents_task_work_signal_skips_drain_sidecar(monkeypatch, tmp_path):
+    """GH #131: a queued inbox item tied to an in-progress task must NOT be drained by the resident
+    sidecar, whose prompt forbids task work. Leaving the cursor untouched lets the WORK lane spawn the
+    normal isolated worker for that task, even while the warm chat session stays open."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 1, "inbox_ack_ts": 30.0, "inbox_wake_task_id": "T-7",
+            "model": "claude-opus-4-8",
+            "inbox_messages": ["[task-thread message on task T-7] review my diff — RESPOND on it"]}
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert "C1" in live and proc.killed is False                  # warm resident + lease KEPT
+    assert spawns == []                                           # sidecar did NOT intercept task work
+    assert fed == []                                              # nothing injected into the warm session
+    assert not sigs and not any(u.endswith("/wake-ack") for u, _ in posts)
+    assert live["C1"].get("sidecar") is None
+    assert "C1" not in notifier._RESIDENT_DRAIN_YIELD             # skip path is not a drain attempt
 
 
 def test_service_residents_no_yield_when_inbox_empty(monkeypatch, tmp_path):
