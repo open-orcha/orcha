@@ -21,6 +21,14 @@
 > and terminal transitions eagerly delete (§6.5); **(B2) a second schedule for a different task
 > no longer clobbers the first** — one row *per task*, so task A's wake survives when task B is
 > scheduled (§5, §6.1). Test plan gains the required cases (§9: 4, 9–12).
+>
+> **Round 3 (this PR head).** Code Reviewer's round-2 verdict raised two more blockers, both now
+> fixed: **(ack-clear)** the wake-ack now carries a `self_wake_task_id` field — the `WakeAck` model
+> had no task field and the daemon ack sent none, so the earlier "delete by the ack's `wake_task_id`"
+> was not implementable; the ack now names the exact per-task row to clear (§6.4, §7). **(schedule
+> validation)** the schedule endpoint validates the **same** `in_progress` + active-assignment
+> predicate the due scan uses, instead of the looser `_agent_participates_in_task`, so it can no
+> longer accept a wake that will never fire (§6.1, §9 item 5).
 
 ## 1. Problem (from the issue)
 
@@ -198,10 +206,31 @@ human-gated**, and one-shot/per-task.
   WORK-lane token plumbing lands via #90/#91; verify the helper name and that a conversation
   token is distinguishable before wiring the reject.
 - **Body** (`SelfWakeSet` Pydantic model): `resume_at` (or `delay_secs`, int ≥ 60 — reuse the
-  same 60s floor the auto-wake DB CHECK enforces, main.py:4107), `task_id` (must be an
-  in_progress task the agent participates in — reuse `_agent_participates_in_task`, used at
-  main.py:4698), `context` (str, bounded — see §7). Validate `task_id` participation so an agent
-  cannot schedule a wake that would load another task's body.
+  same 60s floor the auto-wake DB CHECK enforces, main.py:4107), `task_id`, `context` (str,
+  bounded — see §7).
+- **`task_id` validation MUST match the due-scan grain (round-2 blocker fix).** Do **not** reuse
+  `_agent_participates_in_task` (main.py:1381-1396): its own docstring calls it "the LOOSER
+  participant check" — it accepts the task **creator** and **any historical `agent_tasks` row**
+  (`t.created_by_agent_id` OR any `agent_tasks` row, main.py:1389-1394), regardless of the task's
+  status or whether the agent is still an active assignee. But the §6.2 due scan only ever fires a
+  row whose task is `status='in_progress'` **and** whose agent has an active assignment
+  (`assignment_status IN ('assigned','accepted','working')`). Validating with the looser helper
+  would let the endpoint **accept a wake that can never fire** (e.g. a creator who never worked the
+  task, or a task already in `needs_verification`). So the endpoint validates with the **same
+  predicate the scan uses**:
+
+  ```sql
+  SELECT 1 FROM tasks t
+    JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
+   WHERE t.id = %s AND t.container_id = %s
+     AND t.status = 'in_progress'
+     AND at.assignment_status IN ('assigned','accepted','working')
+   LIMIT 1
+  ```
+
+  Reject (`409`/`422`) when it returns no row, so an agent can only schedule a self-wake for a task
+  it is *actively working right now* — exactly the set the scan can fire. (Negative test: a
+  creator / non-active participant / non-`in_progress` task is rejected, §9 item 5.)
 - **Effect:** upsert one row **per `(agent, task)`** —
   `INSERT INTO agent_self_wake (agent_id, task_id, resume_at, context) VALUES (…)
   ON CONFLICT (agent_id, task_id) DO UPDATE SET resume_at=EXCLUDED.resume_at,
@@ -281,20 +310,28 @@ human-gated**, and one-shot/per-task.
 
 **6.4 `wake_ack` — clear the one-shot ONLY when it was injected** (`main.py:5161`).
 
-- Add `clear_self_wake: bool = False` to the `WakeAck` model (main.py:4724), documented like
-  `stamp_woken` (main.py:4743).
-- In the WORK-lane branch (main.py:5206-5241), when `clear_self_wake` is true, delete the
-  fired row precisely: `DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s`, keyed on
-  the ack's `wake_task_id` (so exactly the `(agent, task)` that just fired is cleared and **every
-  other task's pending self-wake is left intact** — the B2 grain again). When false, leave all
-  rows untouched so a not-yet-consumed self-wake re-fires on the next scan.
-- **Who sets it:** the daemon sets `clear_self_wake=true` on its ack **only when the self-wake
-  actually rode this wake** — i.e. the candidate's `self_wake_injected` was true
-  (`wake_task_id == self_wake_task_id`, §6.2) and the persona it built resolved that task (§7). If
-  a directed message for a *different* task overrode `wake_task_id` (`self_wake_injected=False`),
-  the ack leaves it unset → the row stays scheduled and re-fires cleanly next tick. This closes
-  the silent-consumption hole: **the wait-point is never marked delivered unless the
-  resume-context was surfaced.**
+- **The ack must carry the task id (round-2 blocker fix).** The current `WakeAck` model has **no
+  task field** (main.py:4724-4749) and the daemon's ack payload sends none — only
+  `{delivered_ts, kind, event, release_lease, lane}` (notifier.py:3212-3214). A **per-task**
+  `agent_self_wake` table therefore cannot be cleared by "the ack's `wake_task_id`": that value is
+  not on the ack. So add **two** fields to `WakeAck` (main.py:4724): `clear_self_wake: bool =
+  False` (documented like `stamp_woken`, main.py:4743) **and** `self_wake_task_id: Optional[str] =
+  None` — the exact task whose `(agent, task)` self-wake row just fired. Both default off, so an
+  older notifier that sends neither changes no behaviour (§10).
+- In the WORK-lane branch (main.py:5206-5241), when `clear_self_wake` is true **and**
+  `self_wake_task_id` is a valid uuid, delete exactly that row:
+  `DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s` bound to `(aid, self_wake_task_id)`
+  — so exactly the `(agent, task)` that just fired is cleared and **every other task's pending
+  self-wake is left intact** (the per-task grain). When `clear_self_wake` is false, or
+  `self_wake_task_id` is missing/blank, leave all rows untouched so a not-yet-consumed self-wake
+  re-fires on the next scan.
+- **Who sets it:** the daemon sets `clear_self_wake=true` **and** `self_wake_task_id =
+  cand["self_wake_task_id"]` on its ack **only when the self-wake actually rode this wake** — i.e.
+  the candidate's `self_wake_injected` was true (`wake_task_id == self_wake_task_id`, §6.2) and the
+  persona it built resolved that task (§7). If a directed message for a *different* task overrode
+  `wake_task_id` (`self_wake_injected=False`), the ack leaves **both** unset → the row stays
+  scheduled and re-fires cleanly next tick. This closes the silent-consumption hole: **the
+  wait-point is never marked delivered unless the resume-context was surfaced.**
 
 **6.5 Eager cleanup on terminal / owner-removal transitions (B1 hygiene).** The §6.2 join filter
 already guarantees a stale row *cannot fire*; this deletes the now-dead row promptly so it never
@@ -333,11 +370,14 @@ unconditionally at these sites.
   don't-claim step-2 (notifier.py:640-644) is misleading here; give self-wake its own step-2
   ("resume the task you scheduled this wake for; re-check the external step; if still not ready,
   reschedule another self-wake and exit"), so a worker never re-derives.
-- **`tick` — set `clear_self_wake`** (notifier.py:3040-3211): pass `clear_self_wake=true` on the
-  post-drain WORK-lane ack (notifier.py:3208-3211) **iff** the candidate's `self_wake_injected` is
-  true (i.e. `wake_task_id == self_wake_task_id`, §6.2) — the resume-context rode this wake, so
-  the fired `(agent, task)` row should be deleted. Otherwise omit it (a competing task won; the
-  row survives to re-fire). The run is attributed to `wake_task_id` exactly as today
+- **`tick` — set `clear_self_wake` + `self_wake_task_id`** (notifier.py:3040-3214): the post-drain
+  WORK-lane ack payload (notifier.py:3212-3214) today sends only
+  `{delivered_ts, kind, event, release_lease, lane}`. Add **both** `clear_self_wake=true` and
+  `self_wake_task_id=cand["self_wake_task_id"]` to that dict **iff** the candidate's
+  `self_wake_injected` is true (i.e. `wake_task_id == self_wake_task_id`, §6.2) — the resume-context
+  rode this wake, so the fired `(agent, task)` row should be deleted, and the ack now carries the
+  exact task id the server needs to target it (§6.4). Otherwise send neither field (a competing
+  task won; the row survives to re-fire). The run is attributed to `wake_task_id` exactly as today
   (notifier.py:3123).
 
 ## 8. CLI command
@@ -360,16 +400,22 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
    `wake_task_id == self_wake_task_id`, `self_wake_injected=true`.
 2. **Context injection.** `get_agent_protocol(task_id=self_wake_task_id)` returns
    `resume_context`; `format_persona` renders the resume section right after the #33 body.
-3. **One-shot clear (happy path).** wake-ack with `clear_self_wake=true` deletes the
-   `(agent, task)` row; the next `wake_scan` no longer reports `self_wake_due`.
+3. **One-shot clear (happy path).** wake-ack with `clear_self_wake=true` **and
+   `self_wake_task_id=<task>`** deletes exactly that `(agent, task)` row; the next `wake_scan` no
+   longer reports `self_wake_due`. Also assert an ack with `clear_self_wake=true` but a
+   **missing/blank `self_wake_task_id` deletes nothing** — the server needs the id to target the
+   per-task row (§6.4).
 4. **Negative path — competing directed task wins (the review's required teeth).** A directed
    `prompt`/`task_message` for **task B** is pending AND a self-wake for **task A** is due:
    assert `wake_task_id == B`, `self_wake_injected=false`, `resume_context` **omitted** from the
    protocol for B, and — after an ack **without** `clear_self_wake` — the self-wake row for A is
    **still scheduled** and re-fires on the next scan. (No silent consumption.)
-5. **Auth scoping.** A `conversation`-lane token (or a human actor) is rejected; a WORK-lane
-   token for the participating agent succeeds; a `task_id` the agent does not participate in is
-   rejected.
+5. **Auth scoping + validation grain (round-2 blocker teeth).** A `conversation`-lane token (or a
+   human actor) is rejected; a WORK-lane token for the **active in-progress assignee** succeeds.
+   And the scheduling endpoint rejects a `task_id` the agent (a) does not participate in at all,
+   (b) only **created** but never worked, or (c) participates in but whose task is **not
+   `in_progress`** (e.g. `needs_verification`) — every case the looser `_agent_participates_in_task`
+   would have wrongly accepted but the §6.2 scan can never fire (§6.1).
 6. **Idempotency / cancel (per-task, B2).** Re-scheduling **the same task** replaces its row
    (still exactly one pending row for it, new `resume_at`); `--cancel` deletes that task's row
    only; `--cancel --all` clears every row for the agent.
