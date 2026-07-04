@@ -30,7 +30,7 @@
 > active-assignment predicate the due scan uses, instead of the looser `_agent_participates_in_task`,
 > so it can no longer accept a wake that will never fire (§6.1, §9 item 5).
 >
-> **Round 4 (this PR head).** Code Reviewer's round-3 verdict raised two more blockers, both now
+> **Round 4.** Code Reviewer's round-3 verdict raised two more blockers, both now
 > fixed: **(protocol due-gate)** §6.3 now surfaces `resume_context` **only for a due row**
 > (`resume_at <= now()`, the same predicate the §6.2 scan fires on) — previously a same-task directed
 > message arriving *before* `resume_at` would inject the context early and, because the due-scan
@@ -39,6 +39,21 @@
 > already-shipped `_require_work_lane` helper (main.py:5742) — the same gate the other AI-callable
 > WORK-lane routes use — with **no `_require_kind` fallback**; a missing/conversation/revoked token
 > is a hard 403, and open-question #1 (auth substrate) is resolved and removed (§6.1, §9 item 5).
+>
+> **Round 5 (this PR head).** Code Reviewer's round-4 verdict raised one remaining blocker: the scan
+> picked the *globally earliest* due self-wake row independent of which task won `wake_task_id`, so
+> when a directed message for task **B** won the wake while task **A** was the earliest due self-wake,
+> the protocol injected **B**'s context (it keys on `wake_task_id`) but the clear keyed on **A**'s
+> pick (`self_wake_injected = wake_task_id==self_wake_task_id → B==A → false`) — divergent rows, so
+> B's context re-rendered and never cleared. **Fixed:** §6.2 now resolves `wake_task_id` **first**,
+> then binds the self-wake candidate to **that resolved task's** row (two branches: a competing task
+> that already won the wake, or — if none won — the earliest due row, which then *becomes*
+> `wake_task_id`). By construction `self_wake_task_id == wake_task_id` whenever a self-wake rides, so
+> §6.3 injects and §6.4 clears the **identical** row — divergence is structurally impossible, and
+> `self_wake_injected` collapses to `self_wake_due` (§6.2). §6.3's protocol lookup now also matches
+> the **full** due-scan eligibility (in_progress + active assignee, not just `resume_at <= now()`).
+> New teeth: §9 item 14 (two due self-wakes + a directed message for one of them → that task's
+> context injects **and** its row clears; the other survives).
 
 ## 1. Problem (from the issue)
 
@@ -137,12 +152,13 @@ POST /agents/{aid}/self-wake  ──▶  upsert agent_self_wake row
    context}  (run-token gated)        context)  — one row PER task
 worker EXITS (yields session)
         ⋯ N minutes ⋯
-                                   wake_scan: earliest DUE row whose  ──▶  candidate carries
-                                     task is in_progress + agent           self_wake_* + wake_task_id
-                                     participates → self_wake_due;          = self_wake_task_id
-                                     folds into has_work;                   (stale/non-active rows
-                                     wake_task_id := self_wake_task_id       are filtered out, §6.2)
-                                     (when not overridden, §6.2)
+                                   wake_scan: resolve wake_task_id   ──▶  candidate carries
+                                     FIRST, then bind self-wake to          self_wake_* with
+                                     THAT task's due row (in_progress       self_wake_task_id
+                                     + active assignee); if no task         == wake_task_id by
+                                     won, earliest due row BECOMES          construction
+                                     wake_task_id → self_wake_due           (stale/non-active
+                                     folds into has_work (§6.2)             rows filtered out)
                                                                      ──▶  _build_persona → GET
                                    get_agent_protocol returns the          /protocol(task_id=…)
                                      task body + resume_context      ◀──   renders resume-context
@@ -263,29 +279,75 @@ gates on `_require_work_lane` (below).
 
 **6.2 `wake_scan` — pick up due self-wakes, filtered to active tasks** (`main.py:4811`).
 
-- **Due-row lookup with the active-task join (B1 correctness core).** Per agent, select the
-  **earliest due** self-wake row *that is still valid* — a correlated subquery beside the
-  candidate SELECT (near the `secs_since_woken` computation at main.py:4874-4878):
+- **Resolve `wake_task_id` FIRST, then bind the self-wake to *that* task (round-4 blocker fix —
+  scan / protocol / ack share one row).** The earlier draft picked the *globally earliest* due
+  self-wake row **independent** of which task won `wake_task_id`; when a directed message for task
+  **B** won the wake while task **A** was the earliest due self-wake, the protocol injected **B**'s
+  context (§6.3 keys on `wake_task_id`) but the clear keyed on **A**'s pick — divergent rows, so B
+  re-rendered and never cleared. The fix: the self-wake candidate is **always the row for the
+  resolved `wake_task_id`**, so injection (§6.3) and clear (§6.4) target the identical row.
+
+  The existing `wake_task_id` resolution runs **first and unchanged** — directed messages
+  (`_collect_directed_messages`, main.py:4957) then a pending answer's `originating_task_id`
+  (main.py:4969-4983). Define the shared **self-wake eligibility predicate** (identical to the
+  endpoint's §6.1 validation grain and the protocol's §6.3 lookup — the exact grain the wake-load
+  path already uses at main.py:4709):
 
   ```sql
-  SELECT sw.task_id, sw.context
-    FROM agent_self_wake sw
-    JOIN tasks t         ON t.id = sw.task_id
-    JOIN agent_tasks at  ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
-   WHERE sw.agent_id = a.id
-     AND sw.resume_at <= now()
-     AND t.status = 'in_progress'                         -- B1: never fire for a done/cancelled task
-     AND at.assignment_status IN ('assigned','accepted','working')   -- B1: agent still participates
-   ORDER BY sw.resume_at
-   LIMIT 1
+  sw.resume_at <= now()
+  AND t.status = 'in_progress'                                       -- B1: never for a done/cancelled task
+  AND at.assignment_status IN ('assigned','accepted','working')      -- B1: agent still actively participates
   ```
 
-  The `t.status='in_progress'` + active-assignment join (`assignment_status IN
-  ('assigned','accepted','working')` — the exact grain the wake-load path already uses at
-  main.py:4709) is the **guarantee** that a stale row for a no-longer-active task can never wake
-  the agent, independent of whether §6.5's eager cleanup ran.
-  Expose `self_wake_task_id`, `self_wake_context`, and a computed `self_wake_due` (row present)
-  from this subquery.
+  Then resolve the self-wake in two branches off the already-resolved `wake_task_id` (a correlated
+  subquery beside the candidate SELECT, near the `secs_since_woken` computation at
+  main.py:4874-4878):
+
+  - **A competing task already won `wake_task_id`** (a directed message / pending answer set it):
+    look up the eligible self-wake row **for that exact task**:
+
+    ```sql
+    SELECT sw.context FROM agent_self_wake sw
+      JOIN tasks t        ON t.id = sw.task_id
+      JOIN agent_tasks at ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+     WHERE sw.agent_id = a.id AND sw.task_id = <wake_task_id>
+       AND <eligibility predicate>
+     LIMIT 1
+    ```
+    A row ⇒ the winning task **also** had a due self-wake, so its context injects and its row
+    clears. No row ⇒ the winning task has no due self-wake (the classic "a *different* task's
+    message consumed this wake"): `self_wake_due=false`, nothing injects, and any **other** task's
+    due self-wake row is **left untouched to fire on a later scan**.
+
+  - **No task won `wake_task_id` yet** (`wake_task_id is None`): select the **earliest** eligible
+    self-wake row and **bind** `wake_task_id` to it:
+
+    ```sql
+    SELECT sw.task_id, sw.context FROM agent_self_wake sw
+      JOIN tasks t        ON t.id = sw.task_id
+      JOIN agent_tasks at ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+     WHERE sw.agent_id = a.id AND <eligibility predicate>
+     ORDER BY sw.resume_at
+     LIMIT 1
+    ```
+    A row ⇒ set `wake_task_id := sw.task_id` (this self-wake drives the wake). Several due rows for
+    different tasks ⇒ the earliest is taken this scan and the rest survive to fire on subsequent
+    scans, one per scan (§9 item 9).
+
+  In **both** branches, when a row is found: `self_wake_task_id := wake_task_id`,
+  `self_wake_context := sw.context`, `self_wake_due := true`. When neither yields a row:
+  `self_wake_due := false` and `wake_task_id` is left as the existing resolution set it. The
+  `in_progress` + active-assignment join is the **guarantee** that a stale row for a no-longer-active
+  task can never wake the agent, independent of whether §6.5's eager cleanup ran.
+- **Invariant — one row, no divergence.** By construction `self_wake_due` ⇒
+  `self_wake_task_id == wake_task_id`. The protocol (§6.3) injects the context for `wake_task_id`
+  and the ack (§6.4) clears the row for `self_wake_task_id`; because they are the **same** task, the
+  row injected is exactly the row cleared. **`self_wake_injected` therefore collapses to
+  `self_wake_due` itself** (a due eligible self-wake exists **for the resolved task**) and can no
+  longer disagree with what the protocol actually injected — the round-4 fix. It is `true` both when
+  the self-wake *bound* `wake_task_id` (no competing task) and when a competing message won a task
+  that *also* had a due self-wake; it is `false` only when the winning task had no due self-wake (a
+  different task's message consumed this wake — the row for that different task simply survives).
 - **Lazy cleanup (backstop).** When the scan encounters a self-wake row whose task is *not*
   `in_progress` / not participated (it fails the join above but the row still exists), delete it
   opportunistically (`DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s`), so orphaned
@@ -296,17 +358,6 @@ gates on `_require_work_lane` (below).
   `not embodiment_running`, main.py:5045-5047) apply unchanged. The 60s floor sits well above the
   15s cooldown / 30s min-idle, so no gate conflict (same reasoning the auto-wake note gives at
   main.py:5023-5024).
-- **`wake_task_id` binding.** When `self_wake_due` and no directed message or answer already
-  claimed a `wake_task_id` (i.e. `wake_task_id is None` after the existing resolution at
-  main.py:4957-4983), set `wake_task_id := self_wake_task_id`. If a directed message for *another*
-  task already won `wake_task_id` (main.py:4957), **do NOT override it** — the competing task's
-  work takes this wake and the self-wake row must survive to re-fire (§6.4).
-- **`self_wake_injected` = task-id match (not "who set it").** Define
-  `self_wake_injected = (wake_task_id == self_wake_task_id)`. This is true both when the self-wake
-  bound `wake_task_id` *and* when a directed message for the **same** task independently won it
-  (in which case the resume-context still injects for that task and should still clear). It is
-  false only when a *different* task won — the exact silent-consumption blocker the earlier review
-  caught. Drives the clear decision in §6.4/§7.
 - Surface on the candidate dict (main.py:5110-5146): `self_wake_due`, `self_wake_context`,
   `self_wake_injected`, and `self_wake_task_id`, next to the existing `auto_wake_due` fields
   (main.py:5120). Add a `reason` bit ("scheduled self-wake for task …") beside the auto-wake bit
@@ -319,16 +370,25 @@ gates on `_require_work_lane` (below).
   (main.py:4719-4721) — a single lookup keyed on `(agent_id, task_id)`. Because the notifier
   passes `task_id=wake_task_id` (notifier.py:3058-3059), the context is served only for the task
   this wake actually resolved to.
-- **Due-gate the lookup (round-3 blocker fix — no early/re-render).** The lookup MUST require
-  `resume_at <= now()`, i.e. the row is actually *due* — the **same** predicate the §6.2 due-scan
-  fires on:
+- **Eligibility-gate the lookup (round-3/4 blocker fix — no early/re-render, no stale inject).**
+  The lookup MUST apply the **full eligibility predicate the §6.2 due-scan uses** — not just
+  `resume_at <= now()`, but also the task is `in_progress` and the agent is an active assignee — so
+  the protocol can never inject a context the scan would not have fired:
 
   ```sql
-  SELECT context FROM agent_self_wake
-   WHERE agent_id=%s AND task_id=%s AND resume_at <= now()
+  SELECT sw.context FROM agent_self_wake sw
+    JOIN tasks t        ON t.id = sw.task_id
+    JOIN agent_tasks at ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+   WHERE sw.agent_id=%s AND sw.task_id=%s
+     AND sw.resume_at <= now()
+     AND t.status = 'in_progress'
+     AND at.assignment_status IN ('assigned','accepted','working')
    LIMIT 1
   ```
 
+  Because §6.2 now binds `self_wake_task_id` to the resolved `wake_task_id`, this lookup — keyed on
+  the same `task_id=wake_task_id` the notifier passes (notifier.py:3058-3059) — reads the **identical
+  row** the §6.4 ack will clear, so inject and clear can never target different rows.
   Without the `resume_at <= now()` clause, a directed message for the **same** task arriving
   **before** `resume_at` would resolve `wake_task_id` to that task, cause this endpoint to inject
   the resume-context **early**, and — because the §6.2 due-scan selected no row (not yet due) so
@@ -441,11 +501,12 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
    longer reports `self_wake_due`. Also assert an ack with `clear_self_wake=true` but a
    **missing/blank `self_wake_task_id` deletes nothing** — the server needs the id to target the
    per-task row (§6.4).
-4. **Negative path — competing directed task wins (the review's required teeth).** A directed
-   `prompt`/`task_message` for **task B** is pending AND a self-wake for **task A** is due:
-   assert `wake_task_id == B`, `self_wake_injected=false`, `resume_context` **omitted** from the
-   protocol for B, and — after an ack **without** `clear_self_wake` — the self-wake row for A is
-   **still scheduled** and re-fires on the next scan. (No silent consumption.)
+4. **Negative path — competing directed task wins, no self-wake on it (the review's required
+   teeth).** A directed `prompt`/`task_message` for **task B** is pending, **task B has no self-wake
+   row**, AND a self-wake for **task A** is due: assert `wake_task_id == B`, the branch-A lookup for
+   B finds no eligible row so `self_wake_due=false` / `self_wake_injected=false`, `resume_context`
+   **omitted** from the protocol for B, and — after an ack **without** `clear_self_wake` — the
+   self-wake row for A is **still scheduled** and re-fires on the next scan. (No silent consumption.)
 5. **Auth scoping + validation grain (round-2/3 blocker teeth).** `_require_work_lane` is enforced:
    a request with **no `X-Orcha-Run-Token` header at all → 403** (the hard round-3 requirement — no
    token, no fallback), a **`conversation`-lane token → 403**, and a **revoked/unknown token → 403**;
@@ -484,6 +545,15 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     the ack — sent **without** `clear_self_wake` — the self-wake row for A is **still scheduled** and
     then fires **once** with the context when `resume_at` finally arrives. (Context renders exactly
     once, at due time — never early, never twice.)
+14. **Two due self-wakes + a directed message for one of them — resolved-task binding (round-4
+    blocker teeth).** Task **A** and task **B** *both* have due self-wake rows, and a directed
+    `prompt`/`task_message` for **task B** is pending. Assert `wake_task_id == B` (directed wins),
+    that the self-wake candidate binds to **B** via §6.2's branch-A lookup (`self_wake_task_id == B`,
+    `self_wake_injected=true`), that `get_agent_protocol(task_id=B)` injects **B**'s `resume_context`,
+    and that after the ack (`clear_self_wake=true`, `self_wake_task_id=B`) **B**'s row is deleted
+    while **A**'s row **survives** and fires on the next scan. (The injected row is exactly the
+    cleared row; no divergence, no double-render — the specific hole round 4 caught, where the old
+    "globally earliest" pick chose A while the protocol injected B.)
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
