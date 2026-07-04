@@ -10,6 +10,28 @@ missing.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-04
+
+### Added
+- Native mobile companion apps for iOS and Android (Orcha#30): pair your phone by
+  scanning a QR code, then read your tasks and requests, watch a live run-log
+  feed, create tasks, and nudge or close any request from your phone.
+- Portal: a mobile-pairing QR modal, so connecting a phone is a single scan.
+- Separate conversation and work lanes (Orcha#90, Orcha#91): chatting with an
+  agent and assigning it work are now distinct, and a conversation can hand off a
+  task directly.
+- Claude Sonnet 5 is now offered in the model picker.
+- Agents recognize review verdicts when they wake, so review hand-offs move
+  forward without a human re-explaining the outcome.
+
+### Fixed
+- Notifier no longer folds active-task wakes into the resident drain, so a busy
+  agent's task wakes aren't dropped.
+- Portal: task threads no longer get stuck on "Loading thread…" — a repaint
+  guard misfired on pre-filled protocol fields (Orcha#74).
+- Android: creating a task no longer double-fires on a fast double-tap
+  (Orcha#124).
+
 ## [0.3.0] - 2026-06-30
 
 ### Added

@@ -1,0 +1,5 @@
+build/
+*.xcodeproj/
+!project.yml
+xcuserdata/
+DerivedData/

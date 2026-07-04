@@ -424,13 +424,19 @@ async def test_wake_disabled_opt_out(client, container, make_agent, make_request
 
 
 @pytest.mark.asyncio
-async def test_active_agent_not_woken_until_idle(client, container, make_agent, make_request):
+async def test_active_agent_not_woken_until_idle(client, container, make_agent, make_request, db):
     a = await make_agent("A")
-    # B registers WITH an initial task → heartbeat bumped now → looks active.
+    # B registers WITH an initial task → looks active. GH #91/#90: the WORK-idle gate now keys on
+    # work_last_heartbeat_at (not the agent-wide heartbeat), so seed a fresh work-lane heartbeat to
+    # represent an active work embodiment (register only bumps agents.last_heartbeat_at).
     b = await make_agent("B", initial_task={"title": "t", "definition_of_done": "d"})
+    db.execute(
+        """INSERT INTO agent_wake_state (agent_id, work_last_heartbeat_at) VALUES (%s, now())
+           ON CONFLICT (agent_id) DO UPDATE SET work_last_heartbeat_at = now()""",
+        (b["agent_id"],))
     await make_request(a["agent_id"], "need input", target_alias="B")
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=30)
-    assert cand["should_wake"] is False        # recent heartbeat → cooperative, don't barge in
+    assert cand["should_wake"] is False        # recent work heartbeat → cooperative, don't barge in
     assert "active" in cand["reason"]
     # With min_idle=0 the idle gate is off → it should wake.
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
@@ -499,7 +505,7 @@ async def test_assigned_ready_task_is_autostart_target(client, container, make_a
 
 
 @pytest.mark.asyncio
-async def test_targeted_task_ready_wakes_owner_on_unblock(client, container, make_agent, make_task, db):
+async def test_targeted_task_ready_wakes_owner_on_unblock(client, container, make_agent, make_task, db, work_headers):
     human = await make_agent("H", kind="human")
     a = await make_agent("A")
     b = await make_agent("B")
@@ -511,7 +517,8 @@ async def test_targeted_task_ready_wakes_owner_on_unblock(client, container, mak
     assert t["id"] not in cand["auto_start_task_ids"]
     # A finishes D; human verifies → D completed, T unblocks to 'ready'.
     await client.post(f"/api/tasks/{d['id']}/done",
-                      json={"agent_id": a["agent_id"], "result": "ok"})
+                      json={"agent_id": a["agent_id"], "result": "ok"},
+                      headers=await work_headers(a["agent_id"]))
     r = await client.post(f"/api/tasks/{d['id']}/verify",
                           json={"approve": True, "actor_agent_id": human["agent_id"]})
     assert r.status_code == 200, r.text
