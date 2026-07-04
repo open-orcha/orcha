@@ -167,7 +167,8 @@ struct AgentDetailScreen: View {
         let activeRun = agent.activeRun
         let liveRun = activeRun.map { run in
             RunDto(
-                runId: run.runId, taskId: run.taskId, taskTitle: run.taskTitle,
+                runId: run.runId, agentId: agent.id, agentAlias: agent.alias,
+                taskId: run.taskId, taskTitle: run.taskTitle,
                 status: "running", wakeKind: run.wakeKind, wakeEvent: run.wakeEvent,
                 startedAt: run.startedAt
             )
