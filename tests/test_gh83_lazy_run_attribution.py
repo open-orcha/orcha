@@ -61,6 +61,145 @@ async def test_accept_task_spawned_run_is_attributed(
     assert r.json()["run_id"] in [run["run_id"] for run in pt.json()["runs"]]
 
 
+async def test_accept_task_attributes_current_accepting_run(
+        client, make_agent, make_request, db, work_headers):
+    """Follow-up repro (PR #139 live symptom): accepting a task request happens inside an
+    already-running inbox/request worker. There is no later run-start event for GH #83's lazy
+    inference to fix, so accept-task must attach the current token-bound worker run itself."""
+    a = await make_agent("Requester", "lead")
+    b = await make_agent("bb", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task=_task_payload())
+    headers = await work_headers(b["agent_id"])
+    token = headers["X-Orcha-Run-Token"]
+
+    # The worker is already running before it accepts the task request, and it starts task-less.
+    started = await client.post(f"/api/agents/{b['agent_id']}/runs",
+                                json={"wake_kind": "ephemeral", "token_id": token})
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run_id"]
+    assert started.json()["task_id"] is None
+
+    acc = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=headers)
+    assert acc.status_code == 200, acc.text
+    spawned = acc.json()["spawned_task_id"]
+
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run_id,))[0]
+    assert str(row["task_id"]) == spawned
+    pt = await client.get(f"/api/tasks/{spawned}/runs")
+    assert run_id in [run["run_id"] for run in pt.json()["runs"]]
+
+
+async def test_accept_task_does_not_overwrite_existing_run_task(
+        client, make_agent, make_task, make_request, db, work_headers):
+    """If the token-bound run already has an explicit task link, accept-task must not move it to
+    the newly spawned task. Wrong attribution is worse than leaving the new task without this run."""
+    a = await make_agent("Requester", "lead")
+    b = await make_agent("bb", "eng")
+    existing = await make_task("existing task", "done", assignee_alias="bb")
+    headers = await work_headers(b["agent_id"])
+    token = headers["X-Orcha-Run-Token"]
+    started = await client.post(f"/api/agents/{b['agent_id']}/runs",
+                                json={"wake_kind": "ephemeral",
+                                      "token_id": token,
+                                      "task_id": existing["id"]})
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run_id"]
+    assert started.json()["task_id"] == existing["id"]
+
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task=_task_payload(title="new task"))
+    acc = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=headers)
+    assert acc.status_code == 200, acc.text
+    spawned = acc.json()["spawned_task_id"]
+
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run_id,))[0]
+    assert str(row["task_id"]) == existing["id"]
+    spawned_runs = await client.get(f"/api/tasks/{spawned}/runs")
+    assert run_id not in [run["run_id"] for run in spawned_runs.json()["runs"]]
+
+
+async def test_accept_task_retry_attributes_respawned_taskless_run(
+        client, make_agent, make_task, make_request, db, work_headers):
+    """If the first accept response is lost and a respawn retries the already-accepted request,
+    the retry branch should attach the respawned run to the still-in-progress spawned task."""
+    a = await make_agent("Requester", "lead")
+    b = await make_agent("bb", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task=_task_payload())
+    h1 = await work_headers(b["agent_id"])
+    started1 = await client.post(f"/api/agents/{b['agent_id']}/runs",
+                                 json={"wake_kind": "ephemeral",
+                                       "token_id": h1["X-Orcha-Run-Token"]})
+    assert started1.status_code == 201, started1.text
+    acc1 = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                             json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                             headers=h1)
+    assert acc1.status_code == 200, acc1.text
+    spawned = acc1.json()["spawned_task_id"]
+    await client.post(f"/api/runs/{started1.json()['run_id']}/finish",
+                      json={"status": "killed"})
+
+    # A second active task makes run-start inference ambiguous, so only the retry branch can attach.
+    await make_task("other active task", "done", assignee_alias="bb")
+    h2 = await work_headers(b["agent_id"])
+    started2 = await client.post(f"/api/agents/{b['agent_id']}/runs",
+                                 json={"wake_kind": "ephemeral",
+                                       "token_id": h2["X-Orcha-Run-Token"]})
+    assert started2.status_code == 201, started2.text
+    assert started2.json()["task_id"] is None
+    run2 = started2.json()["run_id"]
+
+    retry = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                              json={"responder_agent_id": b["agent_id"], "note": "retry"},
+                              headers=h2)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["already_accepted"] is True
+    assert retry.json()["spawned_task_id"] == spawned
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run2,))[0]
+    assert str(row["task_id"]) == spawned
+
+
+async def test_accept_task_retry_does_not_attribute_completed_spawned_task(
+        client, make_agent, make_request, db, work_headers):
+    """A stale retry of an old accepted request must not stamp a new task-less run with a task
+    that has already completed."""
+    a = await make_agent("Requester", "lead")
+    b = await make_agent("bb", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task=_task_payload())
+    h1 = await work_headers(b["agent_id"])
+    started1 = await client.post(f"/api/agents/{b['agent_id']}/runs",
+                                 json={"wake_kind": "ephemeral",
+                                       "token_id": h1["X-Orcha-Run-Token"]})
+    assert started1.status_code == 201, started1.text
+    acc1 = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                             json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                             headers=h1)
+    assert acc1.status_code == 200, acc1.text
+    spawned = acc1.json()["spawned_task_id"]
+    db.execute("UPDATE tasks SET status='completed' WHERE id=%s", (spawned,))
+
+    h2 = await work_headers(b["agent_id"])
+    started2 = await client.post(f"/api/agents/{b['agent_id']}/runs",
+                                 json={"wake_kind": "ephemeral",
+                                       "token_id": h2["X-Orcha-Run-Token"]})
+    assert started2.status_code == 201, started2.text
+    assert started2.json()["task_id"] is None
+    run2 = started2.json()["run_id"]
+    retry = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                              json={"responder_agent_id": b["agent_id"], "note": "stale retry"},
+                              headers=h2)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["already_accepted"] is True
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run2,))[0]
+    assert row["task_id"] is None
+
+
 async def test_late_attribution_on_finish_when_unattached_at_start(
         client, make_agent, make_task):
     """Backstop: a run that started before the agent had any in_progress task (so it began
