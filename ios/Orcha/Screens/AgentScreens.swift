@@ -163,16 +163,31 @@ struct AgentDetailScreen: View {
 
     // MARK: Now (flow 09 §4)
 
+    private func nowTile(_ agent: AgentDto) -> (taskId: String?, title: String?, liveRun: RunDto?) {
+        let activeRun = agent.activeRun
+        let liveRun = activeRun.map { run in
+            RunDto(
+                runId: run.runId, taskId: run.taskId, taskTitle: run.taskTitle,
+                status: "running", wakeKind: run.wakeKind, wakeEvent: run.wakeEvent,
+                startedAt: run.startedAt
+            )
+        }
+        if let activeRun {
+            return (activeRun.taskId, activeRun.taskTitle, liveRun)
+        }
+        return (agent.currentTask?.taskId, agent.currentTask?.title, liveRun)
+    }
+
     @ViewBuilder
     private func nowSection(_ agent: AgentDto) -> some View {
-        let liveRun = model.agentRuns.first { $0.status == "running" }
-        if let tid = agent.currentTask?.taskId {
+        let (tid, title, liveRun) = nowTile(agent)
+        if let tid {
             SectionH(title: "Now")
             NavigationLink(value: WorkspaceRoute.task(tid)) {
                 OrchaCard {
                     HStack(spacing: 8) {
                         Text("▸").font(.system(size: 15, weight: .heavy)).foregroundStyle(p.accent)
-                        Text(agent.currentTask?.title ?? tid)
+                        Text(title ?? tid)
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(p.text)
                             .lineLimit(2)

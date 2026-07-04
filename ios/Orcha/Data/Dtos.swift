@@ -38,6 +38,7 @@ struct AgentDto: Decodable, Identifiable {
     var wakeEnabled: Bool?
     var autoWakeIntervalSecs: Int?
     var currentTask: AgentTaskRef?
+    var activeRun: ActiveRunDto?
     var lastActive: String?
     var terminatedAt: String?
 
@@ -47,6 +48,7 @@ struct AgentDto: Decodable, Identifiable {
         case wakeEnabled = "wake_enabled"
         case autoWakeIntervalSecs = "auto_wake_interval_secs"
         case currentTask = "current_task"
+        case activeRun = "active_run"
         case lastActive = "last_active"
         case terminatedAt = "terminated_at"
     }
@@ -59,6 +61,28 @@ struct AgentTaskRef: Decodable {
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
         case title
+    }
+}
+
+struct ActiveRunDto: Decodable {
+    let runId: String
+    var wakeEvent: String?
+    var wakeKind: String?
+    var runtime: String?
+    var taskId: String?
+    var taskTitle: String?
+    var hasConversation: Bool?
+    var startedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case runtime
+        case runId = "run_id"
+        case wakeEvent = "wake_event"
+        case wakeKind = "wake_kind"
+        case taskId = "task_id"
+        case taskTitle = "task_title"
+        case hasConversation = "has_conversation"
+        case startedAt = "started_at"
     }
 }
 
