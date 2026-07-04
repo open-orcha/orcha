@@ -293,6 +293,20 @@ struct TaskLinkDto: Decodable {
     }
 }
 
+/// Flow 07a — the nudge outcome (`main.py:7762-7801`). `nudged:false` is a clean no-op
+/// (the routed next-action owner is a human / the nudger) — informational, not an error.
+struct NudgeResult: Decodable {
+    var nudged: Bool = false
+    var nudgedRole: String?
+    var nudgedAgentId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nudged
+        case nudgedRole = "nudged_role"
+        case nudgedAgentId = "nudged_agent_id"
+    }
+}
+
 struct TaskMessagesResponse: Decodable {
     var messages: [TaskMessageDto] = []
     /// ISS-68 keyset paging (`main.py:5940`): present only when `limit`>0 was requested.

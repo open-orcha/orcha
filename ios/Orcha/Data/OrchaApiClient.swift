@@ -180,8 +180,10 @@ struct OrchaApiClient {
         try await post(base, "/api/requests/\(rid)/close", ["requester_agent_id": actor, "reason": reason])
     }
 
-    func nudgeRequest(_ base: String, _ rid: String, actor: String, note: String?) async throws {
-        try await post(base, "/api/requests/\(rid)/nudge", ["actor_agent_id": actor, "note": note])
+    /// Flow 07a: returns the routed outcome so the UI can tell a real wake
+    /// (`nudged:true` → "Nudged {alias}") from the human-owns-it no-op (`nudged:false`).
+    func nudgeRequest(_ base: String, _ rid: String, actor: String, note: String?) async throws -> NudgeResult {
+        try await postDecoding(base, "/api/requests/\(rid)/nudge", ["actor_agent_id": actor, "note": note])
     }
 
     func escalateRequest(_ base: String, _ rid: String, actor: String, reason: String?) async throws {
@@ -205,9 +207,6 @@ struct OrchaApiClient {
         ])
     }
 
-    func triageCloseRequest(_ base: String, _ rid: String) async throws {
-        try await post(base, "/api/requests/\(rid)/triage-close", [:])
-    }
 
     func updateAgentModel(_ base: String, _ aid: String, model: String) async throws {
         try await post(base, "/api/agents/\(aid)/model", ["model": model])

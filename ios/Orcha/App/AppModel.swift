@@ -490,11 +490,35 @@ final class AppModel {
         }
     }
 
+    /// Flow 07a: the toast is state-aware — a real wake names the woken agent, while the
+    /// `{nudged:false}` no-op (a human owns the next action) is informational, not an error.
     func nudgeRequest(_ rid: String, note: String?) async -> Bool {
-        await humanAction("Nudge sent") { base, actor in
-            try await api.nudgeRequest(base, rid, actor: actor, note: note)
-            await refresh()
+        guard let sel = selectedContainer else { return false }
+        guard let actor = sel.humanAgentId else {
+            error = "Pairing is missing the human identity. Reconnect this Orcha first."
+            return false
         }
+        actionInFlight = true
+        error = nil
+        defer { actionInFlight = false }
+        do {
+            let result = try await api.nudgeRequest(sel.baseUrl, rid, actor: actor, note: note)
+            toast = nudgeToast(result)
+            await refresh()
+            return true
+        } catch {
+            self.error = friendly(error)
+            return false
+        }
+    }
+
+    private func nudgeToast(_ r: NudgeResult) -> String {
+        guard r.nudged else { return "No agent to wake — a human owns the next action." }
+        if let alias = MobileUx.aliasFor(r.nudgedAgentId, in: snapshot?.agents ?? []) {
+            return "Nudged \(alias)"
+        }
+        if let role = r.nudgedRole { return "Nudged the \(role)" }
+        return "Nudge sent"
     }
 
     func escalateRequest(_ rid: String, reason: String?) async -> Bool {
@@ -525,12 +549,6 @@ final class AppModel {
         }
     }
 
-    func triageCloseRequest(_ rid: String) async -> Bool {
-        await humanAction("Request closed (triage)") { base, _ in
-            try await api.triageCloseRequest(base, rid)
-            await refresh()
-        }
-    }
 
     func changeModel(_ agentId: String, model: String) async -> Bool {
         await humanAction("Model changed") { base, _ in

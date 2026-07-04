@@ -15,6 +15,8 @@ struct RequestDetailScreen: View {
         var id: Self { self }
     }
     @State private var sheet: Sheet?
+    /// Flow 07a — owner-close (no reason needed) confirms via a dialog, not a sheet.
+    @State private var showCloseConfirm = false
 
     private var request: RequestDto? {
         model.snapshot?.requests.first { $0.id == requestId }
@@ -42,6 +44,12 @@ struct RequestDetailScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarMenu }
         .sheet(item: $sheet) { which in sheetView(which) }
+        .confirmationDialog("Close this request?", isPresented: $showCloseConfirm, titleVisibility: .visible) {
+            Button("Close request", role: .destructive, action: closeNow)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The owner sees it closed on the next sync.")
+        }
     }
 
     // MARK: sections
@@ -123,10 +131,25 @@ struct RequestDetailScreen: View {
 
     // MARK: action bar (state × role matrix, flow 07 — binding)
 
+    /// Flow 07a — two tiers. TIER 1 "Your move" is role-specific (Respond / Accept·Reject /
+    /// Convert). TIER 2 "Operator actions" (Nudge · Close) is universal, computed purely from
+    /// status + owner/target identity so it lights up on ANY request the human can see —
+    /// including agent↔agent traffic they are no party to.
     @ViewBuilder
     private func actionBar(_ req: RequestDto, isRequester: Bool, isTarget: Bool) -> some View {
         let busy = model.actionInFlight
+        let neither = !isRequester && !isTarget
+        // Operator-tier visibility (§4). `targetIsYou` is a LITERAL human match (not a null
+        // target) — hiding a nudge that would only wake yourself.
+        let targetIsYou = req.targetId == model.humanId
+        let showClose = ["open", "answered", "accepted"].contains(req.status)
+        let showNudge = ["open", "answered"].contains(req.status)
+            && !(req.status == "open" && targetIsYou)
+            && !(req.status == "answered" && isRequester)
+        let closeNeedsReason = req.requesterId != model.humanId
+
         VStack(spacing: 8) {
+            // TIER 1 — Your move (role-specific)
             if req.status == "open" && isTarget && req.type == "info" {
                 KitButton(title: "Respond", role: .primary, enabled: !busy) { sheet = .respond }
             }
@@ -136,41 +159,45 @@ struct RequestDetailScreen: View {
                     KitButton(title: "Reject…", role: .dangerTonal, enabled: !busy) { sheet = .reject }
                 }
             }
-            if isRequester && ["open", "answered"].contains(req.status) {
+            if req.status == "answered" && isRequester {
+                KitButton(title: "Convert to task", role: .tonal, enabled: !busy) { sheet = .convert }
+            }
+
+            // Operator note — only when acting on someone else's request (neither role).
+            if neither && (showNudge || showClose) {
+                OperatorNote(you: model.selectedContainer?.humanAlias ?? "you")
+            }
+
+            // TIER 2 — Operator actions (universal)
+            if showNudge || showClose {
                 HStack(spacing: 8) {
-                    if req.status == "answered" {
-                        KitButton(title: "Convert to task", role: .tonal, enabled: !busy) { sheet = .convert }
-                    } else {
+                    if showNudge {
                         KitButton(title: "Nudge", role: .tonal, enabled: !busy) { sheet = .nudge }
                     }
-                    KitButton(title: "Close", role: .neutral, enabled: !busy, action: closeNow)
+                    if showClose {
+                        KitButton(
+                            title: "Close",
+                            role: closeNeedsReason ? .dangerTonal : .neutral,
+                            enabled: !busy
+                        ) {
+                            if closeNeedsReason { sheet = .closeWithReason } else { showCloseConfirm = true }
+                        }
+                    }
                 }
-            }
-            if isRequester && req.status == "accepted" {
-                KitButton(title: "Nudge", role: .tonal, enabled: !busy) { sheet = .nudge }
             }
         }
     }
 
-    // MARK: toolbar menu (escalate / neither-role triage)
+    // MARK: toolbar menu (escalate — Nudge/Close are now the operator tier, §4)
 
     @ToolbarContentBuilder
     private var toolbarMenu: some ToolbarContent {
         if let req = request {
             let isRequester = req.requesterId == model.humanId
-            let isTarget = req.targetId == model.humanId || req.targetId == nil
-            let requesterActionable = isRequester && ["open", "answered"].contains(req.status)
-            let triageActionable = !isRequester && !isTarget && ["open", "answered"].contains(req.status)
-            if requesterActionable || triageActionable {
+            if isRequester && ["open", "answered"].contains(req.status) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        if requesterActionable {
-                            Button("Escalate", action: escalate)
-                        }
-                        if triageActionable {
-                            Button("Close with reason…") { sheet = .closeWithReason }
-                            Button("Triage-close (stale)", role: .destructive, action: triageClose)
-                        }
+                        Button("Escalate", action: escalate)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -200,14 +227,14 @@ struct RequestDetailScreen: View {
             }
         case .nudge:
             RequestTextSheet(
-                kicker: "NUDGE", title: "A standalone wake for whoever owes the next action.",
+                kicker: "NUDGE", title: nudgeSubcopy,
                 label: "Note (optional)", required: false, confirm: "Nudge"
             ) { text in
                 await model.nudgeRequest(requestId, note: text.isEmpty ? nil : text)
             }
         case .closeWithReason:
             RequestTextSheet(
-                kicker: "CLOSE REQUEST", title: "Closing someone else's request needs a reason.",
+                kicker: "CLOSE REQUEST", title: closeReasonSubcopy,
                 label: "Reason (required)", required: true, confirm: "Close", destructive: true
             ) { reason in
                 let ok = await model.closeRequest(requestId, reason: reason)
@@ -233,8 +260,45 @@ struct RequestDetailScreen: View {
         Task { _ = await model.escalateRequest(requestId, reason: nil) }
     }
 
-    private func triageClose() {
-        Task { if await model.triageCloseRequest(requestId) { dismiss() } }
+    // MARK: state-routed sheet copy (§5)
+
+    /// Nudge sub-copy names who wakes: open → the target (owes the answer); answered → the
+    /// requester (must act on it or close it).
+    private var nudgeSubcopy: String {
+        guard let req = request else { return "Wake whoever owes the next action." }
+        let agents = model.snapshot?.agents ?? []
+        if req.status == "answered" {
+            let who = MobileUx.aliasFor(req.requesterId, in: agents) ?? "the requester"
+            return "Wakes \(who) — they must act on the answer or close it."
+        }
+        let who = MobileUx.aliasFor(req.targetId, in: agents) ?? "the target"
+        return "Wakes \(who) — they still owe an answer."
+    }
+
+    /// Forced-close reason helper names the owner it's routed to.
+    private var closeReasonSubcopy: String {
+        let who = MobileUx.aliasFor(request?.requesterId, in: model.snapshot?.agents ?? []) ?? "the owner"
+        return "Closing \(who)'s request needs a reason — it's sent to them so they know why."
+    }
+}
+
+/// Flow 07a — the operator note above the operator-action tier, shown only when the human
+/// is neither requester nor target. Mirrors the portal's "Arbitrating as {alias}…" banner.
+private struct OperatorNote: View {
+    @Environment(\.palette) private var p
+    let you: String
+
+    var body: some View {
+        OrchaCard(borderColor: p.warn) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "flag.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(p.warn)
+                Text("Acting as operator (\(you)). Closing another agent's request needs a reason — it's sent to the owner so they know why.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(p.muted)
+            }
+        }
     }
 }
 
