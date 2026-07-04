@@ -22,13 +22,23 @@
 > no longer clobbers the first** — one row *per task*, so task A's wake survives when task B is
 > scheduled (§5, §6.1). Test plan gains the required cases (§9: 4, 9–12).
 >
-> **Round 3 (this PR head).** Code Reviewer's round-2 verdict raised two more blockers, both now
-> fixed: **(ack-clear)** the wake-ack now carries a `self_wake_task_id` field — the `WakeAck` model
-> had no task field and the daemon ack sent none, so the earlier "delete by the ack's `wake_task_id`"
-> was not implementable; the ack now names the exact per-task row to clear (§6.4, §7). **(schedule
-> validation)** the schedule endpoint validates the **same** `in_progress` + active-assignment
-> predicate the due scan uses, instead of the looser `_agent_participates_in_task`, so it can no
-> longer accept a wake that will never fire (§6.1, §9 item 5).
+> **Round 3.** Code Reviewer's round-2 verdict raised two more blockers, both fixed at head
+> `cb31e674`: **(ack-clear)** the wake-ack now carries a `self_wake_task_id` field — the `WakeAck`
+> model had no task field and the daemon ack sent none, so the earlier "delete by the ack's
+> `wake_task_id`" was not implementable; the ack now names the exact per-task row to clear (§6.4,
+> §7). **(schedule validation)** the schedule endpoint validates the **same** `in_progress` +
+> active-assignment predicate the due scan uses, instead of the looser `_agent_participates_in_task`,
+> so it can no longer accept a wake that will never fire (§6.1, §9 item 5).
+>
+> **Round 4 (this PR head).** Code Reviewer's round-3 verdict raised two more blockers, both now
+> fixed: **(protocol due-gate)** §6.3 now surfaces `resume_context` **only for a due row**
+> (`resume_at <= now()`, the same predicate the §6.2 scan fires on) — previously a same-task directed
+> message arriving *before* `resume_at` would inject the context early and, because the due-scan
+> selected no row, never clear it, so it re-rendered at `resume_at`; injection and clear are now in
+> exact lock-step (§6.3, §9 item 13). **(auth hard-gate)** §6.1 now gates `/self-wake` on the
+> already-shipped `_require_work_lane` helper (main.py:5742) — the same gate the other AI-callable
+> WORK-lane routes use — with **no `_require_kind` fallback**; a missing/conversation/revoked token
+> is a hard 403, and open-question #1 (auth substrate) is resolved and removed (§6.1, §9 item 5).
 
 ## 1. Problem (from the issue)
 
@@ -193,18 +203,24 @@ Why a table (and how it closes both round-1 blockers):
 
 **6.1 New endpoint — `POST /api/agents/{aid}/self-wake`** (agent-callable, ephemeral WORK lane
 only). Mirrors the shape of `update_agent_auto_wake` (main.py:4102) but is **AI-callable, not
-human-gated**, and one-shot/per-task.
+human-gated**, and one-shot/per-task. Takes an `x_orcha_run_token: Optional[str] =
+Header(default=None, alias="X-Orcha-Run-Token")` param (same declaration as main.py:3560) and
+gates on `_require_work_lane` (below).
 
-- **Auth scoping (ephemeral WORK lane only).** Unlike the auto-wake endpoint's
-  `_require_kind(..., ("human",))` (main.py:4114), this requires the caller to be the AI agent
-  itself operating its WORK embodiment. Gate on the process-scoped embodiment token
-  (`X-Orcha-Run-Token`, minted per WORK-lane spawn at notifier.py:3102 `_mint_embodiment_token`,
-  lane `"work"`), and reject a `conversation`-lane token — a resident/chat session cannot
-  self-schedule a task wake. Fall back to `_require_kind(..., ("ai",))` + participant check when
-  no token layer is present, consistent with existing AI-gated routes (e.g. the `("ai",)` gate
-  at main.py:3570). *Confirm the exact token-verification helper at implementation time* — the
-  WORK-lane token plumbing lands via #90/#91; verify the helper name and that a conversation
-  token is distinguishable before wiring the reject.
+- **Auth scoping (ephemeral WORK lane only) — hard-gated, no fallback (round-3 blocker fix).**
+  Unlike the auto-wake endpoint's `_require_kind(..., ("human",))` (main.py:4114), `/self-wake`
+  gates on the already-shipped WORK-lane helper `_require_work_lane(cur, aid, x_orcha_run_token)`
+  (main.py:5742-5754) — the **same** gate the other AI-callable WORK-lane task routes already use
+  (`wake_claim` main.py:3568, `task_done` main.py:6766, `respond_request` main.py:8181). It reads
+  the `X-Orcha-Run-Token` header (declared exactly as those routes do, e.g. main.py:3560) and
+  **raises 403 on a missing / unknown / revoked / conversation-lane token**, passing **only** a
+  valid non-revoked `lane='work'` token for this agent (main.py:5747-5754). A resident/chat
+  session (conversation token) therefore cannot self-schedule a task wake; a human live terminal
+  passes because the terminal bridge mints it a WORK token (helper docstring, main.py:5745-5746).
+  **There is no `_require_kind`/participant fallback** — the token is a hard requirement, so an
+  unauthenticated or conversation caller is rejected before any DB write. The WORK-lane token
+  plumbing already lives on `origin/main` (GH #90/#91), so nothing here is deferred to
+  implementation time.
 - **Body** (`SelfWakeSet` Pydantic model): `resume_at` (or `delay_secs`, int ≥ 60 — reuse the
   same 60s floor the auto-wake DB CHECK enforces, main.py:4107), `task_id`, `context` (str,
   bounded — see §7).
@@ -298,15 +314,35 @@ human-gated**, and one-shot/per-task.
 
 **6.3 `get_agent_protocol` — carry the resume-context** (`main.py:4662`).
 
-- When a pending `agent_self_wake` row exists for `(this agent, resolved task_id)`, include its
-  `context` as `resume_context` in the response next to the #33 body fields (main.py:4719-4721) —
-  a single lookup keyed on `(agent_id, task_id)`. Because the notifier passes
-  `task_id=wake_task_id` (notifier.py:3058-3059), the context is served only for the task this
-  wake actually resolved to.
-- **Graceful mismatch (non-blocking note carried forward):** if there is no pending self-wake row
-  for the requested `(agent, task_id)` (a competing task won, or none scheduled), simply **omit**
-  `resume_context` — never 4xx. The endpoint already returns `{task_id: null, protocol: null}`
-  for an unresolved wake (main.py:4716-4717); the resume-context is purely additive.
+- When a **due** pending `agent_self_wake` row exists for `(this agent, resolved task_id)`,
+  include its `context` as `resume_context` in the response next to the #33 body fields
+  (main.py:4719-4721) — a single lookup keyed on `(agent_id, task_id)`. Because the notifier
+  passes `task_id=wake_task_id` (notifier.py:3058-3059), the context is served only for the task
+  this wake actually resolved to.
+- **Due-gate the lookup (round-3 blocker fix — no early/re-render).** The lookup MUST require
+  `resume_at <= now()`, i.e. the row is actually *due* — the **same** predicate the §6.2 due-scan
+  fires on:
+
+  ```sql
+  SELECT context FROM agent_self_wake
+   WHERE agent_id=%s AND task_id=%s AND resume_at <= now()
+   LIMIT 1
+  ```
+
+  Without the `resume_at <= now()` clause, a directed message for the **same** task arriving
+  **before** `resume_at` would resolve `wake_task_id` to that task, cause this endpoint to inject
+  the resume-context **early**, and — because the §6.2 due-scan selected no row (not yet due) so
+  `self_wake_injected` is false — the ack would **not** clear it (§6.4). The still-scheduled row
+  would then fire **again** at `resume_at`, double-rendering the context. Gating the injection on
+  the identical due predicate keeps §6.3 (inject) and §6.2/§6.4 (mark-injected + clear) in exact
+  lock-step: the context is surfaced **iff** the row is due, and it is cleared **iff** it was
+  surfaced. (Now-monotonicity makes this race-free: if the row is due at the §6.2 scan it is still
+  due at the slightly-later §6.3 protocol call.)
+- **Graceful mismatch (non-blocking note carried forward):** if there is no *due* pending
+  self-wake row for the requested `(agent, task_id)` (not yet due, a competing task won, or none
+  scheduled), simply **omit** `resume_context` — never 4xx. The endpoint already returns
+  `{task_id: null, protocol: null}` for an unresolved wake (main.py:4716-4717); the resume-context
+  is purely additive.
 
 **6.4 `wake_ack` — clear the one-shot ONLY when it was injected** (`main.py:5161`).
 
@@ -410,9 +446,12 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
    assert `wake_task_id == B`, `self_wake_injected=false`, `resume_context` **omitted** from the
    protocol for B, and — after an ack **without** `clear_self_wake` — the self-wake row for A is
    **still scheduled** and re-fires on the next scan. (No silent consumption.)
-5. **Auth scoping + validation grain (round-2 blocker teeth).** A `conversation`-lane token (or a
-   human actor) is rejected; a WORK-lane token for the **active in-progress assignee** succeeds.
-   And the scheduling endpoint rejects a `task_id` the agent (a) does not participate in at all,
+5. **Auth scoping + validation grain (round-2/3 blocker teeth).** `_require_work_lane` is enforced:
+   a request with **no `X-Orcha-Run-Token` header at all → 403** (the hard round-3 requirement — no
+   token, no fallback), a **`conversation`-lane token → 403**, and a **revoked/unknown token → 403**;
+   only a valid non-revoked WORK token for the **active in-progress assignee** succeeds (mirrors the
+   existing `_require_work_lane` route tests). And the scheduling endpoint rejects a `task_id` the
+   agent (a) does not participate in at all,
    (b) only **created** but never worked, or (c) participates in but whose task is **not
    `in_progress`** (e.g. `needs_verification`) — every case the looser `_agent_participates_in_task`
    would have wrongly accepted but the §6.2 scan can never fire (§6.1).
@@ -437,6 +476,14 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
     `wake_scan` reports no `self_wake_due` and the row is gone (§6.5).
 12. **B1 — task delete cascades.** Schedule a self-wake, delete the task: the `agent_self_wake`
     row is removed by `ON DELETE CASCADE` (§5) — no orphaned "wake with no valid task".
+13. **Early same-task directed wake — no early/re-render (round-3 blocker teeth).** Schedule a
+    self-wake for **task A** with `resume_at` in the future (not yet due), then make a directed
+    `prompt`/`task_message` for **the same task A** pending so the wake fires **before** `resume_at`.
+    Assert `get_agent_protocol(task_id=A)` **omits** `resume_context` (the §6.3 `resume_at <= now()`
+    due-gate), that `self_wake_injected` is **false** (§6.2 due-scan selected no row), and that after
+    the ack — sent **without** `clear_self_wake` — the self-wake row for A is **still scheduled** and
+    then fires **once** with the context when `resume_at` finally arrives. (Context renders exactly
+    once, at due time — never early, never twice.)
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
@@ -457,13 +504,9 @@ Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 
 ## 11. Open questions for review
 
-1. **Auth substrate.** Confirm the WORK-lane run-token verification helper and that a
-   conversation-lane token is reliably distinguishable at the endpoint (depends on the #90/#91
-   token plumbing landing). If not yet available, fall back to `_require_kind(("ai",))` +
-   participant check and note the gap.
-2. **Reschedule ergonomics.** Should a self-wake that fires but finds the external step *still*
+1. **Reschedule ergonomics.** Should a self-wake that fires but finds the external step *still*
    not ready require an explicit new `self-wake` call (current plan), or support an optional
    auto-reschedule/backoff? Plan keeps it explicit (one-shot) for simplicity; flag if a bounded
    auto-retry is wanted.
-3. **Context size cap.** Proposed a modest cap (e.g. 2 KB) on `context`; confirm the bound and
+2. **Context size cap.** Proposed a modest cap (e.g. 2 KB) on `context`; confirm the bound and
    whether it should reuse an existing `MAX_*` constant.
