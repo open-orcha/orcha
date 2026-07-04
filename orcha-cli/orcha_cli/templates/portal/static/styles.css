@@ -387,6 +387,7 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 [data-theme="light"] .btn.approve, [data-theme="auto"] .btn.approve { color: #fff; }
 .btn.sm { padding: 6px 11px; font-size: 12px; border-radius: 8px; }
 .btn:disabled { opacity: .42; cursor: not-allowed; filter: none; transform: none; }
+.pair-top { flex: none; }
 
 /* status pill — text + icon + colour, identical in lists & detail */
 .pill {
@@ -663,6 +664,49 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 .modal .mh p { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
 .modal .mb { padding: 14px 20px 4px; }
 .modal .mf { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px 18px; }
+
+/* mobile pairing modal */
+.pair-modal { width: min(640px, 100%); }
+.pair-head { display: flex; align-items: center; gap: 13px; padding: 20px 22px 16px; border-bottom: 1px solid var(--border); }
+.pair-head h3 { font-size: 17px; font-weight: 730; letter-spacing: -.02em; }
+.pair-head p { margin: 3px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.pair-mark { width: 42px; height: 42px; border-radius: 12px; flex: none; display: grid; place-items: center;
+  background: radial-gradient(120% 120% at 50% 30%, #0e2d33, #06171c); border: 1px solid var(--border-2); }
+.pair-mark svg { width: 30px; height: 30px; display: block; }
+.pair-content { padding: 18px 22px 22px; }
+.pair-select { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.pair-select span { color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.pair-select select { min-width: 180px; background: var(--surface-3); color: var(--text); border: 1px solid var(--border-2);
+  border-radius: 8px; font: inherit; font-size: 13px; padding: 7px 10px; outline: none; }
+.pair-select select:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.pair-grid { display: grid; grid-template-columns: 304px minmax(0, 1fr); gap: 22px; align-items: center; }
+.pair-qr-wrap { min-width: 0; }
+.pair-qr { width: 304px; height: 304px; display: grid; place-items: center; background: #fff; border-radius: 12px;
+  border: 1px solid var(--border-2); box-shadow: var(--shadow-sm); overflow: hidden; }
+.pair-qr svg { width: 280px; height: 280px; display: block; }
+.pair-url { margin-top: 10px; color: var(--accent); font-size: 12.5px; text-align: center; word-break: break-all; }
+.pair-meta { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
+.pair-label { color: var(--faint); font-size: 10.5px; font-weight: 740; letter-spacing: .08em; text-transform: uppercase; }
+.pair-value { color: var(--text); font-size: 13.5px; font-weight: 620; margin-top: 3px; }
+.pair-code { display: inline-flex; align-self: flex-start; margin-top: 4px; padding: 6px 9px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); font-size: 13px; letter-spacing: .08em; }
+.pair-foot { color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+.pair-loading { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 304px;
+  color: var(--muted); font-size: 13px; }
+.pair-loading svg { width: 17px; height: 17px; color: var(--accent); }
+.pair-warning { border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: 12px; padding: 16px; }
+.pair-warn-title { display: flex; align-items: center; gap: 9px; color: var(--warn); font-size: 14px; font-weight: 720; }
+.pair-warn-title svg { width: 18px; height: 18px; }
+.pair-warning p { margin: 10px 0 0; color: var(--text-2); font-size: 13px; line-height: 1.55; }
+.pair-remedy { margin-top: 13px; padding: 11px 12px; border-radius: 9px; background: var(--surface); border: 1px solid var(--border);
+  color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.pair-remedy code { white-space: normal; word-break: break-word; }
+@media (max-width: 720px) {
+  .pair-grid { grid-template-columns: 1fr; }
+  .pair-qr { width: min(304px, 100%); height: auto; aspect-ratio: 1; margin: 0 auto; }
+  .pair-url { text-align: left; }
+}
 
 /* toast */
 .toast { position: fixed; right: 22px; bottom: 22px; z-index: 90; background: var(--surface);

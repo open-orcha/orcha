@@ -9,12 +9,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import importlib.resources as pkg_res
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 import json
 import os
 import pathlib
+import re
 import secrets
 import shutil
 import socket
@@ -33,6 +35,7 @@ PKG_TEMPLATES = PKG_ROOT / "templates"
 # auto-generates + persists one to .orcha/.env on up/upgrade so stored-key storage works
 # out of the box; see _ensure_secret_key.
 _MASTER_KEY_ENV = "ORCHA_SECRET_KEY"
+_PAIRING_HOST_ENV = "ORCHA_PAIRING_HOST"
 
 
 # Pure-stdlib shared modules that the portal container imports top-level (`import <name>`) but
@@ -267,6 +270,62 @@ def _tighten_env_file(env_file: pathlib.Path) -> None:
         pass
 
 
+def _usable_pairing_ip(value: str) -> Optional[str]:
+    """Return a phone-reachable LAN-ish IP, or None for localhost/link-local/etc."""
+    try:
+        ip = ipaddress.ip_address((value or "").strip())
+    except ValueError:
+        return None
+    if ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local:
+        return None
+    # Prefer private LANs for the direct phone-to-laptop story. If a site uses a routed
+    # corporate address, allow it as long as it is not one of the known non-reachable classes.
+    if ip.version == 4 and str(ip).startswith("169.254."):
+        return None
+    return str(ip)
+
+
+def _discover_pairing_host() -> Optional[str]:
+    """Best-effort host LAN IP discovery for mobile pairing.
+
+    This runs on the Mac/host before Docker starts. Doing it inside the portal container would
+    usually find Docker's bridge address, which a phone cannot reach.
+    """
+    supplied = _usable_pairing_ip(os.environ.get(_PAIRING_HOST_ENV, ""))
+    if supplied:
+        return supplied
+
+    candidates: list[str] = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(0.2)
+            s.connect(("1.1.1.1", 80))
+            candidates.append(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for family, _typ, _proto, _canon, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+            if family == socket.AF_INET and sockaddr:
+                candidates.append(sockaddr[0])
+    except OSError:
+        pass
+
+    for c in candidates:
+        ip = _usable_pairing_ip(c)
+        if ip:
+            return ip
+    return None
+
+
+def _export_pairing_host() -> None:
+    """Expose the host LAN IP to docker compose for the portal's pairing endpoint."""
+    if os.environ.get(_PAIRING_HOST_ENV):
+        return
+    host = _discover_pairing_host()
+    if host:
+        os.environ[_PAIRING_HOST_ENV] = host
+
+
 def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
     if "up" in args:
         # SSE: the portal bind-mounts the host wake-log dir (../.claude/.orcha-wakes). Create
@@ -288,6 +347,7 @@ def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: b
         # #294 Item 1: ensure the secret_box master key exists + is exported so the portal env
         # gets it on this up (init / up / upgrade all funnel through here).
         _ensure_secret_key(orcha_dir)
+        _export_pairing_host()
     cmd = ["docker", "compose", "-f", str(orcha_dir / "docker-compose.yml"), *args]
     return subprocess.run(cmd, check=check, capture_output=capture, text=capture)
 
@@ -778,6 +838,8 @@ def _full_project(project_name: str) -> str:
 
 def _by_project(project_name: str, *args: str) -> None:
     """Run `docker compose -p orcha-<name> <args...>` from anywhere."""
+    if "up" in args:
+        _export_pairing_host()
     cmd = ["docker", "compose", "-p", _full_project(project_name), *args]
     subprocess.run(cmd, check=True)
 
@@ -1547,6 +1609,9 @@ def _write_hook_config(claude_dir: pathlib.Path) -> bool:
                                               continuity digest before exiting)
     - PostToolUse   → `orcha poll-inbox`     (drains the watcher's queue into
                                               Claude's next-turn context)
+    - PreToolUse    → `orcha conv-guard`     (GH #91/#90: blocks the task-claim/
+                                              mutation path for a conversation
+                                              embodiment; no-op otherwise)
 
     Each entry is added independently and idempotently — re-running this with
     a partially-present config will fill in whatever's missing without touching
@@ -1590,6 +1655,11 @@ def _write_hook_config(claude_dir: pathlib.Path) -> bool:
 
     added_any = False
     added_any |= _ensure("PostToolUse",  "orcha poll-inbox",   matcher="*")
+    # GH #91/#90: PreToolUse conversation-lane backstop. A no-op unless ORCHA_CONVERSATION_WORKER=1,
+    # so interactive human tabs / task ephemerals / live terminals are unaffected; for a conversation
+    # embodiment it denies the task-claim/mutation path (/orcha-next, /orcha-accept-task, /orcha-done,
+    # Edit/Write/NotebookEdit) while leaving dispatch + conversation-reply allowed.
+    added_any |= _ensure("PreToolUse",   "orcha conv-guard",   matcher="*")
     added_any |= _ensure("SessionStart", "orcha watch --detach", matcher=None)
     # Epic C: a SECOND SessionStart entry, alongside watch — prints the rehydrate
     # brief. Independent + idempotent: the two entries don't clobber each other.
@@ -1707,6 +1777,82 @@ def cmd_poll_inbox(args: argparse.Namespace) -> None:
         f"Handle at the next step boundary: `/orcha-inbox --alias {alias}` "
         f"for full thread, or `/orcha-outbox --alias {alias}` for answered asks."
     )
+
+
+# GH #91/#90: the task-claim/mutation surface a CONVERSATION embodiment must NOT touch. Keyed by the
+# skill's slash-name (SlashCommand tool passes it as tool_input.command). The conversation lane is a
+# responder — it dispatches work (creates/assigns tasks, replies inline) but never claims/advances a
+# task itself; that's the WORK lane's job. This is the SECONDARY floor — the server's _require_work_lane
+# gate (a conversation token can't pass) is the PRIMARY one; this hook just gives the model a clean,
+# early deny instead of letting it burn a turn on a call the server would 403.
+_CONV_BLOCKED_SLASH = ("orcha-next", "orcha-accept-task", "orcha-done")
+# File-mutating tools a conversation responder shouldn't reach for (it dispatches code work to a task,
+# it doesn't do the edits itself). Dispatch + read + conversation-reply tools stay allowed.
+_CONV_BLOCKED_TOOLS = ("Edit", "Write", "NotebookEdit")
+# PR R5: the ONE file surface a conversation embodiment must keep — its persistent Claude Code
+# file-memory (~/.claude/projects/<project>/memory/...). A warm resident that can't write memory
+# silently stops persisting what it learns across sessions; memory writes are self-bookkeeping,
+# not the "code work" the lane guard exists to farm out.
+_CONV_MEMORY_DIR_RE = re.compile(r"/\.claude/projects/[^/]+/memory/")
+
+
+def _conv_is_memory_write(tool_input: dict) -> bool:
+    """True when a blocked file tool is targeting the agent's file-memory directory."""
+    path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    return bool(_CONV_MEMORY_DIR_RE.search(path.replace("\\", "/")))
+
+
+def cmd_conv_guard(_: argparse.Namespace) -> None:
+    """PreToolUse backstop (GH #91/#90): when ORCHA_CONVERSATION_WORKER=1, block the task-claim /
+    task-mutation path so a conversation embodiment stays a responder — it DISPATCHES work (create/
+    assign a task, reply/post to the conversation) but never claims or advances a task itself.
+
+    PreToolUse hooks receive {tool_name, tool_input, ...} on stdin and can veto a call by emitting a
+    `hookSpecificOutput.permissionDecision: "deny"`. We deny two things when the marker is set:
+      - the task-lifecycle SLASH skills (/orcha-next, /orcha-accept-task begin-work, /orcha-done), and
+      - the file-mutating tools (Edit/Write/NotebookEdit) — a responder farms code edits out to a task.
+    Everything else (task create/assign dispatch, conversation reply/post, all reads) is ALLOWED.
+
+    Secondary to the server's _require_work_lane gate (the primary floor a conversation token can't
+    pass). Must NEVER raise — a broken hook must not wedge the session, so any error → allow (exit 0)."""
+    # Only a genuine conversation embodiment is gated. Task ephemerals / the drain sidecar / a human /
+    # a live terminal never set this marker → the guard is a no-op for them.
+    if os.environ.get("ORCHA_CONVERSATION_WORKER") != "1":
+        return
+    payload = _read_hook_stdin()
+    tool_name = payload.get("tool_name") or ""
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    blocked_reason = None
+    if tool_name in _CONV_BLOCKED_TOOLS and not _conv_is_memory_write(tool_input):
+        blocked_reason = (
+            f"{tool_name} is blocked for a conversation embodiment. You are the conversation "
+            "responder: dispatch code work to an assigned task (with a clear title/DoD/protocol) "
+            "instead of editing files inline. (Writes to your own memory directory are allowed.)"
+        )
+    elif tool_name == "SlashCommand":
+        # SlashCommand passes the invoked command as tool_input.command, e.g. "/orcha-next --alias x".
+        cmd = str(tool_input.get("command") or "").lstrip("/").strip()
+        first = cmd.split()[0] if cmd else ""
+        if first in _CONV_BLOCKED_SLASH:
+            blocked_reason = (
+                f"/{first} is a WORK-lane task action, blocked for a conversation embodiment. "
+                "You dispatch work (create/assign a task, reply inline) — you do not claim or "
+                "advance tasks yourself. Create an assigned task and reply with the task link."
+            )
+
+    if blocked_reason is None:
+        return                                          # allowed — say nothing, exit 0
+    # Deny cleanly via the PreToolUse hook JSON contract.
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": blocked_reason,
+        }
+    }))
 
 
 def _fmt_rehydrate_brief(b: dict) -> str:
@@ -2429,6 +2575,14 @@ def build_parser() -> argparse.ArgumentParser:
                       help="[deprecated] accepted for back-compat with older settings.json; ignored "
                            "now that polling moved to `orcha watch`")
     poll.set_defaults(func=cmd_poll_inbox)
+
+    conv_guard = sub.add_parser(
+        "conv-guard",
+        help="PreToolUse hook entry (GH #91/#90) — when ORCHA_CONVERSATION_WORKER=1, denies the "
+             "task-claim/mutation path (/orcha-next, /orcha-accept-task, /orcha-done, Edit/Write/"
+             "NotebookEdit) so a conversation embodiment stays a responder. No-op otherwise.",
+    )
+    conv_guard.set_defaults(func=cmd_conv_guard)
 
     watch = sub.add_parser(
         "watch",
