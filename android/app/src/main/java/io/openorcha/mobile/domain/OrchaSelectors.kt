@@ -1,6 +1,7 @@
 package io.openorcha.mobile.domain
 
 import io.openorcha.mobile.data.AgentDto
+import io.openorcha.mobile.data.AgentTaskRef
 import io.openorcha.mobile.data.ContainerSnapshot
 import io.openorcha.mobile.data.RequestDto
 import io.openorcha.mobile.data.TaskDto
@@ -28,6 +29,17 @@ object OrchaSelectors {
             it.status == "open" && (humanId == null || it.targetId == humanId)
         }
         return NeedsYou(plans, verifications, requests)
+    }
+
+    // Now-section (flow 09 §4, GH #125/#126): activeRun is authoritative whenever present — even
+    // when it's task-less — so it never gets paired with a stale currentTask field (no per-field mixing).
+    fun nowTaskRef(agent: AgentDto): AgentTaskRef? {
+        val run = agent.activeRun
+        return if (run != null) {
+            run.taskId?.let { AgentTaskRef(taskId = it, title = run.taskTitle) }
+        } else {
+            agent.currentTask
+        }
     }
 
     fun tasksByStatus(tasks: List<TaskDto>): Map<String, List<TaskDto>> =

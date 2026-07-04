@@ -56,6 +56,7 @@ import io.openorcha.mobile.data.ModelDto
 import io.openorcha.mobile.data.RunDto
 import io.openorcha.mobile.data.TurnDto
 import io.openorcha.mobile.domain.MobileUx
+import io.openorcha.mobile.domain.OrchaSelectors
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.components.Avatar
 import io.openorcha.mobile.ui.components.AvatarSize
@@ -181,10 +182,11 @@ fun AgentDetailScreen(
             if (agent.kind == "ai" && !dead) {
                 item { PrimaryButton("Converse", { onConversation(agent.id) }, Modifier.fillMaxWidth()) }
             }
-            // Now (flow 09 §4): live run's task wins over a stale current_task claim (GH #125)
+            // Now (flow 09 §4): live run's task wins over a stale current_task claim (GH #125/#126)
             val activeRun = agent.activeRun
-            val nowTaskId = activeRun?.taskId ?: agent.currentTask?.taskId
-            val nowTaskTitle = activeRun?.taskTitle ?: agent.currentTask?.title
+            val nowTask = OrchaSelectors.nowTaskRef(agent)
+            val nowTaskId = nowTask?.taskId
+            val nowTaskTitle = nowTask?.title
             if (nowTaskId != null || activeRun != null) {
                 item { SectionH("Now") }
                 nowTaskId?.let { tid ->
