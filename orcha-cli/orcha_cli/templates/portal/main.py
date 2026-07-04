@@ -5737,6 +5737,34 @@ def _require_work_lane(cur, aid, token):
         raise HTTPException(403, "conversation lane cannot claim/work a task; create/assign a task and stop")
 
 
+def _attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
+    """GH #83 follow-up: accepting a task request happens inside an already-running worker, so
+    the lazy run-start/run-finish inference never sees a new spawn to attach. The work token is
+    already bound to the current worker_runs row; if that row is still task-less, attach it to the
+    task the accept just spawned. Existing explicit task links are preserved."""
+    if not token or not task_id:
+        return False
+    cur.execute(
+        """UPDATE worker_runs wr
+              SET task_id=%s
+             FROM embodiment_tokens et
+            WHERE et.run_token=%s
+              AND et.agent_id=%s
+              AND et.lane='work'
+              AND et.revoked_at IS NULL
+              AND et.run_id IS NOT NULL
+              AND wr.run_id=et.run_id
+              AND wr.agent_id=et.agent_id
+              AND wr.status='running'
+              AND wr.task_id IS NULL
+              AND EXISTS (SELECT 1 FROM tasks t
+                           WHERE t.id=%s AND t.status='in_progress')
+        RETURNING wr.run_id""",
+        (task_id, token, aid, task_id),
+    )
+    return cur.fetchone() is not None
+
+
 def _revoke_tokens_for_runs(cur, run_ids):
     """GH #91/#90: revoke every non-revoked token bound to any of these run_ids. Called on EVERY
     server-observed run-terminal transition (finish / wake-ack orphan / reaper / dead-pid sweep) so a
@@ -8011,6 +8039,10 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
         # fall through to the Point 5 backstop. Rebuild it deterministically from the request detail.
         if r["status"] == "accepted":
             _retry_dod = ((r["detail"] or {}).get("definition_of_done") or "")
+            if r["spawned_task_id"]:
+                _attribute_token_run_to_task(cur, body.responder_agent_id, x_orcha_run_token,
+                                             str(r["spawned_task_id"]))
+                conn.commit()
             return {"request_id": rid, "status": "accepted",
                     "spawned_task_id": str(r["spawned_task_id"]) if r["spawned_task_id"] else None,
                     "report_back": _build_report_back(rid, _retry_dod),
@@ -8076,6 +8108,7 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
         log_event(cur, r["container_id"], "ai", body.responder_agent_id,
                   "task", tid, "created",
                   {"title": task["title"], "via": "task-request accept"})
+        _attribute_token_run_to_task(cur, body.responder_agent_id, x_orcha_run_token, tid)
         # GH #56 (Point 6): accept must NOT wake the requester — only the real ANSWER (at material
         # completion) wakes them. The accept stays in the audit feed via log_event above, but we no
         # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was

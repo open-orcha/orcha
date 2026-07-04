@@ -94,5 +94,50 @@ class OrchaSelectorsTest {
 
         assertEquals(AgentTaskRef(taskId = "t1", title = "Current task"), result)
     }
+
+    // GH #140: task-ref linkification — bare full-UUID or unambiguous-prefix tokens in a
+    // message body resolve to a known task, mirroring the portal's TASK_REF_RE/taskByRef.
+    @Test
+    fun resolvesFullUuidTaskRef() {
+        val target = TaskDto(id = "d87de515-710e-4588-96fc-5822c0801cc7", title = "Clickable links")
+        val tasks = listOf(target, TaskDto(id = "6a8771a2-7335-40b3-99ff-53208ef1eb6b", title = "iOS twin"))
+
+        val matches = OrchaSelectors.taskRefMatches("see task d87de515-710e-4588-96fc-5822c0801cc7 please", tasks)
+
+        assertEquals(1, matches.size)
+        assertEquals(target, matches.single().task)
+    }
+
+    @Test
+    fun resolvesUniqueEightCharPrefix() {
+        val target = TaskDto(id = "d87de515-710e-4588-96fc-5822c0801cc7", title = "Clickable links")
+        val tasks = listOf(target, TaskDto(id = "6a8771a2-7335-40b3-99ff-53208ef1eb6b", title = "iOS twin"))
+
+        val matches = OrchaSelectors.taskRefMatches("blocked on d87de515 for now", tasks)
+
+        assertEquals(1, matches.size)
+        assertEquals(target, matches.single().task)
+    }
+
+    @Test
+    fun ambiguousPrefixDoesNotResolve() {
+        val tasks = listOf(
+            TaskDto(id = "d87de515-710e-4588-96fc-5822c0801cc7", title = "Clickable links"),
+            TaskDto(id = "d87de515-aaaa-4588-96fc-5822c0801cc7", title = "Collides on prefix"),
+        )
+
+        val matches = OrchaSelectors.taskRefMatches("see d87de515 for details", tasks)
+
+        assertEquals(0, matches.size)
+    }
+
+    @Test
+    fun unknownIdPassesThroughUnresolved() {
+        val tasks = listOf(TaskDto(id = "d87de515-710e-4588-96fc-5822c0801cc7", title = "Clickable links"))
+
+        val matches = OrchaSelectors.taskRefMatches("cross-container task ffffffff-ffff-ffff-ffff-ffffffffffff", tasks)
+
+        assertEquals(0, matches.size)
+    }
 }
 

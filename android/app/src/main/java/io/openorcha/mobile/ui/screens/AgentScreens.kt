@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.ModelDto
 import io.openorcha.mobile.data.RunDto
+import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TurnDto
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.domain.OrchaSelectors
@@ -482,6 +483,7 @@ fun ConversationScreen(
     onSend: (String) -> Unit,
     onEnd: () -> Unit,
     onOpenRun: (RunDto) -> Unit,
+    onOpenTask: (String) -> Unit,
 ) {
     val p = Orcha.palette
     val agent = state.selectedAgent
@@ -581,7 +583,7 @@ fun ConversationScreen(
                         }
                     }
                     item(key = turn.id ?: "${turn.seq}") {
-                        TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id)
+                        TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id, state.snapshot?.tasks.orEmpty(), onOpenTask)
                     }
                 }
                 unsentTurn?.let { text ->
@@ -646,13 +648,24 @@ fun ConversationScreen(
 }
 
 @Composable
-private fun TurnBubble(turn: TurnDto, humanId: String?, agentAlias: String?, onOpenRun: (RunDto) -> Unit, agentId: String?) {
+private fun TurnBubble(
+    turn: TurnDto,
+    humanId: String?,
+    agentAlias: String?,
+    onOpenRun: (RunDto) -> Unit,
+    agentId: String?,
+    tasks: List<TaskDto>,
+    onOpenTask: (String) -> Unit,
+) {
     val p = Orcha.palette
     val mine = turn.authorAgentId == humanId || turn.role == "human"
     when {
-        turn.role == "system" -> Bubble(BubbleKind.System, turn.content)
-        mine -> Bubble(BubbleKind.Mine, turn.content, time = MobileUx.agoLabel(turn.createdAt))
-        else -> Bubble(BubbleKind.Theirs, turn.content, author = agentAlias ?: "agent", time = MobileUx.agoLabel(turn.createdAt)) {
+        turn.role == "system" -> Bubble(BubbleKind.System, turn.content, tasks = tasks, onOpenTask = onOpenTask)
+        mine -> Bubble(BubbleKind.Mine, turn.content, time = MobileUx.agoLabel(turn.createdAt), tasks = tasks, onOpenTask = onOpenTask)
+        else -> Bubble(
+            BubbleKind.Theirs, turn.content, author = agentAlias ?: "agent", time = MobileUx.agoLabel(turn.createdAt),
+            tasks = tasks, onOpenTask = onOpenTask,
+        ) {
             turn.runId?.let { rid ->
                 Text(
                     "Open work log →",

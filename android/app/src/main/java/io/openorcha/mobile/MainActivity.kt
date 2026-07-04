@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
                         onRefresh = viewModel::refreshSelectedTask,
                         onSendMessage = viewModel::sendTaskMessage,
                         onLoadEarlier = viewModel::loadEarlierMessages,
+                        onOpenTask = viewModel::openTask,
                     )
 
                     AppRoute.RequestDetail -> RequestDetailScreen(
@@ -185,6 +186,7 @@ class MainActivity : ComponentActivity() {
                         onSend = viewModel::sendConversationTurn,
                         onEnd = viewModel::endConversation,
                         onOpenRun = viewModel::openRun,
+                        onOpenTask = viewModel::openTask,
                     )
 
                     AppRoute.CreateTask -> CreateTaskScreen(
