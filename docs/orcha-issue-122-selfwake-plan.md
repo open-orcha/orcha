@@ -12,6 +12,15 @@
 > **clear-only-if-injected** conditional, and the **migration slot** number) plus its
 > non-blocking notes (graceful protocol mismatch, dedicated `build_wake_prompt` branch,
 > negative-path test).
+>
+> **Round 2 (this PR head).** Code Reviewer's round-1 verdict on PR #146 raised two blockers,
+> both now addressed by moving from three columns on `agent_wake_state` (one pending wake per
+> agent) to a dedicated **per-task `agent_self_wake` table** keyed `(agent_id, task_id)`:
+> **(B1) stale rows never fire** — `wake_scan` joins the row to its task and requires
+> `status='in_progress'` + participation, `ON DELETE CASCADE` removes rows for deleted tasks,
+> and terminal transitions eagerly delete (§6.5); **(B2) a second schedule for a different task
+> no longer clobbers the first** — one row *per task*, so task A's wake survives when task B is
+> scheduled (§5, §6.1). Test plan gains the required cases (§9: 4, 9–12).
 
 ## 1. Problem (from the issue)
 
@@ -94,32 +103,38 @@ writes the directive, with a dedicated `auto_wake_due` heartbeat branch at notif
 
 ## 4. Design overview
 
-A new **one-shot, per-task, agent-callable** wake, stored on `agent_wake_state` alongside the
-existing WORK-lane wake state, picked up as a new OR-term in `wake_scan`, and surfaced through
-the **same** `wake_task_id` → protocol → `format_persona` path so the resume-context injects at
-the #33 seam. It fires **once**, then clears — but **only when the context actually rode the
-injection** (§6).
+A new **one-shot, per-task, agent-callable** wake, stored in a dedicated `agent_self_wake` table
+keyed `(agent_id, task_id)` (one pending row per task, so several concurrently-blocked tasks each
+keep their own — see §5 rationale), picked up as a new OR-term in `wake_scan`, and surfaced
+through the **same** `wake_task_id` → protocol → `format_persona` path so the resume-context
+injects at the #33 seam. It fires **once**, then clears — but **only when the context actually
+rode the injection** (§6.4), and it can **never fire for a task that is no longer `in_progress`**
+(§6.2 join filter + §6.5 eager cleanup).
 
 ```
 worker (blocked on CI)                server                              notifier daemon
 ─────────────────────                 ──────                              ───────────────
-POST /agents/{aid}/self-wake  ──▶  set agent_wake_state.self_wake_at,
-  {resume_at, task_id,               self_wake_task_id, self_wake_context
-   context}  (run-token gated)        (one-shot; WORK lane)
+POST /agents/{aid}/self-wake  ──▶  upsert agent_self_wake row
+  {resume_at, task_id,               (agent_id, task_id, resume_at,
+   context}  (run-token gated)        context)  — one row PER task
 worker EXITS (yields session)
         ⋯ N minutes ⋯
-                                   wake_scan: self_wake_due OR-term  ──▶  candidate carries
-                                     folds into has_work;                 self_wake_* + wake_task_id
-                                     wake_task_id := self_wake_task_id     = self_wake_task_id
-                                     (when not overridden, §6)
+                                   wake_scan: earliest DUE row whose  ──▶  candidate carries
+                                     task is in_progress + agent           self_wake_* + wake_task_id
+                                     participates → self_wake_due;          = self_wake_task_id
+                                     folds into has_work;                   (stale/non-active rows
+                                     wake_task_id := self_wake_task_id       are filtered out, §6.2)
+                                     (when not overridden, §6.2)
                                                                      ──▶  _build_persona → GET
                                    get_agent_protocol returns the          /protocol(task_id=…)
                                      task body + resume_context      ◀──   renders resume-context
                                                                            at the #33 seam;
                                                                            build_wake_prompt
                                                                            self-wake branch
-                                   wake-ack {clear_self_wake:true}   ◀──   ONLY if the context
-                                     clears the one-shot row               actually rode (§6)
+                                   wake-ack {clear_self_wake:true}   ◀──   ONLY if wake_task_id ==
+                                     DELETEs the (agent,task) row           self_wake_task_id, i.e.
+                                     — other tasks' rows untouched          the context actually
+                                                                           rode (§6.4)
 ```
 
 ## 5. Data model / migration
@@ -129,25 +144,42 @@ worker EXITS (yields session)
 `029_close_accepted_requests.sql.pending` is parked (not applied). If `031` is taken by the time
 this is implemented, use the next free number — re-check the directory at implementation time.
 
-New migration `031_agent_self_wake.sql` adds three nullable columns to `agent_wake_state`
-(the table that already holds `last_woken_at`, `delivered_ts`, and the WORK-lane lease columns —
-same lifecycle, so co-locating avoids a parallel table + join):
+New migration `031_agent_self_wake.sql` creates a **dedicated table keyed per `(agent, task)`**,
+*not* columns on `agent_wake_state`. (Round-1 review, blocker B2: an agent can have **several
+in_progress tasks at once** — the protocol loader is explicit about not guessing the wrong one,
+`orcha-cli/orcha_cli/notifier.py:1021-1025`, `main.py:4695-4715` — so a single per-agent slot
+would silently drop task A's pending wake the moment task B scheduled one.)
 
 ```sql
-ALTER TABLE agent_wake_state
-  ADD COLUMN self_wake_at      timestamptz,          -- one-shot resume_at; NULL = none scheduled
-  ADD COLUMN self_wake_task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
-  ADD COLUMN self_wake_context text;                 -- small free-text payload (bounded, see §7)
--- Partial index so wake_scan's due-check stays cheap.
-CREATE INDEX IF NOT EXISTS idx_agent_wake_self_due
-  ON agent_wake_state (self_wake_at) WHERE self_wake_at IS NOT NULL;
+CREATE TABLE agent_self_wake (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  task_id     uuid NOT NULL REFERENCES tasks(id)  ON DELETE CASCADE,   -- B1: deleted task ⇒ row gone
+  resume_at   timestamptz NOT NULL,                 -- one-shot fire time (delay floor 60s, §6.1)
+  context     text,                                 -- small free-text payload (bounded, §7)
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (agent_id, task_id)                         -- one pending self-wake PER task; re-sched = upsert
+);
+-- wake_scan's due-scan reads this ordered by fire time; keep it cheap.
+CREATE INDEX IF NOT EXISTS idx_agent_self_wake_due ON agent_self_wake (resume_at);
 ```
 
-Rationale for columns-on-`agent_wake_state` over a new table: one-shot + at most one pending
-self-wake per agent WORK lane (the same single-flight shape as the existing wake state), so a row
-per agent is exact; `ON DELETE SET NULL` means a deleted task auto-cancels a stale self-wake.
-Free text (not JSONB) keeps the payload a plain human/agent-readable string that renders directly
-into the wake prompt; a length cap (§7) is enforced at the API layer.
+Why a table (and how it closes both round-1 blockers):
+
+- **B2 — no silent loss across tasks.** `UNIQUE (agent_id, task_id)` means re-scheduling the
+  *same* task upserts (one pending per task), while scheduling a *different* task inserts a
+  **separate** row. Task A's wake is never clobbered by task B's. (`(agent, task)` is the exact
+  grain the wake-load path already keys on, `main.py:4695-4715`.)
+- **B1 — a stale/dead task can never fire.** `ON DELETE CASCADE` on `task_id` deletes the row
+  outright when the task is deleted (no orphaned "wake with no valid task" the old
+  `ON DELETE SET NULL` left behind). For the *non-delete* terminal transitions (done →
+  `needs_verification`/`completed`, cancel → `cancelled`), the row lingers until cleaned, so the
+  correctness guarantee is the `wake_scan` **join filter** (§6.2: task must be `in_progress` **and**
+  the agent must still participate), backed by eager delete on those transitions (§6.5) and a lazy
+  delete in scan (§6.2). Belt (filter) + suspenders (eager + lazy delete).
+- **Context stays free text** (not JSONB): a plain human/agent-readable string that renders
+  directly into the wake prompt; a length cap (§7) is enforced at the API layer.
+- `ON DELETE CASCADE` on `agent_id` keeps the table clean if an agent row is ever removed.
 
 ## 6. Server changes (`main.py`)
 
@@ -170,31 +202,66 @@ human-gated**, and one-shot/per-task.
   in_progress task the agent participates in — reuse `_agent_participates_in_task`, used at
   main.py:4698), `context` (str, bounded — see §7). Validate `task_id` participation so an agent
   cannot schedule a wake that would load another task's body.
-- **Effect:** `UPDATE agent_wake_state SET self_wake_at=%s, self_wake_task_id=%s,
-  self_wake_context=%s WHERE agent_id=%s` (upsert, mirroring the `ON CONFLICT` pattern at
+- **Effect:** upsert one row **per `(agent, task)`** —
+  `INSERT INTO agent_self_wake (agent_id, task_id, resume_at, context) VALUES (…)
+  ON CONFLICT (agent_id, task_id) DO UPDATE SET resume_at=EXCLUDED.resume_at,
+  context=EXCLUDED.context` (same `ON CONFLICT` idiom as the wake-state upsert at
   main.py:5211-5212). Writes an audit `log_event` (`self_wake_scheduled`) exactly as
   `update_agent_auto_wake` logs `auto_wake_updated` (main.py:4127-4128).
-- **Idempotency:** a second call before the first fires **replaces** it (one pending self-wake
-  per agent). Optionally a `DELETE`/clear form (set columns NULL) so a worker that unblocks early
-  can cancel.
+- **Idempotency (B2 semantics).** Re-scheduling **the same task** before it fires **replaces**
+  that task's pending wake (upsert on the unique key). Scheduling a **different** task inserts a
+  **separate** row — the first task's pending wake is preserved, not clobbered. Result: at most
+  one pending self-wake *per task*, any number *per agent*.
+- **Cancel form.** A `DELETE`/clear path so a worker that unblocks early can cancel: default
+  `DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s` (this task only); an optional
+  `--all` clears every pending self-wake for the agent.
 
-**6.2 `wake_scan` — pick up due self-wakes** (`main.py:4811`).
+**6.2 `wake_scan` — pick up due self-wakes, filtered to active tasks** (`main.py:4811`).
 
-- Add to the candidate SELECT (near main.py:4874-4878, alongside `secs_since_woken`):
-  `w.self_wake_at`, `w.self_wake_task_id`, `w.self_wake_context`, and a computed
-  `(w.self_wake_at IS NOT NULL AND w.self_wake_at <= now()) AS self_wake_due`.
+- **Due-row lookup with the active-task join (B1 correctness core).** Per agent, select the
+  **earliest due** self-wake row *that is still valid* — a correlated subquery beside the
+  candidate SELECT (near the `secs_since_woken` computation at main.py:4874-4878):
+
+  ```sql
+  SELECT sw.task_id, sw.context
+    FROM agent_self_wake sw
+    JOIN tasks t         ON t.id = sw.task_id
+    JOIN agent_tasks at  ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+   WHERE sw.agent_id = a.id
+     AND sw.resume_at <= now()
+     AND t.status = 'in_progress'                         -- B1: never fire for a done/cancelled task
+     AND at.assignment_status IN ('assigned','accepted','working')   -- B1: agent still participates
+   ORDER BY sw.resume_at
+   LIMIT 1
+  ```
+
+  The `t.status='in_progress'` + active-assignment join (`assignment_status IN
+  ('assigned','accepted','working')` — the exact grain the wake-load path already uses at
+  main.py:4709) is the **guarantee** that a stale row for a no-longer-active task can never wake
+  the agent, independent of whether §6.5's eager cleanup ran.
+  Expose `self_wake_task_id`, `self_wake_context`, and a computed `self_wake_due` (row present)
+  from this subquery.
+- **Lazy cleanup (backstop).** When the scan encounters a self-wake row whose task is *not*
+  `in_progress` / not participated (it fails the join above but the row still exists), delete it
+  opportunistically (`DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s`), so orphaned
+  rows don't accumulate between terminal-transition cleanups (§6.5). Correctness never depends on
+  this firing — the join already excludes it.
 - Add `self_wake_due` as an OR-term to `has_work` (main.py:5031) — symmetric with
   `auto_wake_due`. The existing gates (`is_idle`, `not in_cooldown`, `not lease_active`,
   `not embodiment_running`, main.py:5045-5047) apply unchanged. The 60s floor sits well above the
   15s cooldown / 30s min-idle, so no gate conflict (same reasoning the auto-wake note gives at
   main.py:5023-5024).
-- **`wake_task_id` binding (correctness core).** When `self_wake_due` and no directed message or
-  answer already claimed a `wake_task_id` (i.e. the current `wake_task_id is None` after the
-  existing resolution at main.py:4957-4983), set `wake_task_id := self_wake_task_id` **and** mark
-  the candidate `self_wake_injected = True`. If a directed message for *another* task already won
-  `wake_task_id` (main.py:4957), **do NOT override it** and leave `self_wake_injected = False` —
-  the competing task's work takes this wake, the resume-context does not ride, and the self-wake
-  row must survive to re-fire (see 6.4). This is the exact blocker the earlier review caught.
+- **`wake_task_id` binding.** When `self_wake_due` and no directed message or answer already
+  claimed a `wake_task_id` (i.e. `wake_task_id is None` after the existing resolution at
+  main.py:4957-4983), set `wake_task_id := self_wake_task_id`. If a directed message for *another*
+  task already won `wake_task_id` (main.py:4957), **do NOT override it** — the competing task's
+  work takes this wake and the self-wake row must survive to re-fire (§6.4).
+- **`self_wake_injected` = task-id match (not "who set it").** Define
+  `self_wake_injected = (wake_task_id == self_wake_task_id)`. This is true both when the self-wake
+  bound `wake_task_id` *and* when a directed message for the **same** task independently won it
+  (in which case the resume-context still injects for that task and should still clear). It is
+  false only when a *different* task won — the exact silent-consumption blocker the earlier review
+  caught. Drives the clear decision in §6.4/§7.
 - Surface on the candidate dict (main.py:5110-5146): `self_wake_due`, `self_wake_context`,
   `self_wake_injected`, and `self_wake_task_id`, next to the existing `auto_wake_due` fields
   (main.py:5120). Add a `reason` bit ("scheduled self-wake for task …") beside the auto-wake bit
@@ -202,30 +269,52 @@ human-gated**, and one-shot/per-task.
 
 **6.3 `get_agent_protocol` — carry the resume-context** (`main.py:4662`).
 
-- When the resolved `task_id` matches a scheduled `self_wake_task_id` for this agent, include
-  `resume_context` in the response next to the #33 body fields (main.py:4719-4721). Because the
-  notifier passes `task_id=wake_task_id` (notifier.py:3058-3059) and §6.2 binds `wake_task_id`
-  to `self_wake_task_id` only when the self-wake wins, the context is served only on the right
-  wake.
-- **Graceful mismatch (non-blocking note carried forward):** if the requested `task_id` does not
-  match the pending `self_wake_task_id` (a competing task won), simply **omit** `resume_context`
-  — never 4xx. The endpoint already returns `{task_id: null, protocol: null}` for an unresolved
-  wake (main.py:4716-4717); the resume-context is purely additive.
+- When a pending `agent_self_wake` row exists for `(this agent, resolved task_id)`, include its
+  `context` as `resume_context` in the response next to the #33 body fields (main.py:4719-4721) —
+  a single lookup keyed on `(agent_id, task_id)`. Because the notifier passes
+  `task_id=wake_task_id` (notifier.py:3058-3059), the context is served only for the task this
+  wake actually resolved to.
+- **Graceful mismatch (non-blocking note carried forward):** if there is no pending self-wake row
+  for the requested `(agent, task_id)` (a competing task won, or none scheduled), simply **omit**
+  `resume_context` — never 4xx. The endpoint already returns `{task_id: null, protocol: null}`
+  for an unresolved wake (main.py:4716-4717); the resume-context is purely additive.
 
 **6.4 `wake_ack` — clear the one-shot ONLY when it was injected** (`main.py:5161`).
 
 - Add `clear_self_wake: bool = False` to the `WakeAck` model (main.py:4724), documented like
   `stamp_woken` (main.py:4743).
-- In the WORK-lane branch (main.py:5206-5241), when `clear_self_wake` is true, set
-  `self_wake_at=NULL, self_wake_task_id=NULL, self_wake_context=NULL` in the same UPDATE (so the
-  one-shot fires exactly once). When false, **leave the columns intact** so the row re-fires on
-  the next scan.
+- In the WORK-lane branch (main.py:5206-5241), when `clear_self_wake` is true, delete the
+  fired row precisely: `DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s`, keyed on
+  the ack's `wake_task_id` (so exactly the `(agent, task)` that just fired is cleared and **every
+  other task's pending self-wake is left intact** — the B2 grain again). When false, leave all
+  rows untouched so a not-yet-consumed self-wake re-fires on the next scan.
 - **Who sets it:** the daemon sets `clear_self_wake=true` on its ack **only when the self-wake
-  actually rode this wake** — i.e. the candidate's `self_wake_injected` was true and the persona
-  it built resolved that task (§7). If a directed message overrode `wake_task_id`
-  (`self_wake_injected=False`), the ack leaves it unset → the row stays scheduled and re-fires
-  cleanly next tick. This closes the silent-consumption hole: **the wait-point is never marked
-  delivered unless the resume-context was surfaced.**
+  actually rode this wake** — i.e. the candidate's `self_wake_injected` was true
+  (`wake_task_id == self_wake_task_id`, §6.2) and the persona it built resolved that task (§7). If
+  a directed message for a *different* task overrode `wake_task_id` (`self_wake_injected=False`),
+  the ack leaves it unset → the row stays scheduled and re-fires cleanly next tick. This closes
+  the silent-consumption hole: **the wait-point is never marked delivered unless the
+  resume-context was surfaced.**
+
+**6.5 Eager cleanup on terminal / owner-removal transitions (B1 hygiene).** The §6.2 join filter
+already guarantees a stale row *cannot fire*; this deletes the now-dead row promptly so it never
+lingers. Add `DELETE FROM agent_self_wake WHERE task_id=%s` (all agents' rows for the task) at
+each point a task leaves `in_progress`:
+
+- **`/done`, full-autonomy branch** → funnels through `_complete_and_unblock`
+  (main.py:6807, which sets `status='completed'` at main.py:6705-6706). Deleting inside
+  `_complete_and_unblock` covers **both** completion routes (full-autonomy `/done` *and* the human
+  `/verify`-approve branch, which the same helper serves — see its docstring at main.py:6698-6703).
+- **`/done`, non-full-autonomy branch** → task goes to `needs_verification`
+  (main.py:6817-6819); the worker is done waiting, so clear here too.
+- **Task cancel** → `status='cancelled'` (main.py:7245). Clear alongside the existing
+  assignment-clearing cleanup already at that site (main.py:7247-7250).
+- **Task delete** → handled structurally by `ON DELETE CASCADE` (§5); no code needed.
+- **Verify-*reject*** returns the task to `in_progress` — intentionally **not** cleared, so a
+  legitimately still-running task keeps its pending self-wake.
+
+Each deletion is a no-op when the task had no pending self-wake, so it is safe to add
+unconditionally at these sites.
 
 ## 7. Notifier changes (`notifier.py`)
 
@@ -244,11 +333,12 @@ human-gated**, and one-shot/per-task.
   don't-claim step-2 (notifier.py:640-644) is misleading here; give self-wake its own step-2
   ("resume the task you scheduled this wake for; re-check the external step; if still not ready,
   reschedule another self-wake and exit"), so a worker never re-derives.
-- **`tick` — set `clear_self_wake`** (notifier.py:3040-3211): when the wake it is issuing is a
-  self-wake that actually resolved the self-wake task (candidate `self_wake_injected` true and the
-  persona built for `wake_task_id == self_wake_task_id`), pass `clear_self_wake=true` on the
-  post-drain WORK-lane ack (the ack at notifier.py:3208-3211). Otherwise omit it. The run is
-  attributed to `wake_task_id` exactly as today (notifier.py:3123).
+- **`tick` — set `clear_self_wake`** (notifier.py:3040-3211): pass `clear_self_wake=true` on the
+  post-drain WORK-lane ack (notifier.py:3208-3211) **iff** the candidate's `self_wake_injected` is
+  true (i.e. `wake_task_id == self_wake_task_id`, §6.2) — the resume-context rode this wake, so
+  the fired `(agent, task)` row should be deleted. Otherwise omit it (a competing task won; the
+  row survives to re-fire). The run is attributed to `wake_task_id` exactly as today
+  (notifier.py:3123).
 
 ## 8. CLI command
 
@@ -270,8 +360,8 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
    `wake_task_id == self_wake_task_id`, `self_wake_injected=true`.
 2. **Context injection.** `get_agent_protocol(task_id=self_wake_task_id)` returns
    `resume_context`; `format_persona` renders the resume section right after the #33 body.
-3. **One-shot clear (happy path).** wake-ack with `clear_self_wake=true` nulls the three columns;
-   the next `wake_scan` no longer reports `self_wake_due`.
+3. **One-shot clear (happy path).** wake-ack with `clear_self_wake=true` deletes the
+   `(agent, task)` row; the next `wake_scan` no longer reports `self_wake_due`.
 4. **Negative path — competing directed task wins (the review's required teeth).** A directed
    `prompt`/`task_message` for **task B** is pending AND a self-wake for **task A** is due:
    assert `wake_task_id == B`, `self_wake_injected=false`, `resume_context` **omitted** from the
@@ -280,12 +370,27 @@ Server (pytest, `.venv-test` per `docs/orcha-test-runbook.md`):
 5. **Auth scoping.** A `conversation`-lane token (or a human actor) is rejected; a WORK-lane
    token for the participating agent succeeds; a `task_id` the agent does not participate in is
    rejected.
-6. **Idempotency / cancel.** A second schedule replaces the first; `--cancel` clears it.
+6. **Idempotency / cancel (per-task, B2).** Re-scheduling **the same task** replaces its row
+   (still exactly one pending row for it, new `resume_at`); `--cancel` deletes that task's row
+   only; `--cancel --all` clears every row for the agent.
 7. **Gate interplay.** A live WORK lease / running embodiment / cooldown / non-idle each
    suppresses the self-wake exactly as it does other wakes (reuse the existing `wake_scan` gate
    tests).
-8. **Graceful mismatch.** `get_agent_protocol` with a `task_id` that doesn't match the pending
-   self-wake returns 200 with no `resume_context` (never 4xx).
+8. **Graceful mismatch.** `get_agent_protocol` with a `task_id` that has no pending self-wake row
+   returns 200 with no `resume_context` (never 4xx).
+9. **B2 — two tasks don't clobber (required teeth).** Schedule a self-wake for **task A**, then a
+   self-wake for **task B**, both before either fires. Assert **both** rows exist; make both due;
+   assert the earliest-`resume_at` one is picked this scan, then after its ack+clear the **other**
+   is still scheduled and fires on the next scan. (Neither wake is silently lost.)
+10. **B1 — stale row never fires after `/done` (required teeth).** Schedule a due self-wake for a
+    task, then `/done` it: under **full autonomy** the task completes and under **non-full** it
+    goes to `needs_verification`. In *both* cases assert `wake_scan` reports **no** `self_wake_due`
+    for that task (the §6.2 `status='in_progress'` join filter), and assert §6.5 eager-deleted the
+    row (or, if left to the lazy path, that the scan removed it).
+11. **B1 — cancel clears.** Schedule a due self-wake, cancel the task (`status='cancelled'`):
+    `wake_scan` reports no `self_wake_due` and the row is gone (§6.5).
+12. **B1 — task delete cascades.** Schedule a self-wake, delete the task: the `agent_self_wake`
+    row is removed by `ON DELETE CASCADE` (§5) — no orphaned "wake with no valid task".
 
 Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 `derive_wake_event` / `format_persona` tests): `derive_wake_event` returns `self_wake`;
@@ -293,10 +398,11 @@ Notifier (pure-function tests, the style of the existing `build_wake_prompt` /
 
 ## 10. Rollout
 
-- **Additive & backward-compatible.** All new columns are nullable; every new field on the
-  wake-scan candidate and `WakeAck` defaults off. An older notifier that ignores the new fields
-  simply never schedules/clears a self-wake — no behaviour change. Ship the migration (`031`) and
-  server first; the notifier + CLI changes light it up.
+- **Additive & backward-compatible.** The `agent_self_wake` table is brand-new (nothing reads it
+  until the new code does); every new field on the wake-scan candidate and `WakeAck` defaults off.
+  An older notifier that ignores the new fields simply never schedules/clears a self-wake — no
+  behaviour change. Ship the migration (`031`) and server first; the notifier + CLI changes light
+  it up.
 - **No new config/kill-switch needed** — the container-wide `wakes_enabled` kill-switch
   (main.py:4836-4838) and per-agent `wake_enabled` already gate *all* wakes, self-wakes included.
 - **Docs:** add the `/orcha-self-wake` skill + a line in the wake section of the review protocol;
