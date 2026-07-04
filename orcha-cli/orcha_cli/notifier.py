@@ -1175,6 +1175,12 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
     # sidecar must NOT set it.
     if conversation:
         env["ORCHA_CONVERSATION_WORKER"] = "1"
+    else:
+        # env is a copy of the daemon's OWN environment, which is not assumed clean: if the
+        # daemon itself was ever started from a shell/worktree with this set (e.g. inherited
+        # from a resident agent session), it would otherwise silently ride along into every
+        # work-lane worker and wrongly trip the conv-guard hook on that worker's Edit/Write.
+        env.pop("ORCHA_CONVERSATION_WORKER", None)
     env["ORCHA_AGENT_RUNTIME"] = runtime
     # ISS-21: mark this as a headless wake worker so the interactive SessionStart hooks
     # (watch/rehydrate/notifier --ensure/reachability) short-circuit to a no-op. Without
@@ -1303,6 +1309,11 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
     # backstop that blocks inline task work while allowing dispatch.
     if conversation:
         env["ORCHA_CONVERSATION_WORKER"] = "1"
+    else:
+        # env is a copy of the daemon's OWN environment, which is not assumed clean (see
+        # spawn_headless) — clear any inherited flag so a work-lane resident is never
+        # mislabeled as a conversation embodiment.
+        env.pop("ORCHA_CONVERSATION_WORKER", None)
     env["ORCHA_HEADLESS_WORKER"] = "1"      # ISS-21: short-circuit interactive SessionStart hooks
     out = subprocess.DEVNULL
     if log_path is not None:

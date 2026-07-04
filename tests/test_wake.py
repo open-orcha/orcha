@@ -908,6 +908,84 @@ def test_spawn_headless_includes_partial_messages(monkeypatch, tmp_path):
     assert "--output-format" in argv and argv[argv.index("--output-format") + 1] == "stream-json"
 
 
+def test_spawn_headless_scrubs_leaked_conversation_flag(monkeypatch, tmp_path):
+    """A work-lane spawn must not inherit ORCHA_CONVERSATION_WORKER from the daemon's own
+    (possibly contaminated) environment, or the conv-guard hook wrongly blocks its Edit/Write."""
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, cwd=None, env=None, **kw):
+            captured["env"] = env
+            self.pid = 1
+
+    monkeypatch.setenv("ORCHA_CONVERSATION_WORKER", "1")
+    monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
+    monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
+    notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
+                            conversation=False)
+    assert "ORCHA_CONVERSATION_WORKER" not in captured["env"]
+
+
+def test_spawn_headless_conversation_still_sets_flag(monkeypatch, tmp_path):
+    """Genuine conversation embodiments must still get the flag set to '1'."""
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, cwd=None, env=None, **kw):
+            captured["env"] = env
+            self.pid = 1
+
+    monkeypatch.delenv("ORCHA_CONVERSATION_WORKER", raising=False)
+    monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
+    monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
+    notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
+                            conversation=True)
+    assert captured["env"].get("ORCHA_CONVERSATION_WORKER") == "1"
+
+
+def test_spawn_resident_scrubs_leaked_conversation_flag(monkeypatch, tmp_path):
+    """Same env-leak guard for spawn_resident: a work-lane resident must not inherit the
+    daemon's own contaminated ORCHA_CONVERSATION_WORKER."""
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, cwd=None, env=None, **kw):
+            captured["env"] = env
+            self.pid = 1
+            self.stdin = None
+            self.stdout = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("ORCHA_CONVERSATION_WORKER", "1")
+    monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
+    monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
+    notifier.spawn_resident(str(tmp_path), alias="Tim", conversation=False)
+    assert "ORCHA_CONVERSATION_WORKER" not in captured["env"]
+
+
+def test_spawn_resident_conversation_still_sets_flag(monkeypatch, tmp_path):
+    """Genuine conversation-lane residents must still get the flag set to '1'."""
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, cwd=None, env=None, **kw):
+            captured["env"] = env
+            self.pid = 1
+            self.stdin = None
+            self.stdout = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.delenv("ORCHA_CONVERSATION_WORKER", raising=False)
+    monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
+    monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
+    notifier.spawn_resident(str(tmp_path), alias="Tim", conversation=True)
+    assert captured["env"].get("ORCHA_CONVERSATION_WORKER") == "1"
+
+
 def test_spawn_headless_codex_runtime(monkeypatch, tmp_path):
     """Codex-backed models use the Codex automation surface, with persona prepended."""
     captured = {}
