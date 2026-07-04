@@ -59,6 +59,7 @@ import io.openorcha.mobile.ui.components.AvatarSize
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.DangerTonalButton
+import io.openorcha.mobile.ui.components.LinkifiedText
 import io.openorcha.mobile.ui.components.MetaTag
 import io.openorcha.mobile.ui.components.NeutralButton
 import io.openorcha.mobile.ui.components.OrchaCard
@@ -172,15 +173,16 @@ fun RequestDetailScreen(
                     }
                 }
             }
+            val knownTasks = state.snapshot?.tasks.orEmpty()
             item { SectionH("Payload") }
-            item { OrchaCard { Text(req.payload, color = p.text) } }
+            item { OrchaCard { LinkifiedText(req.payload, knownTasks, onOpenTask, color = p.text) } }
             req.response?.let {
                 item { SectionH("Response") }
-                item { OrchaCard(borderColor = p.okLine) { Text(it, color = p.text2) } }
+                item { OrchaCard(borderColor = p.okLine) { LinkifiedText(it, knownTasks, onOpenTask, color = p.text2) } }
             }
             req.rejectionReason?.let {
                 item { SectionH("Rejection") }
-                item { OrchaCard(borderColor = p.dangerLine) { Text(it, color = p.text2) } }
+                item { OrchaCard(borderColor = p.dangerLine) { LinkifiedText(it, knownTasks, onOpenTask, color = p.text2) } }
             }
             item { SectionH("Timeline") }
             item {

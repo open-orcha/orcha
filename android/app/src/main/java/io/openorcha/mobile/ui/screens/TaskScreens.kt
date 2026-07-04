@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.RunDto
+import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
@@ -295,6 +296,7 @@ fun TaskThreadScreen(
     onRefresh: () -> Unit,
     onSendMessage: (String) -> Unit,
     onLoadEarlier: () -> Unit,
+    onOpenTask: (String) -> Unit,
 ) {
     val p = Orcha.palette
     val task = state.selectedTask
@@ -364,7 +366,7 @@ fun TaskThreadScreen(
                     }
                 }
                 items(state.taskMessages, key = { it.messageId ?: "${it.createdAt}-${it.body.hashCode()}" }) { msg ->
-                    ThreadBubble(msg, state.selectedContainer?.humanAgentId)
+                    ThreadBubble(msg, state.selectedContainer?.humanAgentId, state.snapshot?.tasks.orEmpty(), onOpenTask)
                 }
                 unsent?.let { text ->
                     item {
@@ -409,16 +411,17 @@ fun TaskThreadScreen(
 }
 
 @Composable
-private fun ThreadBubble(msg: TaskMessageDto, humanId: String?) {
+private fun ThreadBubble(msg: TaskMessageDto, humanId: String?, tasks: List<TaskDto>, onOpenTask: (String) -> Unit) {
     val mine = msg.authorId != null && msg.authorId == humanId
     val system = msg.authorId == null && !msg.isHuman
     when {
-        system -> Bubble(BubbleKind.System, msg.body)
-        mine -> Bubble(BubbleKind.Mine, msg.body, time = MobileUx.agoLabel(msg.createdAt))
+        system -> Bubble(BubbleKind.System, msg.body, tasks = tasks, onOpenTask = onOpenTask)
+        mine -> Bubble(BubbleKind.Mine, msg.body, time = MobileUx.agoLabel(msg.createdAt), tasks = tasks, onOpenTask = onOpenTask)
         else -> Bubble(
             BubbleKind.Theirs, msg.body,
             author = msg.authorAlias ?: if (msg.isHuman) "human" else "agent",
             time = MobileUx.agoLabel(msg.createdAt),
+            tasks = tasks, onOpenTask = onOpenTask,
         )
     }
 }
