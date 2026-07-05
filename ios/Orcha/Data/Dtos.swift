@@ -20,10 +20,14 @@ struct ContainerDto: Decodable {
     var description: String?
     var status: String = "unknown"
     var autonomyLevel: String?
+    /// GH #148 — the wake kill-switch, distinct from `status` (the laptop-level container
+    /// lifecycle). Pre-SPEC-1 snapshots may omit this; treat missing as Running (spec §6.3).
+    var wakesEnabled: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, status
         case autonomyLevel = "autonomy_level"
+        case wakesEnabled = "wakes_enabled"
     }
 }
 

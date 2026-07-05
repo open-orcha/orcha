@@ -62,6 +62,9 @@ struct WorkspaceScreen: View {
         .sheet(isPresented: $showSettings) {
             SettingsScreen()
         }
+        .sheet(isPresented: $model.showContainerControls) {
+            ContainerControlsSheet()
+        }
         .task { await model.refresh() }
     }
 
@@ -82,6 +85,17 @@ struct WorkspaceScreen: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     ConnChip(state: model.snapshot == nil ? (model.loading ? "probing" : "unreachable") : connState)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // GH #148 — entry point to the Notifier/Autonomy sheet; tinted by the
+                    // notifier's current state (the power switch), independent of connectivity.
+                    Button {
+                        model.showContainerControls = true
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .foregroundStyle((model.snapshot?.container.wakesEnabled ?? true) ? p.text2 : p.danger)
+                    }
+                    .accessibilityLabel("Autonomy & Notifier")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -119,13 +133,22 @@ struct WorkspaceScreen: View {
 
 /// The shared connection banner row (flow 04 H8/H10): polling is the honest v1
 /// state (SSE is the listed follow-up); paused blocks agent action.
+///
+/// GH #148 — `container.status` (the laptop-level lifecycle set by `/orcha-pause`) and
+/// `wakes_enabled` (the in-container notifier) are two DIFFERENT states (spec §6.2); this
+/// used to read only `status`, mislabeling the notifier. `status` is checked first as the
+/// higher-tier state, then the notifier, each with its own banner.
 struct ConnectionBanners: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         if let snapshot = model.snapshot {
             if snapshot.container.status != "active" {
-                Banner(kind: .info, text: "This Orcha is paused — agents won't act until resumed from the laptop.")
+                Banner(kind: .info, text: "This Orcha is paused or stopped on the laptop — resume it there to continue.")
+            } else if !(snapshot.container.wakesEnabled ?? true) {
+                Banner(kind: .warn, text: "Notifier paused — agents won't wake.", action: "Resume") {
+                    model.showContainerControls = true
+                }
             } else {
                 Banner(kind: .warn, text: "Live updates unavailable — checking every 30s", action: "Refresh now") {
                     Task { await model.refresh() }

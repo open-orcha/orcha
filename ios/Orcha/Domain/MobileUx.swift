@@ -220,6 +220,24 @@ enum MobileUx {
         }
     }
 
+    // MARK: GH #148 — the autonomy gearbox (`plan` | `pr` | `full`)
+
+    static func autonomyLabel(_ level: String) -> String {
+        switch level {
+        case "pr": "Build to PR"
+        case "full": "Full"
+        default: "Plan-only"
+        }
+    }
+
+    static func autonomyBlurb(_ level: String) -> String {
+        switch level {
+        case "pr": "Agents execute approved plans up to an open PR; you still merge."
+        case "full": "Agents may carry approved work to its terminal state without further gates."
+        default: "Agents wake & propose, but every plan stops at the approval gate — you approve before any execution."
+        }
+    }
+
     // MARK: flow 05 — "Needs me" + status group order
 
     static func needsMe(_ tasks: [TaskDto]) -> [TaskDto] {

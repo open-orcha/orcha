@@ -180,6 +180,17 @@ struct OrchaApiClient {
         try await post(base, "/api/requests/\(rid)/close", ["requester_agent_id": actor, "reason": reason])
     }
 
+    /// GH #148 — the notifier (kill-switch). Human-only on the server; `actor` is the
+    /// paired human, not an agent id.
+    func setWakes(_ base: String, _ cid: String, actor: String, enabled: Bool) async throws {
+        try await post(base, "/api/containers/\(cid)/wakes", ["enabled": enabled, "actor_agent_id": actor])
+    }
+
+    /// GH #148 — the autonomy gearbox (`plan` | `pr` | `full`). Human-gated on the server.
+    func setAutonomy(_ base: String, _ cid: String, actor: String, level: String) async throws {
+        try await post(base, "/api/containers/\(cid)/autonomy", ["level": level, "actor_agent_id": actor])
+    }
+
     /// Flow 07a: returns the routed outcome so the UI can tell a real wake
     /// (`nudged:true` → "Nudged {alias}") from the human-owns-it no-op (`nudged:false`).
     func nudgeRequest(_ base: String, _ rid: String, actor: String, note: String?) async throws -> NudgeResult {

@@ -306,3 +306,33 @@ private let fixedNow = Date(timeIntervalSince1970: 1_751_400_000)
         #expect(task.planDecision == nil)
     }
 }
+
+/// GH #148 — the Notifier (`wakes_enabled`) / Autonomy (`autonomy_level`) split.
+@Suite struct AutonomySplitTests {
+    @Test func autonomyLabelCoversAllThreeLevels() {
+        #expect(MobileUx.autonomyLabel("plan") == "Plan-only")
+        #expect(MobileUx.autonomyLabel("pr") == "Build to PR")
+        #expect(MobileUx.autonomyLabel("full") == "Full")
+    }
+
+    @Test func autonomyLabelFallsBackToPlanOnlyForUnknownLevel() {
+        #expect(MobileUx.autonomyLabel("bogus") == "Plan-only")
+    }
+
+    private func decode(_ json: String) throws -> ContainerDto {
+        try JSONDecoder().decode(ContainerDto.self, from: Data(json.utf8))
+    }
+
+    @Test func wakesEnabledDecodesTrueAndFalse() throws {
+        let running = try decode(#"{"id":"c1","name":"x","status":"active","wakes_enabled":true}"#)
+        #expect(running.wakesEnabled == true)
+        let paused = try decode(#"{"id":"c1","name":"x","status":"active","wakes_enabled":false}"#)
+        #expect(paused.wakesEnabled == false)
+    }
+
+    // Spec §6.3 — pre-SPEC-1 snapshots may omit wakes_enabled; screens fall back to Running.
+    @Test func wakesEnabledAbsentStaysNil() throws {
+        let container = try decode(#"{"id":"c1","name":"x","status":"active"}"#)
+        #expect(container.wakesEnabled == nil)
+    }
+}
