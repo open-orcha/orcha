@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autonomy vs Notifier — split controls (GH #148)</title>
+<style>
+  /* Orcha brand tokens (from portal styles.css, dark theme) */
+  :root{
+    --bg:#0a0d12; --panel:#0e131b; --panel-2:#111826; --border:#232d3d; --border-2:#2c3848;
+    --fg:#e8eef7; --muted:#8b98ab; --faint:#5c6a7e;
+    --accent:#1fc7cd; --accent-ink:#04181a; --accent-soft:rgba(31,199,205,.14); --accent-line:rgba(31,199,205,.4);
+    --ok:#38d39a; --ok-soft:rgba(56,211,154,.14); --ok-line:rgba(56,211,154,.4);
+    --info:#5aa6ff; --info-soft:rgba(90,166,255,.14); --info-line:rgba(90,166,255,.4);
+    --warn:#f5b13d; --warn-soft:rgba(245,177,61,.15); --warn-line:rgba(245,177,61,.4);
+    --bad:#f6767e; --bad-soft:rgba(246,118,126,.14); --bad-line:rgba(246,118,126,.42);
+    --radius:14px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,rgba(31,199,205,.06),transparent),
+        radial-gradient(1000px 500px at 90% 0%,rgba(125,145,255,.05),transparent),var(--bg);
+        color:var(--fg);font-family:var(--font);line-height:1.5;padding:32px 20px 80px}
+  .wrap{max-width:1100px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em}
+  h1 .tag{font-size:13px;color:var(--accent);border:1px solid var(--accent-line);background:var(--accent-soft);
+          padding:2px 9px;border-radius:999px;vertical-align:middle;margin-left:8px}
+  .sub{color:var(--muted);margin:0 0 8px;font-size:15px}
+  .model{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0 30px}
+  .model .card{flex:1;min-width:250px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+  .model .card b{color:var(--fg)} .model .card .k{font-size:12px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em}
+  .model .power{border-left:3px solid var(--ok)} .model .gear{border-left:3px solid var(--accent)}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:40px 0 14px;
+     border-bottom:1px solid var(--border);padding-bottom:8px}
+  .row{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .stage{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;flex:1;min-width:340px}
+  .stage h3{margin:0 0 3px;font-size:14px} .stage .cap{color:var(--faint);font-size:12.5px;margin:0 0 14px}
+
+  /* ---------- shared control atoms ---------- */
+  .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);margin-bottom:6px;display:block}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px;vertical-align:middle}
+  .seg-group{display:inline-flex;border:1px solid var(--border-2);border-radius:10px;overflow:hidden;background:var(--panel-2)}
+  .seg-group.dim{opacity:.5}
+  .seg{padding:7px 13px;font-size:13px;color:var(--muted);border-right:1px solid var(--border);cursor:default;white-space:nowrap}
+  .seg:last-child{border-right:0}
+  .seg.on.plan{color:var(--warn);background:var(--warn-soft);box-shadow:inset 0 -2px 0 var(--warn)}
+  .seg.on.pr{color:var(--info);background:var(--info-soft);box-shadow:inset 0 -2px 0 var(--info)}
+  .seg.on.full{color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 -2px 0 var(--accent)}
+  .switch{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--border-2);border-radius:999px;
+          padding:5px 12px 5px 11px;font-size:13px;background:var(--panel-2)}
+  .switch.run{border-color:var(--ok-line);color:var(--ok);background:var(--ok-soft)}
+  .switch.paused{border-color:var(--bad-line);color:var(--bad);background:var(--bad-soft)}
+  .track{width:34px;height:19px;border-radius:999px;position:relative;background:#26303f;flex:none}
+  .track .knob{width:15px;height:15px;border-radius:50%;background:#cfd8e6;position:absolute;top:2px;left:2px;transition:.15s}
+  .switch.run .track{background:var(--ok)} .switch.run .track .knob{left:17px;background:#04231a}
+  .switch.paused .track{background:#3a2530} .switch.paused .track .knob{left:2px;background:var(--bad)}
+  .hint{font-size:11.5px;color:var(--faint);margin-top:7px}
+  .divider{height:1px;background:var(--border);margin:14px 0}
+  .vdiv{width:1px;align-self:stretch;background:var(--border);margin:0 4px}
+
+  /* ---------- WEB topbar ---------- */
+  .topbar{display:flex;align-items:center;gap:16px;background:var(--panel-2);border:1px solid var(--border);
+          border-radius:12px;padding:12px 16px;flex-wrap:wrap}
+  .topbar.paused{border-color:var(--bad-line);box-shadow:0 0 0 1px var(--bad-line) inset}
+  .brand{font-weight:700;letter-spacing:-.01em;color:var(--fg);display:flex;align-items:center;gap:8px}
+  .brand .o{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#7d91ff);display:inline-block}
+  .grp{display:flex;flex-direction:column}
+  .pushright{margin-left:auto;display:flex;gap:16px}
+  .pausebar{margin-top:10px;background:var(--bad-soft);border:1px solid var(--bad-line);border-radius:10px;
+            padding:9px 14px;font-size:13px;color:var(--fg);display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .pausebar .resume{color:var(--bad);font-weight:600;border:1px solid var(--bad-line);border-radius:8px;padding:3px 10px;font-size:12px}
+
+  /* ---------- PHONE frame ---------- */
+  .phones{display:flex;gap:26px;flex-wrap:wrap}
+  .phone{width:300px;border:1px solid var(--border-2);border-radius:26px;background:#05070b;padding:9px;flex:none}
+  .phone .scr{background:var(--bg);border-radius:19px;overflow:hidden;border:1px solid var(--border)}
+  .os{font-size:11px;color:var(--faint);text-align:center;margin:0 0 8px;letter-spacing:.05em}
+  .appbar{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);background:var(--panel-2)}
+  .appbar .t{font-weight:600;font-size:14px}
+  .chip{margin-left:auto;font-size:11px;color:var(--muted);border:1px solid var(--border-2);border-radius:999px;padding:2px 9px;display:flex;align-items:center}
+  .gear{font-size:15px;color:var(--muted)}
+  .banner{margin:10px;padding:9px 12px;border-radius:10px;font-size:12px;display:flex;align-items:center;gap:8px}
+  .banner.warnb{background:var(--bad-soft);border:1px solid var(--bad-line);color:var(--fg)}
+  .content{padding:6px 10px 12px}
+  .sheet{margin:10px;border:1px solid var(--border-2);border-radius:16px;background:var(--panel);overflow:hidden}
+  .sheet .grab{width:34px;height:4px;border-radius:2px;background:var(--border-2);margin:9px auto 4px}
+  .sheet h4{margin:2px 14px 2px;font-size:14px}
+  .sheet .sh-sub{margin:0 14px 10px;font-size:11.5px;color:var(--faint)}
+  .listitem{display:flex;align-items:center;gap:12px;padding:12px 14px}
+  .listitem .li-t{font-size:13.5px} .listitem .li-s{font-size:11.5px;color:var(--faint)}
+  .listitem .li-txt{flex:1}
+  .ios-seg{margin:2px 14px 4px}
+  .ios-seg .seg-group{width:100%;display:flex} .ios-seg .seg{flex:1;text-align:center}
+  .foot{font-size:11px;color:var(--faint);padding:4px 14px 14px}
+  .and-seg{margin:2px 14px 6px}
+  .and-seg .seg-group{width:100%;display:flex;border-radius:999px} .and-seg .seg{flex:1;text-align:center;border-radius:999px}
+  .and-seg .seg{border-right:1px solid var(--border)}
+
+  /* confirm dialog mini */
+  .dlg{margin:10px;border:1px solid var(--bad-line);border-radius:14px;background:var(--panel);padding:14px}
+  .dlg h5{margin:0 0 6px;font-size:14px} .dlg p{margin:0 0 12px;font-size:12px;color:var(--muted)}
+  .dlg .acts{display:flex;gap:8px;justify-content:flex-end}
+  .btn{font-size:12px;border-radius:8px;padding:6px 12px;border:1px solid var(--border-2);color:var(--muted)}
+  .btn.danger{background:var(--bad);color:#2a0a0d;border-color:var(--bad);font-weight:600}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:8px 0 0;font-size:12px;color:var(--muted)}
+  .legend b{color:var(--fg);font-weight:600}
+  .note{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:10px;padding:12px 15px;margin:12px 0;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Autonomy&nbsp;·&nbsp;Notifier — two separate controls <span class="tag">GH&nbsp;#148</span></h1>
+  <p class="sub">One fused 4-rung slider → two orthogonal controls, everywhere. No backend change — both endpoints already exist and are human-only.</p>
+
+  <div class="model">
+    <div class="card power"><span class="k">Event-notifier · the power switch</span><br>
+      <b>Running / Paused.</b> Do agents wake <b>at all</b>? Writes <code>wakes_enabled</code> → <code>POST /wakes</code>.</div>
+    <div class="card gear"><span class="k">Autonomy · the gearbox</span><br>
+      <b>Plan-only / Build&nbsp;to&nbsp;PR / Full.</b> How far agents go <b>when</b> they act. Writes <code>autonomy_level</code> → <code>POST /autonomy</code>.</div>
+  </div>
+  <p class="sub" style="margin-top:-12px">Turning the power off never re-shifts the gears — the level is remembered and re-applies on resume. That independence is the whole point of the split.</p>
+
+  <!-- ============ WEB ============ -->
+  <h2>Web portal — topbar</h2>
+  <div class="row">
+    <div class="stage">
+      <h3>Running</h3>
+      <p class="cap">Two labeled groups, a divider between them. Notifier green; autonomy lit in its tone.</p>
+      <div class="topbar">
+        <span class="brand"><span class="o"></span>Orcha</span>
+        <div class="pushright">
+          <div class="grp"><span class="lbl">Notifier</span>
+            <span class="switch run"><span class="track"><span class="knob"></span></span><span class="dot" style="background:var(--ok)"></span>Running</span></div>
+          <div class="vdiv"></div>
+          <div class="grp"><span class="lbl">Autonomy</span>
+            <span class="seg-group"><span class="seg">Plan-only</span><span class="seg on pr">Build to PR</span><span class="seg">Full</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="stage">
+      <h3>Paused</h3>
+      <p class="cap">Notifier red + topbar edge + micro-banner. Autonomy stays on <b>Build&nbsp;to&nbsp;PR</b>, dimmed with an "applies when running" hint — never reset.</p>
+      <div class="topbar paused">
+        <span class="brand"><span class="o"></span>Orcha</span>
+        <div class="pushright">
+          <div class="grp"><span class="lbl">Notifier</span>
+            <span class="switch paused"><span class="track"><span class="knob"></span></span><span class="dot" style="background:var(--bad)"></span>Paused</span></div>
+          <div class="vdiv"></div>
+          <div class="grp"><span class="lbl">Autonomy</span>
+            <span class="seg-group dim"><span class="seg">Plan-only</span><span class="seg on pr">Build to PR</span><span class="seg">Full</span></span></div>
+        </div>
+      </div>
+      <div class="pausebar"><span>⏸ Autonomy paused — no agent wakes. Humans &amp; live terminals still work.</span><span class="resume">Resume ↩</span></div>
+    </div>
+  </div>
+  <div class="note"><b>Compare with today:</b> the current <code>AUT_RUNGS</code> renders <code>[ Paused | Plan-only | Build to PR | Full ]</code> as one connected strip, so "more paused" looks adjacent to "more autonomous." The labels + divider above make it read as the two independent things it is.</div>
+
+  <!-- ============ ANDROID ============ -->
+  <h2>Android — Material 3 · bottom sheet</h2>
+  <div class="phones">
+    <div class="phone"><p class="os">ANDROID · workspace (Running)</p><div class="scr">
+      <div class="appbar"><span class="t">demo-app</span><span class="chip"><span class="dot" style="background:var(--ok)"></span>polling</span><span class="gear">⚙</span></div>
+      <div class="content" style="padding:14px 12px">
+        <div style="font-size:12px;color:var(--muted)">Tap ⚙ or the Autonomy chip to open controls.</div>
+      </div>
+    </div></div>
+
+    <div class="phone"><p class="os">ANDROID · controls sheet (Running)</p><div class="scr">
+      <div class="appbar"><span class="t">demo-app</span><span class="chip"><span class="dot" style="background:var(--ok)"></span>polling</span></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <h4>Container controls</h4><p class="sh-sub">Power switch and gearbox — independent.</p>
+        <div class="listitem"><div class="li-txt"><div class="li-t">Event-notifier</div><div class="li-s">Running — agents wake normally</div></div>
+          <span class="switch run" style="padding:4px 4px 4px 4px"><span class="track"><span class="knob"></span></span></span></div>
+        <div class="divider"></div>
+        <div style="padding:10px 14px 2px"><div class="li-t">Autonomy</div><div class="li-s" style="margin-bottom:8px">How far agents go when they act</div></div>
+        <div class="and-seg"><span class="seg-group"><span class="seg on plan">Plan-only</span><span class="seg">Build to PR</span><span class="seg">Full</span></span></div>
+        <p class="foot">SingleChoice segmented buttons · Full opens a destructive AlertDialog.</p>
+      </div>
+    </div></div>
+
+    <div class="phone"><p class="os">ANDROID · workspace (Paused) + confirm</p><div class="scr">
+      <div class="appbar"><span class="t">demo-app</span><span class="chip"><span class="dot" style="background:var(--bad)"></span>paused</span><span class="gear">⚙</span></div>
+      <div class="banner warnb">⏸ Notifier paused — no agent wakes. <span style="color:var(--bad);font-weight:600">Resume</span></div>
+      <div class="dlg">
+        <h5>Pause all agent wakes?</h5>
+        <p>Agents stop waking immediately. In-flight work finishes; nothing new starts. Humans &amp; live terminals still work.</p>
+        <div class="acts"><span class="btn">Cancel</span><span class="btn danger">Pause all wakes</span></div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ============ iOS ============ -->
+  <h2>iOS — HIG · sheet (Form)</h2>
+  <div class="phones">
+    <div class="phone"><p class="os">iOS · controls sheet (Running)</p><div class="scr">
+      <div class="appbar"><span class="t" style="font-weight:700">demo-app</span><span class="chip"><span class="dot" style="background:var(--ok)"></span>Running</span></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <h4>Autonomy &amp; Notifier</h4><p class="sh-sub">The power switch and the gearbox, set separately.</p>
+        <div class="listitem"><div class="li-txt"><div class="li-t">Notifier</div><div class="li-s">Running</div></div>
+          <span class="switch run" style="padding:4px 4px 4px 4px"><span class="track"><span class="knob"></span></span></span></div>
+        <div class="divider"></div>
+        <div style="padding:8px 14px 2px"><div class="li-t">Autonomy</div></div>
+        <div class="ios-seg"><span class="seg-group"><span class="seg">Plan-only</span><span class="seg on pr">Build to PR</span><span class="seg">Full</span></span></div>
+        <p class="foot">Segmented Picker · selecting Full presents a destructive confirmationDialog.</p>
+      </div>
+    </div></div>
+
+    <div class="phone"><p class="os">iOS · Paused + confirmationDialog</p><div class="scr">
+      <div class="appbar"><span class="t" style="font-weight:700">demo-app</span><span class="chip"><span class="dot" style="background:var(--bad)"></span>Paused</span></div>
+      <div class="banner warnb">⏸ Notifier paused — tap to resume.</div>
+      <div class="sheet" style="border-color:var(--border)">
+        <div class="listitem"><div class="li-txt"><div class="li-t">Notifier</div><div class="li-s" style="color:var(--bad)">Paused</div></div>
+          <span class="switch paused" style="padding:4px 4px 4px 4px"><span class="track"><span class="knob"></span></span></span></div>
+        <div class="divider"></div>
+        <div style="padding:8px 14px 2px"><div class="li-t">Autonomy <span style="color:var(--faint);font-weight:400;font-size:11px">· applies when running</span></div></div>
+        <div class="ios-seg"><span class="seg-group dim"><span class="seg">Plan-only</span><span class="seg on pr">Build to PR</span><span class="seg">Full</span></span></div>
+      </div>
+      <div class="dlg" style="border-color:var(--border-2)">
+        <p style="text-align:center;color:var(--faint);margin-bottom:10px">Resume agent wakes?</p>
+        <div class="acts" style="justify-content:center"><span class="btn">Cancel</span><span class="btn" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600">Resume</span></div>
+      </div>
+    </div></div>
+
+    <div class="phone"><p class="os">iOS · read-only fallback (no human actor)</p><div class="scr">
+      <div class="appbar"><span class="t" style="font-weight:700">demo-app</span><span class="chip">Running</span></div>
+      <div class="sheet">
+        <div class="listitem" style="opacity:.55"><div class="li-txt"><div class="li-t">Notifier</div><div class="li-s">Running</div></div>
+          <span class="switch run" style="padding:4px 4px 4px 4px;opacity:.6"><span class="track"><span class="knob"></span></span></span></div>
+        <div class="divider"></div>
+        <div style="padding:8px 14px 2px;opacity:.55"><div class="li-t">Autonomy</div></div>
+        <div class="ios-seg" style="opacity:.55"><span class="seg-group"><span class="seg">Plan-only</span><span class="seg on pr">Build to PR</span><span class="seg">Full</span></span></div>
+        <p class="foot">No acting human → controls read-only. <br>Footnote: “Change autonomy from the laptop.”</p>
+      </div>
+    </div></div>
+  </div>
+
+  <h2>Tones &amp; danger flags</h2>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--ok)"></span><b>Running</b> — green</span>
+    <span><span class="dot" style="background:var(--bad)"></span><b>Paused</b> — red (danger to enter)</span>
+    <span><span class="dot" style="background:var(--warn)"></span><b>Plan-only</b> — amber</span>
+    <span><span class="dot" style="background:var(--info)"></span><b>Build to PR</b> — blue</span>
+    <span><span class="dot" style="background:var(--accent)"></span><b>Full</b> — teal (danger: removes the human gate)</span>
+  </div>
+  <p class="sub" style="margin-top:22px;font-size:13px">Dana · design spec: <code>docs/design/autonomy-notifier-split-gh148/spec.md</code></p>
+</div>
+</body>
+</html>
