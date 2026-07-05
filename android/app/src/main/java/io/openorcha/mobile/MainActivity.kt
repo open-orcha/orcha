@@ -114,6 +114,8 @@ class MainActivity : ComponentActivity() {
                         onCreateTask = viewModel::showCreateTask,
                         onDecidePlanFor = viewModel::decidePlanById,
                         onVerifyFor = viewModel::verifyTaskById,
+                        onSetWakes = viewModel::setWakes,
+                        onSetAutonomy = viewModel::setAutonomy,
                     )
 
                     AppRoute.TaskDetail -> TaskDetailScreen(

@@ -264,6 +264,14 @@ class OrchaApiClient {
     suspend fun assignTask(baseUrl: String, taskId: String, actorId: String, agentId: String, reassign: Boolean): GenericIdResponse =
         postJson("${baseUrl.endpoint()}/api/tasks/$taskId/assign", AssignTaskBody(actorId, agentId, reassign))
 
+    /** GH #148: notifier — flip the container-wide wake kill-switch. */
+    suspend fun setWakes(baseUrl: String, containerId: String, enabled: Boolean, actorId: String?): WakesResponse =
+        postJson("${baseUrl.endpoint()}/api/containers/$containerId/wakes", WakesToggleBody(enabled, actorId))
+
+    /** GH #148: autonomy — move the plan/pr/full gearbox. Human-gated server-side. */
+    suspend fun setAutonomy(baseUrl: String, containerId: String, level: String, actorId: String): AutonomyResponse =
+        postJson("${baseUrl.endpoint()}/api/containers/$containerId/autonomy", AutonomyUpdateBody(level, actorId))
+
     private suspend inline fun <reified T : Any, reified R> postJson(url: String, payload: T): R = withTimeout(10_000) {
         val response: HttpResponse = client.post(url) {
             contentType(ContentType.Application.Json)

@@ -763,6 +763,18 @@ class OrchaViewModel(application: Application) : AndroidViewModel(application) {
         showWorkspace()
     }
 
+    /** GH #148: notifier switch. Never touches autonomy_level — the two controls are orthogonal. */
+    fun setWakes(enabled: Boolean) = runHumanAction(if (enabled) "Wakes resumed" else "Wakes paused") { selected, actor ->
+        api.setWakes(selected.baseUrl, selected.id, enabled, actor)
+        refreshSelected()
+    }
+
+    /** GH #148: autonomy gearbox. Never touches wakes_enabled — applies whether running or paused. */
+    fun setAutonomy(level: String) = runHumanAction("Autonomy set to $level") { selected, actor ->
+        api.setAutonomy(selected.baseUrl, selected.id, level, actor)
+        refreshSelected()
+    }
+
     fun sendConversationTurn(content: String) = runHumanAction("Message sent") { selected, actor ->
         val agent = _uiState.value.selectedAgent ?: error("No agent selected")
         val conversation = _uiState.value.conversation ?: api.startConversation(selected.baseUrl, agent.id, actor).conversation
