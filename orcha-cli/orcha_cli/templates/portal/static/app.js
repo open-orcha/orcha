@@ -660,7 +660,9 @@ window.Orcha = (function () {
   function paintPausedReinforcement() {
     const paused = wakesPaused();
     const topbar = document.getElementById("topbar");
-    if (topbar) topbar.classList.toggle("paused", paused);
+    // A stubbed/minimal topbar (e.g. the D0 shell-mount harness passes {innerHTML:''})
+    // has no classList — feature-detect so mountShell doesn't crash on the reinforcement pass.
+    if (topbar && topbar.classList) topbar.classList.toggle("paused", paused);
     const bar = document.getElementById("pausebar");
     if (bar) {
       bar.classList.toggle("show", paused);
@@ -712,7 +714,7 @@ window.Orcha = (function () {
   function setWakes(enabled) {
     // Single choke point for the global wake switch: gate on an acting human here so EVERY
     // caller (slider + pausebar Resume banner) is covered, never just the controls we hide.
-    if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
+    if (!actingHuman()) { toast("Pick an acting human to change the notifier", "warn"); return; }
     const cid = D.container && D.container.id;
     if (!cid) { toast("No container", "danger"); return; }
     const prev = D.container.wakes_enabled;
@@ -732,7 +734,7 @@ window.Orcha = (function () {
       .catch((e) => {
         D.container.wakes_enabled = prev;   // revert
         paintAutonomy();
-        toast("Could not change autonomy: " + e.message, "danger");
+        toast("Could not change the notifier: " + e.message, "danger");
       });
   }
 
