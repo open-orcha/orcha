@@ -2753,11 +2753,17 @@ def _task_list_sql(where: str, order: str) -> str:
                          FROM task_messages m LEFT JOIN agents ma ON ma.id = m.author_id
                         WHERE m.task_id = t.id AND m.author_id IS NOT NULL AND ma.kind <> 'human'
                         ORDER BY m.created_at ASC LIMIT 1) AS plan_message,
+                      -- GH #144: the per-task runs summary counts/reads FEED membership
+                      -- (worker_run_tasks — every task a run touched), not the single
+                      -- worker_runs.task_id pin, so a run from a multi-task session is counted
+                      -- under every task it spanned.
                       json_build_object(
-                          'count', (SELECT count(*) FROM worker_runs wr WHERE wr.task_id = t.id),
+                          'count', (SELECT count(*) FROM worker_run_tasks wrt WHERE wrt.task_id = t.id),
                           'latest', (SELECT json_build_object('status', l.status, 'exit_code', l.exit_code,
                                          'started_at', l.started_at, 'ended_at', l.ended_at)
-                                     FROM worker_runs l WHERE l.task_id = t.id
+                                     FROM worker_runs l
+                                     JOIN worker_run_tasks wrt ON wrt.run_id = l.run_id
+                                     WHERE wrt.task_id = t.id
                                      ORDER BY l.started_at DESC LIMIT 1)
                       ) AS runs
                FROM tasks t WHERE {where} {order} LIMIT %s OFFSET %s"""
@@ -5755,10 +5761,21 @@ def _require_work_lane(cur, aid, token):
 
 
 def _attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
-    """GH #83 follow-up: accepting a task request happens inside an already-running worker, so
-    the lazy run-start/run-finish inference never sees a new spawn to attach. The work token is
-    already bound to the current worker_runs row; if that row is still task-less, attach it to the
-    task the accept just spawned. Existing explicit task links are preserved."""
+    """GH #83 follow-up + GH #144: accepting a task request happens inside an already-running worker,
+    so the lazy run-start/run-finish inference never sees a new spawn to attach. The work token is
+    already bound to the current worker_runs row. Two effects, deliberately split (GH #144):
+
+      * PIN — if the row is still task-less, set worker_runs.task_id (the single "current task" the
+        GH #340 activity label and the GH #126 live-run guard read). An EXISTING pin is PRESERVED: a
+        session already working task A keeps A as its current task and is never silently moved to B
+        (ec197e8 / test_accept_task_does_not_overwrite_existing_run_task).
+      * FEED MEMBERSHIP — record that this run TOUCHED `task_id` in worker_run_tasks regardless of
+        the pin, so a continuous session spanning task A then task B narrates on BOTH task feeds.
+        This closes the one-task-only gap (GH #144) that the single pin column cannot: the AFTER
+        trigger already maintains membership for the pin path, but the accept HOP keeps the pin on A
+        (task_id unchanged) so the trigger never fires for B — hence this explicit insert.
+
+    Returns True if the PIN was (re)set to task_id."""
     if not token or not task_id:
         return False
     cur.execute(
@@ -5779,7 +5796,29 @@ def _attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
         RETURNING wr.run_id""",
         (task_id, token, aid, task_id),
     )
-    return cur.fetchone() is not None
+    pinned = cur.fetchone() is not None
+    # GH #144 FEED MEMBERSHIP: the run touched this task — record it even when the pin stayed on an
+    # earlier task, so BOTH task feeds narrate. Same live-work-token + in_progress-task guard as the
+    # pin update (never attribute to a non-running run or a not-in_progress task); ON CONFLICT keeps
+    # it idempotent across accept retries and the pin-path trigger.
+    cur.execute(
+        """INSERT INTO worker_run_tasks (run_id, task_id)
+           SELECT wr.run_id, %s
+             FROM worker_runs wr
+             JOIN embodiment_tokens et ON wr.run_id = et.run_id
+            WHERE et.run_token=%s
+              AND et.agent_id=%s
+              AND et.lane='work'
+              AND et.revoked_at IS NULL
+              AND et.run_id IS NOT NULL
+              AND wr.agent_id=et.agent_id
+              AND wr.status='running'
+              AND EXISTS (SELECT 1 FROM tasks t
+                           WHERE t.id=%s AND t.status='in_progress')
+           ON CONFLICT DO NOTHING""",
+        (task_id, token, aid, task_id),
+    )
+    return pinned
 
 
 def _revoke_tokens_for_runs(cur, run_ids):
@@ -6159,7 +6198,11 @@ def _fetch_run_lines(run_id, after_seq, limit=500):
 @app.get("/api/agents/{aid}/runs")
 def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
                     task_id: Optional[str] = Query(default=None)):
-    """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter."""
+    """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter.
+
+    GH #144: the ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every task a run
+    touched) instead of the single worker_runs.task_id pin — a session that spanned this task shows
+    up here even if its pin settled on another task."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
@@ -6167,8 +6210,10 @@ def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
         if task_id is not None:
             if not _valid_uuid(task_id):
                 raise HTTPException(400, "task_id is not a valid UUID")
-            cur.execute("""SELECT * FROM worker_runs WHERE agent_id=%s AND task_id=%s
-                           ORDER BY started_at DESC LIMIT %s""", (aid, task_id, limit))
+            cur.execute("""SELECT wr.* FROM worker_runs wr
+                           JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
+                           WHERE wr.agent_id=%s AND wrt.task_id=%s
+                           ORDER BY wr.started_at DESC LIMIT %s""", (aid, task_id, limit))
         else:
             cur.execute("""SELECT * FROM worker_runs WHERE agent_id=%s
                            ORDER BY started_at DESC LIMIT %s""", (aid, limit))
@@ -6178,13 +6223,19 @@ def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
 
 @app.get("/api/tasks/{tid}/runs")
 def list_task_runs(tid: str, limit: int = Query(default=20, ge=1, le=200)):
-    """A2: worker runs for a task, newest first (per-task progress view for B1)."""
+    """A2: worker runs for a task, newest first (per-task progress view for B1).
+
+    GH #144: joins worker_run_tasks (every task a run touched) rather than the single
+    worker_runs.task_id pin, so a run from a session that spanned this AND another task narrates
+    here too — not only under whichever task ended up as its pin."""
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_task(cur, tid)
-        cur.execute("""SELECT * FROM worker_runs WHERE task_id=%s
-                       ORDER BY started_at DESC LIMIT %s""", (tid, limit))
+        cur.execute("""SELECT wr.* FROM worker_runs wr
+                       JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
+                       WHERE wrt.task_id=%s
+                       ORDER BY wr.started_at DESC LIMIT %s""", (tid, limit))
         runs = [_run_row(r) for r in cur.fetchall()]
     return {"task_id": tid, "runs": runs}
 
