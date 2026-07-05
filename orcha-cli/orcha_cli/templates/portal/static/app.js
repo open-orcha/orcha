@@ -493,9 +493,19 @@ window.Orcha = (function () {
           </a>
         </div>
         <div class="tb-line tb-line-2">
-          <div class="aut-wrap" id="autWrap">
-            <span class="aut-lab">autonomy</span>
-            <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy"></div>
+          <!-- GH #148: two orthogonal controls, not one fused slider. Notifier = the power
+               switch (wakes_enabled); Autonomy = the gearbox (autonomy_level). A divider keeps
+               them reading as two separate things; both keep the acting-human lock. -->
+          <div class="ctl-wrap" id="ctlWrap">
+            <div class="ctl-group" id="notifGroup">
+              <span class="aut-lab">Notifier</span>
+              <div class="aut notif" id="notifTop" role="group" aria-label="Event notifier — pause or resume all agent wakes"></div>
+            </div>
+            <span class="ctl-div" aria-hidden="true"></span>
+            <div class="ctl-group" id="autGroup">
+              <span class="aut-lab">Autonomy</span>
+              <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy level"></div>
+            </div>
           </div>
           <div class="acting" title="You are the human authority on this container">
             <span class="lbl">acting as</span>
@@ -530,25 +540,27 @@ window.Orcha = (function () {
     }
   }
 
-  /* ---- SPEC-1: global autonomy switch ---------------------------------- */
-  // Four rungs in ONE slider, lowest→highest authority, but TWO orthogonal backends:
-  //   Rung 0  — the LIVE binary kill-switch, containers.wakes_enabled
-  //             (POST /api/containers/{cid}/wakes). Paused(red) vs Running(green).
-  //   Rungs 1-3 — the engine autonomy LEVEL, containers.autonomy_level
-  //             (#298: POST /api/containers/{cid}/autonomy, level ∈ plan|pr|full).
-  // The two are independent: pausing wakes does NOT change the level, so the active
-  // level keeps rendering whether wakes are on or off. The active level lights in its
-  // spec tone (plan=warn / pr=info / full=accent); rung 0 always shows the binary on top.
-  // `level` is the wire enum the backend stores+returns; `label` is the operator-facing rung.
-  const AUT_RUNGS = [
-    { r: 0, label: "Paused" },
-    { r: 1, level: "plan", tone: "warn", label: "Plan-only",
+  /* ---- GH #148: two orthogonal topbar controls ------------------------- */
+  // The topbar carries TWO independent controls, NOT one fused slider:
+  //   NOTIFIER  — the LIVE binary kill-switch, containers.wakes_enabled
+  //               (POST /api/containers/{cid}/wakes). Paused(red) vs Running(green).
+  //               "The power switch": do agents wake AT ALL?
+  //   AUTONOMY  — the engine LEVEL, containers.autonomy_level
+  //               (#298: POST /api/containers/{cid}/autonomy, level ∈ plan|pr|full).
+  //               "The gearbox": how far agents may go WHEN they act.
+  // They are orthogonal: pausing the notifier does NOT change the level, so the active
+  // level keeps rendering whether the notifier is Running or Paused (dimmed while paused,
+  // but still legible + editable so you can pre-set the level before resuming). The active
+  // level lights in its spec tone (plan=warn / pr=info / full=accent).
+  // `level` is the wire enum the backend stores+returns; `label` is operator-facing.
+  const AUT_LEVELS = [
+    { level: "plan", tone: "warn", label: "Plan-only",
       meaning: "Agents wake & propose, but every plan stops at the approval gate — you approve before any execution.",
       impact: "Agents resume and propose plans, but you approve every plan before any execution." },
-    { r: 2, level: "pr", tone: "info", label: "Build to PR",
+    { level: "pr", tone: "info", label: "Build to PR",
       meaning: "Agents execute approved plans up to an open PR; you still merge.",
       impact: "Agents execute approved plans up to an open PR. You still merge." },
-    { r: 3, level: "full", tone: "accent", label: "Full",
+    { level: "full", tone: "accent", label: "Full",
       meaning: "Agents may carry approved work to its configured terminal state without further gates.",
       impact: "Agents may carry approved work to completion without further gates." },
   ];
@@ -577,46 +589,76 @@ window.Orcha = (function () {
     const bar = document.createElement("div");
     bar.className = "pausebar";
     bar.id = "pausebar";
-    bar.innerHTML = `<span>⏸ Autonomy paused — no agent wakes. Humans & live terminals still work.</span>
+    bar.innerHTML = `<span>⏸ Notifier paused — no agent wakes. Humans & live terminals still work.</span>
       <span class="resume" id="resumeBtn" role="button" tabindex="0">Resume ↩</span>`;
     topbar.insertAdjacentElement("afterend", bar);
   }
 
-  // Render the switch + paused reinforcement from the current snapshot. Idempotent and
-  // safe to call before mount (no #autTop → no-op), so the 5s poll can reconcile it.
+  // Render BOTH controls + the paused reinforcement from the current snapshot. Idempotent
+  // and safe to call before mount (missing hosts → no-op), so the 5s poll can reconcile it.
+  // Kept as the single public entry (called from applySnapshot + mountShell); it fans out to
+  // the two hosts so the fused-slider call sites don't need to know about the split.
   function paintAutonomy() {
+    paintNotifier();
+    paintLevels();
+    paintPausedReinforcement();
+  }
+
+  // NOTIFIER host (#notifTop): the live binary kill-switch. Paused (red) vs Running (green),
+  // always lit; clicking flips the wake switch (confirm first). Orthogonal to the level.
+  function paintNotifier() {
+    const host = document.getElementById("notifTop");
+    if (!host) return;
+    const paused = wakesPaused();
+    const canAct = !!actingHuman();
+    host.classList.toggle("locked", !canAct);
+    const cls = paused ? "seg paused on" : "seg run on";
+    const lab = paused ? "Paused" : "Running";
+    const tip = canAct
+      ? (paused ? "Notifier is OFF — click to resume all agent wakes" : "Notifier is ON — click to pause all agent wakes")
+      : "Pick an acting human to change the notifier";
+    host.innerHTML = `<span class="${cls}" data-notif="1" role="switch" aria-checked="${!paused}" tabindex="0"
+      title="${esc(tip)}"><span class="d"></span>${esc(lab)}</span>`;
+    const seg = host.querySelector(".seg");
+    if (seg) {
+      seg.onclick = onNotifClick;
+      seg.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNotifClick(); } };
+    }
+  }
+
+  // AUTONOMY host (#autTop): the 3-level segmented selector (plan|pr|full). The active level
+  // lights in its spec tone; the rest stay selectable. Orthogonal to the notifier — the level
+  // renders the same whether the notifier is paused or running, but is de-emphasized (dimmed,
+  // hint "applies when running") while paused so you can still pre-set it before resuming.
+  function paintLevels() {
     const host = document.getElementById("autTop");
     if (!host) return;
     const paused = wakesPaused();
     const level = autLevel();
     const canAct = !!actingHuman();
     host.classList.toggle("locked", !canAct);
-    host.innerHTML = AUT_RUNGS.map((rg) => {
-      if (rg.r === 0) {
-        // the live binary: Paused (red) vs Running (neutral green), always lit
-        const cls = paused ? "seg paused on" : "seg run on";
-        const lab = paused ? "Paused" : "Running";
-        const tip = canAct
-          ? (paused ? "Wakes are OFF — click to resume" : "Wakes are ON — click to pause all agent wakes")
-          : "Pick an acting human to change autonomy";
-        return `<span class="${cls}" data-rung="0" role="radio" aria-checked="true"
-          title="${esc(tip)}"><span class="d"></span>${esc(lab)}</span>`;
-      }
-      // rungs 1-3: the engine autonomy level (plan|pr|full). The active level lights in its
-      // spec tone; the rest stay selectable. Orthogonal to rung 0 — the level renders the same
-      // whether wakes are paused or running.
+    host.classList.toggle("dimmed", paused);
+    host.innerHTML = AUT_LEVELS.map((rg) => {
       const active = rg.level === level;
       const cls = "seg lvl " + rg.tone + (active ? " on" : "");
       const tip = canAct
-        ? (active ? "Current autonomy: " + rg.label : "Set autonomy to " + rg.label + " — " + rg.meaning)
+        ? (active
+            ? "Current autonomy: " + rg.label + (paused ? " — applies when running" : "")
+            : "Set autonomy to " + rg.label + " — " + rg.meaning)
         : "Pick an acting human to change autonomy";
-      return `<span class="${cls}" data-rung="${rg.r}" role="radio" aria-checked="${active}"
+      return `<span class="${cls}" data-level="${rg.level}" role="radio" aria-checked="${active}" tabindex="0"
         title="${esc(tip)}"><span class="d"></span>${esc(rg.label)}</span>`;
     }).join("");
     host.querySelectorAll(".seg").forEach((seg) => {
-      seg.onclick = () => onAutClick(+seg.dataset.rung);
+      seg.onclick = () => onLevelClick(seg.dataset.level);
+      seg.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onLevelClick(seg.dataset.level); } };
     });
-    // topbar red border + persistent micro-banner when paused
+  }
+
+  // The paused reinforcement (red topbar border + persistent #pausebar micro-banner) is now
+  // driven ONLY by the notifier, never the level.
+  function paintPausedReinforcement() {
+    const paused = wakesPaused();
     const topbar = document.getElementById("topbar");
     if (topbar) topbar.classList.toggle("paused", paused);
     const bar = document.getElementById("pausebar");
@@ -627,34 +669,34 @@ window.Orcha = (function () {
     }
   }
 
-  function onAutClick(rung) {
-    if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
-    if (rung === 0) {
-      const paused = wakesPaused();
-      if (paused) {
-        // resume → Running
-        modal({
-          title: "Resume autonomy?",
-          desc: "Agents resume waking at the current autonomy level. Restores the global wake switch to ON (Running).",
-          primary: "Resume",
-          onPrimary: () => { closeModal(); setWakes(true); },
-        });
-      } else {
-        // pause → kill-switch
-        modal({
-          title: "Pause autonomy?",
-          desc: "All agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.",
-          primary: "Pause all wakes",
-          danger: true,
-          onPrimary: () => { closeModal(); setWakes(false); },
-        });
-      }
-      return;
+  // NOTIFIER click → flip the wake switch. Running→Paused is destructive (halts all wakes):
+  // danger confirm. Paused→Running is safe: light confirm.
+  function onNotifClick() {
+    if (!actingHuman()) { toast("Pick an acting human to change the notifier", "warn"); return; }
+    if (wakesPaused()) {
+      modal({
+        title: "Resume agent wakes?",
+        desc: "Agents resume waking at the current autonomy level.",
+        primary: "Resume",
+        onPrimary: () => { closeModal(); setWakes(true); },
+      });
+    } else {
+      modal({
+        title: "Pause all agent wakes?",
+        desc: "Agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.",
+        primary: "Pause all wakes",
+        danger: true,
+        onPrimary: () => { closeModal(); setWakes(false); },
+      });
     }
-    // rungs 1-3 → set the engine autonomy LEVEL (containers.autonomy_level). Confirm first
-    // (this can switch off the human verification gate at 'full'); no-op if already there.
-    const rg = AUT_RUNGS[rung];
-    if (!rg || !rg.level) return;
+  }
+
+  // AUTONOMY click → set the engine LEVEL (containers.autonomy_level). Confirm first (Full
+  // removes the human completion gate → danger-flagged); no-op if already at that level.
+  function onLevelClick(level) {
+    if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
+    const rg = AUT_LEVELS.find((x) => x.level === level);
+    if (!rg) return;
     if (rg.level === autLevel()) return;   // already at this level — no modal, no POST
     modal({
       title: "Set autonomy to " + rg.label + "?",
@@ -685,7 +727,7 @@ window.Orcha = (function () {
       .then((res) => {
         D.container.wakes_enabled = res.wakes_enabled;
         paintAutonomy();
-        toast(res.wakes_enabled ? "Autonomy · Running" : "Autonomy · Paused", res.wakes_enabled ? "ok" : "bad");
+        toast(res.wakes_enabled ? "Notifier · Running" : "Notifier · Paused", res.wakes_enabled ? "ok" : "bad");
       })
       .catch((e) => {
         D.container.wakes_enabled = prev;   // revert
@@ -715,7 +757,7 @@ window.Orcha = (function () {
       .then((res) => {
         D.container.autonomy_level = res.autonomy_level;
         paintAutonomy();
-        const rg = AUT_RUNGS.find((x) => x.level === res.autonomy_level);
+        const rg = AUT_LEVELS.find((x) => x.level === res.autonomy_level);
         toast("Autonomy · " + (rg ? rg.label : res.autonomy_level), "ok");
       })
       .catch((e) => {

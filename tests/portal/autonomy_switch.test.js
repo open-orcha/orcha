@@ -1,9 +1,12 @@
 /* ============================================================================
-   SPEC-1 — global autonomy switch (topbar). TWO orthogonal backends in one slider:
-   rung 0 is the LIVE binary kill-switch (containers.wakes_enabled) rendered
-   Paused(red)/Running(green); rungs 1-3 are the engine autonomy LEVEL
-   (#298 containers.autonomy_level, plan|pr|full) — the active level lights in its
-   tone and clicking a different level confirms → POST /api/containers/{cid}/autonomy.
+   GH #148 — two orthogonal topbar controls (was one fused slider). The topbar now
+   carries TWO independent hosts:
+     • NOTIFIER (#notifTop) — the LIVE binary kill-switch (containers.wakes_enabled),
+       rendered Paused(red)/Running(green). Clicking flips it → POST /wakes.
+     • AUTONOMY (#autTop)   — the engine LEVEL (containers.autonomy_level, plan|pr|full);
+       the active level lights in its tone. Clicking a different level confirms → POST /autonomy.
+   They are orthogonal: pausing the notifier NEVER changes the level, and the level renders
+   the same whether the notifier is Running or Paused (dimmed-but-editable while paused).
 
    Dependency-free: stubs a minimal DOM + fetch, loads the REAL portal app.js in a
    vm sandbox, and drives the actual wired path (applySnapshot → paintAutonomy →
@@ -45,21 +48,31 @@ function makeNode(id) {
     },
     setAttribute: () => {}, getAttribute: () => null,
     addEventListener: () => {}, insertAdjacentElement: () => {}, appendChild: () => {}, focus: () => {},
-    querySelector: () => null,
-    querySelectorAll: (sel) => {
-      if (!/seg/.test(sel)) return [];
-      if (n._segHtml !== n._html) {   // cache so onclick assignments persist across paints
+    // parse the seg spans out of this host's innerHTML. A seg carries EITHER data-notif
+    // (the binary switch) OR data-level (an autonomy level); expose both on dataset.
+    _parseSegs: () => {
+      if (n._segHtml !== n._html) {
         const segs = [];
-        const re = /<span class="([^"]*)"\s+data-rung="(\d+)"/g;
+        const re = /<span class="([^"]*)"\s+data-(notif|level)="([^"]*)"/g;
         let m;
         while ((m = re.exec(n._html))) {
           const seg = makeNode("");
-          seg._class = m[1]; seg.dataset = { rung: m[2] };
+          seg._class = m[1];
+          seg.dataset = m[2] === "notif" ? { notif: m[3] } : { level: m[3] };
           segs.push(seg);
         }
         n._segs = segs; n._segHtml = n._html;
       }
       return n._segs;
+    },
+    querySelector: (sel) => {
+      if (!/seg/.test(sel)) return null;
+      const segs = n._parseSegs();
+      return segs.length ? segs[0] : null;
+    },
+    querySelectorAll: (sel) => {
+      if (!/seg/.test(sel)) return [];
+      return n._parseSegs();
     },
   };
   return n;
@@ -68,7 +81,7 @@ function makeNode(id) {
 function makeSandbox(opts) {
   opts = opts || {};
   const reg = {};   // id -> node
-  ["autTop", "topbar", "pausebar", "resumeBtn", "__mc", "__mp"].forEach((id) => { reg[id] = makeNode(id); });
+  ["notifTop", "autTop", "topbar", "pausebar", "resumeBtn", "__mc", "__mp"].forEach((id) => { reg[id] = makeNode(id); });
 
   const captured = { modalHandlers: [] };
   // __mp.addEventListener captures the confirm handler so the test can "click" it.
@@ -120,55 +133,55 @@ function makeSandbox(opts) {
 }
 
 const tick = () => new Promise((r) => setImmediate(r));
+const notifSeg = (s) => s.reg.notifTop.querySelector(".seg");
+const levelSeg = (s, lvl) => s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.level === lvl);
 
 async function run() {
-  console.log("autonomy_switch.test.js — SPEC-1 Phase A\n");
+  console.log("autonomy_switch.test.js — GH #148 (two orthogonal controls)\n");
 
   const human = { id: "h1", alias: "Kedar", kind: "human" };
 
   // --- Case 1: Running render ------------------------------------------------
   {
-    console.log("Case 1: wakes_enabled=true → Running (neutral green); level rungs 1-3 live (default 'plan' lit)");
+    console.log("Case 1: wakes_enabled=true → Notifier 'Running' (green); autonomy shows 3 levels, 'plan' lit");
     const s = makeSandbox();
-    // snapshot omits autonomy_level → degrades to the migration default 'plan' (rung 1)
+    // snapshot omits autonomy_level → degrades to the migration default 'plan'
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true }, agents: [human], tasks: [], requests: [] });
-    const html = s.reg.autTop.innerHTML;
-    const segs = s.reg.autTop.querySelectorAll(".seg");
-    assert(segs.length === 4, "slider renders all 4 rungs");
-    const r0 = segs.find((x) => x.dataset.rung === "0");
-    assert(/\brun\b/.test(r0._class) && /\bon\b/.test(r0._class), "rung 0 lit as 'run on' (neutral)");
-    assert(/Running/.test(html), "rung 0 label = 'Running'");
-    assert(!/\bpaused\b/.test(r0._class), "rung 0 not red/paused while running");
-    const lvls = segs.filter((x) => x.dataset.rung !== "0");
-    assert(lvls.every((x) => /\blvl\b/.test(x._class) && !/\bsoon\b/.test(x._class)), "rungs 1-3 are live level segs (no 'soon')");
-    const r1 = segs.find((x) => x.dataset.rung === "1");
-    assert(/\bwarn\b/.test(r1._class) && /\bon\b/.test(r1._class), "default level 'plan' (rung 1) lit in warn tone");
-    assert(segs.filter((x) => /[123]/.test(x.dataset.rung) && /\bon\b/.test(x._class)).length === 1, "exactly one level rung lit");
+    const notif = notifSeg(s);
+    assert(notif && /\brun\b/.test(notif._class) && /\bon\b/.test(notif._class), "notifier lit as 'run on' (green)");
+    assert(/Running/.test(s.reg.notifTop.innerHTML), "notifier label = 'Running'");
+    assert(!/\bpaused\b/.test(notif._class), "notifier not red/paused while running");
+    const lvls = s.reg.autTop.querySelectorAll(".seg");
+    assert(lvls.length === 3, "autonomy host renders exactly 3 level segs");
+    assert(lvls.every((x) => /\blvl\b/.test(x._class)), "all 3 are level segs");
+    assert(/\bwarn\b/.test(levelSeg(s, "plan")._class) && /\bon\b/.test(levelSeg(s, "plan")._class), "default level 'plan' lit in warn tone");
+    assert(lvls.filter((x) => /\bon\b/.test(x._class)).length === 1, "exactly one level lit");
+    assert(!s.reg.autTop.classList.contains("dimmed"), "autonomy NOT dimmed while running");
     assert(s.reg.topbar.classList.contains("paused") === false, "topbar has no paused border");
     assert(s.reg.pausebar.classList.contains("show") === false, "pausebar hidden");
   }
 
   // --- Case 2: Paused render -------------------------------------------------
   {
-    console.log("\nCase 2: wakes_enabled=false → Paused (red) + topbar border + micro-banner");
+    console.log("\nCase 2: wakes_enabled=false → Notifier 'Paused' (red) + topbar border + micro-banner");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: false }, agents: [human], tasks: [], requests: [] });
-    const r0 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "0");
-    assert(/\bpaused\b/.test(r0._class) && /\bon\b/.test(r0._class), "rung 0 lit as 'paused on' (red)");
-    assert(/Paused/.test(s.reg.autTop.innerHTML), "rung 0 label = 'Paused'");
+    const notif = notifSeg(s);
+    assert(/\bpaused\b/.test(notif._class) && /\bon\b/.test(notif._class), "notifier lit as 'paused on' (red)");
+    assert(/Paused/.test(s.reg.notifTop.innerHTML), "notifier label = 'Paused'");
     assert(s.reg.topbar.classList.contains("paused"), "topbar grows the red paused border");
     assert(s.reg.pausebar.classList.contains("show"), "paused micro-banner is shown");
+    assert(s.reg.autTop.classList.contains("dimmed"), "autonomy de-emphasized (dimmed) while paused");
   }
 
   // --- Case 3: pause click → confirm → POST + optimistic + reconcile ---------
   {
-    console.log("\nCase 3: click Running → confirm → POST {enabled:false}, optimistic + reconcile");
+    console.log("\nCase 3: click Notifier (Running) → confirm → POST {enabled:false}, optimistic + reconcile");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true }, agents: [human], tasks: [], requests: [] });
-    const r0 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "0");
-    r0.onclick();   // opens the confirm modal (no POST yet)
+    notifSeg(s).onclick();   // opens the confirm modal (no POST yet)
     assert(s.fetchCalls.length === 0, "no POST before confirm");
-    assert(/Pause autonomy\?/.test(s.reg.__ov.innerHTML), "confirm modal asks 'Pause autonomy?'");
+    assert(/Pause all agent wakes\?/.test(s.reg.__ov.innerHTML), "confirm modal asks 'Pause all agent wakes?'");
     s.captured.modalHandlers.forEach((fn) => fn());   // click the primary "Pause all wakes"
     assert(s.ORCHA.container.wakes_enabled === false, "optimistic: state flips to paused immediately");
     assert(s.fetchCalls.length === 1, "exactly one POST fired");
@@ -181,12 +194,11 @@ async function run() {
 
   // --- Case 4: resume click POSTs enabled:true -------------------------------
   {
-    console.log("\nCase 4: click Paused → confirm Resume → POST {enabled:true}");
+    console.log("\nCase 4: click Notifier (Paused) → confirm Resume → POST {enabled:true}");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: false }, agents: [human], tasks: [], requests: [] });
-    const r0 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "0");
-    r0.onclick();
-    assert(/Resume autonomy\?/.test(s.reg.__ov.innerHTML), "confirm modal asks 'Resume autonomy?'");
+    notifSeg(s).onclick();
+    assert(/Resume agent wakes\?/.test(s.reg.__ov.innerHTML), "confirm modal asks 'Resume agent wakes?'");
     s.captured.modalHandlers.forEach((fn) => fn());
     await tick();
     assert(s.fetchCalls.length === 1 && s.fetchCalls[0].body.enabled === true, "POST {enabled:true} fired");
@@ -195,25 +207,23 @@ async function run() {
 
   // --- Case 5: failed POST reverts the optimistic state ----------------------
   {
-    console.log("\nCase 5: POST failure reverts to the prior state");
+    console.log("\nCase 5: notifier POST failure reverts to the prior state");
     const s = makeSandbox({ failFetch: true });
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true }, agents: [human], tasks: [], requests: [] });
-    const r0 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "0");
-    r0.onclick();
+    notifSeg(s).onclick();
     s.captured.modalHandlers.forEach((fn) => fn());
     assert(s.ORCHA.container.wakes_enabled === false, "optimistic flip applied");
     await tick();
     assert(s.ORCHA.container.wakes_enabled === true, "reverted to running after the POST failed");
   }
 
-  // --- Case 6: read-only gate when no acting human ---------------------------
+  // --- Case 6: read-only gate when no acting human (notifier) -----------------
   {
-    console.log("\nCase 6: no acting human → slider locked, click is a no-op (no POST)");
+    console.log("\nCase 6: no acting human → notifier locked, click is a no-op (no POST)");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true }, agents: [], tasks: [], requests: [] });
-    assert(s.reg.autTop.classList.contains("locked"), "slider marked read-only (locked)");
-    const r0 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "0");
-    r0.onclick();
+    assert(s.reg.notifTop.classList.contains("locked"), "notifier marked read-only (locked)");
+    notifSeg(s).onclick();
     assert(s.fetchCalls.length === 0, "no POST without an acting human");
     assert(!s.reg.__ov, "no confirm modal opened");
   }
@@ -223,8 +233,7 @@ async function run() {
     console.log("\nCase 7: click Build to PR → confirm → POST {level:'pr'}, optimistic + reconcile");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "plan" }, agents: [human], tasks: [], requests: [] });
-    const r2 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "2");
-    r2.onclick();   // opens the confirm modal (no POST yet)
+    levelSeg(s, "pr").onclick();   // opens the confirm modal (no POST yet)
     assert(s.fetchCalls.length === 0, "no POST before confirm");
     assert(/Set autonomy to Build to PR\?/.test(s.reg.__ov.innerHTML), "confirm modal asks to set the level");
     s.captured.modalHandlers.forEach((fn) => fn());   // click the primary "Set Build to PR"
@@ -235,18 +244,17 @@ async function run() {
     assert(s.fetchCalls[0].body.actor_agent_id === "h1", "body carries the acting human id");
     await tick();
     assert(s.ORCHA.container.autonomy_level === "pr", "reconciled from response (level 'pr')");
-    const r2b = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "2");
-    assert(/\binfo\b/.test(r2b._class) && /\bon\b/.test(r2b._class), "rung 2 now lit in info tone");
+    assert(/\binfo\b/.test(levelSeg(s, "pr")._class) && /\bon\b/.test(levelSeg(s, "pr")._class), "'pr' now lit in info tone");
   }
 
-  // --- Case 8: poll reconcile — external flip repaints without a click -------
+  // --- Case 8: poll reconcile — external notifier flip repaints without a click -------
   {
-    console.log("\nCase 8: a later snapshot (poll) repaints the switch");
+    console.log("\nCase 8: a later snapshot (poll) repaints the notifier");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true }, agents: [human], tasks: [], requests: [] });
-    assert(/Running/.test(s.reg.autTop.innerHTML), "starts Running");
+    assert(/Running/.test(s.reg.notifTop.innerHTML), "starts Running");
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: false }, agents: [human], tasks: [], requests: [] });
-    assert(/Paused/.test(s.reg.autTop.innerHTML) && s.reg.pausebar.classList.contains("show"), "poll flip → repaints to Paused");
+    assert(/Paused/.test(s.reg.notifTop.innerHTML) && s.reg.pausebar.classList.contains("show"), "poll flip → repaints to Paused");
   }
 
   // --- Case 9: minimal topbar (no insertAdjacentElement) must not crash mount ---
@@ -278,16 +286,14 @@ async function run() {
     console.log("\nCase 11: click Full → danger confirm → POST {level:'full'}, lit accent");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "pr" }, agents: [human], tasks: [], requests: [] });
-    const r3 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "3");
-    r3.onclick();
+    levelSeg(s, "full").onclick();
     assert(/Set autonomy to Full\?/.test(s.reg.__ov.innerHTML), "confirm modal asks to set Full");
     assert(/without further gates/.test(s.reg.__ov.innerHTML), "Full impact line warns gates are removed");
     s.captured.modalHandlers.forEach((fn) => fn());
     await tick();
     assert(s.fetchCalls.length === 1 && s.fetchCalls[0].body.level === "full", "POST {level:'full'} fired");
     assert(s.ORCHA.container.autonomy_level === "full", "level reconciled to 'full'");
-    const r3b = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "3");
-    assert(/\baccent\b/.test(r3b._class) && /\bon\b/.test(r3b._class), "rung 3 (Full) lit in accent tone");
+    assert(/\baccent\b/.test(levelSeg(s, "full")._class) && /\bon\b/.test(levelSeg(s, "full")._class), "'full' lit in accent tone");
   }
 
   // --- Case 12: clicking the already-active level is a no-op -------------------
@@ -295,8 +301,7 @@ async function run() {
     console.log("\nCase 12: clicking the current level → no modal, no POST");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "pr" }, agents: [human], tasks: [], requests: [] });
-    const r2 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "2");
-    r2.onclick();   // rung 2 IS the current level ('pr')
+    levelSeg(s, "pr").onclick();   // 'pr' IS the current level
     assert(!s.reg.__ov, "no confirm modal when clicking the active level");
     assert(s.fetchCalls.length === 0, "no POST when clicking the active level");
   }
@@ -306,8 +311,7 @@ async function run() {
     console.log("\nCase 13: autonomy POST failure reverts to the prior level");
     const s = makeSandbox({ failFetch: true });
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "plan" }, agents: [human], tasks: [], requests: [] });
-    const r3 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "3");
-    r3.onclick();
+    levelSeg(s, "full").onclick();
     s.captured.modalHandlers.forEach((fn) => fn());
     assert(s.ORCHA.container.autonomy_level === "full", "optimistic flip to 'full' applied");
     await tick();
@@ -316,13 +320,12 @@ async function run() {
 
   // --- Case 14: level is orthogonal to pause — renders lit while paused --------
   {
-    console.log("\nCase 14: paused + level set → level rung still lit (orthogonal fields)");
+    console.log("\nCase 14: paused + level set → level still lit (orthogonal fields), host dimmed");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: false, autonomy_level: "pr" }, agents: [human], tasks: [], requests: [] });
-    const r0 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "0");
-    assert(/\bpaused\b/.test(r0._class), "rung 0 paused");
-    const r2 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "2");
-    assert(/\binfo\b/.test(r2._class) && /\bon\b/.test(r2._class), "level 'pr' still lit while paused (orthogonal)");
+    assert(/\bpaused\b/.test(notifSeg(s)._class), "notifier paused");
+    assert(/\binfo\b/.test(levelSeg(s, "pr")._class) && /\bon\b/.test(levelSeg(s, "pr")._class), "level 'pr' still lit while paused (orthogonal)");
+    assert(s.reg.autTop.classList.contains("dimmed"), "autonomy host dimmed while paused but still rendered");
   }
 
   // --- Case 15: no acting human → level click is a no-op (no POST) -------------
@@ -330,24 +333,34 @@ async function run() {
     console.log("\nCase 15: no acting human → clicking a level POSTs nothing");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "plan" }, agents: [], tasks: [], requests: [] });
-    const r3 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "3");
-    r3.onclick();
+    assert(s.reg.autTop.classList.contains("locked"), "autonomy marked read-only (locked)");
+    levelSeg(s, "full").onclick();
     assert(s.fetchCalls.length === 0, "no POST without an acting human");
     assert(!s.reg.__ov, "no confirm modal without an acting human");
   }
 
   // --- Case 16: a later snapshot (poll) repaints the level --------------------
   {
-    console.log("\nCase 16: external level change in a later snapshot repaints the active rung");
+    console.log("\nCase 16: external level change in a later snapshot repaints the active level");
     const s = makeSandbox();
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "plan" }, agents: [human], tasks: [], requests: [] });
-    let r1 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "1");
-    assert(/\bon\b/.test(r1._class), "starts with 'plan' (rung 1) lit");
+    assert(/\bon\b/.test(levelSeg(s, "plan")._class), "starts with 'plan' lit");
     s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "full" }, agents: [human], tasks: [], requests: [] });
-    r1 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "1");
-    const r3 = s.reg.autTop.querySelectorAll(".seg").find((x) => x.dataset.rung === "3");
-    assert(!/\bon\b/.test(r1._class), "poll: 'plan' no longer lit");
-    assert(/\baccent\b/.test(r3._class) && /\bon\b/.test(r3._class), "poll: 'full' (rung 3) now lit");
+    assert(!/\bon\b/.test(levelSeg(s, "plan")._class), "poll: 'plan' no longer lit");
+    assert(/\baccent\b/.test(levelSeg(s, "full")._class) && /\bon\b/.test(levelSeg(s, "full")._class), "poll: 'full' now lit");
+  }
+
+  // --- Case 17: notifier and autonomy are independent — pausing keeps the level --
+  {
+    console.log("\nCase 17: pausing the notifier NEVER changes the autonomy level");
+    const s = makeSandbox();
+    s.Orcha.applySnapshot({ container: { id: "c1", wakes_enabled: true, autonomy_level: "pr" }, agents: [human], tasks: [], requests: [] });
+    notifSeg(s).onclick();                       // pause
+    s.captured.modalHandlers.forEach((fn) => fn());
+    await tick();
+    assert(s.ORCHA.container.wakes_enabled === false, "notifier now paused");
+    assert(s.ORCHA.container.autonomy_level === "pr", "autonomy level untouched by the pause");
+    assert(/\bon\b/.test(levelSeg(s, "pr")._class), "'pr' still lit after pausing");
   }
 
   console.log("\n" + (failures === 0 ? "ALL PASSED ✅" : failures + " FAILED ❌"));
