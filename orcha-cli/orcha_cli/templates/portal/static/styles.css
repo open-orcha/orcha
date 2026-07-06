@@ -339,6 +339,24 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
   border-radius: 999px; padding: 3px 11px; font-size: 11.5px; font-weight: 600; }
 .pausebar .resume:hover { border-color: var(--accent-line); color: var(--accent); }
 
+/* #103: notifier health — inline chip on the autonomy switch + the "Running but no notifier" banner */
+.notif-chip { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; padding: 3px 9px;
+  border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--muted); }
+.notif-chip .d { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+.notif-chip.ok   { color: var(--ok);     border-color: var(--ok-line);     background: var(--ok-soft); }
+.notif-chip.warn { color: var(--warn);   border-color: var(--warn-line);   background: var(--warn-soft); }
+.notif-chip.bad  { color: var(--danger); border-color: var(--danger-line); background: var(--danger-soft); }
+.notifbar { display: none; align-items: center; gap: 8px; padding: 7px 26px; font-size: 12px; font-weight: 650;
+  color: var(--warn); background: var(--warn-soft); border-bottom: 1px solid var(--warn-line); }
+.notifbar.show { display: flex; }
+.notifbar .fix { margin-left: auto; cursor: pointer; color: var(--text); border: 1px solid var(--border-2);
+  border-radius: 999px; padding: 3px 11px; font-size: 11.5px; font-weight: 600; }
+.notifbar .fix:hover { border-color: var(--accent-line); color: var(--accent); }
+.cmdbox { display: flex; align-items: center; gap: 10px; }
+.cmdbox code { flex: 1; padding: 8px 11px; border-radius: 8px; background: var(--surface-2);
+  border: 1px solid var(--border); font-size: 12.5px; overflow-x: auto; white-space: nowrap; }
+
 /* acting-as */
 .acting { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 5px 6px 5px 12px;
   border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }

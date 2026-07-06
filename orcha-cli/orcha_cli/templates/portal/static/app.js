@@ -580,6 +580,14 @@ window.Orcha = (function () {
     return (D.container && D.container.autonomy_level) || "plan";
   }
 
+  // #103: the host notifier's health from the 5s snapshot
+  // ({status: running|stale|offline, age_seconds, version, restart_pending, last_error}).
+  // Pre-#103 backends omit `notifier` — return null and render nothing (degrade to a sane read,
+  // mirroring wakesPaused()), NEVER a false "offline" that would nag on an older stack.
+  function notifierHealth() {
+    return (D.container && D.container.notifier) || null;
+  }
+
   // Inject the paused micro-banner once, immediately after the topbar (shared across pages).
   function ensurePausebar(topbar) {
     if (!topbar || document.getElementById("pausebar")) return;
@@ -592,6 +600,16 @@ window.Orcha = (function () {
     bar.innerHTML = `<span>⏸ Notifier paused — no agent wakes. Humans & live terminals still work.</span>
       <span class="resume" id="resumeBtn" role="button" tabindex="0">Resume ↩</span>`;
     topbar.insertAdjacentElement("afterend", bar);
+    // #103: a second micro-banner for the "wakes on but no notifier polling" failure mode, injected
+    // right after the pausebar so the two never overlap (pausebar shows only when paused; this shows
+    // only when Running-but-unhealthy). Its Restart button is wired in paintNotifier().
+    if (document.getElementById("notifbar")) return;
+    const nb = document.createElement("div");
+    nb.className = "notifbar";
+    nb.id = "notifbar";
+    nb.innerHTML = `<span id="notifbarMsg"></span>
+      <span class="fix" id="notifRestartBtn" role="button" tabindex="0">Restart notifier</span>`;
+    bar.insertAdjacentElement("afterend", nb);
   }
 
   // Render BOTH controls + the paused reinforcement from the current snapshot. Idempotent
@@ -648,7 +666,7 @@ window.Orcha = (function () {
         : "Pick an acting human to change autonomy";
       return `<span class="${cls}" data-level="${rg.level}" role="radio" aria-checked="${active}" tabindex="0"
         title="${esc(tip)}"><span class="d"></span>${esc(rg.label)}</span>`;
-    }).join("");
+    }).join("") + notifChipHtml();
     host.querySelectorAll(".seg").forEach((seg) => {
       seg.onclick = () => onLevelClick(seg.dataset.level);
       seg.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onLevelClick(seg.dataset.level); } };
@@ -669,6 +687,77 @@ window.Orcha = (function () {
       const rb = document.getElementById("resumeBtn");
       if (rb) { rb.onclick = () => setWakes(true); rb.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWakes(true); } }; }
     }
+    paintNotifier(paused);
+  }
+
+  // #103: the inline notifier-health chip appended to the switch — green "notifier live" /
+  // amber "notifier stale" / red "notifier offline". Empty string on a pre-#103 snapshot.
+  function notifChipHtml() {
+    const nh = notifierHealth();
+    if (!nh || !nh.status) return "";
+    const tone = nh.status === "running" ? "ok" : nh.status === "stale" ? "warn" : "bad";
+    const lab = nh.status === "running" ? "notifier live"
+              : nh.status === "stale" ? "notifier stale" : "notifier offline";
+    const tip = nh.status === "running"
+        ? "The host notifier is polling and waking agents" + (nh.version ? " · v" + nh.version : "")
+        : "The host notifier isn't waking agents — use Restart notifier"
+          + (nh.last_error ? " · last error: " + nh.last_error : "");
+    return `<span class="notif-chip ${tone}" title="${esc(tip)}"><span class="d"></span>${esc(lab)}</span>`;
+  }
+
+  // #103: show/hide the "Running but no notifier polling" banner and wire its Restart button.
+  // The banner appears only when wakes are ON (not paused) AND the notifier is stale/offline — the
+  // exact silent failure this issue targets. When paused, the pausebar owns the message instead.
+  function paintNotifier(paused) {
+    const nb = document.getElementById("notifbar");
+    if (!nb) return;
+    const nh = notifierHealth();
+    const bad = !paused && nh && (nh.status === "stale" || nh.status === "offline");
+    nb.classList.toggle("show", !!bad);
+    if (!bad) return;
+    const msg = document.getElementById("notifbarMsg");
+    if (msg) {
+      msg.textContent = nh.status === "offline"
+        ? "⚠ Running, but the notifier is offline — no host process is waking agents."
+        : "⚠ Running, but the notifier looks stale — agent wakes may be delayed.";
+    }
+    const rb = document.getElementById("notifRestartBtn");
+    if (rb) {
+      rb.onclick = () => restartNotifier();
+      rb.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); restartNotifier(); } };
+    }
+  }
+
+  // #103: ask the host daemon to restart. A live-but-stale notifier self-heals (re-execs) on its
+  // next heartbeat; a fully-dead one can't, so we show the exact manual command to run on the host.
+  function restartNotifier() {
+    if (!actingHuman()) { toast("Pick an acting human to restart the notifier", "warn"); return; }
+    const cid = D.container && D.container.id;
+    if (!cid) { toast("No container", "danger"); return; }
+    const who = actingHuman();
+    fetch("/api/containers/" + encodeURIComponent(cid) + "/notifier/restart-request", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor_agent_id: who ? who.id : null }),
+    })
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((res) => {
+        if (res.self_heal) {
+          // a live daemon will pick up the request and re-exec; the 5s poll flips the chip to live
+          toast("Restarting notifier…", "ok");
+        } else {
+          const cmd = res.manual_command || "orcha notifier --restart";
+          modal({
+            title: "Notifier is offline",
+            desc: "No notifier is running, so it can't restart itself. Run this on the machine hosting Orcha:",
+            body: `<div class="cmdbox"><code>${esc(cmd)}</code>`
+                + `<button class="btn subtle sm" id="__cpc" type="button">Copy</button></div>`,
+            primary: "Done", cancel: "Close",
+            onOpen: (ov) => { const b = ov.querySelector("#__cpc"); if (b) b.onclick = () => copyText(cmd); },
+            onPrimary: () => closeModal(),
+          });
+        }
+      })
+      .catch((e) => toast("Could not request restart: " + e.message, "danger"));
   }
 
   // NOTIFIER click → flip the wake switch. Running→Paused is destructive (halts all wakes):
@@ -730,6 +819,15 @@ window.Orcha = (function () {
         D.container.wakes_enabled = res.wakes_enabled;
         paintAutonomy();
         toast(res.wakes_enabled ? "Notifier · Running" : "Notifier · Paused", res.wakes_enabled ? "ok" : "bad");
+        // #103: enabling wakes doesn't guarantee a notifier is polling — close the silent
+        // "wakes on but nothing waking agents" gap by flagging it right when the human resumes.
+        // The notifbar (painted above) already shows; this reinforces it at the moment of action.
+        if (res.wakes_enabled) {
+          const nh = notifierHealth();
+          if (nh && (nh.status === "stale" || nh.status === "offline")) {
+            toast("Wakes on, but the notifier is " + nh.status + " — click Restart notifier", "warn");
+          }
+        }
       })
       .catch((e) => {
         D.container.wakes_enabled = prev;   // revert

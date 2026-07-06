@@ -2548,6 +2548,14 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                LIMIT %s OFFSET 0""", (cid, request_limit))
         requests = _annotate_request_ownership(cur.fetchall())
 
+        # #103: fold the host notifier's health into the 5s poll so the portal can show a health
+        # chip + warn when wakes are on but nothing is polling — no extra frontend fetch. Compact:
+        # the full diagnostics live on GET /api/containers/{cid}/notifier-health.
+        ns = _notifier_status(_fetch_notifier_health(cur, cid))
+        c["notifier"] = {"status": ns["status"], "age_seconds": ns["age_seconds"],
+                         "version": ns["version"], "restart_pending": ns["restart_pending"],
+                         "last_error": ns["last_error"]}
+
     return {"container": c, "agents": agents, "tasks": tasks, "requests": requests,
             "task_total": task_total, "request_total": request_total}
 
@@ -5790,6 +5798,157 @@ def _revoke_tokens_for_runs(cur, run_ids):
         cur.execute(
             "UPDATE embodiment_tokens SET revoked_at=now() WHERE run_id = ANY(%s) AND revoked_at IS NULL",
             (list(run_ids),))
+
+
+# ---------- #103: notifier health + one-click restart ----------
+# The notifier is a HOST daemon; the portal (in a container) can't see or signal it. Flipping the
+# top-bar switch to Running only sets wakes_enabled — it does NOT prove a daemon is polling, so a
+# dead notifier looks like a working "Running" state while nothing wakes. The daemon UPSERTs a
+# heartbeat here each loop; the portal derives running/stale/offline from its age and can record a
+# restart REQUEST (intent only — same host/container boundary as WorkerRunStop). A live daemon reads
+# the request back on its next heartbeat and re-execs itself; a dead one can't, so the portal shows
+# the manual fallback command instead.
+NOTIFIER_STALE_SECS = 15.0     # last heartbeat older than this ⇒ "stale" (daemon interval is ~2s, hb ~5s)
+NOTIFIER_OFFLINE_SECS = 60.0   # older than this (or state='stopped', or never seen) ⇒ "offline"
+
+
+def _fetch_notifier_health(cur, cid):
+    """The notifier_health row for `cid` with DB-computed age (avoids app/DB clock skew) and a
+    resolved restart_pending flag. None if no daemon has ever reported for this container."""
+    cur.execute(
+        """SELECT pid, host_cwd, version, state, last_error, started_at, last_seen_at,
+                  restart_requested_at, restart_requested_by, restart_acked_at,
+                  EXTRACT(EPOCH FROM (now() - last_seen_at)) AS age_seconds,
+                  (restart_requested_at IS NOT NULL
+                   AND (restart_acked_at IS NULL OR restart_acked_at < restart_requested_at))
+                      AS restart_pending
+             FROM notifier_health WHERE container_id=%s""", (cid,))
+    return cur.fetchone()
+
+
+def _notifier_status(row) -> dict:
+    """Derive the operator-facing notifier health from a _fetch_notifier_health row.
+      running — a fresh heartbeat (daemon is polling + spawning workers).
+      stale   — heartbeat aging (daemon may be wedged / mid-restart); wakes may be delayed.
+      offline — never reported, aged past the offline window, or cleanly stopped.
+    A missing row is offline (no daemon has ever checked in for this container)."""
+    if row is None:
+        return {"status": "offline", "age_seconds": None, "last_seen_at": None, "started_at": None,
+                "pid": None, "version": None, "last_error": None, "restart_pending": False}
+    age = float(row["age_seconds"]) if row["age_seconds"] is not None else None
+    if row["state"] == "stopped" or age is None or age >= NOTIFIER_OFFLINE_SECS:
+        status = "offline"
+    elif age >= NOTIFIER_STALE_SECS:
+        status = "stale"
+    else:
+        status = "running"
+    return {"status": status, "age_seconds": age, "last_seen_at": row["last_seen_at"],
+            "started_at": row["started_at"], "pid": row["pid"], "version": row["version"],
+            "last_error": row["last_error"], "restart_pending": bool(row["restart_pending"])}
+
+
+class NotifierHeartbeat(BaseModel):
+    """The host daemon's per-loop liveness ping (unauthenticated, like the other daemon endpoints)."""
+    pid: Optional[int] = Field(default=None, description="host PID of the daemon (diagnostic)")
+    version: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN, description="orcha-cli version")
+    cwd: Optional[str] = Field(default=None, max_length=1024, description="project dir the daemon runs from")
+    started_at: Optional[float] = Field(default=None, description="daemon boot time, epoch seconds "
+                                        "(anchors restart-ack: a boot AFTER a restart request clears it)")
+    error: Optional[str] = Field(default=None, max_length=4000, description="last tick error, if any")
+    state: str = Field(default="running", description="running | stopped (graceful-shutdown marker)")
+
+
+class NotifierRestartRequest(BaseModel):
+    """#103: a human asks the host daemon to restart. Human-gated (matches /autonomy) because it is a
+    deliberate recovery action, and audit-logged. The API only RECORDS intent; a live daemon enforces
+    it on its next heartbeat (it can't signal host PIDs), so this is a request, not a guarantee."""
+    actor_agent_id: str = Field(..., description="UUID of the human (kind='human') requesting the restart")
+
+
+@app.post("/api/containers/{cid}/notifier/heartbeat", status_code=200)
+def notifier_heartbeat(cid: str, body: NotifierHeartbeat):
+    """#103: the host notifier daemon reports liveness each loop. UPSERTs the per-container row and
+    returns whether a portal-initiated restart is pending so the daemon can self-heal (re-exec) in
+    the same round-trip — no extra poll. A heartbeat whose `started_at` post-dates a pending request
+    is treated as the restart having happened (restart_acked_at set), so it won't loop."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if body.state not in ("running", "stopped"):
+        raise HTTPException(400, "state must be 'running' or 'stopped'")
+    with db_cursor() as (conn, cur):
+        _require_container(cur, cid)
+        cur.execute(
+            """INSERT INTO notifier_health
+                   (container_id, pid, host_cwd, version, started_at, last_seen_at,
+                    last_error, state, restart_acked_at)
+               VALUES (%s, %s, %s, %s,
+                       CASE WHEN %s IS NULL THEN NULL ELSE to_timestamp(%s) END,
+                       now(), %s, %s, NULL)
+               ON CONFLICT (container_id) DO UPDATE SET
+                   pid = EXCLUDED.pid,
+                   host_cwd = EXCLUDED.host_cwd,
+                   version = EXCLUDED.version,
+                   started_at = EXCLUDED.started_at,
+                   last_seen_at = now(),
+                   last_error = EXCLUDED.last_error,
+                   state = EXCLUDED.state,
+                   restart_acked_at = CASE
+                       WHEN notifier_health.restart_requested_at IS NOT NULL
+                            AND EXCLUDED.started_at IS NOT NULL
+                            AND EXCLUDED.started_at > notifier_health.restart_requested_at
+                       THEN now() ELSE notifier_health.restart_acked_at END
+               RETURNING restart_requested_at, restart_acked_at""",
+            (cid, body.pid, body.cwd, body.version,
+             body.started_at, body.started_at, body.error, body.state))
+        row = cur.fetchone()
+        conn.commit()
+    req_at = row["restart_requested_at"]
+    acked_at = row["restart_acked_at"]
+    pending = req_at is not None and (acked_at is None or acked_at < req_at)
+    return {"restart_requested_at": req_at, "restart_pending": pending}
+
+
+@app.get("/api/containers/{cid}/notifier-health", status_code=200)
+def get_notifier_health(cid: str):
+    """#103: the derived notifier health for a container (running | stale | offline) + diagnostics.
+    Used by the portal to surface a health chip and the "wakes on but nothing polling" warning."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        _require_container(cur, cid)
+        return _notifier_status(_fetch_notifier_health(cur, cid))
+
+
+@app.post("/api/containers/{cid}/notifier/restart-request", status_code=200)
+def request_notifier_restart(cid: str, body: NotifierRestartRequest):
+    """#103: a human requests a notifier restart from the portal. Records intent (human-gated,
+    audit-logged). `self_heal` is true only when a live/stale daemon is present to pick it up on its
+    next heartbeat; when offline, the caller shows `manual_command` as the fallback."""
+    if not _valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        _require_container(cur, cid)
+        _require_kind(cur, body.actor_agent_id, ("human",))
+        # Carry the request even if the daemon never reported (offline row): the INSERT branch marks
+        # state='stopped' so health reads offline until a real heartbeat lands. A live row's state /
+        # last_seen_at are preserved (only the restart_* fields are touched).
+        cur.execute(
+            """INSERT INTO notifier_health
+                   (container_id, last_seen_at, state, restart_requested_at,
+                    restart_requested_by, restart_acked_at)
+               VALUES (%s, now(), 'stopped', now(), %s, NULL)
+               ON CONFLICT (container_id) DO UPDATE SET
+                   restart_requested_at = now(),
+                   restart_requested_by = EXCLUDED.restart_requested_by,
+                   restart_acked_at = NULL""",
+            (cid, body.actor_agent_id))
+        status = _notifier_status(_fetch_notifier_health(cur, cid))
+        log_event(cur, cid, "human", body.actor_agent_id, "container", cid,
+                  "notifier_restart_requested", {"notifier_status": status["status"]})
+        conn.commit()
+    self_heal = status["status"] in ("running", "stale")
+    return {"ok": True, "notifier_status": status["status"], "self_heal": self_heal,
+            "manual_command": "orcha notifier --restart"}
 
 
 # ---------- A2: worker runs (persist + expose headless wake output) ----------

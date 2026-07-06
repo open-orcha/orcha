@@ -518,6 +518,49 @@ def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
         return None
 
 
+# ---------- #103: notifier health heartbeat + portal-initiated self-restart ----------
+HEARTBEAT_INTERVAL = 5.0   # seconds between health pings (< the API's 15s "stale" threshold)
+
+
+def _cli_version() -> str:
+    """Installed orcha-cli version, reported on the heartbeat so the portal can flag a daemon
+    running STALE code after `orcha update`. Source-tree runs have no dist metadata → sentinel."""
+    try:
+        from importlib.metadata import version as _v
+        return _v("orcha-cli")
+    except Exception:
+        return "0.0.0+source"
+
+
+def _post_heartbeat(api_base: str, cid: str, *, started_at: float, version: str,
+                    cwd: str, error: Optional[str], state: str) -> Optional[dict]:
+    """POST one liveness heartbeat. Best-effort (never raises): a health-reporting failure must
+    NEVER disrupt waking. Returns the API's `{restart_requested_at, restart_pending}` reply, so the
+    caller can self-heal when a human requested a restart from the portal."""
+    return _post_json(
+        f"{api_base}/api/containers/{cid}/notifier/heartbeat",
+        {"pid": os.getpid(), "started_at": started_at, "version": (version or "")[:200],
+         "cwd": (cwd or "")[:1024], "error": (error or None) and str(error)[:4000], "state": state})
+
+
+def _reexec_notifier() -> None:
+    """#103: replace THIS daemon's process image with a fresh `orcha notifier` invocation so it
+    reloads on-disk code (e.g. after `orcha update`). Re-exec keeps the SAME pid, so the pidfile +
+    container claim this process already owns stay valid (the `finally` cleanup does NOT run — execv
+    never returns). The re-exec'd daemon boots with a new started_at that post-dates the request, so
+    its first heartbeat acks it and it won't loop. Does not return on success."""
+    argv_tail = sys.argv[1:]   # e.g. ['notifier', '--quiet', '--container', '<cid>']
+    exe = shutil.which("orcha")
+    try:
+        if exe:
+            os.execv(exe, [exe] + argv_tail)
+        else:
+            os.execv(sys.executable, [sys.executable, "-m", "orcha_cli"] + argv_tail)
+    except OSError:
+        # execv itself failed (rare) — exit cleanly; the SessionStart `--ensure` hook respawns us.
+        os._exit(0)
+
+
 def _extract_attachment_text(attachments, api_base: Optional[str] = None) -> dict:
     """#338 Codex image->text. Read upload/validation-time cached OCR text from attachment refs and
     return ``{attachment-id: text}`` for the feed renderer. ``api_base`` is kept for compatibility
@@ -4956,6 +4999,16 @@ def cmd_notifier(args) -> None:
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
+    # #103: notifier health. daemon_started_at is wall-clock (compared server-side against a
+    # restart request's timestamp — same host clock as the DB container, so no meaningful skew).
+    # An immediate first heartbeat makes the portal show "running" right away AND, for a daemon
+    # re-exec'd to fulfil a restart request, acks that request on this very first ping.
+    daemon_started_at = time.time()
+    notifier_version = _cli_version()
+    last_tick_error: Optional[str] = None
+    _post_heartbeat(api_base, cid, started_at=daemon_started_at, version=notifier_version,
+                    cwd=str(cwd), error=None, state="running")
+    last_hb = time.monotonic()
     try:
         while not stop["flag"]:
             try:
@@ -4989,14 +5042,37 @@ def cmd_notifier(args) -> None:
                      min_idle=args.min_idle, quiet=args.quiet,
                      lease_ttl=getattr(args, "lease_ttl", 1200.0),
                      live_workers=live_workers, base_cwd=project_cwd)
+                last_tick_error = None   # #103: a clean tick clears the surfaced error
             except Exception as e:  # a daemon must not die on a transient error
+                last_tick_error = str(e)
                 if not args.quiet:
                     print(f"[notifier] tick error (continuing): {e}", file=sys.stderr)
+            # #103: throttled health heartbeat. If a human requested a restart from the portal
+            # (restart_pending), re-exec to reload on-disk code — the API only records the intent;
+            # this live daemon is what enforces it (a dead one can't, hence the portal's manual
+            # fallback). Best-effort: a heartbeat failure must never disrupt waking.
+            if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL:
+                last_hb = time.monotonic()
+                resp = _post_heartbeat(api_base, cid, started_at=daemon_started_at,
+                                       version=notifier_version, cwd=str(cwd),
+                                       error=last_tick_error, state="running")
+                if resp and resp.get("restart_pending") and not stop["flag"]:
+                    if not args.quiet:
+                        print("[notifier] restart requested via portal — re-execing daemon",
+                              file=sys.stderr)
+                    _reexec_notifier()   # does not return
             slept = 0.0
             while slept < args.interval and not stop["flag"]:
                 time.sleep(min(0.25, args.interval - slept))
                 slept += 0.25
     finally:
+        # #103: mark the daemon cleanly stopped so the portal flips to "offline" at once instead of
+        # waiting out the staleness window. Best-effort — teardown must never raise.
+        try:
+            _post_heartbeat(api_base, cid, started_at=daemon_started_at, version=notifier_version,
+                            cwd=str(cwd), error=last_tick_error, state="stopped")
+        except Exception:
+            pass
         try:
             if pid_file.read_text().strip() == str(os.getpid()):
                 pid_file.unlink()
