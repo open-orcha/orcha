@@ -445,6 +445,7 @@
         ${O.avatar(a.alias, a.kind, "")}
         <span class="grow"><span class="nm">${O.esc(a.alias)}</span><span class="rl">${O.esc(a.role)}</span></span>
         ${embodBadge(a, liveSet)}
+        ${O.pendingBellHTML(a)}
         ${O.glyph(O.statusClass(a.status))}
       </button>`).join(""));
     if (pendingScroll) {   // ISS-38: anchor the deeplinked/selected row (one-shot)
@@ -487,6 +488,7 @@
           <h1>${O.esc(a.alias)} ${O.kindBadge(a.kind)}</h1>
           <div class="role">${O.esc(a.role)}</div>
         </div>
+        ${O.pendingBellHTML(a, "lg")}
         ${O.pill(a.status, "lg")}
       </div>
       <div class="meta" style="margin-top:16px;padding-top:15px;border-top:1px solid var(--border)">
@@ -828,12 +830,27 @@
 
   // roster clicks are delegated once (the roster element persists across patches).
   $("roster").addEventListener("click", (ev) => {
+    // GH#89: the pending-notifications bell opens the veto panel WITHOUT selecting the row.
+    const bell = ev.target.closest("[data-pnbell]");
+    if (bell) {
+      ev.stopPropagation();
+      O.pendingPanel(bell.dataset.pnbell, bell.dataset.pnalias,
+                     bell.dataset.pninterval !== "" ? +bell.dataset.pninterval : null);
+      return;
+    }
     const b = ev.target.closest("[data-alias]"); if (b) select(b.dataset.alias);
   });
   // ISS-63: collapse-toggle clicks delegated once on the stable #detailMain (its innerHTML is
   // patched every tick, but the element itself persists, so one listener survives the repaints).
   $("detailMain").addEventListener("click", (ev) => {
     if (ev.target.closest(".sortctl")) return;   // ISS-331: handled by wireSortControl below
+    // GH#89: the header pending-notifications bell opens the veto panel.
+    const bell = ev.target.closest("[data-pnbell]");
+    if (bell) {
+      O.pendingPanel(bell.dataset.pnbell, bell.dataset.pnalias,
+                     bell.dataset.pninterval !== "" ? +bell.dataset.pninterval : null);
+      return;
+    }
     const b = ev.target.closest("[data-collapse]"); if (b) toggleCollapse(b.dataset.collapse);
   });
   // ISS-331: re-sort the three agent-detail lists on any sort-control change (one delegated
