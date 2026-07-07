@@ -5529,19 +5529,37 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
     work_last_heartbeat_at (it was never split) still reaps — the WORK branch keys idle on
     COALESCE(work_last_heartbeat_at, agents.last_heartbeat_at), so pre-split rows fall back to the
     agent-wide heartbeat they always used. The conversation branch has no such legacy (conv leases
-    only exist post-030), so it keys strictly on conv_last_heartbeat_at."""
+    only exist post-030), so it keys strictly on conv_last_heartbeat_at.
+
+    GH #138: idle is floored at GREATEST(heartbeat, lane's own last_woken_at/conv_last_woken_at).
+    wake-claim stamps last_woken_at on EVERY claim (including the first), but never touches the
+    heartbeat column — only wake-renew does, on the next keep-alive tick. Without this floor, an
+    agent idle for a long stretch before a brand-new claim has a heartbeat column still holding a
+    value from BEFORE that claim; the reaper would read the fresh lease as already stale by however
+    old that pre-claim heartbeat was and false-orphan a lease that is seconds old and genuinely
+    alive — flipping its worker_run to 'orphaned' out from under it and briefly reopening the
+    single-flight guard for a competing claim (a real double-embodiment window, not just a
+    cosmetic status flash)."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
 
-    def _reap_lane(cur, *, lease_col, kind_col, heartbeat_expr, preempt_cols, run_lane):
+    def _reap_lane(cur, *, lease_col, kind_col, heartbeat_expr, claim_floor_expr, preempt_cols, run_lane):
         """Reap one lane's orphan leases. Returns the pre-release reaped rows (agent_id/alias/
-        lease_kind/idle_seconds) with reconciled_runs already revoked + logged per agent."""
+        lease_kind/idle_seconds) with reconciled_runs already revoked + logged per agent.
+
+        GH #138: idle is measured off `floored_expr`, NOT the raw heartbeat — floored to
+        GREATEST(heartbeat_expr, claim_floor_expr) so a lease claimed a moment ago (fresh
+        claim_floor_expr) is never judged by a heartbeat column that predates that claim. The
+        NULL-heartbeat gate still reads the RAW heartbeat_expr (never floored) — a genuinely
+        never-beat agent stays categorically excluded regardless of claim recency; its own
+        short lease TTL is what handles that case, unchanged from before this fix."""
+        floored_expr = f"GREATEST(({heartbeat_expr}), ({claim_floor_expr}))"
         set_release = ", ".join([f"{lease_col} = NULL", f"{kind_col} = NULL"]
                                 + [f"{c} = NULL" for c in preempt_cols])
         cur.execute(
             f"""WITH orphans AS (
                    SELECT w.agent_id, a.alias, w.{kind_col} AS lease_kind,
-                          EXTRACT(EPOCH FROM (now() - ({heartbeat_expr}))) AS idle_seconds
+                          EXTRACT(EPOCH FROM (now() - ({floored_expr}))) AS idle_seconds
                      FROM agent_wake_state w
                      JOIN agents a ON a.id = w.agent_id
                     WHERE a.container_id = %s
@@ -5549,7 +5567,7 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
                       AND w.{lease_col} IS NOT NULL
                       AND w.{lease_col} > now()                            -- only a LIVE (wake-blocking) lease
                       AND ({heartbeat_expr}) IS NOT NULL                   -- never-beat = no embodiment to orphan
-                      AND ({heartbeat_expr}) < now() - make_interval(secs => %s)
+                      AND ({floored_expr}) < now() - make_interval(secs => %s)
                ), released AS (
                    UPDATE agent_wake_state w
                       SET {set_release}
@@ -5589,14 +5607,22 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
         # WORK branch — legacy fallback on the agent-wide heartbeat via COALESCE (see docstring).
+        # GH #138: claim_floor_expr=last_woken_at (stamped by every wake-claim, including the
+        # INITIAL one) floors idle at claim time — wake-claim never bumps the heartbeat itself
+        # (only wake-renew does), so without this floor a lease claimed a second ago, on an agent
+        # whose heartbeat column is still holding a value from BEFORE this claim, reads as idle for
+        # however stale that old heartbeat is and gets false-reaped mid-boot.
         work_reaped = _reap_lane(
             cur, lease_col="wake_lease_until", kind_col="lease_kind",
             heartbeat_expr="COALESCE(w.work_last_heartbeat_at, a.last_heartbeat_at)",
+            claim_floor_expr="w.last_woken_at",
             preempt_cols=("preempt_requested_at", "preempt_for"), run_lane="work")
         # CONVERSATION branch — keyed strictly on the lane's own heartbeat (no pre-030 legacy).
+        # GH #138: same claim-time floor via conv_last_woken_at.
         conv_reaped = _reap_lane(
             cur, lease_col="conv_lease_until", kind_col="conv_lease_kind",
             heartbeat_expr="w.conv_last_heartbeat_at",
+            claim_floor_expr="w.conv_last_woken_at",
             preempt_cols=("conv_preempt_requested_at", "conv_preempt_for"), run_lane="conversation")
         # GH #91/#90: unbound-token backstop — a token minted for a spawn that NEVER created its run
         # (crash between mint and /runs) would otherwise linger valid forever with run_id NULL. Revoke
