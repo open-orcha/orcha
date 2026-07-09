@@ -133,13 +133,33 @@ async def test_delete_clears_only_that_provider(client, container, make_agent, m
 
 
 @pytest.mark.asyncio
-async def test_env_override_shadows_all_providers(client, container, make_agent, monkeypatch):
+async def test_env_override_shadows_only_anthropic(client, container, make_agent, monkeypatch):
+    """ORCHA_LLM_API_KEY is an ANTHROPIC key (single-provider era): it must shadow only the
+    Anthropic slot. Reporting it as every provider's key showed the Anthropic hint on the xAI
+    card and hid a legitimately-stored xAI key behind a key that can't work there."""
+    monkeypatch.setenv("ORCHA_LLM_API_KEY", "sk-env-override-7777")
+    monkeypatch.setenv("ORCHA_SECRET_KEY", "route-master-key")
+    hid = await _human(make_agent)
+    await client.put(f"/api/containers/{container['id']}/settings/provider-keys/xai",
+                     json={"actor_agent_id": hid, "api_key": XAI_KEY})
+    by = _by_provider((await client.get(
+        f"/api/containers/{container['id']}/settings/provider-keys")).json())
+    # anthropic reports the env override…
+    assert by["anthropic"]["source"] == "env"
+    assert by["anthropic"]["masked"] == "sk-...7777"
+    # …but the stored xAI key stays live and visible, not env-shadowed
+    assert by["xai"]["source"] == "db"
+    assert by["xai"]["masked"] == "sk-...9876"
+
+
+@pytest.mark.asyncio
+async def test_env_override_leaves_other_providers_unconfigured(client, container, monkeypatch):
     monkeypatch.setenv("ORCHA_LLM_API_KEY", "sk-env-override-7777")
     by = _by_provider((await client.get(
         f"/api/containers/{container['id']}/settings/provider-keys")).json())
-    # the global env override is reported as source='env' for every provider
-    assert by["xai"]["source"] == "env" and by["anthropic"]["source"] == "env"
-    assert by["xai"]["masked"] == "sk-...7777"
+    # with nothing stored, the Anthropic override must not make xAI look configured
+    assert by["anthropic"]["source"] == "env"
+    assert by["xai"]["configured"] is False and by["xai"]["source"] is None
 
 
 # ---- /test ping (provider monkeypatched: no live network, no real key) ----

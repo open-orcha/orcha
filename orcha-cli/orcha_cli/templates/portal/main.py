@@ -947,11 +947,12 @@ def _provider_stored_row(cur, cid: str, provider: str):
 
 def _provider_api_key(cur, cid: str, provider: str) -> Optional[str]:
     """Resolve the usable plaintext key for (container, provider): env override
-    (ORCHA_LLM_API_KEY) > stored+unsealed key for THIS provider > None. The provider-scoped
-    sibling of _container_llm_key, for use-cases whose provider a human can override (#290 catalog)."""
+    (ORCHA_LLM_API_KEY, ANTHROPIC-scoped — it must never shadow another provider's stored key)
+    > stored+unsealed key for THIS provider > None. The provider-scoped sibling of
+    _container_llm_key, for use-cases whose provider a human can override (#290 catalog)."""
     try:
         row = _provider_stored_row(cur, cid, provider)
-        return secret_box.resolve_llm_key(row["key_enc"] if row else None)
+        return secret_box.resolve_llm_key(row["key_enc"] if row else None, provider=provider)
     except Exception:
         return None
 
@@ -3133,7 +3134,9 @@ def list_container_provider_keys(cid: str):
             if not p["available"]:
                 continue
             row = _provider_stored_row(cur, cid, p["id"])
-            if env_override:
+            # ORCHA_LLM_API_KEY is ANTHROPIC-scoped (see _provider_api_key): a stored xAI key is
+            # live even with the override set, so it must not be reported as env-shadowed.
+            if env_override and p["id"] == "anthropic":
                 entry = {"configured": True, "source": "env",
                          "masked": _mask_llm_key(secret_box.last4(env_override)), "set_at": None}
             elif row:
@@ -3202,7 +3205,7 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
                   {"provider": provider})
         conn.commit()
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
-    if env_override:
+    if env_override and provider == "anthropic":   # the env override is Anthropic-scoped
         return {"configured": True, "source": "env", "provider": provider,
                 "masked": _mask_llm_key(secret_box.last4(env_override))}
     return {"configured": False, "source": None, "provider": provider, "masked": None}
@@ -3224,8 +3227,10 @@ def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
         else:
             candidate = _provider_api_key(cur, cid, provider)
     if not candidate:
-        return {"ok": False,
-                "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset"}
+        detail = f"no API key to test: none supplied and none stored for '{provider}'"
+        if provider == "anthropic":
+            detail += ", and ORCHA_LLM_API_KEY is unset"
+        return {"ok": False, "detail": detail}
     return _ping_provider_key(provider, candidate)
 
 

@@ -229,15 +229,18 @@ def resolve_spec(use_case: str, *, config: Optional[dict] = None) -> ModelSpec:
 def resolve_api_key(provider: str, *, explicit: Optional[str] = None) -> str:
     """Resolve the Orcha-managed API key for ``provider``.
 
-    Precedence: explicit arg > ``ORCHA_LLM_API_KEY`` (Orcha-managed, provider-neutral) >
-    the provider's conventional env var. The Orcha key is deliberately FIRST + independent of
-    any agent's CLI auth so this works for Codex agents and in CI/headless contexts.
+    Precedence: explicit arg > ``ORCHA_LLM_API_KEY`` (Orcha-managed, ANTHROPIC-SCOPED) >
+    the provider's conventional env var. The Orcha key is deliberately ahead of any agent's
+    CLI auth so this works for Codex agents and in CI/headless contexts — but an API key is
+    provider-specific, so it applies only to Anthropic calls: routing it to another provider
+    would be a guaranteed auth failure that shadows that provider's own env key.
     """
     if explicit:
         return explicit
-    orcha_key = os.environ.get("ORCHA_LLM_API_KEY")
-    if orcha_key:
-        return orcha_key
+    if provider == "anthropic":
+        orcha_key = os.environ.get("ORCHA_LLM_API_KEY")
+        if orcha_key:
+            return orcha_key
     fallback_env = {
         "anthropic": "ANTHROPIC_API_KEY",
         "xai": "XAI_API_KEY",
@@ -246,9 +249,14 @@ def resolve_api_key(provider: str, *, explicit: Optional[str] = None) -> str:
     }.get(provider)
     key = os.environ.get(fallback_env) if fallback_env else None
     if not key:
+        if provider == "anthropic":
+            raise LLMError(
+                "no API key for provider 'anthropic': set ORCHA_LLM_API_KEY "
+                "(or ANTHROPIC_API_KEY) in the environment"
+            )
         raise LLMError(
-            f"no API key for provider '{provider}': set ORCHA_LLM_API_KEY "
-            f"(or {fallback_env}) in the environment"
+            f"no API key for provider '{provider}': set "
+            f"{fallback_env or 'the provider API key'} in the environment"
         )
     return key
 

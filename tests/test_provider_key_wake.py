@@ -60,10 +60,22 @@ def test_unseal_scan_key_none_when_field_absent(monkeypatch):
 
 
 def test_unseal_scan_key_env_override_wins(monkeypatch):
-    # resolve_llm_key precedence: an ORCHA_LLM_API_KEY env override shadows the stored blob.
+    # resolve_llm_key precedence: the ORCHA_LLM_API_KEY env override shadows the stored blob —
+    # for an ANTHROPIC-provider scan (no triage_model override ⇒ the shipped Anthropic default).
     blob = _seal(monkeypatch)
     monkeypatch.setenv("ORCHA_LLM_API_KEY", "env-override-key")
     assert notifier._unseal_scan_key({"triage_key_enc": blob}, "triage_key_enc") == "env-override-key"
+
+
+def test_unseal_scan_key_env_override_does_not_shadow_xai(monkeypatch):
+    """The whole point of this seam: a Settings-stored xAI key must reach triage/ack. The
+    (Anthropic) env override must not shadow it when the scan's use-case runs on xAI."""
+    blob = _seal(monkeypatch)
+    monkeypatch.setenv("ORCHA_LLM_API_KEY", "env-override-key")
+    scan = {"triage_key_enc": blob, "triage_model": {"provider": "xai", "model": "grok-4.3"}}
+    assert notifier._unseal_scan_key(scan, "triage_key_enc") == XAI_KEY
+    scan = {"ack_key_enc": blob, "ack_model": {"provider": "xai", "model": "grok-4.3"}}
+    assert notifier._unseal_scan_key(scan, "ack_key_enc") == XAI_KEY
 
 
 # ---- triage path: stored xAI key reaches llm_util.triage_wake ----

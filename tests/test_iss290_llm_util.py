@@ -86,7 +86,7 @@ def test_api_key_precedence(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     # explicit wins
     assert L.resolve_api_key("anthropic", explicit="X") == "X"
-    # ORCHA key is provider-neutral and preferred over the provider env var
+    # ORCHA key is the Anthropic-scoped override, preferred over the provider env var
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anth")
     monkeypatch.setenv("ORCHA_LLM_API_KEY", "orcha")
     assert L.resolve_api_key("anthropic") == "orcha"
@@ -242,6 +242,18 @@ def test_resolve_api_key_xai_fallback(monkeypatch):
     monkeypatch.delenv("ORCHA_LLM_API_KEY", raising=False)
     monkeypatch.setenv("XAI_API_KEY", "xai-secret")
     assert L.resolve_api_key("xai") == "xai-secret"
+
+
+def test_resolve_api_key_orcha_key_is_anthropic_scoped(monkeypatch):
+    """ORCHA_LLM_API_KEY holds an ANTHROPIC key: it must neither shadow another provider's
+    own env key nor be misrouted to that provider when nothing else is set (a guaranteed 401
+    that's harder to diagnose than a clean 'no key' error)."""
+    monkeypatch.setenv("ORCHA_LLM_API_KEY", "orcha-anthropic-key")
+    monkeypatch.setenv("XAI_API_KEY", "xai-secret")
+    assert L.resolve_api_key("xai") == "xai-secret"
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    with pytest.raises(L.LLMError, match="XAI_API_KEY"):
+        L.resolve_api_key("xai")
 
 
 def test_grok_request_translates_to_openai_framing(monkeypatch):

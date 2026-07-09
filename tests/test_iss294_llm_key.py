@@ -101,6 +101,17 @@ def test_resolve_env_override_wins_over_stored():
     assert secret_box.resolve_llm_key(blob, env=env) == "sk-override-zzzz"
 
 
+def test_resolve_env_override_is_anthropic_scoped():
+    """ORCHA_LLM_API_KEY is an ANTHROPIC key: it must never shadow (or stand in for)
+    another provider's stored key — an Anthropic key sent to xAI is a guaranteed 401."""
+    blob = secret_box.seal(KEY, env=MASTER)
+    env = {**MASTER, "ORCHA_LLM_API_KEY": "sk-override-zzzz"}
+    # a stored xAI key survives the override...
+    assert secret_box.resolve_llm_key(blob, provider="xai", env=env) == KEY
+    # ...and with nothing stored, the Anthropic override must not leak to xAI
+    assert secret_box.resolve_llm_key(None, provider="xai", env=env) is None
+
+
 def test_resolve_decrypts_stored_when_no_override():
     blob = secret_box.seal(KEY, env=MASTER)
     assert secret_box.resolve_llm_key(blob, env=MASTER) == KEY

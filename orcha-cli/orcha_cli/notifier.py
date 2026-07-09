@@ -154,13 +154,18 @@ def _load_master_key_from_env_file() -> None:
 
 def _unseal_scan_key(scan: Optional[dict], field: str) -> Optional[str]:
     """Unseal a wake-scan's sealed provider-key blob (`triage_key_enc` / `ack_key_enc`) into a
-    usable plaintext key, or None. Env override (ORCHA_LLM_API_KEY) still wins via resolve_llm_key.
-    Fails SOFT to None (→ the call falls back to env keys / fails open) on any decrypt error."""
+    usable plaintext key, or None. The env override (ORCHA_LLM_API_KEY) still wins via
+    resolve_llm_key, but it is ANTHROPIC-scoped: the blob belongs to the use-case's effective
+    provider (the scan's `triage_model`/`ack_model` override, else the shipped Anthropic default),
+    and an Anthropic env key must not shadow a Settings-stored xAI key — that's the very case
+    this seam exists for. Fails SOFT to None (→ env keys / fail open) on any decrypt error."""
     blob = (scan or {}).get(field)
     if _secret_box is None:
         return None
+    model = (scan or {}).get(field.replace("_key_enc", "_model"))
+    provider = (model.get("provider") if isinstance(model, dict) else None) or "anthropic"
     try:
-        return _secret_box.resolve_llm_key(blob)
+        return _secret_box.resolve_llm_key(blob, provider=provider)
     except Exception:
         return None
 
