@@ -8294,6 +8294,7 @@ def reject_task_request(rid: str, body: TaskRequestReject):
         raise HTTPException(400, "responder_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         r = _require_request(cur, rid, for_update=True)   # lock: serialize all request-state mutations
+        _reject_if_retired(cur, body.responder_agent_id)   # ISS-51: same guard as accept-task
         _require_container_active(cur, str(r["container_id"]), body.responder_agent_id)   # GH #24
         if r["type"] != "task":
             raise HTTPException(409, f"request type is '{r['type']}', not 'task' — cannot reject-task")
