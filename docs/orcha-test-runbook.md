@@ -90,10 +90,18 @@ any change that touches the live-terminal / worktree-overlay seam.
 
 There is **one** known-red test on a clean checkout:
 
-- `tests/test_terminal_bridge.py:619` — `test_ensure_bridge_restart_stops_old_first`
+- `tests/test_terminal_bridge.py:716` — `test_ensure_bridge_restart_stops_old_first`
 
 A run that is green **except for that single test** is the expected local baseline. **Any
 other red is a real regression** — investigate before opening/approving a PR.
+
+**macOS full-suite caveat:** `tests/test_worktree_diff.py` can fail wholesale in a
+full-suite run (its `git` subprocesses die at fork) after `test_wake_single_flight.py`
+has exercised the notifier in-process — the same macOS fork-safety trap noted for the
+notifier-loop tests. It reproduces on a clean checkout (`pytest
+tests/test_wake_single_flight.py tests/test_worktree_diff.py`) and the file passes
+standalone, so treat it as environmental: rerun `tests/test_worktree_diff.py` on its own
+before reading its failures as a regression.
 
 ---
 

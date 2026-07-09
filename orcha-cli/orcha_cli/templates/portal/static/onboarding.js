@@ -6,7 +6,8 @@
    O2: create-agent form — POST .../agents kind:ai + prompt (+ optional initial_task),
        model from GET /api/models.
    O3: concierge template for the FIRST agent (CONCIERGE_TEMPLATE, editable).
-   O4 is HELD — the assign/wake step is a "coming soon" stub (needs the B5 assign endpoint).
+   O4: assign/wake is LIVE — the success screen points at the Tasks page's Assign
+       control (POST /api/tasks/{tid}/assign, the B5 assign-and-wake endpoint).
 
    Unlike the localStorage MOCKUP this was lifted from, this WIRES TO THE REAL API:
    the container id is resolved once on boot (OrchaData.resolveCid), the operator and
@@ -579,7 +580,7 @@ and waits for the operator to verify. Propose plans and wait for approval before
         </div>
       </div>
 
-      <div class="held">${icon("clock", "")}<span>Assigning tasks to agents is coming soon (needs the B5 assign endpoint). For now, ${esc(alias)} picks up any initial task you gave it.</span></div>
+      <div class="held">${icon("tasks", "")}<span>Assign tasks to ${esc(alias)} anytime from the <a href="/tasks">Tasks page</a> — open a task and use <b>Assign</b>; the agent wakes and starts on it. Any initial task you gave it here is already assigned.</span></div>
 
       ${walkBlock}
 

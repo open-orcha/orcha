@@ -10,6 +10,11 @@ missing.
 
 ## [Unreleased]
 
+### Changed
+- Autonomy is now its own setting, split out of the Event-notifier section, on web,
+  Android, and iOS (Orcha#148): control how much an agent may do unattended
+  independently of how it gets notified.
+
 ## [0.4.0] - 2026-07-04
 
 ### Added
