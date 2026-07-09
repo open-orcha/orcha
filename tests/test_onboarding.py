@@ -7,7 +7,8 @@ mockup it was lifted from, it WIRES TO THE REAL API:
   O2 — create an agent via POST .../agents kind='ai' + prompt (+ optional initial_task),
        models from GET /api/models.
   O3 — a versioned CONCIERGE_TEMPLATE seeds the first agent's system prompt (editable).
-  O4 — HELD: the assign/wake step is a "coming soon" stub (no assign endpoint wired).
+  O4 — the assign step shipped (B5, POST /api/tasks/{tid}/assign on the Tasks page); the
+       success screen POINTS there — the wizard itself still wires no assign/wake call.
 
 The live visual is verified in the portal; the automatable surface is the page wiring +
 the endpoints round-trip + static guards on the JS contract.
@@ -80,17 +81,18 @@ def test_onboarding_has_concierge_template_for_first_agent():
     assert "aiAgents().length === 0" in js, "first-agent detection isn't snapshot-derived"
 
 
-def test_onboarding_o4_is_a_held_stub_no_assign_wired():
+def test_onboarding_o4_points_at_tasks_assign_not_wired_inline():
     js = (STATIC / "onboarding.js").read_text()
-    # O4 held: a coming-soon stub note, NOT a wired assign/wake step
-    assert "coming soon" in js.lower(), "no held coming-soon stub for the assign step"
-    assert "B5 assign endpoint" in js, "the held stub doesn't name the missing B5 assign endpoint"
-    # no invented assign/wake endpoint CALLS (prose like "the assign/wake step" is fine —
+    # O4: the B5 assign endpoint shipped and lives on the Tasks page — the success screen
+    # points there; the stale "coming soon" stub copy must stay gone.
+    assert "coming soon" not in js.lower(), "stale coming-soon assign stub copy resurfaced"
+    assert 'href="/tasks"' in js, "success screen doesn't point at the Tasks page assign control"
+    # the wizard itself still wires NO assign/wake endpoint CALLS (prose is fine —
     # what's forbidden is actually fetching one of these paths)
     for bad in ('"/assign', "'/assign", '/api/wakes', "/wakes", "/wake-scan"):
-        assert bad not in js, f"O4 must stay held — wired a forbidden endpoint: {bad}"
+        assert bad not in js, f"onboarding must not wire assign/wake itself: {bad}"
     # and there must be NO fetch to a per-agent /wake* mutation
-    assert "/wake\"" not in js and "/wake'" not in js, "must not wire a wake endpoint while O4 is held"
+    assert "/wake\"" not in js and "/wake'" not in js, "must not wire a wake endpoint from onboarding"
 
 
 def test_onboarding_deeplinks_use_served_routes():

@@ -3148,8 +3148,9 @@ def list_container_provider_keys(cid: str):
 
 @app.put("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
 def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
-    """Seal + store the key for one provider. HUMAN-AUTHORITY gated + audit-logged. Anthropic
-    writes its legacy column; other providers upsert container_provider_keys. 503 w/o ORCHA_SECRET_KEY."""
+    """Seal + store the key for one provider. HUMAN-AUTHORITY gated + audit-logged. Every
+    provider — Anthropic included — upserts container_provider_keys (unified by migration 027;
+    the legacy containers.llm_api_key_enc column is retired). 503 w/o ORCHA_SECRET_KEY."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if not _available_provider(provider):

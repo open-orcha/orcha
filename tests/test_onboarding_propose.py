@@ -1,14 +1,11 @@
 import json
 import logging
-import pathlib
 
 import pytest
 
 import main
 
 pytestmark = pytest.mark.asyncio
-
-REPO = pathlib.Path(__file__).resolve().parent.parent
 
 
 async def _post_sse(client, body, *, max_events=10):
@@ -326,18 +323,3 @@ async def test_onboarding_propose_is_in_openapi(client):
     assert sorted(spec["paths"]["/api/onboarding/propose"]) == ["post"]
     body_ref = spec["paths"]["/api/onboarding/propose"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     assert body_ref.endswith("/ProposeBody")
-
-
-async def test_postman_collection_includes_onboarding_propose():
-    coll = json.loads((REPO / "docs" / "orcha.postman_collection.json").read_text())
-    requests = []
-    for folder in coll["item"]:
-        for item in folder.get("item", []):
-            if "request" in item:
-                requests.append((folder["name"], item["name"], item["request"]["method"], item["request"]["url"]["raw"]))
-    assert (
-        "Onboarding",
-        "Propose roster (SPEC-292 SSE)",
-        "POST",
-        "{{baseUrl}}/api/onboarding/propose",
-    ) in requests

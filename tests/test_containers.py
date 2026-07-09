@@ -62,7 +62,9 @@ async def test_root_task_verification_completes_container(client, container, mak
     assert snap.json()["container"]["status"] == "completed"
 
 
-@pytest.mark.xfail(reason="Orcha#24: paused container does not yet block mutating endpoints")
+@pytest.mark.xfail(reason="Orcha#24 shipped for AGENT-attributed mutations (see "
+                          "test_iss24_pause_stop_enforcement.py); an unattributed task "
+                          "create still bypasses the paused gate — remaining gap")
 async def test_paused_blocks_mutations(client, container, make_agent):
     human = await make_agent("op", "operator", kind="human")
     await client.post(
