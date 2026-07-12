@@ -2842,6 +2842,58 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
               f"respawn {n}/{HARD_CAP_RESPAWN_MAX}) on the same worktree")
 
 
+def _drain_task_failure(api_base: str, w: dict, aid: str, task_id, status: str,
+                        returncode, diff, *, failed_drains: dict, agent_hold_until: dict,
+                        now: float, quiet: bool, w_lane: str, live_workers: dict,
+                        pid, drain_desc: str = "drained") -> None:
+    """GH#110: the shared rate_limited/failed TASK-drain bookkeeping — PRESERVE the task worktree
+    (never teardown), record the run with its structured cause, count the failed drain, and DON'T
+    advance the wake cursor (the events stay pending so the next wake retries from the preserved
+    state) — bounded by FAILED_DRAIN_MAX. Used by BOTH reap paths: the clean-exit poll() branch and
+    the completed-but-lingering kill branch (PR #121 review blocker: the lingering branch used to
+    record a terminal-failure Codex worker as a normal 'exited' drain — checkpoint, counter
+    cleared, cursor ADVANCED — silently skipping the retry instead of routing it here)."""
+    _finish_run(api_base, w.get("run_id"), status, returncode, w.get("log_path"),
+                diff, kill_reason=json.dumps({"run_id": str(w.get("run_id")),
+                                              "agent_id": aid, "cause": status,
+                                              "task_id": task_id}))
+    key = (aid, task_id)
+    failed_drains[key] = failed_drains.get(key, 0) + 1
+    n = failed_drains[key]
+    if status == "rate_limited":
+        hold = _parse_rate_limit_reset(w.get("log_path"))
+        agent_hold_until[aid] = now + hold
+        human = ("worker hit a rate limit (Codex 429) — work saved and preserved; "
+                 "it will retry after the cooldown")
+    else:
+        human = "worker exited without finishing — work saved and preserved; it will retry"
+    _record_task_saved_ref(api_base, w, _saved_ref(w, None, diff), human)
+    if n >= FAILED_DRAIN_MAX:
+        # bounded redelivery: stop the hot-loop — advance the cursor (stashed ts) and
+        # surface a plain-language failure so a human can look, then clear the counter.
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                   {"delivered_ts": w.get("pending_ack_ts"),
+                    "kind": "worker_drain_failed_released", "release_lease": True,
+                    "lane": w_lane})
+        _record_task_saved_ref(
+            api_base, w, _saved_ref(w, None, diff),
+            f"heads up: this worker has failed to finish {n} times in a row — "
+            f"releasing it for now so it doesn't loop; the work is saved on its branch")
+        failed_drains.pop(key, None)
+    else:
+        # withhold the cursor (no delivered_ts) but release the lease so a later wake
+        # can retry. GH#110 DoD(3): do NOT ack/close pending notifications here.
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
+                   {"kind": ("worker_rate_limited" if status == "rate_limited"
+                             else "worker_drain_failed"), "release_lease": True,
+                    "lane": w_lane})
+    _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
+    if not quiet:
+        print(f"[notifier] task worker for {aid} (pid {pid}) {drain_desc} {status} "
+              f"({n}/{FAILED_DRAIN_MAX}) — worktree PRESERVED, cursor "
+              f"{'advanced (bound hit)' if n >= FAILED_DRAIN_MAX else 'withheld'}")
+
+
 def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: float = 120.0,
                  failed_drains: Optional[dict] = None,
                  agent_hold_until: Optional[dict] = None) -> None:
@@ -2897,50 +2949,15 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             is_task_wt = bool(w.get("task_worktree"))
             task_id = (w.get("respawn_ctx") or {}).get("task_id")
             if is_task_wt and status in ("rate_limited", "failed"):
-                # GH#110: PRESERVE the task worktree (never teardown), record the run as
-                # rate_limited/failed, and DON'T advance the wake cursor — the events stay pending
-                # so the next wake retries from the preserved state — bounded by FAILED_DRAIN_MAX.
+                # GH#110: PRESERVE the task worktree, record the structured cause, withhold the
+                # cursor so the next wake retries — the shared bookkeeping in _drain_task_failure.
                 # PR #121 review note (b): tag the run with WHY it drained non-successfully so the
                 # feed/meter shows a structured cause (rate_limited vs failed), not a bare status.
-                _finish_run(api_base, w.get("run_id"), status, proc.returncode, w.get("log_path"),
-                            diff, kill_reason=json.dumps({"run_id": str(w.get("run_id")),
-                                                          "agent_id": aid, "cause": status,
-                                                          "task_id": task_id}))
-                key = (aid, task_id)
-                failed_drains[key] = failed_drains.get(key, 0) + 1
-                n = failed_drains[key]
-                if status == "rate_limited":
-                    hold = _parse_rate_limit_reset(w.get("log_path"))
-                    agent_hold_until[aid] = now + hold
-                    human = ("worker hit a rate limit (Codex 429) — work saved and preserved; "
-                             "it will retry after the cooldown")
-                else:
-                    human = "worker exited without finishing — work saved and preserved; it will retry"
-                _record_task_saved_ref(api_base, w, _saved_ref(w, None, diff), human)
-                if n >= FAILED_DRAIN_MAX:
-                    # bounded redelivery: stop the hot-loop — advance the cursor (stashed ts) and
-                    # surface a plain-language failure so a human can look, then clear the counter.
-                    _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                               {"delivered_ts": w.get("pending_ack_ts"),
-                                "kind": "worker_drain_failed_released", "release_lease": True,
-                                "lane": w_lane})
-                    _record_task_saved_ref(
-                        api_base, w, _saved_ref(w, None, diff),
-                        f"heads up: this worker has failed to finish {n} times in a row — "
-                        f"releasing it for now so it doesn't loop; the work is saved on its branch")
-                    failed_drains.pop(key, None)
-                else:
-                    # withhold the cursor (no delivered_ts) but release the lease so a later wake
-                    # can retry. GH#110 DoD(3): do NOT ack/close pending notifications here.
-                    _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                               {"kind": ("worker_rate_limited" if status == "rate_limited"
-                                         else "worker_drain_failed"), "release_lease": True,
-                                "lane": w_lane})
-                _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
-                if not quiet:
-                    print(f"[notifier] task worker for {aid} (pid {proc.pid}) drained {status} "
-                          f"({n}/{FAILED_DRAIN_MAX}) — worktree PRESERVED, cursor "
-                          f"{'advanced (bound hit)' if n >= FAILED_DRAIN_MAX else 'withheld'}")
+                _drain_task_failure(api_base, w, aid, task_id, status, proc.returncode, diff,
+                                    failed_drains=failed_drains,
+                                    agent_hold_until=agent_hold_until, now=now, quiet=quiet,
+                                    w_lane=w_lane, live_workers=live_workers, pid=proc.pid,
+                                    drain_desc="drained")
                 continue
             _finish_run(api_base, w.get("run_id"), status, proc.returncode, w.get("log_path"), diff)
             if is_task_wt:
@@ -3043,8 +3060,26 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                 continue               # within the graceful window — let it exit on its own
             _kill_worker(proc, graceful=True)   # SIGTERM (let teardown run) then SIGKILL
             diff = _capture_diff(w.get("worktree"))
+            # PR #121 review blocker: a lingering worker whose terminal signal was a FAILURE (or a
+            # rate-limited tail) must NOT be booked as a completed drain — that checkpoint-committed,
+            # cleared the failed-drain counter and ADVANCED the cursor, silently skipping the retry.
+            # Classify exactly like the clean-exit poll() path (safe post-kill: rstatus is non-None
+            # here, so the classifier never falls back to the kill-signal returncode) and route a
+            # rate_limited/failed TASK drain through the shared preserve+retry bookkeeping.
+            drain_status = "exited"
+            if w_runtime == RUNTIME_CODEX:
+                drain_status = _codex_exit_status(w.get("log_path"), proc.returncode)
+            if bool(w.get("task_worktree")) and drain_status in ("rate_limited", "failed"):
+                _drain_task_failure(api_base, w, aid,
+                                    (w.get("respawn_ctx") or {}).get("task_id"),
+                                    drain_status, proc.returncode, diff,
+                                    failed_drains=failed_drains,
+                                    agent_hold_until=agent_hold_until, now=now, quiet=quiet,
+                                    w_lane=w_lane, live_workers=live_workers, pid=proc.pid,
+                                    drain_desc="completed-but-lingered, drained")
+                continue
             exit_code = 0 if rstatus == "success" else proc.returncode
-            _finish_run(api_base, w.get("run_id"), "exited", exit_code, w.get("log_path"), diff)
+            _finish_run(api_base, w.get("run_id"), drain_status, exit_code, w.get("log_path"), diff)
             # GH#110: a COMPLETED task worker preserves its worktree exactly like the clean-exit
             # success path (checkpoint-commit + keep + saved_ref + digest + advance the stashed
             # cursor); only a non-task ephemeral worker is torn down here.

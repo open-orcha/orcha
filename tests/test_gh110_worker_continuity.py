@@ -392,3 +392,49 @@ def test_terminal_reaper_paginates_past_page_one(tmp_path, monkeypatch):
     assert not pathlib.Path(wt_new).exists()                      # reclaimed despite being past page 1
     assert "NEW" in swept                                         # swept once
     assert "OLD0" in swept and "OLD99" in swept                  # page 1 also fully processed
+
+
+# ---------- PR #121 review blocker: lingering terminal-FAILURE worker routes to retry ----------
+
+class _LiveProc:
+    """A worker process that is still ALIVE (poll() -> None) — the completed-but-lingering path."""
+    def __init__(self, pid=998):
+        self.pid = pid
+        self.returncode = None
+    def poll(self): return None
+    def kill(self): pass
+    def wait(self, timeout=None): return 0
+
+
+def test_codex_lingering_terminal_failure_preserved_and_cursor_withheld(tmp_path, monkeypatch):
+    """A Codex task worker whose log already shows a terminal turn.failed and that lingers past
+    the graceful-exit window must drain 'failed' — preserve the worktree, withhold the cursor,
+    count the failed drain — NOT be booked as a completed 'exited' drain that checkpoint-commits,
+    clears the counter and advances the cursor (skipping the retry the events were owed)."""
+    work = _make_repo(tmp_path)
+    wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "fail-task")
+    (pathlib.Path(wt) / "partial.txt").write_text("in-flight work\n")
+
+    log = tmp_path / "codex-failed.log"
+    log.write_text('{"type":"item.completed","item":{"id":"1"}}\n{"type":"turn.failed"}\n')
+
+    posts = []
+    _wire(monkeypatch, posts)
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: None)  # never signal a real pgid
+    fd, hold = {}, {}
+    w = _task_worker(work, wt, branch, log, notifier.RUNTIME_CODEX, task_id="fail-task")
+    w["proc"] = _LiveProc()
+    w["hard_deadline"] = time.time() - 5          # over the cap -> watchdog section
+    w["result_seen_ts"] = 1.0                     # graceful-exit window long expired -> kill branch
+    notifier.reap_workers("http://x", {"agent-X": w}, quiet=True,
+                          failed_drains=fd, agent_hold_until=hold)
+
+    finish = next(b for u, b in posts if "/finish" in u)
+    assert finish["status"] == "failed"                              # NOT a completed 'exited' drain
+    assert pathlib.Path(wt).is_dir()                                 # worktree PRESERVED
+    rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
+    assert out.strip() == "0"                                        # failed -> no checkpoint commit
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert "delivered_ts" not in ack                                 # cursor withheld -> wake retries
+    assert ack["kind"] == "worker_drain_failed"
+    assert fd[("agent-X", "fail-task")] == 1                         # failed drain counted, not cleared
