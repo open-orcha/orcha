@@ -239,8 +239,9 @@ async def test_orphan_lease_reaper_reconciles_running_run(client, make_agent, co
     rid = (await client.post(f"/api/agents/{aid}/runs",
                              json={"wake_kind": "resident", "lane": "conversation"})).json()["run_id"]
     # conversation branch keys on conv_last_heartbeat_at; stale IT (a once-alive-now-gone conv lease).
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
-               "WHERE agent_id=%s", (aid,))
+    # GH #138: also backdate conv_last_woken_at (the reaper floors idle at claim time now).
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
+               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
 
     r = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
     assert [x["agent_id"] for x in r.json()["reaped"]] == [aid]
