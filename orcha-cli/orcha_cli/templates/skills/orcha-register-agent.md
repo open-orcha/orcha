@@ -119,6 +119,7 @@ User arguments: `$ARGUMENTS`
    /orcha-task-new "<title>" --dod "..."      create a task (--assign <alias> to give it to someone)
    /orcha-post <task_id> "<msg>"              append to a task's thread
    /orcha-done <task_id> "<result>"           mark a task done (awaits human verify)
+   /orcha-self-wake <task_id> --in 10m --context "waiting on CI..."   schedule a one-shot resume wake
 
    Agent-to-agent INFO requests (Phase 2; always pass --alias <alias>):
    /orcha-inbox                                                 incoming open + my asks now answered (two-section)

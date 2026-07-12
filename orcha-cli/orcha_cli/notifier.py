@@ -613,10 +613,13 @@ def build_wake_prompt(cand: dict) -> str:
         bits.append(f"{cand['pending_events']} new event(s)")
     if cand.get("auto_start_task_ids"):
         bits.append(f"{len(cand['auto_start_task_ids'])} assigned ready task(s)")
+    if cand.get("self_wake_due"):
+        bits.append("self-scheduled task wake")
     # #266: a clock-driven heartbeat wake with NOTHING otherwise pending — say so plainly so the
     # worker knows it's a scheduled poll: drain anything that's there, and if genuinely empty, just
     # exit (the generic "pending work" below would be misleading for an empty scheduled poll).
-    if cand.get("auto_wake_due") and not cand.get("pending_events") and not cand.get("auto_start_task_ids"):
+    if (cand.get("auto_wake_due") and not cand.get("pending_events")
+            and not cand.get("auto_start_task_ids") and not cand.get("self_wake_due")):
         bits.append("scheduled heartbeat wake (nothing flagged — check for anything pending, else exit)")
     what = " + ".join(bits) or "pending work"
 
@@ -692,6 +695,13 @@ def build_wake_prompt(cand: dict) -> str:
             f"not work off the title alone (GH #33); honor every acceptance criterion, and if "
             f"the description/DoD asks for a loop or multi-step work, run the loop / do all "
             f"steps, then make concrete progress; "
+        )
+    elif cand.get("self_wake_due"):
+        task_step = (
+            "(2) resume the in-progress task you scheduled this wake for; read the "
+            "'Your task' and 'Resuming' sections, check the saved wait-point first, then "
+            "continue the task; if the external step is still not ready, schedule another "
+            "self-wake and exit instead of polling; "
         )
     else:
         task_step = (
@@ -929,6 +939,22 @@ def _render_task_body(protocol: Optional[dict]) -> Optional[str]:
     return "\n".join(lines) if len(lines) > 2 else None
 
 
+def _render_resume_context(protocol: Optional[dict]) -> Optional[str]:
+    """GH #122: render the worker's saved wait-point for a self-scheduled wake."""
+    p = protocol or {}
+    context = p.get("resume_context")
+    if not context:
+        return None
+    if not isinstance(context, str):
+        context = json.dumps(context, ensure_ascii=False)
+    context = context.strip()
+    if not context:
+        return None
+    return ("## Resuming — you scheduled this wake:\n"
+            f"You were waiting on: {context}\n"
+            "Check that first. If it is still not ready, schedule another self-wake and exit.")
+
+
 # GH #91/#90: a short, STABLE per-turn reminder prepended to each warm conversation turn's content.
 # The persona already carries the full CONVERSATION_LANE_DIRECTIVE on the cold boot; but a long-lived
 # warm resident answers many turns off that one boot, so we re-assert the lane on every turn as a
@@ -950,7 +976,8 @@ def _wrap_conversation_turn(content: str) -> str:
 
 
 def format_persona(persona: Optional[dict], digest: Optional[dict],
-                   protocol: Optional[dict] = None, lane: str = "work") -> Optional[str]:
+                   protocol: Optional[dict] = None, lane: str = "work",
+                   render_resume: bool = False) -> Optional[str]:
     """Pure: assemble the --append-system-prompt text so a headless worker boots AS the
     agent. `persona` is GET /persona ({system_prompt,...}); `digest` is GET /digest
     ({digest: {...}|null}); `protocol` is GET /agents/{aid}/protocol ({protocol:{...}|null});
@@ -986,6 +1013,10 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     body_section = _render_task_body(protocol)
     if body_section:
         parts.append(body_section)
+    if render_resume:
+        resume_section = _render_resume_context(protocol)
+        if resume_section:
+            parts.append(resume_section)
     # #326 (A1): RULES (protocol) ahead of the digest — read fresh every wake, human-editable.
     proto_section = _render_protocol(protocol)
     if proto_section:
@@ -1070,7 +1101,9 @@ def _persona_and_digest(api_base: str, agent_id: str,
 
 
 def _build_persona(api_base: str, agent_id: str, *, task_id: Optional[str] = None,
-                   force_fresh: bool = False, lane: str = "work") -> Optional[str]:
+                   force_fresh: bool = False, lane: str = "work",
+                   self_wake: Optional[dict] = None,
+                   return_resume_rendered: bool = False):
     """Fetch the agent's persona + latest digest + active-task protocol and format them for
     injection.
 
@@ -1097,8 +1130,15 @@ def _build_persona(api_base: str, agent_id: str, *, task_id: Optional[str] = Non
     if task_id:
         proto_url += f"?task_id={task_id}"
     protocol = _get_json(proto_url)
+    render_resume = bool(self_wake and self_wake.get("injected")
+                         and task_id and task_id == self_wake.get("task_id"))
+    resume_rendered = bool(render_resume and protocol and protocol.get("resume_context"))
     # GH #91/#90: thread the lane through so a conversation-lane boot gets the dispatch directive.
-    return format_persona(persona, digest, protocol, lane=lane)
+    formatted = format_persona(persona, digest, protocol, lane=lane,
+                               render_resume=render_resume)
+    if return_resume_rendered:
+        return formatted, resume_rendered
+    return formatted
 
 
 def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
@@ -1292,7 +1332,16 @@ def derive_wake_event(cand: dict) -> Optional[str]:
     pure function rather than re-derived inline at each call site."""
     return (cand.get("latest_event")
             or ("auto_start" if cand.get("auto_start_task_ids") else None)
+            or ("self_wake" if cand.get("self_wake_due") else None)
             or ("auto_wake" if cand.get("auto_wake_due") else None))  # #266: clock-driven heartbeat
+
+
+def self_wake_ack_fields(cand: dict, *, kind: str, sent: bool, resume_rendered: bool) -> dict:
+    """GH #122: ack fields that consume a self-wake only after rendered headless delivery."""
+    if (sent and kind == "ephemeral" and cand.get("self_wake_injected")
+            and resume_rendered and cand.get("self_wake_task_id")):
+        return {"clear_self_wake": True, "self_wake_task_id": cand["self_wake_task_id"]}
+    return {}
 
 
 # ---------- E3: the resident-session transport (a WARM, stdin-driven `claude`) ----------
@@ -3028,6 +3077,7 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
         prompt = build_wake_prompt(cand)
         kind = select_transport(cand)
         event = derive_wake_event(cand)
+        resume_rendered = False
         ephemeral_lane = "work"   # GH #91/#90 (PR R5): every scan_and_wake wake is WORK-lane — the
                                   # scan's pending count runs against the work cursor, so the ack
                                   # must advance that same cursor (tmux/unreachable included).
@@ -3119,8 +3169,18 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # judgment + reasoning continuity, not as a generic Claude.
             # GH #56 (Point 3 / FLAG 2a part d): pass the wake's originating-task hint so the injected
             # protocol is that task's (the link), not a guess at the agent's one in_progress task.
-            persona = None if dry_run else _build_persona(
-                api_base, cand["agent_id"], task_id=cand.get("wake_task_id"))
+            if dry_run:
+                persona = None
+            else:
+                _persona_result = _build_persona(
+                    api_base, cand["agent_id"], task_id=cand.get("wake_task_id"),
+                    self_wake={"injected": cand.get("self_wake_injected"),
+                               "task_id": cand.get("self_wake_task_id")},
+                    return_resume_rendered=True)
+                if isinstance(_persona_result, tuple):
+                    persona, resume_rendered = _persona_result
+                else:
+                    persona, resume_rendered = _persona_result, False
             log_path = None
             hc = cand.get("headless_cwd")
             if hc and not dry_run:
@@ -3280,10 +3340,12 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             release_lease = (kind == "ephemeral" and not sent)
             # GH #91/#90: the ack releases/advances THIS ephemeral's lane (resolved above; 'work'
             # default for tmux/unreachable, which never took a lane-scoped claim).
-            _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
-                       {"delivered_ts": delivered_ts,
+            ack_body = {"delivered_ts": delivered_ts,
                         "kind": kind if sent else (f"{kind}_failed" if kind != "unreachable" else "unreachable"),
-                        "event": event, "release_lease": release_lease, "lane": ephemeral_lane})
+                        "event": event, "release_lease": release_lease, "lane": ephemeral_lane}
+            ack_body.update(self_wake_ack_fields(
+                cand, kind=kind, sent=sent, resume_rendered=resume_rendered))
+            _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack", ack_body)
 
     return {"ok": True, "woke": woke}
 

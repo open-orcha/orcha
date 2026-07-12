@@ -365,6 +365,7 @@ MAX_DESC_LEN     = 4_000
 MAX_PROMPT_LEN   = 8_000
 MAX_PAYLOAD_LEN  = 4_000   # request / answer text + task result
 MAX_TURN_LEN     = 100_000 # a conversation turn (human message or an agent 'result' final text)
+MAX_SELF_WAKE_CONTEXT_LEN = 2_048  # GH #122: short one-shot resume context for wake injection
 # A3: aggregate cap on the directed-prompt batch surfaced in one wake. Each prompt is bounded by
 # MAX_PAYLOAD_LEN, but an accumulated backlog concatenated into a single `claude -p` / tmux argv
 # could blow the OS arg limit → spawn fails → the same too-big batch retries forever. wake-scan
@@ -1957,6 +1958,19 @@ class AutoWakeUpdate(BaseModel):
     interval_secs: Optional[int] = Field(
         ..., ge=60,
         description="seconds between clock-driven auto-wakes (>=60s floor); null disables auto-wake")
+
+
+class SelfWakeSet(BaseModel):
+    """GH #122: an ephemeral worker schedules a one-shot resume wake for active task work."""
+    task_id: str = Field(..., description="task the worker is actively waiting on")
+    delay_secs: Optional[int] = Field(default=None, ge=60, le=86_400,
+                                      description="wake after this many seconds")
+    resume_in_seconds: Optional[int] = Field(default=None, ge=60, le=86_400,
+                                             description="compat alias for delay_secs")
+    resume_at: Optional[datetime] = Field(default=None,
+                                          description="absolute wake time; must be at least 60s out")
+    context: str = Field(..., max_length=MAX_SELF_WAKE_CONTEXT_LEN,
+                         description="short, non-empty wait-point to inject on the scheduled wake")
 
 
 # ---- E3 conversation store (resident-session thread; docs/orcha-conversation-model.md) ----
@@ -3978,6 +3992,7 @@ def retire_agent(aid: str, body: AgentRetire):
             "AND assignment_status IN ('assigned','accepted','working')",
             (aid,),
         )
+        cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s", (aid,))
 
         # Release to 'ready' any in_progress task that now has no active assignee left.
         released = []
@@ -4136,6 +4151,105 @@ def update_agent_auto_wake(aid: str, body: AutoWakeUpdate):
     return {"agent_id": aid, "alias": updated["alias"],
             "auto_wake_interval_secs": updated["auto_wake_interval_secs"],
             "enabled": updated["auto_wake_interval_secs"] is not None}
+
+
+@app.post("/api/agents/{aid}/self-wake", status_code=200)
+def schedule_agent_self_wake(
+        aid: str, body: SelfWakeSet,
+        x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+    """GH #122: work-lane task worker schedules a one-shot wake for the task it is working."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    if not _valid_uuid(body.task_id):
+        raise HTTPException(400, "task_id is not a valid UUID")
+    context = (body.context or "").strip()
+    if not context:
+        raise HTTPException(422, "context must be non-empty")
+
+    now = datetime.now(timezone.utc)
+    delay = body.delay_secs if body.delay_secs is not None else body.resume_in_seconds
+    if delay is not None:
+        resume_at = now.timestamp() + float(delay)
+        resume_dt = datetime.fromtimestamp(resume_at, timezone.utc)
+    elif body.resume_at is not None:
+        resume_dt = body.resume_at
+        if resume_dt.tzinfo is None:
+            resume_dt = resume_dt.replace(tzinfo=timezone.utc)
+        else:
+            resume_dt = resume_dt.astimezone(timezone.utc)
+        delta = (resume_dt - now).total_seconds()
+        if delta < 60:
+            raise HTTPException(422, "resume_at must be at least 60 seconds in the future")
+        if delta > 86_400:
+            raise HTTPException(422, "resume_at must be within 24 hours")
+    else:
+        raise HTTPException(422, "provide delay_secs, resume_in_seconds, or resume_at")
+
+    with db_cursor() as (conn, cur):
+        ag = _require_agent(cur, aid)
+        _require_work_lane(cur, aid, x_orcha_run_token)
+        cur.execute(
+            """SELECT 1 FROM tasks t
+               JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
+               WHERE t.id = %s AND t.container_id = %s
+                 AND t.status = 'in_progress'
+                 AND t.is_root = false
+                 AND at.assignment_status IN ('assigned','accepted','working')
+               LIMIT 1""",
+            (aid, body.task_id, ag["container_id"]),
+        )
+        if not cur.fetchone():
+            raise HTTPException(
+                409, "self-wake can only be scheduled by an active assignee on an in-progress task")
+        cur.execute(
+            "SELECT id FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
+            (aid, body.task_id),
+        )
+        replaced_existing = cur.fetchone() is not None
+        cur.execute(
+            """INSERT INTO agent_self_wake (agent_id, task_id, resume_at, context)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (agent_id, task_id) DO UPDATE SET
+                 resume_at = EXCLUDED.resume_at,
+                 context = EXCLUDED.context,
+                 created_at = now()
+               RETURNING id, resume_at""",
+            (aid, body.task_id, resume_dt, context),
+        )
+        row = cur.fetchone()
+        log_event(cur, ag["container_id"], "ai", aid, "task", body.task_id,
+                  "self_wake_scheduled",
+                  {"resume_at": row["resume_at"].isoformat(),
+                   "replaced_existing": replaced_existing})
+        conn.commit()
+    return {"self_wake_id": str(row["id"]), "agent_id": aid, "task_id": body.task_id,
+            "resume_at": row["resume_at"].isoformat(), "status": "scheduled",
+            "replaced_existing": replaced_existing}
+
+
+@app.delete("/api/agents/{aid}/self-wake", status_code=200)
+def cancel_agent_self_wake(
+        aid: str, task_id: Optional[str] = Query(default=None),
+        all_tasks: bool = Query(default=False, alias="all"),
+        x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+    """GH #122: cancel this agent's scheduled self-wake for one task, or all of them."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    if not all_tasks and not (task_id and _valid_uuid(task_id)):
+        raise HTTPException(400, "task_id is required unless all=true")
+    with db_cursor() as (conn, cur):
+        ag = _require_agent(cur, aid)
+        _require_work_lane(cur, aid, x_orcha_run_token)
+        if all_tasks:
+            cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s", (aid,))
+        else:
+            cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
+                        (aid, task_id))
+        deleted = cur.rowcount
+        log_event(cur, ag["container_id"], "ai", aid, "agent", aid,
+                  "self_wake_cancelled", {"task_id": task_id, "all": all_tasks, "deleted": deleted})
+        conn.commit()
+    return {"agent_id": aid, "task_id": task_id, "deleted": deleted}
 
 
 @app.get("/api/agents/{aid}/reachability")
@@ -4736,12 +4850,32 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
                 (aid,),
             )
             row = cur.fetchone()
+        resume_context = None
+        if row is not None:
+            cur.execute(
+                """SELECT sw.context
+                   FROM agent_self_wake sw
+                   JOIN tasks t ON t.id = sw.task_id
+                   JOIN agent_tasks at ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+                   WHERE sw.agent_id=%s AND sw.task_id=%s
+                     AND sw.resume_at <= now()
+                     AND t.status = 'in_progress'
+                     AND at.assignment_status IN ('assigned','accepted','working')
+                   LIMIT 1""",
+                (aid, row["id"]),
+            )
+            sw = cur.fetchone()
+            if sw:
+                resume_context = sw["context"]
     if not row:
         return {"task_id": None, "protocol": None}
     # GH #33: body rides whenever a task resolves; protocol stays independent (null when unset).
-    return {"task_id": str(row["id"]), "title": row["title"],
-            "description": row["description"], "definition_of_done": row["definition_of_done"],
-            "protocol": row["protocol"] or None}
+    result = {"task_id": str(row["id"]), "title": row["title"],
+              "description": row["description"], "definition_of_done": row["definition_of_done"],
+              "protocol": row["protocol"] or None}
+    if resume_context:
+        result["resume_context"] = resume_context
+    return result
 
 
 class WakeAck(BaseModel):
@@ -4770,6 +4904,12 @@ class WakeAck(BaseModel):
                     "wake/finish. The auto-wake idle-yield sets it FALSE so a resident that merely "
                     "steps aside to let the ephemeral clock-wake fire does NOT reset secs_since_woken "
                     "out from under its own auto_wake_due (the real ephemeral wake stamps it instead).")
+    clear_self_wake: bool = Field(
+        default=False,
+        description="GH #122: clear the one-shot self-wake row after its resume context rendered")
+    self_wake_task_id: Optional[str] = Field(
+        default=None,
+        description="GH #122: task id of the exact per-task self-wake row to clear")
 
 
 class PromptEvent(BaseModel):
@@ -5031,6 +5171,60 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 (aid,))
             has_pending_task_request = bool(cur.fetchone()["h"])
 
+            # GH #122: one-shot, per-task self-scheduled wakes. First remove rows that can never
+            # fire (task left in_progress or this agent is no longer an active assignee), then bind
+            # a due row only when no higher-precedence target will steer the worker elsewhere.
+            cur.execute(
+                """DELETE FROM agent_self_wake sw
+                   WHERE sw.agent_id=%s
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM tasks t
+                       JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = sw.agent_id
+                       WHERE t.id = sw.task_id
+                         AND t.status = 'in_progress'
+                         AND at.assignment_status IN ('assigned','accepted','working')
+                     )""",
+                (aid,),
+            )
+            self_wake_due = False
+            self_wake_context = None
+            self_wake_task_id = None
+            if not auto_tasks and not has_pending_task_request:
+                if wake_task_id and _valid_uuid(wake_task_id):
+                    cur.execute(
+                        """SELECT sw.task_id, sw.context
+                           FROM agent_self_wake sw
+                           JOIN tasks t ON t.id = sw.task_id
+                           JOIN agent_tasks at ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+                           WHERE sw.agent_id=%s AND sw.task_id=%s
+                             AND sw.resume_at <= now()
+                             AND t.status = 'in_progress'
+                             AND at.assignment_status IN ('assigned','accepted','working')
+                           LIMIT 1""",
+                        (aid, wake_task_id),
+                    )
+                else:
+                    cur.execute(
+                        """SELECT sw.task_id, sw.context
+                           FROM agent_self_wake sw
+                           JOIN tasks t ON t.id = sw.task_id
+                           JOIN agent_tasks at ON at.task_id = sw.task_id AND at.agent_id = sw.agent_id
+                           WHERE sw.agent_id=%s
+                             AND sw.resume_at <= now()
+                             AND t.status = 'in_progress'
+                             AND at.assignment_status IN ('assigned','accepted','working')
+                           ORDER BY sw.resume_at
+                           LIMIT 1""",
+                        (aid,),
+                    )
+                sw = cur.fetchone()
+                if sw:
+                    self_wake_due = True
+                    self_wake_task_id = str(sw["task_id"])
+                    self_wake_context = sw["context"]
+                    wake_task_id = self_wake_task_id
+
             # GH #91/#90: WORK-lane idle keys on the lane's OWN heartbeat (work_last_heartbeat_at),
             # NULL => idle=true (never beat = no live work embodiment to be 'busy'). The agent-wide
             # idle_seconds (bumped by a conversation renew too) is kept for debug only and no longer
@@ -5051,7 +5245,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             auto_wake_due = bool(
                 auto_interval is not None
                 and (secs_since_woken is None or secs_since_woken >= auto_interval))
-            has_work = pending > 0 or len(auto_tasks) > 0 or auto_wake_due or has_pending_task_request
+            has_work = (pending > 0 or len(auto_tasks) > 0 or auto_wake_due
+                        or has_pending_task_request or self_wake_due)
             wake_enabled = a["wake_enabled"]
             in_cooldown = bool(a["in_cooldown"])
             # GH #91/#90: the existing lease/embodiment signals ARE the WORK lane now (they read the
@@ -5106,6 +5301,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # GH #91/#90: an owed OPEN task request is a first-class WORK wake reason.
                 if has_pending_task_request:
                     bits.append("open task-request awaiting accept")
+                if self_wake_due:
+                    bits.append("self-scheduled task wake")
                 if auto_wake_due:
                     bits.append(f"scheduled auto-wake (every {auto_interval}s)")
                 reason = "wake: " + ", ".join(bits)
@@ -5119,8 +5316,9 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # never attach a suppression hint when one is pending (the notifier's suppression decider
             # also short-circuits to wake on has_pending_task_request; this is the server-side belt).
             triage_hint = None
-            if (should_wake and not has_pending_task_request and pending == 1 and not auto_tasks
-                    and not wake_task_id and not prompt_messages and latest):
+            if (should_wake and not has_pending_task_request and not self_wake_due
+                    and pending == 1 and not auto_tasks and not wake_task_id
+                    and not prompt_messages and latest):
                 full_answer = None
                 if latest == "request_answered" and (latest_payload or {}).get("request_id"):
                     cur.execute("SELECT response FROM requests WHERE id=%s",
@@ -5141,6 +5339,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
                 # can show why an idle agent is being woken on a clock.
                 "auto_wake_due": auto_wake_due, "auto_wake_interval_secs": auto_interval,
+                # GH #122: due one-shot task resume wake. self_wake_injected means this scan bound
+                # the self-wake to the same task_id the persona/protocol load will use.
+                "self_wake_due": self_wake_due,
+                "self_wake_context": self_wake_context,
+                "self_wake_task_id": self_wake_task_id,
+                "self_wake_injected": bool(self_wake_due and self_wake_task_id == wake_task_id),
                 # #288: the wake-suppression hint (None unless the sole pending signal is a single
                 # FYI/answer event). The notifier daemon makes the final call and fails open.
                 "triage_hint": triage_hint,
@@ -5263,6 +5467,14 @@ def wake_ack(aid: str, body: WakeAck):
                  body.release_lease, body.release_lease),
             )
         row = cur.fetchone()
+        cleared_self_wake = False
+        if (lane == "work" and body.clear_self_wake
+                and body.self_wake_task_id and _valid_uuid(body.self_wake_task_id)):
+            cur.execute(
+                "DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
+                (aid, body.self_wake_task_id),
+            )
+            cleared_self_wake = cur.rowcount > 0
         # ISS-stranded (e4b77f3f): durable reconciliation backstop. Enforce the invariant
         # "lease released => no 'running' worker_runs for this agent". The happy paths
         # _finish_run('exited'|'killed') BEFORE this ack, so any row still 'running' here is a
@@ -5288,9 +5500,12 @@ def wake_ack(aid: str, body: WakeAck):
                            "trigger": "lease_release", "lane": lane})
         log_event(cur, str(ag["container_id"]), "system", None, "agent", aid, "woken",
                   {"kind": body.kind, "event": body.event, "delivered_ts": body.delivered_ts,
-                   "release_lease": body.release_lease, "lane": lane})
+                   "release_lease": body.release_lease, "lane": lane,
+                   "clear_self_wake": body.clear_self_wake,
+                   "self_wake_task_id": body.self_wake_task_id,
+                   "cleared_self_wake": cleared_self_wake})
         conn.commit()
-    return {"agent_id": aid, "lane": lane, **row}
+    return {"agent_id": aid, "lane": lane, "cleared_self_wake": cleared_self_wake, **row}
 
 
 @app.post("/api/agents/{aid}/wake-claim", status_code=200)
@@ -6799,6 +7014,7 @@ def _complete_and_unblock(cur, container_id, tid):
     _backstop_stranded_request(cur, container_id, tid)
     cur.execute(
         "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,))
+    cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
     # unblock downstream tasks whose deps are now all completed
     cur.execute(
         """SELECT DISTINCT td.task_id
@@ -6912,6 +7128,7 @@ def mark_done(tid: str, body: TaskDone,
             "UPDATE tasks SET status='needs_verification', result=%s::jsonb WHERE id=%s",
             (result_json, tid),
         )
+        cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
         # GH #56 (Point 5): plan/pr autonomy parks the task at needs_verification (the full branch
         # above auto-completes via _complete_and_unblock, which runs the same backstop). If this is
         # an accepter's spawned task and its originating request is still 'accepted', auto-answer it
@@ -7006,6 +7223,11 @@ def assign_task(tid: str, body: AssignTask):
                 """DELETE FROM agent_tasks
                    WHERE task_id=%s AND agent_id <> %s
                      AND assignment_status IN ('assigned','accepted','working')""",
+                (tid, body.agent_id),
+            )
+            cur.execute(
+                """DELETE FROM agent_self_wake
+                   WHERE task_id=%s AND agent_id <> %s""",
                 (tid, body.agent_id),
             )
             for pid in prior:
@@ -7149,6 +7371,7 @@ def unassign_task(tid: str, body: TaskUnassign):
                WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')""",
             (tid,),
         )
+        cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
         # An in_progress task with no assignee left returns to the queue; a ready/pending/not_ready
         # task keeps its status (it just loses its owner). started_at clears so a reclaim is clean.
         new_status = t["status"]
@@ -7337,6 +7560,7 @@ def cancel_task(tid: str, body: TaskCancel):
                                       "detail": "a reason is required when cancelling another agent's task"})
         cur.execute(
             "UPDATE tasks SET status='cancelled', completed_at=now() WHERE id=%s", (tid,))
+        cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
         # Review P2: clear the now-stale assignments so assignees don't stay 'working'.
         # recompute_agent_status counts assigned|accepted|working rows regardless of the
         # task's status, so a cancelled task would otherwise pin its assignee 'working'.
