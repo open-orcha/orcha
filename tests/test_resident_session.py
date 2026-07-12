@@ -1126,7 +1126,8 @@ def test_service_residents_recycles_idle_claude_resident_on_model_change(monkeyp
     assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
     new_proc.stdin.seek(0)
     sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
-    assert sent == "fresh question"                                # delivered only to the fresh boot
+    # GH #91/#90 (PR R5): delivered turns are lane-framed — compare against the wrapped shape
+    assert sent == notifier._wrap_conversation_turn("fresh question")   # delivered only to the fresh boot
 
 
 def test_service_residents_defers_model_change_while_claude_turn_inflight(monkeypatch, tmp_path):
@@ -1198,7 +1199,7 @@ def test_service_residents_recycles_before_feeding_after_model_change_capture(mo
     assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
     new_proc.stdin.seek(0)
     sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
-    assert sent == "next on new model"
+    assert sent == notifier._wrap_conversation_turn("next on new model")
     assert old_proc.stdin.closed is True
 
 
@@ -1248,7 +1249,7 @@ def test_service_residents_does_not_repin_old_session_when_model_switched_mid_tu
     assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
     new_proc.stdin.seek(0)
     sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
-    assert sent == "next on new model"
+    assert sent == notifier._wrap_conversation_turn("next on new model")
 
 
 def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path):
