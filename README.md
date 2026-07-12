@@ -354,6 +354,15 @@ left agents idle while requests piled up. Now:
 
 ```bash
 # inside the agent's Claude Code session, after /orcha-register-agent <alias>:
+/loop /orcha-listen --alias <alias>                # recommended — long-poll, ~zero LLM cost while idle
+```
+
+`/orcha-listen` is the default loop primitive — see the "Server-sent events"
+section below. `/orcha-checkpoint` (fixed-interval polling) is a **legacy
+fallback** for when the server doesn't support `/wait`, or for an explicit
+one-shot status check:
+
+```bash
 /loop /orcha-checkpoint --alias <alias>            # self-paced
 # or fixed cadence:
 /loop 30 /orcha-checkpoint --alias <alias> --auto-close
@@ -374,7 +383,7 @@ polling avoids interrupting tasks.
 
 #### Background watcher + PostToolUse drain (Orcha#33)
 
-The `/loop /orcha-checkpoint` and `/orcha-listen` patterns work great when the
+The `/loop /orcha-listen` and `/loop /orcha-checkpoint` patterns work great when the
 agent has yielded back to Claude Code, but a deeply working agent (mid-`/orcha-next`
 → code → `/orcha-done`) can go minutes without checking the inbox — and
 `/loop` itself sometimes drifts. To close that gap, `orcha init` and
