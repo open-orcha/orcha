@@ -141,7 +141,7 @@ this is the **consumer-side** half.
 
 ### B8 — Model selector from the portal  (NEW — kedar 2026-06-02)
 *Why:* the human should choose which model an agent/worker uses, with options visible.
-- **B8.1** portal shows the available models (**Opus 4.8 / Sonnet 4.6 / Haiku 4.5**) and lets the human set
+- **B8.1** portal shows the available models (**Opus 4.8 / Sonnet 5 / Haiku 4.5**) and lets the human set
   the model per-agent (and/or per-task). **B8.2** the notifier launches the worker with the chosen
   `--model`. *Verify:* set an agent to Haiku in the portal → its next wake's worker runs on that model
   (confirm via the run record / stream-json).

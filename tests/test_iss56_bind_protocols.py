@@ -49,6 +49,41 @@ def test_render_protocol_none_when_empty():
     assert sys.modules.get("orcha_cli.notifier") or True  # import guard
     import orcha_cli.notifier as notifier
     assert notifier._render_protocol({"protocol": None}) is None
+
+
+def test_render_task_body_surfaces_full_spec():
+    """GH #33: the wake-injected task section carries title + description + definition_of_done so a
+    woken worker acts on the complete spec, not the title alone — and is told to honor loops."""
+    import orcha_cli.notifier as notifier
+    out = notifier._render_task_body({
+        "task_id": "t-1", "title": "loop the thing",
+        "description": "Run the loop 5 times; each pass appends a line.",
+        "definition_of_done": "all 5 iterations logged", "protocol": None,
+    })
+    assert out is not None
+    assert "Run the loop 5 times" in out
+    assert "all 5 iterations logged" in out
+    assert "loop" in out and "title alone" in out  # directive to not work off the title
+
+
+def test_render_task_body_none_when_no_task_or_title_only():
+    """No resolved task → no section (cold/idle wake). A title with no description/DoD adds nothing
+    over what the worker already has, so it is also suppressed."""
+    import orcha_cli.notifier as notifier
+    assert notifier._render_task_body({"task_id": None, "protocol": None}) is None
+    assert notifier._render_task_body(None) is None
+    assert notifier._render_task_body({"task_id": "t-1", "title": "just a title"}) is None
+
+
+def test_format_persona_injects_task_body():
+    """GH #33: the full task body rides in the appended system prompt on every resolved-task wake."""
+    import orcha_cli.notifier as notifier
+    out = notifier.format_persona(
+        {"system_prompt": "You are Eng."}, None,
+        {"task_id": "t-1", "title": "loop it", "description": "loop 5x",
+         "definition_of_done": "5 lines logged", "protocol": None})
+    assert out is not None
+    assert "Your task" in out and "loop 5x" in out and "5 lines logged" in out
     assert notifier._render_protocol(None) is None
 
 
@@ -121,14 +156,15 @@ async def test_request_answered_event_carries_originating_task_id(
 # ===================== Point 4 — accepted → answered → closed =====================
 
 async def test_accepted_request_can_be_answered_then_requester_closes(
-        client, container, make_agent, make_request, db):
+        client, container, make_agent, make_request, db, work_headers):
     a = await make_agent("areq", "eng")
     b = await make_agent("bb", "eng")
     req = await make_request(a["agent_id"], "build X", target_alias="bb",
                              type="task", task=_task_payload())
     rid = req["request_id"]
     acc = await client.post(f"/api/requests/{rid}/accept-task",
-                            json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=await work_headers(b["agent_id"]))
     assert acc.status_code == 200 and acc.json()["status"] == "accepted"
     # accepter posts the real result → accepted → answered (Point 4)
     ans = await client.post(f"/api/requests/{rid}/respond",
@@ -146,13 +182,14 @@ async def test_accepted_request_can_be_answered_then_requester_closes(
 # ===================== Point 6 — accept does not wake the requester =====================
 
 async def test_accept_task_does_not_wake_requester(
-        client, container, make_agent, make_request, db):
+        client, container, make_agent, make_request, db, work_headers):
     a = await make_agent("areq", "eng")
     b = await make_agent("bb", "eng")
     req = await make_request(a["agent_id"], "build X", target_alias="bb",
                              type="task", task=_task_payload())
     await client.post(f"/api/requests/{req['request_id']}/accept-task",
-                      json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                      json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                      headers=await work_headers(b["agent_id"]))
     # No wake-worthy event toward the requester from the accept alone (only the answer wakes).
     evs = db.event_rows(a["agent_id"])
     assert not [e for e in evs if e["event_name"] in ("task_request_accepted", "request_answered")]
@@ -161,7 +198,7 @@ async def test_accept_task_does_not_wake_requester(
 # ===================== Point 5 — backstop auto-answers a stranded accept =====================
 
 async def test_backstop_auto_answers_when_accepter_task_terminal(
-        client, container, make_agent, make_task, make_request, db):
+        client, container, make_agent, make_task, make_request, db, work_headers):
     """If the accepter's spawned task reaches needs_verification/completed while the request is
     STILL 'accepted' (no report-back), the backstop auto-answers it so the requester's loop closes.
     The wake event is flagged backstop=true and an auto_answered audit row is logged."""
@@ -172,11 +209,13 @@ async def test_backstop_auto_answers_when_accepter_task_terminal(
                              type="task", task=_task_payload(), originating_task_id=a_task["id"])
     rid = req["request_id"]
     acc = await client.post(f"/api/requests/{rid}/accept-task",
-                            json={"responder_agent_id": b["agent_id"], "note": "on it"})
+                            json={"responder_agent_id": b["agent_id"], "note": "on it"},
+                            headers=await work_headers(b["agent_id"]))
     spawned = acc.json()["spawned_task_id"]
     # accepter marks the spawned task done WITHOUT reporting back → backstop fires.
     done = await client.post(f"/api/tasks/{spawned}/done",
-                             json={"agent_id": b["agent_id"], "result": "did it"})
+                             json={"agent_id": b["agent_id"], "result": "did it"},
+                             headers=await work_headers(b["agent_id"]))
     assert done.status_code == 200, done.text
     assert db.execute("SELECT status FROM requests WHERE id=%s", (rid,))[0]["status"] == "answered"
     # requester got a backstop-flagged answer carrying the originating task link
@@ -220,6 +259,25 @@ async def test_protocol_endpoint_ignores_foreign_task_id_hint(
     r = await client.get(f"/api/agents/{agent['agent_id']}/protocol", params={"task_id": foreign["id"]})
     assert r.status_code == 200
     assert r.json()["protocol"] is None  # foreign protocol never leaks; fell back to the (empty) guess
+
+
+async def test_protocol_endpoint_carries_full_task_body(
+        client, container, make_agent, make_task):
+    """GH #33: the /protocol endpoint — the surface fetched fresh on EVERY wake and injected into
+    the persona — carries the resolved task's FULL body (title + description + definition_of_done),
+    so the request-answer (originating-link) and in-progress direct-assignment paths both surface
+    the complete spec, not just the title. Body rides even when no protocol is set."""
+    agent = await make_agent("bodyreader", "eng")
+    t = await make_task("loop the thing", "all 5 iterations logged", assignee_alias="bodyreader",
+                        description="Run the loop 5 times; each pass appends a line.")
+    # via the explicit originating-task hint (the request-answer wake path)
+    r = await client.get(f"/api/agents/{agent['agent_id']}/protocol", params={"task_id": t["id"]})
+    body = r.json()
+    assert body["task_id"] == t["id"]
+    assert body["title"] == "loop the thing"
+    assert body["description"] == "Run the loop 5 times; each pass appends a line."
+    assert body["definition_of_done"] == "all 5 iterations logged"
+    assert body["protocol"] is None  # body rides independent of whether a protocol is set
 
 
 # ===================== Point 3 (FLAG 2a b) — wake-scan attaches the answer to the task =====================

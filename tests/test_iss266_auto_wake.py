@@ -118,6 +118,30 @@ async def test_auto_wake_not_gated_by_budget(
 
 
 @pytest.mark.asyncio
+async def test_recurring_clock_keeps_firing_past_budget_iss25(
+        client, container, make_agent, db):
+    """GH #25: a fixed-interval clock wake must keep firing for as long as it is scheduled. It
+    previously stopped 'after a few cycles' because every wake bumps turns_used and the clock was
+    gated on turns_used<turn_budget — so once the budget (default 50) was spent, auto_wake_due went
+    permanently False and the recurring series silently died. GH #39 removed that gate.
+
+    This proves the RECURRING property across many cycles AND past budget exhaustion: the clock is
+    stateless (due = secs_since_woken >= interval), so it re-arms automatically every cycle off
+    last_woken_at — a missed/late tick or a spent budget can't cancel the series. TEETH: restore the
+    `turns_used < turn_budget` term in wake-scan and this fails at the first over-budget cycle."""
+    a = await make_agent("Looper")
+    aid = a["agent_id"]
+    _set_interval(db, aid, 300)                        # every 5 minutes
+    db.execute("UPDATE agents SET turns_used=0, turn_budget=3 WHERE id=%s", (aid,))  # tiny budget
+    for cycle in range(10):                            # far more cycles than the budget allows
+        _set_last_woken(db, aid, seconds_ago=301)      # cadence elapsed → this cycle is due
+        db.execute("UPDATE agents SET turns_used = turns_used + 5 WHERE id=%s", (aid,))  # wake spends turns
+        _, cand = await _scan(client, container["id"], aid)
+        assert cand["auto_wake_due"] is True, f"clock wake stopped firing at cycle {cycle}"
+        assert cand["should_wake"] is True, f"agent not woken at cycle {cycle}"
+
+
+@pytest.mark.asyncio
 async def test_auto_wake_suppressed_by_live_lease(client, container, make_agent, db):
     """A live single-flight lease suppresses a clock wake exactly like an event wake (no double-spawn
     over a live worker) — events/clock stay due and fire after release."""

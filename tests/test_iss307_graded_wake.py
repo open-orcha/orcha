@@ -78,6 +78,35 @@ def test_tier_act_on_routine_handoff_that_would_full_boot():
     assert out["text"] == "great work"
 
 
+def test_tier_pending_task_request_forces_full_over_stale_t2_act():
+    """GH #91/#90 (Round 11): the has_pending_task_request guard is the SOLE difference. A candidate
+    carrying a t2 'ack_verify' hint that WOULD grade 'act' (a stale routine tag riding along) still
+    grades 'full' when the owed-task flag is set — and the guard short-circuits BEFORE the triage /
+    cheap-act path, so triage_fn is never consulted and no 'action' is emitted. Flip the flag off and
+    the SAME fixture grades 'act', proving the guard (not the fixture) forces the boot the accept-task
+    step needs. MUTATION: drop the guard -> an owed task request gets cheap-acted, the accept-task
+    spawn is skipped, and the task is stranded -> RED here."""
+    tid = str(uuid.uuid4())
+    hint = {"tier": "llm", "event_name": "task_verified", "request_id": None, "text": "great work",
+            "t2": {"action": "ack_verify", "task_id": tid}}
+
+    calls = []
+    def _spy(text):
+        calls.append(text)
+        return {"wake": True, "reason": "note"}
+
+    # Flag SET: full boot, and the cheap-act / triage path is never reached.
+    owed = notifier.decide_wake_tier(_cand(hint, has_pending_task_request=True), triage_fn=_spy)
+    assert owed["tier"] == "full"
+    assert "action" not in owed          # NOT cheap-acted
+    assert calls == []                   # guard short-circuited before triage / cheap-act
+
+    # Flag CLEAR: the SAME fixture grades 'act' — so the guard is the only thing that changed.
+    acted = notifier.decide_wake_tier(_cand(hint, has_pending_task_request=False), triage_fn=_spy)
+    assert acted["tier"] == "act" and acted["action"] == "ack_verify"
+    assert calls != []                   # triage WAS consulted on the non-owed path
+
+
 def test_tier_full_when_no_hint():
     """No hint (task work, multi-event backlog, a directed message) -> tier 'full'. The conservative
     default: anything not positively classified earns a full embodiment."""

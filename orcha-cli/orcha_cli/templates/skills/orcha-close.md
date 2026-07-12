@@ -1,7 +1,7 @@
 ---
-description: As the original requester, close an answered request (satisfied with the answer). Flips 'answered' to 'closed'.
+description: As the original requester, close an answered request (satisfied with the answer). Flips 'answered' to 'closed'. A human can also close ANY open/answered request, with an optional reason (routed to the owner).
 allowed-tools: Bash, Read, AskUserQuestion
-argument-hint: <request_id> [--alias <name>]
+argument-hint: <request_id> [--alias <name>] [--reason "..."]
 ---
 
 You are executing `/orcha-close`.
@@ -13,6 +13,7 @@ User arguments: `$ARGUMENTS`
 1. **Parse `$ARGUMENTS`**:
    - First positional: `request_id` (UUID)
    - Optional `--alias <name>` — see step 2
+   - Optional `--reason "..."` — a close reason. **Required** when a HUMAN closes a request they did NOT originate (it's routed to the owning agent so it learns why). Ignored when you close your own request.
 
 2. **Identify the acting agent** (REQUIRED — must be the request's original requester) using this resolution order — STOP at the first match:
    1. **`--alias <name>` in `$ARGUMENTS`** → use that alias.
@@ -26,20 +27,23 @@ User arguments: `$ARGUMENTS`
 
 3. **Read `.claude/orcha.json`** for `api_base_url`.
 
-4. **POST**:
+4. **POST** — include `reason` only when given:
    ```bash
    curl -fsS -X POST "<api_base_url>/api/requests/<request_id>/close" \
      -H 'Content-Type: application/json' \
-     -d '{"requester_agent_id": "<my agent_id>"}'
+     -d '{"requester_agent_id": "<my agent_id>", "reason": "<reason or omit>"}'
    ```
-   Response: `{"request_id": "...", "status": "closed"}`
+   Response: `{"request_id": "...", "status": "closed", "forced_by_human": <bool>}`
 
 5. **Report**: `request <short-id> closed.`
 
+> To wake an agent that owes the next action on a request **without** closing it, use `/orcha-nudge <request_id>` — a standalone, state-routed nudge (open → the target who still owes an answer; answered → the requester who must act on it). Nudging never changes the request's state.
+
 ## Errors
 
-- **403** "only the requester may close" → not your request to close.
-- **409** "request is '<status>', not 'answered'" → still open (no answer yet — use `/orcha-escalate` if stuck) or already closed.
+- **403** "only the requester (or a human) may close" → a non-human tried to close a request it didn't originate. Only the owner or a human can.
+- **409** "request is '<status>', not 'answered'" → a non-human can only close an `answered` request (a human may force-close from any non-closed status). Already-closed is a safe no-op (200).
+- **422** "reason_required" → a human is closing another agent's request without `--reason`. Re-run with `--reason "..."`.
 
 ## When to use which
 

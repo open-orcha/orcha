@@ -23,7 +23,7 @@ const item: AttentionItem = {
 const stackDetail: StackAttention = {
   items: [item, { ...item, id: 'r2', title: 'Second ask' }],
   agents: [
-    { alias: 'Plum', kind: 'ai', status: 'working', model: 'sonnet-4-6', task: 'Wire the widget bridge' },
+    { alias: 'Plum', kind: 'ai', status: 'working', model: 'sonnet-5', task: 'Wire the widget bridge' },
     { alias: 'Atlas', kind: 'ai', status: 'idle', model: 'opus-4-8', task: null }
   ],
   tasks: { ready: 1, inProgress: 2, needsVerification: 0 }
@@ -48,7 +48,7 @@ describe('buildStatus', () => {
           attention: 2,
           working: 1,
           agents: [
-            { alias: 'Plum', kind: 'ai', status: 'working', model: 'sonnet-4-6', task: 'Wire the widget bridge' },
+            { alias: 'Plum', kind: 'ai', status: 'working', model: 'sonnet-5', task: 'Wire the widget bridge' },
             { alias: 'Atlas', kind: 'ai', status: 'idle', model: 'opus-4-8', task: null }
           ],
           tasks: { ready: 1, inProgress: 2, needsVerification: 0 }

@@ -44,6 +44,10 @@ services:
       # injected explicitly (mirrors how api_port/db_port are chosen per-project). Without this
       # every project's browser dialled the fixed ws://127.0.0.1:8765 = the wrong container.
       ORCHA_TERMINAL_WS_URL: ws://127.0.0.1:{{ bridge_port }}
+      # Mobile pairing: the portal container cannot infer the Mac's Wi-Fi/LAN address from inside
+      # Docker. The host CLI discovers it before compose up and passes it here; the pairing
+      # endpoint refuses with a clear warning when this is unavailable.
+      ORCHA_PAIRING_HOST: ${ORCHA_PAIRING_HOST:-}
     ports: ["{{ api_port }}:8000"]
     volumes:
       - ./migrations:/app/migrations:ro   # R1: portal reads migrations to apply pending ones (no wipe)

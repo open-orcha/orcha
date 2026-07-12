@@ -22,17 +22,18 @@ User arguments: `$ARGUMENTS`
 
 2. **Read `.claude/orcha.json`** for `api_base_url`.
 
-3. **POST** to claim:
+3. **POST** to claim. This is a WORK-lane endpoint: if `$ORCHA_RUN_TOKEN` is set in the env (a bridge/worker-spawned embodiment), pass it as the `X-Orcha-Run-Token` header so the server's work-lane gate accepts the claim; when it is UNSET (a human/no-token caller), OMIT the header (a bare call correctly 403s on this gated endpoint). Use the shell-safe expansion so an unset var adds nothing:
    ```bash
-   curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/next"
+   curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/next" \
+     ${ORCHA_RUN_TOKEN:+-H "X-Orcha-Run-Token: $ORCHA_RUN_TOKEN"}
    ```
    Response is one of:
-   - `{"task": {"id": "...", "title": "...", "definition_of_done": "...", "priority": N}}`  → task claimed
+   - `{"task": {"id": "...", "title": "...", "description": "...", "definition_of_done": "...", "priority": N, "protocol": {...}}}`  → task claimed
    - `{"task": null, "message": "no ready tasks available"}`  → nothing to do
 
-4. **Report**:
-   - If a task was claimed: print task_id, title, definition_of_done, priority, and the instruction:
-     > Begin work now. When done, call `/orcha-done <task_id> "<result>" --alias <alias>`. To post progress: `/orcha-post <task_id> "<note>" --alias <alias>`.
+4. **Report & read the FULL task before working** (GH #33):
+   - If a task was claimed: print task_id, title, **description**, definition_of_done, priority, and the **`protocol`** (its per-task working agreement — review_chain / handoff_to / autonomy / notes). Then:
+     > **Read the full `description` and `definition_of_done` before you start — do not act on the title alone.** Acceptance criteria live in the description and DoD; if they ask for a **loop** or multi-step work, run the loop / complete every step, not a shallow one-pass. **Read the `protocol` too and honor it** — route reviews through its `review_chain`, hand finished work to its `handoff_to`, and follow its `notes`; these are binding. Begin work now. When done, call `/orcha-done <task_id> "<result>" --alias <alias>`. To post progress: `/orcha-post <task_id> "<note>" --alias <alias>`.
    - If nothing was claimed: print the message; suggest `/orcha-status` to inspect the project.
 
 ## Errors

@@ -202,7 +202,13 @@ def decide_wake_suppression(cand, *, triage_fn=_triage_wake):
     FAIL-OPEN everywhere: a candidate with no ``triage_hint``, an unknown tier, a non-False
     ``wake`` verdict, OR any triage exception all return None (wake). Only a structural BARE FYI,
     or an explicit ``wake is False`` triage verdict, suppresses. ``request_id`` is set (Tier-1
-    ``request_answered`` only) so the caller can auto-close the answered request."""
+    ``request_answered`` only) so the caller can auto-close the answered request.
+
+    GH #91/#90 (Round 10): an OWED, unaccepted task request (``has_pending_task_request``) is NEVER
+    suppressible — the agent must full-boot to accept it. Return None (wake) before consulting the
+    hint, so even a stale suppression hint riding along can't strand the task."""
+    if (cand or {}).get("has_pending_task_request"):
+        return None
     hint = (cand or {}).get("triage_hint")
     if not hint:
         return None
@@ -241,6 +247,12 @@ def decide_wake_tier(cand, *, triage_fn=_triage_wake):
     grades ``full`` (FAIL-OPEN — an untagged/novel event always earns a full embodiment).
 
     ``triage_fn`` is injected exactly as in ``decide_wake_suppression`` (one triage call total)."""
+    # GH #91/#90 (Round 11): an owed, unaccepted task request ALWAYS earns a full boot — it must never
+    # be suppressed (structural/llm) NOR cheap-acted (T2 'act'), both of which skip the spawn the
+    # accept-task step needs. Guard here, the sole ephemeral-path grader, BEFORE reading triage_hint
+    # or calling decide_wake_suppression, so it covers every downstream rung in one place.
+    if (cand or {}).get("has_pending_task_request"):
+        return {"tier": "full", "reason": "owed task request — full boot"}
     hint = (cand or {}).get("triage_hint")
     if not hint:
         return {"tier": "full"}
@@ -296,6 +308,32 @@ def _log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
         pass
 
 
+def _advance_wake_cursor(api_base: str, cand: dict, event) -> None:
+    """Advance the wake cursor WITHOUT spawning — the no-spawn ack shared by the T2 cheap-act
+    success path and the GH#36 already-resolved no-op path (mirrors _suppress_wake exactly).
+    Acks only THROUGH the surfaced batch (ack_through_ts), falling back to max_event_ts."""
+    ack_ts = cand.get("ack_through_ts")
+    if ack_ts is None:
+        ack_ts = cand.get("max_event_ts")
+    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
+               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+
+
+def _request_actionable(api_base: str, rid: str) -> Optional[bool]:
+    """GH#36: True iff request `rid` is still in 'answered' state (a real ack_close to perform);
+    False if it's a resolved NO-OP (closed/escalated/any non-answered status); None if we can't
+    tell (API unreachable, or a 404 _get_json can't distinguish from a dead API). The caller treats
+    None CONSERVATIVELY — escalate to a full boot — so a transient read failure never silently drops
+    a still-actionable request; only a DEFINITIVE non-answered status suppresses the boot."""
+    data = _get_json(f"{api_base}/api/requests/{rid}")
+    if not isinstance(data, dict):
+        return None
+    status = data.get("status")
+    if not status:
+        return None
+    return status == "answered"
+
+
 def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                     quiet: bool, ack_config: Optional[dict] = None,
                     ack_api_key: Optional[str] = None) -> bool:
@@ -309,6 +347,18 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
         verdict.get("task_id") if action == "ack_verify" else None)
     if not target:
         return False                       # nothing to act on → escalate
+    # GH#36: an ack_close whose request is NO LONGER actionable (already closed/escalated/gone) is a
+    # pure no-op — advance the cursor and DON'T escalate to a full headless boot (the empty-inbox
+    # boot→stall→watchdog-kill loop). Checked BEFORE the cheap substrate so a flaky/absent ack model
+    # can't turn an already-resolved request into an endless boot. Only a DEFINITIVE non-answered
+    # status suppresses; None (unreachable / can't tell) and 'answered' fall through to the normal
+    # cheap-act → boot escalation, so a still-open answer is never silently dropped.
+    if action == "ack_close" and _request_actionable(api_base, target) is False:
+        if not quiet:
+            print(f"[notifier] ack_close for {cand.get('alias')} is already resolved "
+                  f"(request {str(target)[:8]} not 'answered') — advancing cursor, NO boot (GH#36)")
+        _advance_wake_cursor(api_base, cand, event)
+        return True
     if _llm_util is None:
         return False                       # no cheap substrate → escalate
     try:
@@ -332,11 +382,7 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                   f"— escalating to a full boot (cursor not advanced)", file=sys.stderr)
         return False                       # write failed → DON'T advance the cursor; re-grade later
     # Write landed → advance the cursor WITHOUT spawning (mirrors _suppress_wake exactly).
-    ack_ts = cand.get("ack_through_ts")
-    if ack_ts is None:
-        ack_ts = cand.get("max_event_ts")
-    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
-               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+    _advance_wake_cursor(api_base, cand, event)
     return True
 
 
@@ -496,6 +542,28 @@ def _probe_container(api_base: str, cid: str) -> str:
         return "unreachable"
 
 
+# Issue #36: how often a RUNNING daemon re-checks that its container still exists. Far longer
+# than the scan --interval (default 2s) — this is a cheap liveness guard, not a hot path, and a
+# minute's delay before an orphan self-terminates is harmless. The startup 404-refusal posture
+# only protects the moment of launch; this carries the same protection through the daemon's life.
+_DAEMON_LIVENESS_INTERVAL = 60.0
+
+
+def _container_vanished(api_base: str, cid: str) -> bool:
+    """Issue #36 self-terminate predicate. True iff the API is ALIVE and DEFINITIVELY no longer
+    knows this container (HTTP 404).
+
+    A long-running daemon resolves (api_base, cid) ONCE at startup. When its container is later
+    REPLACED (`orcha up` / `init --force`) or its `.claude/orcha.json` goes stale, the daemon
+    would otherwise poll a now-404 container forever — an orphan that still shows up as a live
+    `orcha notifier` in ps (the #36 boot-loop postmortem found 4 notifier daemons, 3 of them bound
+    to dead containers). Mirrors the startup 404-refusal: only a definitive 404 is grounds to quit.
+
+    Returns False for 'unreachable' (API down / booting / mid-restart): a transient API bounce —
+    routine during `orcha up` — must NEVER kill a healthy daemon. Only a definitive 'missing' does."""
+    return _probe_container(api_base, cid) == "missing"
+
+
 def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode(), method="POST",
@@ -592,11 +660,24 @@ def build_wake_prompt(cand: dict) -> str:
         quoted = " ".join(f'(prompt {i + 1}) "{m}"' for i, m in enumerate(msgs))
         directed = (f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — act on "
                     f"{'these' if len(msgs) > 1 else 'this'} specifically: {quoted}.")
+        # GH #33: a task-thread message wake carries only the message preview. When the wake resolves
+        # a task, its FULL body (title + description + definition_of_done) now rides in your system
+        # prompt's "Your task" section — read it before acting, and don't work off the message/title
+        # alone. The thread read (GET /api/tasks/<id>/messages) also returns a `task` header with the
+        # same body if you re-read it there.
+        if cand.get("wake_task_id"):
+            directed += (" Before acting, READ the FULL task body (description AND definition_of_done) "
+                         "in your 'Your task' section — honor every acceptance criterion (run the loop "
+                         "if asked); do not act on the message preview or title alone (GH #33).")
     # #359: a TASK-request in the inbox IS an assignment — accepting it spawns the task. Without this
     # the worker reads "drain your inbox" + "assignment is the only task trigger" and DEFLECTS the
     # work (answers/defers the request to empty the inbox) instead of spawning it. When one is
     # pending, steer the worker into accept-and-do, overriding the generic don't-claim guidance.
-    has_task_request = any((n.get("is_task_request") for n in notifications))
+    # GH #91/#90 (Round 10): also honor the uncapped, event-independent server signal so a beyond-cap
+    # or event-consumed (nudge-redelivered) task request still selects the accept-task step — keeping
+    # the prompt and the token lane in agreement (both say "accept it and make progress").
+    has_task_request = (any((n.get("is_task_request") for n in notifications))
+                        or bool(cand.get("has_pending_task_request")))
     if has_task_request:
         task_step = (
             f"(2) one or more inbox items is a TASK-REQUEST (a teammate asking you to DO work) — "
@@ -608,8 +689,11 @@ def build_wake_prompt(cand: dict) -> str:
     elif cand.get("auto_start_task_ids"):
         task_step = (
             f"(2) if the auto-start rule still holds (assigned & ready, no human HOLD, "
-            f"container active) claim your task via `/orcha-next --alias {alias}` and make "
-            f"concrete progress; "
+            f"container active) claim your task via `/orcha-next --alias {alias}`, then READ "
+            f"the claimed task's FULL description AND definition_of_done before acting — do "
+            f"not work off the title alone (GH #33); honor every acceptance criterion, and if "
+            f"the description/DoD asks for a loop or multi-step work, run the loop / do all "
+            f"steps, then make concrete progress; "
         )
     else:
         task_step = (
@@ -743,6 +827,51 @@ HUMAN_COMMS_GUARDRAIL = (
 )
 
 
+# GH #91/#90: create-time rule for the one duplicate-work case left after the lane split. This is
+# intentionally advisory/model-facing, not a backend gate: only the conversation embodiment can judge
+# whether the new task overlaps state that exists solely in its live chat context.
+_SELF_REFERENTIAL_HANDOFF_RULE = (
+    "Self-referential handoffs: before creating a task assigned to yourself/current agent, check "
+    "whether the task asks you to continue, finish, or act on work that overlaps this live context "
+    "from the conversation. If yes, and only if yes, do the tiny resident-only slice that depends on "
+    "that live context before task creation, then bake the result into the initial task description "
+    "or protocol notes as already completed so the spawned worker inherits it and does not redo it. "
+    "If a separate thread note is needed, create the task unassigned, post that note, then assign it; "
+    "do not assign first. For unrelated tasks, or for work larger than a tiny context-only slice, do "
+    "no work inline and use the normal fresh handoff path."
+)
+
+
+# GH #91/#90: the conversation-lane directive. A conversation embodiment (resident, or an ephemeral
+# woken purely to talk) is the RESPONDER on the human's chat — but it must NOT silently swallow real
+# work inline. The split is: quick asks (questions, brainstorm, status, a one-line lookup) get
+# answered in the chat directly; anything that will take more than ~3-4 minutes or touch code / tests
+# / PRs / a long investigation is HANDED OFF as an assigned task — the conversation worker CREATES the
+# task, replies with a single short ack + the task link, and STOPS. The decision can be made up front
+# (the ask is obviously long) OR mid-flight (a quick reply turns into a long investigation — hand off
+# then, don't grind it out inline). This is the human-readable half of #91/#90; the embodiment-token
+# gate is the server-side backstop that makes it structurally impossible for the conversation lane to
+# own the work anyway. Appended to a conversation-lane persona so it frames every turn of the session.
+CONVERSATION_LANE_DIRECTIVE = (
+    "## You are the conversation responder (conversation lane)\n"
+    "You are answering a human on their chat. Decide, for each ask, whether it is QUICK or REAL WORK:\n"
+    "- QUICK (answer inline, right here): a question, brainstorm, status check, a small lookup, "
+    "anything you can finish in a message or two in under ~3-4 minutes. Just reply.\n"
+    "- REAL WORK (do NOT do it inline — hand it off): anything that will take more than ~3-4 minutes, "
+    "or touch code, tests, PRs, or a long investigation. For these you CREATE an assigned task, then "
+    "reply with ONE short line plus the task link and STOP. Do not start the work in this turn.\n"
+    "When you create the handoff task, make it self-contained for the worker who will pick it up: a "
+    "clear plain-English title; a description that preserves the human's ask and the context you have; "
+    "a definition of done; and a protocol note telling the worker to POST its findings back to the "
+    "task thread when done (that thread is how the human follows along). Then reply to the human with "
+    "exactly one line, e.g. \"I'll handle this in the background — follow the task thread: <link>\".\n"
+    "You may decide up front (the ask is obviously long) OR mid-flight — if a quick reply is turning "
+    "into a long investigation, hand it off at that point rather than grinding it out inline. Only "
+    "genuinely long work becomes a task; pure questions, brainstorming, and status stay inline.\n"
+    f"{_SELF_REFERENTIAL_HANDOFF_RULE}"
+)
+
+
 def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
     """#326 (A1): render the per-task protocol (GET /agents/{aid}/protocol → {protocol:{...}})
     as the standing-RULES section. `protocol` is the response dict; its `protocol` key is the
@@ -776,8 +905,54 @@ def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _render_task_body(protocol: Optional[dict]) -> Optional[str]:
+    """GH #33: render the resolved task's FULL body — title + description + definition_of_done —
+    as a wake section so a woken worker acts on the complete spec, not the title alone. `protocol`
+    is the GET /agents/{aid}/protocol response, which now carries the body fields alongside the
+    rules (the endpoint resolves the wake's task via the originating-link or in-progress guess).
+
+    Covers EVERY wake that resolves a task: the request-answer (originating-task) path and the
+    in-progress direct-assignment path both flow through that endpoint. Returns None when no task
+    resolved (cold/idle wake) or the task carries no description/DoD beyond a title."""
+    p = protocol or {}
+    if not p.get("task_id"):
+        return None
+    lines = ["## Your task (read this FULL body FRESH every wake — act on the complete spec, NOT "
+             "the title alone; acceptance criteria live in the description and definition of done, "
+             "and a loop / multi-step DoD must be honored, not given a shallow one-pass):"]
+    for label, key in (("Title", "title"), ("Description", "description"),
+                       ("Definition of done", "definition_of_done")):
+        v = p.get(key)
+        if v:
+            if not isinstance(v, str):
+                v = json.dumps(v, ensure_ascii=False)
+            lines.append(f"- {label}: {v}")
+    # Title alone (no description/DoD) adds nothing over what the worker already knows — skip.
+    return "\n".join(lines) if len(lines) > 2 else None
+
+
+# GH #91/#90: a short, STABLE per-turn reminder prepended to each warm conversation turn's content.
+# The persona already carries the full CONVERSATION_LANE_DIRECTIVE on the cold boot; but a long-lived
+# warm resident answers many turns off that one boot, so we re-assert the lane on every turn as a
+# cache-cheap one-liner (identical text every turn → prompt-cache friendly, unlike the full block).
+_CONVERSATION_TURN_REMINDER = (
+    "[conversation lane] Answer directly if quick. If this needs real work (investigation, code, "
+    "tests, PR) or more than ~3-4 min, create an assigned task with a protocol and reply with a "
+    "one-line ack + the task link instead of doing it now. For a self-referential task that overlaps "
+    "your live context, first do only the tiny context-only slice and put that result in the task's "
+    "initial task description/notes before assignment, so the spawned worker does not redo it."
+)
+
+
+def _wrap_conversation_turn(content: str) -> str:
+    """Prepend the stable conversation-lane reminder to a warm turn's content (GH #91/#90). Kept as
+    ONE fixed sentence so it stays prompt-cache friendly across turns; the full directive rode in on
+    the cold-boot persona."""
+    return f"{_CONVERSATION_TURN_REMINDER}\n\n{content}"
+
+
 def format_persona(persona: Optional[dict], digest: Optional[dict],
-                   protocol: Optional[dict] = None) -> Optional[str]:
+                   protocol: Optional[dict] = None, lane: str = "work") -> Optional[str]:
     """Pure: assemble the --append-system-prompt text so a headless worker boots AS the
     agent. `persona` is GET /persona ({system_prompt,...}); `digest` is GET /digest
     ({digest: {...}|null}); `protocol` is GET /agents/{aid}/protocol ({protocol:{...}|null});
@@ -802,6 +977,17 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     # #325: standing guardrail rides whenever we're actually booting as an agent.
     if parts:
         parts.append(HUMAN_COMMS_GUARDRAIL)
+    # GH #91/#90: a conversation-lane embodiment (resident, or a talk-only ephemeral) also carries the
+    # dispatch directive so the boot frames every turn as "answer quick asks inline; hand off real
+    # work as an assigned task". Only appended for lane=='conversation' — a work embodiment keeps its
+    # existing persona untouched.
+    if parts and lane == "conversation":
+        parts.append(CONVERSATION_LANE_DIRECTIVE)
+    # GH #33: the resolved task's FULL body (title + description + DoD) rides ahead of the RULES so
+    # the worker reads the complete spec — not the title alone — on every wake that resolves a task.
+    body_section = _render_task_body(protocol)
+    if body_section:
+        parts.append(body_section)
     # #326 (A1): RULES (protocol) ahead of the digest — read fresh every wake, human-editable.
     proto_section = _render_protocol(protocol)
     if proto_section:
@@ -886,7 +1072,7 @@ def _persona_and_digest(api_base: str, agent_id: str,
 
 
 def _build_persona(api_base: str, agent_id: str, *, task_id: Optional[str] = None,
-                   force_fresh: bool = False) -> Optional[str]:
+                   force_fresh: bool = False, lane: str = "work") -> Optional[str]:
     """Fetch the agent's persona + latest digest + active-task protocol and format them for
     injection.
 
@@ -913,7 +1099,8 @@ def _build_persona(api_base: str, agent_id: str, *, task_id: Optional[str] = Non
     if task_id:
         proto_url += f"?task_id={task_id}"
     protocol = _get_json(proto_url)
-    return format_persona(persona, digest, protocol)
+    # GH #91/#90: thread the lane through so a conversation-lane boot gets the dispatch directive.
+    return format_persona(persona, digest, protocol, lane=lane)
 
 
 def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
@@ -924,7 +1111,9 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
                    runtime: Optional[str] = None,
                    resume_session_id: Optional[str] = None,
                    log_path: Optional[pathlib.Path] = None,
-                   last_message_path: Optional[pathlib.Path] = None) -> tuple[bool, str, object]:
+                   last_message_path: Optional[pathlib.Path] = None,
+                   run_token: Optional[str] = None,
+                   conversation: bool = False) -> tuple[bool, str, object]:
     """Fire-and-forget a one-shot coding-agent worker in `cwd`, booted AS `alias`.
 
     Claude models spawn `claude -p "<prompt>"`; Codex models spawn `codex exec "<prompt>"`.
@@ -1044,6 +1233,24 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
     env = dict(os.environ)
     if alias:
         env["ORCHA_ALIAS"] = alias
+    # GH #91/#90: the process-scoped embodiment token — the work-lane capability the gated skills
+    # (orcha-next/accept-task/done/release) present as X-Orcha-Run-Token. Minted BEFORE this spawn so
+    # it is valid in the DB before the worker's first gated call; injected beside ORCHA_ALIAS. None →
+    # the mint failed and the worker runs token-less (degraded: gated endpoints 403), never blocked.
+    if run_token:
+        env["ORCHA_RUN_TOKEN"] = run_token
+    # GH #91/#90: mark GENUINE conversation embodiments only (spawn_headless is shared by task
+    # ephemerals + the drain sidecar + the Codex conversation worker). The PreToolUse backstop keys
+    # on this to block the task-claim/mutation path while allowing dispatch; task ephemerals and the
+    # sidecar must NOT set it.
+    if conversation:
+        env["ORCHA_CONVERSATION_WORKER"] = "1"
+    else:
+        # env is a copy of the daemon's OWN environment, which is not assumed clean: if the
+        # daemon itself was ever started from a shell/worktree with this set (e.g. inherited
+        # from a resident agent session), it would otherwise silently ride along into every
+        # work-lane worker and wrongly trip the conv-guard hook on that worker's Edit/Write.
+        env.pop("ORCHA_CONVERSATION_WORKER", None)
     env["ORCHA_AGENT_RUNTIME"] = runtime
     # ISS-21: mark this as a headless wake worker so the interactive SessionStart hooks
     # (watch/rehydrate/notifier --ensure/reachability) short-circuit to a no-op. Without
@@ -1111,6 +1318,8 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
                    model: Optional[str] = None,
                    reasoning_effort: Optional[str] = None,
                    runtime: Optional[str] = None,
+                   run_token: Optional[str] = None,
+                   conversation: bool = False,
                    dry_run: bool = False) -> tuple[bool, str, object]:
     """Boot a RESIDENT conversation session: `claude -p --input-format stream-json` with an
     OPEN stdin pipe, booted AS `alias`. Unlike the ephemeral headless worker (one-shot, stdin
@@ -1166,6 +1375,20 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
     env = dict(os.environ)
     if alias:
         env["ORCHA_ALIAS"] = alias
+    # GH #91/#90: the process-scoped embodiment token (see spawn_headless). A resident is a
+    # CONVERSATION-lane embodiment, so its token is minted in the conversation lane; the gated
+    # work-lane endpoints then 403 it, which is the desired constraint (it must dispatch, not work).
+    if run_token:
+        env["ORCHA_RUN_TOKEN"] = run_token
+    # GH #91/#90: the resident IS a genuine conversation embodiment → mark it for the PreToolUse
+    # backstop that blocks inline task work while allowing dispatch.
+    if conversation:
+        env["ORCHA_CONVERSATION_WORKER"] = "1"
+    else:
+        # env is a copy of the daemon's OWN environment, which is not assumed clean (see
+        # spawn_headless) — clear any inherited flag so a work-lane resident is never
+        # mislabeled as a conversation embodiment.
+        env.pop("ORCHA_CONVERSATION_WORKER", None)
     env["ORCHA_HEADLESS_WORKER"] = "1"      # ISS-21: short-circuit interactive SessionStart hooks
     out = subprocess.DEVNULL
     if log_path is not None:
@@ -1372,7 +1595,242 @@ def _last_event_type(log_path) -> Optional[str]:
     return None
 
 
-def _worker_is_live(log_path) -> bool:
+def _codex_is_rate_limit(obj: dict) -> bool:
+    """GH#61: does this Codex `codex exec --json` event signal a rate-limit / backoff / retry —
+    i.e. the worker is alive, just sleeping off a 429? Tolerant on purpose (codex is not installed
+    on the dev host, so the exact event spelling can't be pinned — same caveat as
+    `_extract_codex_session_id`): we scan the event `type`, any nested `msg.type`, and the explicit
+    `retry_after` backoff field, and only treat an error-shaped event as 'live' when it CLEARLY
+    carries retry/backoff/429 semantics (a generic error is a dead worker, not a sleeping one).
+    We deliberately do NOT key off a bare `retries` count: a *successful* event can be stamped with
+    `retries: N` (it retried then succeeded), which is history, not a backoff in progress — counting
+    it would read a finished worker as alive. Only `retry_after` (a concrete 'sleep this long before
+    the next attempt') and explicit retry/429 type/message text mark an in-flight backoff."""
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if "rate_limit" in t or "rate-limit" in t or "backoff" in t or "throttl" in t \
+                or "retry" in t or "retrying" in t:
+            return True
+    if obj.get("retry_after") or msg.get("retry_after"):
+        return True
+    for field in (msg.get("message"), msg.get("error"), obj.get("error"), obj.get("message")):
+        if isinstance(field, str):
+            low = field.lower()
+            if "429" in low or "rate limit" in low or "rate_limit" in low or "too many requests" in low:
+                return True
+    return False
+
+
+def _codex_event_phase(obj: dict):
+    """GH#61: classify a Codex `codex exec --json` event as the START or END of a tool/command,
+    returning ('start'|'end'|None, id_or_None). Codex frames work as item lifecycle events —
+    `item.started` → `item.completed`/`item.failed` carrying `item.id`, `item.type`
+    (command_execution, mcp_tool_call, web_search, file_change, …) and `item.status` — but older
+    builds emit a nested `msg` with `*_begin`/`*_end` pairs (exec_command_begin/_end,
+    mcp_tool_call_begin/_end, …). The exact spelling can't be pinned on this host, so we recognize
+    BOTH shapes tolerantly and fall back to a status-string read; an unrecognized event is None
+    (ignored) rather than mistaken for in-flight work."""
+    if not isinstance(obj, dict):
+        return None, None
+    item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    iid = item.get("id") or msg.get("call_id") or msg.get("id") or obj.get("id")
+    top = (obj.get("type") or "").lower()
+    mtype = (msg.get("type") or "").lower()
+    # modern item.* lifecycle
+    if top == "item.started":
+        return "start", iid
+    if top in ("item.completed", "item.failed", "item.done"):
+        return "end", iid
+    # nested msg begin/end pairs (older schema)
+    if mtype.endswith("_begin"):
+        return "start", iid
+    if mtype.endswith("_end"):
+        return "end", iid
+    # status-string fallback (e.g. an item.updated carrying status)
+    status = str(item.get("status") or msg.get("status") or "").lower()
+    if status in ("in_progress", "running", "started", "pending"):
+        return "start", iid
+    if status in ("completed", "complete", "done", "failed", "success", "error",
+                  "cancelled", "canceled", "aborted"):
+        return "end", iid
+    return None, None
+
+
+def _codex_is_turn_end(obj: dict) -> bool:
+    """GH#61 (PR #80 review): does this Codex `codex exec --json` event mark the end of a whole
+    TURN, not just one item? Codex frames an agent turn as `turn.started` → …items… →
+    `turn.completed`/`turn.failed` (older builds nest a `msg.type` of `turn_complete`/`task_complete`).
+    This matters for liveness because a command `item.started` is not always closed by its own
+    `item.completed`: in the official `codex exec --json` sample a command start is followed by an
+    agent-message `item.completed` (a DIFFERENT id) and then `turn.completed`, leaving the command id
+    perpetually 'in flight'. A turn-terminal event is a hard boundary — every item opened in that turn
+    is finished — so we honor it as such (clear in-flight ids, balance the count) rather than reading a
+    completed turn as a live worker. Recognized tolerantly (codex unpinned on this host)."""
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if t in ("turn.completed", "turn.failed", "turn.done", "turn_complete",
+                 "turn_completed", "turn_failed", "turn_end", "task_complete",
+                 "task_completed", "task_finished"):
+            return True
+    return False
+
+
+def _codex_tail_is_live(tail: bytes) -> bool:
+    """GH#61: liveness probe for a Codex (`codex exec --json`) worker, the runtime-aware sibling of
+    the Claude `_worker_is_live` body. The Claude probe only understands Claude stream-json shapes,
+    so before this an ALIVE-but-log-silent Codex worker (e.g. on a long external command) read as
+    stalled and was hard-killed past the cap — the exact #49 failure mode left unfixed for Codex.
+
+    Mirror the Claude three-signal heuristic over Codex's event schema and treat ANY as alive:
+      * pairing — a tool/command `item.started`/`*_begin` whose id has not yet been seen as a
+        terminal `item.completed`/`*_end` (precise when ids exist);
+      * count — more starts than ends (covers no-id + parallel calls);
+      * order — the LAST tool-phase event in the tail is a START (a no-id call in flight at the tail);
+    plus a rate-limit/backoff event as the last meaningful signal (mid-429, alive but sleeping).
+    A genuinely finished/idle Codex tail trips none of these → False, so the dead-Codex teeth case
+    still hard-kills. Parsing is fail-open/tolerant (codex unpinned on this host).
+
+    PR #80 review: a `turn.completed`/`turn.failed` event is a hard TURN boundary that overrides the
+    in-flight pairing. In the official `codex exec --json` shape a command `item.started` is closed by
+    an agent-message `item.completed` (a different id) and then `turn.completed`, so the command id
+    would otherwise stay 'in flight' and read the finished worker as live (→ wrongly checkpoint-
+    respawned). On a turn-terminal event we clear the in-flight set, reset the start/end count, and
+    make the turn end the last signal — so a completed/failed turn correctly reads NOT live."""
+    inflight: set = set()
+    start_count = end_count = 0
+    last_signal = None                         # 'start' | 'end' | 'rate_limit' | 'turn_end'
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                           # partial/garbled line (e.g. truncated tail head)
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_turn_end(obj):
+            # hard turn boundary: every item opened this turn is done — drop in-flight ids, balance
+            # the count, and let this terminal event be the last signal so the order check reads idle.
+            inflight.clear()
+            start_count = end_count = 0
+            last_signal = "turn_end"
+            continue
+        if _codex_is_rate_limit(obj):
+            last_signal = "rate_limit"
+            continue
+        phase, iid = _codex_event_phase(obj)
+        if phase == "start":
+            last_signal = "start"
+            if iid:
+                # Codex emits repeated `item.updated` (status:in_progress) events for ONE command,
+                # each read as a "start" by the status fallback. Trust the id: only count a fresh
+                # start (id not already in flight) so repeated updates of the same command don't
+                # inflate start_count and read a finished worker as live. No-id events still count.
+                if iid not in inflight:
+                    inflight.add(iid)
+                    start_count += 1
+            else:
+                start_count += 1
+        elif phase == "end":
+            last_signal = "end"
+            if iid:
+                # Only balance the count for an id we actually counted as started; a terminal event
+                # for an id whose start scrolled out of the tail (or a duplicate end) must not drive
+                # end_count past the real starts and fabricate a false stall.
+                if iid in inflight:
+                    inflight.discard(iid)
+                    end_count += 1
+            else:
+                end_count += 1
+    if inflight:                               # pairing: an unpaired in-flight tool/command id
+        return True
+    if start_count > end_count:                # count: more starts issued than terminated (no-id safe)
+        return True
+    return last_signal in ("start", "rate_limit")   # order/backoff: tail ends mid-tool or mid-429
+
+
+def _codex_result_status(log_path) -> Optional[str]:
+    """GH#61 (PR #80 review round 2): the Codex sibling of `_result_status`. Return a terminal
+    status ('success' / 'error') when a Codex (`codex exec --json`) worker's log tail shows a
+    COMPLETED turn as its last meaningful signal, else None.
+
+    Why `reap_workers` needs this distinctly from `_worker_is_live`: when a Codex worker finishes,
+    its terminal `turn.completed` line is fresh log GROWTH, so `reap_workers` reads the worker as
+    `stalled=False`. `_result_status` only understands Claude's `result` event (→ None for Codex),
+    so the finished worker skipped the hold-off/exit-cleanly branch and fell through to the
+    checkpoint branch (`respawnable and (not stalled or ...)`) — which respawned an ALREADY-FINISHED
+    worker. Mirroring the Claude `result` path, a turn-terminal Codex tail must instead take the
+    terminal branch: hold off, let the process exit on its own (reaped 'exited', SessionEnd/C1
+    digest runs), never checkpoint-respawn it.
+
+    Terminal means the LAST turn/tool signal in the tail is a `turn.completed`/`turn.failed` with
+    NOTHING live after it — no later `item.started`, no unpaired in-flight id, no rate-limit
+    backoff. A worker that went silent WITHOUT a turn end (e.g. crashed mid-item) is NOT terminal
+    here → it stays on the stall/liveness/respawn path, exactly as before. A turn end followed by a
+    new turn's activity is likewise not terminal (the new turn is still running). Tolerant/fail-open
+    parsing (codex unpinned on this host), and — like `_result_status` — a still-being-written final
+    line (unparseable last line) defers the decision to a later tick rather than risk a false
+    terminal on a live worker."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            f.seek(max(0, end - 65536))          # tail is plenty; terminal lines are small
+            tail = f.read()
+    except OSError:
+        return None
+    # the LAST non-empty line must parse cleanly; a truncated final line means codex is still
+    # mid-write → don't declare terminal yet (mirrors _result_status's last-line guard).
+    for raw in reversed(tail.split(b"\n")):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            json.loads(s)
+        except ValueError:
+            return None
+        break
+    last_signal = None                           # 'start' | 'end' | 'rate_limit' | 'turn_end'
+    last_turn_status = None                      # 'success' | 'error' — status of the last turn end
+    for raw in tail.split(b"\n"):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            continue                             # partial/garbled line (e.g. truncated tail head)
+        if not isinstance(obj, dict):
+            continue
+        if _codex_is_turn_end(obj):
+            last_signal = "turn_end"
+            blob = ((obj.get("type") or "") + " "
+                    + ((obj.get("msg") or {}).get("type") or "")).lower()
+            last_turn_status = "error" if "fail" in blob else "success"
+            continue
+        if _codex_is_rate_limit(obj):
+            last_signal = "rate_limit"
+            continue
+        phase, _iid = _codex_event_phase(obj)
+        if phase == "start":
+            last_signal = "start"
+        elif phase == "end":
+            last_signal = "end"
+    # terminal ONLY when the tail's last meaningful signal is a turn end (nothing live after it).
+    return last_turn_status if last_signal == "turn_end" else None
+
+
+def _worker_is_live(log_path, runtime=None) -> bool:
     """ISS-45: liveness probe for the STALL watchdog. A worker whose stream-json log has
     stopped growing is NOT necessarily stalled — output-silence ≠ death. Two common cases are
     a worker that is very much alive yet legitimately quiet:
@@ -1401,7 +1859,14 @@ def _worker_is_live(log_path) -> bool:
       * order — the LAST tool-related block in the stream is a `tool_use` (covers a no-id call
         in flight at the tail, even when an orphan result earlier balances the count).
     A `tool_result` always follows its `tool_use`, so an orphan result whose `tool_use` scrolled
-    out of the tail can't fabricate a false in-flight under any of the three."""
+    out of the tail can't fabricate a false in-flight under any of the three.
+
+    GH#61: the probe is RUNTIME-AWARE. Codex workers launch via `codex exec --json` (not
+    `claude -p`), which emits an entirely different event schema, so the Claude-only shapes below
+    found none of a live Codex worker's signals and returned False → the #54 checkpoint protection
+    never fired and an alive-but-silent Codex worker was hard-killed past the cap. For a Codex
+    runtime we delegate to `_codex_tail_is_live`; the default (None/claude) keeps the original
+    Claude path so existing callers are unchanged."""
     if not log_path:
         return False
     try:
@@ -1412,6 +1877,8 @@ def _worker_is_live(log_path) -> bool:
             tail = f.read()
     except OSError:
         return False
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_tail_is_live(tail)
     tool_use_ids: set = set()
     tool_result_ids: set = set()
     use_count = result_count = 0
@@ -1449,6 +1916,19 @@ def _worker_is_live(log_path) -> bool:
     if use_count > result_count:              # count: more calls issued than answered (no-id safe)
         return True
     return last_tool_block == "use"           # order: tail ends on an unanswered tool_use
+
+
+def _terminal_status(log_path, runtime=None) -> Optional[str]:
+    """GH#61 (PR #80 review round 2): runtime-aware 'has this worker FINISHED its agent loop?'.
+    Claude emits a terminal stream-json `result` line (`_result_status`); a Codex worker emits a
+    terminal `turn.completed`/`turn.failed` (`_codex_result_status`). `reap_workers` uses this to
+    HOLD OFF on a finished worker — let it exit cleanly so SessionEnd (the C1 digest) runs and it is
+    reaped 'exited' — instead of stall-killing OR checkpoint-respawning it. Without the Codex arm a
+    finished Codex worker's terminal turn line read as fresh growth (`not stalled`) and was wrongly
+    respawned by the checkpoint branch."""
+    if _normalize_runtime(runtime) == RUNTIME_CODEX:
+        return _codex_result_status(log_path)
+    return _result_status(log_path)
 
 
 def _kill_worker(proc, graceful: bool = False, grace_secs: float = 10.0) -> None:
@@ -1553,6 +2033,95 @@ def _usage_from_log(log_path) -> dict:
     return {}
 
 
+# ---------- GH #91/#90: embodiment-token lifecycle (mint before spawn, revoke on teardown) ----------
+# A token is a per-PROCESS work/conversation capability, decoupled from worker_runs. The daemon mints
+# one BEFORE Popen at every run-creating spawn site (so it is valid in the DB before the worker's
+# first gated call), injects it as ORCHA_RUN_TOKEN, stores it in the live-state dict, and revokes it
+# when the process is torn down. The server-side run-terminal revoke (bound via token_id at run-create)
+# is the durable backstop; this daemon-side revoke is the fast path.
+#
+# `pending_revokes`: tokens whose revoke POST failed transiently. Retried best-effort each tick — the
+# DB binding means even if the daemon dies before the retry lands, the server still revokes on the
+# run's terminal transition, so no live token can strand.
+pending_revokes: list[str] = []
+
+
+def _mint_embodiment_token(api_base: str, aid: str, lane: str, kind: str) -> Optional[str]:
+    """Mint a process-scoped embodiment token for `aid` in `lane` ('work'|'conversation'), `kind`
+    ('headless'|'resident'|'live'). POSTs to the mint endpoint and returns the run_token, or None on
+    failure. A None return is NOT fatal: the caller spawns token-less (degraded — the worker's gated
+    calls 403), never blocked on the mint. Never raises (a network hiccup must not crash the daemon)."""
+    try:
+        resp = _post_json(f"{api_base}/api/agents/{aid}/embodiment-tokens",
+                          {"lane": lane, "kind": kind})
+    except Exception:
+        resp = None
+    tok = (resp or {}).get("run_token") or (resp or {}).get("token") or (resp or {}).get("token_id")
+    if not tok:
+        # Log + continue: the spawn proceeds without gated authority rather than being blocked.
+        try:
+            print(f"[notifier] embodiment mint FAILED aid={aid} lane={lane} kind={kind} "
+                  f"— spawning token-less", flush=True)
+        except Exception:
+            pass
+        return None
+    return tok
+
+
+def _revoke_embodiment_token(api_base: str, token: Optional[str]) -> bool:
+    """Best-effort revoke of a minted token (idempotent server-side). Returns True on a confirmed
+    revoke, False on failure — the caller appends a failed token to `pending_revokes` for retry. Never
+    raises. A falsy token is a no-op success (nothing to revoke)."""
+    if not token:
+        return True
+    try:
+        resp = _post_json(f"{api_base}/api/embodiment-tokens/{token}/revoke", {})
+    except Exception:
+        resp = None
+    return resp is not None
+
+
+def _revoke_or_defer(api_base: str, token: Optional[str]) -> None:
+    """Revoke a token; if the POST fails, park it in `pending_revokes` for a best-effort retry each
+    tick. The durable server-side run-terminal revoke is the backstop, so this is best-effort only."""
+    if not token:
+        return
+    if not _revoke_embodiment_token(api_base, token):
+        pending_revokes.append(token)
+
+
+def _drain_pending_revokes(api_base: str) -> None:
+    """Retry any parked failed revokes (called once per daemon tick). Best-effort — a still-failing
+    token stays parked; the server's run-terminal revoke covers the durable case regardless."""
+    if not pending_revokes:
+        return
+    still: list[str] = []
+    for token in pending_revokes:
+        if not _revoke_embodiment_token(api_base, token):
+            still.append(token)
+    pending_revokes[:] = still
+
+
+def _retire_headless(api_base: str, live_workers: dict, aid) -> Optional[dict]:
+    """GH #91/#90: the single teardown choke for a headless/ephemeral worker — REVOKE its stored token
+    (or defer on failure) THEN pop it from live_workers. EVERY live_workers.pop MUST route through here
+    so no exit path can leak a live token. Returns the popped state dict (or None if absent)."""
+    w = live_workers.get(aid)
+    if w is not None:
+        _revoke_or_defer(api_base, w.get("run_token"))
+    return live_workers.pop(aid, None)
+
+
+def _retire_resident(api_base: str, live_residents: dict, conv_id) -> Optional[dict]:
+    """GH #91/#90: the single teardown choke for a resident (conversation) worker — REVOKE its stored
+    conversation token (or defer) THEN pop it from live_residents. EVERY live_residents.pop MUST route
+    through here. Returns the popped state dict (or None if absent)."""
+    r = live_residents.get(conv_id)
+    if r is not None:
+        _revoke_or_defer(api_base, r.get("run_token"))
+    return live_residents.pop(conv_id, None)
+
+
 def _finish_run(api_base: str, run_id, status: str, exit_code, log_path, diff=None,
                 kill_reason=None) -> None:
     """A2/ISS-8: record a run's terminal state + captured stream-json output + net git
@@ -1616,7 +2185,7 @@ def _reap_dead_pid_resident_runs(api_base: str, aid: str, live_pids=frozenset(),
             _finish_run(api_base, r.get("run_id"), "killed", -1, None)
     else:
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": "resident_dead_pid", "release_lease": True})
+                   {"kind": "resident_dead_pid", "release_lease": True, "lane": "conversation"})
     if not quiet:
         print(f"[notifier] reaped {len(dead)} dead-pid resident run(s) for {aid} "
               f"({'kept lease (live sibling)' if live_sibling else 'released lease'})")
@@ -1964,6 +2533,32 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     diff = _capture_diff(worktree)
     _finish_run(api_base, w.get("run_id"), "exited", 0, w.get("log_path"), diff)
 
+    # GH #126: don't trust the in-memory ctx["task_id"] snapshot captured at original spawn -- if
+    # the server's record for this agent's just-finished run has since diverged (e.g. the agent was
+    # reassigned to a different task mid-run), blindly carrying ctx.task_id forward would respawn
+    # the worker still claiming the OLD task while the server's truth says otherwise. Re-fetch the
+    # just-finished run's task_id from the server and use that; fail open to ctx.get("task_id")
+    # only if the fetch itself fails OR the finished run isn't found, never on a mismatch.
+    #
+    # `/runs` is newest-run-first across BOTH lanes (work + conversation) -- NOT "the run that just
+    # finished". A conversation-lane run started after this checkpoint's work run (e.g. the human
+    # chatted with the agent mid-task) would sort first and could carry a different (often null)
+    # task_id, so we must match this checkpoint's own run_id explicitly rather than take runs[0].
+    finished_run_id = w.get("run_id")
+    _server_runs = _get_json(f"{api_base}/api/agents/{aid}/runs?limit=20")
+    respawn_task_id = ctx.get("task_id")
+    if _server_runs and _server_runs.get("runs"):
+        for _run in _server_runs["runs"]:
+            if _run.get("run_id") == finished_run_id:
+                respawn_task_id = _run.get("task_id")
+                break
+
+    # GH #91/#90: the OLD process is dead — revoke its work token, then mint a FRESH work token for
+    # the respawned process. Exactly one live token per live process. Revoke-old first (idempotent):
+    old_tok = w.get("run_token")
+    _revoke_or_defer(api_base, old_tok)
+    new_tok = _mint_embodiment_token(api_base, aid, "work", "headless")
+
     # 2) respawn AS the agent with the freshest digest, on the SAME worktree. #285: force_fresh
     # bypasses the persona/digest cache — step 1 just wrote a NEW continuity digest (C1) for this
     # agent, so a cached (pre-checkpoint) digest here would respawn it with stale continuity.
@@ -1978,24 +2573,33 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
                                          model=ctx.get("model"),
                                          reasoning_effort=ctx.get("reasoning_effort"),
                                          runtime=ctx.get("model_runtime"),
-                                         log_path=log_path)
+                                         log_path=log_path, run_token=new_tok)
     if not (sent and newproc is not None):
         # Respawn failed to spawn — don't strand the agent holding a worktree + lease forever.
+        # GH #91/#90: revoke the just-minted new token explicitly (nothing will ever carry it), then
+        # store it so _retire_headless revokes whatever is tracked (idempotent) as it pops.
+        _revoke_or_defer(api_base, new_tok)
         _teardown_worktree(base_cwd, worktree, branch)
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": "worker_checkpoint_respawn_failed", "release_lease": True})
-        live_workers.pop(aid, None)
+                   {"kind": "worker_checkpoint_respawn_failed", "release_lease": True,
+                    "lane": w.get("lane", "work")})
+        w["run_token"] = new_tok
+        _retire_headless(api_base, live_workers, aid)
         if not quiet:
             print(f"[notifier] checkpoint-respawn for {aid} FAILED to spawn a fresh worker — "
                   f"worktree torn down + lease released")
         return
 
+    # GH #91/#90: a respawned worker continues on ITS OWN lane (stamped at first spawn; today
+    # always 'work' — tick ephemerals are work-lane by construction, PR R5); carry the minted
+    # token_id so the server binds embodiment_tokens.run_id to this run (durable EOL backstop).
     run = _post_json(f"{api_base}/api/agents/{aid}/runs",
                      {"wake_kind": "ephemeral", "wake_event": "checkpoint_respawn",
-                      "task_id": ctx.get("task_id"),
+                      "task_id": respawn_task_id,
                       "log_path": str(log_path) if log_path else None,
                       "pid": newproc.pid, "runtime": ctx.get("model_runtime"),
-                      "worktree": worktree, "branch": branch, "base_cwd": base_cwd})
+                      "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
+                      "lane": w.get("lane", "work"), "token_id": new_tok})
     now = time.time()
     live_workers[aid] = {
         "proc": newproc,
@@ -2004,11 +2608,13 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         "run_id": (run or {}).get("run_id"), "log_path": log_path,
         "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
         "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
-        "cap": cap, "respawns": n, "respawn_ctx": ctx}
+        "cap": cap, "respawns": n, "respawn_ctx": ctx, "lane": w.get("lane", "work"),
+        "run_token": new_tok}   # GH #91/#90: track the fresh work token for teardown revoke
     # Non-releasing ack: keep the single-flight lease (the new worker continues under it) but
     # record the checkpoint for portal/event visibility + refresh the cooldown debounce.
     _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-               {"kind": "worker_checkpoint_respawn", "release_lease": False})
+               {"kind": "worker_checkpoint_respawn", "release_lease": False,
+                "lane": w.get("lane", "work")})
     if not quiet:
         print(f"[notifier] worker for {aid} (pid {proc.pid}) crossed the soft hard-cap while "
               f"still progressing — checkpointed (C1 digest) + respawned (pid {newproc.pid}, "
@@ -2037,6 +2643,10 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
     now = time.time()
     for aid, w in list(live_workers.items()):
         proc = w["proc"]
+        # GH #91/#90 (PR R5): renew/release against the lane THIS worker's lease lives on (stamped
+        # at spawn) — a hardcoded 'work' would renew/release the wrong lane's lease if a
+        # conversation-lane worker ever landed in this dict. Default 'work' covers legacy entries.
+        w_lane = w.get("lane", "work")
         # ISS-39: flush the worker's latest stream-json lines to the DB every tick (this is the
         # live feed) AND right before any finish below — the daemon posts a run's final lines
         # before its status flips, so the SSE never emits `done` ahead of a tail line.
@@ -2046,8 +2656,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             _finish_run(api_base, w.get("run_id"), "exited", proc.returncode, w.get("log_path"), diff)
             _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "released", "release_lease": True})
-            live_workers.pop(aid, None)
+                       {"kind": "released", "release_lease": True, "lane": w_lane})
+            _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
                       f"exited — lease released")
@@ -2057,7 +2667,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # one the daemon stops tracking, is NOT renewed, so its lease lapses within
         # WAKE_LEASE_TTL_SECS and a fresh high-priority event can wake a new worker promptly.
         renew = _post_json(f"{api_base}/api/agents/{aid}/wake-renew",
-                           {"lease_ttl": WAKE_LEASE_TTL_SECS})
+                           {"lease_ttl": WAKE_LEASE_TTL_SECS, "lane": w_lane})
         # #240/ISS-72: a human requested a graceful STOP of THIS tracked run (surfaced on the renew
         # above — zero new poll). Vet stop_run_id == the run THIS daemon tracks (run-id identity
         # check, the #276 pattern at run level — never kill a stale/foreign run), then reap it with
@@ -2074,8 +2684,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                         diff, kill_reason=json.dumps(diag))
             _safe_teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "worker_human_stopped", "release_lease": True})
-            live_workers.pop(aid, None)
+                       {"kind": "worker_human_stopped", "release_lease": True, "lane": w_lane})
+            _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, run {w.get('run_id')}) "
                       f"STOPPED by {renew.get('stop_requested_by') or 'a human'} — "
@@ -2096,13 +2706,22 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         over_cap = now > w.get("hard_deadline", now)
         if not (stalled or over_cap):
             continue                   # progressing (or within stall window) — let it work
-        # ISS-29: a worker that already emitted a terminal `result` has COMPLETED — the log
-        # stops growing at the result line, so the stall timer trips even though the work is
-        # done and the process is just slow to exit. Do NOT reap it as 'killed': hold off and
-        # let the next tick's proc.poll() catch a clean exit (reaped 'exited', SessionEnd/C1
-        # digest gets to run). Only force it down — still 'exited' — if it overruns a generous
-        # graceful-exit window.
-        rstatus = _result_status(w.get("log_path"))
+        # GH#61: resolve the worker's OWN runtime up front — both the terminal-completion check
+        # below and the liveness probe further down must read the worker's runtime schema. A Codex
+        # worker's `codex exec --json` log carries none of the Claude stream-json signals, so a
+        # runtime-blind read mis-classifies it. The runtime rides on respawn_ctx (set at spawn AND
+        # carried through checkpoint-respawn).
+        w_runtime = _normalize_runtime((w.get("respawn_ctx") or {}).get("model_runtime"))
+        # ISS-29: a worker that already emitted a terminal `result` (Claude) / `turn.completed`
+        # (Codex, GH#61 PR #80 review) has COMPLETED — the log stops growing at that line, so the
+        # stall timer trips even though the work is done and the process is just slow to exit. Do
+        # NOT reap it as 'killed' AND do NOT checkpoint-respawn it: a Codex worker's terminal turn
+        # line is fresh growth (`not stalled`), which the checkpoint branch below would otherwise
+        # treat as "still progressing" and respawn an already-finished worker (#80 review round 2).
+        # Hold off here and let the next tick's proc.poll() catch a clean exit (reaped 'exited',
+        # SessionEnd/C1 digest gets to run). Only force it down — still 'exited' — if it overruns a
+        # generous graceful-exit window.
+        rstatus = _terminal_status(w.get("log_path"), runtime=w_runtime)
         if rstatus is not None:
             seen = w.get("result_seen_ts")
             if seen is None:
@@ -2119,8 +2738,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             _finish_run(api_base, w.get("run_id"), "exited", exit_code, w.get("log_path"), diff)
             _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "worker_completed_reaped", "release_lease": True})
-            live_workers.pop(aid, None)
+                       {"kind": "worker_completed_reaped", "release_lease": True, "lane": w_lane})
+            _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}) completed but lingered "
                       f">{GRACEFUL_EXIT_SECS:.0f}s after result — reaped as exited")
@@ -2128,8 +2747,10 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # ISS-45: a stalled-looking worker can be log-silent yet ALIVE — waiting on an in-flight
         # tool call (the `tool_use` is out but its `tool_result` only lands when the subprocess
         # returns) or backing off on a rate limit. Compute liveness ONCE here; reused by the
-        # exemption, the checkpoint gate, and the kill diagnostic below.
-        is_live = _worker_is_live(w.get("log_path"))
+        # exemption, the checkpoint gate, and the kill diagnostic below. The probe reads the
+        # worker's OWN runtime (w_runtime, resolved above) — a runtime-blind probe would read an
+        # alive-but-silent Codex worker as dead and hard-kill it past the cap (GH#61).
+        is_live = _worker_is_live(w.get("log_path"), runtime=w_runtime)
         # Under the soft cap a log-silent-but-live worker is simply LEFT ALONE — don't STALL-kill it:
         # that SIGKILLed legitimately-working workers mid-task, losing the result + the C1 digest.
         if stalled and not over_cap and is_live:
@@ -2171,6 +2792,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             "last_progress_ts": lpts,
             "over_cap": over_cap,
             "worker_is_live": is_live,
+            "runtime": w_runtime,            # GH#61: which liveness schema the probe applied
             "last_event_type": _last_event_type(lp),
         }
         _kill_worker(proc, graceful=True)
@@ -2183,9 +2805,17 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # (_safe_teardown_worktree); the preserved path is logged so a human can find it.
         disp = _safe_teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
         kind = "worker_stalled_killed" if (stalled and not over_cap) else "worker_timeout_killed"
-        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": kind, "release_lease": True})
-        live_workers.pop(aid, None)
+        # GH#36 backstop: a NO-OP ephemeral worker (no task attributed AND no uncommitted work) that
+        # stalls into a watchdog kill must not leave its trigger un-acked — re-assert the cursor
+        # advance to the trigger ts this boot consumed so the SAME wake can't re-arm into another
+        # empty-inbox boot→stall→kill cycle (the spawn-time ack already set it; this is the idempotent
+        # safety net for a transient ack failure). A worker that DID make progress (a task wake or a
+        # dirty diff) leaves the cursor ALONE: its work isn't finished, so it must be free to re-wake.
+        kill_ack = {"kind": kind, "release_lease": True, "lane": w_lane}
+        if not w.get("wake_task_id") and not (diff or "").strip() and w.get("wake_ack_ts") is not None:
+            kill_ack["delivered_ts"] = w.get("wake_ack_ts")
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack", kill_ack)
+        _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
         # #270: emit the kill diagnostic AT KILL TIME, unconditionally — a watchdog kill is a rare,
         # important event and this line is the whole on-host record of WHY it fired.
         print(f"[notifier] WATCHDOG KILL {aid} (pid {proc.pid}) — gracefully KILLED "
@@ -2248,11 +2878,16 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
     the agent as busy (blocks re-wake, compounds #340).
 
     This sweep is keyed on the only truth that survives daemon turnover: the DB run row + a HOST
-    os.kill(pid,0) (the API can't see host PIDs). For each agent with a running run whose process is dead:
-      * NO live process backs ANY of its running rows → release the lease (the server's wake-ack reconcile
-        orphans every running row for the agent) so the agent is idle + re-wakeable within one poll cycle.
-      * a live sibling DOES exist (true double-spawn / a fresh worker mid-run) → finish ONLY the dead orphan
-        rows ('killed'), keep the lease the live worker still renews.
+    os.kill(pid,0) (the API can't see host PIDs). GH #91/#90: the wake-ack lease release + the
+    server's running->orphaned reconcile are LANE-scoped, so the sweep groups per (agent, lane) —
+    a dead CONVERSATION-lane run releases the conv lease, a dead WORK run the work lease, and a
+    live run in ONE lane never shields a dead run in the OTHER (the lanes lease independently).
+    For each (agent, lane) with a running run whose process is dead:
+      * NO live process backs ANY of that lane's running rows → release that LANE's lease (the
+        server's wake-ack reconcile orphans every running row for the agent IN THAT LANE) so the
+        lane is idle + re-claimable within one poll cycle.
+      * a live SAME-LANE sibling DOES exist (true double-spawn / a fresh worker mid-run) → finish
+        ONLY the dead orphan rows ('killed'), keep the lease the live worker still renews.
     `live_pids` shields THIS daemon's genuinely-live workers + residents from a racing os.kill. (pid REUSE
     can mask a dead run as alive — accepted: the ISS-60B heartbeat backstop still catches that tail.)
     Returns the number of dead runs reaped."""
@@ -2265,11 +2900,12 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
         pid = r.get("pid")
         return (pid in live_pids) or _run_pid_alive(pid)
 
-    by_agent: dict = {}
+    by_agent_lane: dict = {}
     for r in runs:
-        by_agent.setdefault(r.get("agent_id"), []).append(r)
+        # missing lane (pre-030 server mid-upgrade) → 'work', the historical default
+        by_agent_lane.setdefault((r.get("agent_id"), r.get("lane") or "work"), []).append(r)
     reaped = 0
-    for aid, arows in by_agent.items():
+    for (aid, lane), arows in by_agent_lane.items():
         dead = [r for r in arows if not _alive(r)]
         if not dead:
             continue
@@ -2279,10 +2915,10 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
                 _finish_run(api_base, r.get("run_id"), "killed", -1, None)
         else:
             _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "orphan_run_sweep", "release_lease": True})
+                       {"kind": "orphan_run_sweep", "release_lease": True, "lane": lane})
         reaped += len(dead)
         if not quiet:
-            print(f"[notifier] swept {len(dead)} dead-pid orphaned run(s) for {aid} "
+            print(f"[notifier] swept {len(dead)} dead-pid orphaned {lane}-lane run(s) for {aid} "
                   f"({'finished orphans, kept lease (live sibling)' if live_sibling else 'released lease'}) "
                   f"(#342)")
     return reaped
@@ -2312,6 +2948,14 @@ RESUME_FAIL_WINDOW_SECS = 20.0           # ISS-61: a warm boot that dies this fa
 # event the ephemeral drain can't ack away can't thrash teardown→warm-resume every cycle. A genuinely
 # NEW event (higher inbox_ack_ts) always yields immediately; only a stalled/echo repeat is throttled.
 RESIDENT_DRAIN_COOLDOWN_SECS = 60.0
+# GH #91/#90 (R2-1 / R3-4): the lanes split retires the resident-side WORK teardown. Non-conversation
+# inbox + clock auto-wake now drive the WORK lane independently through wake_scan (its own work lease +
+# work worker_run), so a warm resident must NOT tear down its (conversation) lease to let an ephemeral
+# do that work — the two lanes coexist now. This flag gates BOTH the drain-sidecar spawn and the two
+# work-yield branches (inbox_drain_yield, auto_wake_yield) OFF by default; conversation delivery + the
+# pure idle-reap are untouched. Kept as a flag (not a hard delete) so the old behavior can be restored
+# if the work lane's independent wake regresses in the field. See the plan's R2-1 and R3-4 sections.
+RESIDENT_WORK_TEARDOWN_ENABLED = False
 # ISS-78: per-conversation yield bookkeeping for the backstop above — {conv_id: (inbox_ack_ts, ts)}.
 # Module-level (not on the resident dict) because the resident is destroyed when it yields; this is how
 # the next boot's idle tick remembers the last yield's high-water mark. Cleared on conversation end.
@@ -2404,6 +3048,9 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
         prompt = build_wake_prompt(cand)
         kind = select_transport(cand)
         event = derive_wake_event(cand)
+        ephemeral_lane = "work"   # GH #91/#90 (PR R5): every scan_and_wake wake is WORK-lane — the
+                                  # scan's pending count runs against the work cursor, so the ack
+                                  # must advance that same cursor (tmux/unreachable included).
         # #288 wake-suppression: a NO-ACTION ephemeral wake (a bare FYI / pure-ack answer) costs a
         # full subprocess spawn for zero work. Gate ONLY the ephemeral spawn — resident/tmux wakes
         # are cheap (a prompt to a live pane) and are NEVER gated. The decision (server-provided
@@ -2463,6 +3110,16 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # --once has no reaper to renew, so it keeps its own (already-short) lease and lets
             # it expire. The watchdog hard cap (`cap`) is unchanged and lives on hard_deadline.
             claim_ttl = WAKE_LEASE_TTL_SECS if live_workers is not None else cap
+            # GH #91/#90 (PR R5): a tick ephemeral is ALWAYS the WORK lane. Every scan candidate is
+            # driven by the WORK pending count (wake_scan counts events past `delivered_ts`, with
+            # bare `conversation_turn` filtered out), so this wake's ack MUST advance the WORK
+            # cursor — an earlier revision routed taskless drain wakes (info requests, answered
+            # notifications, nudges, clock auto-wakes) to the conversation lane, whose ack advances
+            # only `conv_delivered_ts`; the driving events never left the work pending count and the
+            # daemon respawned a no-op worker forever. The conversation lane belongs exclusively to
+            # genuine chat embodiments (the Claude warm resident / Codex per-turn conversation
+            # runner, both spawned by service_residents), never to a scan_and_wake ephemeral.
+            ephemeral_lane = "work"
             # R2.4 single-flight: win an exclusive, TTL-bounded lease BEFORE spawning.
             # If we don't win, a worker is already live for this agent (or the global
             # kill-switch is off) — skip without spawning and without touching the
@@ -2470,7 +3127,8 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             if not dry_run:
                 claim = _post_json(
                     f"{api_base}/api/agents/{cand['agent_id']}/wake-claim",
-                    {"lease_ttl": claim_ttl, "kind": "ephemeral", "event": event})
+                    {"lease_ttl": claim_ttl, "kind": "ephemeral", "event": event,
+                     "lane": ephemeral_lane})
                 if not (claim and claim.get("claimed")):
                     why = (claim or {}).get("reason", "claim failed (unreachable)")
                     if not quiet:
@@ -2521,13 +3179,20 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             if is_code_wake and hc and not dry_run and live_workers is not None:
                 worktree, branch = _provision_worktree(hc, cand.get("alias"))
             run_cwd = worktree or hc
+            # GH #91/#90: mint the process-scoped embodiment token BEFORE Popen so it is valid in the
+            # DB before the worker's first gated call. Lane per the resolver above; kind 'headless'.
+            # dry_run never mints (no process). A mint failure returns None → the worker spawns
+            # token-less (degraded), never blocked.
+            ephemeral_tok = None if dry_run else _mint_embodiment_token(
+                api_base, cand["agent_id"], ephemeral_lane, "headless")
             sent, cmd, proc = spawn_headless(run_cwd, prompt,
                                        cand.get("headless_flags"), dry_run,
                                        alias=cand.get("alias"), system_prompt=persona,
                                        model=cand.get("model"),
                                        reasoning_effort=cand.get("reasoning_effort"),
                                        runtime=cand.get("model_runtime"),
-                                       log_path=log_path)
+                                       log_path=log_path, run_token=ephemeral_tok,
+                                       conversation=(ephemeral_lane == "conversation"))
             if sent and proc is not None and live_workers is not None:
                 # ISS-8.2: record a worker_run for every DAEMON-LOOP headless spawn (incl.
                 # event-wakes — the 18:15 invisible-worker gap) so reap can finish it with
@@ -2544,7 +3209,10 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                   "log_path": str(log_path) if log_path else None,
                                   "pid": getattr(proc, "pid", None),
                                   "runtime": cand.get("model_runtime"),
-                                  "worktree": worktree, "branch": branch, "base_cwd": hc})
+                                  "worktree": worktree, "branch": branch, "base_cwd": hc,
+                                  # GH #91/#90: stamp the run's lane + bind the minted token so the
+                                  # server durably revokes it on this run's terminal transition.
+                                  "lane": ephemeral_lane, "token_id": ephemeral_tok})
                 run_id = (run or {}).get("run_id")
                 if not run_id and not quiet:
                     print(f"[notifier] WARN: worker_run NOT recorded for {cand.get('alias')} "
@@ -2565,6 +3233,14 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     # ISS-76: everything reap_workers needs to CHECKPOINT-RESPAWN this worker on
                     # the same worktree if it's still progressing when it crosses the soft cap.
                     "cap": cap, "respawns": 0,
+                    # GH#36: the trigger this boot consumed — so a NO-OP stall/cap kill (no task
+                    # attributed AND no uncommitted diff) can re-assert the cursor advance to this
+                    # ts and never re-arm the SAME wake into another empty-inbox boot→stall→kill.
+                    "wake_event": event,
+                    "wake_task_id": auto[0] if auto else cand.get("wake_task_id"),
+                    "wake_ack_ts": (cand.get("ack_through_ts")
+                                    if cand.get("ack_through_ts") is not None
+                                    else cand.get("max_event_ts")),
                     # [P2 #218] carry the resolved model: the replacement worker must come up
                     # on the agent's model, not claude's default (per-agent contract, #202)
                     "respawn_ctx": {"prompt": prompt, "flags": cand.get("headless_flags"),
@@ -2573,10 +3249,26 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                     "reasoning_effort": cand.get("reasoning_effort"),  # GH #51
                                     "model_runtime": cand.get("model_runtime"),
                                     "task_id": auto[0] if auto else cand.get("wake_task_id"),
-                                    "event": event}}
+                                    "event": event},
+                    # GH #91/#90: track the token so _retire_headless revokes it on teardown. Stored
+                    # even when POST /runs came back falsy ("running unseen") — the worker still holds
+                    # the token, so it must still be revoked when later reaped.
+                    "run_token": ephemeral_tok,
+                    # GH #91/#90 (PR R5): the lane this worker's lease lives on. reap_workers reads
+                    # it for every renew/release so the reaper is structurally lane-correct. Today
+                    # this is always 'work' (tick ephemerals are work-lane by construction, and
+                    # conversation embodiments are tracked in live_residents, not here) — which is
+                    # also why keying live_workers by agent_id alone stays sound: one work-lane
+                    # worker per agent is exactly the work lane's single-flight invariant.
+                    "lane": ephemeral_lane}
             elif worktree and not sent:
                 # spawn failed after we made a worktree — clean it up (no orphan)
                 _teardown_worktree(hc, worktree, branch)
+                # GH #91/#90: the just-minted token will never ride a process → revoke it now.
+                _revoke_or_defer(api_base, ephemeral_tok)
+            elif not sent and not dry_run:
+                # spawn failed with no worktree — still revoke the minted token (nothing carries it).
+                _revoke_or_defer(api_base, ephemeral_tok)
         else:
             sent, cmd = False, "(no tmux pane / headless cwd recorded — unreachable)"
 
@@ -2608,10 +3300,12 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # then failed (no claude, bad cwd, Popen error), no worker exists — release
             # the lease we just won so the agent isn't suppressed for the whole TTL.
             release_lease = (kind == "ephemeral" and not sent)
+            # GH #91/#90: the ack releases/advances THIS ephemeral's lane (resolved above; 'work'
+            # default for tmux/unreachable, which never took a lane-scoped claim).
             _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
                        {"delivered_ts": delivered_ts,
                         "kind": kind if sent else (f"{kind}_failed" if kind != "unreachable" else "unreachable"),
-                        "event": event, "release_lease": release_lease})
+                        "event": event, "release_lease": release_lease, "lane": ephemeral_lane})
 
     return {"ok": True, "woke": woke}
 
@@ -2670,6 +3364,27 @@ def _simple_history(turns: list[dict]) -> str:
     return "## Conversation so far\n\n" + "\n\n".join(rows) if rows else ""
 
 
+# GH #91/#90: the dispatch directive for a ONE-SHOT conversation worker (Codex cold + resume). Same
+# content as CONVERSATION_LANE_DIRECTIVE, phrased for a single-turn chat reply: answer quick asks
+# inline; hand real work off as an assigned task with a one-line ack + link, and do NOT do it inline.
+# This REPLACES the older "do not post through task/request endpoints unless the human asked" line —
+# the whole point of #91/#90 is that the conversation worker SHOULD create+dispatch a task for real
+# work; it just must not do that work inline.
+_CONVERSATION_DISPATCH_DIRECTIVE = (
+    "Decide whether the human's ask is QUICK or REAL WORK. QUICK (a question, brainstorm, status, a "
+    "small lookup — under ~3-4 min): answer it directly as your chat reply. REAL WORK (more than "
+    "~3-4 min, or touching code, tests, PRs, or a long investigation): do NOT do it inline — CREATE "
+    "an assigned task (clear plain-English title; a description preserving the human's ask + context; "
+    "a definition of done; and a protocol note telling the assigned worker to POST its findings back "
+    "to the task thread), then make your chat reply ONE short line plus the task link, e.g. \"I'll "
+    "handle this in the background — follow the task thread: <link>\". You may decide up front or "
+    "mid-reply. For a self-referential task assigned to yourself/current agent that overlaps your "
+    "live context from this conversation, do only the tiny resident-only slice first and include its result in "
+    "the initial task description or protocol notes before assignment, so the worker inherits it and "
+    "does not redo it; unrelated tasks keep the normal fresh handoff path. Do not call `/orcha-listen`."
+)
+
+
 def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_turns: list[dict],
                                 api_base: Optional[str] = None) -> str:
     """Instruction for a one-shot Codex conversation worker.
@@ -2704,9 +3419,8 @@ def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_t
         f"[orcha conversation] {alias or 'agent'}: reply to the human in Orcha's "
         "Conversation tab. This is a ONE-SHOT Codex conversation worker, not a resident "
         "stdin session. Use tools if needed, but make your final answer the chat reply "
-        "that should be appended to the conversation. Do not call `/orcha-listen` and do "
-        "not post this reply through task/request endpoints unless the human explicitly "
-        "asked for that side effect.\n\n"
+        "that should be appended to the conversation.\n"
+        f"{_CONVERSATION_DISPATCH_DIRECTIVE}\n\n"
         f"{history}\n\n"
         "## Pending Human Message(s)\n\n"
         f"{latest}\n"
@@ -2733,8 +3447,8 @@ def _codex_resume_prompt(alias: str, pending_turns: list[dict]) -> str:
         f"[orcha conversation] {alias or 'agent'}: continue replying to the human in Orcha's "
         "Conversation tab. This RESUMES your existing Codex session — the prior conversation is "
         "already in your context, so do NOT restate it. Make your final answer the chat reply "
-        "appended to the conversation. Do not call `/orcha-listen` and do not post this reply "
-        "through task/request endpoints unless the human explicitly asked for that side effect.\n\n"
+        "appended to the conversation.\n"
+        f"{_CONVERSATION_DISPATCH_DIRECTIVE}\n\n"
         "## New Human Message(s)\n\n"
         f"{latest}\n"
     )
@@ -2852,7 +3566,10 @@ def _post_conversation_reply(api_base: str, conv_id: str, r: dict,
 
 
 def _conversation_ack_body(kind: str, *, delivered_ts=None, release_lease: bool = True) -> dict:
-    body = {"kind": kind, "event": "conversation_turn", "release_lease": release_lease}
+    # GH #91/#90: every ack built here is a CONVERSATION-lane embodiment (resident / Codex
+    # conversation), so it releases/advances the conversation lease slot, never the work slot.
+    body = {"kind": kind, "event": "conversation_turn", "release_lease": release_lease,
+            "lane": "conversation"}
     if delivered_ts is not None:
         body["delivered_ts"] = delivered_ts
     return body
@@ -3026,8 +3743,10 @@ def _close_resident(api_base: str, r: dict, reason: str = "idle", teardown_workt
     # conversation end — an idle/hung close keeps the worktree for the next --resume boot.
     if teardown_worktree:
         _safe_teardown_worktree(r.get("base_cwd"), r.get("worktree"), r.get("branch"))
+    # GH #91/#90: a resident is a CONVERSATION-lane embodiment → release the conversation lease slot.
     _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-               {"kind": f"resident_{reason}", "release_lease": True, "stamp_woken": stamp_woken})
+               {"kind": f"resident_{reason}", "release_lease": True, "stamp_woken": stamp_woken,
+                "lane": "conversation"})
 
 
 def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Optional[list] = None,
@@ -3132,6 +3851,28 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 print(f"[notifier] resident {r.get('alias')} runtime changed "
                       f"{_resident_runtime(r)}→{desired_runtime} — releasing old resident lease")
             _close_resident(api_base, r, reason="runtime_changed")
+            _retire_resident(api_base, live_residents, conv_id)
+            continue
+        # GH#88: same-RUNTIME model switch (e.g. Opus → another Claude model). set_agent_model
+        # already cleared the pinned session_id so the NEXT boot is COLD and picks up the new
+        # --model — but a still-alive warm resident kept its OLD boot model baked into its
+        # session, and the runtime branch above never fires because desired_runtime equals the
+        # resident's. Recycle the idle resident so the next human turn cold-boots on the newly
+        # selected model. A mid-turn resident (awaiting_result) is left alone — its turn finishes
+        # on the old model and this fires next tick, before the next human turn is fed. Claude
+        # only: codex conversation turns already cold-spawn per turn with the current model, and
+        # their in-memory dict carries no boot model to compare against.
+        desired_model = cand.get("model") if cand else None
+        if (_resident_runtime(r) == RUNTIME_CLAUDE
+                and desired_model is not None
+                and r.get("model") is not None
+                and desired_model != r.get("model")
+                and not r.get("awaiting_result")):
+            if not quiet:
+                print(f"[notifier] resident {r.get('alias')} model changed "
+                      f"{r.get('model')}→{desired_model} — recycling for cold reboot (GH#88)")
+            _RESIDENT_RESUME_FAILED.add(conv_id)
+            _close_resident(api_base, r, reason="model_changed")
             live_residents.pop(conv_id, None)
             continue
         if _resident_runtime(r) == RUNTIME_CODEX:
@@ -3143,7 +3884,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
                            _conversation_ack_body("codex_conversation_ended", release_lease=True))
                 _CODEX_RESUME_FAILED.discard(conv_id)   # #286: conversation gone → reset the flag
-                live_residents.pop(conv_id, None)
+                _retire_resident(api_base, live_residents, conv_id)
                 continue
             _pump_one(api_base, r["agent_id"], r)
             if proc.poll() is not None:
@@ -3151,13 +3892,13 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     api_base, conv_id, r, status="exited", exit_code=proc.returncode,
                     ack_kind="codex_conversation_released", post_reply=True,
                 )
-                live_residents.pop(conv_id, None)
+                _retire_resident(api_base, live_residents, conv_id)
                 if not quiet:
                     print(f"[notifier] Codex conversation worker for {r.get('alias')} "
                           f"(pid {proc.pid}, rc={proc.returncode}) replied — lease released")
                 continue
             renew = _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-renew",
-                               {"lease_ttl": WAKE_LEASE_TTL_SECS})
+                               {"lease_ttl": WAKE_LEASE_TTL_SECS, "lane": "conversation"})
             # #240/ISS-72: a human requested a graceful STOP of THIS codex conversation turn (surfaced
             # on the renew — zero new poll). A live codex conversation worker HAS a worker_runs row, so
             # POST /api/runs/{id}/stop targets it and APPEARS to succeed — we must honor the signal here
@@ -3183,7 +3924,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
                            _conversation_ack_body("codex_conversation_human_stopped",
                                                   release_lease=True))
-                live_residents.pop(conv_id, None)
+                _retire_resident(api_base, live_residents, conv_id)
                 if not quiet:
                     print(f"[notifier] Codex conversation worker for {r.get('alias')} TURN STOPPED "
                           f"by {by} (run {r.get('current_run_id')}) — conversation kept, lease "
@@ -3206,7 +3947,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                             r.get("log_path"), diff)
                 _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
                            _conversation_ack_body("codex_conversation_killed", release_lease=True))
-                live_residents.pop(conv_id, None)
+                _retire_resident(api_base, live_residents, conv_id)
             continue
         if proc.poll() is not None:            # resident process exited/crashed
             if r.get("current_run_id"):
@@ -3222,14 +3963,14 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     print(f"[notifier] resident {r.get('alias')} warm --resume failed fast "
                           f"→ next boot COLD (ISS-61)")
             _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-                       {"kind": "resident_exited", "release_lease": True})
-            live_residents.pop(conv_id, None)
+                       {"kind": "resident_exited", "release_lease": True, "lane": "conversation"})
+            _retire_resident(api_base, live_residents, conv_id)
             continue
         if conv_id not in active_ids:          # human ended the conversation out from under us
             _close_resident(api_base, r, reason="conversation_ended", teardown_worktree=True)
             _RESIDENT_RESUME_FAILED.discard(conv_id)   # ISS-61: conversation gone → reset the flag
             _RESIDENT_DRAIN_YIELD.pop(conv_id, None)    # ISS-78: drop stale yield bookkeeping
-            live_residents.pop(conv_id, None)
+            _retire_resident(api_base, live_residents, conv_id)
             continue
         if r.get("awaiting_result"):
             _pump_one(api_base, r["agent_id"], r)          # live tokens → worker_run_lines (ISS-39)
@@ -3249,7 +3990,30 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                                   delivered_ts=delivered_ts,
                                                   release_lease=False))
                 _finish_run(api_base, r["current_run_id"], "exited", 0, r.get("log_path"))
-                if not r.get("session_pinned"):        # pin the session for later --resume
+                # GH#88: if the agent's model was switched (same claude runtime) WHILE this
+                # cold-booted turn was in flight, set_agent_model already NULLed the server-side
+                # session_id so the next boot cold-starts on the new model. Re-pinning the OLD
+                # model's session here would undo that clear and make the switch stick to the old
+                # model — the recycle would then rely solely on the in-memory _RESIDENT_RESUME_FAILED
+                # flag, which is dropped at spawn (so a crash / ISS-72 stop / hard-cap / daemon
+                # restart before the next turn silently warm-resumes the old-model session). Leaving
+                # the server pin NULL keeps the next boot cold BY CONSTRUCTION — the durable signal
+                # is the server clear, not daemon memory. cand is non-None here: the conversation-
+                # ended check above (conv_id in active_ids) guarantees it.
+                model_switched = (
+                    _resident_runtime(r) == RUNTIME_CLAUDE
+                    and cand is not None
+                    and cand.get("model") is not None
+                    and r.get("model") is not None
+                    and cand.get("model") != r.get("model")
+                )
+                if model_switched:
+                    _RESIDENT_RESUME_FAILED.add(conv_id)   # belt-and-suspenders next-boot-cold flag
+                    if not quiet:
+                        print(f"[notifier] resident {r.get('alias')} model switched mid-turn "
+                              f"{r.get('model')}→{cand.get('model')} — captured old reply but "
+                              f"leaving session UNPINNED so the next boot cold-starts (GH#88)")
+                if not r.get("session_pinned") and not model_switched:   # pin the session for later --resume
                     sid = res.get("session_id") or _extract_session_id(r.get("log_path"))
                     if sid:
                         _post_json(f"{api_base}/api/conversations/{conv_id}/session",
@@ -3273,10 +4037,11 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 _finish_run(api_base, r["current_run_id"], "killed", -1, r.get("log_path"))
                 r["current_run_id"] = None
             _close_resident(api_base, r, reason="hung")
-            live_residents.pop(conv_id, None)
+            _retire_resident(api_base, live_residents, conv_id)
             continue
         renew = _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-renew",
-                           {"lease_ttl": WAKE_LEASE_TTL_SECS})   # hold single-embodiment while warm
+                           {"lease_ttl": WAKE_LEASE_TTL_SECS,
+                            "lane": "conversation"})   # hold single-embodiment while warm
         # #240/ISS-72: a human requested a graceful STOP of this resident's in-flight TURN (surfaced
         # on the renew — zero new poll). stop_run_id matches current_run_id ONLY while a turn is in
         # flight, so this fires exactly on a mid-turn run, never on an idle warm session. Abort the
@@ -3302,7 +4067,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                                 "by": renew.get("stop_requested_by")}))
             _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
                        _conversation_ack_body("resident_human_stopped", release_lease=True))
-            live_residents.pop(conv_id, None)            # worktree KEPT (conversation stays active)
+            _retire_resident(api_base, live_residents, conv_id)            # worktree KEPT (conversation stays active)
             if not quiet:
                 print(f"[notifier] resident {r.get('alias')} TURN STOPPED by {by} "
                       f"(run {r.get('current_run_id')}) — partial flushed, conversation kept, "
@@ -3328,7 +4093,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
             # lower-risk seam.
             _PERSONA_CACHE.pop(r.get("agent_id"), None)
             _close_resident(api_base, r, reason="digest_resync")
-            live_residents.pop(conv_id, None)
+            _retire_resident(api_base, live_residents, conv_id)
             continue
         # ISS-69(b): a human opened a live terminal (preempt=1) while this resident holds the lease.
         # wake-claim recorded the yield request; the renew above reads it back. Yield ONLY when idle
@@ -3342,7 +4107,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 print(f"[notifier] resident {r.get('alias')} YIELDING to a live terminal "
                       f"(preempt=1, idle) — snapshot + release lease (ISS-69b)")
             _close_resident(api_base, r, reason="preempted")
-            live_residents.pop(conv_id, None)
+            _retire_resident(api_base, live_residents, conv_id)
             continue
         # #247 B3 (§5.2 warm-zone): a drain SIDECAR may be in flight (spawned below). While it runs,
         # this resident is "busy draining" — exactly like an in-flight turn: skip every yield/reap
@@ -3405,6 +4170,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # circuits this tick (the `r["sidecar"]` block above), so we only get here with NO sidecar live.
         inbox = (cand or {}).get("pending_inbox", 0) or 0
         inbox_ack_ts = (cand or {}).get("inbox_ack_ts")
+        inbox_wake_task_id = (cand or {}).get("inbox_wake_task_id")
         # ISS-78 anti-thrash backstop (carries the ISS-75/#188 guard forward): don't spawn ANOTHER drain
         # pass when the inbox high-water mark (inbox_ack_ts) hasn't advanced past the last attempt's AND
         # we attempted within the cooldown — a stuck/echo event the drain can't ack away would otherwise
@@ -3415,7 +4181,21 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         stalled = (inbox_ack_ts is not None and prev is not None and prev[0] is not None
                    and inbox_ack_ts <= prev[0]
                    and time.time() - prev[1] < RESIDENT_DRAIN_COOLDOWN_SECS)
-        if not r.get("awaiting_result") and not pending and inbox > 0 and not stalled:
+        # GH #91/#90 (R2-1/R3-4): the WORK lane now drains the non-conversation inbox on its own —
+        # the warm resident no longer spawns a sidecar NOR yields its conversation lease for it. Gated
+        # OFF by RESIDENT_WORK_TEARDOWN_ENABLED. The warm resident stays a pure conversation responder
+        # here; it is torn down only by the pure idle-reap below or by a real conversation transition.
+        if (RESIDENT_WORK_TEARDOWN_ENABLED
+                and not r.get("awaiting_result") and not pending and inbox > 0 and not stalled):
+            if inbox_wake_task_id:
+                # GH #131: this backlog is a resume on an in-progress task the agent already owns.
+                # Leave it on the WORK lane so wake_scan can spawn the normal isolated worker; the
+                # resident drain sidecar is only for no-task drains and new/other task claims.
+                if not quiet:
+                    print(f"[notifier] resident {r.get('alias')} has task-thread work queued "
+                          f"for an in-progress task — leaving inbox for the work worker; warm "
+                          f"conversation + lease KEPT (GH #131)")
+                continue
             _RESIDENT_DRAIN_YIELD[conv_id] = (inbox_ack_ts, time.time())   # mark this drain attempt
             spawned = _spawn_drain_sidecar(api_base, r, inbox,
                                            messages=(cand or {}).get("inbox_messages"),
@@ -3432,7 +4212,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     print(f"[notifier] resident {r.get('alias')} drain sidecar unavailable — "
                           f"yielding the lease for an ephemeral drain instead (#247 B3 §8 fail-open)")
                 _close_resident(api_base, r, reason="inbox_drain_yield")
-                live_residents.pop(conv_id, None)
+                _retire_resident(api_base, live_residents, conv_id)
             continue
         # #266 (auto-wake FIRING): a warm resident that is idle (no in-flight turn, no pending human
         # turn) and whose clock-driven auto-wake is DUE yields the lease — the same snapshot+release
@@ -3444,18 +4224,22 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # own throwaway session (single-embodiment preserved: the lease is free before it claims). The
         # ephemeral wake's own ack then stamps last_woken_at, anchoring the next cadence correctly. A
         # mid-turn resident never reaches here (awaiting_result short-circuits in section 1).
-        if not r.get("awaiting_result") and not pending and (cand or {}).get("auto_wake_due"):
+        # GH #91/#90 (R3-4): the clock-driven auto-wake is WORK-lane work; the warm conversation
+        # resident must NOT yield its lease for it (the work lane fires its own ephemeral off its own
+        # work lease + heartbeat). Gated OFF by RESIDENT_WORK_TEARDOWN_ENABLED.
+        if (RESIDENT_WORK_TEARDOWN_ENABLED
+                and not r.get("awaiting_result") and not pending and (cand or {}).get("auto_wake_due")):
             if not quiet:
                 print(f"[notifier] resident {r.get('alias')} idle + clock-driven auto-wake due — "
                       f"yielding the lease (no clock reset) so an ephemeral worker runs the heartbeat "
                       f"in its own session (#266, no context-bleed)")
             _close_resident(api_base, r, reason="auto_wake_yield", stamp_woken=False)
-            live_residents.pop(conv_id, None)
+            _retire_resident(api_base, live_residents, conv_id)
             continue
         if (not r.get("awaiting_result") and not pending
                 and time.time() - r.get("last_activity_ts", 0) > RESIDENT_IDLE_REAP_SECS):
             _close_resident(api_base, r, reason="idle")     # warm session went cold → free the lease
-            live_residents.pop(conv_id, None)
+            _retire_resident(api_base, live_residents, conv_id)
 
     # 2) For each conversation with a pending human turn and no resident mid-turn, advance ONE
     #    turn: boot the resident if needed, then feed the next human turn.
@@ -3496,7 +4280,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                           f"worktree isolation failed (won't run in shared checkout)")
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
                            {"kind": "codex_conversation_failed", "event": "conversation_turn",
-                            "release_lease": True})
+                            "release_lease": True, "lane": "conversation"})   # no token minted yet
                 continue
             run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
             log_path = _conversation_log_path(base_cwd, conv_id)
@@ -3517,7 +4301,18 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     c.get("agent_alias"), pending_turns,
                     [t for t in turns if t.get("seq", 0) <= resolved_through],
                     api_base=api_base)
-                persona = None if dry_run else _build_persona(api_base, c["agent_id"])
+                persona = None if dry_run else _build_persona(
+                    api_base, c["agent_id"], lane="conversation")
+            # GH #91/#90 (R3): this Codex conversation worker IS a conversation-lane embodiment —
+            # mint the CONVERSATION-lane token BEFORE Popen (valid in the DB before its first gated
+            # call), pass it + conversation=True to the process, and stamp lane='conversation' on the
+            # run below. Without this the run recorded lane='work' (the WorkerRunStart default), so
+            # wake_scan counted a live conversation as a WORK embodiment and suppressed work wakes —
+            # the exact split this PR delivers. One run per process (one-shot `codex exec`), so the
+            # server's revoke-on-terminal (bound via token_id) is the right lifetime, mirroring the
+            # ephemeral path. dry_run never mints (no process); a None token spawns token-less.
+            conv_tok = None if dry_run else _mint_embodiment_token(
+                api_base, c["agent_id"], "conversation", "headless")
             sent, _, proc = spawn_headless(run_cwd, prompt, None, dry_run,
                                            alias=c.get("agent_alias"), system_prompt=persona,
                                            model=c.get("model"),
@@ -3525,12 +4320,14 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                            runtime=runtime,
                                            resume_session_id=(session_id if use_resume else None),
                                            log_path=log_path,
-                                           last_message_path=last_message_path)
+                                           last_message_path=last_message_path,
+                                           run_token=conv_tok, conversation=True)
             if not sent or proc is None:
                 _safe_teardown_worktree(base_cwd, worktree, branch)
+                _revoke_or_defer(api_base, conv_tok)   # token never rode a process → revoke now
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
                            {"kind": "codex_conversation_failed", "event": "conversation_turn",
-                            "release_lease": True})
+                            "release_lease": True, "lane": "conversation"})
                 continue
             run = _post_json(
                 f"{api_base}/api/agents/{c['agent_id']}/runs",
@@ -3539,14 +4336,18 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                  "pid": proc.pid, "runtime": runtime, "conversation_id": conv_id,
                  "conversation_ack_ts": c.get("conversation_ack_ts"),
                  "last_message_path": str(last_message_path) if last_message_path else None,
-                 "worktree": worktree, "branch": branch, "base_cwd": base_cwd})
+                 "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
+                 # GH #91/#90 (R3): stamp the conversation lane + bind the minted token so the
+                 # server durably revokes it on this run's terminal transition.
+                 "lane": "conversation", "token_id": conv_tok})
             run_id = (run or {}).get("run_id")
             if not run_id:
                 _kill_worker(proc, graceful=True)
                 _safe_teardown_worktree(base_cwd, worktree, branch)
+                _revoke_or_defer(api_base, conv_tok)   # no run bound the token → revoke now
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
                            {"kind": "codex_conversation_failed", "event": "conversation_turn",
-                            "release_lease": True})
+                            "release_lease": True, "lane": "conversation"})
                 if not quiet:
                     print(f"[notifier] Codex conversation skip {c.get('agent_alias')} — "
                           "worker_run creation failed")
@@ -3563,6 +4364,9 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 # uses it to (a) fall back to cold if a resume produced no reply, and (b) skip
                 # re-pinning when the resumed session id is unchanged.
                 "resume_session_id": session_id if use_resume else None,
+                # GH #91/#90 (R3): track the conversation token so _retire_resident revokes it on
+                # teardown (belt to the server's run-terminal revoke, mirroring the ephemeral path).
+                "run_token": conv_tok,
                 "hard_deadline": time.time() + HARD_CAP_MIN_SECS,
                 "last_size": 0, "last_progress_ts": time.time(),
                 "lines_offset": 0, "lines_buf": b"", "lines_seq": 1,
@@ -3579,6 +4383,19 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         serviced = r.get("serviced_seq", 0) if r else 0
         if c.get("last_turn_seq", 0) <= serviced:
             continue                                        # nothing newer than we've fed
+        desired_model = c.get("model")
+        if (r is not None
+                and _resident_runtime(r) == RUNTIME_CLAUDE
+                and desired_model is not None
+                and r.get("model") is not None
+                and desired_model != r.get("model")):
+            if not quiet:
+                print(f"[notifier] resident {r.get('alias')} model changed "
+                      f"{r.get('model')}→{desired_model} — recycling before feed (GH#88)")
+            _RESIDENT_RESUME_FAILED.add(conv_id)
+            _close_resident(api_base, r, reason="model_changed")
+            live_residents.pop(conv_id, None)
+            r = None
         if r is None:                                       # boot a resident for this conversation
             # 919050a5 (b): single-flight reap-prior. Before claiming a NEW resident lease, reap any
             # prior resident run for this agent whose pid is dead (a crash/turnover between POST-run
@@ -3617,7 +4434,8 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                      or {}).get("turns", [])
             resolved_through = max([t["seq"] for t in turns if t.get("role") == "agent"], default=0)
             serviced = max(serviced, resolved_through)
-            persona = _build_persona(api_base, c["agent_id"]) if cold else None   # warm --resume's it
+            persona = (_build_persona(api_base, c["agent_id"], lane="conversation")
+                       if cold else None)   # warm --resume already carries it in-session
             if cold and _format_history is not None:
                 # V1 history prefix (Vault #120): the warm session has no in-context history on a
                 # cold boot, so prepend the RESOLVED turns (seq ≤ resolved_through). WARM --resume
@@ -3650,27 +4468,51 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                     print(f"[notifier] resident skip {c.get('agent_alias')} — "
                           f"worktree isolation failed (won't run in shared checkout)")
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
-                           {"kind": "resident_failed", "release_lease": True})
+                           {"kind": "resident_failed", "release_lease": True,
+                            "lane": "conversation"})   # release the CONVERSATION lease we claimed
                 continue
             run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
+            # GH #91/#90 (R3): a resident is a CONVERSATION-lane embodiment. Mint the conversation
+            # token BEFORE spawn and pass it + conversation=True so its env carries the capability
+            # (the gated WORK endpoints 403 it — it may only dispatch). Unlike the one-shot ephemeral/
+            # Codex worker (one run per process, so token_id binds to that run for revoke-on-terminal),
+            # a resident is ONE process spanning MANY per-turn runs — so the token is PROCESS-scoped:
+            # stored in r["run_token"] and revoked by _retire_resident at teardown. Binding it to a
+            # per-turn run would revoke it after the first turn (each turn's run goes terminal). The
+            # per-turn run below is still stamped lane='conversation' — the wake_scan-critical fix.
+            conv_tok = None if dry_run else _mint_embodiment_token(
+                api_base, c["agent_id"], "conversation", "resident")
             sent, _, proc = spawn_resident(run_cwd,
                                            system_prompt=persona, log_path=log_path,
                                            resume_session_id=None if cold else session_id,
                                            alias=c.get("agent_alias"), model=c.get("model"),
                                            reasoning_effort=c.get("reasoning_effort"),
                                            runtime=c.get("model_runtime"),
+                                           run_token=conv_tok, conversation=True,
                                            dry_run=dry_run)
             if not sent or proc is None:
                 # ISS-61: keep the STABLE per-conversation worktree (reused on the next boot); it's
-                # torn down only when the conversation ends. Just release the lease.
+                # torn down only when the conversation ends. Revoke the just-minted token (no process
+                # to carry it) and release the CONVERSATION lease.
+                _revoke_or_defer(api_base, conv_tok)
                 _post_json(f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
-                           {"kind": "resident_failed", "release_lease": True})
+                           {"kind": "resident_failed", "release_lease": True,
+                            "lane": "conversation"})
                 continue
             r = {"runtime": RUNTIME_CLAUDE, "proc": proc,
                  "agent_id": c["agent_id"], "conversation_id": conv_id,
                  "alias": c.get("agent_alias"), "log_path": log_path,
+                 # GH#88: the model this resident was actually booted on (already resolved
+                 # server-side). service_residents recycles the resident when the candidate's
+                 # current model drifts from this — a same-runtime warm session keeps its boot
+                 # model in-context, so a mid-conversation Opus→other-Claude switch needs a cold
+                 # boundary to take effect.
+                 "model": c.get("model"),
                  "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
                  "session_id": session_id, "session_pinned": not cold, "cold": cold,
+                 # GH #91/#90 (R3): the process-scoped conversation token, revoked by
+                 # _retire_resident at teardown (see the mint comment above).
+                 "run_token": conv_tok,
                  "serviced_seq": serviced, "current_run_id": None, "run_id": None,
                  "awaiting_result": False, "turn_scan_offset": existing,
                  "lines_offset": existing, "lines_buf": b"", "lines_seq": 1,
@@ -3691,12 +4533,23 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # on a broken pipe, hit `continue` WITHOUT setting current_run_id — orphaning the row forever
         # (the exact stall Page hit) and re-POSTing a fresh orphan every tick. A broken pipe now just
         # skips this tick (the resident is reaped via proc.poll()/idle), creating no row.
-        if not _send_user_turn(r["proc"], nxt["content"]):  # pipe gone → reaped next tick, no orphan row
+        # GH #91/#90 (PR R5): every turn fed to the resident carries the stable one-line lane
+        # reminder (_wrap_conversation_turn) — the full CONVERSATION_LANE_DIRECTIVE rode in on the
+        # cold-boot persona, but a long-lived warm resident (and a resumed pre-merge session, which
+        # never saw the directive at all) answers many turns off that one boot, so the lane is
+        # re-asserted per turn. Wrapped at the send (not stored) so the reminder never leaks into
+        # conversation records.
+        if not _send_user_turn(r["proc"], _wrap_conversation_turn(nxt["content"])):  # pipe gone → reaped next tick, no orphan row
             continue
         run = _post_json(f"{api_base}/api/agents/{c['agent_id']}/runs",
                          {"wake_kind": "resident", "wake_event": "conversation_turn",
                           "log_path": str(r["log_path"]) if r.get("log_path") else None,
-                          "pid": getattr(r.get("proc"), "pid", None)})
+                          "pid": getattr(r.get("proc"), "pid", None),
+                          # GH #91/#90 (R3): stamp the conversation lane so wake_scan does not count
+                          # this warm resident as a WORK embodiment (which would suppress work wakes).
+                          # No token_id: the resident token is PROCESS-scoped (revoked at teardown),
+                          # not bound to a per-turn run — see the mint comment at boot.
+                          "lane": "conversation"})
         run_id = (run or {}).get("run_id")
         r["current_run_id"] = run_id
         r["run_id"] = run_id                                # _pump_one streams this turn to run_id
@@ -4267,8 +5120,28 @@ def cmd_notifier(args) -> None:
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
+    # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
+    # re-check fires ~_DAEMON_LIVENESS_INTERVAL later, not redundantly on iteration one.
+    last_liveness = time.monotonic()
     try:
         while not stop["flag"]:
+            # Issue #36: the daemon resolved (api_base, cid) ONCE at startup and never re-checks.
+            # When its container is later REPLACED (`orcha up` / `init --force`) or its orcha.json
+            # goes stale, it would poll a now-404 container forever — an orphan that still reads as
+            # a live `orcha notifier` in ps (the #36 postmortem found 4 daemons, 3 on dead
+            # containers). Re-run the SAME definitive probe the startup refusal uses, on a slow
+            # cadence, and self-terminate on a DEFINITIVE 'missing' (HTTP 404). A transient
+            # 'unreachable' (API mid-restart during `orcha up`) is tolerated — see _container_vanished.
+            now = time.monotonic()
+            if now - last_liveness >= _DAEMON_LIVENESS_INTERVAL:
+                last_liveness = now
+                if _container_vanished(api_base, cid):
+                    if not args.quiet:
+                        print(f"[notifier] container {cid} no longer exists at {api_base} (HTTP "
+                              f"404) — self-terminating this orphaned daemon (issue #36). The "
+                              f"container was likely replaced (orcha up / init) or "
+                              f".claude/orcha.json points at a previous stack.", file=sys.stderr)
+                    break
             try:
                 # Release leases of workers that finished since the last tick, BEFORE
                 # scanning, so a just-finished agent with fresh work is wakeable now.

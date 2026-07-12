@@ -39,7 +39,7 @@ Two ideas the UI must make legible:
 Design real components for each. These are the live entities:
 
 - **Agent** — `alias`, `role`, system prompt/persona, `kind` (human | ai), **status** (idle · working ·
-  needs_verification · blocked), **model** (Opus 4.8 / Sonnet 4.6 / Haiku 4.5), **wake-enabled** flag,
+  needs_verification · blocked), **model** (Opus 4.8 / Sonnet 5 / Haiku 4.5), **wake-enabled** flag,
   current task, **memory digest** ("where you left off": focus, recent decisions, open threads), and its
   history of **runs**.
 - **Task** — `title`, `description`, `definition_of_done`, **status** (ready · in_progress/working ·

@@ -107,7 +107,7 @@ async def test_retire_releases_in_progress_task_to_ready(client, container, make
 
 
 @pytest.mark.asyncio
-async def test_retired_agent_cannot_claim_next(client, container, make_agent, make_task):
+async def test_retired_agent_cannot_claim_next(client, container, make_agent, make_task, work_headers):
     """[P1 review fix] a retired agent must be ineligible to claim new work via /next."""
     human = await make_agent("Boss7", "human", kind="human")
     a = await make_agent("Done4Now", "eng")
@@ -116,11 +116,14 @@ async def test_retired_agent_cannot_claim_next(client, container, make_agent, ma
     ar = await client.post(f"/api/tasks/{t['id']}/assign",
                            json={"actor_agent_id": human["agent_id"], "agent_id": aid})
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
-    # before retirement the agent can claim
-    assert (await client.post(f"/api/agents/{aid}/next")).status_code == 200
+    # before retirement the agent can claim (a work token gets it past the GH #91/#90 lane gate)
+    assert (await client.post(f"/api/agents/{aid}/next",
+                              headers=await work_headers(aid))).status_code == 200
 
     await client.post(f"/api/agents/{aid}/retire", json={"actor_agent_id": human["agent_id"]})
-    r = await client.post(f"/api/agents/{aid}/next")
+    # a fresh work token still mints (mint doesn't check retirement), so the call reaches the REAL
+    # retirement rejection (409) rather than stopping at the token gate.
+    r = await client.post(f"/api/agents/{aid}/next", headers=await work_headers(aid))
     assert r.status_code == 409, r.text
     assert "retired" in r.text
 

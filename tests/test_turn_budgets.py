@@ -2,7 +2,7 @@
 blocks a claim. The counter still bumps on work (Orcha#22) and not on reads."""
 
 
-async def test_exhausted_budget_still_allows_claim(client, make_agent, make_task, db):
+async def test_exhausted_budget_still_allows_claim(client, make_agent, make_task, db, work_headers):
     """GH#39: an exhausted turn budget no longer 429s an agent off its own assigned+ready task."""
     human = await make_agent("op", "operator", kind="human")
     a = await make_agent("burned", "eng")
@@ -11,11 +11,12 @@ async def test_exhausted_budget_still_allows_claim(client, make_agent, make_task
                            json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
     db.execute("UPDATE agents SET turns_used=turn_budget WHERE id=%s", (a["agent_id"],))
-    r = await client.post(f"/api/agents/{a['agent_id']}/next")
+    r = await client.post(f"/api/agents/{a['agent_id']}/next",
+                          headers=await work_headers(a["agent_id"]))
     assert r.status_code == 200 and r.json()["task"] is not None, r.text
 
 
-async def test_budget_with_headroom_allows_claim(client, make_agent, make_task, db):
+async def test_budget_with_headroom_allows_claim(client, make_agent, make_task, db, work_headers):
     human = await make_agent("op", "operator", kind="human")
     a = await make_agent("fresh", "eng")
     t = await make_task("work", "done")
@@ -23,7 +24,8 @@ async def test_budget_with_headroom_allows_claim(client, make_agent, make_task, 
                            json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
     db.execute("UPDATE agents SET turns_used=0, turn_budget=10 WHERE id=%s", (a["agent_id"],))
-    r = await client.post(f"/api/agents/{a['agent_id']}/next")
+    r = await client.post(f"/api/agents/{a['agent_id']}/next",
+                          headers=await work_headers(a["agent_id"]))
     assert r.status_code == 200 and r.json()["task"] is not None
 
 

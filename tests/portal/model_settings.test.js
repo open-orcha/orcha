@@ -47,7 +47,7 @@ function makeNode(id) {
 const CATALOG = [
   { id: "anthropic", name: "Anthropic", available: true, models: [
     { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5" },
-    { id: "claude-sonnet-4-6", name: "Sonnet 4.6" },
+    { id: "claude-sonnet-5", name: "Sonnet 5" },
     { id: "claude-opus-4-8", name: "Opus 4.8" },
   ]},
   { id: "openai", name: "OpenAI", available: false, models: [] },
@@ -55,11 +55,11 @@ const CATALOG = [
 function modelsFixture() {
   return [
     { key: "onboarding", label: "Onboarding", purpose: "Drafts the roster.",
-      default_provider: "anthropic", default_model: "claude-sonnet-4-6",
+      default_provider: "anthropic", default_model: "claude-sonnet-5",
       provider: null, model: null, is_set: false },
     { key: "triage", label: "Wake eligibility", purpose: "Triages a wake.",
       default_provider: "anthropic", default_model: "claude-haiku-4-5-20251001",
-      provider: "anthropic", model: "claude-sonnet-4-6", is_set: true },
+      provider: "anthropic", model: "claude-sonnet-5", is_set: true },
     { key: "summarize", label: "Summarize", purpose: "A use-case the page never hardcoded.",
       default_provider: "anthropic", default_model: "claude-haiku-4-5-20251001",
       provider: null, model: null, is_set: false },
@@ -141,18 +141,18 @@ async function settle() { for (let i = 0; i < 8; i++) await tick(); }
     assert(S.modelsForProvider(CATALOG, "openai").length === 0, "modelsForProvider empty for stubbed provider");
 
     const ucUnset = { default_provider: "anthropic", default_model: "claude-haiku-4-5-20251001", is_set: false, provider: null, model: null };
-    const ucSet = { default_provider: "anthropic", default_model: "claude-haiku-4-5-20251001", is_set: true, provider: "anthropic", model: "claude-sonnet-4-6" };
+    const ucSet = { default_provider: "anthropic", default_model: "claude-haiku-4-5-20251001", is_set: true, provider: "anthropic", model: "claude-sonnet-5" };
 
     // currentSel: unset -> default; set -> the override
     assert(S.currentSel(ucUnset).model === "claude-haiku-4-5-20251001", "currentSel unset -> default model");
-    assert(S.currentSel(ucSet).model === "claude-sonnet-4-6", "currentSel set -> override model");
+    assert(S.currentSel(ucSet).model === "claude-sonnet-5", "currentSel set -> override model");
 
     // isOverride: default-valued selection is NOT an override; a different model IS
     assert(S.isOverride({ provider: "anthropic", model: "claude-haiku-4-5-20251001" }, ucUnset) === false, "isOverride false when equals default");
-    assert(S.isOverride({ provider: "anthropic", model: "claude-sonnet-4-6" }, ucUnset) === true, "isOverride true when differs from default");
+    assert(S.isOverride({ provider: "anthropic", model: "claude-sonnet-5" }, ucUnset) === true, "isOverride true when differs from default");
 
     // rowDirty: equal to persisted -> clean; differ -> dirty
-    assert(S.rowDirty({ provider: "anthropic", model: "claude-sonnet-4-6" }, ucSet) === false, "rowDirty false when equals persisted override");
+    assert(S.rowDirty({ provider: "anthropic", model: "claude-sonnet-5" }, ucSet) === false, "rowDirty false when equals persisted override");
     assert(S.rowDirty({ provider: "anthropic", model: "claude-opus-4-8" }, ucSet) === true, "rowDirty true when differs from persisted");
     // resetting a SET row to default is dirty (it will unset on save)
     assert(S.rowDirty({ provider: "anthropic", model: "claude-haiku-4-5-20251001" }, ucSet) === true, "rowDirty true when resetting a set row to default");
@@ -178,7 +178,7 @@ async function settle() { for (let i = 0; i < 8; i++) await tick(); }
     const html = reg.modelRows._html;
     assert(/Onboarding/.test(html) && /Wake eligibility/.test(html), "renders the registered use-case rows");
     assert(/Summarize/.test(html), "renders a 3rd use-case the page never hardcoded (extensibility DoD)");
-    assert(/default: claude-sonnet-4-6/.test(html), "shows the shipped-default chip");
+    assert(/default: claude-sonnet-5/.test(html), "shows the shipped-default chip");
     // triage is overridden in the fixture -> ● 'set to' state; onboarding unset -> ○ default
     assert(/uc-dot on/.test(html), "an overridden row shows the ● set-state dot");
     assert(/using shipped default/.test(html), "an unset row shows 'using shipped default'");

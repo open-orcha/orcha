@@ -186,48 +186,55 @@ async def test_claim_defaults_ephemeral_resident_explicit(client, make_agent):
 
 
 @pytest.mark.asyncio
-async def test_resident_lease_blocks_ephemeral_and_vice_versa(client, make_agent):
-    """E1 single-embodiment: a live RESIDENT lease blocks an ephemeral claim (with the
-    single-embodiment reason), and a live EPHEMERAL lease blocks a resident claim."""
+async def test_resident_and_work_leases_coexist_per_lane(client, make_agent):
+    """GH #91/#90: after the work/conversation lane split, a resident (CONVERSATION lane) and an
+    ephemeral work worker (WORK lane) hold INDEPENDENT lease slots and COEXIST — one lane's live
+    lease no longer blocks the other's claim. Single-flight is now enforced PER LANE, not across
+    the whole agent. (Cross-lane exclusion was the old single-embodiment model; the split is the
+    #91 fix so a resident conversation no longer blocks task work, and vice versa.)"""
     a = await make_agent("A")
     aid = a["agent_id"]
+    # resident claims the CONVERSATION lane
     assert (await client.post(f"/api/agents/{aid}/wake-claim",
                               json={"lease_ttl": 300, "lease_kind": "resident"})).json()["claimed"] is True
-    # an ephemeral wake can't spawn while the resident session holds the embodiment
+    # an ephemeral wake (WORK lane) claims SUCCESSFULLY alongside the resident — different lane
     r = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
-    assert r.json()["claimed"] is False
-    assert r.json()["lease_kind"] == "resident"
-    assert "single-embodiment" in r.json()["reason"]
+    assert r.json()["claimed"] is True
+    assert r.json()["lane"] == "work" and r.json()["lease_kind"] == "ephemeral"
 
-    # symmetric: a live ephemeral lease blocks a resident claim
-    b = await make_agent("B")
-    bid = b["agent_id"]
-    assert (await client.post(f"/api/agents/{bid}/wake-claim", json={"lease_ttl": 300})).json()["claimed"] is True
-    r = await client.post(f"/api/agents/{bid}/wake-claim", json={"lease_ttl": 300, "lease_kind": "resident"})
-    assert r.json()["claimed"] is False and r.json()["lease_kind"] == "ephemeral"
+    # ...but within a lane, single-flight still holds: a second WORK claim is refused.
+    r2 = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
+    assert r2.json()["claimed"] is False and r2.json()["lane"] == "work"
+    assert "single" in r2.json()["reason"]
+    # and a second CONVERSATION claim is refused by the resident already holding that lane.
+    r3 = await client.post(f"/api/agents/{aid}/wake-claim",
+                           json={"lease_ttl": 300, "lease_kind": "resident"})
+    assert r3.json()["claimed"] is False and r3.json()["lane"] == "conversation"
+    assert r3.json()["lease_kind"] == "resident"
 
 
 @pytest.mark.asyncio
 async def test_live_lease_claim_and_mutual_exclusion(client, make_agent):
-    """§3b: lease_kind='live' (an embedded-terminal embodiment) is a first-class single-flight
-    lease — it claims, and it excludes ephemeral/resident both ways (one embodiment per agent)."""
+    """§3b + GH #91/#90: lease_kind='live' (an embedded-terminal embodiment) is a WORK-lane lease —
+    it claims, and within the WORK lane it excludes ephemeral both ways (one work embodiment per
+    agent). It COEXISTS with a resident (CONVERSATION lane) after the lane split."""
     a = await make_agent("A")
     aid = a["agent_id"]
     r = await client.post(f"/api/agents/{aid}/wake-claim",
                           json={"lease_ttl": 300, "lease_kind": "live"})
-    assert r.json()["claimed"] is True and r.json()["lease_kind"] == "live"
-    # an ephemeral wake can't spawn while a live terminal holds the embodiment
+    assert r.json()["claimed"] is True and r.json()["lane"] == "work" and r.json()["lease_kind"] == "live"
+    # an ephemeral wake can't spawn while a live terminal holds the WORK embodiment (same lane)
     r = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
     assert r.json()["claimed"] is False and r.json()["lease_kind"] == "live"
-    assert "single-embodiment" in r.json()["reason"]
+    assert "single" in r.json()["reason"]
 
-    # symmetric: a live resident lease blocks a 'live' terminal claim
+    # coexistence: a resident (CONVERSATION lane) does NOT block a 'live' terminal (WORK lane) claim.
     b = await make_agent("B")
     bid = b["agent_id"]
     assert (await client.post(f"/api/agents/{bid}/wake-claim",
                               json={"lease_ttl": 300, "lease_kind": "resident"})).json()["claimed"] is True
     r = await client.post(f"/api/agents/{bid}/wake-claim", json={"lease_ttl": 300, "lease_kind": "live"})
-    assert r.json()["claimed"] is False and r.json()["lease_kind"] == "resident"
+    assert r.json()["claimed"] is True and r.json()["lane"] == "work" and r.json()["lease_kind"] == "live"
 
 
 @pytest.mark.asyncio
@@ -254,35 +261,40 @@ async def test_invalid_lease_kind_rejected(client, make_agent):
 
 
 @pytest.mark.asyncio
-async def test_resident_lease_suppresses_wake_scan_with_reason(client, container, make_agent, make_request):
-    """E1: wake-scan excludes an agent holding a live resident lease, and says why."""
+async def test_resident_lease_does_not_suppress_work_wake_scan(client, container, make_agent, make_request):
+    """GH #91/#90 (the core #91 fix): wake-scan governs the WORK lane only. A live resident holds
+    the CONVERSATION lane, so it NO LONGER suppresses a work wake — B still wakes to do the pending
+    task work while its resident conversation stays live. (Old behavior: a resident blocked every
+    ephemeral wake; that is exactly the pain #91 removes.)"""
     a = await make_agent("A")
     b = await make_agent("B")
     await make_request(a["agent_id"], "need input", target_alias="B")     # B has pending work
     await client.post(f"/api/agents/{b['agent_id']}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
     _, cand = await _scan(client, container["id"], b["agent_id"])
-    assert cand["lease_active"] is True
-    assert cand["lease_kind"] == "resident"
-    assert cand["should_wake"] is False
-    assert "resident session is live (single-embodiment)" in cand["reason"]
+    # the resident holds the conversation lane...
+    assert cand["conv_lease_active"] is True
+    # ...but the WORK lane is free, so the work wake is NOT suppressed.
+    assert cand["lease_active"] is False
+    assert cand["lease_kind"] is None
+    assert cand["should_wake"] is True
 
 
 @pytest.mark.asyncio
 async def test_wake_scan_hides_lease_kind_once_lease_expired(client, container, make_agent, make_request, db):
     """E1 review (P2): expiry is the crash/orphan recovery path and does NOT clear the row, so a
-    raw projection would surface a stale 'resident' embodiment after the lease lapsed. wake-scan
-    must report lease_kind=NULL (no embodiment) the moment the lease is observed expired —
-    consistent with lease_active=false / should_wake=true — or future resident orchestration
-    misreads a dead session as live."""
+    raw projection would surface a stale embodiment after the lease lapsed. wake-scan must report
+    lease_kind=NULL (no embodiment) the moment the WORK lease is observed expired — consistent with
+    lease_active=false / should_wake=true — or a dead session is misread as live. (Exercised on the
+    WORK lane, which is what wake-scan's lease_kind/lease_active surface after the GH #91/#90 split.)"""
     a = await make_agent("A")
     b = await make_agent("B")
     await make_request(a["agent_id"], "need input", target_alias="B")   # B has pending work
     await client.post(f"/api/agents/{b['agent_id']}/wake-claim",
-                      json={"lease_ttl": 300, "lease_kind": "resident"})
-    # While live: scan exposes the resident embodiment and suppresses the wake.
+                      json={"lease_ttl": 300})                          # ephemeral -> WORK lane
+    # While live: scan exposes the work embodiment and suppresses the wake.
     _, cand = await _scan(client, container["id"], b["agent_id"])
-    assert cand["lease_active"] is True and cand["lease_kind"] == "resident"
+    assert cand["lease_active"] is True and cand["lease_kind"] == "ephemeral"
     # Force the lease into the past (crash-safe TTL expiry, row left intact — no release).
     db.execute("UPDATE agent_wake_state SET wake_lease_until = now() - interval '1 second' "
                "WHERE agent_id = %s", (b["agent_id"],))
@@ -297,52 +309,62 @@ async def test_wake_scan_hides_lease_kind_once_lease_expired(client, container, 
 
 @pytest.mark.asyncio
 async def test_release_clears_lease_kind(client, make_agent, db):
-    """E1: releasing the lease (wake-ack release_lease) clears the embodiment label to NULL —
-    a released agent shows no embodiment, not a stale kind."""
+    """E1 + GH #91/#90: releasing the CONVERSATION lease (wake-ack release_lease, lane=conversation)
+    clears the resident embodiment label to NULL — a released agent shows no embodiment, not a stale
+    kind."""
     a = await make_agent("A")
     aid = a["agent_id"]
     await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300, "lease_kind": "resident"})
-    assert db.execute("SELECT lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]["lease_kind"] == "resident"
-    ack = await client.post(f"/api/agents/{aid}/wake-ack", json={"kind": "resident", "release_lease": True})
+    assert db.execute("SELECT conv_lease_kind FROM agent_wake_state WHERE agent_id=%s",
+                      (aid,))[0]["conv_lease_kind"] == "resident"
+    ack = await client.post(f"/api/agents/{aid}/wake-ack",
+                            json={"kind": "resident", "release_lease": True, "lane": "conversation"})
     assert ack.status_code == 200
-    row = db.execute("SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["wake_lease_until"] is None and row["lease_kind"] is None
+    row = db.execute("SELECT conv_lease_until, conv_lease_kind FROM agent_wake_state WHERE agent_id=%s",
+                     (aid,))[0]
+    assert row["conv_lease_until"] is None and row["conv_lease_kind"] is None
 
 
-# ---------- ISS-69(b): terminal-preempts-an-idle-resident yield request ----------
+# ---------- GH #91/#90: embodiments coexist per-lane; the ISS-69(b) preempt path is now inert ----------
+# The old "live terminal preempts an idle resident via a yield request" flow (ISS-69(b)) is gone:
+# a resident is a CONVERSATION-lane embodiment and a live terminal is a WORK-lane one, so they hold
+# INDEPENDENT lease slots and COEXIST — a live/ephemeral WORK claim never blocks on a resident, so no
+# yield hand-off is needed. The preempt columns + branch are kept-but-inert (Open Q3): the branch is
+# gated `lane=='work' and held_kind=='resident'`, and a resident never sits in the WORK lane, so it
+# cannot fire. These tests pin the new coexistence contract and that preempt stays inert cross-lane;
+# within a lane, single-flight (and the no-yield-for-non-resident refusal) still holds.
 
 async def _claim(client, aid, **body):
     return (await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300, **body})).json()
 
 
 @pytest.mark.asyncio
-async def test_preempt_records_yield_request_against_idle_resident(client, make_agent, db):
-    """A live-terminal claim with preempt=1, blocked by a RESIDENT, does NOT just refuse: it records
-    a yield request on the held row (reason 'yield_pending') so the daemon can hand off the idle
-    resident. The lease is NOT taken here — single-flight still holds until the resident releases."""
+async def test_live_claim_coexists_with_resident_no_yield(client, make_agent, db):
+    """A live-terminal (WORK lane) claim while a resident holds the CONVERSATION lane now SUCCEEDS —
+    the two lanes coexist, so preempt=True records NO yield request (the cross-lane preempt path is
+    inert). The resident keeps its conversation lease untouched."""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
     r = await _claim(client, aid, lease_kind="live", preempt=True)
-    assert r["claimed"] is False
-    assert r["reason"] == "yield_pending"
-    assert r["preempt_requested"] is True
-    assert r["lease_kind"] == "resident"                      # holder unchanged (no steal)
-    row = db.execute("SELECT lease_kind, preempt_requested_at, preempt_for "
+    assert r["claimed"] is True                               # coexists — not blocked, not a yield
+    assert r["lane"] == "work" and r["lease_kind"] == "live"
+    assert r.get("reason") != "yield_pending"
+    row = db.execute("SELECT conv_lease_kind, preempt_requested_at, preempt_for, conv_preempt_requested_at "
                      "FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["lease_kind"] == "resident"                    # resident STILL holds the lease
-    assert row["preempt_requested_at"] is not None            # ...but a yield is now requested
-    assert row["preempt_for"] == "live"
+    assert row["conv_lease_kind"] == "resident"              # resident lease intact
+    assert row["preempt_requested_at"] is None and row["preempt_for"] is None    # WORK lane: no yield
+    assert row["conv_preempt_requested_at"] is None          # CONVERSATION lane: no yield
 
 
 @pytest.mark.asyncio
 async def test_preempt_has_no_effect_on_ephemeral_holder(client, make_agent, db):
-    """Only a resident yields. An ephemeral wake worker is doing task work — preempt must NOT flag it;
-    the terminal stays a hard refusal (single-embodiment), no yield request recorded."""
+    """Within the WORK lane single-flight still holds: an ephemeral work worker blocks a live claim
+    (same lane), and preempt must NOT flag it — the terminal stays a hard refusal, no yield."""
     a = await make_agent("A")
     aid = a["agent_id"]
-    assert (await _claim(client, aid))["claimed"] is True     # ephemeral (default)
-    r = await _claim(client, aid, lease_kind="live", preempt=True)
+    assert (await _claim(client, aid))["claimed"] is True     # ephemeral (default) -> WORK lane
+    r = await _claim(client, aid, lease_kind="live", preempt=True)   # live -> WORK lane, same slot
     assert r["claimed"] is False
     assert r["reason"] != "yield_pending" and "single" in r["reason"]
     row = db.execute("SELECT preempt_requested_at FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
@@ -350,25 +372,26 @@ async def test_preempt_has_no_effect_on_ephemeral_holder(client, make_agent, db)
 
 
 @pytest.mark.asyncio
-async def test_ephemeral_claim_with_preempt_cannot_evict_resident(client, make_agent, db):
-    """[review blocking] ISS-69(b) is scoped to the HUMAN terminal 'Pair anyway' path. An autonomous
-    EPHEMERAL wake that sets preempt=true while a resident holds the lease must NOT yield the warm
-    resident — it gets the normal single-embodiment denial, with NO yield request recorded. The
-    preempt branch is gated on the REQUESTING kind being 'live', not just on preempt=true."""
+async def test_ephemeral_claim_coexists_with_resident(client, make_agent, db):
+    """An autonomous EPHEMERAL wake (WORK lane) claims SUCCESSFULLY alongside a resident
+    (CONVERSATION lane) — different slots, so no eviction and NO yield request, with or without the
+    preempt flag (which is inert cross-lane)."""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
     r = await _claim(client, aid, lease_kind="ephemeral", preempt=True)   # ephemeral, NOT live
-    assert r["claimed"] is False
-    assert r["reason"] != "yield_pending" and "single-embodiment" in r["reason"]
+    assert r["claimed"] is True and r["lane"] == "work"
     assert r.get("preempt_requested") is not True
-    row = db.execute("SELECT preempt_requested_at, preempt_for FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["preempt_requested_at"] is None and row["preempt_for"] is None   # resident not flagged to yield
+    row = db.execute("SELECT conv_preempt_requested_at, conv_preempt_for, preempt_requested_at "
+                     "FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
+    assert row["conv_preempt_requested_at"] is None and row["conv_preempt_for"] is None  # resident not flagged
+    assert row["preempt_requested_at"] is None
 
 
 @pytest.mark.asyncio
 async def test_preempt_has_no_effect_on_another_live_terminal(client, make_agent, db):
-    """A second live terminal does not preempt the first — two humans don't auto-evict each other."""
+    """A second live terminal does not preempt the first — two humans (both WORK lane) don't
+    auto-evict each other; same-lane single-flight refuses the second with no yield."""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="live"))["claimed"] is True
@@ -379,63 +402,21 @@ async def test_preempt_has_no_effect_on_another_live_terminal(client, make_agent
 
 
 @pytest.mark.asyncio
-async def test_no_preempt_flag_without_the_flag(client, make_agent, db):
-    """Default (preempt omitted/false): a resident-blocked claim is the unchanged single-embodiment
-    refusal — no yield request. Mutation guard: the flag must be OPT-IN."""
+async def test_wake_renew_surfaces_no_preempt_after_lane_split(client, make_agent):
+    """wake-renew still returns the preempt_requested field on each heartbeat, but after the lane
+    split a resident (conversation) and a work claim coexist, so no cross-lane yield is ever recorded
+    — the field stays False. (Kept-but-inert per Open Q3.)"""
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    r = await _claim(client, aid, lease_kind="live")          # no preempt
-    assert r["claimed"] is False
-    assert r["reason"] != "yield_pending" and r.get("preempt_requested") is not True
-    row = db.execute("SELECT preempt_requested_at FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["preempt_requested_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_wake_renew_surfaces_preempt_requested(client, make_agent):
-    """The daemon reads the yield request back on the heartbeat it already sends each tick:
-    wake-renew returns preempt_requested True once a yield is pending, False otherwise."""
-    a = await make_agent("A")
-    aid = a["agent_id"]
-    assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    # before any preempt: heartbeat says no yield pending
-    r0 = await client.post(f"/api/agents/{aid}/wake-renew", json={"lease_ttl": 300})
+    r0 = await client.post(f"/api/agents/{aid}/wake-renew",
+                           json={"lease_ttl": 300, "lane": "conversation"})
     assert r0.json()["renewed"] is True and r0.json()["preempt_requested"] is False
-    # a terminal preempts → heartbeat now flags it
-    assert (await _claim(client, aid, lease_kind="live", preempt=True))["reason"] == "yield_pending"
-    r1 = await client.post(f"/api/agents/{aid}/wake-renew", json={"lease_ttl": 300})
-    assert r1.json()["renewed"] is True and r1.json()["preempt_requested"] is True
-
-
-@pytest.mark.asyncio
-async def test_release_clears_preempt_flag(client, make_agent, db):
-    """When the idle resident yields (wake-ack release), the pending yield request is cleared — the
-    next embodiment never inherits a stale flag."""
-    a = await make_agent("A")
-    aid = a["agent_id"]
-    assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    assert (await _claim(client, aid, lease_kind="live", preempt=True))["reason"] == "yield_pending"
-    await client.post(f"/api/agents/{aid}/wake-ack", json={"kind": "resident_preempted", "release_lease": True})
-    row = db.execute("SELECT wake_lease_until, lease_kind, preempt_requested_at, preempt_for "
-                     "FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["wake_lease_until"] is None and row["lease_kind"] is None
-    assert row["preempt_requested_at"] is None and row["preempt_for"] is None
-
-
-@pytest.mark.asyncio
-async def test_fresh_claim_clears_stale_preempt_flag(client, make_agent, db):
-    """After the resident yields and the terminal claims 'live', the new holder's row carries NO
-    stale yield request (a fresh claim clears it)."""
-    a = await make_agent("A")
-    aid = a["agent_id"]
-    assert (await _claim(client, aid, lease_kind="resident"))["claimed"] is True
-    assert (await _claim(client, aid, lease_kind="live", preempt=True))["reason"] == "yield_pending"
-    # resident yields (release), then the terminal wins the lease
-    await client.post(f"/api/agents/{aid}/wake-ack", json={"kind": "resident_preempted", "release_lease": True})
-    assert (await _claim(client, aid, lease_kind="live"))["claimed"] is True
-    row = db.execute("SELECT lease_kind, preempt_requested_at FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
-    assert row["lease_kind"] == "live" and row["preempt_requested_at"] is None
+    # a live terminal claims the WORK lane (coexists) — no yield is recorded against the resident
+    assert (await _claim(client, aid, lease_kind="live", preempt=True))["claimed"] is True
+    r1 = await client.post(f"/api/agents/{aid}/wake-renew",
+                           json={"lease_ttl": 300, "lane": "conversation"})
+    assert r1.json()["renewed"] is True and r1.json()["preempt_requested"] is False
 
 
 # ---------- the global kill-switch ----------
@@ -641,6 +622,51 @@ def test_tick_spawns_when_claim_won(monkeypatch):
     assert w["run_id"] == "RUN-1" and w["log_path"] is not None  # A2: run tracked for /finish
 
 
+def test_taskless_ephemeral_wake_uses_work_lane(monkeypatch):
+    """GH #91/#90 PR R5: wake_scan's pending count is a WORK cursor count, so a taskless
+    scan-driven ephemeral (info request, nudge, clock wake) must still claim and ack the WORK lane.
+
+    The old resolver sent this shape to the CONVERSATION lane; its ack advanced conv_delivered_ts
+    while delivered_ts stayed stale, so the same event respawned a no-op worker forever."""
+    cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
+            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
+            "latest_event": "request_answered", "max_event_ts": 5.0, "headless_flags": None}
+    monkeypatch.setattr(notifier, "_get_json",
+                        lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
+    posts = []
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        if "wake-claim" in url:
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "RUN-1"}
+        return {}
+
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    spawned = []
+    monkeypatch.setattr(
+        notifier, "spawn_headless",
+        lambda *a, **k: spawned.append(k) or (True, "cmd", FakeProc(pid=7)))
+    live = {}
+
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0,
+                  quiet=True, live_workers=live)
+
+    claim = next(b for u, b in posts if "wake-claim" in u)
+    run = next(b for u, b in posts if u.endswith("/runs"))
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert claim["lane"] == "work"
+    assert run["lane"] == "work"
+    assert ack["lane"] == "work" and ack["delivered_ts"] == 5.0
+    assert live[cand["agent_id"]]["lane"] == "work"
+    assert spawned[0]["conversation"] is False
+
+
 def test_tick_isolates_task_message_wake_in_worktree(monkeypatch):
     """PR #132 review [P1]: a task_message wake is actionable (ISS-55 — worker reads the thread
     and may edit code, e.g. 'rebase onto main'). With no auto-start task it must STILL provision
@@ -836,8 +862,37 @@ def test_reap_keeps_lease_for_live_worker(monkeypatch):
     # the only post is a lease renewal (no release/finish for a live, progressing worker)
     renew = [(u, b) for u, b in posts if u.endswith("/wake-renew")]
     assert renew == [("http://x/api/agents/agent-X/wake-renew",
-                      {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS})]
+                      {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS, "lane": "work"})]
     assert not [u for u, _ in posts if u.endswith("/wake-ack") or u.endswith("/finish")]
+
+
+def test_reap_uses_tracked_worker_lane_for_renew_and_release(monkeypatch):
+    """GH #91/#90 PR R5: reap_workers must operate on the lane stamped on the tracked worker.
+
+    This covers both paths Informer flagged: the live-worker renew and the terminal release. Before
+    the fix both hardcoded lane='work', which would leave a conversation-lane worker's lease wedged.
+    """
+    posts = []
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)))
+    live = {"agent-X": {"proc": FakeProc(exited=False), "hard_deadline": time.time() + 100,
+                         "last_size": 0, "last_progress_ts": time.time(),
+                         "run_id": None, "log_path": None, "worktree": None,
+                         "lane": "conversation"}}
+
+    notifier.reap_workers("http://x", live, quiet=True)
+
+    assert posts == [("http://x/api/agents/agent-X/wake-renew",
+                      {"lease_ttl": notifier.WAKE_LEASE_TTL_SECS, "lane": "conversation"})]
+
+    posts.clear()
+    live["agent-X"]["proc"].returncode = 0
+    notifier.reap_workers("http://x", live, quiet=True)
+
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "released"
+    assert ack["release_lease"] is True
+    assert ack["lane"] == "conversation"
+    assert live == {}
 
 
 # ---------- FT-ENGINE: workers observable (A1/ISS-17) + watchdog (ISS-15) ----------
@@ -1239,6 +1294,115 @@ def test_worker_is_live_handles_no_id_tool_shape(tmp_path):
     assert notifier._worker_is_live(str(_resolved_tool_log_no_id(tmp_path))) is False
 
 
+def test_worker_is_live_codex_runtime(tmp_path):
+    """GH#61 unit: with runtime="codex", _worker_is_live reads the `codex exec --json` schema, not
+    Claude stream-json. It is True for an in-flight command (item.started with no item.completed),
+    the legacy `*_begin`/`*_end` shape with an unmatched begin, and a rate-limit/backoff tail; it is
+    False once every command completed, for an idle agent_message, and for opaque/missing logs."""
+    def _log(name, text):
+        p = tmp_path / name
+        p.write_text(text)
+        return str(p)
+
+    # in-flight command (modern item.* schema) → live
+    inflight = _log("ci.log",
+        '{"type":"thread.started","thread_id":"t1"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n')
+    assert notifier._worker_is_live(inflight, runtime="codex") is True
+    # the same in-flight log read under the (default) CLAUDE schema finds no signal → False, proving
+    # the dispatch is what flips the verdict.
+    assert notifier._worker_is_live(inflight) is False
+
+    # legacy nested-msg begin with no matching end → live
+    begin = _log("cb.log",
+        '{"msg":{"type":"exec_command_begin","call_id":"c1","command":["xcodebuild","test"]}}\n')
+    assert notifier._worker_is_live(begin, runtime="codex") is True
+
+    # rate-limit / backoff is the last signal → live
+    rl = _log("crl.log",
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"error","msg":{"type":"stream_error","message":"429 Too Many Requests, retrying"}}\n')
+    assert notifier._worker_is_live(rl, runtime="codex") is True
+
+    # every command completed, tail ends idle → NOT live (the dead-Codex teeth case)
+    done = _log("cd.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n')
+    assert notifier._worker_is_live(done, runtime="codex") is False
+
+    # a plain error WITHOUT retry/429 semantics is a dead worker, not a sleeping one
+    err = _log("ce.log",
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"error","msg":{"type":"fatal","message":"unexpected EOF"}}\n')
+    assert notifier._worker_is_live(err, runtime="codex") is False
+
+    # PR #80 review (mahimagupta) — finding 1: Codex emits repeated `item.updated` (in_progress)
+    # events for ONE command, each read as a "start" by the status fallback. A FINISHED command
+    # that issued such an update must still read NOT live — the id-dedup must stop start_count from
+    # outrunning end_count. (Pre-fix this returned True via `start_count > end_count`, defanging the
+    # dead-Codex teeth — the bare `done` case above missed it because it had no `item.updated` line.)
+    updated_done = _log("cu.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+    assert notifier._worker_is_live(updated_done, runtime="codex") is False
+    # …but the SAME repeated-update stream with no terminal event is still in flight → live (the
+    # id-pairing signal, not the count, carries it).
+    updated_inflight = _log("cui.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n')
+    assert notifier._worker_is_live(updated_inflight, runtime="codex") is True
+
+    # finding 2: a *successful* command stamped with a historical `retries` count is NOT a backoff
+    # in progress — it finished. A bare `retries` field must no longer read as a live 429.
+    retries_done = _log("crd.log",
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"},'
+        '"msg":{"type":"agent_message","retries":2}}\n')
+    assert notifier._worker_is_live(retries_done, runtime="codex") is False
+    # an explicit `retry_after` backoff IS a live, mid-429 worker.
+    retry_after = _log("cra.log",
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"stream_error","msg":{"retry_after":12}}\n')
+    assert notifier._worker_is_live(retry_after, runtime="codex") is True
+
+    # PR #80 review round 2 (Code Reviewer) — terminal turn events. In the official
+    # `codex exec --json` shape a command `item.started` is closed by an agent-message
+    # `item.completed` (a DIFFERENT id) and then `turn.completed`, so the command id would otherwise
+    # stay 'in flight' and read the FINISHED worker as live → wrongly checkpoint-respawned. The turn
+    # boundary must clear it: an unpaired command start followed by `turn.completed` is NOT live.
+    turn_done = _log("ctd.log",
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n'
+        '{"type":"turn.completed"}\n')
+    assert notifier._worker_is_live(turn_done, runtime="codex") is False
+    # a failed turn is just as terminal.
+    turn_failed = _log("ctf.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"turn.failed"}\n')
+    assert notifier._worker_is_live(turn_failed, runtime="codex") is False
+    # legacy nested-msg spelling of the turn boundary is honored too.
+    turn_done_legacy = _log("ctl.log",
+        '{"msg":{"type":"exec_command_begin","call_id":"c1","command":["sleep","1"]}}\n'
+        '{"msg":{"type":"task_complete"}}\n')
+    assert notifier._worker_is_live(turn_done_legacy, runtime="codex") is False
+    # but a command that starts in a NEW turn AFTER the boundary is genuinely in flight → live (the
+    # turn-end reset must not mask a fresh, still-open command).
+    turn_then_inflight = _log("cti.log",
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"turn.completed"}\n'
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i2","type":"command_execution","status":"in_progress"}}\n')
+    assert notifier._worker_is_live(turn_then_inflight, runtime="codex") is True
+
+    blank = _log("cz.log", "xxxx\n{bad json\n")
+    assert notifier._worker_is_live(blank, runtime="codex") is False
+    assert notifier._worker_is_live(None, runtime="codex") is False
+
+
 def test_no_id_inflight_tool_worker_not_stall_killed(monkeypatch, tmp_path):
     """PR #75 review (P2) regression: a worker whose log ends on a NO-ID in-flight tool_use is
     ALIVE — it must NOT be SIGTERM'd / marked worker_stalled_killed (the precise failure the
@@ -1442,6 +1606,190 @@ def test_progressing_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_pa
     assert ack["kind"] == "worker_checkpoint_respawn" and ack["release_lease"] is False
 
 
+def test_checkpoint_respawn_uses_servers_task_id_not_stale_ctx(monkeypatch, tmp_path):
+    """GH #126: `ctx["task_id"]` is a snapshot captured at ORIGINAL spawn time — if the agent's live
+    run has since been reassigned to a different task server-side (e.g. the task-boundary guard in
+    _collect_directed_messages left the run on a NEW task while ctx still says the old one, or an
+    operator reassigned it), the respawned worker must carry the SERVER's current task_id forward,
+    not the stale ctx snapshot. `/runs` is newest-first across BOTH lanes, so the stub's first row
+    is a NEWER conversation-lane run (different run_id, task_id None) — the just-finished run
+    ("R1", matching `w["run_id"]`) is second in the page. The new /runs POST must stamp "T2" (R1's
+    task_id), proving the match is by run_id and not by list position."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_get_json",
+                        lambda url, **k: {"runs": [{"run_id": "R-CONV", "task_id": None},
+                                                    {"run_id": "R1", "task_id": "T2"}]}
+                        if "/runs?limit=20" in url else None)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    def _spawn(cwd, prompt, flags, dry_run, **kw):
+        spawned.append({"cwd": cwd})
+        return True, "repr", newproc
+    monkeypatch.setattr(notifier, "spawn_headless", _spawn)
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1", run_id "R1"
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned                                         # respawn actually happened
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["task_id"] == "T2"                      # SERVER's task_id wins, not stale ctx "T1"
+
+
+def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_fetch_fails(monkeypatch, tmp_path):
+    """GH #126 fail-open: if the server task_id re-fetch itself fails (e.g. API unreachable), the
+    respawn must still proceed using ctx.get("task_id") rather than silently dropping attribution
+    (task_id=None) — a failed GET is not the same as a real mismatch."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: None)   # fetch fails
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "repr", newproc))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1"
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["task_id"] == "T1"                      # fail-open to ctx, not dropped to None
+
+
+def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_run_not_in_page(monkeypatch, tmp_path):
+    """GH #126 fail-open (not-found case): the server responds, but the just-finished run_id
+    ("R1") isn't in the returned page (e.g. it's an older run pushed off a 20-row window by newer
+    runs in other lanes) — must fall back to ctx.get("task_id"), not silently null out the
+    attribution."""
+    posts, sigs = [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_get_json",
+                        lambda url, **k: {"runs": [{"run_id": "R-OTHER", "task_id": "T9"}]}
+                        if "/runs?limit=20" in url else None)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "repr", newproc))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"still working"}]}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _respawn_entry(proc, log)                      # respawn_ctx["task_id"] == "T1", run_id "R1"
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["task_id"] == "T1"                      # fail-open to ctx, not T9 (unrelated run)
+
+
+def _codex_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
+    """A `_respawn_entry` over the CODEX runtime: past the soft cap, last_size=0 + a non-empty log
+    so this tick sees growth (`stalled=False`), respawn_ctx tagged model_runtime='codex'."""
+    entry = _respawn_entry(proc, log, respawns=respawns, cap=cap)
+    entry["agent-X"]["respawn_ctx"]["model_runtime"] = "codex"
+    return entry
+
+
+def test_finished_codex_worker_past_cap_is_not_respawned(monkeypatch, tmp_path):
+    """PR #80 review round 2 (GH#61): a FINISHED Codex worker must NOT be checkpoint-respawned.
+    When a Codex turn completes, the terminal `turn.completed` line is fresh log GROWTH, so
+    reap_workers reads `stalled=False`. `_result_status` only knew Claude's `result` event, so the
+    finished worker skipped the hold-off branch and fell through to the checkpoint branch
+    (`respawnable and (not stalled or ...)`) — respawning an already-finished worker. The
+    runtime-aware `_terminal_status` now routes the official over-cap Codex terminal tail
+    (`item.started` cmd + agent-message `item.completed` + `turn.completed`) into the terminal
+    branch: hold off (record result_seen_ts, let it exit cleanly), NO respawn, lease NOT released."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
+
+    log = tmp_path / "w.log"
+    # the official `codex exec --json` terminal shape: a command start is closed by an
+    # agent-message item.completed (a DIFFERENT id), then turn.completed ends the turn.
+    log.write_text(
+        '{"type":"item.started","item":{"id":"cmd-1","type":"command_execution"}}\n'
+        '{"type":"item.completed","item":{"id":"msg-1","type":"agent_message"}}\n'
+        '{"type":"turn.completed"}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _codex_respawn_entry(proc, log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned == []                                         # finished → NOT respawned
+    assert sigs == []                                            # not killed either — let it exit
+    assert not any(u.endswith("/runs/R1/finish") for u, _ in posts)   # run not finished yet
+    assert "agent-X" in live and live["agent-X"]["proc"] is proc      # still tracked, lease held
+    assert live["agent-X"].get("result_seen_ts") is not None          # terminal branch: holding off
+
+
+def test_inflight_codex_worker_past_cap_is_still_respawned(monkeypatch, tmp_path):
+    """Contrast/guard for the fix above: a Codex worker still IN A TURN past the cap (an
+    `item.started` with no terminal `turn.completed`) is genuinely progressing, so `_terminal_status`
+    returns None and it MUST still be checkpoint-respawned — the round-2 fix must not over-fire and
+    strand live Codex workers on the terminal branch."""
+    posts, sigs, spawned = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(k.get("runtime")) or (True, "r", newproc))
+
+    log = tmp_path / "w.log"
+    log.write_text('{"type":"item.started","item":{"id":"cmd-1","type":"command_execution"}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _codex_respawn_entry(proc, log)
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert sigs and sigs[0] == (4321, signal.SIGTERM)            # graceful checkpoint of the old worker
+    assert spawned == ["codex"]                                  # respawned ON the codex runtime
+    runpost = next(b for u, b in posts if u.endswith("/runs"))
+    assert runpost["wake_event"] == "checkpoint_respawn"
+    assert live["agent-X"]["proc"] is newproc and live["agent-X"]["respawns"] == 1
+
+
 def test_checkpoint_respawn_budget_exhausted_is_reaped_as_runaway(monkeypatch, tmp_path):
     """ISS-76 runaway backstop: a task still progressing after HARD_CAP_RESPAWN_MAX rollovers is
     no longer respawned — it's gracefully reaped as a timeout kill and its lease released."""
@@ -1518,19 +1866,21 @@ def test_checkpoint_respawn_is_the_mechanism(monkeypatch, tmp_path):
     assert ack["kind"] == "worker_timeout_killed"
 
 
-def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0):
+def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0, model_runtime="claude"):
     """A live_workers entry for a worker PAST the soft cap and STALLED — the log is frozen
     (last_size already equals the file's current size, so no growth this tick) and last progress
     was 200s ago — with the ISS-76 respawn context. Whether it is live/dead is decided by the log
-    CONTENT (an unanswered tool_use → live)."""
+    CONTENT (an unanswered tool_use → live). GH#61: `model_runtime` selects which liveness schema
+    the watchdog applies — "claude" stream-json vs "codex" `codex exec --json`."""
+    model = "gpt-5-codex" if model_runtime == "codex" else "claude-fable-5"
     return {"agent-X": {"proc": proc, "hard_deadline": time.time() - 1,   # PAST the soft cap
                         "last_size": log.stat().st_size,                  # no growth this tick …
                         "last_progress_ts": time.time() - 200,            # … and frozen 200s → stalled
                         "run_id": "R1", "log_path": str(log), "worktree": "/wt", "branch": "b",
                         "base_cwd": None, "cap": cap, "respawns": respawns,
                         "respawn_ctx": {"prompt": "drain + continue", "flags": None,
-                                        "alias": "Forge", "model": "claude-fable-5",
-                                        "model_runtime": "claude",
+                                        "alias": "Forge", "model": model,
+                                        "model_runtime": model_runtime,
                                         "task_id": "T1", "event": "task_message"}}}
 
 
@@ -1599,6 +1949,79 @@ def test_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_p
     assert ack["kind"] == "worker_timeout_killed" and ack["release_lease"] is True
     diag = json.loads(next(b for u, b in posts if u.endswith("/runs/R1/finish"))["kill_reason"])
     assert diag["over_cap"] is True and diag["worker_is_live"] is False
+
+
+def test_codex_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_path):
+    """GH#61: the past-cap stalled-but-alive checkpoint protection must also fire for CODEX workers.
+    A Codex worker launches via `codex exec --json`, whose event schema carries NONE of the Claude
+    stream-json liveness signals — so a runtime-blind probe always read it as dead and hard-killed
+    an alive-but-silent Codex worker past the cap (the #49 failure mode, left unfixed for Codex).
+    With a runtime-aware probe an unterminated `item.started` (a long external command in flight)
+    reads as LIVE and the worker is checkpoint-respawned exactly like its Claude sibling."""
+    posts, sigs, torn = [], [], []
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"run_id": "R2"} if url.endswith("/runs") else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
+    newproc = FakeProc(pid=9999, exited=False)
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (True, "repr", newproc))
+
+    log = tmp_path / "w.log"
+    # a Codex command started but not yet completed (a long external job whose item.completed lands
+    # only when it returns) → _worker_is_live True under the codex schema even though the log froze.
+    log.write_text(
+        '{"type":"thread.started","thread_id":"t-abc"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n')
+    proc = FakeProc(pid=4321, exited=False)
+    live = _stalled_respawn_entry(proc, log, model_runtime="codex")
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    # graceful checkpoint, NOT a hard kill+teardown
+    assert sigs and sigs[0] == (4321, signal.SIGTERM)
+    assert torn == []
+    fin = next(b for u, b in posts if u.endswith("/runs/R1/finish"))
+    assert fin["status"] == "exited"                            # work preserved, not `killed`
+    w = live["agent-X"]
+    assert w["proc"] is newproc and w["respawns"] == 1 and w["run_id"] == "R2"
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "worker_checkpoint_respawn" and ack["release_lease"] is False
+
+
+def test_codex_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_path):
+    """GH#61 teeth: the Codex exemption is liveness-gated like the Claude one. A Codex worker whose
+    last command already COMPLETED (no in-flight item) is idle/done, not alive — it must still be
+    hard-killed past the cap, and the kill diagnostic must record the codex runtime + a False
+    liveness verdict (proving the runtime-aware probe ran and saw no in-flight work)."""
+    posts, sigs, spawned = [], [], []
+    monkeypatch.setattr(notifier, "_post_json", lambda u, b, **k: posts.append((u, b)))
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
+
+    log = tmp_path / "w.log"
+    # the command STARTED then COMPLETED — nothing in flight → not live.
+    log.write_text(
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+    live = _stalled_respawn_entry(FakeProc(pid=4321, exited=False), log, model_runtime="codex")
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert spawned == []                                        # NOT respawned — not live
+    assert sigs and live == {}                                  # hard-killed + released
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "worker_timeout_killed" and ack["release_lease"] is True
+    diag = json.loads(next(b for u, b in posts if u.endswith("/runs/R1/finish"))["kill_reason"])
+    assert diag["over_cap"] is True and diag["worker_is_live"] is False and diag["runtime"] == "codex"
 
 
 def test_watchdog_kill_escalates_to_sigkill_when_term_ignored(monkeypatch, tmp_path):

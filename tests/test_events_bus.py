@@ -243,7 +243,7 @@ async def test_close_publishes_request_closed_to_target(client, make_agent, make
     assert last is not None and last["event"] == "request_closed"
 
 
-async def test_verify_approve_publishes_task_verified(client, make_agent, make_task):
+async def test_verify_approve_publishes_task_verified(client, make_agent, make_task, work_headers):
     worker = await make_agent("VW", "bus-tester")
     human = await make_agent("VH", "reviewer", kind="human")
     t = await make_task("ship", "shipped", assignee_alias="VW")
@@ -251,6 +251,7 @@ async def test_verify_approve_publishes_task_verified(client, make_agent, make_t
     d = await client.post(
         f"/api/tasks/{t['id']}/done",
         json={"agent_id": worker["agent_id"], "result": "shipped"},
+        headers=await work_headers(worker["agent_id"]),
     )
     assert d.status_code == 200
     v = await client.post(
@@ -265,7 +266,8 @@ async def test_verify_approve_publishes_task_verified(client, make_agent, make_t
     assert last.get("approved") is True
 
 
-async def test_dependency_readied_publishes_task_ready(client, db, make_agent, make_task, container):
+async def test_dependency_readied_publishes_task_ready(client, db, make_agent, make_task, container,
+                                                       work_headers):
     """Verifying task A satisfies B's dependency -> B readied -> task_ready published
     container-wide (target=None) carrying B's id."""
     worker = await make_agent("DepW", "bus-tester")
@@ -276,6 +278,7 @@ async def test_dependency_readied_publishes_task_ready(client, db, make_agent, m
     await client.post(
         f"/api/tasks/{a['id']}/done",
         json={"agent_id": worker["agent_id"], "result": "x"},
+        headers=await work_headers(worker["agent_id"]),
     )
     await client.post(
         f"/api/tasks/{a['id']}/verify",

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The in-app Orcha brand glyph (foundations §5): the orca group from
+     desktop/resources/icon.svg on a transparent canvas, for BrandMark tiles
+     and brand rows. Native 100x100 space. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#F3FBFB"
+        android:pathData="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" />
+    <path
+        android:strokeColor="#06171C"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M49,38 L40,62 M49,38 L56,62 M49,38 L50,74" />
+    <path
+        android:fillColor="#06171C"
+        android:pathData="M35,64 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 M53,64 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 M46,76 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#1FC7CD"
+        android:pathData="M43,35 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" />
+    <path
+        android:strokeColor="#1FC7CD"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" />
+</vector>
