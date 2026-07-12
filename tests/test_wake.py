@@ -206,6 +206,44 @@ async def test_prompt_event_wakes_agent_and_carries_message(client, container, m
     assert evt["event"] == "prompt" and evt["message"] == "re-check the failing test"
 
 
+# ---------- GH #138: conversation_turn as a safety-net directed message ----------
+
+@pytest.mark.asyncio
+async def test_conversation_turn_surfaces_alongside_a_work_wake(client, container, make_agent, db):
+    """GH #138 safety net: a lingering unanswered chat message must not go unseen forever if the
+    resident's own retry never fires — when this agent wakes on the WORK lane for an unrelated
+    reason (here, a `prompt`), the chat content rides along in prompt_messages too."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
+                ts=1000.0, payload={"conversation_id": "c1", "content": "are you still there?"})
+    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    assert r.status_code == 201, r.text
+
+    _, cand = await _scan(client, container["id"], aid)
+    assert cand["should_wake"] is True
+    assert "re-check the failing test" in cand["prompt_messages"]
+    chat = next((m for m in cand["prompt_messages"] if "are you still there?" in m), None)
+    assert chat is not None, f"conversation_turn content missing from {cand['prompt_messages']}"
+    assert "still waiting on a reply" in chat
+
+
+@pytest.mark.asyncio
+async def test_conversation_turn_alone_does_not_wake_work_lane(client, container, make_agent, db):
+    """GH #91/#90 (unchanged by #138): a bare, unanswered chat message is the CONVERSATION lane's
+    own surface — it must NOT by itself wake a WORK embodiment. The safety net only rides along
+    when the agent wakes for some OTHER reason; it never becomes a spurious wake source itself."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
+                ts=1000.0, payload={"conversation_id": "c1", "content": "hello?"})
+
+    _, cand = await _scan(client, container["id"], aid)
+    assert cand["should_wake"] is False
+    assert cand["pending_events"] == 0
+    assert cand["prompt_messages"] == []
+
+
 @pytest.mark.asyncio
 async def test_prompt_records_sender_and_validates(client, container, make_agent):
     a = await make_agent("A")

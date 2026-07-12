@@ -308,6 +308,32 @@ def _log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
         pass
 
 
+def _advance_wake_cursor(api_base: str, cand: dict, event) -> None:
+    """Advance the wake cursor WITHOUT spawning — the no-spawn ack shared by the T2 cheap-act
+    success path and the GH#36 already-resolved no-op path (mirrors _suppress_wake exactly).
+    Acks only THROUGH the surfaced batch (ack_through_ts), falling back to max_event_ts."""
+    ack_ts = cand.get("ack_through_ts")
+    if ack_ts is None:
+        ack_ts = cand.get("max_event_ts")
+    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
+               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+
+
+def _request_actionable(api_base: str, rid: str) -> Optional[bool]:
+    """GH#36: True iff request `rid` is still in 'answered' state (a real ack_close to perform);
+    False if it's a resolved NO-OP (closed/escalated/any non-answered status); None if we can't
+    tell (API unreachable, or a 404 _get_json can't distinguish from a dead API). The caller treats
+    None CONSERVATIVELY — escalate to a full boot — so a transient read failure never silently drops
+    a still-actionable request; only a DEFINITIVE non-answered status suppresses the boot."""
+    data = _get_json(f"{api_base}/api/requests/{rid}")
+    if not isinstance(data, dict):
+        return None
+    status = data.get("status")
+    if not status:
+        return None
+    return status == "answered"
+
+
 def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                     quiet: bool, ack_config: Optional[dict] = None,
                     ack_api_key: Optional[str] = None) -> bool:
@@ -321,6 +347,18 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
         verdict.get("task_id") if action == "ack_verify" else None)
     if not target:
         return False                       # nothing to act on → escalate
+    # GH#36: an ack_close whose request is NO LONGER actionable (already closed/escalated/gone) is a
+    # pure no-op — advance the cursor and DON'T escalate to a full headless boot (the empty-inbox
+    # boot→stall→watchdog-kill loop). Checked BEFORE the cheap substrate so a flaky/absent ack model
+    # can't turn an already-resolved request into an endless boot. Only a DEFINITIVE non-answered
+    # status suppresses; None (unreachable / can't tell) and 'answered' fall through to the normal
+    # cheap-act → boot escalation, so a still-open answer is never silently dropped.
+    if action == "ack_close" and _request_actionable(api_base, target) is False:
+        if not quiet:
+            print(f"[notifier] ack_close for {cand.get('alias')} is already resolved "
+                  f"(request {str(target)[:8]} not 'answered') — advancing cursor, NO boot (GH#36)")
+        _advance_wake_cursor(api_base, cand, event)
+        return True
     if _llm_util is None:
         return False                       # no cheap substrate → escalate
     try:
@@ -344,11 +382,7 @@ def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                   f"— escalating to a full boot (cursor not advanced)", file=sys.stderr)
         return False                       # write failed → DON'T advance the cursor; re-grade later
     # Write landed → advance the cursor WITHOUT spawning (mirrors _suppress_wake exactly).
-    ack_ts = cand.get("ack_through_ts")
-    if ack_ts is None:
-        ack_ts = cand.get("max_event_ts")
-    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
-               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+    _advance_wake_cursor(api_base, cand, event)
     return True
 
 
@@ -504,6 +538,28 @@ def _probe_container(api_base: str, cid: str) -> str:
         return "missing" if e.code == 404 else "ok"
     except (urllib.error.URLError, ValueError, OSError):
         return "unreachable"
+
+
+# Issue #36: how often a RUNNING daemon re-checks that its container still exists. Far longer
+# than the scan --interval (default 2s) — this is a cheap liveness guard, not a hot path, and a
+# minute's delay before an orphan self-terminates is harmless. The startup 404-refusal posture
+# only protects the moment of launch; this carries the same protection through the daemon's life.
+_DAEMON_LIVENESS_INTERVAL = 60.0
+
+
+def _container_vanished(api_base: str, cid: str) -> bool:
+    """Issue #36 self-terminate predicate. True iff the API is ALIVE and DEFINITIVELY no longer
+    knows this container (HTTP 404).
+
+    A long-running daemon resolves (api_base, cid) ONCE at startup. When its container is later
+    REPLACED (`orcha up` / `init --force`) or its `.claude/orcha.json` goes stale, the daemon
+    would otherwise poll a now-404 container forever — an orphan that still shows up as a live
+    `orcha notifier` in ps (the #36 boot-loop postmortem found 4 notifier daemons, 3 of them bound
+    to dead containers). Mirrors the startup 404-refusal: only a definitive 404 is grounds to quit.
+
+    Returns False for 'unreachable' (API down / booting / mid-restart): a transient API bounce —
+    routine during `orcha up` — must NEVER kill a healthy daemon. Only a definitive 'missing' does."""
+    return _probe_container(api_base, cid) == "missing"
 
 
 def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
@@ -2729,8 +2785,16 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
         # (_safe_teardown_worktree); the preserved path is logged so a human can find it.
         disp = _safe_teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
         kind = "worker_stalled_killed" if (stalled and not over_cap) else "worker_timeout_killed"
-        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": kind, "release_lease": True, "lane": w_lane})
+        # GH#36 backstop: a NO-OP ephemeral worker (no task attributed AND no uncommitted work) that
+        # stalls into a watchdog kill must not leave its trigger un-acked — re-assert the cursor
+        # advance to the trigger ts this boot consumed so the SAME wake can't re-arm into another
+        # empty-inbox boot→stall→kill cycle (the spawn-time ack already set it; this is the idempotent
+        # safety net for a transient ack failure). A worker that DID make progress (a task wake or a
+        # dirty diff) leaves the cursor ALONE: its work isn't finished, so it must be free to re-wake.
+        kill_ack = {"kind": kind, "release_lease": True, "lane": w_lane}
+        if not w.get("wake_task_id") and not (diff or "").strip() and w.get("wake_ack_ts") is not None:
+            kill_ack["delivered_ts"] = w.get("wake_ack_ts")
+        _post_json(f"{api_base}/api/agents/{aid}/wake-ack", kill_ack)
         _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
         # #270: emit the kill diagnostic AT KILL TIME, unconditionally — a watchdog kill is a rare,
         # important event and this line is the whole on-host record of WHY it fired.
@@ -3148,6 +3212,14 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     # ISS-76: everything reap_workers needs to CHECKPOINT-RESPAWN this worker on
                     # the same worktree if it's still progressing when it crosses the soft cap.
                     "cap": cap, "respawns": 0,
+                    # GH#36: the trigger this boot consumed — so a NO-OP stall/cap kill (no task
+                    # attributed AND no uncommitted diff) can re-assert the cursor advance to this
+                    # ts and never re-arm the SAME wake into another empty-inbox boot→stall→kill.
+                    "wake_event": event,
+                    "wake_task_id": auto[0] if auto else cand.get("wake_task_id"),
+                    "wake_ack_ts": (cand.get("ack_through_ts")
+                                    if cand.get("ack_through_ts") is not None
+                                    else cand.get("max_event_ts")),
                     # [P2 #218] carry the resolved model: the replacement worker must come up
                     # on the agent's model, not claude's default (per-agent contract, #202)
                     "respawn_ctx": {"prompt": prompt, "flags": cand.get("headless_flags"),
@@ -5032,8 +5104,28 @@ def cmd_notifier(args) -> None:
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
+    # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
+    # re-check fires ~_DAEMON_LIVENESS_INTERVAL later, not redundantly on iteration one.
+    last_liveness = time.monotonic()
     try:
         while not stop["flag"]:
+            # Issue #36: the daemon resolved (api_base, cid) ONCE at startup and never re-checks.
+            # When its container is later REPLACED (`orcha up` / `init --force`) or its orcha.json
+            # goes stale, it would poll a now-404 container forever — an orphan that still reads as
+            # a live `orcha notifier` in ps (the #36 postmortem found 4 daemons, 3 on dead
+            # containers). Re-run the SAME definitive probe the startup refusal uses, on a slow
+            # cadence, and self-terminate on a DEFINITIVE 'missing' (HTTP 404). A transient
+            # 'unreachable' (API mid-restart during `orcha up`) is tolerated — see _container_vanished.
+            now = time.monotonic()
+            if now - last_liveness >= _DAEMON_LIVENESS_INTERVAL:
+                last_liveness = now
+                if _container_vanished(api_base, cid):
+                    if not args.quiet:
+                        print(f"[notifier] container {cid} no longer exists at {api_base} (HTTP "
+                              f"404) — self-terminating this orphaned daemon (issue #36). The "
+                              f"container was likely replaced (orcha up / init) or "
+                              f".claude/orcha.json points at a previous stack.", file=sys.stderr)
+                    break
             try:
                 # Release leases of workers that finished since the last tick, BEFORE
                 # scanning, so a just-finished agent with fresh work is wakeable now.
