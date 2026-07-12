@@ -4381,7 +4381,17 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
 
     GH #126: a `task_assigned` for a DIFFERENT task than the one this agent has a LIVE work-lane run
     on must not be framed as "begin directly" nor win wake_task_id — otherwise the new task's work
-    gets silently recorded under the live run's task. `live_task_id` is that in-flight task, if any."""
+    gets silently recorded under the live run's task. `live_task_id` is that in-flight task, if any.
+
+    GH #138: `conversation_turn` is included as a SAFETY NET, not a primary delivery path — the
+    resident already answers it via the pending_human/turn-feed mechanism (active_conversations
+    excludes conversation_turn from its own `pending_inbox` count precisely so this function is never
+    even called for a resident whose only pending work IS a chat turn — no double-handling). This
+    only has effect for a WORK-lane wake_scan candidate that woke for an unrelated reason (a
+    conversation_turn alone never counts toward `pending` there either — _WORK_NON_WAKING_EVENTS) but
+    happens to also have an unanswered chat message sitting on the CONVERSATION lane: if the resident
+    ever crashes/never boots for it, this is the fallback that lets whatever DOES wake still see and
+    answer the message, instead of a reply silently going unrecovered."""
     messages = []
     wake_task_id = None                              # ISS-56: attribute the run to its task
     ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
@@ -4397,7 +4407,7 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     cur.execute(
         """SELECT ts, event_name, payload FROM agent_events
            WHERE event_key = %s AND ts > %s
-             AND event_name IN ('prompt', 'task_message', 'task_assigned')
+             AND event_name IN ('prompt', 'task_message', 'task_assigned', 'conversation_turn')
            ORDER BY ts, id""",
         (aid, delivered_ts))
     budget = MAX_PROMPT_BATCH_CHARS
@@ -4463,6 +4473,13 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
                     and str(live_task_id) != str(ev_task_id)):
                 ack_through_ts = included_ts
                 break
+        elif r["event_name"] == "conversation_turn":
+            # GH #138 safety net: not task-scoped (ev_task_id stays None — must never win
+            # wake_task_id, a chat reply must not misattribute a work run to some task).
+            ev_task_id = None
+            content = pl.get("content") or ""
+            m = (f"[unanswered chat message on this agent's conversation] {content} — the human is "
+                 f"still waiting on a reply; answer it directly." if content else None)
         else:
             ev_task_id = None
             m = pl.get("message")
