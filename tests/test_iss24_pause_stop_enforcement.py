@@ -21,7 +21,7 @@ async def _set_status(client, cid, status, human_id):
 # ---------- paused blocks the core agent-mutation set ----------
 
 @pytest.mark.asyncio
-async def test_paused_blocks_agent_next_then_resume_restores(client, container, make_agent, make_task):
+async def test_paused_blocks_agent_next_then_resume_restores(client, container, make_agent, make_task, work_headers):
     human = await make_agent("Boss", "human", kind="human")
     a = await make_agent("Worker", "eng")
     aid = a["agent_id"]
@@ -31,12 +31,14 @@ async def test_paused_blocks_agent_next_then_resume_restores(client, container, 
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
 
     await _set_status(client, container["id"], "paused", human["agent_id"])
-    r = await client.post(f"/api/agents/{aid}/next")
+    r = await client.post(f"/api/agents/{aid}/next",
+                          headers=await work_headers(aid))
     assert r.status_code == 409, r.text
     assert "paused" in r.text and "resumed" in r.text
 
     await _set_status(client, container["id"], "active", human["agent_id"])  # resume
-    r2 = await client.post(f"/api/agents/{aid}/next")
+    r2 = await client.post(f"/api/agents/{aid}/next",
+                           headers=await work_headers(aid))
     assert r2.status_code == 200, r2.text                    # claim works again
 
 
@@ -78,7 +80,7 @@ async def test_paused_blocks_respond(client, container, make_agent):
 
 
 @pytest.mark.asyncio
-async def test_paused_blocks_accept_task(client, container, make_agent):
+async def test_paused_blocks_accept_task(client, container, make_agent, work_headers):
     human = await make_agent("Boss4", "human", kind="human")
     a = await make_agent("Dispatcher", "eng")
     b = await make_agent("Doer", "eng")
@@ -92,12 +94,13 @@ async def test_paused_blocks_accept_task(client, container, make_agent):
 
     await _set_status(client, container["id"], "paused", human["agent_id"])
     r = await client.post(f"/api/requests/{rid}/accept-task",
-                          json={"responder_agent_id": b["agent_id"]})
+                          json={"responder_agent_id": b["agent_id"]},
+                          headers=await work_headers(b["agent_id"]))
     assert r.status_code == 409, r.text
 
 
 @pytest.mark.asyncio
-async def test_paused_blocks_done(client, container, make_agent, make_task, db):
+async def test_paused_blocks_done(client, container, make_agent, make_task, db, work_headers):
     human = await make_agent("Boss5", "human", kind="human")
     a = await make_agent("Builder", "eng")
     aid = a["agent_id"]
@@ -108,7 +111,8 @@ async def test_paused_blocks_done(client, container, make_agent, make_task, db):
 
     await _set_status(client, container["id"], "paused", human["agent_id"])
     r = await client.post(f"/api/tasks/{tid}/done",
-                          json={"agent_id": aid, "result": "done"})
+                          json={"agent_id": aid, "result": "done"},
+                          headers=await work_headers(aid))
     assert r.status_code == 409, r.text
 
 

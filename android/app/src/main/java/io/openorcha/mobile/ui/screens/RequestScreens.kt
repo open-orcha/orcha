@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -57,6 +59,7 @@ import io.openorcha.mobile.ui.components.AvatarSize
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.DangerTonalButton
+import io.openorcha.mobile.ui.components.LinkifiedText
 import io.openorcha.mobile.ui.components.MetaTag
 import io.openorcha.mobile.ui.components.NeutralButton
 import io.openorcha.mobile.ui.components.OrchaCard
@@ -87,14 +90,18 @@ fun RequestDetailScreen(
     onAcceptTask: (String?) -> Unit,
     onRejectTask: (String) -> Unit,
     onConvert: (String, String, String?, Int) -> Unit,
-    onTriageClose: () -> Unit,
     onOpenTask: (String) -> Unit,
 ) {
     val p = Orcha.palette
     val req = state.selectedRequest
     val humanId = state.selectedContainer?.humanAgentId
+    // server rows never carry aliases — resolve from snapshot.agents (web data.js:118-119)
+    val agents = state.snapshot?.agents.orEmpty()
+    val fromAlias = RequestsView.aliasFor(agents, req?.requesterId) ?: req?.requesterAlias
+    val toAlias = RequestsView.aliasFor(agents, req?.targetId) ?: req?.targetAlias
     var sheet by remember { mutableStateOf(RequestSheet.None) }
     var menuOpen by remember { mutableStateOf(false) }
+    var confirmOwnerClose by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = p.bg,
@@ -105,16 +112,14 @@ fun RequestDetailScreen(
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                 actions = {
                     if (req != null) {
-                        IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, "More") }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            val isRequester = req.requesterId == humanId
-                            if (req.status in setOf("open", "answered") && isRequester) {
-                                DropdownMenuItem(text = { Text("Nudge") }, onClick = { menuOpen = false; sheet = RequestSheet.Nudge })
+                        // Escalate is the only overflow action left — Nudge + Close now live in
+                        // the universal operator tier below (flow 07a). The daemon-only
+                        // "Triage-close" is retired; a stale request is closed with a reason.
+                        val isRequester = req.requesterId == humanId
+                        if (req.status in setOf("open", "answered") && isRequester) {
+                            IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                 DropdownMenuItem(text = { Text("Escalate") }, onClick = { menuOpen = false; onEscalate(null) })
-                            }
-                            if (req.status in setOf("open", "answered") && !isRequester && req.targetId != humanId) {
-                                DropdownMenuItem(text = { Text("Close with reason…") }, onClick = { menuOpen = false; sheet = RequestSheet.CloseWithReason })
-                                DropdownMenuItem(text = { Text("Triage-close (stale)") }, onClick = { menuOpen = false; onTriageClose() })
                             }
                         }
                     }
@@ -135,10 +140,6 @@ fun RequestDetailScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
-                // server rows never carry aliases — resolve from snapshot.agents (web data.js:118-119)
-                val agents = state.snapshot?.agents.orEmpty()
-                val fromAlias = RequestsView.aliasFor(agents, req.requesterId) ?: req.requesterAlias
-                val toAlias = RequestsView.aliasFor(agents, req.targetId) ?: req.targetAlias
                 OrchaCard {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Avatar(fromAlias ?: "?", human = req.requesterId == humanId || RequestsView.kindFor(agents, req.requesterId) == "human")
@@ -172,15 +173,16 @@ fun RequestDetailScreen(
                     }
                 }
             }
+            val knownTasks = state.snapshot?.tasks.orEmpty()
             item { SectionH("Payload") }
-            item { OrchaCard { Text(req.payload, color = p.text) } }
+            item { OrchaCard { LinkifiedText(req.payload, knownTasks, onOpenTask, color = p.text) } }
             req.response?.let {
                 item { SectionH("Response") }
-                item { OrchaCard(borderColor = p.okLine) { Text(it, color = p.text2) } }
+                item { OrchaCard(borderColor = p.okLine) { LinkifiedText(it, knownTasks, onOpenTask, color = p.text2) } }
             }
             req.rejectionReason?.let {
                 item { SectionH("Rejection") }
-                item { OrchaCard(borderColor = p.dangerLine) { Text(it, color = p.text2) } }
+                item { OrchaCard(borderColor = p.dangerLine) { LinkifiedText(it, knownTasks, onOpenTask, color = p.text2) } }
             }
             item { SectionH("Timeline") }
             item {
@@ -191,9 +193,12 @@ fun RequestDetailScreen(
                     if (req.closedAt != null || req.status in setOf("closed", "rejected", "converted_to_task")) TimelineDot(MobileUx.statusCopy(req.status), req.closedAt, true)
                 }
             }
-            // action bar per the binding matrix (flow 07)
+            // Action zone (flow 07a): role-specific "Your move" on top, then the universal
+            // operator tier (Nudge · Close) that lights up on any request the human can see.
             item {
+                val ops = RequestsView.operatorActions(req, humanId)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // ── Your move (role-specific) ──
                     if (req.status == "open" && isTarget && req.type == "info") {
                         PrimaryButton("Respond", { sheet = RequestSheet.Respond }, Modifier.fillMaxWidth(), enabled = !state.actionInFlight)
                     }
@@ -203,18 +208,31 @@ fun RequestDetailScreen(
                             DangerTonalButton("Reject…", { sheet = RequestSheet.Reject }, Modifier.weight(1f), enabled = !state.actionInFlight)
                         }
                     }
-                    if (isRequester && req.status in setOf("open", "answered")) {
+                    if (isRequester && req.status == "answered") {
+                        TonalButton("Convert to task", { sheet = RequestSheet.Convert }, Modifier.fillMaxWidth(), enabled = !state.actionInFlight)
+                    }
+
+                    // ── Operator actions (universal) ──
+                    if (ops.showOperatorNote) {
+                        Banner(
+                            BannerKind.Info,
+                            "Acting as operator (${state.selectedContainer?.humanAlias ?: "you"}). " +
+                                "Closing another agent's request needs a reason — it's sent to the owner so they know why.",
+                        )
+                    }
+                    if (ops.showNudge || ops.showClose) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (req.status == "answered") {
-                                TonalButton("Convert to task", { sheet = RequestSheet.Convert }, Modifier.weight(1f), enabled = !state.actionInFlight)
-                            } else {
+                            if (ops.showNudge) {
                                 TonalButton("Nudge", { sheet = RequestSheet.Nudge }, Modifier.weight(1f), enabled = !state.actionInFlight)
                             }
-                            NeutralButton("Close", { onClose(null) }, Modifier.weight(1f), enabled = !state.actionInFlight)
+                            if (ops.showClose) {
+                                if (ops.closeNeedsReason) {
+                                    DangerTonalButton("Close", { sheet = RequestSheet.CloseWithReason }, Modifier.weight(1f), enabled = !state.actionInFlight)
+                                } else {
+                                    NeutralButton("Close", { confirmOwnerClose = true }, Modifier.weight(1f), enabled = !state.actionInFlight)
+                                }
+                            }
                         }
-                    }
-                    if (isRequester && req.status == "accepted") {
-                        TonalButton("Nudge", { sheet = RequestSheet.Nudge }, Modifier.fillMaxWidth(), enabled = !state.actionInFlight)
                     }
                 }
             }
@@ -232,13 +250,22 @@ fun RequestDetailScreen(
                 confirm = "Reject", busy = state.actionInFlight, destructive = true,
                 onDismiss = { sheet = RequestSheet.None },
             ) { sheet = RequestSheet.None; onRejectTask(it) }
-            RequestSheet.Nudge -> TextSheet(
-                kicker = "NUDGE", title = "A standalone wake for whoever owes the next action.", label = "Note (optional)", required = false,
-                confirm = "Nudge", busy = state.actionInFlight,
-                onDismiss = { sheet = RequestSheet.None },
-            ) { sheet = RequestSheet.None; onNudge(it.ifBlank { null }) }
+            RequestSheet.Nudge -> {
+                val who = (if (req.status == "open") toAlias else fromAlias) ?: "the other agent"
+                val routed = if (req.status == "open") {
+                    "Wakes $who — they still owe an answer."
+                } else {
+                    "Wakes $who — they must act on the answer or close it."
+                }
+                TextSheet(
+                    kicker = "NUDGE", title = routed, label = "Note (optional)", required = false,
+                    confirm = "Nudge", busy = state.actionInFlight,
+                    onDismiss = { sheet = RequestSheet.None },
+                ) { sheet = RequestSheet.None; onNudge(it.ifBlank { null }) }
+            }
             RequestSheet.CloseWithReason -> TextSheet(
-                kicker = "CLOSE REQUEST", title = "Closing someone else's request needs a reason.", label = "Reason (required)", required = true,
+                kicker = "CLOSE REQUEST", title = "Closing someone else's request needs a reason.",
+                label = "Reason — sent to ${fromAlias ?: "the owner"}", required = true,
                 confirm = "Close", busy = state.actionInFlight, destructive = true,
                 onDismiss = { sheet = RequestSheet.None },
             ) { sheet = RequestSheet.None; onClose(it) }
@@ -248,6 +275,17 @@ fun RequestDetailScreen(
                 onDismiss = { sheet = RequestSheet.None },
             ) { title, dod, assignee -> sheet = RequestSheet.None; onConvert(title, dod, assignee, 100) }
             RequestSheet.None -> Unit
+        }
+
+        // Owner close (your own request) — a quick confirm, no reason needed (flow 07a §5).
+        if (confirmOwnerClose) {
+            AlertDialog(
+                onDismissRequest = { confirmOwnerClose = false },
+                title = { Text("Close this request?") },
+                text = { Text("${toAlias ?: "The other party"} sees it closed on the next sync.") },
+                confirmButton = { TextButton(onClick = { confirmOwnerClose = false; onClose(null) }) { Text("Close") } },
+                dismissButton = { TextButton(onClick = { confirmOwnerClose = false }) { Text("Cancel") } },
+            )
         }
     }
 }

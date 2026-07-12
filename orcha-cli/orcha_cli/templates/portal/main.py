@@ -53,7 +53,7 @@ import pathlib
 import os
 import queue
 import re
-import secrets
+import secrets  # GH #91/#90: mint per-process embodiment run tokens (secrets.token_urlsafe)
 import threading
 import time
 import uuid
@@ -62,7 +62,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import psycopg
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -377,6 +377,12 @@ MAX_PROMPT_BATCH_CHARS = 24_000
 # worker → SessionEnd snapshots → republishes → re-wakes). The publish is now container-scoped
 # (target=NULL), and wake-scan also excludes these names from its should_wake count as a backstop.
 _NON_WAKING_EVENTS = ("digest_snapshotted",)
+# GH #91/#90: the WORK lane must NOT wake on a bare `conversation_turn`. A conversation_turn is the
+# conversation lane's own actionable surface (the resident chat responds to it); after the lane
+# split it must not by itself count as work-lane pending, or every human chat message would boot a
+# WORK embodiment. The work pending-count / latest-event / max_ts consumption use this widened set;
+# the conversation lane still wakes on conversation_turn via its own (unchanged) path.
+_WORK_NON_WAKING_EVENTS = _NON_WAKING_EVENTS + ("conversation_turn",)
 # ISS-75 (#188) / ISS-77 (#200): the SOLE event that must NOT, on its own, trigger a RESIDENT
 # inbox-drain. `request_closed` is SELF-ECHOING: when the resident drains and closes a request, the
 # close emits a NEW `request_closed` event → re-counts as pending_inbox → re-drains → the #185
@@ -1266,9 +1272,21 @@ def bump_agent(cur, agent_id):
 def _touch_heartbeat(agent_id):
     """ISS-50: mark an agent alive NOW — heartbeat ONLY (never turns_used; a /wait poll is not a
     turn). Own short transaction so it can be called outside an existing cursor (e.g. right after
-    a long-poll returns)."""
+    a long-poll returns).
+
+    GH #91/#90: also bump the WORK-lane heartbeat (work_last_heartbeat_at). A present /wait listener
+    is the agent's own live process, which handles its own events — so wake-scan's WORK-idle gate
+    (which now keys on work_last_heartbeat_at, not the agent-wide column) must see it and NOT spawn a
+    redundant headless worker (the ISS-50 suppression the lane split otherwise broke: a poll only
+    bumped the agent-wide heartbeat). A CONVERSATION renew stays lane-isolated (it never touches
+    work_last_heartbeat_at), so this does not re-block work on a live resident."""
     with db_cursor() as (conn, cur):
         cur.execute("UPDATE agents SET last_heartbeat_at = now() WHERE id = %s", (agent_id,))
+        cur.execute(
+            """INSERT INTO agent_wake_state (agent_id, work_last_heartbeat_at)
+               VALUES (%s, now())
+               ON CONFLICT (agent_id) DO UPDATE SET work_last_heartbeat_at = now()""",
+            (agent_id,))
         conn.commit()
 
 
@@ -2411,13 +2429,30 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                          FROM worker_runs wr
                          LEFT JOIN tasks t3 ON t3.id = wr.task_id
                         WHERE wr.agent_id = a.id AND wr.status = 'running'
-                          AND ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
+                          -- GH #91/#90: keep active_run on the SAME lane surfaced by embodiment.
+                          -- Work wins when both lanes are live; otherwise a live conversation lease
+                          -- surfaces its conversation run. Without this, a newer resident run could
+                          -- bind the portal's activity/terminal state while the row reports a WORK
+                          -- embodiment.
+                          AND (
+                              (ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
+                               AND wr.lane = 'work')
+                              OR (
+                                  NOT (ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now())
+                                  AND ws.conv_lease_until IS NOT NULL AND ws.conv_lease_until > now()
+                                  AND wr.lane = 'conversation'
+                              )
+                          )
                         ORDER BY wr.started_at DESC LIMIT 1) AS active_run,
                       -- §3b: the agent's current EMBODIMENT (the live single-flight lease kind, else
                       -- 'idle') so the portal can render the live-session indicator + lock/guard the
                       -- conversation panel and the 'Open terminal' action. idle|ephemeral|resident|live.
+                      -- GH #91/#90: read BOTH lanes — a WORK lease surfaces its kind (ephemeral|live);
+                      -- otherwise a live CONVERSATION lease surfaces 'resident' (the warm chat session).
                       CASE WHEN ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
-                           THEN ws.lease_kind ELSE 'idle' END AS embodiment,
+                           THEN ws.lease_kind
+                           WHEN ws.conv_lease_until IS NOT NULL AND ws.conv_lease_until > now()
+                           THEN ws.conv_lease_kind ELSE 'idle' END AS embodiment,
                       -- ISS-16/#89: LIVENESS-derived status, emitted UNDER `status` (the stored
                       -- agents.status column is left untouched as internal truth — internal callers
                       -- unaffected). The stored value flips to 'working' on task assignment
@@ -2441,7 +2476,10 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                       CASE
                           WHEN a.status = 'terminated' THEN 'terminated'
                           WHEN w.waiting_on IS NOT NULL THEN 'awaiting_request'
-                          WHEN ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
+                          -- GH #91/#90: 'working' needs an owned task AND a LIVE lease in EITHER lane
+                          -- (a resident conversation is as embodied as a work worker).
+                          WHEN ((ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now())
+                                OR (ws.conv_lease_until IS NOT NULL AND ws.conv_lease_until > now()))
                                AND EXISTS (SELECT 1 FROM agent_tasks at3
                                             WHERE at3.agent_id = a.id
                                               AND at3.assignment_status IN ('assigned','accepted','working'))
@@ -2715,11 +2753,17 @@ def _task_list_sql(where: str, order: str) -> str:
                          FROM task_messages m LEFT JOIN agents ma ON ma.id = m.author_id
                         WHERE m.task_id = t.id AND m.author_id IS NOT NULL AND ma.kind <> 'human'
                         ORDER BY m.created_at ASC LIMIT 1) AS plan_message,
+                      -- GH #144: the per-task runs summary counts/reads FEED membership
+                      -- (worker_run_tasks — every task a run touched), not the single
+                      -- worker_runs.task_id pin, so a run from a multi-task session is counted
+                      -- under every task it spanned.
                       json_build_object(
-                          'count', (SELECT count(*) FROM worker_runs wr WHERE wr.task_id = t.id),
+                          'count', (SELECT count(*) FROM worker_run_tasks wrt WHERE wrt.task_id = t.id),
                           'latest', (SELECT json_build_object('status', l.status, 'exit_code', l.exit_code,
                                          'started_at', l.started_at, 'ended_at', l.ended_at)
-                                     FROM worker_runs l WHERE l.task_id = t.id
+                                     FROM worker_runs l
+                                     JOIN worker_run_tasks wrt ON wrt.run_id = l.run_id
+                                     WHERE wrt.task_id = t.id
                                      ORDER BY l.started_at DESC LIMIT 1)
                       ) AS runs
                FROM tasks t WHERE {where} {order} LIMIT %s OFFSET %s"""
@@ -3518,12 +3562,16 @@ def register_agent(cid: str, body: AgentCreate):
 
 
 @app.post("/api/agents/{aid}/next")
-def agent_next(aid: str):
+def agent_next(aid: str,
+               x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
     """Atomically claim the highest-priority READY task in this agent's container."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
+        # GH #91/#90: claiming a task is WORK-lane only — a conversation-lane embodiment cannot OWN
+        # work, only dispatch it. Requires a valid non-revoked WORK token for this agent (403 else).
+        _require_work_lane(cur, aid, x_orcha_run_token)
         # Orcha#30: humans don't poll for tasks. They pick deliberately via UI / direct assignment.
         _require_kind(cur, aid, ("ai",))
         _reject_if_retired(cur, aid)   # ISS-51 [P1]: a retired agent can't claim work
@@ -3639,11 +3687,15 @@ def agent_inbox(aid: str, since: Optional[str] = None):
 
 
 @app.get("/api/agents/{aid}/outbox")
-def agent_outbox(aid: str, status: Optional[str] = None):
+def agent_outbox(aid: str, status: Optional[str] = None, include_closed: bool = False):
     """Outgoing requests where this agent is the requester.
 
     Use `?status=answered` to see only requests waiting for me to close (or resume the parent).
     Default: all non-closed (open, answered, escalated-via-target-null still open).
+
+    GH #71: opt-in `?include_closed=true` ALSO returns recently-closed requests (the default
+    view still omits them — back-compat). Ignored when an explicit `?status=` filter is given
+    (that already pins the exact status the caller asked for).
     """
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -3660,6 +3712,19 @@ def agent_outbox(aid: str, status: Optional[str] = None):
                    WHERE r.requester_id = %s AND r.status = %s
                    ORDER BY r.created_at DESC""",
                 (aid, status),
+            )
+        elif include_closed:
+            # GH #71: every outgoing request regardless of status (incl. closed/rejected).
+            cur.execute(
+                """SELECT r.id, r.type, r.status, r.priority, r.payload, r.response,
+                          r.created_at, r.responded_at, r.expires_at, r.closed_at,
+                          r.target_id, t.alias AS target_alias, r.requester_id,
+                          r.parent_request_id, r.chain_depth
+                   FROM requests r
+                   LEFT JOIN agents t ON t.id = r.target_id
+                   WHERE r.requester_id = %s
+                   ORDER BY r.created_at DESC""",
+                (aid,),
             )
         else:
             cur.execute(
@@ -4312,10 +4377,23 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     Shared by wake_scan (ephemeral wakes) and active_conversations (ISS-74 resident inbox drain) so
     BOTH paths deliver directed messages identically — a resident drain can never mark a directed
     event delivered without its content reaching the agent. (A `task_assigned` whose task is already
-    completed/cancelled by wake time surfaces nothing but is still acked — see the branch below.)"""
+    completed/cancelled by wake time surfaces nothing but is still acked — see the branch below.)
+
+    GH #126: a `task_assigned` for a DIFFERENT task than the one this agent has a LIVE work-lane run
+    on must not be framed as "begin directly" nor win wake_task_id — otherwise the new task's work
+    gets silently recorded under the live run's task. `live_task_id` is that in-flight task, if any."""
     messages = []
     wake_task_id = None                              # ISS-56: attribute the run to its task
     ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
+    cur.execute(
+        """SELECT wr.task_id FROM worker_runs wr
+           JOIN agent_wake_state ws ON ws.agent_id = wr.agent_id
+           WHERE wr.agent_id=%s AND wr.status='running' AND wr.lane='work'
+             AND ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
+           ORDER BY wr.started_at DESC LIMIT 1""",
+        (aid,))
+    _live_row = cur.fetchone()
+    live_task_id = _live_row["task_id"] if _live_row else None
     cur.execute(
         """SELECT ts, event_name, payload FROM agent_events
            WHERE event_key = %s AND ts > %s
@@ -4374,6 +4452,17 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
                 m = (f"[new task assigned to you: {title} (task {ev_task_id})] "
                      f"— it's '{tstatus}'; READ its thread (/api/tasks/{ev_task_id}/messages); "
                      f"it may be waiting on dependencies before it's ready")
+            # GH #126: this agent already has a LIVE work-lane run on a DIFFERENT task — do not let
+            # this assignment win wake_task_id (that would silently attribute Task B's work to Task
+            # A's run) nor frame it as startable now. It must NOT be surfaced-and-acked here (an
+            # acked event is gone for good) — instead defer the ack cursor to just BEFORE this event,
+            # the same mechanism the batch-overflow branch below uses, so it (and anything after it,
+            # to preserve delivery order) stays pending and is re-evaluated on every subsequent
+            # wake/drain until the live run ends, at which point it flows through normally.
+            if (m is not None and live_task_id is not None
+                    and str(live_task_id) != str(ev_task_id)):
+                ack_through_ts = included_ts
+                break
         else:
             ev_task_id = None
             m = pl.get("message")
@@ -4390,6 +4479,45 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
                                                      # task_message or task_assigned — ISS-86)
         included_ts = r["ts"]                        # advance past included or blank messages
     return messages, wake_task_id, ack_through_ts
+
+
+def _resident_inbox_task_work_id(cur, aid: str, delivered_ts, max_ts):
+    """Return the newest pending task-work id a warm resident must leave for the WORK lane.
+
+    This is deliberately narrower than wake_scan's `wake_task_id`: only task-linked events for an
+    in-progress task this agent actively owns should bypass the resident drain sidecar. New ready
+    assignments and open task requests are still drain-safe for the sidecar prompt, whose job is to
+    avoid starting a second task embodiment from a warm chat session.
+    """
+    if max_ts is None:
+        return None
+    cur.execute(
+        """SELECT event_name, payload FROM agent_events
+           WHERE event_key = %s AND ts > %s AND ts <= %s
+             AND (event_name IN ('task_message', 'task_assigned')
+                  OR (event_name='request_answered'
+                      AND payload->>'originating_task_id' IS NOT NULL))
+           ORDER BY ts DESC, id DESC""",
+        (aid, delivered_ts, max_ts),
+    )
+    for ev in cur.fetchall():
+        pl = ev["payload"] or {}
+        tid = (pl.get("originating_task_id") if ev["event_name"] == "request_answered"
+               else pl.get("task_id"))
+        if not tid or not _valid_uuid(tid):
+            continue
+        cur.execute(
+            """SELECT 1 FROM tasks t
+               JOIN agent_tasks at ON at.task_id = t.id
+               WHERE t.id = %s AND at.agent_id = %s
+                 AND t.status = 'in_progress' AND t.is_root = false
+                 AND at.assignment_status IN ('assigned','accepted','working')
+               LIMIT 1""",
+            (tid, aid),
+        )
+        if cur.fetchone():
+            return tid
+    return None
 
 
 @app.get("/api/containers/{cid}/active-conversations")
@@ -4445,7 +4573,7 @@ def active_conversations(cid: str):
                       COALESCE(ws.delivered_ts, 0) AS _delivered_ts,
                       (SELECT max(ev.ts) FROM agent_events ev
                          WHERE ev.event_key = cv.agent_id::text
-                           AND ev.ts > COALESCE(ws.delivered_ts, 0)
+                           AND ev.ts > COALESCE(ws.conv_delivered_ts, 0)
                            AND ev.event_name = 'conversation_turn') AS conversation_ack_ts,
                       COALESCE((SELECT count(*) FROM agent_events ev
                                  WHERE ev.event_key = cv.agent_id::text
@@ -4500,9 +4628,12 @@ def active_conversations(cid: str):
                     cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
                 r["inbox_messages"] = msgs
                 r["inbox_ack_ts"] = ack_ts
+                r["inbox_wake_task_id"] = _resident_inbox_task_work_id(
+                    cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
             else:
                 r["inbox_messages"] = []
                 r["inbox_ack_ts"] = None
+                r["inbox_wake_task_id"] = None
             r.pop("_delivered_ts", None)
             r.pop("_inbox_max_ts", None)
     return {"container_id": cid, "conversations": convs}
@@ -4602,6 +4733,12 @@ class WakeAck(BaseModel):
         default=None,
         description="advance the agent's wake cursor to this agent_events.ts (omit if no events consumed)")
     kind: str = Field(..., description="tmux | ephemeral | resident | unreachable | skipped (or a *_killed/*_failed/released reason)")
+    lane: Optional[str] = Field(
+        default=None, pattern="^(work|conversation)$",
+        description="GH #91/#90: which lease slot this ack acts on. None -> resolved to 'work' for "
+                    "backward compat (existing ephemeral/live acks are work-lane; a resident "
+                    "conversation ack passes 'conversation'). release_lease / cursor advance / "
+                    "running->orphaned reconcile are all scoped to this lane.")
     event: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN,
                                  description="the event_name / reason that triggered the wake")
     release_lease: bool = Field(
@@ -4636,6 +4773,13 @@ class WakeClaim(BaseModel):
         description="seconds the lease is held; the worker should finish well within this, and the "
                     "TTL auto-expires it on crash so the agent is never stuck unwakeable")
     kind: str = Field(default="ephemeral", description="transport about to be used: ephemeral | tmux | resident | live")
+    lane: Optional[str] = Field(
+        default=None, pattern="^(work|conversation)$",
+        description="GH #91/#90: which lease slot to claim. When None it is derived from lease_kind/"
+                    "kind (see _resolve_claim_lane): a 'resident' embodiment (or an explicit "
+                    "'conversation' kind) claims the CONVERSATION lane; ephemeral/live claim WORK. "
+                    "The two lanes have independent lease slots on the one agent_wake_state row, so a "
+                    "warm resident chat and a work worker can be live for the same agent at once.")
     event: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN,
                                  description="the event_name / reason driving this wake")
     lease_kind: str = Field(default="ephemeral", pattern="^(ephemeral|resident|live)$",
@@ -4652,6 +4796,22 @@ class WakeClaim(BaseModel):
                     "it back on its next wake-renew and gracefully yields the idle resident (snapshot + "
                     "release) so this claim can win on retry. No effect when the holder is ephemeral or "
                     "another live terminal (those stay 4409).")
+
+
+def _resolve_claim_lane(body) -> str:
+    """GH #91/#90: resolve which lease slot a wake claim/renew acts on.
+
+    Pydantic can't cross-reference sibling fields at validation time, so the None-derivation lives
+    here at the call sites. Explicit `body.lane` always wins. Otherwise: a 'resident' embodiment (a
+    warm background conversation session) OR an explicit 'conversation' kind claims the CONVERSATION
+    lane; everything else (ephemeral one-shot wakes, live human terminals) is WORK. This preserves
+    backward compat — existing callers pass no lane and land on the historically-correct slot."""
+    lane = getattr(body, "lane", None)
+    if lane:
+        return lane
+    if getattr(body, "lease_kind", None) == "resident" or getattr(body, "kind", None) == "conversation":
+        return "conversation"
+    return "work"
 
 
 @app.get("/api/containers/{cid}/wake-scan")
@@ -4710,6 +4870,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                       r.tmux_target, r.headless_cwd, r.headless_flags,
                       COALESCE(w.delivered_ts, 0)    AS delivered_ts,
                       w.last_woken_at,
+                      -- GH #91/#90: WORK-lane idle now keys on the lane's OWN heartbeat, not the
+                      -- agent-wide a.last_heartbeat_at (which a conversation renew also bumps and would
+                      -- keep the work lane permanently non-idle). NULL work heartbeat -> idle (computed
+                      -- below). agent-wide idle_seconds kept for debug/back-compat only.
+                      w.work_last_heartbeat_at,
+                      EXTRACT(EPOCH FROM (now() - w.work_last_heartbeat_at)) AS work_idle_seconds,
                       EXTRACT(EPOCH FROM (now() - a.last_heartbeat_at)) AS idle_seconds,
                       -- #266: seconds since the clock anchor (NULL if never woken) — drives the
                       -- auto_wake_due term below. Reuses last_woken_at (stamped on every wake-ack)
@@ -4718,7 +4884,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                       EXTRACT(EPOCH FROM (now() - w.last_woken_at)) AS secs_since_woken,
                       (w.last_woken_at IS NOT NULL
                        AND EXTRACT(EPOCH FROM (now() - w.last_woken_at)) < %s) AS in_cooldown,
-                      -- R2.4: a live worker holds an unexpired lease; skip those.
+                      -- R2.4 / GH #91/#90: a live WORK worker holds an unexpired WORK lease. This is
+                      -- now the WORK-lane lease_active (the existing columns ARE the work lane).
                       (w.wake_lease_until IS NOT NULL AND w.wake_lease_until > now()) AS lease_active,
                       -- E1 (review P2): only project the embodiment for a LIVE lease. Expiry is the
                       -- crash/orphan recovery path and doesn't clear the row, so a raw w.lease_kind
@@ -4726,6 +4893,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                       -- should_wake=true) — violating the NULL-when-no-lease contract.
                       CASE WHEN w.wake_lease_until IS NOT NULL AND w.wake_lease_until > now()
                            THEN w.lease_kind ELSE NULL END AS lease_kind,
+                      -- GH #91/#90: conversation-lane slot, surfaced for debug only (should_wake no
+                      -- longer references it — the conversation lane wakes via its own path).
+                      w.conv_lease_until, w.conv_delivered_ts, w.conv_last_woken_at,
+                      (w.conv_lease_until IS NOT NULL AND w.conv_lease_until > now()) AS conv_lease_active,
                       -- #247 B2: the AUTHORITATIVE anything-live? signal. lease_active alone is
                       -- lease-only and cannot close the orphan hole §3.2 names: orcha-upgrade kills
                       -- the owning daemon, its resident child survives 'running', the lease LAPSES
@@ -4734,8 +4905,14 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                       -- (finding-orcha-update-midflight-orphans-workers). worker_runs.status='running'
                       -- is the one signal the orphan still carries, so gate on it too. A genuinely
                       -- DEAD orphan is reaped to 'orphaned' by the dead-PID reaper, clearing this.
+                      -- GH #91/#90: scoped to lane='work' so a live CONVERSATION run does not suppress
+                      -- a work wake (the two lanes are independent embodiments).
                       EXISTS (SELECT 1 FROM worker_runs wr
-                              WHERE wr.agent_id = a.id AND wr.status = 'running') AS embodiment_running
+                              WHERE wr.agent_id = a.id AND wr.status = 'running'
+                                AND wr.lane = 'work') AS embodiment_running,
+                      EXISTS (SELECT 1 FROM worker_runs wr
+                              WHERE wr.agent_id = a.id AND wr.status = 'running'
+                                AND wr.lane = 'conversation') AS conv_embodiment_running
                FROM agents a
                LEFT JOIN agent_reachability r ON r.agent_id = a.id
                LEFT JOIN agent_wake_state   w ON w.agent_id = a.id
@@ -4751,11 +4928,16 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # ISS-58: the should_wake `pending` count excludes _NON_WAKING_EVENTS (self-echo
             # notifications like digest_snapshotted) so they never wake the agent — but max_ts is
             # over ALL events so the ack still advances past them (they don't accumulate uncounted).
+            # GH #91/#90: this is the WORK-lane count, so it uses _WORK_NON_WAKING_EVENTS (adds
+            # `conversation_turn`) — a bare human chat message is the conversation lane's surface and
+            # must not by itself wake a WORK embodiment. max_ts is still over ALL events (unfiltered),
+            # so a work ack advances the work cursor past a conversation_turn too (it never accumulates
+            # uncounted); the conversation lane consumes it via its own delivered cursor.
             cur.execute(
                 """SELECT count(*) FILTER (WHERE event_name <> ALL(%s)) AS n,
                           max(ts) AS max_ts
                    FROM agent_events WHERE event_key = %s AND ts > %s""",
-                (list(_NON_WAKING_EVENTS), aid, a["delivered_ts"]),
+                (list(_WORK_NON_WAKING_EVENTS), aid, a["delivered_ts"]),
             )
             ev = cur.fetchone()
             pending = ev["n"] or 0
@@ -4767,7 +4949,7 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                     """SELECT event_name, payload FROM agent_events
                        WHERE event_key = %s AND ts > %s AND event_name <> ALL(%s)
                        ORDER BY ts DESC, id DESC LIMIT 1""",
-                    (aid, a["delivered_ts"], list(_NON_WAKING_EVENTS)),
+                    (aid, a["delivered_ts"], list(_WORK_NON_WAKING_EVENTS)),
                 )
                 _latest_row = cur.fetchone()
                 latest = _latest_row["event_name"]
@@ -4822,8 +5004,23 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             )
             auto_tasks = [str(r["id"]) for r in cur.fetchall()]
 
-            idle_seconds = a["idle_seconds"]
-            is_idle = (idle_seconds is None) or (idle_seconds >= min_idle)
+            # GH #91/#90: an UNCAPPED work-lane signal — an OPEN task request addressed to this agent
+            # that it still owes an accept/reject. This is task-shaped work that must ALWAYS full-boot
+            # the WORK lane (a conversation lane cannot accept it), so it folds into has_work below,
+            # forces a full boot (never suppressed), and is surfaced on the candidate so the notifier's
+            # tier/suppression deciders short-circuit to a full work wake.
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM requests WHERE target_id=%s AND type='task' AND status='open') AS h",
+                (aid,))
+            has_pending_task_request = bool(cur.fetchone()["h"])
+
+            # GH #91/#90: WORK-lane idle keys on the lane's OWN heartbeat (work_last_heartbeat_at),
+            # NULL => idle=true (never beat = no live work embodiment to be 'busy'). The agent-wide
+            # idle_seconds (bumped by a conversation renew too) is kept for debug only and no longer
+            # gates the work wake.
+            idle_seconds = a["idle_seconds"]           # agent-wide, debug/back-compat only
+            work_idle_seconds = a["work_idle_seconds"]
+            is_idle = (work_idle_seconds is None) or (work_idle_seconds >= min_idle)
             # #266: clock-driven auto-wake — a recurring heartbeat poll, due when the interval has
             # elapsed since the last wake of ANY kind (last_woken_at, NULL=never => due immediately).
             # Two interlocks, ALL reusing existing state (no parallel counter): (1) opt-in only
@@ -4837,14 +5034,20 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             auto_wake_due = bool(
                 auto_interval is not None
                 and (secs_since_woken is None or secs_since_woken >= auto_interval))
-            has_work = pending > 0 or len(auto_tasks) > 0 or auto_wake_due
+            has_work = pending > 0 or len(auto_tasks) > 0 or auto_wake_due or has_pending_task_request
             wake_enabled = a["wake_enabled"]
             in_cooldown = bool(a["in_cooldown"])
-            lease_active = bool(a["lease_active"])   # R2.4: a worker is already live
+            # GH #91/#90: the existing lease/embodiment signals ARE the WORK lane now (they read the
+            # work columns / lane='work'). should_wake gates on the WORK lane ONLY — a live
+            # conversation resident (conv_lease_active / conv_embodiment_running) no longer suppresses
+            # a work wake, because the two lanes are independent embodiments.
+            lease_active = bool(a["lease_active"])   # R2.4 / GH #91: WORK lease is live
             lease_kind = a["lease_kind"]             # E1: 'ephemeral' | 'resident' | None
             # #247 B2: anything-live? is the real single-embodiment guard, not is-resident-due?.
-            # A lapsed-lease orphan whose worker_run is still 'running' must suppress the wake too.
-            embodiment_running = bool(a["embodiment_running"])
+            # A lapsed-lease WORK orphan whose worker_run is still 'running' must suppress the wake too.
+            embodiment_running = bool(a["embodiment_running"])  # GH #91: lane='work' running run
+            conv_lease_active = bool(a["conv_lease_active"])
+            conv_embodiment_running = bool(a["conv_embodiment_running"])
             should_wake = bool(active and wakes_enabled and wake_enabled and has_work
                                and is_idle and not in_cooldown and not lease_active
                                and not embodiment_running)
@@ -4869,7 +5072,7 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             elif not has_work:
                 reason = "no pending events or ready tasks"
             elif not is_idle:
-                reason = f"agent active (idle {idle_seconds:.0f}s < {min_idle:.0f}s)"
+                reason = f"agent active (work idle {work_idle_seconds:.0f}s < {min_idle:.0f}s)"
             elif in_cooldown:
                 reason = "within cooldown window"
             else:
@@ -4883,6 +5086,9 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                         bits.append(f"{pending} event(s) (latest={latest})")
                 if auto_tasks:
                     bits.append(f"{len(auto_tasks)} assigned ready task(s)")
+                # GH #91/#90: an owed OPEN task request is a first-class WORK wake reason.
+                if has_pending_task_request:
+                    bits.append("open task-request awaiting accept")
                 if auto_wake_due:
                     bits.append(f"scheduled auto-wake (every {auto_interval}s)")
                 reason = "wake: " + ", ".join(bits)
@@ -4892,8 +5098,11 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # That narrowness is the safety bar: anything else (task work, a directed prompt, a
             # multi-event backlog that might hide actionable work) carries NO hint and always wakes.
             # The notifier reads the hint and decides (failing open); the server never suppresses.
+            # GH #91/#90: an owed OPEN task request is task-shaped work that must ALWAYS full-boot —
+            # never attach a suppression hint when one is pending (the notifier's suppression decider
+            # also short-circuits to wake on has_pending_task_request; this is the server-side belt).
             triage_hint = None
-            if (should_wake and pending == 1 and not auto_tasks
+            if (should_wake and not has_pending_task_request and pending == 1 and not auto_tasks
                     and not wake_task_id and not prompt_messages and latest):
                 full_answer = None
                 if latest == "request_answered" and (latest_payload or {}).get("request_id"):
@@ -4922,7 +5131,16 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 "lease_active": lease_active, "lease_kind": lease_kind,
                 # #247 B2: the authoritative live-embodiment signal (a 'running' worker_run), exposed
                 # so the portal/debug can see an orphan suppressing a wake even after its lease lapsed.
+                # GH #91/#90: this is now the WORK-lane running signal (lane='work').
                 "embodiment_running": embodiment_running,
+                # GH #91/#90: the uncapped owed-task signal — the notifier folds it into has_task_request
+                # and its tier/suppression deciders short-circuit to a full WORK boot on it.
+                "has_pending_task_request": has_pending_task_request,
+                # GH #91/#90: lane-split debug fields (should_wake governs WORK only; these expose the
+                # coexisting conversation-lane state so the portal/debug can see both embodiments).
+                "conv_lease_active": conv_lease_active,
+                "conv_embodiment_running": conv_embodiment_running,
+                "work_idle_seconds": work_idle_seconds,
                 "idle_seconds": idle_seconds,
                 "tmux_target": a["tmux_target"], "headless_cwd": a["headless_cwd"],
                 "headless_flags": a["headless_flags"],
@@ -4958,41 +5176,75 @@ def wake_ack(aid: str, body: WakeAck):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
-        cur.execute(
-            """INSERT INTO agent_wake_state
-                 (agent_id, delivered_ts, last_woken_at, last_wake_kind, last_wake_event,
-                  wake_lease_until)
-               VALUES (%s, COALESCE(%s, 0), CASE WHEN %s THEN now() ELSE NULL END, %s, %s, NULL)
-               ON CONFLICT (agent_id) DO UPDATE SET
-                 -- never move the cursor backwards; only advance when given a newer ts
-                 delivered_ts    = GREATEST(agent_wake_state.delivered_ts,
-                                            COALESCE(EXCLUDED.delivered_ts, agent_wake_state.delivered_ts)),
-                 -- #266: stamp_woken=false (the auto-wake idle-yield) PRESERVES the prior clock so the
-                 -- ephemeral wake it's stepping aside for still reads auto_wake_due; every other ack stamps.
-                 last_woken_at   = CASE WHEN %s THEN now() ELSE agent_wake_state.last_woken_at END,
-                 last_wake_kind  = EXCLUDED.last_wake_kind,
-                 last_wake_event = EXCLUDED.last_wake_event,
-                 -- R2.4: a finished one-shot worker releases its lease; otherwise leave it
-                 -- intact so the TTL still guards against a concurrent spawn.
-                 wake_lease_until = CASE WHEN %s THEN NULL
-                                         ELSE agent_wake_state.wake_lease_until END,
-                 -- E1: clear the embodiment label when the lease is released, so a released
-                 -- agent shows no embodiment (NULL) rather than a stale 'ephemeral'/'resident'.
-                 lease_kind       = CASE WHEN %s THEN NULL
-                                         ELSE agent_wake_state.lease_kind END,
-                 -- ISS-69(b): releasing the lease (e.g. an idle resident yielding to a terminal)
-                 -- also clears any pending yield request — it has been satisfied, so the next holder
-                 -- never inherits a stale flag.
-                 preempt_requested_at = CASE WHEN %s THEN NULL
-                                             ELSE agent_wake_state.preempt_requested_at END,
-                 preempt_for          = CASE WHEN %s THEN NULL
-                                             ELSE agent_wake_state.preempt_for END
-               RETURNING delivered_ts, last_woken_at, last_wake_kind, last_wake_event,
-                         wake_lease_until, lease_kind""",
-            (aid, body.delivered_ts, body.stamp_woken, body.kind, body.event, body.stamp_woken,
-             body.release_lease, body.release_lease,
-             body.release_lease, body.release_lease),
-        )
+        # GH #91/#90: an ack acts on ONE lane's slot. None -> 'work' (backward compat: every existing
+        # ephemeral/live ack is work-lane; a resident conversation ack passes 'conversation'). The
+        # cursor advance (delivered_ts) + cooldown stamp (last_woken_at) + lease release + the
+        # running->orphaned reconcile are all scoped to this lane so a conversation ack never swallows
+        # a work event, resets the work cooldown, or cross-orphans a work run.
+        lane = body.lane or "work"
+        if lane == "conversation":
+            cur.execute(
+                """INSERT INTO agent_wake_state
+                     (agent_id, conv_delivered_ts, conv_last_woken_at, last_wake_kind, last_wake_event,
+                      conv_lease_until)
+                   VALUES (%s, COALESCE(%s, 0), CASE WHEN %s THEN now() ELSE NULL END, %s, %s, NULL)
+                   ON CONFLICT (agent_id) DO UPDATE SET
+                     conv_delivered_ts = GREATEST(COALESCE(agent_wake_state.conv_delivered_ts, 0),
+                                                  COALESCE(EXCLUDED.conv_delivered_ts, agent_wake_state.conv_delivered_ts)),
+                     conv_last_woken_at = CASE WHEN %s THEN now() ELSE agent_wake_state.conv_last_woken_at END,
+                     last_wake_kind  = EXCLUDED.last_wake_kind,
+                     last_wake_event = EXCLUDED.last_wake_event,
+                     conv_lease_until = CASE WHEN %s THEN NULL
+                                             ELSE agent_wake_state.conv_lease_until END,
+                     conv_lease_kind  = CASE WHEN %s THEN NULL
+                                             ELSE agent_wake_state.conv_lease_kind END,
+                     conv_preempt_requested_at = CASE WHEN %s THEN NULL
+                                                 ELSE agent_wake_state.conv_preempt_requested_at END,
+                     conv_preempt_for          = CASE WHEN %s THEN NULL
+                                                 ELSE agent_wake_state.conv_preempt_for END
+                   RETURNING conv_delivered_ts AS delivered_ts, conv_last_woken_at AS last_woken_at,
+                             last_wake_kind, last_wake_event,
+                             conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind""",
+                (aid, body.delivered_ts, body.stamp_woken, body.kind, body.event, body.stamp_woken,
+                 body.release_lease, body.release_lease,
+                 body.release_lease, body.release_lease),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO agent_wake_state
+                     (agent_id, delivered_ts, last_woken_at, last_wake_kind, last_wake_event,
+                      wake_lease_until)
+                   VALUES (%s, COALESCE(%s, 0), CASE WHEN %s THEN now() ELSE NULL END, %s, %s, NULL)
+                   ON CONFLICT (agent_id) DO UPDATE SET
+                     -- never move the cursor backwards; only advance when given a newer ts
+                     delivered_ts    = GREATEST(agent_wake_state.delivered_ts,
+                                                COALESCE(EXCLUDED.delivered_ts, agent_wake_state.delivered_ts)),
+                     -- #266: stamp_woken=false (the auto-wake idle-yield) PRESERVES the prior clock so the
+                     -- ephemeral wake it's stepping aside for still reads auto_wake_due; every other ack stamps.
+                     last_woken_at   = CASE WHEN %s THEN now() ELSE agent_wake_state.last_woken_at END,
+                     last_wake_kind  = EXCLUDED.last_wake_kind,
+                     last_wake_event = EXCLUDED.last_wake_event,
+                     -- R2.4: a finished one-shot worker releases its lease; otherwise leave it
+                     -- intact so the TTL still guards against a concurrent spawn.
+                     wake_lease_until = CASE WHEN %s THEN NULL
+                                             ELSE agent_wake_state.wake_lease_until END,
+                     -- E1: clear the embodiment label when the lease is released, so a released
+                     -- agent shows no embodiment (NULL) rather than a stale 'ephemeral'/'resident'.
+                     lease_kind       = CASE WHEN %s THEN NULL
+                                             ELSE agent_wake_state.lease_kind END,
+                     -- ISS-69(b): releasing the lease (e.g. an idle resident yielding to a terminal)
+                     -- also clears any pending yield request — it has been satisfied, so the next holder
+                     -- never inherits a stale flag.
+                     preempt_requested_at = CASE WHEN %s THEN NULL
+                                                 ELSE agent_wake_state.preempt_requested_at END,
+                     preempt_for          = CASE WHEN %s THEN NULL
+                                                 ELSE agent_wake_state.preempt_for END
+                   RETURNING delivered_ts, last_woken_at, last_wake_kind, last_wake_event,
+                             wake_lease_until, lease_kind""",
+                (aid, body.delivered_ts, body.stamp_woken, body.kind, body.event, body.stamp_woken,
+                 body.release_lease, body.release_lease,
+                 body.release_lease, body.release_lease),
+            )
         row = cur.fetchone()
         # ISS-stranded (e4b77f3f): durable reconciliation backstop. Enforce the invariant
         # "lease released => no 'running' worker_runs for this agent". The happy paths
@@ -5000,23 +5252,28 @@ def wake_ack(aid: str, body: WakeAck):
         # genuine orphan — a run whose run_id never reached the daemon's current_run_id (a send
         # that failed after the row was POSTed, pre send-first fix) or was stranded by daemon
         # turnover. worker_runs.status is free TEXT (no CHECK), so 'orphaned' needs no migration.
+        # GH #91/#90: filter the reconcile to the RELEASED lane so a work ack never orphans a live
+        # conversation run (or vice-versa) — the two lanes are independent.
         if body.release_lease:
             cur.execute(
                 """UPDATE worker_runs SET status='orphaned', ended_at=now()
-                   WHERE agent_id=%s AND status='running'
+                   WHERE agent_id=%s AND status='running' AND lane=%s
                    RETURNING run_id""",
-                (aid,))
+                (aid, lane))
             reconciled = [str(rr["run_id"]) for rr in cur.fetchall()]
             if reconciled:
+                # GH #91/#90: revoke the reconciled runs' tokens — the process is gone (orphaned) so
+                # its WORK-lane capability must not linger.
+                _revoke_tokens_for_runs(cur, reconciled)
                 log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
                           "worker_runs_reconciled",
                           {"reconciled": reconciled, "to_status": "orphaned",
-                           "trigger": "lease_release"})
+                           "trigger": "lease_release", "lane": lane})
         log_event(cur, str(ag["container_id"]), "system", None, "agent", aid, "woken",
                   {"kind": body.kind, "event": body.event, "delivered_ts": body.delivered_ts,
-                   "release_lease": body.release_lease})
+                   "release_lease": body.release_lease, "lane": lane})
         conn.commit()
-    return {"agent_id": aid, **row}
+    return {"agent_id": aid, "lane": lane, **row}
 
 
 @app.post("/api/agents/{aid}/wake-claim", status_code=200)
@@ -5055,48 +5312,81 @@ def wake_claim(aid: str, body: WakeClaim):
         if rr is not None and rr["wake_enabled"] is False:
             return {"agent_id": aid, "claimed": False,
                     "reason": "wake disabled for this agent (opt-out)"}
-        # Conditional single-flight: insert-or-claim only when no live lease exists.
-        cur.execute(
-            """INSERT INTO agent_wake_state (agent_id, wake_lease_until, last_woken_at, lease_kind)
-               VALUES (%s, now() + make_interval(secs => %s), now(), %s)
-               ON CONFLICT (agent_id) DO UPDATE SET
-                 wake_lease_until = now() + make_interval(secs => %s),
-                 last_woken_at    = now(),
-                 lease_kind       = EXCLUDED.lease_kind,
-                 -- ISS-69(b): a fresh claim clears any stale yield request (the prior holder
-                 -- yielded and this is the new embodiment — no pending preempt should linger).
-                 preempt_requested_at = NULL,
-                 preempt_for          = NULL
-               WHERE (agent_wake_state.wake_lease_until IS NULL
-                      OR agent_wake_state.wake_lease_until < now())
-                 -- #247 B2: atomic anything-live? belt. Even with a lapsed/absent lease, refuse the
-                 -- claim while a worker_run is still 'running' (daemon-kill orphan whose lease lapsed
-                 -- with no renewer) — closes the orphan double-spawn hole server-side, in the SAME
-                 -- conditional that already serializes concurrent claims. The OR above is parenthesized
-                 -- so this AND also guards the NULL-lease branch (AND binds tighter than OR).
-                 AND NOT EXISTS (SELECT 1 FROM worker_runs wr
-                                 WHERE wr.agent_id = agent_wake_state.agent_id
-                                   AND wr.status = 'running')
-               RETURNING wake_lease_until, lease_kind""",
-            (aid, body.lease_ttl, body.lease_kind, body.lease_ttl),
-        )
+        # GH #91/#90: resolve which lease SLOT to claim. The two lanes have independent slots on the
+        # one agent_wake_state row, so a warm conversation resident and a work worker can be live for
+        # the same agent at once — one lane's live lease never blocks the other's claim, and the
+        # `NOT EXISTS(running worker_run)` belt is scoped to the CLAIMING lane below.
+        lane = _resolve_claim_lane(body)
+        if lane == "conversation":
+            # CONVERSATION lane: target the conv_* lease slot. Preempt/yield is a WORK-lane concept
+            # (a live terminal preempting an idle resident is now cross-lane and unnecessary — they
+            # coexist), so a conversation claim NEVER sets preempt (documented, Open Q3). The belt is
+            # scoped `wr.lane='conversation'` so a running WORK run does not block a conversation claim.
+            cur.execute(
+                """INSERT INTO agent_wake_state (agent_id, conv_lease_until, conv_last_woken_at, conv_lease_kind)
+                   VALUES (%s, now() + make_interval(secs => %s), now(), %s)
+                   ON CONFLICT (agent_id) DO UPDATE SET
+                     conv_lease_until = now() + make_interval(secs => %s),
+                     conv_last_woken_at = now(),
+                     conv_lease_kind  = EXCLUDED.conv_lease_kind,
+                     conv_preempt_requested_at = NULL,
+                     conv_preempt_for          = NULL
+                   WHERE (agent_wake_state.conv_lease_until IS NULL
+                          OR agent_wake_state.conv_lease_until < now())
+                     AND NOT EXISTS (SELECT 1 FROM worker_runs wr
+                                     WHERE wr.agent_id = agent_wake_state.agent_id
+                                       AND wr.status = 'running' AND wr.lane = 'conversation')
+                   RETURNING conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind""",
+                (aid, body.lease_ttl, body.lease_kind, body.lease_ttl),
+            )
+        else:
+            # Conditional single-flight: insert-or-claim only when no live WORK lease exists.
+            cur.execute(
+                """INSERT INTO agent_wake_state (agent_id, wake_lease_until, last_woken_at, lease_kind)
+                   VALUES (%s, now() + make_interval(secs => %s), now(), %s)
+                   ON CONFLICT (agent_id) DO UPDATE SET
+                     wake_lease_until = now() + make_interval(secs => %s),
+                     last_woken_at    = now(),
+                     lease_kind       = EXCLUDED.lease_kind,
+                     -- ISS-69(b): a fresh claim clears any stale yield request (the prior holder
+                     -- yielded and this is the new embodiment — no pending preempt should linger).
+                     preempt_requested_at = NULL,
+                     preempt_for          = NULL
+                   WHERE (agent_wake_state.wake_lease_until IS NULL
+                          OR agent_wake_state.wake_lease_until < now())
+                     -- #247 B2: atomic anything-live? belt. Even with a lapsed/absent lease, refuse the
+                     -- claim while a worker_run is still 'running' (daemon-kill orphan whose lease lapsed
+                     -- with no renewer) — closes the orphan double-spawn hole server-side, in the SAME
+                     -- conditional that already serializes concurrent claims. The OR above is parenthesized
+                     -- so this AND also guards the NULL-lease branch (AND binds tighter than OR).
+                     -- GH #91/#90: scoped `wr.lane='work'` so a running CONVERSATION run does not block
+                     -- a work claim (the two lanes are independent).
+                     AND NOT EXISTS (SELECT 1 FROM worker_runs wr
+                                     WHERE wr.agent_id = agent_wake_state.agent_id
+                                       AND wr.status = 'running' AND wr.lane = 'work')
+                   RETURNING wake_lease_until, lease_kind""",
+                (aid, body.lease_ttl, body.lease_kind, body.lease_ttl),
+            )
         row = cur.fetchone()
         if row is None:
-            # Conflict + WHERE false → a live lease is held (single-flight / single-embodiment).
+            # Conflict + WHERE false → a live lease is held IN THIS LANE (single-flight /
+            # single-embodiment PER LANE). Read back the held kind from the lane's own columns.
             conn.rollback()
-            cur.execute("SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))
+            if lane == "conversation":
+                cur.execute("SELECT conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind "
+                            "FROM agent_wake_state WHERE agent_id=%s", (aid,))
+            else:
+                cur.execute("SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))
             held = cur.fetchone()
             held_kind = held["lease_kind"] if held else None
             # ISS-69(b): a live-terminal claim (preempt=1) blocked by an IDLE warm RESIDENT records a
-            # YIELD REQUEST rather than just refusing. The daemon (notifier.service_residents) reads it
-            # back on its next wake-renew and, only if the resident isn't mid-turn, snapshots + releases
-            # the lease so this claim wins on retry. Only a RESIDENT yields: an ephemeral wake or another
-            # live terminal stays a hard 4409 (preempt has no effect on those). The deferred (mid-turn)
-            # case is automatic — the flag persists, so the next idle daemon tick yields.
-            # GATE on the REQUESTING kind too (review [blocking]): ISS-69(b) is scoped to the HUMAN
-            # terminal "Pair anyway" path, so ONLY a live-terminal claim may preempt. An autonomous
-            # ephemeral wake with preempt=true must NOT evict a warm resident — it stays a normal 4409.
-            if body.preempt and body.lease_kind == "live" and held_kind == "resident":
+            # YIELD REQUEST rather than just refusing. GH #91/#90: preempt/yield is WORK-lane only —
+            # a live terminal is a WORK embodiment and a resident is a CONVERSATION embodiment, so the
+            # historical "live preempts idle resident" is now CROSS-LANE and unnecessary (they coexist
+            # in separate slots). The preempt PATH stays but only fires on the work lane; a
+            # conversation claim never reaches it (a resident holder is now in the conv slot, never
+            # blocking a work claim). Kept-but-inert per Open Q3.
+            if lane == "work" and body.preempt and body.lease_kind == "live" and held_kind == "resident":
                 cur.execute(
                     """UPDATE agent_wake_state
                           SET preempt_requested_at = now(), preempt_for = %s
@@ -5105,19 +5395,19 @@ def wake_claim(aid: str, body: WakeClaim):
                 log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
                           "wake_preempt_requested", {"by": body.lease_kind, "holder": held_kind})
                 conn.commit()
-                return {"agent_id": aid, "claimed": False, "reason": "yield_pending",
+                return {"agent_id": aid, "claimed": False, "reason": "yield_pending", "lane": lane,
                         "lease_kind": held_kind, "preempt_requested": True,
                         "wake_lease_until": held["wake_lease_until"].isoformat() if held and held["wake_lease_until"] else None}
             reason = ({"resident": "a resident session is live (single-embodiment)",
                        "live": "a live terminal session is held (single-embodiment)"}
                       .get(held_kind, "a worker is already live (single-flight lease held)"))
-            return {"agent_id": aid, "claimed": False, "reason": reason, "lease_kind": held_kind,
+            return {"agent_id": aid, "claimed": False, "reason": reason, "lane": lane, "lease_kind": held_kind,
                     "wake_lease_until": held["wake_lease_until"].isoformat() if held and held["wake_lease_until"] else None}
         log_event(cur, str(ag["container_id"]), "system", None, "agent", aid, "wake_claimed",
                   {"kind": body.kind, "event": body.event, "lease_ttl": body.lease_ttl,
-                   "lease_kind": body.lease_kind})
+                   "lease_kind": body.lease_kind, "lane": lane})
         conn.commit()
-    resp = {"agent_id": aid, "claimed": True, "lease_kind": row["lease_kind"],
+    resp = {"agent_id": aid, "claimed": True, "lane": lane, "lease_kind": row["lease_kind"],
             "wake_lease_until": row["wake_lease_until"].isoformat()}
     # §3b live embodiment: the PTY bridge needs to know whether to COLD-boot (Vault injects
     # persona+digest+history into `orcha use`) or RESUME a pinned session. R1 is COLD-ONLY
@@ -5145,23 +5435,44 @@ def wake_renew(aid: str, body: WakeClaim):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_agent(cur, aid)
-        cur.execute(
-            """UPDATE agent_wake_state
-               SET wake_lease_until = now() + make_interval(secs => %s)
-               WHERE agent_id = %s
-                 AND wake_lease_until IS NOT NULL
-                 AND wake_lease_until > now()
-               RETURNING wake_lease_until, lease_kind, preempt_requested_at""",
-            (body.lease_ttl, aid),
-        )
+        # GH #91/#90: renew the matching lane's slot only. Each lane extends its own *_lease_until and
+        # bumps its own *_last_heartbeat_at, so a conversation keep-alive never freshens the WORK-lane
+        # idle gate (which now reads work_last_heartbeat_at) and vice-versa.
+        lane = _resolve_claim_lane(body)
+        if lane == "conversation":
+            cur.execute(
+                """UPDATE agent_wake_state
+                   SET conv_lease_until = now() + make_interval(secs => %s)
+                   WHERE agent_id = %s
+                     AND conv_lease_until IS NOT NULL
+                     AND conv_lease_until > now()
+                   RETURNING conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind,
+                             conv_preempt_requested_at AS preempt_requested_at""",
+                (body.lease_ttl, aid),
+            )
+        else:
+            cur.execute(
+                """UPDATE agent_wake_state
+                   SET wake_lease_until = now() + make_interval(secs => %s)
+                   WHERE agent_id = %s
+                     AND wake_lease_until IS NOT NULL
+                     AND wake_lease_until > now()
+                   RETURNING wake_lease_until, lease_kind, preempt_requested_at""",
+                (body.lease_ttl, aid),
+            )
         row = cur.fetchone()
         if row is not None:
             # ISS-60(B) liveness ping: a SUCCESSFUL renew is the daemon's per-tick proof that this
             # embodiment's process is genuinely alive (reap_workers / service_residents / the live
-            # terminal bridge all renew only while their process lives). Bump last_heartbeat_at here
-            # so the orphan-lease reaper can trust heartbeat staleness as death — an alive-but-quiet
-            # resident (whose ONLY signal is this keep-alive) keeps a fresh heartbeat and is never
-            # false-orphaned. A renew that races a release/expiry returns None and does NOT bump.
+            # terminal bridge all renew only while their process lives). GH #91/#90: bump the LANE's
+            # own heartbeat column so the (now lane-scoped) orphan-lease reaper + wake idle gate can
+            # trust per-lane heartbeat staleness as death. Keep bumping agents.last_heartbeat_at too
+            # (portal-wide liveness), but the work-idle gate no longer reads it. A renew that races a
+            # release/expiry returns None and does NOT bump either.
+            if lane == "conversation":
+                cur.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() WHERE agent_id = %s", (aid,))
+            else:
+                cur.execute("UPDATE agent_wake_state SET work_last_heartbeat_at = now() WHERE agent_id = %s", (aid,))
             cur.execute("UPDATE agents SET last_heartbeat_at = now() WHERE id = %s", (aid,))
         # #240/ISS-72: surface a pending human STOP on this SAME per-tick renew (zero new poll).
         # Single-flight ⇒ ≤1 running run per agent, so an agent-keyed renew carries a run-scoped
@@ -5176,19 +5487,20 @@ def wake_renew(aid: str, body: WakeClaim):
                      FROM worker_runs w
                      LEFT JOIN agents ag ON ag.id::text = w.stop_requested_by
                     WHERE w.agent_id = %s AND w.status = 'running'
+                      AND w.lane = %s
                       AND w.stop_requested_at IS NOT NULL
                     ORDER BY w.started_at DESC LIMIT 1""",
-                (aid,),
+                (aid, lane),
             )
             stop = cur.fetchone()
         conn.commit()
     if row is None:
-        return {"agent_id": aid, "renewed": False, "wake_lease_until": None, "lease_kind": None,
+        return {"agent_id": aid, "renewed": False, "lane": lane, "wake_lease_until": None, "lease_kind": None,
                 "preempt_requested": False, "stop_requested": False, "stop_run_id": None,
                 "stop_requested_by": None}
     # ISS-69(b): surface a pending yield request on the heartbeat the daemon already sends every
     # tick, so service_residents can yield an idle resident WITHOUT a separate read loop.
-    return {"agent_id": aid, "renewed": True, "lease_kind": row["lease_kind"],
+    return {"agent_id": aid, "renewed": True, "lane": lane, "lease_kind": row["lease_kind"],
             "wake_lease_until": row["wake_lease_until"].isoformat(),
             "preempt_requested": row["preempt_requested_at"] is not None,
             "stop_requested": stop is not None,
@@ -5214,28 +5526,39 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
     NULL heartbeats are NEVER reaped (an agent that never beat has no live embodiment to orphan; its
     own short TTL handles it) — only a once-alive-now-stale lease. The reap DECISION lives server-side
     (only the API touches the DB) so the host daemon stays a thin caller. The daemon polls this each
-    tick; it is idempotent (a released lease is no longer LIVE, so a re-call is a no-op)."""
+    tick; it is idempotent (a released lease is no longer LIVE, so a re-call is a no-op).
+
+    GH #91/#90: the reaper is now TWO INDEPENDENT lane branches so a stale WORK lease is reaped
+    without touching a live CONVERSATION lease on the same agent (and vice-versa). Each branch keys
+    idle on its OWN heartbeat column, releases only its OWN lease columns, and reconciles only its
+    OWN lane's runs. WORK back-compat: a legacy (pre-030) row that has a work lease but a NULL
+    work_last_heartbeat_at (it was never split) still reaps — the WORK branch keys idle on
+    COALESCE(work_last_heartbeat_at, agents.last_heartbeat_at), so pre-split rows fall back to the
+    agent-wide heartbeat they always used. The conversation branch has no such legacy (conv leases
+    only exist post-030), so it keys strictly on conv_last_heartbeat_at."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    with db_cursor() as (conn, cur):
-        _require_container(cur, cid)
-        # CTE so RETURNING-equivalent captures the PRE-release lease_kind (the UPDATE NULLs it).
+
+    def _reap_lane(cur, *, lease_col, kind_col, heartbeat_expr, preempt_cols, run_lane):
+        """Reap one lane's orphan leases. Returns the pre-release reaped rows (agent_id/alias/
+        lease_kind/idle_seconds) with reconciled_runs already revoked + logged per agent."""
+        set_release = ", ".join([f"{lease_col} = NULL", f"{kind_col} = NULL"]
+                                + [f"{c} = NULL" for c in preempt_cols])
         cur.execute(
-            """WITH orphans AS (
-                   SELECT w.agent_id, a.alias, w.lease_kind,
-                          EXTRACT(EPOCH FROM (now() - a.last_heartbeat_at)) AS idle_seconds
+            f"""WITH orphans AS (
+                   SELECT w.agent_id, a.alias, w.{kind_col} AS lease_kind,
+                          EXTRACT(EPOCH FROM (now() - ({heartbeat_expr}))) AS idle_seconds
                      FROM agent_wake_state w
                      JOIN agents a ON a.id = w.agent_id
                     WHERE a.container_id = %s
                       AND a.terminated_at IS NULL
-                      AND w.wake_lease_until IS NOT NULL
-                      AND w.wake_lease_until > now()                       -- only a LIVE (wake-blocking) lease
-                      AND a.last_heartbeat_at IS NOT NULL                  -- never-beat = no embodiment to orphan
-                      AND a.last_heartbeat_at < now() - make_interval(secs => %s)
+                      AND w.{lease_col} IS NOT NULL
+                      AND w.{lease_col} > now()                            -- only a LIVE (wake-blocking) lease
+                      AND ({heartbeat_expr}) IS NOT NULL                   -- never-beat = no embodiment to orphan
+                      AND ({heartbeat_expr}) < now() - make_interval(secs => %s)
                ), released AS (
                    UPDATE agent_wake_state w
-                      SET wake_lease_until = NULL, lease_kind = NULL,
-                          preempt_requested_at = NULL, preempt_for = NULL
+                      SET {set_release}
                      FROM orphans o
                     WHERE w.agent_id = o.agent_id
                    RETURNING w.agent_id
@@ -5244,28 +5567,57 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
             (cid, orphan_secs),
         )
         reaped = cur.fetchall()
-        # ISS-stranded (e4b77f3f): fold the run-reconcile into the orphan-lease reaper too, so a lease
-        # that OUTLIVED its embodiment (daemon turnover, beyond the TTL's reach) also clears its
-        # stranded 'running' worker_runs when the reaper force-releases it — same invariant as
-        # wake-ack's release path, keyed on the agents whose lease we just released.
+        # ISS-stranded (e4b77f3f): reconcile stranded 'running' runs when the reaper force-releases a
+        # lease that OUTLIVED its embodiment — same invariant as wake-ack's release path. GH #91/#90:
+        # scoped to THIS lane's runs so a work reap never orphans a live conversation run.
         runs_by_agent: dict = {}
         reaped_ids = [str(r["agent_id"]) for r in reaped]
         if reaped_ids:
             cur.execute(
                 """UPDATE worker_runs SET status='orphaned', ended_at=now()
-                   WHERE agent_id::text = ANY(%s) AND status='running'
+                   WHERE agent_id::text = ANY(%s) AND status='running' AND lane=%s
                    RETURNING run_id, agent_id""",
-                (reaped_ids,))
+                (reaped_ids, run_lane))
             for rr in cur.fetchall():
                 runs_by_agent.setdefault(str(rr["agent_id"]), []).append(str(rr["run_id"]))
+        # GH #91/#90: revoke the reconciled runs' tokens — the embodiment is gone.
+        all_reconciled = [rid for rids in runs_by_agent.values() for rid in rids]
+        _revoke_tokens_for_runs(cur, all_reconciled)
         for r in reaped:
             log_event(cur, cid, "system", None, "agent", str(r["agent_id"]),
                       "orphan_lease_reaped",
-                      {"lease_kind": r["lease_kind"],
+                      {"lease_kind": r["lease_kind"], "lane": run_lane,
                        "idle_seconds": round(float(r["idle_seconds"]), 1),
                        "orphan_secs": orphan_secs,
                        "reconciled_runs": runs_by_agent.get(str(r["agent_id"]), [])})
+        return reaped
+
+    with db_cursor() as (conn, cur):
+        _require_container(cur, cid)
+        # WORK branch — legacy fallback on the agent-wide heartbeat via COALESCE (see docstring).
+        work_reaped = _reap_lane(
+            cur, lease_col="wake_lease_until", kind_col="lease_kind",
+            heartbeat_expr="COALESCE(w.work_last_heartbeat_at, a.last_heartbeat_at)",
+            preempt_cols=("preempt_requested_at", "preempt_for"), run_lane="work")
+        # CONVERSATION branch — keyed strictly on the lane's own heartbeat (no pre-030 legacy).
+        conv_reaped = _reap_lane(
+            cur, lease_col="conv_lease_until", kind_col="conv_lease_kind",
+            heartbeat_expr="w.conv_last_heartbeat_at",
+            preempt_cols=("conv_preempt_requested_at", "conv_preempt_for"), run_lane="conversation")
+        # GH #91/#90: unbound-token backstop — a token minted for a spawn that NEVER created its run
+        # (crash between mint and /runs) would otherwise linger valid forever with run_id NULL. Revoke
+        # any unbound token older than 2 minutes (well beyond a normal mint->spawn->/runs window).
+        # PR R5: EXCEPT kind='resident' — a resident token is PROCESS-scoped by design (one warm
+        # resident spans many per-turn runs, so its run_id stays NULL for its whole life; the daemon
+        # revokes it at resident teardown). Sweeping it here contradicted the documented lifecycle
+        # and would break any future "valid conversation token" check mid-conversation.
+        cur.execute(
+            """UPDATE embodiment_tokens SET revoked_at=now()
+               WHERE run_id IS NULL AND revoked_at IS NULL
+                 AND kind <> 'resident'
+                 AND created_at < now() - interval '2 minutes'""")
         conn.commit()
+    reaped = list(work_reaped) + list(conv_reaped)
     return {"container_id": cid, "orphan_secs": orphan_secs,
             "reaped": [{"agent_id": str(r["agent_id"]), "alias": r["alias"],
                         "lease_kind": r["lease_kind"],
@@ -5345,6 +5697,140 @@ def set_autonomy_level(cid: str, body: AutonomyUpdate):
     return {"container_id": cid, "autonomy_level": row["autonomy_level"]}
 
 
+# ---------- GH #91/#90: embodiment tokens (per-process WORK-lane capability) ----------
+# A run_token is minted BEFORE a worker is spawned and bound to its run row at run-create. The four
+# WORK-lane-only task endpoints (/next, accept->working, /tasks/{id}/done, release) require a valid
+# non-revoked WORK token via the X-Orcha-Run-Token header, so a conversation-lane (or mislabeled)
+# process structurally CANNOT own/claim/complete a task — it can only DISPATCH one. The server
+# revokes a run's token on EVERY terminal transition it observes (finish / wake-ack orphan /
+# reap-orphan-leases / dead-pid sweep) so a revoked capability can never outlive its process.
+
+class EmbodimentTokenMint(BaseModel):
+    """GH #91/#90: mint a per-process capability token before a spawn."""
+    lane: str = Field(..., pattern="^(work|conversation)$",
+                      description="work = may claim/work/complete tasks; conversation = dispatch only")
+    kind: str = Field(..., description="informational: headless | resident | live")
+
+
+@app.post("/api/agents/{aid}/embodiment-tokens", status_code=201)
+def mint_embodiment_token(aid: str, body: EmbodimentTokenMint):
+    """GH #91/#90: mint a run_token for a spawn about to happen. run_id/pid stay NULL until the run
+    is created and binds the token (start_worker_run). The token_id returned IS the run_token — there
+    is no separate id column; the daemon carries it as the handle for the bind + revoke calls."""
+    if not _valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        _require_agent(cur, aid)
+        tok = secrets.token_urlsafe(32)
+        cur.execute(
+            """INSERT INTO embodiment_tokens (run_token, agent_id, lane, kind)
+               VALUES (%s, %s, %s, %s)""",
+            (tok, aid, body.lane, body.kind))
+        conn.commit()
+    return {"run_token": tok, "token_id": tok}
+
+
+@app.post("/api/embodiment-tokens/{token}/revoke", status_code=200)
+def revoke_embodiment_token(token: str):
+    """GH #91/#90: revoke a token (idempotent). A daemon revokes its own token when it retires the
+    embodiment; the server also revokes on terminal transitions. Re-revoking a revoked/unknown token
+    is a no-op 200 with revoked=false."""
+    with db_cursor() as (conn, cur):
+        cur.execute(
+            """UPDATE embodiment_tokens SET revoked_at=now()
+               WHERE run_token=%s AND revoked_at IS NULL""",
+            (token,))
+        revoked = cur.rowcount > 0
+        conn.commit()
+    return {"revoked": bool(revoked)}
+
+
+def _require_work_lane(cur, aid, token):
+    """GH #91/#90: gate a WORK-lane-only task endpoint. A missing / unknown / revoked / conversation
+    token -> 403. Only a valid non-revoked WORK token for THIS agent passes. Raise (don't return) so
+    the handler aborts before touching the task. A human live terminal is minted a WORK token by the
+    terminal bridge, so it passes; a conversation resident holds a conversation token and cannot."""
+    if not token:
+        raise HTTPException(403, "work-lane token required")
+    cur.execute(
+        "SELECT lane FROM embodiment_tokens WHERE run_token=%s AND agent_id=%s AND revoked_at IS NULL",
+        (token, aid))
+    row = cur.fetchone()
+    if row is None or row["lane"] != "work":
+        raise HTTPException(403, "conversation lane cannot claim/work a task; create/assign a task and stop")
+
+
+def _attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
+    """GH #83 follow-up + GH #144: accepting a task request happens inside an already-running worker,
+    so the lazy run-start/run-finish inference never sees a new spawn to attach. The work token is
+    already bound to the current worker_runs row. Two effects, deliberately split (GH #144):
+
+      * PIN — if the row is still task-less, set worker_runs.task_id (the single "current task" the
+        GH #340 activity label and the GH #126 live-run guard read). An EXISTING pin is PRESERVED: a
+        session already working task A keeps A as its current task and is never silently moved to B
+        (ec197e8 / test_accept_task_does_not_overwrite_existing_run_task).
+      * FEED MEMBERSHIP — record that this run TOUCHED `task_id` in worker_run_tasks regardless of
+        the pin, so a continuous session spanning task A then task B narrates on BOTH task feeds.
+        This closes the one-task-only gap (GH #144) that the single pin column cannot: the AFTER
+        trigger already maintains membership for the pin path, but the accept HOP keeps the pin on A
+        (task_id unchanged) so the trigger never fires for B — hence this explicit insert.
+
+    Returns True if the PIN was (re)set to task_id."""
+    if not token or not task_id:
+        return False
+    cur.execute(
+        """UPDATE worker_runs wr
+              SET task_id=%s
+             FROM embodiment_tokens et
+            WHERE et.run_token=%s
+              AND et.agent_id=%s
+              AND et.lane='work'
+              AND et.revoked_at IS NULL
+              AND et.run_id IS NOT NULL
+              AND wr.run_id=et.run_id
+              AND wr.agent_id=et.agent_id
+              AND wr.status='running'
+              AND wr.task_id IS NULL
+              AND EXISTS (SELECT 1 FROM tasks t
+                           WHERE t.id=%s AND t.status='in_progress')
+        RETURNING wr.run_id""",
+        (task_id, token, aid, task_id),
+    )
+    pinned = cur.fetchone() is not None
+    # GH #144 FEED MEMBERSHIP: the run touched this task — record it even when the pin stayed on an
+    # earlier task, so BOTH task feeds narrate. Same live-work-token + in_progress-task guard as the
+    # pin update (never attribute to a non-running run or a not-in_progress task); ON CONFLICT keeps
+    # it idempotent across accept retries and the pin-path trigger.
+    cur.execute(
+        """INSERT INTO worker_run_tasks (run_id, task_id)
+           SELECT wr.run_id, %s
+             FROM worker_runs wr
+             JOIN embodiment_tokens et ON wr.run_id = et.run_id
+            WHERE et.run_token=%s
+              AND et.agent_id=%s
+              AND et.lane='work'
+              AND et.revoked_at IS NULL
+              AND et.run_id IS NOT NULL
+              AND wr.agent_id=et.agent_id
+              AND wr.status='running'
+              AND EXISTS (SELECT 1 FROM tasks t
+                           WHERE t.id=%s AND t.status='in_progress')
+           ON CONFLICT DO NOTHING""",
+        (task_id, token, aid, task_id),
+    )
+    return pinned
+
+
+def _revoke_tokens_for_runs(cur, run_ids):
+    """GH #91/#90: revoke every non-revoked token bound to any of these run_ids. Called on EVERY
+    server-observed run-terminal transition (finish / wake-ack orphan / reaper / dead-pid sweep) so a
+    capability can never outlive its process, even a token this daemon never held."""
+    if run_ids:
+        cur.execute(
+            "UPDATE embodiment_tokens SET revoked_at=now() WHERE run_id = ANY(%s) AND revoked_at IS NULL",
+            (list(run_ids),))
+
+
 # ---------- A2: worker runs (persist + expose headless wake output) ----------
 
 class WorkerRunStart(BaseModel):
@@ -5362,6 +5848,16 @@ class WorkerRunStart(BaseModel):
     worktree: Optional[str] = Field(default=None, description="isolated worktree cwd, if any")
     branch: Optional[str] = Field(default=None, description="isolated worktree branch, if any")
     base_cwd: Optional[str] = Field(default=None, description="host project cwd that owns the worktree/logs")
+    # GH #91/#90: the run's lane. This is the SINGLE insert choke point where a run is tagged, so it
+    # is validated here (DB CHECK is the backstop). Default 'work' keeps every existing caller landing
+    # on the work lane; the conversation resident/turn spawns pass 'conversation'.
+    lane: str = Field(default="work", pattern="^(work|conversation)$",
+                      description="GH #91/#90: work | conversation — scopes the single-flight belt, "
+                                  "wake gates and orphan reaper per lane")
+    # GH #91/#90: the embodiment run_token this process was minted BEFORE spawn (if any). When
+    # present, the server binds it to the freshly-created run_id (+pid) so revocation survives daemon
+    # turnover — the server can revoke a run's token on any terminal transition it observes.
+    token_id: Optional[str] = Field(default=None, description="the run_token to bind to this run, if any")
 
 
 class WorkerRunFinish(BaseModel):
@@ -5410,6 +5906,46 @@ def _run_row(r: dict) -> dict:
     }
 
 
+def _infer_agent_active_task(cur, aid: str) -> Optional[str]:
+    """GH #83: lazy/late worker-run attribution. Many spawn paths can't supply a task_id at
+    wake time — a task-request accept (the spawned task isn't ready-queued and no wake event
+    carries its id), a checkpoint respawn that lost the original context, or any wake that
+    fires without a directed task event — so the worker run would otherwise be recorded with
+    task_id=NULL and float unattached. This reconciles such a run to the agent's CURRENT task
+    when — and ONLY when — that task is UNAMBIGUOUS: the agent has exactly one in_progress task
+    it is assigned/accepted/working. If the agent holds several concurrent in_progress tasks we
+    can't tell which one the run belongs to (kedar1607, PR #86), so we return None and leave the
+    run unattributed rather than risk stamping the wrong task — a wrong link is worse than an
+    honest NULL. Returns the sole active task id, or None when there is no active task OR more
+    than one candidate (both stay unattributed; a directed wake still attaches precisely via the
+    GH #56 wake_task_id path, which supplies task_id explicitly and never reaches this fallback)."""
+    cur.execute(
+        """SELECT t.id
+           FROM tasks t
+           JOIN agent_tasks at ON at.task_id = t.id
+           WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+             AND t.status='in_progress' AND t.is_root = false
+           ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
+           LIMIT 2""",
+        (aid,),
+    )
+    rows = cur.fetchall()
+    return str(rows[0]["id"]) if len(rows) == 1 else None
+
+
+def _is_non_task_work(wake_kind, wake_event, conversation_id) -> bool:
+    """GH #83: some spawn paths post a run with no task_id because the run is definitionally NOT
+    task work — a resident/ephemeral per-turn conversation reply or a live terminal session. Those
+    are meant to stay task_id=NULL: attributing them to the agent's sole in_progress task would
+    (a) regress the GH #340 activity label (home.html activity() takes the task_id branch before
+    the conversation/live label) and (b) pollute /api/tasks/{tid}/runs with non-task work. This
+    predicate flags exactly those runs so the lazy-attribution inference is skipped for them. An
+    explicit task_id is always honored — this only gates the inference fallback, never an override."""
+    return (wake_event == "conversation_turn"
+            or wake_kind == "live"
+            or conversation_id is not None)
+
+
 @app.post("/api/agents/{aid}/runs", status_code=201)
 def start_worker_run(aid: str, body: WorkerRunStart):
     """A2: the notifier records a worker it just spawned (status=running). Returns run_id;
@@ -5423,8 +5959,17 @@ def start_worker_run(aid: str, body: WorkerRunStart):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
-        if body.task_id is not None:
-            _require_task(cur, body.task_id)   # 404 on a valid-but-unknown task, not a 500 FK violation
+        task_id = body.task_id
+        lazy_attributed = False
+        if task_id is not None:
+            _require_task(cur, task_id)   # 404 on a valid-but-unknown task, not a 500 FK violation
+        elif not _is_non_task_work(body.wake_kind, body.wake_event, body.conversation_id):
+            # GH #83: the wake path gave us no task link — lazily attribute the run to the
+            # agent's current in_progress task so accept-task / checkpoint-respawn / any
+            # task_id-less wake never leaves the worker run floating unattached. Skipped for
+            # conversation/live runs (see _is_non_task_work): those stay NULL by design.
+            task_id = _infer_agent_active_task(cur, aid)
+            lazy_attributed = task_id is not None
         if body.conversation_id is not None:
             cur.execute("SELECT agent_id FROM conversations WHERE id=%s", (body.conversation_id,))
             conv = cur.fetchone()
@@ -5436,16 +5981,26 @@ def start_worker_run(aid: str, body: WorkerRunStart):
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,
                      conversation_id, conversation_ack_ts, last_message_path,
-                     worktree, branch, base_cwd, status)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running')
+                     worktree, branch, base_cwd, lane, status)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running')
                RETURNING *""",
-            (aid, body.task_id, body.wake_kind, body.wake_event, body.log_path,
+            (aid, task_id, body.wake_kind, body.wake_event, body.log_path,
              body.pid, body.runtime, body.conversation_id, body.conversation_ack_ts,
-             body.last_message_path, body.worktree, body.branch, body.base_cwd),
+             body.last_message_path, body.worktree, body.branch, body.base_cwd, body.lane),
         )
         row = cur.fetchone()
+        # GH #91/#90: bind the pre-minted token to this run (+pid) so the server can revoke it on any
+        # terminal transition it observes — the capability's lifetime is now tied to the run row, not
+        # to whichever daemon happens to hold the Popen handle.
+        if body.token_id:
+            cur.execute(
+                """UPDATE embodiment_tokens SET run_id=%s, pid=%s
+                   WHERE run_token=%s AND revoked_at IS NULL""",
+                (row["run_id"], body.pid, body.token_id))
         log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
-                  "worker_run_started", {"run_id": str(row["run_id"]), "wake_kind": body.wake_kind})
+                  "worker_run_started",
+                  {"run_id": str(row["run_id"]), "wake_kind": body.wake_kind,
+                   "task_id": task_id, "lazy_attributed": lazy_attributed})
         conn.commit()
     return _run_row(row)
 
@@ -5485,13 +6040,19 @@ def list_container_running_runs(cid: str):
     wake_kinds: it's what reaps an orphaned EPHEMERAL wake-run (request_answered / checkpoint_respawn
     / conversation_turn) whose daemon RESTARTED and lost the Popen handle that would have poll()/
     finished it — the #342 'busy forever' leak the per-agent resident reaper (active-conversation +
-    resident-scoped) and the heartbeat reap-orphan-leases (live-lease-scoped) both miss. Newest first."""
+    resident-scoped) and the heartbeat reap-orphan-leases (live-lease-scoped) both miss. Newest first.
+
+    GH #91/#90 (PR R3): each row carries `lane` — the sweep's wake-ack release + running->orphaned
+    reconcile are lane-scoped server-side, so the reaper must ack the DEAD run's OWN lane. Without
+    it every sweep ack defaulted to 'work' and a dead CONVERSATION-lane run kept its conv lease +
+    'running' row forever, blocking all future conversation claims for that agent."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
         cur.execute(
-            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.started_at
+            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
+                      wr.started_at
                  FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
                 WHERE a.container_id = %s AND wr.status = 'running'
                   AND a.terminated_at IS NULL
@@ -5501,6 +6062,7 @@ def list_container_running_runs(cid: str):
     return {"container_id": cid,
             "runs": [{"run_id": str(r["run_id"]), "agent_id": str(r["agent_id"]),
                       "pid": r["pid"], "wake_kind": r["wake_kind"], "wake_event": r["wake_event"],
+                      "lane": r["lane"],
                       "started_at": r["started_at"].isoformat() if r["started_at"] else None}
                      for r in rows]}
 
@@ -5520,11 +6082,25 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
     if body.status not in ("exited", "killed", "rate_limited", "failed"):
         raise HTTPException(422, "status must be 'exited', 'killed', 'rate_limited', or 'failed'")
     with db_cursor() as (conn, cur):
-        cur.execute("SELECT run_id, agent_id FROM worker_runs WHERE run_id=%s", (run_id,))
-        if not cur.fetchone():
+        cur.execute(
+            "SELECT run_id, agent_id, task_id, wake_kind, wake_event, conversation_id "
+            "FROM worker_runs WHERE run_id=%s", (run_id,))
+        existing = cur.fetchone()
+        if not existing:
             raise HTTPException(404, f"worker run {run_id} not found")
+        # GH #83: backstop the lazy attribution — if the run started with no task link and one
+        # is determinable now (e.g. the task only reached in_progress AFTER spawn), reconcile it
+        # on reap so the finished run still surfaces under its task. COALESCE so a run that was
+        # already attributed (at spawn or a prior finish) is never overwritten. Skip the
+        # inference for conversation/live runs — they are meant to stay NULL (see _is_non_task_work).
+        late_task_id = (_infer_agent_active_task(cur, str(existing["agent_id"]))
+                        if existing["task_id"] is None
+                        and not _is_non_task_work(existing["wake_kind"], existing["wake_event"],
+                                                  existing["conversation_id"])
+                        else None)
         cur.execute(
             """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
+                      task_id=COALESCE(task_id, %s),
                       diff=COALESCE(%s, diff), kill_reason=COALESCE(%s, kill_reason),
                       input_tokens=COALESCE(%s, input_tokens),
                       output_tokens=COALESCE(%s, output_tokens),
@@ -5533,11 +6109,15 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
                       total_cost_usd=COALESCE(%s, total_cost_usd),
                       ended_at=now()
                WHERE run_id=%s RETURNING agent_id, status, ended_at""",
-            (body.status, body.exit_code, body.output, body.diff, body.kill_reason,
+            (body.status, body.exit_code, body.output, late_task_id,
+             body.diff, body.kill_reason,
              body.input_tokens, body.output_tokens, body.cache_read_input_tokens,
              body.cache_creation_input_tokens, body.total_cost_usd, run_id),
         )
         row = cur.fetchone()
+        # GH #91/#90: a run just went terminal (exited/killed) — revoke its bound token so the
+        # capability can never outlive the process.
+        _revoke_tokens_for_runs(cur, [run_id])
         conn.commit()
     return {"run_id": run_id, "status": row["status"],
             "ended_at": row["ended_at"].isoformat() if row["ended_at"] else None}
@@ -5623,7 +6203,11 @@ def _fetch_run_lines(run_id, after_seq, limit=500):
 @app.get("/api/agents/{aid}/runs")
 def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
                     task_id: Optional[str] = Query(default=None)):
-    """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter."""
+    """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter.
+
+    GH #144: the ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every task a run
+    touched) instead of the single worker_runs.task_id pin — a session that spanned this task shows
+    up here even if its pin settled on another task."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
@@ -5631,8 +6215,10 @@ def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
         if task_id is not None:
             if not _valid_uuid(task_id):
                 raise HTTPException(400, "task_id is not a valid UUID")
-            cur.execute("""SELECT * FROM worker_runs WHERE agent_id=%s AND task_id=%s
-                           ORDER BY started_at DESC LIMIT %s""", (aid, task_id, limit))
+            cur.execute("""SELECT wr.* FROM worker_runs wr
+                           JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
+                           WHERE wr.agent_id=%s AND wrt.task_id=%s
+                           ORDER BY wr.started_at DESC LIMIT %s""", (aid, task_id, limit))
         else:
             cur.execute("""SELECT * FROM worker_runs WHERE agent_id=%s
                            ORDER BY started_at DESC LIMIT %s""", (aid, limit))
@@ -5642,13 +6228,19 @@ def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
 
 @app.get("/api/tasks/{tid}/runs")
 def list_task_runs(tid: str, limit: int = Query(default=20, ge=1, le=200)):
-    """A2: worker runs for a task, newest first (per-task progress view for B1)."""
+    """A2: worker runs for a task, newest first (per-task progress view for B1).
+
+    GH #144: joins worker_run_tasks (every task a run touched) rather than the single
+    worker_runs.task_id pin, so a run from a session that spanned this AND another task narrates
+    here too — not only under whichever task ended up as its pin."""
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_task(cur, tid)
-        cur.execute("""SELECT * FROM worker_runs WHERE task_id=%s
-                       ORDER BY started_at DESC LIMIT %s""", (tid, limit))
+        cur.execute("""SELECT wr.* FROM worker_runs wr
+                       JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
+                       WHERE wrt.task_id=%s
+                       ORDER BY wr.started_at DESC LIMIT %s""", (tid, limit))
         runs = [_run_row(r) for r in cur.fetchall()]
     return {"task_id": tid, "runs": runs}
 
@@ -6217,13 +6809,17 @@ def _complete_and_unblock(cur, container_id, tid):
 
 
 @app.post("/api/tasks/{tid}/done", status_code=200)
-def mark_done(tid: str, body: TaskDone):
+def mark_done(tid: str, body: TaskDone,
+              x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     if not _valid_uuid(body.agent_id):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        # GH #91/#90: completing a task is WORK-lane only — gate on the ACTING agent (body.agent_id).
+        # A conversation-lane embodiment cannot mark a task done (403).
+        _require_work_lane(cur, body.agent_id, x_orcha_run_token)
         _reject_if_retired(cur, body.agent_id)   # ISS-51 [P1]
         _require_container_active(cur, str(t["container_id"]), body.agent_id)   # GH #24
         # Issue #11: root task is a sentinel for container completion — only
@@ -6827,6 +7423,116 @@ def close_implications(tid: str):
 
 # ---------- requests (Phase 2 — info type only) ----------
 
+# GH #71: requests default to type='info', but real work (review / sign-off / docs / coding)
+# routed as 'info' silently skips the task wake path — a missed-wake incident. This shared,
+# PURE classifier is the server-side BACKSTOP: when a caller sends type='info' with no task
+# object, create_request runs it and AUTO-PROMOTES the request to type='task' if the payload
+# clearly *asks for work*. It is intentionally conservative — a false promotion (info that
+# becomes a task) is worse than a false negative (work that stays info), so the verb set is
+# curated, not speculative, and an interrogative phrasing always wins (stays info).
+#
+# Curated WORK_VERBS only (do NOT expand speculatively). Multi-word forms ("sign off",
+# "sign-off") are matched separately below.
+WORK_VERBS = frozenset({
+    "review", "approve", "implement", "write", "code", "build", "fix",
+    "document", "draft", "create", "refactor", "test", "add",
+})
+# Leading question words / auxiliaries — if the payload OPENS with one of these it is a
+# genuine question (interrogative), never promote even if a work verb appears later
+# ("which file do I review?" stays info).
+_QUESTION_LEADERS = frozenset({
+    "which", "what", "who", "whom", "whose", "when", "where", "why", "how",
+    "is", "are", "was", "were", "do", "does", "did", "can", "could",
+    "should", "would", "will", "shall", "may", "might", "am", "has", "have",
+})
+# Imperative lead-ins that may precede the work verb ("please review ...", "can you go
+# review ...") — we skip past these to find the verb in imperative position. "can"/"could"
+# are deliberately NOT here: they lead a question ("can you review?" → interrogative).
+_IMPERATIVE_LEADINS = frozenset({"please", "kindly", "pls", "plz", "go", "now", "then", "you", "to"})
+# Underscore MUST stay in the word charset: a code identifier like "test_wake_single_flight"
+# or "include_closed" is one token, not the bare verb "test"/"closed" it would otherwise
+# fragment into (GH#71 round-1 blocker 1).
+_WORD_RE = re.compile(r"[a-z][a-z_\-']*")
+# Copula/auxiliary forms — when one of these (or "of") follows the candidate verb anywhere
+# before sentence end, the verb is being used as a NOUN subject of a declarative sentence
+# ("fix was deployed", "review of the Q3 numbers is attached"), not an imperative. A bare
+# past-tense/participle word ("failed", "dropped", "attached") is the same signal, checked
+# separately below — underscore-joined identifiers are exempted so "include_closed" (which
+# ends in "ed") is never mistaken for one (GH#71 round-1 blocker 2).
+_DECLARATIVE_MARKERS = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "has", "have", "had", "of",
+})
+
+
+def _is_declarative_tail(words: "list[str]") -> bool:
+    for w in words:
+        if w in _DECLARATIVE_MARKERS:
+            return True
+        if "_" not in w and w.endswith("ed") and w not in WORK_VERBS:
+            return True
+    return False
+
+
+def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
+    """GH #71 — pure, unit-testable classifier. Decide whether an info-typed request
+    payload actually *asks for work* and should be promoted to a task.
+
+    Returns ("task", matched_verb) to promote, or ("info", None) to leave alone.
+
+    Rules (all must hold to promote):
+      * a curated WORK_VERB (lowercased, word-boundary matched) appears in IMPERATIVE
+        position — i.e. it is the first meaningful word, or follows only imperative
+        lead-ins like "please"/"go"/"you";
+      * the payload is NOT interrogative — it must not open with a question word/auxiliary
+        AND must not end with '?';
+      * the rest of the sentence is not declarative — no copula/auxiliary/"of" or bare
+        past-tense word follows the verb (else it's a noun subject, e.g. "build 4711 failed
+        overnight", not an imperative).
+    Anything else stays info. Conservative by design (backstop only).
+    """
+    if not payload:
+        return ("info", None)
+    text = payload.strip()
+    if not text:
+        return ("info", None)
+    lowered = text.lower()
+
+    # Interrogative guards: trailing '?' OR a leading question word → genuine question.
+    if text.rstrip().endswith("?"):
+        return ("info", None)
+    words = _WORD_RE.findall(lowered)
+    if not words:
+        return ("info", None)
+    if words[0] in _QUESTION_LEADERS:
+        return ("info", None)
+
+    # Multi-word verb form: "sign off" / "sign-off" in imperative position.
+    # Normalize the hyphenated form to the spaced form for a uniform prefix check, then
+    # re-tokenize with the same word regex so the declarative-tail check below sees
+    # underscore-joined identifiers as single tokens, same as the single-word path.
+    norm = re.sub(r"sign-off", "sign off", lowered)
+    norm_words = _WORD_RE.findall(norm)
+    idx = 0
+    while idx < len(norm_words) and norm_words[idx] in _IMPERATIVE_LEADINS:
+        idx += 1
+    if idx + 1 < len(norm_words):
+        if norm_words[idx] == "sign" and norm_words[idx + 1] == "off":
+            if _is_declarative_tail(norm_words[idx + 2:]):
+                return ("info", None)
+            return ("task", "sign off")
+
+    # Single-word work verb in imperative position: scan past leading imperative lead-ins,
+    # the first meaningful word must be a curated WORK_VERB.
+    pos = 0
+    while pos < len(words) and words[pos] in _IMPERATIVE_LEADINS:
+        pos += 1
+    if pos < len(words) and words[pos] in WORK_VERBS:
+        if _is_declarative_tail(words[pos + 1:]):
+            return ("info", None)
+        return ("task", words[pos])
+    return ("info", None)
+
+
 class TaskRequestPayload(BaseModel):
     """Embedded inside a request when type='task' (Orcha#5, Phase 3)."""
     title: str = Field(..., max_length=MAX_NAME_LEN)
@@ -6984,26 +7690,54 @@ def create_request(cid: str, body: RequestCreate):
                 )
             originating_task_id = body.originating_task_id
 
+        # GH #71: AUTO-PROMOTE info-that-is-really-work to a task BEFORE the type branch,
+        # so we never insert a task-type row with task=None (the 400 contract below is kept
+        # for genuine caller errors). Only runs when the caller sent the DEFAULT type='info'
+        # with NO task object — an explicit type='task' honors the caller and SKIPS the
+        # classifier (binding answer #4). On a "task" verdict we synthesize a minimal
+        # TaskRequestPayload (title = first line of payload truncated; dod = the payload;
+        # priority = the request priority) and route it through the SAME task-detail build
+        # path below, then stamp the audit fields onto `detail`.
+        effective_type = body.type
+        effective_task = body.task
+        promoted_verb: Optional[str] = None
+        if body.type == "info" and body.task is None:
+            verdict, matched_verb = classify_request_type(body.payload)
+            if verdict == "task":
+                effective_type = "task"
+                promoted_verb = matched_verb
+                first_line = body.payload.strip().splitlines()[0].strip()
+                synth_title = (first_line[:MAX_NAME_LEN] if first_line else "(promoted request)")
+                effective_task = TaskRequestPayload(
+                    title=synth_title,
+                    definition_of_done=body.payload[:MAX_DOD_LEN],
+                    priority=body.priority,
+                )
+
         # Phase 3 (Orcha#5): type='task' carries a TaskRequestPayload in body.task
         # which gets stuffed into the JSONB `detail` column. The task itself is
         # only created on /accept-task.
         detail: Optional[dict] = None
-        if body.type == "task":
-            if body.task is None:
+        if effective_type == "task":
+            if effective_task is None:
                 raise HTTPException(400, "type='task' requires a `task` object (title, definition_of_done, priority)")
             detail = {
-                "title": body.task.title,
-                "description": body.task.description,
-                "definition_of_done": body.task.definition_of_done,
-                "priority": body.task.priority,
+                "title": effective_task.title,
+                "description": effective_task.description,
+                "definition_of_done": effective_task.definition_of_done,
+                "priority": effective_task.priority,
             }
             # GH #55: carry the optional protocol through the request so the spawned task
             # inherits its loop rules on accept (only the keys actually set are stored).
-            if body.task.protocol is not None:
-                proto_fields = body.task.protocol.model_dump(exclude_none=True)
+            if effective_task.protocol is not None:
+                proto_fields = effective_task.protocol.model_dump(exclude_none=True)
                 if proto_fields:
                     detail["protocol"] = proto_fields
-        elif body.task is not None:
+            # GH #71: audit stamp on a promoted request so the provenance is visible in `detail`.
+            if promoted_verb is not None:
+                detail["promoted_from_info"] = True
+                detail["matched_verb"] = promoted_verb
+        elif effective_task is not None:
             raise HTTPException(400, "`task` field is only valid with type='task'")
 
         cur.execute(
@@ -7014,7 +7748,7 @@ def create_request(cid: str, body: RequestCreate):
                VALUES (%s, %s, %s, %s, %s, 'open', %s,
                        now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s)
                RETURNING id, expires_at""",
-            (cid, body.type, body.requester_agent_id, target_id, body.priority,
+            (cid, effective_type, body.requester_agent_id, target_id, body.priority,
              body.payload, str(body.expires_minutes), parent_request_id, chain_depth,
              json.dumps(detail) if detail is not None else None,
              originating_task_id),
@@ -7024,19 +7758,20 @@ def create_request(cid: str, body: RequestCreate):
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)  # → awaiting_request
         log_event(cur, cid, "ai", body.requester_agent_id, "request", rid, "created",
-                  {"type": body.type, "target_alias": target_alias,
+                  {"type": effective_type, "target_alias": target_alias,
                    "priority": body.priority, "preview": body.payload[:120],
                    "parent_request_id": parent_request_id, "chain_depth": chain_depth,
-                   "task_title": detail["title"] if detail else None})
+                   "task_title": detail["title"] if detail else None,
+                   "promoted_from_info": promoted_verb is not None})  # GH #71
         _publish_event(cur, cid, target_id, "request_created", {
-            "request_id": rid, "type": body.type, "from_agent_id": body.requester_agent_id,
+            "request_id": rid, "type": effective_type, "from_agent_id": body.requester_agent_id,
             "preview": body.payload[:120]
         })
         conn.commit()
 
     return {
         "request_id": rid,
-        "type": body.type,
+        "type": effective_type,  # GH #71: reflects auto-promotion (info → task) when it fired
         "status": "open",
         "target_alias": target_alias,  # null when the request was born already targeting the human (Orcha#30)
         "expires_at": row["expires_at"].isoformat(),
@@ -7486,7 +8221,8 @@ def escalate_request(rid: str, body: RequestActorBody):
 # ---------- Phase 3 / Orcha#5: task requests + agent-suggestion ----------
 
 @app.post("/api/requests/{rid}/accept-task", status_code=200)
-def accept_task_request(rid: str, body: TaskRequestAccept):
+def accept_task_request(rid: str, body: TaskRequestAccept,
+                        x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
     """Target accepts a task request → creates the task, assigns it, marks request 'accepted'."""
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
@@ -7494,6 +8230,11 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         raise HTTPException(400, "responder_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         r = _require_request(cur, rid, for_update=True)   # lock: serialize overlapping retries
+        # GH #91/#90: accepting a task request creates an agent_tasks 'working' row — that is moving a
+        # task INTO working, which is WORK-lane only. Gate on the ACCEPTING agent (the target /
+        # responder). A conversation-lane embodiment can DISPATCH a task (create/assign a request) but
+        # cannot accept one into its own working set (403).
+        _require_work_lane(cur, body.responder_agent_id, x_orcha_run_token)
         _reject_if_retired(cur, body.responder_agent_id)   # ISS-51 [P1]: retired can't take on work
         _require_container_active(cur, str(r["container_id"]), body.responder_agent_id)   # GH #24
         if r["type"] != "task":
@@ -7510,6 +8251,10 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         # fall through to the Point 5 backstop. Rebuild it deterministically from the request detail.
         if r["status"] == "accepted":
             _retry_dod = ((r["detail"] or {}).get("definition_of_done") or "")
+            if r["spawned_task_id"]:
+                _attribute_token_run_to_task(cur, body.responder_agent_id, x_orcha_run_token,
+                                             str(r["spawned_task_id"]))
+                conn.commit()
             return {"request_id": rid, "status": "accepted",
                     "spawned_task_id": str(r["spawned_task_id"]) if r["spawned_task_id"] else None,
                     "report_back": _build_report_back(rid, _retry_dod),
@@ -7575,6 +8320,7 @@ def accept_task_request(rid: str, body: TaskRequestAccept):
         log_event(cur, r["container_id"], "ai", body.responder_agent_id,
                   "task", tid, "created",
                   {"title": task["title"], "via": "task-request accept"})
+        _attribute_token_run_to_task(cur, body.responder_agent_id, x_orcha_run_token, tid)
         # GH #56 (Point 6): accept must NOT wake the requester — only the real ANSWER (at material
         # completion) wakes them. The accept stays in the audit feed via log_event above, but we no
         # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was
@@ -7961,6 +8707,13 @@ async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: fl
     with db_cursor() as (conn, cur):
         _require_agent(cur, aid)
         cur.execute("UPDATE agents SET last_heartbeat_at = now() WHERE id = %s", (aid,))
+        # GH #91/#90: also refresh the WORK-lane heartbeat so a present listener suppresses a
+        # redundant work spawn (see _touch_heartbeat + the edge/level note below, which relies on it).
+        cur.execute(
+            """INSERT INTO agent_wake_state (agent_id, work_last_heartbeat_at)
+               VALUES (%s, now())
+               ON CONFLICT (agent_id) DO UPDATE SET work_last_heartbeat_at = now()""",
+            (aid,))
         # #23 [P0]: BEFORE blocking, settle the edge/level gap. _wait_for_event is EDGE-triggered
         # (returns only agent_events with ts > since_ts), so a task assigned+readied while this
         # listener wasn't subscribed — its task_ready/task_assigned event already <= since_ts, or

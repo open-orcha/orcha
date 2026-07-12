@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // UIResponder keyboard notifications (Issue 2 — scroll composer above keyboard)
 
 /* =============================================================================
    Flow 05 — Task detail + thread. Flow 06 — worker runs + streaming log.
@@ -341,6 +342,9 @@ struct TaskThreadScreen: View {
 
     @State private var draft = ""
     @State private var pendingSend: String?
+    /// GH #140 — a tapped task-id link pushes here, in addition to the tab's own
+    /// `WorkspaceRoute.task` destination; both target the same `TaskDetailScreen`.
+    @State private var linkedTaskId: String?
 
     private var task: TaskDto? { model.snapshot?.tasks.first { $0.id == taskId } }
     private var assignee: String? { task?.assignees.first ?? task?.ownerAlias }
@@ -349,6 +353,25 @@ struct TaskThreadScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
+                    // Issue 4: "Load earlier" reveals the previous keyset page at the TOP; it
+                    // prepends older messages and must NOT scroll the view to the bottom.
+                    if model.threadHasMore {
+                        Button {
+                            Task { await model.loadEarlierThreadMessages(taskId) }
+                        } label: {
+                            if model.threadLoadingEarlier {
+                                ProgressView().frame(maxWidth: .infinity)
+                            } else {
+                                Text("Load earlier messages")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(p.accent)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                        .disabled(model.threadLoadingEarlier)
+                    }
                     if model.taskMessages.isEmpty, pendingSend == nil {
                         OrchaCard {
                             Text("No messages yet — say hi to \(assignee ?? "the assignee").")
@@ -376,7 +399,15 @@ struct TaskThreadScreen: View {
                 }
                 .padding(16)
             }
-            .onChange(of: model.taskMessages.count) {
+            // Scroll to bottom only when the NEWEST message changes (a new/sent message) or a
+            // pending bubble appears — never on a "Load earlier" prepend (which changes the top).
+            .onChange(of: model.taskMessages.last?.messageId) {
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: pendingSend) {
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -401,19 +432,22 @@ struct TaskThreadScreen: View {
         }
         .task { await model.loadTaskDetail(taskId) }
         .refreshable { await model.loadTaskDetail(taskId) }
+        .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
     }
 
     @ViewBuilder
     private func threadBubble(_ msg: TaskMessageDto) -> some View {
+        let tasks = model.snapshot?.tasks ?? []
         if msg.authorId == nil, !msg.isHuman {
-            Bubble(.system, msg.body)
+            Bubble(.system, msg.body, tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else if msg.authorId != nil, msg.authorId == model.humanId {
-            Bubble(.mine, msg.body, time: MobileUx.agoLabel(msg.createdAt))
+            Bubble(.mine, msg.body, time: MobileUx.agoLabel(msg.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else {
             Bubble(
                 .theirs, msg.body,
                 author: msg.authorAlias ?? (msg.isHuman ? "human" : "agent"),
-                time: MobileUx.agoLabel(msg.createdAt)
+                time: MobileUx.agoLabel(msg.createdAt),
+                tasks: tasks, onTapTask: { linkedTaskId = $0 }
             )
         }
     }
@@ -482,10 +516,13 @@ struct RunDetailScreen: View {
             if run.status != "running" {
                 terminalBanner
             }
+            if let note = model.runStreamNote {
+                Banner(kind: .info, text: note)
+            }
             logCard
             if let error = model.error {
                 Banner(kind: .danger, text: error, action: "Retry") {
-                    Task { await model.loadRunLog(run) }
+                    model.startRunLog(run)
                 }
             }
         }
@@ -498,7 +535,10 @@ struct RunDetailScreen: View {
                     .foregroundStyle(p.text)
             }
         }
-        .task { await model.loadRunLog(run) }
+        // Issue 3: a running run streams live over SSE; a finished run keeps the one-shot fetch.
+        // The collector is cancelled when the screen goes away.
+        .task { model.startRunLog(run) }
+        .onDisappear { model.stopRunLogStream() }
     }
 
     private var header: some View {
@@ -530,26 +570,26 @@ struct RunDetailScreen: View {
 
     private var logCard: some View {
         OrchaCard {
-            if model.runLines.isEmpty {
+            if model.runFeed.isEmpty {
                 ScrollView {
-                    Text(model.loading ? "Loading stream…" : "No log lines yet.")
+                    Text(emptyLogText)
                         .font(.system(size: 13))
                         .foregroundStyle(p.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .refreshable { await model.loadRunLog(run) }
+                .refreshable { model.startRunLog(run) }
             } else {
                 ScrollViewReader { proxy in
                     ZStack(alignment: .bottom) {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 2) {
-                                ForEach(Array(model.runLines.enumerated()), id: \.offset) { _, line in
-                                    LogLine(line: line)
+                                ForEach(Array(model.runFeed.enumerated()), id: \.offset) { _, row in
+                                    FeedRow(row: row)
                                 }
                                 Color.clear.frame(height: 1).id("log-bottom")
                             }
                         }
-                        .refreshable { await model.loadRunLog(run) }
+                        .refreshable { model.startRunLog(run) }
                         // pragmatic pin tracking (flow 06 §auto-scroll): a downward
                         // drag (scrolling back through history) pauses auto-scroll.
                         .simultaneousGesture(
@@ -574,7 +614,7 @@ struct RunDetailScreen: View {
                             .padding(.bottom, 6)
                         }
                     }
-                    .onChange(of: model.runLines.count) {
+                    .onChange(of: model.runFeed.count) {
                         if pinned {
                             proxy.scrollTo("log-bottom", anchor: .bottom)
                         }
@@ -582,6 +622,12 @@ struct RunDetailScreen: View {
                 }
             }
         }
+    }
+
+    private var emptyLogText: String {
+        if model.runLogStreaming { return "Waiting for the worker to emit output…" }
+        if model.loading { return "Loading stream…" }
+        return "No log lines yet."
     }
 
     private func stopRun() {

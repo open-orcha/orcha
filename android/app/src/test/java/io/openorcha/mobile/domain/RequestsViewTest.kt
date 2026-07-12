@@ -124,4 +124,69 @@ class RequestsViewTest {
         val sorted = RequestsView.sort(rows, RequestSort(SortKey.Priority, ascending = true))
         assertEquals(listOf("urgent", "no-prio"), sorted.map { it.id })
     }
+
+    /* ---------- flow 07a: operator-action tier (Nudge · Close on ANY request) ---------- */
+
+    private val you = "h1" // the paired human (kedar)
+
+    @Test
+    fun operatorNudgeHiddenWhenItWouldOnlyWakeYourself() {
+        // open + you are the target → you owe the answer; nudging would just wake you.
+        val inbound = RequestsView.operatorActions(req("r", status = "open", target = you, requester = "a2"), you)
+        assertFalse(inbound.showNudge)
+        assertNull(inbound.nudgeRecipientId)
+        assertTrue(inbound.showClose)
+        assertTrue(inbound.closeNeedsReason) // requester a2 != you
+        assertFalse(inbound.showOperatorNote) // you ARE the target
+
+        // answered + you are the requester → the answer is yours to act on; nudge wakes you.
+        val mine = RequestsView.operatorActions(req("r", status = "answered", target = "a1", requester = you), you)
+        assertFalse(mine.showNudge)
+        assertFalse(mine.closeNeedsReason) // you own it → owner-confirm close, no reason
+        assertFalse(mine.showOperatorNote)
+    }
+
+    @Test
+    fun operatorNudgeWakesTargetOnOpenAndRequesterOnAnswered() {
+        val open = RequestsView.operatorActions(req("r", status = "open", target = "a1", requester = you), you)
+        assertTrue(open.showNudge)
+        assertEquals("a1", open.nudgeRecipientId) // target owes the answer
+
+        val answered = RequestsView.operatorActions(req("r", status = "answered", target = you, requester = "a2"), you)
+        assertTrue(answered.showNudge)
+        assertEquals("a2", answered.nudgeRecipientId) // requester must act on the answer
+    }
+
+    @Test
+    fun operatorNoteAndReasonOnAgentToAgentRequests() {
+        // neither requester nor target → the "acting as operator" note + forced-close reason.
+        val other = RequestsView.operatorActions(req("r", status = "open", target = "a1", requester = "a2"), you)
+        assertTrue(other.showOperatorNote)
+        assertTrue(other.showNudge)
+        assertEquals("a1", other.nudgeRecipientId)
+        assertTrue(other.showClose)
+        assertTrue(other.closeNeedsReason)
+    }
+
+    @Test
+    fun escalatedToHumanCountsAsTargetYouSoNudgeHides() {
+        // null target = escalated to the paired human → you are its effective answerer.
+        val esc = RequestsView.operatorActions(req("r", status = "open", target = null, requester = "a2"), you)
+        assertFalse(esc.showNudge) // nudging would only wake a human
+        assertFalse(esc.showOperatorNote) // you count as the target
+        assertTrue(esc.showClose)
+    }
+
+    @Test
+    fun acceptedShowsCloseOnlyAndTerminalShowsNothing() {
+        val accepted = RequestsView.operatorActions(req("r", status = "accepted", target = "a1", requester = "a2"), you)
+        assertFalse(accepted.showNudge) // nudge the spawned task, not the request
+        assertTrue(accepted.showClose)
+
+        for (terminal in listOf("closed", "rejected", "converted_to_task")) {
+            val ops = RequestsView.operatorActions(req("r", status = terminal, target = "a1", requester = "a2"), you)
+            assertFalse(ops.showNudge, "nudge hidden on $terminal")
+            assertFalse(ops.showClose, "close hidden on $terminal")
+        }
+    }
 }

@@ -377,6 +377,32 @@ data class AgentRetireBody(
     @SerialName("actor_agent_id") val actorAgentId: String,
 )
 
+/** GH #148: the notifier kill-switch — `false` halts ALL wakes for the container. */
+@Serializable
+data class WakesToggleBody(
+    val enabled: Boolean,
+    @SerialName("actor_agent_id") val actorAgentId: String? = null,
+)
+
+@Serializable
+data class WakesResponse(
+    @SerialName("container_id") val containerId: String,
+    @SerialName("wakes_enabled") val wakesEnabled: Boolean,
+)
+
+/** GH #148: the autonomy gearbox — `plan` | `pr` | `full`, human-gated server-side. */
+@Serializable
+data class AutonomyUpdateBody(
+    val level: String,
+    @SerialName("actor_agent_id") val actorAgentId: String,
+)
+
+@Serializable
+data class AutonomyResponse(
+    @SerialName("container_id") val containerId: String,
+    @SerialName("autonomy_level") val autonomyLevel: String,
+)
+
 @Serializable
 data class ConversationStartBody(
     @SerialName("actor_agent_id") val actorAgentId: String,
@@ -417,9 +443,6 @@ data class AssignTaskBody(
 data class WorkerRunStopBody(
     @SerialName("actor_agent_id") val actorAgentId: String,
 )
-
-@Serializable
-class EmptyBody
 
 /* ---------- flow 09: agent detail lazy sections ---------- */
 
@@ -476,4 +499,8 @@ data class GenericIdResponse(
     @SerialName("request_id") val requestId: String? = null,
     @SerialName("spawned_task_id") val spawnedTaskId: String? = null,
     val status: String? = null,
+    // flow 07a: nudge returns {nudged: bool} (false = next action is a human — informative no-op);
+    // close returns {already_closed: bool} on an idempotent re-close (still a success).
+    val nudged: Boolean? = null,
+    @SerialName("already_closed") val alreadyClosed: Boolean? = null,
 )

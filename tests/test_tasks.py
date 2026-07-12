@@ -13,11 +13,12 @@ async def test_create_unassigned_is_ready(make_task):
     assert t["status"] == "ready"
 
 
-async def test_next_does_not_claim_unassigned_ready_task(client, make_agent, make_task):
+async def test_next_does_not_claim_unassigned_ready_task(client, make_agent, make_task, work_headers):
     """Assignment is the only task trigger: ready-but-unassigned tasks are not a free pool."""
     a = await make_agent("claimer", "eng")
     await make_task("loose", "done")
-    r = await client.post(f"/api/agents/{a['agent_id']}/next")
+    r = await client.post(f"/api/agents/{a['agent_id']}/next",
+                          headers=await work_headers(a["agent_id"]))
     assert r.status_code == 200, r.text
     assert r.json()["task"] is None
 
@@ -28,14 +29,15 @@ async def test_create_with_deps_is_pending(make_task):
     assert t["status"] == "pending"
 
 
-async def test_next_claims_ready_excludes_root(client, container, make_agent, make_task):
+async def test_next_claims_ready_excludes_root(client, container, make_agent, make_task, work_headers):
     human = await make_agent("op", "operator", kind="human")
     a = await make_agent("claimer", "eng")
     t = await make_task("ready-one", "done")
     ar = await client.post(f"/api/tasks/{t['task_id']}/assign",
                            json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
     assert ar.status_code == 200 and ar.json()["status"] == "ready", ar.text
-    r = await client.post(f"/api/agents/{a['agent_id']}/next")
+    r = await client.post(f"/api/agents/{a['agent_id']}/next",
+                          headers=await work_headers(a["agent_id"]))
     assert r.status_code == 200, r.text
     claimed = r.json()["task"]
     assert claimed is not None
@@ -43,7 +45,7 @@ async def test_next_claims_ready_excludes_root(client, container, make_agent, ma
     assert claimed["id"] != container["root_task_id"]  # never the root sentinel
 
 
-async def test_next_claim_payload_carries_full_task_body(client, make_agent, make_task):
+async def test_next_claim_payload_carries_full_task_body(client, make_agent, make_task, work_headers):
     """GH #33: the claim payload must surface the FULL task body — title AND description AND
     definition_of_done — so the woken worker acts on the complete spec, not just the title."""
     human = await make_agent("op", "operator", kind="human")
@@ -53,7 +55,8 @@ async def test_next_claim_payload_carries_full_task_body(client, make_agent, mak
     ar = await client.post(f"/api/tasks/{t['task_id']}/assign",
                            json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
     assert ar.status_code == 200, ar.text
-    claimed = (await client.post(f"/api/agents/{a['agent_id']}/next")).json()["task"]
+    claimed = (await client.post(f"/api/agents/{a['agent_id']}/next",
+                                 headers=await work_headers(a["agent_id"]))).json()["task"]
     assert claimed["title"] == "loop the thing"
     assert claimed["description"] == "Run the loop 5 times; each pass must append a line."
     assert claimed["definition_of_done"] == "all 5 iterations logged"
@@ -79,45 +82,50 @@ async def test_task_thread_read_carries_task_body_header(client, make_agent, mak
     assert rp.json()["task"]["definition_of_done"] == "all 5 iterations logged"
 
 
-async def test_next_no_ready_returns_none(client, make_agent):
+async def test_next_no_ready_returns_none(client, make_agent, work_headers):
     a = await make_agent("idle-claimer", "eng")
-    r = await client.post(f"/api/agents/{a['agent_id']}/next")
+    r = await client.post(f"/api/agents/{a['agent_id']}/next",
+                          headers=await work_headers(a["agent_id"]))
     assert r.status_code == 200, r.text
     assert r.json()["task"] is None
 
 
-async def test_done_only_by_assignee(client, make_agent, make_task):
+async def test_done_only_by_assignee(client, make_agent, make_task, work_headers):
     owner = await make_agent("owner", "eng")
     intruder = await make_agent("intruder", "eng")
     t = await make_task("mine", "done", assignee_alias="owner")
     bad = await client.post(f"/api/tasks/{t['task_id']}/done",
-                            json={"agent_id": intruder["agent_id"], "result": "sneaky"})
+                            json={"agent_id": intruder["agent_id"], "result": "sneaky"},
+                            headers=await work_headers(intruder["agent_id"]))
     assert bad.status_code == 403, bad.text
     ok = await client.post(f"/api/tasks/{t['task_id']}/done",
-                           json={"agent_id": owner["agent_id"], "result": "real"})
+                           json={"agent_id": owner["agent_id"], "result": "real"},
+                           headers=await work_headers(owner["agent_id"]))
     assert ok.status_code == 200 and ok.json()["status"] == "needs_verification"
 
 
-async def test_verify_approve_unlocks_downstream(client, make_agent, make_task):
+async def test_verify_approve_unlocks_downstream(client, make_agent, make_task, work_headers):
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
     blocker = await make_task("blocker", "done", assignee_alias="dev")
     downstream = await make_task("downstream", "done", depends_on=[blocker["task_id"]])
     assert downstream["status"] == "pending"
     await client.post(f"/api/tasks/{blocker['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "x"})
+                      json={"agent_id": dev["agent_id"], "result": "x"},
+                      headers=await work_headers(dev["agent_id"]))
     v = await client.post(f"/api/tasks/{blocker['task_id']}/verify",
                           json={"approve": True, "actor_agent_id": human["agent_id"]})
     assert v.status_code == 200, v.text
     assert downstream["task_id"] in v.json().get("unblocked", [])
 
 
-async def test_verify_reject_restores_assignee(client, container, make_agent, make_task):
+async def test_verify_reject_restores_assignee(client, container, make_agent, make_task, work_headers):
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
     t = await make_task("redo", "done", assignee_alias="dev")
     await client.post(f"/api/tasks/{t['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "draft"})
+                      json={"agent_id": dev["agent_id"], "result": "draft"},
+                      headers=await work_headers(dev["agent_id"]))
     v = await client.post(f"/api/tasks/{t['task_id']}/verify",
                           json={"approve": False, "feedback": "redo it",
                                 "actor_agent_id": human["agent_id"]})
@@ -129,20 +137,22 @@ async def test_verify_reject_restores_assignee(client, container, make_agent, ma
     assert "dev" in redo["assignees"]
 
 
-async def test_blocked_task_cannot_be_done(client, make_agent, make_task):
+async def test_blocked_task_cannot_be_done(client, make_agent, make_task, work_headers):
     dev = await make_agent("dev", "eng")
     blocker = await make_task("b", "done")
     pending = await make_task("p", "done", depends_on=[blocker["task_id"]], assignee_alias="dev")
     r = await client.post(f"/api/tasks/{pending['task_id']}/done",
-                          json={"agent_id": dev["agent_id"], "result": "nope"})
+                          json={"agent_id": dev["agent_id"], "result": "nope"},
+                          headers=await work_headers(dev["agent_id"]))
     assert r.status_code >= 400, "a pending/blocked task should not be completable"
 
 
-async def test_verify_is_human_only(client, make_agent, make_task):
+async def test_verify_is_human_only(client, make_agent, make_task, work_headers):
     dev = await make_agent("dev", "eng")
     t = await make_task("t", "done", assignee_alias="dev")
     await client.post(f"/api/tasks/{t['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "x"})
+                      json={"agent_id": dev["agent_id"], "result": "x"},
+                      headers=await work_headers(dev["agent_id"]))
     r = await client.post(f"/api/tasks/{t['task_id']}/verify",
                           json={"approve": True, "actor_agent_id": dev["agent_id"]})
     assert r.status_code == 403, r.text
@@ -260,12 +270,13 @@ async def test_assign_root_task_rejected(client, container, make_agent):
     assert r.status_code == 409, r.text
 
 
-async def test_assign_finished_task_rejected(client, make_agent, make_task):
+async def test_assign_finished_task_rejected(client, make_agent, make_task, work_headers):
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
     t = await make_task("wrap", "done", assignee_alias="dev")
     await client.post(f"/api/tasks/{t['task_id']}/done",
-                      json={"agent_id": dev["agent_id"], "result": "x"})   # → needs_verification
+                      json={"agent_id": dev["agent_id"], "result": "x"},
+                      headers=await work_headers(dev["agent_id"]))   # → needs_verification
     r = await client.post(f"/api/tasks/{t['task_id']}/assign",
                           json={"actor_agent_id": human["agent_id"], "agent_id": dev["agent_id"]})
     assert r.status_code == 409, r.text
@@ -289,7 +300,7 @@ async def test_assign_unknown_agent_404(client, make_agent, make_task):
     assert r.status_code == 404, r.text
 
 
-async def test_next_prefers_assigned_task_over_higher_priority_pool(client, make_agent, make_task):
+async def test_next_prefers_assigned_task_over_higher_priority_pool(client, make_agent, make_task, work_headers):
     """An assigned task is claimable even when a higher-priority unassigned task is also ready."""
     human = await make_agent("op", "operator", kind="human")
     dev = await make_agent("dev", "eng")
@@ -298,7 +309,8 @@ async def test_next_prefers_assigned_task_over_higher_priority_pool(client, make
     r = await client.post(f"/api/tasks/{mine['task_id']}/assign",
                           json={"actor_agent_id": human["agent_id"], "agent_id": dev["agent_id"]})
     assert r.status_code == 200 and r.json()["status"] == "ready", r.text
-    nxt = await client.post(f"/api/agents/{dev['agent_id']}/next")
+    nxt = await client.post(f"/api/agents/{dev['agent_id']}/next",
+                            headers=await work_headers(dev["agent_id"]))
     assert nxt.status_code == 200, nxt.text
     assert nxt.json()["task"]["id"] == mine["task_id"], "must claim the ASSIGNED task, not the pool competitor"
     # the competitor is still ready for someone else
@@ -318,7 +330,7 @@ async def test_assign_cancelled_task_rejected(client, make_agent, make_task):
     assert r.status_code == 409, r.text
 
 
-async def test_next_excludes_tasks_assigned_to_another_agent(client, make_agent, make_task):
+async def test_next_excludes_tasks_assigned_to_another_agent(client, make_agent, make_task, work_headers):
     """A task assigned to agent A is NOT in agent B's /next pool."""
     human = await make_agent("op", "operator", kind="human")
     a = await make_agent("a", "eng")
@@ -328,9 +340,11 @@ async def test_next_excludes_tasks_assigned_to_another_agent(client, make_agent,
                           json={"actor_agent_id": human["agent_id"], "agent_id": a["agent_id"]})
     assert r.status_code == 200 and r.json()["status"] == "ready", r.text
     # B polls /next — must NOT get A's assigned task (it's the only ready task → None)
-    nb = await client.post(f"/api/agents/{b['agent_id']}/next")
+    nb = await client.post(f"/api/agents/{b['agent_id']}/next",
+                           headers=await work_headers(b["agent_id"]))
     assert nb.status_code == 200, nb.text
     assert nb.json()["task"] is None, "agent B must not be able to claim a task assigned to A"
     # A polls /next — gets its assigned task
-    na = await client.post(f"/api/agents/{a['agent_id']}/next")
+    na = await client.post(f"/api/agents/{a['agent_id']}/next",
+                           headers=await work_headers(a["agent_id"]))
     assert na.status_code == 200 and na.json()["task"]["id"] == t["task_id"], na.text

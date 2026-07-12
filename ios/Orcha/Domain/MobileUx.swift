@@ -60,6 +60,116 @@ enum MobileUx {
         return RequestGroups(needsYourAnswer: needs, waitingOnOthers: waiting, answeredActOnIt: answered, done: done)
     }
 
+    // MARK: Issue 1 — web-parity request filtering / sorting / alias resolution
+
+    /// The requests screen lens. `.yours` is the flow-07 grouped landing (needs-you-first,
+    /// the four `requestGroups` groups); the other five mirror the web's client-side chips
+    /// (`requests.html:88-99`) over the full snapshot, surfacing agent↔agent traffic too.
+    enum RequestLens: String, CaseIterable, Identifiable {
+        case yours, all, open, answered, escalated, task
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .yours: "Yours"
+            case .all: "All"
+            case .open: "Open"
+            case .answered: "Answered"
+            case .escalated: "Escalations"
+            case .task: "Task reqs"
+            }
+        }
+    }
+
+    /// Sort control keys (web `sortComparator`, `app.js:1632-1648`). Default: time desc.
+    enum RequestSortKey: String { case time, priority }
+
+    /// Resolve an agent id → alias from the snapshot roster (web `aliasFor`, `app.js:237`).
+    /// The snapshot never ships `requester_alias`/`target_alias`, so every "?" avatar is
+    /// resolved here client-side instead.
+    static func aliasFor(_ id: String?, in agents: [AgentDto]) -> String? {
+        guard let id else { return nil }
+        return agents.first { $0.id == id }?.alias
+    }
+
+    /// Web `isToHuman` (`app.js:247-256`): a request is "to the human" when it has no
+    /// explicit target (routed to the picked human) OR its target resolves to a human agent.
+    /// NO status filter — mirrors the Escalations chip exactly.
+    static func isToHuman(_ r: RequestDto, agents: [AgentDto]) -> Bool {
+        guard let tid = r.targetId else { return true }
+        guard let t = agents.first(where: { $0.id == tid }) else { return false }
+        return t.kind == "human"
+    }
+
+    /// Client-side chip filter over the full snapshot (web `matches`, `requests.html:93-99`).
+    static func filterRequests(_ requests: [RequestDto], lens: RequestLens, agents: [AgentDto]) -> [RequestDto] {
+        requests.filter { r in
+            switch lens {
+            case .yours, .all: true
+            case .open: r.status == "open"
+            case .answered: r.status == "answered"
+            case .escalated: isToHuman(r, agents: agents)
+            case .task: r.type == "task"
+            }
+        }
+    }
+
+    /// Web `sortComparator` (`app.js:1632-1648`): the status bucket (open → answered → rest)
+    /// stays the OUTER key; the chosen key sorts within it; the unchosen key is the tiebreak.
+    /// Priority ascending = higher priority (lower number) first, matching the web.
+    static func sortRequests(_ requests: [RequestDto], key: RequestSortKey, ascending: Bool) -> [RequestDto] {
+        func bucket(_ r: RequestDto) -> Int {
+            switch r.status { case "open": 0; case "answered": 1; default: 2 }
+        }
+        func time(_ r: RequestDto) -> Double { parseInstant(r.createdAt)?.timeIntervalSince1970 ?? 0 }
+        func prio(_ r: RequestDto) -> Int { r.priority ?? 100 }
+        let sign: Double = ascending ? 1 : -1
+        return requests.sorted { a, b in
+            let bk = bucket(a) - bucket(b)
+            if bk != 0 { return bk < 0 }
+            if key == .priority {
+                let d = prio(a) - prio(b)
+                if d != 0 { return Double(d) * sign < 0 }
+                return time(a) > time(b)          // tiebreak: newest first
+            }
+            let d = time(a) - time(b)
+            if d != 0 { return d * sign < 0 }
+            return prio(a) < prio(b)              // tiebreak: highest priority first
+        }
+    }
+
+    /// The status glyph shown on a request row (mobile adaptation of the web text pill).
+    /// `escalated` is the STRICTER open + human-targeted rule (web `requests.html:135`),
+    /// distinct from the broader Escalations *chip* which has no status filter.
+    static func requestStatusGlyph(_ status: String, escalated: Bool) -> String {
+        if escalated { return "xmark.octagon.fill" }
+        switch status {
+        case "open": return "exclamationmark.triangle.fill"
+        case "accepted": return "play.fill"
+        case "answered": return "checkmark.circle.fill"
+        case "rejected": return "xmark.circle.fill"
+        case "converted_to_task": return "arrow.right.circle.fill"
+        case "closed": return "circle.fill"
+        default: return "circle.fill"
+        }
+    }
+
+    // MARK: Issue 4 — pure paging reducers (unit-tested; keyset prepend + seq append/dedup)
+
+    /// Prepend an older keyset page (returned ASC) ahead of the existing thread, dropping any
+    /// row already present at the page seam (dedup by message id). "Load earlier" appends the
+    /// older page at the TOP without disturbing order.
+    static func prependMessages(_ older: [TaskMessageDto], before existing: [TaskMessageDto]) -> [TaskMessageDto] {
+        let have = Set(existing.compactMap { $0.messageId })
+        let fresh = older.filter { m in m.messageId.map { !have.contains($0) } ?? true }
+        return fresh + existing
+    }
+
+    /// Append an `after_seq` turns delta, dropping any seq already held (monotonic dedup).
+    static func appendTurns(_ existing: [TurnDto], delta: [TurnDto]) -> [TurnDto] {
+        let have = Set(existing.map { $0.seq })
+        return existing + delta.filter { !have.contains($0.seq) }
+    }
+
     // MARK: flows 11 + 05 — priority
 
     static func priorityBand(_ priority: Int?) -> PriorityBand {
@@ -107,6 +217,24 @@ enum MobileUx {
         case "awaiting_human": "waiting on you"
         case "in_progress": "in progress"
         default: status.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    // MARK: GH #148 — the autonomy gearbox (`plan` | `pr` | `full`)
+
+    static func autonomyLabel(_ level: String) -> String {
+        switch level {
+        case "pr": "Build to PR"
+        case "full": "Full"
+        default: "Plan-only"
+        }
+    }
+
+    static func autonomyBlurb(_ level: String) -> String {
+        switch level {
+        case "pr": "Agents execute approved plans up to an open PR; you still merge."
+        case "full": "Agents may carry approved work to its terminal state without further gates."
+        default: "Agents wake & propose, but every plan stops at the approval gate — you approve before any execution."
         }
     }
 
@@ -185,5 +313,70 @@ enum MobileUx {
         let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         guard (1...12).contains(parts[1]) else { return nil }
         return "\(months[parts[1] - 1]) \(parts[2])"
+    }
+
+    // MARK: GH #140 — bare task-id links in request/conversation/thread message bodies
+    //
+    // The backend emits NO markdown/scheme for task references — confirmed against the web
+    // portal's own convention (ISS-82/GH #223, `orcha-cli/.../static/app.js` `taskRefs`):
+    // a message body simply carries a raw task id (full UUID or a short hex prefix, however
+    // an author happened to type it), and the CLIENT resolves it against the known task list.
+    // Exact full-id match wins; else a UNIQUE 8+ hex-char prefix; ambiguous/absent → nil
+    // (never guessed) — same rule as the web's `taskByRef`.
+    private static let taskRefPattern = try! NSRegularExpression(
+        pattern: #"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?\b"#
+    )
+
+    static func resolveTaskRef(_ token: String, in tasks: [TaskDto]) -> TaskDto? {
+        let tok = token.lowercased()
+        if let exact = tasks.first(where: { $0.id.lowercased() == tok }) { return exact }
+        guard tok.count >= 8, tok.count < 36 else { return nil }
+        var hit: TaskDto?
+        for t in tasks where t.id.lowercased().hasPrefix(tok) {
+            if hit != nil { return nil }
+            hit = t
+        }
+        return hit
+    }
+
+    /// `orcha-task:///<id>` is an in-app-only marker — never sent over the wire — used to
+    /// carry a resolved task id through `AttributedString.link`/`Text` to an `openURL` handler.
+    static func taskLinkURL(_ taskId: String) -> URL? {
+        URL(string: "orcha-task:///\(taskId)")
+    }
+
+    static func taskIdFromLinkURL(_ url: URL) -> String? {
+        guard url.scheme == "orcha-task" else { return nil }
+        let id = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return id.isEmpty ? nil : id
+    }
+
+    /// Rewrites bare task-id tokens in `body` that resolve to a real task into `.link`-tagged
+    /// runs (see `taskLinkURL`); every other token passes through as plain text.
+    static func linkifyTaskRefs(_ body: String, tasks: [TaskDto]) -> AttributedString {
+        guard !tasks.isEmpty else { return AttributedString(body) }
+        let ns = body as NSString
+        let matches = taskRefPattern.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return AttributedString(body) }
+        var result = AttributedString()
+        var last = 0
+        for m in matches {
+            if m.range.location > last {
+                result += AttributedString(ns.substring(with: NSRange(location: last, length: m.range.location - last)))
+            }
+            let token = ns.substring(with: m.range)
+            if let task = resolveTaskRef(token, in: tasks), let url = taskLinkURL(task.id) {
+                var run = AttributedString(token)
+                run.link = url
+                result += run
+            } else {
+                result += AttributedString(token)
+            }
+            last = m.range.location + m.range.length
+        }
+        if last < ns.length {
+            result += AttributedString(ns.substring(from: last))
+        }
+        return result
     }
 }

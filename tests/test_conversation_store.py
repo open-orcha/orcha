@@ -259,7 +259,8 @@ async def test_active_conversations_reports_conversation_ack_ts(client, containe
     r = await client.post(f"/api/agents/{aid}/wake-ack",
                           json={"kind": "resident_conversation_turn",
                                 "event": "conversation_turn",
-                                "delivered_ts": cand["conversation_ack_ts"]})
+                                "delivered_ts": cand["conversation_ack_ts"],
+                                "lane": "conversation"})
     assert r.status_code == 200, r.text
     _, cand2 = await _active(client, container["id"], cid)
     assert cand2["conversation_ack_ts"] is None
@@ -375,6 +376,77 @@ async def test_active_conversations_surfaces_directed_messages(client, container
         "please rebase onto main",
         "[task-thread message on task T-9] ping on T-9 — READ that task's thread and RESPOND on it"]
     assert cand["inbox_ack_ts"] == 30.0           # nothing truncated → ack through the max counted ts
+
+
+@pytest.mark.asyncio
+async def test_active_conversations_marks_in_progress_task_message_for_work_lane(
+        client, container, make_agent, make_task):
+    """GH #131: a task-thread note on an in-progress task the resident's agent already owns is
+    task work, not a resident sidecar drain. The scan keeps the normal inbox count/messages, but also
+    labels the task so the notifier leaves it for the WORK lane's isolated worker."""
+    human = await make_agent("KedarTW", "human", kind="human")
+    ai = await make_agent("VoxTW", "eng")
+    aid = ai["agent_id"]
+    cid = (await _start(client, aid, human["agent_id"]))["conversation"]["id"]
+    task = await make_task("active thread work", "done", assignee_alias="VoxTW")
+    r = await client.post(f"/api/tasks/{task['id']}/messages",
+                          json={"author_agent_id": human["agent_id"], "body": "please rebase this"})
+    assert r.status_code == 201, r.text
+
+    _, cand = await _active(client, container["id"], cid)
+
+    assert cand["pending_inbox"] == 2                    # task_assigned + task_message still count
+    assert cand["inbox_wake_task_id"] == task["id"]      # but the resident must not drain them
+    assert any("please rebase this" in m for m in cand["inbox_messages"])
+
+
+@pytest.mark.asyncio
+async def test_active_conversations_marks_originating_task_answer_for_work_lane(
+        client, container, make_agent, make_task, make_request, db):
+    """GH #131 follow-up: an answered request can resume a task via originating_task_id without a
+    direct task_message event. The resident scan must surface that task id too."""
+    human = await make_agent("KedarOA", "human", kind="human")
+    owner = await make_agent("OwnerOA", "eng")
+    helper = await make_agent("HelperOA", "eng")
+    aid = owner["agent_id"]
+    cid = (await _start(client, aid, human["agent_id"]))["conversation"]["id"]
+    task = await make_task("waiting on answer", "done", assignee_alias="OwnerOA")
+    mark = db.execute("SELECT max(ts) AS ts FROM agent_events WHERE event_key=%s", (aid,))[0]["ts"]
+    await client.post(f"/api/agents/{aid}/wake-ack",
+                      json={"kind": "test_setup", "delivered_ts": mark})
+
+    req = await make_request(aid, "what did you find?", target_alias="HelperOA",
+                             originating_task_id=task["id"])
+    r = await client.post(f"/api/requests/{req['id']}/respond",
+                          json={"responder_agent_id": helper["agent_id"], "response": "answer"})
+    assert r.status_code == 200, r.text
+
+    _, cand = await _active(client, container["id"], cid)
+
+    assert cand["pending_inbox"] == 1
+    assert cand["inbox_messages"] == []                  # request_answered has no directed text
+    assert cand["inbox_wake_task_id"] == task["id"]
+
+
+@pytest.mark.asyncio
+async def test_active_conversations_leaves_ready_task_assignment_drain_safe(
+        client, container, make_agent, make_task):
+    """GH #131: a new ready task claim is not a resume of already-running task work. It remains
+    drain-safe for the resident sidecar's 'do not start work here' block."""
+    human = await make_agent("KedarRT", "human", kind="human")
+    ai = await make_agent("VoxRT", "eng")
+    aid = ai["agent_id"]
+    cid = (await _start(client, aid, human["agent_id"]))["conversation"]["id"]
+    task = await make_task("new ready work", "done")
+    r = await client.post(f"/api/tasks/{task['id']}/assign",
+                          json={"actor_agent_id": human["agent_id"], "agent_id": aid})
+    assert r.status_code == 200, r.text
+
+    _, cand = await _active(client, container["id"], cid)
+
+    assert cand["pending_inbox"] == 1
+    assert cand["inbox_wake_task_id"] is None
+    assert "claim it with /orcha-next" in cand["inbox_messages"][0]
 
 
 @pytest.mark.asyncio

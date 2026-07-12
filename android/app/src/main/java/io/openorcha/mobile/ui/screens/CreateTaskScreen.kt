@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,6 +77,12 @@ fun CreateTaskScreen(
     var parked by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var triedSubmit by remember { mutableStateOf(false) }
+    // Set synchronously in onClick so a rapid second tap is a no-op immediately —
+    // state.actionInFlight only flips on the next dispatch, leaving a window for a
+    // duplicate createTask POST (GH #124). Reset when the action settles so the
+    // failure/retry path stays usable (success navigates away).
+    var submitting by remember { mutableStateOf(false) }
+    LaunchedEffect(state.actionInFlight) { if (!state.actionInFlight) submitting = false }
 
     val dirty = title.isNotBlank() || description.isNotBlank() || dod.isNotBlank() || assignee != null || parked || dependsOn.isNotEmpty()
     val valid = title.isNotBlank() && dod.isNotBlank()
@@ -93,18 +100,22 @@ fun CreateTaskScreen(
                 actions = {
                     TextButton(
                         onClick = {
+                            if (submitting || state.actionInFlight) return@TextButton
                             triedSubmit = true
-                            if (valid) onCreate(
-                                title.trim(),
-                                description.trim().ifBlank { null },
-                                dod.trim(),
-                                assignee,
-                                MobileUx.priorityFor(band),
-                                dependsOn.toList(),
-                                parked,
-                            )
+                            if (valid) {
+                                submitting = true
+                                onCreate(
+                                    title.trim(),
+                                    description.trim().ifBlank { null },
+                                    dod.trim(),
+                                    assignee,
+                                    MobileUx.priorityFor(band),
+                                    dependsOn.toList(),
+                                    parked,
+                                )
+                            }
                         },
-                        enabled = !state.actionInFlight,
+                        enabled = !submitting && !state.actionInFlight,
                     ) {
                         Text(
                             "Create",

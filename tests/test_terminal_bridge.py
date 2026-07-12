@@ -163,6 +163,15 @@ def test_claim_renew_release_post_the_right_payloads(monkeypatch):
 
 # ---------- handle_connection glue (the two review [P1]s) ----------
 
+# A pid guaranteed NOT to be a live process (mirrors test_pid_alive_true_for_self_false_for_absent:
+# 2_000_000_000 is absurd → os.kill(pid, 0) always raises → _pid_alive is False). The teardown-path
+# tests below need the park-vs-teardown liveness check to resolve to "dead" deterministically. A real
+# low pid like 4321 is NOT safe: on a busy host (CI) that pid is often a live process, so the session
+# parks warm instead of tearing down and the teardown assertions fail. The warm/park tests take the
+# opposite tack — they back the PTY with a real live `sleep` pid via _wire_warm_handle.
+_DEAD_PID = 2_000_000_000
+
+
 class _FakeWS:
     """Minimal async websocket double: yields the queued client frames then ends; records
     sends; can be told to raise on send to simulate an already-closed socket. `close_code`
@@ -218,7 +227,7 @@ def _wire_handle(monkeypatch):
     monkeypatch.setattr(notifier, "_provision_live_worktree", lambda base, alias: (None, None))
     spawned = []
     monkeypatch.setattr(tb, "spawn_pty",
-                        lambda alias, cold, sid, cwd, **k: spawned.append(alias) or (4321, os.open(os.devnull, os.O_RDONLY)))
+                        lambda alias, cold, sid, cwd, **k: spawned.append(alias) or (_DEAD_PID, os.open(os.devnull, os.O_RDONLY)))
     killed = []
     monkeypatch.setattr(tb, "terminate_pty",
                         lambda pid, fd, **k: killed.append(pid) or os.close(fd))
@@ -232,6 +241,10 @@ def _wire_handle(monkeypatch):
         posts.append((url, body))
         if url.endswith("/runs"):
             return {"run_id": "live-run-1", "status": "running"}
+        if url.endswith("/embodiment-tokens"):
+            # GH #91/#90: the live terminal mints a WORK token before spawning; hand one back so the
+            # run-record path binds it (token_id on the /runs POST).
+            return {"run_token": "live-tok-1", "token_id": "live-tok-1"}
         return {}
     monkeypatch.setattr(notifier, "_post_json", _post)
     return spawned, killed, released, posts
@@ -264,7 +277,7 @@ async def test_handle_connection_passes_target_model_runtime_to_spawn(monkeypatc
     captured = {}
     monkeypatch.setattr(tb, "spawn_pty",
                         lambda alias, cold, sid, cwd, **k: captured.update(alias=alias, **k)
-                        or (4321, os.open(os.devnull, os.O_RDONLY)))
+                        or (_DEAD_PID, os.open(os.devnull, os.O_RDONLY)))
     ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN")
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     assert captured["alias"] == "Vault"
@@ -291,7 +304,7 @@ async def test_handle_connection_human_target_normalizes_runtime_to_claude(monke
     captured = {}
     monkeypatch.setattr(tb, "spawn_pty",
                         lambda alias, cold, sid, cwd, **k: captured.update(alias=alias, **k)
-                        or (4321, os.open(os.devnull, os.O_RDONLY)))
+                        or (_DEAD_PID, os.open(os.devnull, os.O_RDONLY)))
     ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN")
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     assert captured["alias"] == "Pat"
@@ -306,7 +319,7 @@ async def test_handle_connection_releases_lease_even_if_socket_already_closed(mo
     spawned, killed, released, posts = _wire_handle(monkeypatch)
     ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN", send_raises=True)
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
-    assert killed == [4321], "PTY terminated despite failed status send"
+    assert killed == [_DEAD_PID], "PTY terminated despite failed status send"
     assert released == ["AID"], "lease released despite failed status send"
 
 
@@ -331,7 +344,10 @@ def test_start_live_run_posts_live_kind_and_returns_run_id(monkeypatch):
     assert rid == "R1"
     url, body = posts[0]
     assert url.endswith("/api/agents/AID/runs")
-    assert body == {"wake_kind": "live", "wake_event": "live_terminal"}
+    # GH #91/#90: the live run is a WORK embodiment; start_live_run posts lane + (here defaulted) pid
+    # and token_id so the server binds the token and the dead-pid sweep won't false-orphan it.
+    assert body == {"wake_kind": "live", "wake_event": "live_terminal",
+                    "lane": "work", "pid": None, "token_id": None}
 
 
 def test_start_live_run_best_effort_returns_none_on_failed_post(monkeypatch):
@@ -378,7 +394,10 @@ async def test_handle_connection_records_and_finishes_live_run(monkeypatch):
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     starts = [b for (u, b) in posts if u.endswith("/api/agents/AID/runs")]
     finishes = [(u, b) for (u, b) in posts if u.endswith("/api/runs/live-run-1/finish")]
-    assert starts == [{"wake_kind": "live", "wake_event": "live_terminal"}]
+    # GH #91/#90: the run binds the real PTY pid (_DEAD_PID from the stubbed spawn_pty) + the minted
+    # WORK token (live-tok-1 from the stubbed mint), and is tagged lane='work'.
+    assert starts == [{"wake_kind": "live", "wake_event": "live_terminal",
+                       "lane": "work", "pid": _DEAD_PID, "token_id": "live-tok-1"}]
     assert len(finishes) == 1 and finishes[0][1]["status"] == "exited"
 
 
@@ -530,13 +549,13 @@ async def test_explicit_user_close_tears_down_instead_of_parking(monkeypatch):
 async def test_dead_pty_tears_down_instead_of_parking(monkeypatch):
     """If claude already exited (pid not alive) at detach, there is nothing to keep warm → the
     session tears down + releases immediately (no stranded warm entry)."""
-    spawned, killed, released, posts = _wire_handle(monkeypatch)   # fake pid 4321 (not a live process)
+    spawned, killed, released, posts = _wire_handle(monkeypatch)   # _DEAD_PID (not a live process)
     monkeypatch.setattr(notifier, "_provision_live_worktree", lambda base, alias: (None, None))
     ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN")
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     assert released == ["AID"], "a dead PTY must release the lease, not park"
     assert "AID" not in tb._WARM_SESSIONS
-    assert killed == [4321]
+    assert killed == [_DEAD_PID]
 
 
 @pytest.mark.asyncio

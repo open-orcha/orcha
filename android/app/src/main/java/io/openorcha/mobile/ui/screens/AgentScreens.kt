@@ -54,8 +54,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.ModelDto
 import io.openorcha.mobile.data.RunDto
+import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TurnDto
 import io.openorcha.mobile.domain.MobileUx
+import io.openorcha.mobile.domain.OrchaSelectors
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.components.Avatar
 import io.openorcha.mobile.ui.components.AvatarSize
@@ -181,23 +183,44 @@ fun AgentDetailScreen(
             if (agent.kind == "ai" && !dead) {
                 item { PrimaryButton("Converse", { onConversation(agent.id) }, Modifier.fillMaxWidth()) }
             }
-            // Now (flow 09 §4): current task + live run, or the idle line
-            val liveRun = state.agentRuns.firstOrNull { it.status == "running" }
-            if (agent.currentTask?.taskId != null || liveRun != null) {
+            // Now (flow 09 §4): live run's task wins over a stale current_task claim (GH #125/#126)
+            val activeRun = agent.activeRun
+            val nowTask = OrchaSelectors.nowTaskRef(agent)
+            val nowTaskId = nowTask?.taskId
+            val nowTaskTitle = nowTask?.title
+            if (nowTaskId != null || activeRun != null) {
                 item { SectionH("Now") }
-                agent.currentTask?.taskId?.let { tid ->
+                nowTaskId?.let { tid ->
                     item {
                         OrchaCard(onClick = { onOpenTask(tid) }) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("▸", color = p.accent, fontWeight = FontWeight.W800)
-                                Text(agent.currentTask.title ?: tid, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(nowTaskTitle ?: tid, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
                 }
-                liveRun?.let { run ->
+                activeRun?.let { run ->
                     item {
-                        OrchaCard(onClick = { onOpenRun(run) }, borderColor = p.accentLine) {
+                        OrchaCard(
+                            onClick = {
+                                onOpenRun(
+                                    RunDto(
+                                        runId = run.runId,
+                                        agentId = agent.id,
+                                        agentAlias = agent.alias,
+                                        taskId = run.taskId,
+                                        taskTitle = run.taskTitle,
+                                        status = "running",
+                                        wakeKind = run.wakeKind,
+                                        wakeEvent = run.wakeEvent,
+                                        runtime = run.runtime,
+                                        startedAt = run.startedAt,
+                                    ),
+                                )
+                            },
+                            borderColor = p.accentLine,
+                        ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(run.runId.take(6), style = MonoStyle)
                                 StatusPill("running", StatusDomain.Run)
@@ -460,6 +483,7 @@ fun ConversationScreen(
     onSend: (String) -> Unit,
     onEnd: () -> Unit,
     onOpenRun: (RunDto) -> Unit,
+    onOpenTask: (String) -> Unit,
 ) {
     val p = Orcha.palette
     val agent = state.selectedAgent
@@ -559,7 +583,7 @@ fun ConversationScreen(
                         }
                     }
                     item(key = turn.id ?: "${turn.seq}") {
-                        TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id)
+                        TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id, state.snapshot?.tasks.orEmpty(), onOpenTask)
                     }
                 }
                 unsentTurn?.let { text ->
@@ -624,13 +648,24 @@ fun ConversationScreen(
 }
 
 @Composable
-private fun TurnBubble(turn: TurnDto, humanId: String?, agentAlias: String?, onOpenRun: (RunDto) -> Unit, agentId: String?) {
+private fun TurnBubble(
+    turn: TurnDto,
+    humanId: String?,
+    agentAlias: String?,
+    onOpenRun: (RunDto) -> Unit,
+    agentId: String?,
+    tasks: List<TaskDto>,
+    onOpenTask: (String) -> Unit,
+) {
     val p = Orcha.palette
     val mine = turn.authorAgentId == humanId || turn.role == "human"
     when {
-        turn.role == "system" -> Bubble(BubbleKind.System, turn.content)
-        mine -> Bubble(BubbleKind.Mine, turn.content, time = MobileUx.agoLabel(turn.createdAt))
-        else -> Bubble(BubbleKind.Theirs, turn.content, author = agentAlias ?: "agent", time = MobileUx.agoLabel(turn.createdAt)) {
+        turn.role == "system" -> Bubble(BubbleKind.System, turn.content, tasks = tasks, onOpenTask = onOpenTask)
+        mine -> Bubble(BubbleKind.Mine, turn.content, time = MobileUx.agoLabel(turn.createdAt), tasks = tasks, onOpenTask = onOpenTask)
+        else -> Bubble(
+            BubbleKind.Theirs, turn.content, author = agentAlias ?: "agent", time = MobileUx.agoLabel(turn.createdAt),
+            tasks = tasks, onOpenTask = onOpenTask,
+        ) {
             turn.runId?.let { rid ->
                 Text(
                     "Open work log →",

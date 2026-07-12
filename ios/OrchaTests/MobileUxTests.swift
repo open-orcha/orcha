@@ -228,3 +228,111 @@ private let fixedNow = Date(timeIntervalSince1970: 1_751_400_000)
         #expect(MobileUx.dayLabel("2026-07-01T21:40:00Z") == "Jul 1")
     }
 }
+
+@Suite struct TaskLinkRefTests {
+    // GH #140: the backend emits no markdown/scheme for task links — a message body
+    // simply carries a raw task id (full UUID or a short hex prefix), matching the web
+    // portal's `taskByRef`/`taskRefs` convention (ISS-82/GH #223). Exact full-id match
+    // wins; else a UNIQUE 8+ hex prefix; ambiguous/absent never resolves.
+    private let full = "6a8771a2-7335-40b3-99ff-53208ef1eb6b"
+    private let other = "6a8771a2-aaaa-bbbb-cccc-000000000000"
+    private let tasks = [
+        TaskDto(id: "6a8771a2-7335-40b3-99ff-53208ef1eb6b", title: "Clickable task links"),
+        TaskDto(id: "6a8771a2-aaaa-bbbb-cccc-000000000000", title: "Some other task"),
+        TaskDto(id: "deadbeef-0000-0000-0000-000000000000", title: "Unrelated"),
+    ]
+
+    @Test func resolvesExactFullIdOverPrefix() {
+        #expect(MobileUx.resolveTaskRef(full, in: tasks)?.id == full)
+    }
+
+    @Test func resolvesAUniqueShortPrefix() {
+        #expect(MobileUx.resolveTaskRef("deadbeef", in: tasks)?.id == "deadbeef-0000-0000-0000-000000000000")
+    }
+
+    @Test func ambiguousPrefixNeverGuesses() {
+        // "6a8771a2" alone prefixes BOTH `full` and `other` — must resolve to neither.
+        #expect(MobileUx.resolveTaskRef("6a8771a2", in: tasks) == nil)
+    }
+
+    @Test func unknownTokenAndTooShortTokenDoNotResolve() {
+        #expect(MobileUx.resolveTaskRef("cafebabe", in: tasks) == nil)
+        #expect(MobileUx.resolveTaskRef("dead", in: tasks) == nil)     // < 8 chars: never guessed
+    }
+
+    @Test func linkifyTagsOnlyTheResolvedToken() {
+        let body = "see task \(full) — also mentions cafebabe which isn't real"
+        let attr = MobileUx.linkifyTaskRefs(body, tasks: tasks)
+        let linkedRuns = attr.runs.filter { $0.link != nil }
+        #expect(linkedRuns.count == 1)
+        #expect(linkedRuns.first?.link == MobileUx.taskLinkURL(full))
+        #expect(String(attr.characters) == body)   // visible text is untouched, only attributes differ
+    }
+
+    @Test func linkifyLeavesPlainTextAloneWhenNothingResolves() {
+        let body = "no task ids here"
+        let attr = MobileUx.linkifyTaskRefs(body, tasks: tasks)
+        #expect(attr.runs.filter { $0.link != nil }.isEmpty)
+    }
+
+    @Test func taskLinkUrlRoundTripsThroughTheOpenUrlHandler() {
+        let url = MobileUx.taskLinkURL(full)!
+        #expect(MobileUx.taskIdFromLinkURL(url) == full)
+        #expect(MobileUx.taskIdFromLinkURL(URL(string: "https://example.com")!) == nil)
+    }
+}
+
+@Suite struct TaskDtoPlanDecisionTests {
+    // Found while manually verifying GH #140: the real backend has always sent `plan_decision`
+    // as an object ({decision, reason, actor, at} — ISS-41), never a bare string, so decoding
+    // any snapshot with at least one decided plan threw and bricked the whole container. Fixed
+    // to match the `result` field's existing tolerant-decode pattern just above it.
+    private func decode(_ json: String) throws -> TaskDto {
+        try JSONDecoder().decode(TaskDto.self, from: Data(json.utf8))
+    }
+
+    @Test func planDecisionAsObjectDecodesNonNil() throws {
+        let task = try decode(#"{"id":"t1","title":"x","plan_decision":{"decision":"approve","reason":null,"actor":"kedar","at":"2026-07-04T00:00:00Z"}}"#)
+        #expect(task.planDecision == "approve")
+    }
+
+    @Test func planDecisionNullStaysNil() throws {
+        let task = try decode(#"{"id":"t1","title":"x","plan_decision":null}"#)
+        #expect(task.planDecision == nil)
+    }
+
+    @Test func planDecisionAbsentStaysNil() throws {
+        let task = try decode(#"{"id":"t1","title":"x"}"#)
+        #expect(task.planDecision == nil)
+    }
+}
+
+/// GH #148 — the Notifier (`wakes_enabled`) / Autonomy (`autonomy_level`) split.
+@Suite struct AutonomySplitTests {
+    @Test func autonomyLabelCoversAllThreeLevels() {
+        #expect(MobileUx.autonomyLabel("plan") == "Plan-only")
+        #expect(MobileUx.autonomyLabel("pr") == "Build to PR")
+        #expect(MobileUx.autonomyLabel("full") == "Full")
+    }
+
+    @Test func autonomyLabelFallsBackToPlanOnlyForUnknownLevel() {
+        #expect(MobileUx.autonomyLabel("bogus") == "Plan-only")
+    }
+
+    private func decode(_ json: String) throws -> ContainerDto {
+        try JSONDecoder().decode(ContainerDto.self, from: Data(json.utf8))
+    }
+
+    @Test func wakesEnabledDecodesTrueAndFalse() throws {
+        let running = try decode(#"{"id":"c1","name":"x","status":"active","wakes_enabled":true}"#)
+        #expect(running.wakesEnabled == true)
+        let paused = try decode(#"{"id":"c1","name":"x","status":"active","wakes_enabled":false}"#)
+        #expect(paused.wakesEnabled == false)
+    }
+
+    // Spec §6.3 — pre-SPEC-1 snapshots may omit wakes_enabled; screens fall back to Running.
+    @Test func wakesEnabledAbsentStaysNil() throws {
+        let container = try decode(#"{"id":"c1","name":"x","status":"active"}"#)
+        #expect(container.wakesEnabled == nil)
+    }
+}

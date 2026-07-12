@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // UIResponder keyboard notifications (Issue 2 — scroll composer above keyboard)
 
 /* =============================================================================
    Flow 09 — Agent detail (header, Now, Controls, persona, memory, requests, runs)
@@ -162,16 +163,32 @@ struct AgentDetailScreen: View {
 
     // MARK: Now (flow 09 §4)
 
+    private func nowTile(_ agent: AgentDto) -> (taskId: String?, title: String?, liveRun: RunDto?) {
+        let activeRun = agent.activeRun
+        let liveRun = activeRun.map { run in
+            RunDto(
+                runId: run.runId, agentId: agent.id, agentAlias: agent.alias,
+                taskId: run.taskId, taskTitle: run.taskTitle,
+                status: "running", wakeKind: run.wakeKind, wakeEvent: run.wakeEvent,
+                startedAt: run.startedAt
+            )
+        }
+        if let activeRun {
+            return (activeRun.taskId, activeRun.taskTitle, liveRun)
+        }
+        return (agent.currentTask?.taskId, agent.currentTask?.title, liveRun)
+    }
+
     @ViewBuilder
     private func nowSection(_ agent: AgentDto) -> some View {
-        let liveRun = model.agentRuns.first { $0.status == "running" }
-        if let tid = agent.currentTask?.taskId {
+        let (tid, title, liveRun) = nowTile(agent)
+        if let tid {
             SectionH(title: "Now")
             NavigationLink(value: WorkspaceRoute.task(tid)) {
                 OrchaCard {
                     HStack(spacing: 8) {
                         Text("▸").font(.system(size: 15, weight: .heavy)).foregroundStyle(p.accent)
-                        Text(agent.currentTask?.title ?? tid)
+                        Text(title ?? tid)
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(p.text)
                             .lineLimit(2)
@@ -504,6 +521,12 @@ struct ConversationScreen: View {
     @State private var draft = ""
     @State private var confirmEnd = false
     @State private var pulse = false
+    /// Issue 4 — client-side reveal window over the already-fetched turns (web parity:
+    /// start at the last 10, +20 per "Load earlier" tap). No refetch; the fetch window is 80.
+    @State private var revealed = 10
+    private static let revealStep = 20
+    /// GH #140 — a tapped task-id link pushes onto the tab's NavigationStack.
+    @State private var linkedTaskId: String?
 
     private var agent: AgentDto? {
         model.snapshot?.agents.first { $0.id == agentId }
@@ -512,19 +535,13 @@ struct ConversationScreen: View {
     private let hints = ["What are you working on?", "Any blockers?", "Status update, please"]
 
     var body: some View {
-        VStack(spacing: 0) {
-            if working, agent?.currentTask != nil {
-                Banner(
-                    kind: .info,
-                    text: "\(agent?.alias ?? "The agent") is working on a task — your message queues."
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-            }
-            transcript
-            composer
-        }
-        .navigationTitle(agent?.alias ?? "Conversation")
+        // Issue 2: composer pinned via `.safeAreaInset(edge: .bottom)` (like TaskThreadScreen)
+        // so SwiftUI lifts it directly above the keyboard and shrinks the scroll area — no gap,
+        // no obscured transcript. The "working" banner is a top inset so it never scrolls away.
+        transcript
+            .safeAreaInset(edge: .top, spacing: 0) { workingBanner }
+            .safeAreaInset(edge: .bottom) { composer }
+            .navigationTitle(agent?.alias ?? "Conversation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -541,7 +558,23 @@ struct ConversationScreen: View {
         } message: {
             Text("\(agent?.alias ?? "The agent") goes back to their own work. The transcript stays here.")
         }
+        .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
         .task { await model.loadConversation(agentId) }
+    }
+
+    // MARK: working banner (top inset)
+
+    @ViewBuilder
+    private var workingBanner: some View {
+        if working, agent?.currentTask != nil {
+            Banner(
+                kind: .info,
+                text: "\(agent?.alias ?? "The agent") is working on a task — your message queues."
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(p.bg)
+        }
     }
 
     // MARK: transcript
@@ -550,6 +583,18 @@ struct ConversationScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    // Issue 4: "Load earlier" widens the reveal window over the already-fetched
+                    // turns (no refetch); it changes only the TOP, so it must not scroll to bottom.
+                    if model.turns.count > revealed {
+                        Button { revealed += Self.revealStep } label: {
+                            Text("Load earlier messages")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(p.accent)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                    }
                     if model.turns.isEmpty {
                         OrchaCard {
                             Text("No conversation yet. Send a message to wake \(agent?.alias ?? "the agent").")
@@ -577,9 +622,16 @@ struct ConversationScreen: View {
                 }
                 .padding(16)
             }
-            .onChange(of: model.turns.count) { _, _ in
+            // Scroll to bottom on a NEW/sent turn (newest seq changes) or when the keyboard
+            // opens — never on a "Load earlier" reveal (which only widens the top).
+            .onChange(of: model.turns.last?.seq) {
                 withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .refreshable { await model.refreshConversationDelta(agentId) }
         }
     }
 
@@ -588,7 +640,7 @@ struct ConversationScreen: View {
     private var turnRows: some View {
         let humanId = model.humanId
         let alias = agent?.alias ?? "agent"
-        let rows = withDayDividers(model.turns)
+        let rows = withDayDividers(Array(model.turns.suffix(revealed)))
         ForEach(rows) { row in
             switch row {
             case let .day(label):
@@ -602,12 +654,13 @@ struct ConversationScreen: View {
     @ViewBuilder
     private func turnBubble(_ turn: TurnDto, humanId: String?, alias: String) -> some View {
         let mine = turn.authorAgentId == humanId || turn.role == "human"
+        let tasks = model.snapshot?.tasks ?? []
         if turn.role == "system" {
-            Bubble(.system, turn.content)
+            Bubble(.system, turn.content, tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else if mine {
-            Bubble(.mine, turn.content, time: MobileUx.agoLabel(turn.createdAt))
+            Bubble(.mine, turn.content, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else {
-            Bubble(.theirs, turn.content, author: alias, time: MobileUx.agoLabel(turn.createdAt)) {
+            Bubble(.theirs, turn.content, author: alias, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 }) {
                 if let rid = turn.runId {
                     NavigationLink(value: WorkspaceRoute.run(RunDto(runId: rid, agentId: agentId, agentAlias: alias, status: "exited"))) {
                         Text("Open work log →")

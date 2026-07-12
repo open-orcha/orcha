@@ -70,13 +70,15 @@ RUNTIME_CLAUDE = "claude"
 
 # ---------- ENV contract (Vault req 9f5caa8e) ----------
 
-def build_spawn_env(alias, cold, session_id=None, base_env=None, model=None, runtime=None):
+def build_spawn_env(alias, cold, session_id=None, base_env=None, model=None, runtime=None,
+                    run_token=None):
     """The env the PTY's `orcha use <alias>` inherits. Vault's cmd_use reads these:
       ORCHA_LIVE=1            → exec interactive claude (not the export print)
       ORCHA_LIVE_COLD=1|0     → cold boot (inject persona+digest+history) vs resume
       ORCHA_LIVE_RESUME_SID   → session to `claude --resume` when COLD=0
       ORCHA_LIVE_MODEL        → the agent's selected model id to pin on a COLD boot (#297)
       ORCHA_LIVE_RUNTIME      → the agent's runtime ('claude'|'codex') (#297)
+      ORCHA_RUN_TOKEN         → GH#91/90 WORK embodiment token (gated task-lifecycle calls carry it)
       ORCHA_ALIAS             → run AS the agent (set ALWAYS)
 
     #297: the bridge already resolved the agent's model+runtime from the /persona fetch that
@@ -90,6 +92,10 @@ def build_spawn_env(alias, cold, session_id=None, base_env=None, model=None, run
     env = dict(os.environ if base_env is None else base_env)
     env["ORCHA_ALIAS"] = alias
     env["ORCHA_LIVE"] = "1"
+    if run_token:
+        env["ORCHA_RUN_TOKEN"] = str(run_token)
+    else:
+        env.pop("ORCHA_RUN_TOKEN", None)             # no token (mint failed) → degraded, gated calls 403
     env["ORCHA_LIVE_COLD"] = "1" if cold else "0"
     if not cold and session_id:
         env["ORCHA_LIVE_RESUME_SID"] = str(session_id)
@@ -176,6 +182,29 @@ def safe_teardown_worktree(base_cwd, worktree, branch):
     return "removed"
 
 
+# ---------- GH#91/90: embodiment token (a live terminal is a WORK embodiment) ----------
+
+def mint_live_token(api_base, aid):
+    """Mint a WORK embodiment token (kind='live') for a live terminal session. The live terminal
+    is a WORK embodiment — a human legitimately claims/works tasks through it — so the token's lane
+    is 'work', which passes the server's `_require_work_lane` gate on the task-lifecycle endpoints.
+    Uses the SAME A2 API mechanism (`notifier._post_json`) every other bridge call uses. Best-effort:
+    returns the run_token string, or None if the mint POST fails (a token failure must NEVER block a
+    human's live terminal — the caller continues token-less/degraded on None)."""
+    tok = notifier._post_json(
+        f"{api_base}/api/agents/{aid}/embodiment-tokens",
+        {"lane": "work", "kind": "live"})
+    return (tok or {}).get("run_token")
+
+
+def revoke_live_token(api_base, token):
+    """Revoke a minted embodiment token (idempotent server-side). Best-effort no-op when the token
+    was never minted (token is None). Same API mechanism as every other bridge call."""
+    if not token:
+        return
+    notifier._post_json(f"{api_base}/api/embodiment-tokens/{token}/revoke", {})
+
+
 # ---------- lease lifecycle (reuse E1 single-flight via the API) ----------
 
 def claim_live_lease(api_base, aid, preempt=False):
@@ -187,19 +216,20 @@ def claim_live_lease(api_base, aid, preempt=False):
     return notifier._post_json(
         f"{api_base}/api/agents/{aid}/wake-claim",
         {"lease_ttl": LIVE_LEASE_TTL_SECS, "kind": "live", "lease_kind": "live",
-         "event": "live_terminal", "preempt": bool(preempt)})
+         "event": "live_terminal", "preempt": bool(preempt), "lane": "work"})
 
 
 def renew_live_lease(api_base, aid):
     return notifier._post_json(
         f"{api_base}/api/agents/{aid}/wake-renew",
-        {"lease_ttl": LIVE_LEASE_TTL_SECS, "lease_kind": "live"})
+        {"lease_ttl": LIVE_LEASE_TTL_SECS, "lease_kind": "live", "lane": "work"})
 
 
 def release_live_lease(api_base, aid):
     return notifier._post_json(
         f"{api_base}/api/agents/{aid}/wake-ack",
-        {"kind": "live", "release_lease": True, "event": "live_terminal_closed"})
+        {"kind": "live", "release_lease": True, "event": "live_terminal_closed",
+         "lane": "work"})
 
 
 async def acquire_live_lease(api_base, aid, preempt=False, on_yielding=None):
@@ -234,15 +264,19 @@ async def acquire_live_lease(api_base, aid, preempt=False, on_yielding=None):
 
 # ---------- ISS-73: record the live session as a worker_run (audit trail) ----------
 
-def start_live_run(api_base, aid, wake_event="live_terminal"):
-    """Record a worker_run (wake_kind='live') for a live terminal session so it shows up in run
-    history alongside ephemeral/resident runs (GET /api/agents/<id>/runs). Uses the SAME A2 route
-    the notifier uses for headless spawns — keeps the 'only the API touches the DB' invariant.
+def start_live_run(api_base, aid, wake_event="live_terminal", pid=None, token_id=None):
+    """Record a worker_run (wake_kind='live', lane='work') for a live terminal session so it shows
+    up in run history alongside ephemeral/resident runs (GET /api/agents/<id>/runs). Uses the SAME
+    A2 route the notifier uses for headless spawns — keeps the 'only the API touches the DB'
+    invariant. GH#91/90: posts the real PTY `pid` + `token_id` (the minted WORK token) so the server
+    binds the token to the new run row (run_id + pid) — this stops the container dead-pid sweep from
+    false-orphaning an active terminal.
     Best-effort: returns the run_id, or None if the POST fails (run bookkeeping must NEVER block a
     human's live session, so the caller tolerates None everywhere)."""
     run = notifier._post_json(
         f"{api_base}/api/agents/{aid}/runs",
-        {"wake_kind": "live", "wake_event": wake_event})
+        {"wake_kind": "live", "wake_event": wake_event, "lane": "work",
+         "pid": pid, "token_id": token_id})
     return (run or {}).get("run_id")
 
 
@@ -261,11 +295,14 @@ def finish_live_run(api_base, run_id, status="exited", output=None, exit_code=No
 
 # ---------- PTY spawn ----------
 
-def spawn_pty(alias, cold, session_id, cwd, base_env=None, model=None, runtime=None):
+def spawn_pty(alias, cold, session_id, cwd, base_env=None, model=None, runtime=None,
+              run_token=None):
     """Fork `orcha use <alias>` onto a PTY in `cwd` with the ORCHA_LIVE env. Returns
     (pid, master_fd). The child is its own session leader so we can signal the whole group.
-    model/runtime (#297) are the agent's bridge-resolved selection, passed through to cmd_use."""
-    env = build_spawn_env(alias, cold, session_id, base_env=base_env, model=model, runtime=runtime)
+    model/runtime (#297) are the agent's bridge-resolved selection, passed through to cmd_use.
+    run_token (GH#91/90) is the WORK embodiment token injected as ORCHA_RUN_TOKEN."""
+    env = build_spawn_env(alias, cold, session_id, base_env=base_env, model=model,
+                          runtime=runtime, run_token=run_token)
     pid, master_fd = pty.fork()
     if pid == 0:  # child
         try:
@@ -346,7 +383,7 @@ class _WarmSession:
     blank). While parked it is DETACHED from any ws; a reattach adopts pid+fd+worktree as-is."""
 
     def __init__(self, aid, alias, api_base, base_cwd, pid, master_fd,
-                 worktree, branch, run_id, rec):
+                 worktree, branch, run_id, rec, run_token=None):
         self.aid = aid
         self.alias = alias
         self.api_base = api_base
@@ -357,6 +394,7 @@ class _WarmSession:
         self.branch = branch
         self.run_id = run_id
         self.rec = rec
+        self.run_token = run_token          # GH#91/90 WORK token; revoked once at final retire
         self._expiry_task = None
 
     def pty_alive(self):
@@ -429,6 +467,10 @@ def _retire_warm(session, quiet=True):
         release_live_lease(session.api_base, session.aid)
         finish_live_run(session.api_base, session.run_id, "exited",
                         output="".join(session.rec["chunks"]))
+        # GH#91/90: revoke the WORK embodiment token ONCE, at final retire. Both close paths funnel
+        # here; warm-park does NOT retire (the expiry task only renews), so the token is not revoked
+        # during the grace window — only when the session is genuinely over. Idempotent server-side.
+        revoke_live_token(session.api_base, getattr(session, "run_token", None))
     if not quiet:
         print(f"[terminal-bridge] warm session retired for {session.alias} (worktree {disp})")
     return disp
@@ -514,6 +556,7 @@ async def handle_connection(ws, api_base, base_cwd, quiet=True):
         warm.cancel_expiry()
         pid, master_fd = warm.pid, warm.master_fd
         worktree, branch, run_id, rec = warm.worktree, warm.branch, warm.run_id, warm.rec
+        run_token = warm.run_token          # GH#91/90: carry the still-valid WORK token across reattach
         await ws.send(make_frame("status", state="connected",
                                  worktree=bool(worktree), cold=False, reattached=True))
         # Replay the recent screen so the reopened (blank) xterm shows context immediately rather
@@ -540,12 +583,26 @@ async def handle_connection(ws, api_base, base_cwd, quiet=True):
         # coherent reattach (the warm claude's CWD is this path) and it preserves a human's edits.
         worktree, branch = notifier._provision_live_worktree(base_cwd, alias)
         run_cwd = worktree or base_cwd
+        # GH#91/90: mint a WORK embodiment token (kind='live') BEFORE building the PTY env, so it can
+        # be injected as ORCHA_RUN_TOKEN. The live terminal is a WORK embodiment (a human legitimately
+        # claims/works tasks), so the token's lane is 'work' — it passes the server's _require_work_lane
+        # gate on the task-lifecycle endpoints. Best-effort: None on mint failure → token-less/degraded
+        # (gated calls will 403), but the terminal STILL opens — never block the human on a token.
+        run_token = mint_live_token(api_base, aid)
         pid, master_fd = spawn_pty(alias, cold, session_id, run_cwd,
-                                   model=live_model, runtime=live_runtime)
+                                   model=live_model, runtime=live_runtime, run_token=run_token)
         # ISS-73: record this live session as a worker_run (wake_kind='live') so it appears in run
-        # history with start/end/status + the relayed stream. Best-effort — run_id may be None (a
-        # failed record must never break the terminal); every run call below tolerates that.
-        run_id = start_live_run(api_base, aid)
+        # history with start/end/status + the relayed stream. GH#91/90: post the real PTY pid + the
+        # minted token_id so the server binds the token to this run row (prevents the dead-pid sweep
+        # from false-orphaning an active terminal). Best-effort — run_id may be None (a failed record
+        # must never break the terminal); every run call below tolerates that.
+        run_id = start_live_run(api_base, aid, pid=pid, token_id=run_token)
+        if run_token and run_id is None:
+            # The /runs bind failed → the token was never bound to a run row. REVOKE it (an unbound
+            # token is dead weight the server's backstop would sweep anyway) and continue token-less/
+            # degraded. Block the token, NOT the terminal — the human's session must still open.
+            revoke_live_token(api_base, run_token)
+            run_token = None
         rec = {"chunks": [], "len": 0}                 # bounded buffer of relayed output → run log on close
         await ws.send(make_frame("status", state="connected",
                                  worktree=bool(worktree), cold=cold))
@@ -564,7 +621,7 @@ async def handle_connection(ws, api_base, base_cwd, quiet=True):
         # now — those run at grace-expiry (or on the next reattach's eventual close), so a glance-away
         # -and-back costs nothing and snapshot fires once per real session end, not per reopen.
         session = _WarmSession(aid, alias, api_base, base_cwd, pid, master_fd,
-                               worktree, branch, run_id, rec)
+                               worktree, branch, run_id, rec, run_token=run_token)
         _park_warm(session, quiet=quiet)
         await _safe_send(ws, make_frame("status", state="detached", grace_secs=LIVE_GRACE_SECS))
         await _safe_close(ws)
@@ -578,7 +635,7 @@ async def handle_connection(ws, api_base, base_cwd, quiet=True):
         # BEST-EFFORT.
         await _safe_send(ws, make_frame("status", state="snapshotting"))
         session = _WarmSession(aid, alias, api_base, base_cwd, pid, master_fd,
-                               worktree, branch, run_id, rec)
+                               worktree, branch, run_id, rec, run_token=run_token)
         disp = _retire_warm(session, quiet=quiet)
         await _safe_send(ws, make_frame("status", state="closed", worktree=disp))
         await _safe_close(ws)

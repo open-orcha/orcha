@@ -20,10 +20,14 @@ struct ContainerDto: Decodable {
     var description: String?
     var status: String = "unknown"
     var autonomyLevel: String?
+    /// GH #148 — the wake kill-switch, distinct from `status` (the laptop-level container
+    /// lifecycle). Pre-SPEC-1 snapshots may omit this; treat missing as Running (spec §6.3).
+    var wakesEnabled: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, status
         case autonomyLevel = "autonomy_level"
+        case wakesEnabled = "wakes_enabled"
     }
 }
 
@@ -38,6 +42,7 @@ struct AgentDto: Decodable, Identifiable {
     var wakeEnabled: Bool?
     var autoWakeIntervalSecs: Int?
     var currentTask: AgentTaskRef?
+    var activeRun: ActiveRunDto?
     var lastActive: String?
     var terminatedAt: String?
 
@@ -47,6 +52,7 @@ struct AgentDto: Decodable, Identifiable {
         case wakeEnabled = "wake_enabled"
         case autoWakeIntervalSecs = "auto_wake_interval_secs"
         case currentTask = "current_task"
+        case activeRun = "active_run"
         case lastActive = "last_active"
         case terminatedAt = "terminated_at"
     }
@@ -59,6 +65,28 @@ struct AgentTaskRef: Decodable {
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
         case title
+    }
+}
+
+struct ActiveRunDto: Decodable {
+    let runId: String
+    var wakeEvent: String?
+    var wakeKind: String?
+    var runtime: String?
+    var taskId: String?
+    var taskTitle: String?
+    var hasConversation: Bool?
+    var startedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case runtime
+        case runId = "run_id"
+        case wakeEvent = "wake_event"
+        case wakeKind = "wake_kind"
+        case taskId = "task_id"
+        case taskTitle = "task_title"
+        case hasConversation = "has_conversation"
+        case startedAt = "started_at"
     }
 }
 
@@ -127,7 +155,16 @@ struct TaskDto: Decodable, Identifiable {
         completedAt = try c.decodeIfPresent(String.self, forKey: .completedAt)
         messageSummary = try c.decodeIfPresent(MessageSummaryDto.self, forKey: .messageSummary)
         planMessage = try c.decodeIfPresent(TaskMessageDto.self, forKey: .planMessage)
-        planDecision = try c.decodeIfPresent(String.self, forKey: .planDecision)
+        // tolerant plan_decision: null | {"decision": string, "reason", "actor", "at"} (ISS-41
+        // shape — every caller only checks nil vs non-nil, never the string itself, so pulling
+        // just `.decision` out preserves that contract).
+        if let plain = try? c.decodeIfPresent(String.self, forKey: .planDecision) {
+            planDecision = plain
+        } else if let obj = try? c.decodeIfPresent([String: LenientValue].self, forKey: .planDecision) {
+            planDecision = obj["decision"]?.stringValue
+        } else {
+            planDecision = nil
+        }
         dependsOn = try c.decodeIfPresent([String].self, forKey: .dependsOn) ?? []
     }
 
@@ -197,8 +234,9 @@ struct TaskMessageDto: Decodable {
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
     }
 
-    init(body: String, authorAlias: String? = nil, authorId: String? = nil, isHuman: Bool = false, createdAt: String? = nil) {
+    init(body: String, messageId: String? = nil, authorAlias: String? = nil, authorId: String? = nil, isHuman: Bool = false, createdAt: String? = nil) {
         self.body = body
+        self.messageId = messageId
         self.authorAlias = authorAlias
         self.authorId = authorId
         self.isHuman = isHuman
@@ -266,13 +304,14 @@ struct RequestDto: Decodable, Identifiable {
 
     init(
         id: String, type: String = "info", status: String = "open", payload: String = "",
-        requesterId: String? = nil, targetId: String? = nil,
+        priority: Int? = nil, requesterId: String? = nil, targetId: String? = nil,
         createdAt: String? = nil, closedAt: String? = nil, expiresAt: String? = nil
     ) {
         self.id = id
         self.type = type
         self.status = status
         self.payload = payload
+        self.priority = priority
         self.requesterId = requesterId
         self.targetId = targetId
         self.createdAt = createdAt
@@ -291,8 +330,37 @@ struct TaskLinkDto: Decodable {
     }
 }
 
+/// Flow 07a — the nudge outcome (`main.py:7762-7801`). `nudged:false` is a clean no-op
+/// (the routed next-action owner is a human / the nudger) — informational, not an error.
+struct NudgeResult: Decodable {
+    var nudged: Bool = false
+    var nudgedRole: String?
+    var nudgedAgentId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nudged
+        case nudgedRole = "nudged_role"
+        case nudgedAgentId = "nudged_agent_id"
+    }
+}
+
 struct TaskMessagesResponse: Decodable {
     var messages: [TaskMessageDto] = []
+    /// ISS-68 keyset paging (`main.py:5940`): present only when `limit`>0 was requested.
+    var hasMore: Bool = false
+    var nextBefore: String?
+    var nextBeforeId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case messages
+        case hasMore = "has_more"
+        case nextBefore = "next_before"
+        case nextBeforeId = "next_before_id"
+    }
+}
+
+struct TurnsResponse: Decodable {
+    var turns: [TurnDto] = []
 }
 
 struct RunsResponse: Decodable {

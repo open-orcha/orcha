@@ -31,6 +31,12 @@ final class AppModel {
     private let store = ContainerStore()
     private let api = OrchaApiClient()
     private var pollTask: Task<Void, Never>?
+    /// Issue 3 — the live run-log collector; cancelled on leaving RunDetailScreen.
+    private var runStreamTask: Task<Void, Never>?
+    private var lastRunSeq = -1
+    /// Issue 4 — task-thread keyset cursor (echoed back as before/before_id to load earlier).
+    private var threadNextBefore: String?
+    private var threadNextBeforeId: String?
 
     // navigation
     var containers: [StoredContainer]
@@ -45,7 +51,12 @@ final class AppModel {
     var taskRuns: [RunDto] = []
     var agentRuns: [RunDto] = []
     var agentExtras = AgentExtras()
-    var runLines: [String] = []
+    /// Issue 3 — the typed, classified run-log feed (web/Android parity). Classified once at
+    /// append (not on every render), keeping a 400-row retention cap.
+    var runFeed: [RunFeedRow] = []
+    /// Issue 3 — a neutral note shown above the feed when the live stream drops mid-run
+    /// (reconnecting), never a synthetic feed row. Cleared on the next accepted update.
+    var runStreamNote: String?
     var models: [ModelDto] = []
     var conversation: ConversationDto?
     var turns: [TurnDto] = []
@@ -56,6 +67,10 @@ final class AppModel {
     var actionInFlight = false
     var error: String?
     var toast: String?
+    var runLogStreaming = false      // Issue 3 — waiting on the live run stream
+    var threadHasMore = false        // Issue 4 — an older task-thread page is available
+    var threadLoadingEarlier = false
+    var showContainerControls = false  // GH #148 — Notifier + Autonomy sheet
 
     var humanId: String? { selectedContainer?.humanAgentId }
 
@@ -217,11 +232,49 @@ final class AppModel {
 
     // MARK: detail loads
 
+    /// Issue 4: load the NEWEST page of the thread (keyset), not the whole thread. The older
+    /// pages are revealed on demand via `loadEarlierThreadMessages`.
     func loadTaskDetail(_ taskId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            taskMessages = try await api.taskMessages(sel.baseUrl, taskId).messages
+            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20)
+            taskMessages = page.messages
+            threadHasMore = page.hasMore
+            threadNextBefore = page.nextBefore
+            threadNextBeforeId = page.nextBeforeId
             taskRuns = try await api.taskRuns(sel.baseUrl, taskId).runs
+        } catch {
+            self.error = friendly(error)
+        }
+    }
+
+    /// Issue 4: "Load earlier" — fetch the next older keyset page and PREPEND it (messages come
+    /// back ASC; dedup at the seam). Must not disturb the reader's scroll to the bottom.
+    func loadEarlierThreadMessages(_ taskId: String) async {
+        guard let sel = selectedContainer, threadHasMore, !threadLoadingEarlier,
+              let before = threadNextBefore, let beforeId = threadNextBeforeId else { return }
+        threadLoadingEarlier = true
+        defer { threadLoadingEarlier = false }
+        do {
+            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20, before: before, beforeId: beforeId)
+            taskMessages = MobileUx.prependMessages(page.messages, before: taskMessages)
+            threadHasMore = page.hasMore
+            threadNextBefore = page.nextBefore
+            threadNextBeforeId = page.nextBeforeId
+        } catch {
+            self.error = friendly(error)
+        }
+    }
+
+    /// Issue 4: after posting, re-fetch only the newest page and merge in the new message(s),
+    /// instead of re-fetching the whole thread.
+    private func reloadNewestThreadPage(_ taskId: String) async {
+        guard let sel = selectedContainer else { return }
+        do {
+            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20)
+            let have = Set(taskMessages.compactMap { $0.messageId })
+            let fresh = page.messages.filter { m in m.messageId.map { !have.contains($0) } ?? true }
+            taskMessages.append(contentsOf: fresh)
         } catch {
             self.error = friendly(error)
         }
@@ -253,24 +306,122 @@ final class AppModel {
         }
     }
 
+    /// Issue 3: start showing a run's log. A RUNNING run is consumed incrementally over SSE
+    /// (never a buffered one-shot that would time out); a finished run keeps the one-shot fetch.
+    func startRunLog(_ run: RunDto) {
+        stopRunLogStream()
+        lastRunSeq = -1
+        runFeed = []
+        runStreamNote = nil
+        error = nil
+        if run.status == "running" {
+            streamRunLog(run)
+        } else {
+            Task { await loadRunLog(run) }
+        }
+    }
+
+    /// Cancel the live collector (leaving RunDetailScreen, or before a one-shot refresh).
+    func stopRunLogStream() {
+        runStreamTask?.cancel()
+        runStreamTask = nil
+        runLogStreaming = false
+    }
+
+    private func streamRunLog(_ run: RunDto) {
+        guard let sel = selectedContainer, let aid = run.agentId else { return }
+        runLogStreaming = true
+        runStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var attempt = 0
+            while !Task.isCancelled {
+                do {
+                    streaming: for try await event in api.runStream(sel.baseUrl, aid, run.runId) {
+                        if Task.isCancelled { return }
+                        switch event {
+                        case let .line(seq, text):
+                            appendRunRows(seq: seq, text: text)
+                            attempt = 0
+                        case let .done(_, status):
+                            if status == "stream_timeout" {
+                                break streaming          // server 30-min cap — reopen, run still live
+                            }
+                            appendFeed([RunFeedRow(type: "done", label: "run-complete", text: status)])
+                            runStreamNote = nil
+                            runLogStreaming = false
+                            await refresh()              // sync the run row elsewhere in the UI
+                            return
+                        }
+                    }
+                    attempt = 0                          // clean close / timeout → reopen shortly
+                } catch {
+                    if Task.isCancelled { return }
+                    attempt = min(attempt + 1, 5)
+                    runStreamNote = "Log stream interrupted — reconnecting…"
+                }
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .seconds(attempt == 0 ? 0.3 : Double(attempt)))
+            }
+        }
+    }
+
+    /// Append a streamed line: web's monotonic-`seq` dedup → classify into typed rows →
+    /// skip-empty guard → append + 400-row cap → clear the interruption note (only inside a
+    /// non-empty update, matching Android VM:522-526).
+    private func appendRunRows(seq: Int, text: String) {
+        if seq >= 0 {
+            guard seq > lastRunSeq else { return }
+            lastRunSeq = seq
+        }
+        let rows = RunFeed.classifyLine(text)
+        guard !rows.isEmpty else { return }
+        appendFeed(rows)
+        runStreamNote = nil
+    }
+
+    /// Append rows with the shared 400-row retention cap (classify happens at append, never render).
+    private func appendFeed(_ rows: [RunFeedRow]) {
+        runFeed.append(contentsOf: rows)
+        if runFeed.count > 400 { runFeed.removeFirst(runFeed.count - 400) }
+    }
+
+    /// One-shot read for a FINISHED run (server closes the stream immediately).
     func loadRunLog(_ run: RunDto) async {
         guard let sel = selectedContainer, let aid = run.agentId else { return }
         loading = true
         defer { loading = false }
         do {
             let text = try await api.runStreamText(sel.baseUrl, aid, run.runId)
-            runLines = Self.parseSseLines(text)
+            runFeed = Self.feedFromStreamText(text)
         } catch {
             self.error = friendly(error)
         }
     }
 
+    /// Issue 4: initial mount pulls the most-recent window (?limit=80); the screen reveals
+    /// older turns client-side. Refreshes delta-append via `after_seq` (see below).
     func loadConversation(_ agentId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            let response = try await api.conversation(sel.baseUrl, agentId)
+            let response = try await api.conversation(sel.baseUrl, agentId, limit: 80)
             conversation = response.conversation
             turns = response.turns
+        } catch {
+            self.error = friendly(error)
+        }
+    }
+
+    /// Issue 4: append only the turns created after the last-held seq, instead of full-replacing
+    /// the transcript (web parity, `conversation.js:586`). Falls back to a full load if unmounted.
+    func refreshConversationDelta(_ agentId: String) async {
+        guard let sel = selectedContainer, let conv = conversation else {
+            await loadConversation(agentId)
+            return
+        }
+        do {
+            let lastSeq = turns.map(\.seq).max() ?? 0
+            let delta = try await api.conversationTurns(sel.baseUrl, conv.id, afterSeq: lastSeq, limit: 50).turns
+            turns = MobileUx.appendTurns(turns, delta: delta)
         } catch {
             self.error = friendly(error)
         }
@@ -301,7 +452,7 @@ final class AppModel {
     func sendTaskMessage(_ taskId: String, body: String) async -> Bool {
         await humanAction("Message sent") { base, actor in
             try await api.postTaskMessage(base, taskId, actor: actor, body: body)
-            await loadTaskDetail(taskId)
+            await reloadNewestThreadPage(taskId)
         }
     }
 
@@ -340,11 +491,55 @@ final class AppModel {
         }
     }
 
-    func nudgeRequest(_ rid: String, note: String?) async -> Bool {
-        await humanAction("Nudge sent") { base, actor in
-            try await api.nudgeRequest(base, rid, actor: actor, note: note)
+    /// GH #148 — the notifier kill-switch. Independent of `setAutonomy`: flipping this never
+    /// changes the remembered autonomy level.
+    func setWakes(enabled: Bool) async -> Bool {
+        guard let cid = selectedContainer?.id else { return false }
+        return await humanAction(enabled ? "Notifier resumed" : "Notifier paused") { base, actor in
+            try await api.setWakes(base, cid, actor: actor, enabled: enabled)
             await refresh()
         }
+    }
+
+    /// GH #148 — the autonomy gearbox. Independent of `setWakes`: the level applies whether or
+    /// not the notifier is currently running.
+    func setAutonomy(level: String) async -> Bool {
+        guard let cid = selectedContainer?.id else { return false }
+        return await humanAction("Autonomy set to \(MobileUx.autonomyLabel(level))") { base, actor in
+            try await api.setAutonomy(base, cid, actor: actor, level: level)
+            await refresh()
+        }
+    }
+
+    /// Flow 07a: the toast is state-aware — a real wake names the woken agent, while the
+    /// `{nudged:false}` no-op (a human owns the next action) is informational, not an error.
+    func nudgeRequest(_ rid: String, note: String?) async -> Bool {
+        guard let sel = selectedContainer else { return false }
+        guard let actor = sel.humanAgentId else {
+            error = "Pairing is missing the human identity. Reconnect this Orcha first."
+            return false
+        }
+        actionInFlight = true
+        error = nil
+        defer { actionInFlight = false }
+        do {
+            let result = try await api.nudgeRequest(sel.baseUrl, rid, actor: actor, note: note)
+            toast = nudgeToast(result)
+            await refresh()
+            return true
+        } catch {
+            self.error = friendly(error)
+            return false
+        }
+    }
+
+    private func nudgeToast(_ r: NudgeResult) -> String {
+        guard r.nudged else { return "No agent to wake — a human owns the next action." }
+        if let alias = MobileUx.aliasFor(r.nudgedAgentId, in: snapshot?.agents ?? []) {
+            return "Nudged \(alias)"
+        }
+        if let role = r.nudgedRole { return "Nudged the \(role)" }
+        return "Nudge sent"
     }
 
     func escalateRequest(_ rid: String, reason: String?) async -> Bool {
@@ -375,12 +570,6 @@ final class AppModel {
         }
     }
 
-    func triageCloseRequest(_ rid: String) async -> Bool {
-        await humanAction("Request closed (triage)") { base, _ in
-            try await api.triageCloseRequest(base, rid)
-            await refresh()
-        }
-    }
 
     func changeModel(_ agentId: String, model: String) async -> Bool {
         await humanAction("Model changed") { base, _ in
@@ -418,7 +607,7 @@ final class AppModel {
             }
             guard let conv = conversation else { throw URLError(.badServerResponse) }
             try await api.sendTurn(base, conv.id, actor: actor, content: content)
-            await loadConversation(agentId)
+            await refreshConversationDelta(agentId)
         }
     }
 
@@ -433,7 +622,8 @@ final class AppModel {
     func stopRun(_ run: RunDto) async -> Bool {
         await humanAction("Stop requested") { base, actor in
             try await api.stopRun(base, run.runId, actor: actor)
-            await loadRunLog(run)
+            stopRunLogStream()               // the run is closing — end the live collector
+            await loadRunLog(run)            // one-shot now returns the full final log
         }
     }
 
@@ -457,19 +647,27 @@ final class AppModel {
 
     // MARK: helpers
 
-    static func parseSseLines(_ text: String) -> [String] {
-        text.split(separator: "\n", omittingEmptySubsequences: true)
-            .filter { $0.hasPrefix("data:") }
-            .compactMap { line -> String? in
-                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                guard
-                    let data = payload.data(using: .utf8),
-                    let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                else { return nil }
-                if let text = obj["line"] as? String { return text }
-                if let status = obj["status"] as? String { return "run \(status)" }
-                return nil
+    /// Classify a FINISHED run's buffered SSE text into typed feed rows (Android
+    /// `feedFromStreamText`): parse each frame via `OrchaApiClient.parseSseEvent`, drop
+    /// reconnect-replay with `seq > maxSeq`, classify each line, and cap at 400 rows.
+    static func feedFromStreamText(_ text: String) -> [RunFeedRow] {
+        var rows: [RunFeedRow] = []
+        var maxSeq = 0
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            switch OrchaApiClient.parseSseEvent(String(raw)) {
+            case let .line(seq, line):
+                if seq > maxSeq {
+                    maxSeq = seq
+                    rows.append(contentsOf: RunFeed.classifyLine(line))
+                }
+            case let .done(_, status):
+                rows.append(RunFeedRow(type: "done", label: "run-complete", text: status))
+            case .none:
+                break
             }
+        }
+        if rows.count > 400 { rows.removeFirst(rows.count - 400) }
+        return rows
     }
 
     private func friendly(_ error: Error) -> String {

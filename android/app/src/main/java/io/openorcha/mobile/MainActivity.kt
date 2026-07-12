@@ -114,6 +114,8 @@ class MainActivity : ComponentActivity() {
                         onCreateTask = viewModel::showCreateTask,
                         onDecidePlanFor = viewModel::decidePlanById,
                         onVerifyFor = viewModel::verifyTaskById,
+                        onSetWakes = viewModel::setWakes,
+                        onSetAutonomy = viewModel::setAutonomy,
                     )
 
                     AppRoute.TaskDetail -> TaskDetailScreen(
@@ -135,6 +137,7 @@ class MainActivity : ComponentActivity() {
                         onRefresh = viewModel::refreshSelectedTask,
                         onSendMessage = viewModel::sendTaskMessage,
                         onLoadEarlier = viewModel::loadEarlierMessages,
+                        onOpenTask = viewModel::openTask,
                     )
 
                     AppRoute.RequestDetail -> RequestDetailScreen(
@@ -147,7 +150,6 @@ class MainActivity : ComponentActivity() {
                         onAcceptTask = viewModel::acceptSelectedTaskRequest,
                         onRejectTask = viewModel::rejectSelectedTaskRequest,
                         onConvert = viewModel::convertSelectedRequest,
-                        onTriageClose = viewModel::triageCloseSelectedRequest,
                         onOpenTask = viewModel::openTask,
                     )
 
@@ -186,6 +188,7 @@ class MainActivity : ComponentActivity() {
                         onSend = viewModel::sendConversationTurn,
                         onEnd = viewModel::endConversation,
                         onOpenRun = viewModel::openRun,
+                        onOpenTask = viewModel::openTask,
                     )
 
                     AppRoute.CreateTask -> CreateTaskScreen(

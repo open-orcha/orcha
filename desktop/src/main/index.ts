@@ -341,7 +341,10 @@ function openPortalWindow(stack: Stack, path = '/'): void {
       void shell.openExternal(url)
       return { action: 'deny' }
     }
-    return { action: 'allow' }
+    // Same-origin "new window" requests (e.g. a task link's window.open()) should
+    // navigate this project's existing portal window in place, not spawn another one.
+    win.loadURL(url)
+    return { action: 'deny' }
   })
   // The portal page's own <title> ("Orcha · Dashboard") would overwrite the window
   // title — keep the project name in front so multiple portals stay distinguishable.
