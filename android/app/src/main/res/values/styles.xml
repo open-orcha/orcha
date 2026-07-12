@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Orcha" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@color/orcha_bg</item>
+        <item name="android:statusBarColor">@color/orcha_bg</item>
+    </style>
+</resources>
+

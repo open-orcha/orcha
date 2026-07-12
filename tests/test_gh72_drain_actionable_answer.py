@@ -296,7 +296,11 @@ def test_resident_drain_skips_sidecar_when_only_answer_pending(monkeypatch, tmp_
     the answer waits for the post-exit ephemeral wake.
 
     TEETH: revert the notifier gate (`drainable > 0` → `inbox > 0`) and a sidecar IS spawned for a
-    zero-drainable inbox → `len(spawns)==0` flips red."""
+    zero-drainable inbox → `len(spawns)==0` flips red.
+
+    GH #91/#90: the sidecar path is gated behind RESIDENT_WORK_TEARDOWN_ENABLED (default False);
+    enable it here so the #72 drainable gate is what's actually under test."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 1, "drainable_inbox": 0, "inbox_ack_ts": None, "inbox_messages": []}
@@ -317,7 +321,11 @@ def test_resident_drain_skips_sidecar_when_only_answer_pending(monkeypatch, tmp_
 
 def test_resident_drain_sidecar_parks_before_answer_on_mix(monkeypatch, tmp_path):
     """Regression: a real drainable backlog ahead of an actionable answer STILL spawns a sidecar, and
-    it parks the cursor at the server-clamped `inbox_ack_ts` (strictly before the answer)."""
+    it parks the cursor at the server-clamped `inbox_ack_ts` (strictly before the answer).
+
+    GH #91/#90: the sidecar path is gated behind RESIDENT_WORK_TEARDOWN_ENABLED (default False);
+    enable it here to exercise the flag-on sidecar path this test covers."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 2, "drainable_inbox": 1, "inbox_ack_ts": 30.0,

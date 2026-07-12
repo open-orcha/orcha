@@ -285,6 +285,8 @@ window.Orcha = (function () {
     live: '<path d="M2.5 10h3l2-5 3 10 2-7 1.5 2h3.5"/>',
     search: '<circle cx="8.5" cy="8.5" r="5"/><path d="m13 13 3.5 3.5"/>',
     bell: '<path d="M6 9a4 4 0 0 1 8 0c0 3 1.2 4 1.8 4.6.3.3.1.9-.4.9H4.6c-.5 0-.7-.6-.4-.9C4.8 13 6 12 6 9z"/><path d="M8.4 17a1.8 1.8 0 0 0 3.2 0"/>',
+    phone: '<rect x="6" y="2.5" width="8" height="15" rx="2"/><path d="M8.8 5h2.4M9.5 15.2h1"/>',
+    alert: '<path d="M10 3 17 16H3z"/><path d="M10 7.2v4.2M10 14.2h.01"/>',
     sun: '<circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v2M10 15.6v2M2.4 10h2M15.6 10h2M4.6 4.6l1.4 1.4M14 14l1.4 1.4M15.4 4.6 14 6M6 14l-1.4 1.4"/>',
     moon: '<path d="M15.5 11.5A6 6 0 0 1 8.5 4.5a6 6 0 1 0 7 7z"/>',
     chev: '<path d="M5 7.5 10 12l5-4.5"/>',
@@ -491,20 +493,35 @@ window.Orcha = (function () {
           </a>
         </div>
         <div class="tb-line tb-line-2">
-          <div class="aut-wrap" id="autWrap">
-            <span class="aut-lab">autonomy</span>
-            <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy"></div>
+          <!-- GH #148: two orthogonal controls, not one fused slider. Notifier = the power
+               switch (wakes_enabled); Autonomy = the gearbox (autonomy_level). A divider keeps
+               them reading as two separate things; both keep the acting-human lock. -->
+          <div class="ctl-wrap" id="ctlWrap">
+            <div class="ctl-group" id="notifGroup">
+              <span class="aut-lab">Notifier</span>
+              <div class="aut notif" id="notifTop" role="group" aria-label="Event notifier — pause or resume all agent wakes"></div>
+            </div>
+            <span class="ctl-div" aria-hidden="true"></span>
+            <div class="ctl-group" id="autGroup">
+              <span class="aut-lab">Autonomy</span>
+              <div class="aut" id="autTop" role="radiogroup" aria-label="Container autonomy level"></div>
+            </div>
           </div>
           <div class="acting" title="You are the human authority on this container">
             <span class="lbl">acting as</span>
             <span class="who" id="actingWho">${actingHTML}</span>
           </div>
+          <button class="btn sm subtle pair-top" id="pairPhoneBtn" type="button" title="Pair a phone on this Wi-Fi network">
+            ${icon("phone", "")}Pair phone
+          </button>
           <button class="iconbtn" id="themeBtn" title="Theme: ${currentTheme()} — click to cycle">
             ${icon("sun", "sun")}${icon("moon", "moon")}
           </button>
         </div>`;
       const tb = document.getElementById("themeBtn");
       if (tb) tb.addEventListener("click", cycleTheme);
+      const pb = document.getElementById("pairPhoneBtn");
+      if (pb) pb.addEventListener("click", openPairingModal);
       // SPEC-1: ensure the paused micro-banner element sits between topbar and content,
       // then render the autonomy switch from the current snapshot. Injected here (not in
       // each *.html) so the control is identical on every page.
@@ -523,25 +540,27 @@ window.Orcha = (function () {
     }
   }
 
-  /* ---- SPEC-1: global autonomy switch ---------------------------------- */
-  // Four rungs in ONE slider, lowest→highest authority, but TWO orthogonal backends:
-  //   Rung 0  — the LIVE binary kill-switch, containers.wakes_enabled
-  //             (POST /api/containers/{cid}/wakes). Paused(red) vs Running(green).
-  //   Rungs 1-3 — the engine autonomy LEVEL, containers.autonomy_level
-  //             (#298: POST /api/containers/{cid}/autonomy, level ∈ plan|pr|full).
-  // The two are independent: pausing wakes does NOT change the level, so the active
-  // level keeps rendering whether wakes are on or off. The active level lights in its
-  // spec tone (plan=warn / pr=info / full=accent); rung 0 always shows the binary on top.
-  // `level` is the wire enum the backend stores+returns; `label` is the operator-facing rung.
-  const AUT_RUNGS = [
-    { r: 0, label: "Paused" },
-    { r: 1, level: "plan", tone: "warn", label: "Plan-only",
+  /* ---- GH #148: two orthogonal topbar controls ------------------------- */
+  // The topbar carries TWO independent controls, NOT one fused slider:
+  //   NOTIFIER  — the LIVE binary kill-switch, containers.wakes_enabled
+  //               (POST /api/containers/{cid}/wakes). Paused(red) vs Running(green).
+  //               "The power switch": do agents wake AT ALL?
+  //   AUTONOMY  — the engine LEVEL, containers.autonomy_level
+  //               (#298: POST /api/containers/{cid}/autonomy, level ∈ plan|pr|full).
+  //               "The gearbox": how far agents may go WHEN they act.
+  // They are orthogonal: pausing the notifier does NOT change the level, so the active
+  // level keeps rendering whether the notifier is Running or Paused (dimmed while paused,
+  // but still legible + editable so you can pre-set the level before resuming). The active
+  // level lights in its spec tone (plan=warn / pr=info / full=accent).
+  // `level` is the wire enum the backend stores+returns; `label` is operator-facing.
+  const AUT_LEVELS = [
+    { level: "plan", tone: "warn", label: "Plan-only",
       meaning: "Agents wake & propose, but every plan stops at the approval gate — you approve before any execution.",
       impact: "Agents resume and propose plans, but you approve every plan before any execution." },
-    { r: 2, level: "pr", tone: "info", label: "Build to PR",
+    { level: "pr", tone: "info", label: "Build to PR",
       meaning: "Agents execute approved plans up to an open PR; you still merge.",
       impact: "Agents execute approved plans up to an open PR. You still merge." },
-    { r: 3, level: "full", tone: "accent", label: "Full",
+    { level: "full", tone: "accent", label: "Full",
       meaning: "Agents may carry approved work to its configured terminal state without further gates.",
       impact: "Agents may carry approved work to completion without further gates." },
   ];
@@ -570,48 +589,80 @@ window.Orcha = (function () {
     const bar = document.createElement("div");
     bar.className = "pausebar";
     bar.id = "pausebar";
-    bar.innerHTML = `<span>⏸ Autonomy paused — no agent wakes. Humans & live terminals still work.</span>
+    bar.innerHTML = `<span>⏸ Notifier paused — no agent wakes. Humans & live terminals still work.</span>
       <span class="resume" id="resumeBtn" role="button" tabindex="0">Resume ↩</span>`;
     topbar.insertAdjacentElement("afterend", bar);
   }
 
-  // Render the switch + paused reinforcement from the current snapshot. Idempotent and
-  // safe to call before mount (no #autTop → no-op), so the 5s poll can reconcile it.
+  // Render BOTH controls + the paused reinforcement from the current snapshot. Idempotent
+  // and safe to call before mount (missing hosts → no-op), so the 5s poll can reconcile it.
+  // Kept as the single public entry (called from applySnapshot + mountShell); it fans out to
+  // the two hosts so the fused-slider call sites don't need to know about the split.
   function paintAutonomy() {
+    paintNotifier();
+    paintLevels();
+    paintPausedReinforcement();
+  }
+
+  // NOTIFIER host (#notifTop): the live binary kill-switch. Paused (red) vs Running (green),
+  // always lit; clicking flips the wake switch (confirm first). Orthogonal to the level.
+  function paintNotifier() {
+    const host = document.getElementById("notifTop");
+    if (!host) return;
+    const paused = wakesPaused();
+    const canAct = !!actingHuman();
+    host.classList.toggle("locked", !canAct);
+    const cls = paused ? "seg paused on" : "seg run on";
+    const lab = paused ? "Paused" : "Running";
+    const tip = canAct
+      ? (paused ? "Notifier is OFF — click to resume all agent wakes" : "Notifier is ON — click to pause all agent wakes")
+      : "Pick an acting human to change the notifier";
+    host.innerHTML = `<span class="${cls}" data-notif="1" role="switch" aria-checked="${!paused}" tabindex="0"
+      title="${esc(tip)}"><span class="d"></span>${esc(lab)}</span>`;
+    const seg = host.querySelector(".seg");
+    if (seg) {
+      seg.onclick = onNotifClick;
+      seg.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNotifClick(); } };
+    }
+  }
+
+  // AUTONOMY host (#autTop): the 3-level segmented selector (plan|pr|full). The active level
+  // lights in its spec tone; the rest stay selectable. Orthogonal to the notifier — the level
+  // renders the same whether the notifier is paused or running, but is de-emphasized (dimmed,
+  // hint "applies when running") while paused so you can still pre-set it before resuming.
+  function paintLevels() {
     const host = document.getElementById("autTop");
     if (!host) return;
     const paused = wakesPaused();
     const level = autLevel();
     const canAct = !!actingHuman();
     host.classList.toggle("locked", !canAct);
-    host.innerHTML = AUT_RUNGS.map((rg) => {
-      if (rg.r === 0) {
-        // the live binary: Paused (red) vs Running (neutral green), always lit
-        const cls = paused ? "seg paused on" : "seg run on";
-        const lab = paused ? "Paused" : "Running";
-        const tip = canAct
-          ? (paused ? "Wakes are OFF — click to resume" : "Wakes are ON — click to pause all agent wakes")
-          : "Pick an acting human to change autonomy";
-        return `<span class="${cls}" data-rung="0" role="radio" aria-checked="true"
-          title="${esc(tip)}"><span class="d"></span>${esc(lab)}</span>`;
-      }
-      // rungs 1-3: the engine autonomy level (plan|pr|full). The active level lights in its
-      // spec tone; the rest stay selectable. Orthogonal to rung 0 — the level renders the same
-      // whether wakes are paused or running.
+    host.classList.toggle("dimmed", paused);
+    host.innerHTML = AUT_LEVELS.map((rg) => {
       const active = rg.level === level;
       const cls = "seg lvl " + rg.tone + (active ? " on" : "");
       const tip = canAct
-        ? (active ? "Current autonomy: " + rg.label : "Set autonomy to " + rg.label + " — " + rg.meaning)
+        ? (active
+            ? "Current autonomy: " + rg.label + (paused ? " — applies when running" : "")
+            : "Set autonomy to " + rg.label + " — " + rg.meaning)
         : "Pick an acting human to change autonomy";
-      return `<span class="${cls}" data-rung="${rg.r}" role="radio" aria-checked="${active}"
+      return `<span class="${cls}" data-level="${rg.level}" role="radio" aria-checked="${active}" tabindex="0"
         title="${esc(tip)}"><span class="d"></span>${esc(rg.label)}</span>`;
     }).join("");
     host.querySelectorAll(".seg").forEach((seg) => {
-      seg.onclick = () => onAutClick(+seg.dataset.rung);
+      seg.onclick = () => onLevelClick(seg.dataset.level);
+      seg.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onLevelClick(seg.dataset.level); } };
     });
-    // topbar red border + persistent micro-banner when paused
+  }
+
+  // The paused reinforcement (red topbar border + persistent #pausebar micro-banner) is now
+  // driven ONLY by the notifier, never the level.
+  function paintPausedReinforcement() {
+    const paused = wakesPaused();
     const topbar = document.getElementById("topbar");
-    if (topbar) topbar.classList.toggle("paused", paused);
+    // A stubbed/minimal topbar (e.g. the D0 shell-mount harness passes {innerHTML:''})
+    // has no classList — feature-detect so mountShell doesn't crash on the reinforcement pass.
+    if (topbar && topbar.classList) topbar.classList.toggle("paused", paused);
     const bar = document.getElementById("pausebar");
     if (bar) {
       bar.classList.toggle("show", paused);
@@ -620,34 +671,34 @@ window.Orcha = (function () {
     }
   }
 
-  function onAutClick(rung) {
-    if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
-    if (rung === 0) {
-      const paused = wakesPaused();
-      if (paused) {
-        // resume → Running
-        modal({
-          title: "Resume autonomy?",
-          desc: "Agents resume waking at the current autonomy level. Restores the global wake switch to ON (Running).",
-          primary: "Resume",
-          onPrimary: () => { closeModal(); setWakes(true); },
-        });
-      } else {
-        // pause → kill-switch
-        modal({
-          title: "Pause autonomy?",
-          desc: "All agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.",
-          primary: "Pause all wakes",
-          danger: true,
-          onPrimary: () => { closeModal(); setWakes(false); },
-        });
-      }
-      return;
+  // NOTIFIER click → flip the wake switch. Running→Paused is destructive (halts all wakes):
+  // danger confirm. Paused→Running is safe: light confirm.
+  function onNotifClick() {
+    if (!actingHuman()) { toast("Pick an acting human to change the notifier", "warn"); return; }
+    if (wakesPaused()) {
+      modal({
+        title: "Resume agent wakes?",
+        desc: "Agents resume waking at the current autonomy level.",
+        primary: "Resume",
+        onPrimary: () => { closeModal(); setWakes(true); },
+      });
+    } else {
+      modal({
+        title: "Pause all agent wakes?",
+        desc: "Agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.",
+        primary: "Pause all wakes",
+        danger: true,
+        onPrimary: () => { closeModal(); setWakes(false); },
+      });
     }
-    // rungs 1-3 → set the engine autonomy LEVEL (containers.autonomy_level). Confirm first
-    // (this can switch off the human verification gate at 'full'); no-op if already there.
-    const rg = AUT_RUNGS[rung];
-    if (!rg || !rg.level) return;
+  }
+
+  // AUTONOMY click → set the engine LEVEL (containers.autonomy_level). Confirm first (Full
+  // removes the human completion gate → danger-flagged); no-op if already at that level.
+  function onLevelClick(level) {
+    if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
+    const rg = AUT_LEVELS.find((x) => x.level === level);
+    if (!rg) return;
     if (rg.level === autLevel()) return;   // already at this level — no modal, no POST
     modal({
       title: "Set autonomy to " + rg.label + "?",
@@ -663,7 +714,7 @@ window.Orcha = (function () {
   function setWakes(enabled) {
     // Single choke point for the global wake switch: gate on an acting human here so EVERY
     // caller (slider + pausebar Resume banner) is covered, never just the controls we hide.
-    if (!actingHuman()) { toast("Pick an acting human to change autonomy", "warn"); return; }
+    if (!actingHuman()) { toast("Pick an acting human to change the notifier", "warn"); return; }
     const cid = D.container && D.container.id;
     if (!cid) { toast("No container", "danger"); return; }
     const prev = D.container.wakes_enabled;
@@ -678,12 +729,12 @@ window.Orcha = (function () {
       .then((res) => {
         D.container.wakes_enabled = res.wakes_enabled;
         paintAutonomy();
-        toast(res.wakes_enabled ? "Autonomy · Running" : "Autonomy · Paused", res.wakes_enabled ? "ok" : "bad");
+        toast(res.wakes_enabled ? "Notifier · Running" : "Notifier · Paused", res.wakes_enabled ? "ok" : "bad");
       })
       .catch((e) => {
         D.container.wakes_enabled = prev;   // revert
         paintAutonomy();
-        toast("Could not change autonomy: " + e.message, "danger");
+        toast("Could not change the notifier: " + e.message, "danger");
       });
   }
 
@@ -708,7 +759,7 @@ window.Orcha = (function () {
       .then((res) => {
         D.container.autonomy_level = res.autonomy_level;
         paintAutonomy();
-        const rg = AUT_RUNGS.find((x) => x.level === res.autonomy_level);
+        const rg = AUT_LEVELS.find((x) => x.level === res.autonomy_level);
         toast("Autonomy · " + (rg ? rg.label : res.autonomy_level), "ok");
       })
       .catch((e) => {
@@ -947,16 +998,171 @@ window.Orcha = (function () {
     if (_ncOpen) ncRenderPanel();
   }
 
-  /* ---- modal ----------------------------------------------------------- */
-  function modal(cfg) {
+  /* ---- mobile pairing modal --------------------------------------------- */
+  let pairingTimer = null;
+  let pairingSeq = 0;
+
+  function clearPairingTimer() {
+    if (pairingTimer != null) clearInterval(pairingTimer);
+    pairingTimer = null;
+  }
+
+  function ensureOverlay() {
     let ov = document.getElementById("__ov");
     if (!ov) {
       ov = document.createElement("div");
       ov.id = "__ov"; ov.className = "overlay";
       document.body.appendChild(ov);
+    }
+    if (!ov.__orchaWired) {
       ov.addEventListener("click", (e) => { if (e.target === ov) closeModal(); });
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+      ov.__orchaWired = true;
     }
+    return ov;
+  }
+
+  function pairingHumanSelect(selectedId) {
+    const hs = humans();
+    if (hs.length <= 1) return "";
+    return `<label class="pair-select"><span>Pair as</span><select id="pairHuman">
+      ${hs.map((h) => `<option value="${esc(h.id)}"${String(h.id) === String(selectedId) ? " selected" : ""}>${esc(h.alias)} (human)</option>`).join("")}
+    </select></label>`;
+  }
+
+  function openPairingModal() {
+    const cid = D.container && D.container.id;
+    if (!cid) { toast("No Orcha container is loaded.", "danger"); return; }
+    const hs = humans();
+    const who = actingHuman() || hs[0] || null;
+    const selected = who && who.id;
+    clearPairingTimer();
+
+    const ov = ensureOverlay();
+    ov.innerHTML = `<div class="modal pair-modal" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
+      <div class="pair-head">
+        <span class="pair-mark">${orcaSVG()}</span>
+        <div class="grow">
+          <h3 id="pairTitle">Pair your phone</h3>
+          <p>Scan with the Orcha app on the same Wi-Fi network.</p>
+        </div>
+        <button class="iconbtn" id="pairClose" type="button" title="Close">${icon("x", "")}</button>
+      </div>
+      <div class="pair-content">
+        ${pairingHumanSelect(selected)}
+        <div id="pairBody"><div class="pair-loading">${icon("clock", "")}<span>Preparing pairing code...</span></div></div>
+      </div>
+    </div>`;
+    ov.classList.add("show");
+    const close = document.getElementById("pairClose");
+    if (close) close.addEventListener("click", closeModal);
+    const sel = document.getElementById("pairHuman");
+    if (sel) sel.addEventListener("change", () => loadPairing(sel.value));
+    if (!hs.length) {
+      renderPairingWarning({ title: "No human can pair this phone", message: "Add a human operator before pairing a phone." });
+    } else {
+      loadPairing(selected);
+    }
+  }
+
+  function renderPairingWarning(info) {
+    clearPairingTimer();
+    const host = document.getElementById("pairBody");
+    if (!host) return;
+    info = info || {};
+    host.innerHTML = `<div class="pair-warning">
+      <div class="pair-warn-title">${icon("alert", "")}<span>${esc(info.title || "Phones can't reach this Orcha yet")}</span></div>
+      <p>${esc(info.message || "The server could not produce a phone-reachable network address.")}</p>
+      ${info.remedy ? `<div class="pair-remedy">${pairingCopyWithCode(info.remedy)}</div>` : ""}
+      <p class="pair-foot">Both devices must be on the same Wi-Fi. Some VPNs and corporate networks block phone-to-laptop traffic.</p>
+    </div>`;
+  }
+
+  function pairingCopyWithCode(s) {
+    return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+
+  function renderPairingLoading() {
+    const host = document.getElementById("pairBody");
+    if (host) host.innerHTML = `<div class="pair-loading">${icon("clock", "")}<span>Preparing pairing code...</span></div>`;
+  }
+
+  async function loadPairing(humanId) {
+    const cid = D.container && D.container.id;
+    if (!cid) return;
+    const seq = ++pairingSeq;
+    clearPairingTimer();
+    renderPairingLoading();
+    let url = "/api/containers/" + encodeURIComponent(cid) + "/pairing";
+    if (humanId) url += "?human_agent_id=" + encodeURIComponent(humanId);
+    try {
+      const r = await fetch(url);
+      let data = null;
+      try { data = await r.json(); } catch (e) {}
+      if (seq !== pairingSeq) return;
+      if (!r.ok) {
+        renderPairingWarning((data && data.detail) || { message: "Pairing failed (" + r.status + ")." });
+        return;
+      }
+      renderPairingPayload(data, humanId);
+    } catch (e) {
+      if (seq === pairingSeq) renderPairingWarning({ message: "Could not reach the local pairing endpoint: " + e.message });
+    }
+  }
+
+  function countdownText(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = String(total % 60).padStart(2, "0");
+    return "expires in " + m + ":" + s + " — regenerates automatically";
+  }
+
+  function startPairingCountdown(data, humanId) {
+    clearPairingTimer();
+    const exp = Date.parse(data.expiresAt || "");
+    const el = document.getElementById("pairCountdown");
+    if (!exp || !el) return;
+    const tick = () => {
+      const left = exp - Date.now();
+      if (left <= 0) {
+        clearPairingTimer();
+        loadPairing(humanId);
+      } else {
+        el.textContent = countdownText(left);
+      }
+    };
+    tick();
+    pairingTimer = setInterval(tick, 1000);
+  }
+
+  function renderPairingPayload(data, humanId) {
+    const host = document.getElementById("pairBody");
+    if (!host) return;
+    const human = data.humanAgentAlias || aliasFor(data.humanAgentId) || "selected human";
+    host.innerHTML = `<div class="pair-grid">
+      <div class="pair-qr-wrap">
+        <div class="pair-qr" aria-label="Orcha phone pairing QR code">${data.qrSvg || ""}</div>
+        <div class="pair-url mono">${esc(data.baseUrl || "")}</div>
+      </div>
+      <div class="pair-meta">
+        <div>
+          <div class="pair-label">Pairing as</div>
+          <div class="pair-value">${esc(human)} (human)</div>
+        </div>
+        <div>
+          <div class="pair-label">Manual code</div>
+          <div class="pair-code mono">${esc(data.shortCode || "")}</div>
+        </div>
+        <div class="pill s-warn" id="pairCountdown">${icon("clock", "gl")}expires soon</div>
+        <div class="pair-foot">Your phone talks directly to this computer on your network. Nothing goes through the cloud.</div>
+      </div>
+    </div>`;
+    startPairingCountdown(data, humanId || data.humanAgentId);
+  }
+
+  /* ---- modal ----------------------------------------------------------- */
+  function modal(cfg) {
+    let ov = ensureOverlay();
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
       <div class="mh"><h3>${esc(cfg.title)}</h3>${cfg.desc ? `<p>${esc(cfg.desc)}</p>` : ""}</div>
       <div class="mb">${cfg.body || ""}</div>
@@ -969,7 +1175,7 @@ window.Orcha = (function () {
     document.getElementById("__mp").addEventListener("click", () => { if (cfg.onPrimary) cfg.onPrimary(ov); else closeModal(); });
     if (cfg.onOpen) cfg.onOpen(ov);
   }
-  function closeModal() { const ov = document.getElementById("__ov"); if (ov) ov.classList.remove("show"); }
+  function closeModal() { clearPairingTimer(); const ov = document.getElementById("__ov"); if (ov) ov.classList.remove("show"); }
 
   /* ---- toast ----------------------------------------------------------- */
   let toastT;
@@ -1029,8 +1235,18 @@ window.Orcha = (function () {
   function inputActiveWithin(el) {
     // ISS-53 (same root as ISS-46): a 3s patch repaint must not wipe text the human is
     // typing into a card — a reject REASON or an answer to an agent's QUESTION. Defer the
-    // patch while, inside el, a form control is FOCUSED, or a text input/textarea holds
-    // unsaved (non-empty) text (typed, then the mouse moved off it before submit).
+    // patch while, inside el, a form control is FOCUSED, or a text input/textarea is DIRTY
+    // (its current value differs from the value it was rendered with — i.e. the human typed
+    // into it, then the mouse moved off before submit).
+    //
+    // GH #74: the old test was "value is non-empty". That misfires on PRE-FILLED but
+    // UNTOUCHED fields — notably the SPEC-4 protocol editor (review_chain/handoff_to/
+    // autonomy/notes), which renders the task's saved protocol straight into textareas. A
+    // populated-but-unedited panel made this return true forever, so EVERY non-forced repaint
+    // of that detail pane (the lazy thread load + the 3s poll) was deferred and the thread
+    // stayed stuck on "Loading thread…". Comparing against `defaultValue` (the rendered
+    // value) flips a field to "active" only once the human actually edits it, which preserves
+    // the anti-clobber intent without freezing panes that merely show saved data.
     if (typeof document === "undefined" || !el || !el.querySelectorAll) return false;
     const ae = document.activeElement;
     if (ae && el.contains && el.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || "")) return true;
@@ -1039,7 +1255,14 @@ window.Orcha = (function () {
     for (let i = 0; i < ctrls.length; i++) {
       const c = ctrls[i];
       const isText = c.tagName === "TEXTAREA" || (c.tagName === "INPUT" && textish.test(c.type || ""));
-      if (isText && typeof c.value === "string" && c.value.trim() !== "") return true;
+      // dirty = edited away from what it was rendered with. `defaultValue` reflects the
+      // markup-supplied value for both <input> and <textarea>, so an untouched field (incl.
+      // a pre-filled one) is value===defaultValue and never blocks the repaint. In a real DOM
+      // defaultValue is always a string (the empty field's is ""); fall back to "" if a field
+      // exposes a non-string (a never-rendered/synthetic node) so an empty box isn't read as
+      // dirty against `undefined`.
+      const rendered = typeof c.defaultValue === "string" ? c.defaultValue : "";
+      if (isText && typeof c.value === "string" && c.value !== rendered) return true;
     }
     return false;
   }
@@ -1496,7 +1719,7 @@ window.Orcha = (function () {
   return {
     D, applySnapshot, esc, linkify, mdText, trunc, shortId, relTime, clockTime, recencyTs, recencyBand, avatar, icon, pill, statusClass, glyph,
     sortState, sortControlHtml, sortComparator, wireSortControl,
-    kindBadge, agentLink, taskLink, requestLink, taskByRef, taskRefs, attnItems, mountShell, modal, closeModal,
+    kindBadge, agentLink, taskLink, requestLink, taskByRef, taskRefs, attnItems, mountShell, modal, closeModal, openPairingModal,
     toast, copyText, renderDiff, runCard, stopRun, activateRuns, startRunStream, paintFinished, classifyLine,
     applyTheme, currentTheme, cycleTheme, orcaSVG,
     agents, tasks, requests, agentByAlias, agentById, aliasFor, taskById, humans, isToHuman,

@@ -29,7 +29,13 @@ User arguments: `$ARGUMENTS`
 
 3. **If the calling tab is bound to an agent**, include the agent's `agent_id` as `created_by_agent_id`. Resolution order: `--alias <name>` in `$ARGUMENTS` → `$ORCHA_ALIAS` env → if exactly one `.claude/orcha-tabs/*.json` exists, use it → otherwise leave `created_by_agent_id` as null (this becomes a human-created task). Don't error if no agent is resolvable — task creation is allowed from the human side too.
 
-4. **POST** the task. **Include `protocol` only if at least one of `--review-chain` / `--handoff-to` / `--autonomy` / `--notes` was given** — and put only the fields actually supplied inside it (omit the rest; the server stores only set keys and leaves the protocol NULL when the block is absent):
+4. **Conversation-lane self-handoff check before POST.** If `ORCHA_CONVERSATION_WORKER=1` and this task is assigned to the calling agent themself, pause before posting and decide whether the task overlaps the live conversation context you alone currently hold (for example: "continue what we were just doing", "turn your current findings into a task", "have yourself finish this"). Apply this ONLY for that self-referential/overlap case:
+   - Do only the tiny resident-only slice that depends on that live context.
+   - Put the result into the initial `description` or `protocol.notes` as already completed, so the worker spawned by this create call inherits it and does not redo it.
+   - If the result truly needs a separate task-thread note, create the task unassigned first, post the note, then assign it; do not create-and-assign before the note exists.
+   - For unrelated tasks, or anything larger than a tiny context-only slice, do no work inline and keep the normal fresh handoff path.
+
+5. **POST** the task. **Include `protocol` only if at least one of `--review-chain` / `--handoff-to` / `--autonomy` / `--notes` was given** — and put only the fields actually supplied inside it (omit the rest; the server stores only set keys and leaves the protocol NULL when the block is absent):
    ```bash
    curl -fsS -X POST "<api_base_url>/api/containers/<cid>/tasks" \
      -H 'Content-Type: application/json' \
@@ -47,7 +53,7 @@ User arguments: `$ARGUMENTS`
    (Drop the `"protocol"` key entirely when no protocol flags were passed.)
    Response: `{"task_id": "...", "status": "...", "assignee_alias": "...", "depends_on": [...]}`
 
-5. **Report** to the user, briefly:
+6. **Report** to the user, briefly:
    - task_id, status (pending / ready / in_progress)
    - assignee_alias (or "(unassigned)")
    - depends_on (count, if any)

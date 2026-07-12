@@ -52,7 +52,7 @@ def _valid_roster():
                 "name": "Atlas",
                 "role": "Lead planner",
                 "charter": "Plan the work, coordinate through Orcha requests, and stop at needs_verification.",
-                "model_hint": "claude-sonnet-4-6",
+                "model_hint": "claude-sonnet-5",
             },
             {
                 "name": "Forge",
@@ -114,7 +114,7 @@ async def test_onboarding_propose_streams_roster_with_onboarding_model_override(
     roster = frames[1]
     assert roster["rationale"].startswith("A lead agent")
     assert [a["name"] for a in roster["agents"]] == ["Atlas", "Forge"]
-    assert roster["agents"][0]["model_hint"] == "claude-sonnet-4-6"
+    assert roster["agents"][0]["model_hint"] == "claude-sonnet-5"
     assert roster["agents"][1]["model_hint"] is None
     assert roster["tasks"][1]["depends_on"] == ["Map the first-run drop-off"]
     assert roster["tasks"][0]["protocol"]["review_chain"] == "Lens -> Gate -> Helm"

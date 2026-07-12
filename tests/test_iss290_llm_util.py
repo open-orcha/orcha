@@ -148,6 +148,17 @@ def test_triage_wake_success_passthrough():
     assert L.triage_wake("k thx", provider=prov) == {"wake": False, "reason": "pure ack"}
 
 
+def test_triage_wake_prompt_treats_review_verdicts_as_actionable():
+    prov = FakeProvider(complete_result=_tool_response(
+        "emit_result", {"wake": True, "reason": "review verdict"}))
+    L.triage_wake("CLEAN - plan approved", provider=prov)
+    system = prov.calls[0]["system"]
+    assert "review verdict" in system
+    assert "workflow commands, not acknowledgements" in system
+    assert "return wake=true" in system
+    assert "CLEAN" in system and "NEEDS CHANGES" in system and "LGTM" in system
+
+
 def test_triage_wake_fails_open_on_error():
     prov = FakeProvider(raise_exc=RuntimeError("boom"))
     out = L.triage_wake("anything", provider=prov)
@@ -188,6 +199,16 @@ def test_triage_wake_fails_open_on_nonbool_wake():
     for bad in ("false", 0, "", []):
         prov = FakeProvider(complete_result=_tool_response("emit_result", {"wake": bad}))
         assert L.triage_wake("x", provider=prov)["wake"] is True, f"non-bool {bad!r} must fail open"
+
+
+def test_handoff_ack_prompt_never_auto_closes_review_verdicts():
+    prov = FakeProvider(complete_result=_tool_response(
+        "emit_result", {"ack": False, "text": ""}))
+    L.handoff_ack("LGTM - PR approved", provider=prov)
+    system = prov.calls[0]["system"]
+    assert "Never auto-ack and close a review verdict" in system
+    assert "return ack=false" in system
+    assert "CLEAN" in system and "NEEDS CHANGES" in system and "LGTM" in system
 
 
 # ------------------------------------------------------------- providers

@@ -37,10 +37,10 @@ async def test_model_defaults_to_opus_for_ai(client, container, make_agent):
 async def test_model_honored_when_provided(client, container):
     r = await client.post(f"/api/containers/{container['id']}/agents",
                           json={"alias": "Sonny", "role": "eng", "kind": "ai",
-                                "prompt": "p", "model": "claude-sonnet-4-6"})
+                                "prompt": "p", "model": "claude-sonnet-5"})
     assert r.status_code in (200, 201), r.text
     p = await _get_container(client, container["id"])
-    assert _agent(p, "Sonny")["model"] == "claude-sonnet-4-6"
+    assert _agent(p, "Sonny")["model"] == "claude-sonnet-5"
 
 
 @pytest.mark.asyncio
@@ -66,7 +66,7 @@ async def test_list_models_endpoint(client):
     body = r.json()
     assert body["default"] == "claude-opus-4-8"
     ids = {m["id"] for m in body["models"]}
-    assert "claude-opus-4-8" in ids and "claude-sonnet-4-6" in ids
+    assert "claude-opus-4-8" in ids and "claude-sonnet-5" in ids
     assert "gpt-5.5" in ids and "gpt-5.4-mini" in ids
     assert all("id" in m and "name" in m for m in body["models"])   # {id,name} shape
     assert all("runtime" in m for m in body["models"])

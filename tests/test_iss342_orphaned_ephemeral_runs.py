@@ -44,6 +44,9 @@ async def test_container_running_runs_lists_all_wake_kinds(client, make_agent):
     assert by_id[eph]["wake_kind"] == "ephemeral" and by_id[eph]["pid"] == 111
     assert by_id[eph]["agent_id"] == aid
     assert by_id[res]["wake_kind"] == "resident" and by_id[res]["pid"] == 222
+    # GH #91/#90 (PR R3): each row surfaces its lane so the host sweep can ack the dead run's OWN
+    # lane (the wake-ack release/reconcile are lane-scoped server-side). Default insert lane='work'.
+    assert by_id[eph]["lane"] == "work" and by_id[res]["lane"] == "work"
 
     # a finished run drops out of the running set (teeth: status='running' filter actually bites)
     await client.post(f"/api/runs/{eph}/finish", json={"status": "exited", "exit_code": 0})
@@ -97,6 +100,49 @@ async def test_dead_pid_ephemeral_run_reconciled_to_orphaned(client, make_agent,
     assert (await client.get(f"/api/containers/{cid}/running-runs")).json()["runs"] == []  # nothing 'running'
     allruns = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"]
     assert allruns and allruns[0]["status"] == "orphaned"
+
+
+async def test_dead_pid_conversation_run_releases_conv_lane(client, make_agent, container):
+    """REGRESSION (GH #91/#90 PR R3): a dead-pid CONVERSATION-lane run outside the active-conversation
+    reconcile path must not wedge the conversation lane forever. The old sweep acked lane-less
+    (server default 'work'): the work lease released but the conv row stayed 'running' and the conv
+    lease stayed held — every future conversation claim refused. The fixed sweep acks the dead run's
+    OWN lane; teeth below prove the lane-less ack does NOT unwedge it and the lane-scoped ack does."""
+    cid = container["id"]
+    a = await make_agent("ConvOrphan")
+    aid = a["agent_id"]
+    # a resident conversation claimed the CONVERSATION lane + recorded its running run, then its
+    # daemon died (pid now dead) — exactly the stranded state the container sweep must reconcile
+    claim = await client.post(f"/api/agents/{aid}/wake-claim",
+                              json={"lease_ttl": 300, "kind": "resident", "lease_kind": "resident"})
+    assert claim.json()["claimed"] is True
+    await client.post(f"/api/agents/{aid}/runs",
+                      json={"wake_kind": "resident", "wake_event": "conversation_turn",
+                            "pid": _DEAD_PID, "lane": "conversation"})
+
+    # the container read surfaces the lane — what the sweep keys its ack on
+    runs = (await client.get(f"/api/containers/{cid}/running-runs")).json()["runs"]
+    assert [r["lane"] for r in runs] == ["conversation"]
+
+    # the OLD sweep's lane-less ack (server resolves 'work') must NOT unwedge the conversation lane
+    await client.post(f"/api/agents/{aid}/wake-ack",
+                      json={"kind": "orphan_run_sweep", "release_lease": True})
+    still = await client.post(f"/api/agents/{aid}/wake-claim",
+                              json={"lease_ttl": 300, "kind": "resident", "lease_kind": "resident"})
+    assert still.json()["claimed"] is False                  # conv lease + 'running' row both survive
+    runs = (await client.get(f"/api/containers/{cid}/running-runs")).json()["runs"]
+    assert [r["lane"] for r in runs] == ["conversation"]
+
+    # the FIXED sweep acks the dead run's own lane → row orphaned + conv lease freed
+    await client.post(f"/api/agents/{aid}/wake-ack",
+                      json={"kind": "orphan_run_sweep", "release_lease": True,
+                            "lane": "conversation"})
+    assert (await client.get(f"/api/containers/{cid}/running-runs")).json()["runs"] == []
+    allruns = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"]
+    assert allruns and allruns[0]["status"] == "orphaned"
+    reclaim = await client.post(f"/api/agents/{aid}/wake-claim",
+                                json={"lease_ttl": 300, "kind": "resident", "lease_kind": "resident"})
+    assert reclaim.json()["claimed"] is True                 # conversation lane re-claimable
 
 
 # ======================== notifier: the container-wide sweep helper ========================
@@ -163,6 +209,51 @@ def test_sweep_handles_each_agent_independently(monkeypatch):
     assert any("/runs/B-DEAD/finish" in u for u, _ in posts)                    # B: dead orphan finished
     assert not any("/agents/B/wake-ack" in u and (b or {}).get("release_lease")
                    for u, b in posts)                                           # B: lease KEPT (live sibling)
+
+
+def test_sweep_acks_conversation_lane(monkeypatch):
+    """TEETH (GH #91/#90 PR R3): a dead CONVERSATION-lane run with no live sibling → the release
+    ack must carry lane='conversation' so the server frees the CONV lease + orphans the conv row.
+    A lane-less ack resolves to 'work' server-side and leaves the conversation lane wedged."""
+    posts = _patch_io(monkeypatch, [
+        {"run_id": "R", "agent_id": "A1", "pid": _DEAD_PID, "wake_kind": "resident",
+         "lane": "conversation"}])
+
+    n = notifier.reap_orphaned_runs("http://x", "C1")
+    assert n == 1
+    assert any("/agents/A1/wake-ack" in u and (b or {}).get("release_lease")
+               and (b or {}).get("lane") == "conversation" for u, b in posts)
+
+
+def test_sweep_lanes_release_independently(monkeypatch):
+    """TEETH (GH #91/#90 PR R3): same agent, one dead CONVERSATION run + one LIVE WORK worker. The
+    sweep groups per (agent, lane): the live WORK sibling renews only the WORK lease and must NOT
+    shield the dead conversation lane — its lease is released (not per-run finished). The old
+    per-agent grouping saw 'a live sibling' and kept the conv lane wedged."""
+    posts = _patch_io(monkeypatch, [
+        {"run_id": "C-DEAD", "agent_id": "A1", "pid": _DEAD_PID, "wake_kind": "resident",
+         "lane": "conversation"},
+        {"run_id": "W-LIVE", "agent_id": "A1", "pid": os.getpid(), "wake_kind": "ephemeral",
+         "lane": "work"}])
+
+    n = notifier.reap_orphaned_runs("http://x", "C1")
+    assert n == 1
+    assert any("wake-ack" in u and (b or {}).get("release_lease")
+               and (b or {}).get("lane") == "conversation" for u, b in posts)
+    assert not any("/finish" in u for u, _ in posts)         # lane released, not sibling-finished
+    assert not any("wake-ack" in u and (b or {}).get("lane") == "work"
+                   for u, b in posts)                        # live WORK lane untouched
+
+
+def test_sweep_missing_lane_defaults_to_work(monkeypatch):
+    """Backward compat: a running-runs row with NO lane field (pre-030 server mid-upgrade) is
+    treated as the historical WORK lane — the same slot the lane-less ack always acted on."""
+    posts = _patch_io(monkeypatch, [
+        {"run_id": "R", "agent_id": "A1", "pid": _DEAD_PID, "wake_kind": "ephemeral"}])
+
+    n = notifier.reap_orphaned_runs("http://x", "C1")
+    assert n == 1
+    assert any("wake-ack" in u and (b or {}).get("lane") == "work" for u, b in posts)
 
 
 def test_sweep_empty_is_noop(monkeypatch):
