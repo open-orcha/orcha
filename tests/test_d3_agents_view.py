@@ -124,6 +124,19 @@ def test_agents_model_control_filters_by_provider_runtime():
     assert "grid-template-columns: repeat(auto-fit, minmax(142px, 1fr))" in html, "model buttons don't use a responsive grid"
 
 
+def test_agents_reasoning_effort_control_is_wired():
+    """GH #51: the Controls card exposes per-agent reasoning effort and posts the curated id
+    (or null for runtime default), while data.js keeps the snapshot value available."""
+    html = (STATIC / "agents.html").read_text()
+    data = (STATIC / "data.js").read_text()
+    assert "/api/reasoning-efforts" in html, "doesn't fetch the canonical effort list"
+    assert 'id="effortSeg"' in html and "REASONING_EFFORTS.map" in html, "no effort selector in Controls"
+    assert 'data-effort="${e.id == null ? "null" : O.esc(e.id)}"' in html, "effort buttons don't carry ids/null"
+    assert "e.id===selectedEffort" in html or "e.id === selectedEffort" in html, "current effort is not highlighted"
+    assert "/reasoning-effort" in html and "JSON.stringify({ reasoning_effort: effort })" in html, "effort control does not post"
+    assert "reasoning_effort: a.reasoning_effort" in data, "data adapter drops reasoning_effort"
+
+
 def test_agents_gate_decoupled_from_status_and_gated_on_plan_decision():
     """ISS-36: surface the plan-approval / verify gate REGARDLESS of the agent's (possibly
     wrong) status — compute it from the agent's owned tasks, not a.status. ISS-41: an

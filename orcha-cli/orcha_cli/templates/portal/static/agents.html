@@ -387,6 +387,21 @@
     .then((d) => { if (d && Array.isArray(d.models) && d.models.length) { MODELS = d.models; renderDetailMain(); } })
     .catch(() => {});
 
+  let REASONING_EFFORTS = [
+    { id: null, name: "Default" },
+    { id: "low", name: "Low" },
+    { id: "medium", name: "Medium" },
+    { id: "high", name: "High" },
+    { id: "xhigh", name: "Extra-high" },
+  ];
+  fetch("/api/reasoning-efforts").then((r) => r.ok ? r.json() : null)
+    .then((d) => {
+      if (d && Array.isArray(d.efforts) && d.efforts.length) {
+        REASONING_EFFORTS = [{ id: null, name: "Default" }].concat(d.efforts);
+        renderDetailMain();
+      }
+    }).catch(() => {});
+
   const MODEL_RUNTIMES = [
     { id: "claude", name: "Claude" },
     { id: "codex", name: "Codex" },
@@ -476,6 +491,7 @@
     const current = mine.filter((t) => t.status === "in_progress" || t.status === "needs_verification");
     const selectedRuntime = modelRuntimeForAgent(a);
     const visibleModels = modelsForRuntime(selectedRuntime);
+    const selectedEffort = a.reasoning_effort != null ? a.reasoning_effort : null;
 
     let html = "";
 
@@ -520,6 +536,8 @@
             <div class="seg" id="modelRuntimeSeg" data-agent="${O.esc(a.id)}" aria-label="Model provider">${MODEL_RUNTIMES.map((r)=>`<button type="button" class="${r.id===selectedRuntime?'on':''}" data-runtime="${O.esc(r.id)}" aria-pressed="${r.id===selectedRuntime?'true':'false'}" ${O.actingHuman() && modelsForRuntime(r.id).length ? "" : "disabled"}>${O.esc(r.name)}</button>`).join("")}</div></div>
           <div class="ctrl model-ctrl"><div class="grow"><div class="lbl">Model</div><div class="desc">Which ${O.esc(modelRuntimeName(selectedRuntime))} model this agent wakes as</div></div>
             <div class="seg" id="modelSeg" data-agent="${O.esc(a.id)}" data-runtime="${O.esc(selectedRuntime)}" aria-label="${O.esc(modelRuntimeName(selectedRuntime))} model">${visibleModels.length ? visibleModels.map((m)=>`<button type="button" class="${m.id===a.model?'on':''}" data-model="${O.esc(m.id)}" aria-pressed="${m.id===a.model?'true':'false'}" title="${O.esc(m.name)}" ${O.actingHuman()?"":"disabled"}>${O.esc(m.name)}</button>`).join("") : '<span class="none" style="padding:4px 9px">No models</span>'}</div></div>
+          <div class="ctrl"><div class="grow"><div class="lbl">Reasoning effort</div><div class="desc">Worker effort requested on the next wake</div></div>
+            <div class="seg" id="effortSeg" data-agent="${O.esc(a.id)}" aria-label="Reasoning effort">${REASONING_EFFORTS.map((e)=>`<button type="button" class="${e.id===selectedEffort?'on':''}" data-effort="${e.id == null ? "null" : O.esc(e.id)}" aria-pressed="${e.id===selectedEffort?'true':'false'}" ${O.actingHuman()?"":"disabled"}>${O.esc(e.name)}</button>`).join("")}</div></div>
           <div class="ctrl"><div class="grow"><div class="lbl">Wake</div><div class="desc">Daemon may wake this agent on pending work</div></div>
             <span class="wakebadge ${a.wake_enabled?'on':'off'}"><span class="d"></span>${a.wake_enabled?"Enabled":"Disabled"}</span></div>
           <div class="ctrl"><div class="grow"><div class="lbl">Auto-wake</div><div class="desc">Clock-driven heartbeat — wake on a fixed cadence even with no pending work</div></div>
@@ -567,6 +585,8 @@
     if (runtimeSeg) runtimeSeg.addEventListener("click", onModelRuntimeClick);
     const seg = $("modelSeg");
     if (seg) seg.addEventListener("click", onModelClick);
+    const effortSeg = $("effortSeg");
+    if (effortSeg) effortSeg.addEventListener("click", onEffortClick);
     const awakeSeg = $("awakeSeg");
     if (awakeSeg) awakeSeg.addEventListener("click", onAwakeClick);
     // wire persona Expand
@@ -765,6 +785,36 @@
       body: JSON.stringify({ model }),
     }).then((r) => O.toast(r.ok ? ("Model → " + name) : ("Failed (" + r.status + ")"), r.ok ? "ok" : "danger"))
       .catch((e) => O.toast("Failed: " + e.message, "danger"));
+  }
+
+  function onEffortClick(ev) {
+    const b = ev.target.closest("[data-effort]"); if (!b || b.disabled) return;
+    const seg = b.closest("#effortSeg"); const aid = seg && seg.dataset.agent;
+    const h = O.actingHuman();
+    if (!aid || !h) { O.toast("Pick an acting human first.", "danger"); return; }
+    const effort = b.dataset.effort === "null" ? null : b.dataset.effort;
+    const a = O.agentById(aid); if (!a) return;
+    const prev = a.reasoning_effort != null ? a.reasoning_effort : null;
+    if (effort === prev) return;
+    a.reasoning_effort = effort;          // optimistic; reconciled by the next snapshot
+    renderDetailMain(true);
+    fetch("/api/agents/" + encodeURIComponent(aid) + "/reasoning-effort", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reasoning_effort: effort }),
+    }).then((r) => {
+      if (!r.ok) {
+        a.reasoning_effort = prev;
+        renderDetailMain(true);
+        O.toast("Reasoning effort change failed (" + r.status + ")", "danger");
+        return;
+      }
+      const label = (REASONING_EFFORTS.find((x) => x.id === effort) || {}).name || effort || "Default";
+      O.toast("Reasoning effort -> " + label, "ok");
+    }).catch((e) => {
+      a.reasoning_effort = prev;
+      renderDetailMain(true);
+      O.toast("Reasoning effort change failed: " + e.message, "danger");
+    });
   }
 
   /* ---------- worker runs (live feed) — built on agent change / run-set change ---------- */

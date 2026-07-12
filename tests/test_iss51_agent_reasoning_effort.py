@@ -4,7 +4,8 @@ POST /api/agents/{aid}/reasoning-effort {reasoning_effort} persists agents.reaso
 it flows through the container read payload and the wake-scan candidate, where the daemon
 passes it to the worker — `claude --effort <level>` (or Codex `model_reasoning_effort`).
 Validation is curated (low|medium|high|xhigh); humans carry no effort. An unknown/NULL value
-resolves to the default rather than reaching the argv.
+is not the same thing: NULL preserves the runtime default by omitting the argv, while unknown
+stale data resolves to the server default rather than reaching the argv.
 """
 import pathlib
 import sys
@@ -36,6 +37,11 @@ async def test_set_effort_persists_and_flows_through_read_payload(client, contai
     assert r.status_code == 200, r.text
     assert r.json() == {"agent_id": aid, "reasoning_effort": "high"}
     assert await _effort_in_payload(client, container["id"], "Effo") == "high"
+
+    r = await client.post(f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": None})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"agent_id": aid, "reasoning_effort": None}
+    assert await _effort_in_payload(client, container["id"], "Effo") is None
 
 
 async def test_unknown_effort_rejected(client, container, make_agent):
@@ -89,24 +95,55 @@ async def test_list_efforts_endpoint(client):
 def test_resolve_reasoning_effort_falls_back(monkeypatch):
     assert main.resolve_reasoning_effort("high") == "high"
     assert main.resolve_reasoning_effort("xhigh") == "xhigh"
-    assert main.resolve_reasoning_effort(None) == main.DEFAULT_REASONING_EFFORT
+    assert main.resolve_reasoning_effort(None) is None
     assert main.resolve_reasoning_effort("bogus") == main.DEFAULT_REASONING_EFFORT
 
 
-# ---------- wake-scan candidate carries the resolved effort ----------
+# ---------- daemon candidates carry the explicit effort only when one is set ----------
 
-async def test_wake_scan_candidate_carries_resolved_effort(client, container, make_agent):
+async def test_wake_scan_candidate_preserves_unset_effort_end_to_end(client, container, make_agent, db):
     a = await make_agent("Scanny", "eng")
     aid = a["agent_id"]
-    # default (NULL) → resolves to the server default on the candidate
+    # default (NULL) preserves "no explicit worker flag" on the daemon candidate.
     r = await client.get(f"/api/containers/{container['id']}/wake-scan")
     cand = next(c for c in r.json()["candidates"] if c["agent_id"] == aid)
-    assert cand["reasoning_effort"] == main.DEFAULT_REASONING_EFFORT
+    assert cand["reasoning_effort"] is None
+    _, repr_, _ = notifier.spawn_headless("/proj", "do it", None, True,
+                                          alias="A", reasoning_effort=cand["reasoning_effort"],
+                                          runtime="claude")
+    assert "--effort" not in repr_
 
     await client.post(f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "xhigh"})
     r = await client.get(f"/api/containers/{container['id']}/wake-scan")
     cand = next(c for c in r.json()["candidates"] if c["agent_id"] == aid)
     assert cand["reasoning_effort"] == "xhigh"
+
+    db.execute("UPDATE agents SET reasoning_effort='bogus' WHERE id=%s", (aid,))
+    r = await client.get(f"/api/containers/{container['id']}/wake-scan")
+    cand = next(c for c in r.json()["candidates"] if c["agent_id"] == aid)
+    assert cand["reasoning_effort"] == main.DEFAULT_REASONING_EFFORT
+
+
+async def test_active_conversations_candidate_preserves_unset_effort_end_to_end(client, container, make_agent):
+    human = await make_agent("KedarEffort", "human", kind="human")
+    a = await make_agent("ResidentEffort", "eng")
+    aid = a["agent_id"]
+    r = await client.post(f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]})
+    assert r.status_code in (200, 201), r.text
+    conv_id = r.json()["conversation"]["id"]
+
+    r = await client.get(f"/api/containers/{container['id']}/active-conversations")
+    cand = next(c for c in r.json()["conversations"] if c["conversation_id"] == conv_id)
+    assert cand["reasoning_effort"] is None
+    _, repr_, _ = notifier.spawn_resident("/proj", alias="A",
+                                          reasoning_effort=cand["reasoning_effort"],
+                                          runtime="claude", dry_run=True)
+    assert "--effort" not in repr_
+
+    await client.post(f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "high"})
+    r = await client.get(f"/api/containers/{container['id']}/active-conversations")
+    cand = next(c for c in r.json()["conversations"] if c["conversation_id"] == conv_id)
+    assert cand["reasoning_effort"] == "high"
 
 
 # ---------- spawn argv: the effort reaches the worker command ----------

@@ -991,9 +991,8 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
         # so by here `model` is always a currently-spawnable id (or None → claude's own default).
         if model:
             argv += ["--model", model]
-        # GH #51: per-agent reasoning effort. wake-scan resolves an unknown/NULL choice to the
-        # default server-side, so `reasoning_effort` here is always a valid `claude --effort` level
-        # (low|medium|high|xhigh|max).
+        # GH #51: per-agent reasoning effort. wake-scan preserves NULL as "omit the flag" and
+        # resolves stale unknown choices to a valid `claude --effort` level.
         if reasoning_effort:
             argv += ["--effort", reasoning_effort]
         if system_prompt:

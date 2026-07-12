@@ -356,6 +356,7 @@ def resolve_model_runtime(model: Optional[str]) -> str:
 # `claude --effort <id>` (low|medium|high|xhigh|max) and, for Codex agents, mapped to
 # `-c model_reasoning_effort=<...>`. Curated like AVAILABLE_MODELS so an unknown/retired
 # persisted value gracefully resolves to DEFAULT_REASONING_EFFORT and never breaks a spawn.
+# NULL means "no explicit effort flag"; preserve it so the runtime's own default remains in charge.
 AVAILABLE_REASONING_EFFORTS = [
     {"id": "low", "name": "Low"},
     {"id": "medium", "name": "Medium"},
@@ -366,10 +367,13 @@ DEFAULT_REASONING_EFFORT = "medium"
 _REASONING_EFFORT_IDS = {e["id"] for e in AVAILABLE_REASONING_EFFORTS}
 
 
-def resolve_reasoning_effort(effort: Optional[str]) -> str:
+def resolve_reasoning_effort(effort: Optional[str]) -> Optional[str]:
     """Map a PERSISTED agents.reasoning_effort choice to the level to actually spawn with.
-    Unknown/NULL (no choice, or a value from an older deploy) → DEFAULT_REASONING_EFFORT, so a
-    stale value never reaches the worker argv. The stored choice is left intact."""
+    NULL (no choice) stays NULL so no worker argv is emitted. Unknown/stale values resolve to
+    DEFAULT_REASONING_EFFORT so bad data never reaches the worker argv. The stored choice is left
+    intact."""
+    if effort is None:
+        return None
     return effort if effort in _REASONING_EFFORT_IDS else DEFAULT_REASONING_EFFORT
 
 
@@ -1936,8 +1940,8 @@ class AgentModelUpdate(BaseModel):
 
 class AgentReasoningEffortUpdate(BaseModel):
     """GH #51: change the reasoning effort an agent's worker runs at. Must be one of the
-    curated levels (AVAILABLE_REASONING_EFFORTS)."""
-    reasoning_effort: str = Field(..., max_length=16)
+    curated levels (AVAILABLE_REASONING_EFFORTS), or null to use the runtime default."""
+    reasoning_effort: Optional[str] = Field(..., max_length=16)
 
 
 class AgentUpdate(BaseModel):
@@ -3865,12 +3869,12 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate):
     """GH #51: set the reasoning effort an agent's worker spawns at. Persists
     agents.reasoning_effort and flows through the read payload + wake-scan candidate, where the
     daemon passes it to the worker (`claude --effort <level>`, or Codex model_reasoning_effort).
-    Must be a curated level (AVAILABLE_REASONING_EFFORTS). Humans carry no effort (400). Unlike
-    a model swap, effort applies per-spawn (it is not baked into a warm session), so no cold
-    reset is needed — the next worker spawn picks it up."""
+    Must be a curated level (AVAILABLE_REASONING_EFFORTS), or null to clear back to the runtime
+    default. Humans carry no effort (400). Unlike a model swap, effort applies per-spawn (it is not
+    baked into a warm session), so no cold reset is needed — the next worker spawn picks it up."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
-    if body.reasoning_effort not in _REASONING_EFFORT_IDS:
+    if body.reasoning_effort is not None and body.reasoning_effort not in _REASONING_EFFORT_IDS:
         raise HTTPException(
             400, f"reasoning_effort '{body.reasoning_effort}' is not valid; "
                  f"choose one of {sorted(_REASONING_EFFORT_IDS)}")
@@ -4831,8 +4835,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                 # auto-falls-back to the default and never reaches the spawn argv as an invalid id.
                 "model": resolve_model(a["model"]),
                 "model_runtime": resolve_model_runtime(a["model"]),
-                # GH #51: the per-agent reasoning effort the daemon passes to the worker spawn,
-                # resolved server-side (unknown/NULL → DEFAULT_REASONING_EFFORT).
+                # GH #51: the per-agent reasoning effort the daemon passes to the worker spawn.
+                # NULL stays NULL (no explicit flag); unknown stale values fall back server-side.
                 "reasoning_effort": resolve_reasoning_effort(a["reasoning_effort"]),
             })
     return {"container_id": cid, "container_status": c["status"],
