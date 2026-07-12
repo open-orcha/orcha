@@ -4381,7 +4381,17 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
 
     GH #126: a `task_assigned` for a DIFFERENT task than the one this agent has a LIVE work-lane run
     on must not be framed as "begin directly" nor win wake_task_id — otherwise the new task's work
-    gets silently recorded under the live run's task. `live_task_id` is that in-flight task, if any."""
+    gets silently recorded under the live run's task. `live_task_id` is that in-flight task, if any.
+
+    GH #138: `conversation_turn` is included as a SAFETY NET, not a primary delivery path — the
+    resident already answers it via the pending_human/turn-feed mechanism (active_conversations
+    excludes conversation_turn from its own `pending_inbox` count precisely so this function is never
+    even called for a resident whose only pending work IS a chat turn — no double-handling). This
+    only has effect for a WORK-lane wake_scan candidate that woke for an unrelated reason (a
+    conversation_turn alone never counts toward `pending` there either — _WORK_NON_WAKING_EVENTS) but
+    happens to also have an unanswered chat message sitting on the CONVERSATION lane: if the resident
+    ever crashes/never boots for it, this is the fallback that lets whatever DOES wake still see and
+    answer the message, instead of a reply silently going unrecovered."""
     messages = []
     wake_task_id = None                              # ISS-56: attribute the run to its task
     ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
@@ -4397,7 +4407,7 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     cur.execute(
         """SELECT ts, event_name, payload FROM agent_events
            WHERE event_key = %s AND ts > %s
-             AND event_name IN ('prompt', 'task_message', 'task_assigned')
+             AND event_name IN ('prompt', 'task_message', 'task_assigned', 'conversation_turn')
            ORDER BY ts, id""",
         (aid, delivered_ts))
     budget = MAX_PROMPT_BATCH_CHARS
@@ -4463,6 +4473,13 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
                     and str(live_task_id) != str(ev_task_id)):
                 ack_through_ts = included_ts
                 break
+        elif r["event_name"] == "conversation_turn":
+            # GH #138 safety net: not task-scoped (ev_task_id stays None — must never win
+            # wake_task_id, a chat reply must not misattribute a work run to some task).
+            ev_task_id = None
+            content = pl.get("content") or ""
+            m = (f"[unanswered chat message on this agent's conversation] {content} — the human is "
+                 f"still waiting on a reply; answer it directly." if content else None)
         else:
             ev_task_id = None
             m = pl.get("message")
@@ -5535,19 +5552,37 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
     work_last_heartbeat_at (it was never split) still reaps — the WORK branch keys idle on
     COALESCE(work_last_heartbeat_at, agents.last_heartbeat_at), so pre-split rows fall back to the
     agent-wide heartbeat they always used. The conversation branch has no such legacy (conv leases
-    only exist post-030), so it keys strictly on conv_last_heartbeat_at."""
+    only exist post-030), so it keys strictly on conv_last_heartbeat_at.
+
+    GH #138: idle is floored at GREATEST(heartbeat, lane's own last_woken_at/conv_last_woken_at).
+    wake-claim stamps last_woken_at on EVERY claim (including the first), but never touches the
+    heartbeat column — only wake-renew does, on the next keep-alive tick. Without this floor, an
+    agent idle for a long stretch before a brand-new claim has a heartbeat column still holding a
+    value from BEFORE that claim; the reaper would read the fresh lease as already stale by however
+    old that pre-claim heartbeat was and false-orphan a lease that is seconds old and genuinely
+    alive — flipping its worker_run to 'orphaned' out from under it and briefly reopening the
+    single-flight guard for a competing claim (a real double-embodiment window, not just a
+    cosmetic status flash)."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
 
-    def _reap_lane(cur, *, lease_col, kind_col, heartbeat_expr, preempt_cols, run_lane):
+    def _reap_lane(cur, *, lease_col, kind_col, heartbeat_expr, claim_floor_expr, preempt_cols, run_lane):
         """Reap one lane's orphan leases. Returns the pre-release reaped rows (agent_id/alias/
-        lease_kind/idle_seconds) with reconciled_runs already revoked + logged per agent."""
+        lease_kind/idle_seconds) with reconciled_runs already revoked + logged per agent.
+
+        GH #138: idle is measured off `floored_expr`, NOT the raw heartbeat — floored to
+        GREATEST(heartbeat_expr, claim_floor_expr) so a lease claimed a moment ago (fresh
+        claim_floor_expr) is never judged by a heartbeat column that predates that claim. The
+        NULL-heartbeat gate still reads the RAW heartbeat_expr (never floored) — a genuinely
+        never-beat agent stays categorically excluded regardless of claim recency; its own
+        short lease TTL is what handles that case, unchanged from before this fix."""
+        floored_expr = f"GREATEST(({heartbeat_expr}), ({claim_floor_expr}))"
         set_release = ", ".join([f"{lease_col} = NULL", f"{kind_col} = NULL"]
                                 + [f"{c} = NULL" for c in preempt_cols])
         cur.execute(
             f"""WITH orphans AS (
                    SELECT w.agent_id, a.alias, w.{kind_col} AS lease_kind,
-                          EXTRACT(EPOCH FROM (now() - ({heartbeat_expr}))) AS idle_seconds
+                          EXTRACT(EPOCH FROM (now() - ({floored_expr}))) AS idle_seconds
                      FROM agent_wake_state w
                      JOIN agents a ON a.id = w.agent_id
                     WHERE a.container_id = %s
@@ -5555,7 +5590,7 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
                       AND w.{lease_col} IS NOT NULL
                       AND w.{lease_col} > now()                            -- only a LIVE (wake-blocking) lease
                       AND ({heartbeat_expr}) IS NOT NULL                   -- never-beat = no embodiment to orphan
-                      AND ({heartbeat_expr}) < now() - make_interval(secs => %s)
+                      AND ({floored_expr}) < now() - make_interval(secs => %s)
                ), released AS (
                    UPDATE agent_wake_state w
                       SET {set_release}
@@ -5595,14 +5630,22 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
         # WORK branch — legacy fallback on the agent-wide heartbeat via COALESCE (see docstring).
+        # GH #138: claim_floor_expr=last_woken_at (stamped by every wake-claim, including the
+        # INITIAL one) floors idle at claim time — wake-claim never bumps the heartbeat itself
+        # (only wake-renew does), so without this floor a lease claimed a second ago, on an agent
+        # whose heartbeat column is still holding a value from BEFORE this claim, reads as idle for
+        # however stale that old heartbeat is and gets false-reaped mid-boot.
         work_reaped = _reap_lane(
             cur, lease_col="wake_lease_until", kind_col="lease_kind",
             heartbeat_expr="COALESCE(w.work_last_heartbeat_at, a.last_heartbeat_at)",
+            claim_floor_expr="w.last_woken_at",
             preempt_cols=("preempt_requested_at", "preempt_for"), run_lane="work")
         # CONVERSATION branch — keyed strictly on the lane's own heartbeat (no pre-030 legacy).
+        # GH #138: same claim-time floor via conv_last_woken_at.
         conv_reaped = _reap_lane(
             cur, lease_col="conv_lease_until", kind_col="conv_lease_kind",
             heartbeat_expr="w.conv_last_heartbeat_at",
+            claim_floor_expr="w.conv_last_woken_at",
             preempt_cols=("conv_preempt_requested_at", "conv_preempt_for"), run_lane="conversation")
         # GH #91/#90: unbound-token backstop — a token minted for a spawn that NEVER created its run
         # (crash between mint and /runs) would otherwise linger valid forever with run_id NULL. Revoke
@@ -7798,6 +7841,24 @@ def _require_request(cur, rid, for_update=False):
     if not r:
         raise HTTPException(404, f"request {rid} not found")
     return r
+
+
+@app.get("/api/requests/{rid}")
+def get_request(rid: str):
+    """Read a single request by id. Read-only, localhost posture like wake-scan/wake-ack.
+
+    GH#36: the notifier daemon calls this to decide whether a graded `ack_close` wake is still
+    ACTIONABLE (status='answered' — there is a real answer to acknowledge + close) or a resolved
+    NO-OP (closed/escalated/gone) it should NOT spend a full headless boot on. Booting a worker for
+    an already-resolved request is exactly the empty-inbox boot→stall→watchdog-kill loop this read
+    breaks: the daemon advances the wake cursor instead of spawning."""
+    if not _valid_uuid(rid):
+        raise HTTPException(400, "request_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        r = _require_request(cur, rid)   # 404 if missing
+        return {"request_id": str(r["id"]), "type": r["type"], "status": r["status"],
+                "requester_id": str(r["requester_id"]) if r["requester_id"] else None,
+                "target_id": str(r["target_id"]) if r["target_id"] else None}
 
 
 @app.post("/api/requests/{rid}/respond", status_code=200)

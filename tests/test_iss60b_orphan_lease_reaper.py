@@ -72,10 +72,13 @@ async def test_reaps_stale_heartbeat_lease(client, make_agent, container, db):
     aid = a["agent_id"]
     # GH #91/#90: a resident claim holds the CONVERSATION lease; the reaper's conversation branch keys
     # idle strictly on conv_last_heartbeat_at, so drive staleness there (not agents.last_heartbeat_at).
+    # GH #138: also backdate conv_last_woken_at (the claim itself happened 2000s ago and was never
+    # renewed since) — the reaper now floors idle at claim time, so a scenario that's ACTUALLY stale
+    # must age the claim timestamp too, not just the heartbeat.
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
-               "WHERE agent_id=%s", (aid,))
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
+               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
 
     r = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
     assert r.status_code == 200, r.text
@@ -104,10 +107,11 @@ async def test_reaped_agent_is_wakeable_again(client, make_agent, container, db)
     aid = a["agent_id"]
     # GH #91/#90: resident → CONVERSATION lane. Stale the conv heartbeat and assert on conv_lease_active
     # (the work-lane lease_active never went live for a resident claim).
+    # GH #138: also backdate conv_last_woken_at — see test_reaps_stale_heartbeat_lease.
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "resident"})
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
-               "WHERE agent_id=%s", (aid,))
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
+               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
 
     scan = await client.get(f"/api/containers/{cid}/wake-scan?cooldown=0&min_idle=0")
     me = [c for c in scan.json()["candidates"] if c["agent_id"] == aid][0]
@@ -188,6 +192,9 @@ async def test_threshold_floor_protects_busy_worker(client, make_agent, containe
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 1300, "lease_kind": "ephemeral"})
     db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '1210 seconds' WHERE id=%s", (aid,))
+    # GH #138: also backdate the WORK lane's own claim timestamp (last_woken_at) — the reaper floors
+    # idle at claim time, so a scenario that's ACTUALLY 1210s stale must age the claim too.
+    db.execute("UPDATE agent_wake_state SET last_woken_at = now() - interval '1210 seconds' WHERE agent_id=%s", (aid,))
 
     # Default orphan_secs (1260) → 1210s idle is under the bar → safe.
     r = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
@@ -203,6 +210,59 @@ async def test_reap_unknown_container_404s(client):
     import uuid
     r = await client.post(f"/api/containers/{uuid.uuid4()}/reap-orphan-leases")
     assert r.status_code == 404
+
+
+# ---------- GH #138: a freshly-claimed lease must never be judged by a pre-claim heartbeat ----------
+
+@pytest.mark.asyncio
+async def test_does_not_reap_freshly_claimed_lease_with_stale_heartbeat(client, make_agent, container, db):
+    """GH #138 repro: an agent idle for a LONG time (stale heartbeat from a past session) gets a
+    brand-new claim. wake-claim stamps conv_last_woken_at=now() but does NOT touch the heartbeat
+    column — only wake-renew does, on the next tick. A reap called in that narrow window must not
+    false-orphan the lease just because the heartbeat predates the claim."""
+    cid = container["id"]
+    a = await make_agent("JustClaimed")
+    aid = a["agent_id"]
+    # Simulate the pre-claim state: this agent's conversation heartbeat is 2000s stale — as if it
+    # was last active long ago and is only NOW being claimed for a brand-new turn.
+    db.execute(
+        "INSERT INTO agent_wake_state (agent_id, conv_last_heartbeat_at) VALUES (%s, now() - interval '2000 seconds') "
+        "ON CONFLICT (agent_id) DO UPDATE SET conv_last_heartbeat_at = now() - interval '2000 seconds'",
+        (aid,))
+
+    # The claim itself — stamps conv_lease_until + conv_last_woken_at = now(), but leaves the stale
+    # conv_last_heartbeat_at untouched (exactly what wake_claim does; only wake-renew bumps it).
+    r = await client.post(f"/api/agents/{aid}/wake-claim",
+                          json={"lease_ttl": 300, "lease_kind": "resident"})
+    assert r.json()["claimed"] is True
+
+    reap = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
+    assert reap.json()["reaped"] == [], (
+        "a lease claimed a moment ago must not be false-orphaned by a heartbeat that predates it")
+    row = db.execute(
+        "SELECT conv_lease_until, conv_lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
+    assert row["conv_lease_until"] is not None and row["conv_lease_kind"] == "resident"
+
+
+@pytest.mark.asyncio
+async def test_does_not_reap_freshly_claimed_work_lease_with_stale_agent_heartbeat(client, make_agent, container, db):
+    """Same race, WORK lane: the legacy COALESCE fallback reads agents.last_heartbeat_at when
+    work_last_heartbeat_at is NULL — that agent-wide column can ALSO predate a brand-new claim."""
+    cid = container["id"]
+    a = await make_agent("JustClaimedWork")
+    aid = a["agent_id"]
+    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '2000 seconds' WHERE id=%s", (aid,))
+
+    r = await client.post(f"/api/agents/{aid}/wake-claim",
+                          json={"lease_ttl": 300, "lease_kind": "ephemeral"})
+    assert r.json()["claimed"] is True
+
+    reap = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
+    assert reap.json()["reaped"] == [], (
+        "a work lease claimed a moment ago must not be false-orphaned by a stale agent-wide heartbeat")
+    row = db.execute(
+        "SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))[0]
+    assert row["wake_lease_until"] is not None and row["lease_kind"] == "ephemeral"
 
 
 # ---------- the interlock: the ping is what makes the reaper SAFE ----------
@@ -230,8 +290,10 @@ async def test_renew_rescues_quiet_resident_from_reaper(client, make_agent, cont
     assert r.json()["reaped"] == [], "the ping should have rescued the quiet resident"
 
     # (2) Now the daemon is GONE (no renew): conv heartbeat goes stale and stays stale → reaped.
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
-               "WHERE agent_id=%s", (aid,))
+    # GH #138: also backdate conv_last_woken_at — the reaper floors idle at claim time, so a
+    # scenario that's ACTUALLY been quiet since a long-past claim must age the claim too.
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
+               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
     r2 = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
     assert [x["agent_id"] for x in r2.json()["reaped"]] == [aid]
 
