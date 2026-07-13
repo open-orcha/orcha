@@ -662,7 +662,11 @@ def test_taskless_ephemeral_wake_uses_work_lane(monkeypatch):
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert claim["lane"] == "work"
     assert run["lane"] == "work"
-    assert ack["lane"] == "work" and ack["delivered_ts"] == 5.0
+    # GH #58: spawn no longer high-waters the cursor — delivered_ts stays None on the wake-ack
+    # (the tracked worker acks its handled-set at completion via /events/ack-handled, and the
+    # single-flight lease suppresses re-wakes while it runs). The lane routing is the guard here.
+    assert ack["lane"] == "work" and ack["delivered_ts"] is None
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)
     assert live[cand["agent_id"]]["lane"] == "work"
     assert spawned[0]["conversation"] is False
 

@@ -208,7 +208,7 @@ async def test_drain_all_same_task_plus_fyi_in_one_run(
 # ===================== wake-scan — cross-task LEFT UNHANDLED, then re-binds =====================
 
 async def test_cross_task_left_unhandled_then_rebinds(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """C2: with context bound to task B (a ready assigned task), task A's task_message is TASK_BOUND
     to A != B → LEFT UNHANDLED (it stays pending). When B is claimed (context falls to A via the
     surfaced task event), a fresh scan now marks A's message handled — the row re-binds to A's run,
@@ -229,7 +229,8 @@ async def test_cross_task_left_unhandled_then_rebinds(
     assert a_msg not in set(cand["handled_event_ids"])            # cross-task → LEFT UNHANDLED
 
     # claim B → B in_progress, no ready targets left; context falls to A (the surfaced task event)
-    claim = await client.post(f"/api/agents/{x['agent_id']}/next")
+    claim = await client.post(f"/api/agents/{x['agent_id']}/next",
+                              headers=await work_headers(x["agent_id"]))
     assert claim.status_code == 200 and claim.json()["task"]["id"] == b["id"]
     cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand2["context_task_id"] == a["id"]
@@ -237,7 +238,7 @@ async def test_cross_task_left_unhandled_then_rebinds(
 
 
 async def test_prompt_messages_exclude_cross_task_directed_rows(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """R2 review fix: surfacing must agree with the drain. With context bound to ready task B, task A's
     task-thread message (TASK_BOUND to A != B) is LEFT UNHANDLED — so it must ALSO be kept OUT of the
     surfaced `prompt_messages`, or a task-B worker is told to read/respond on task A. Only after B is
@@ -259,7 +260,8 @@ async def test_prompt_messages_exclude_cross_task_directed_rows(
     assert "rebase A onto main" not in joined                     # ...and neither is its body
 
     # claim B → context falls to A (its surfaced task event) → A's message now surfaces for its own run
-    claim = await client.post(f"/api/agents/{x['agent_id']}/next")
+    claim = await client.post(f"/api/agents/{x['agent_id']}/next",
+                              headers=await work_headers(x["agent_id"]))
     assert claim.status_code == 200 and claim.json()["task"]["id"] == b["id"]
     cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand2["context_task_id"] == a["id"]
@@ -267,7 +269,7 @@ async def test_prompt_messages_exclude_cross_task_directed_rows(
 
 
 async def test_wake_manifest_excludes_cross_task_rows(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """R3 review fix: the ranked wake manifest is rendered verbatim as 'drain in this order', so it must
     obey the SAME run-context rule as prompt_messages. With context bound to ready task B, task A's
     task-thread message (TASK_BOUND to A != B) must be ABSENT from the manifest AND from the rendered
@@ -296,7 +298,8 @@ async def test_wake_manifest_excludes_cross_task_rows(
     assert str(b["id"]) in rendered
 
     # claim B → context falls to A → A's row re-binds into the manifest for its own run
-    claim = await client.post(f"/api/agents/{x['agent_id']}/next")
+    claim = await client.post(f"/api/agents/{x['agent_id']}/next",
+                              headers=await work_headers(x["agent_id"]))
     assert claim.status_code == 200 and claim.json()["task"]["id"] == b["id"]
     cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand2["context_task_id"] == a["id"]
@@ -306,7 +309,7 @@ async def test_wake_manifest_excludes_cross_task_rows(
 # ===================== NEW_WORK — consumed at the /next claim, not by a drain =====================
 
 async def test_new_work_acked_at_next_claim_not_other_task(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """C-newwork: a `ready` task_assigned is NEW_WORK — never drained; the /next CLAIM consumes it.
     Claiming task B acks B's assignment but LEAVES task C's assignment pending for its own claim."""
     x = await make_agent("x", "eng")
@@ -319,7 +322,8 @@ async def test_new_work_acked_at_next_claim_not_other_task(
     b_assign = _event_id(db, x["agent_id"], "task_assigned", task_id=b["id"])
     c_assign = _event_id(db, x["agent_id"], "task_assigned", task_id=c["id"])
 
-    claim = await client.post(f"/api/agents/{x['agent_id']}/next")
+    claim = await client.post(f"/api/agents/{x['agent_id']}/next",
+                              headers=await work_headers(x["agent_id"]))
     assert claim.status_code == 200 and claim.json()["task"]["id"] == b["id"]
 
     acked = {r["event_id"] for r in db.execute(
@@ -351,7 +355,7 @@ async def test_request_created_acked_when_closed_before_accept(
 # ===================== R5 cross-run: REJECTED verify is never FYI-acked =====================
 
 async def test_rejected_verify_left_unhandled_until_clean_completion(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """R5 GAP A: a REJECTED verify is a rework START-DIRECTIVE for the restored assignee, NOT an FYI.
     A run bound to a DIFFERENT task must NOT mark it handled (that would clear the rework wake before
     the assignee sees it). It stops re-surfacing only at the assignee's CLEAN completion (/done)."""
@@ -360,7 +364,8 @@ async def test_rejected_verify_left_unhandled_until_clean_completion(
     a = await make_task("task A", "done", assignee_alias="x")     # in_progress, x working
     # x finishes → needs_verification; human REJECTS → task A back to in_progress, x restored
     await client.post(f"/api/tasks/{a['id']}/done",
-                      json={"agent_id": x["agent_id"], "result": "draft"})
+                      json={"agent_id": x["agent_id"], "result": "draft"},
+                      headers=await work_headers(x["agent_id"]))
     rej = await client.post(f"/api/tasks/{a['id']}/verify",
                             json={"approve": False, "feedback": "redo the edge case",
                                   "actor_agent_id": human["agent_id"]})
@@ -377,7 +382,8 @@ async def test_rejected_verify_left_unhandled_until_clean_completion(
 
     # the rework directive resolves only when x cleanly completes A again
     await client.post(f"/api/tasks/{a['id']}/done",
-                      json={"agent_id": x["agent_id"], "result": "edge case fixed"})
+                      json={"agent_id": x["agent_id"], "result": "edge case fixed"},
+                      headers=await work_headers(x["agent_id"]))
     acked = {r["event_id"] for r in db.execute(
         "SELECT event_id FROM agent_event_acks WHERE agent_id=%s", (x["agent_id"],))}
     assert verified_ev in acked                                   # cleared at the /done seam
@@ -386,7 +392,7 @@ async def test_rejected_verify_left_unhandled_until_clean_completion(
 # ===================== R5 cross-run: plan-approval decision is never FYI-acked =====================
 
 async def test_plan_decision_left_unhandled_cross_task_but_fyi_decisions_drain(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """R5 GAP B: a plan_approval decision_made is the SOLE wake for "proceed/revise" (the thread
     mirror emits no task_message bus event), so it is TASK_BOUND on its subject task — a different
     task's run must NOT FYI-ack it. In the SAME backlog, a task_close decision and a task_unassigned
@@ -419,7 +425,8 @@ async def test_plan_decision_left_unhandled_cross_task_but_fyi_decisions_drain(
     assert close_ev in handled                          # task_close decision is FYI → drains
 
     # claim B → context falls to A (its surfaced task_assigned) → the plan decision now drains
-    await client.post(f"/api/agents/{x['agent_id']}/next")
+    await client.post(f"/api/agents/{x['agent_id']}/next",
+                      headers=await work_headers(x["agent_id"]))
     cand2 = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand2["context_task_id"] == a["id"]
     assert plan_ev in set(cand2["handled_event_ids"])
@@ -428,7 +435,7 @@ async def test_plan_decision_left_unhandled_cross_task_but_fyi_decisions_drain(
 # ============ R4 sole-event grounding: a directive that is the ONLY pending row ============
 
 async def test_sole_rejected_verify_grounds_the_run(
-        client, container, make_agent, make_task, db):
+        client, container, make_agent, make_task, db, work_headers):
     """R4 GAP: a REJECTED verify can be the ONLY pending event after the task was already claimed (the
     assignment/readiness rows were consumed at the /next claim). There is no ready task and no directed
     message, so context_task_id would be None and the cross-task filter would drop the very row that
@@ -440,7 +447,8 @@ async def test_sole_rejected_verify_grounds_the_run(
     human = await make_agent("kedar", "lead", kind="human")
     a = await make_task("task A", "done", assignee_alias="x")      # in_progress, x working
     await client.post(f"/api/tasks/{a['id']}/done",
-                      json={"agent_id": x["agent_id"], "result": "draft"})
+                      json={"agent_id": x["agent_id"], "result": "draft"},
+                      headers=await work_headers(x["agent_id"]))
     # claim consumed the assignment; finishing + REJECT leaves the rework verify as the sole pending row
     rej = await client.post(f"/api/tasks/{a['id']}/verify",
                             json={"approve": False, "feedback": "redo the edge case",
