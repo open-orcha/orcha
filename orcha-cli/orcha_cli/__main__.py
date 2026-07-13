@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 from typing import Optional
+from urllib.parse import urlencode
 
 from orcha_cli.notifier import (  # Epic A: wake daemon / cron stopgap
     cmd_notifier, ensure_daemon, stop_daemon, stop_daemon_for_container)
@@ -1295,6 +1296,21 @@ def _resolve_any_binding(cwd: pathlib.Path, alias_override: Optional[str] = None
         return None
 
 
+def _require_any_binding(cwd: pathlib.Path, alias_override: Optional[str], *, verb: str) -> dict:
+    binding = _resolve_any_binding(cwd, alias_override)
+    if binding and binding.get("agent_id"):
+        return binding
+    pick = (alias_override or os.environ.get("ORCHA_ALIAS") or "").strip()
+    if pick:
+        sys.exit(
+            f"error: no binding for alias '{pick}' in .claude/orcha-tabs/. "
+            f"Register first, or set ORCHA_ALIAS to the agent running `{verb}`."
+        )
+    sys.exit(
+        f"error: no agent binding found for `{verb}`. Set ORCHA_ALIAS or pass --alias."
+    )
+
+
 def _watch_state_path(cwd: pathlib.Path, alias: str) -> pathlib.Path:
     return cwd / ".claude" / f".orcha-watch-state-{alias}.json"
 
@@ -1785,7 +1801,7 @@ def cmd_poll_inbox(args: argparse.Namespace) -> None:
 # task itself; that's the WORK lane's job. This is the SECONDARY floor — the server's _require_work_lane
 # gate (a conversation token can't pass) is the PRIMARY one; this hook just gives the model a clean,
 # early deny instead of letting it burn a turn on a call the server would 403.
-_CONV_BLOCKED_SLASH = ("orcha-next", "orcha-accept-task", "orcha-done")
+_CONV_BLOCKED_SLASH = ("orcha-next", "orcha-accept-task", "orcha-done", "orcha-self-wake")
 # File-mutating tools a conversation responder shouldn't reach for (it dispatches code work to a task,
 # it doesn't do the edits itself). Dispatch + read + conversation-reply tools stay allowed.
 _CONV_BLOCKED_TOOLS = ("Edit", "Write", "NotebookEdit")
@@ -2404,6 +2420,101 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         return
 
 
+_SELF_WAKE_DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhSMH]?)\s*$")
+
+
+def _parse_self_wake_delay(raw: str) -> int:
+    m = _SELF_WAKE_DURATION_RE.match(raw or "")
+    if not m:
+        raise SystemExit("error: --in must look like 90s, 10m, or 2h")
+    n = int(m.group(1))
+    unit = (m.group(2) or "s").lower()
+    multiplier = {"s": 1, "m": 60, "h": 3600}[unit]
+    secs = n * multiplier
+    if secs < 60:
+        raise SystemExit("error: self-wake delay must be at least 60 seconds")
+    if secs > 86_400:
+        raise SystemExit("error: self-wake delay must be no more than 24 hours")
+    return secs
+
+
+def _read_project_api_base(cwd: pathlib.Path) -> str:
+    config_path = cwd / ".claude" / "orcha.json"
+    if not config_path.exists():
+        sys.exit(
+            "error: no .claude/orcha.json in CWD. Run from an Orcha project, or connect this "
+            "folder with `orcha connect`."
+        )
+    config = json.loads(config_path.read_text())
+    api_base = config.get("api_base_url")
+    if not api_base:
+        sys.exit("error: api_base_url missing from .claude/orcha.json")
+    return api_base.rstrip("/")
+
+
+def _self_wake_request(url: str, *, method: str, body: Optional[dict] = None) -> dict:
+    import urllib.error
+    import urllib.request
+
+    token = os.environ.get("ORCHA_RUN_TOKEN")
+    if not token:
+        sys.exit("error: self-wake is work-lane only and needs ORCHA_RUN_TOKEN")
+    headers = {"X-Orcha-Run-Token": token}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"error: HTTP {e.code} from {url}\n{e.read().decode(errors='replace')}")
+    except urllib.error.URLError as e:
+        sys.exit(f"error: cannot reach {url} — is the stack up? ({e.reason})")
+
+
+def cmd_self_wake(args: argparse.Namespace) -> None:
+    """GH #122: schedule or cancel a one-shot task resume wake for the acting work agent."""
+    if os.environ.get("ORCHA_CONVERSATION_WORKER"):
+        sys.exit("error: self-wake is for work-lane task workers, not conversation workers")
+    cwd = pathlib.Path.cwd()
+    binding = _require_any_binding(cwd, args.alias, verb="orcha self-wake")
+    agent_id = binding["agent_id"]
+    api_base = _read_project_api_base(cwd)
+
+    if args.all and args.cancel_task_id is None:
+        sys.exit("error: --all is only valid with --cancel")
+    cancelling = args.cancel_task_id is not None
+    if cancelling:
+        task_id = args.cancel_task_id or args.task_id
+        if args.all:
+            query = urlencode({"all": "true"})
+        else:
+            if not task_id:
+                sys.exit("error: pass a task id with --cancel, or use --all")
+            query = urlencode({"task_id": task_id})
+        data = _self_wake_request(
+            f"{api_base}/api/agents/{agent_id}/self-wake?{query}", method="DELETE")
+        print(f"cancelled {data.get('deleted', 0)} scheduled wake(s)")
+        return
+
+    if not args.task_id:
+        sys.exit("error: task_id is required")
+    if not args.delay:
+        sys.exit("error: --in is required")
+    context = (args.context or "").strip()
+    if not context:
+        sys.exit("error: --context must be non-empty")
+    delay_secs = _parse_self_wake_delay(args.delay)
+    data = _self_wake_request(
+        f"{api_base}/api/agents/{agent_id}/self-wake",
+        method="POST",
+        body={"task_id": args.task_id, "delay_secs": delay_secs, "context": context},
+    )
+    print(f"scheduled one-shot wake for {data.get('resume_at', '?')}. Exit now instead of polling.")
+
+
 def _lifecycle_call(container_id: Optional[str], new_status: str, verb: str) -> None:
     """Shared helper for pause/resume/stop: POST /api/containers/{cid}/status.
 
@@ -2579,8 +2690,9 @@ def build_parser() -> argparse.ArgumentParser:
     conv_guard = sub.add_parser(
         "conv-guard",
         help="PreToolUse hook entry (GH #91/#90) — when ORCHA_CONVERSATION_WORKER=1, denies the "
-             "task-claim/mutation path (/orcha-next, /orcha-accept-task, /orcha-done, Edit/Write/"
-             "NotebookEdit) so a conversation embodiment stays a responder. No-op otherwise.",
+             "task-claim/mutation path (/orcha-next, /orcha-accept-task, /orcha-done, "
+             "/orcha-self-wake, Edit/Write/NotebookEdit) so a conversation embodiment stays a "
+             "responder. No-op otherwise.",
     )
     conv_guard.set_defaults(func=cmd_conv_guard)
 
@@ -2635,6 +2747,34 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--alias", default=None,
                           help="binding to snapshot (overrides $ORCHA_ALIAS and single-binding fallback)")
     snapshot.set_defaults(func=cmd_snapshot)
+
+    self_wake = sub.add_parser(
+        "self-wake",
+        help="schedule or cancel a one-shot resume wake for an in-progress task",
+    )
+    self_wake.add_argument(
+        "task_id", nargs="?",
+        help="task id to resume; for cancellation, may also be passed after --cancel",
+    )
+    self_wake.add_argument(
+        "--in", dest="delay", default=None,
+        help="delay before waking, such as 90s, 10m, or 2h",
+    )
+    self_wake.add_argument(
+        "--context", default=None,
+        help="short non-empty wait-point to inject into the wake",
+    )
+    self_wake.add_argument(
+        "--cancel", dest="cancel_task_id", nargs="?", const="",
+        help="cancel this task's scheduled self-wake",
+    )
+    self_wake.add_argument(
+        "--all", action="store_true",
+        help="with --cancel, cancel every scheduled self-wake for the acting agent",
+    )
+    self_wake.add_argument("--alias", default=None,
+                           help="binding to use (overrides $ORCHA_ALIAS and single-binding fallback)")
+    self_wake.set_defaults(func=cmd_self_wake)
 
     reach = sub.add_parser(
         "reachability",
