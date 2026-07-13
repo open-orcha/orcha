@@ -2349,23 +2349,29 @@ def _focus_from_transcript(transcript_path: Optional[str]) -> Optional[str]:
 # underlying create-task/accept-task API call ever actually persisting (call skipped,
 # failed silently, or the model's text ran ahead of the tool result). Below: a best-effort
 # scan for that claim shape, cross-checked against the live container task list.
-_TASK_CLAIM_UUID_RE = re.compile(
-    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
-)
 _TASK_CLAIM_VERB_RE = re.compile(
     r"\b(created|creating|spawned|spawning|started|starting|accepted|in_progress|assigned to me)\b",
     re.IGNORECASE,
 )
-_TASK_WORD_RE = re.compile(r"\btask\b", re.IGNORECASE)
+# The word 'task' (optionally 'task id') must sit DIRECTLY against the uuid — only a short
+# run of separator chars between them — not merely "somewhere nearby" in the sentence.
+# That's what keeps "created request <id> for task follow-up" from being swept in: 'task'
+# does appear in that sentence, but not adjacent to <id>, so it must never match it.
+_TASK_CLAIM_ADJACENT_RE = re.compile(
+    r"\btask\b(?:\s+id)?[\s:#-]{0,3}"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
+    re.IGNORECASE,
+)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
 def _extract_claimed_task_ids(text: Optional[str]) -> list:
     """Best-effort scan for 'task <uuid> created/started' style claims in an agent's own
     reply text (GH #152). A hit needs BOTH a creation/start verb somewhere in the sentence
-    AND the literal word 'task' within 40 chars before the uuid (10 after) — tight enough
-    that an unrelated uuid in the same sentence (a request id, an agent id) doesn't get
-    swept in just because the sentence also happens to mention a real task. Returns
+    AND the literal word 'task' (optionally 'task id') sitting DIRECTLY against the uuid —
+    tight enough that an unrelated uuid in the same sentence (a request id, an agent id)
+    never gets swept in just because the sentence also happens to use the word 'task'
+    elsewhere (e.g. "created request <id> for task follow-up" must not flag <id>). Returns
     deduped, lowercased uuids in first-seen order. Never raises."""
     if not text:
         return []
@@ -2374,11 +2380,8 @@ def _extract_claimed_task_ids(text: Optional[str]) -> list:
     for sentence in _SENTENCE_SPLIT_RE.split(text):
         if not _TASK_CLAIM_VERB_RE.search(sentence):
             continue
-        for m in _TASK_CLAIM_UUID_RE.finditer(sentence):
-            window = sentence[max(0, m.start() - 40): m.end() + 10]
-            if not _TASK_WORD_RE.search(window):
-                continue
-            uid = m.group(0).lower()
+        for m in _TASK_CLAIM_ADJACENT_RE.finditer(sentence):
+            uid = m.group(1).lower()
             if uid not in seen:
                 seen.add(uid)
                 found.append(uid)
@@ -2452,6 +2455,35 @@ def _flag_thread_or_escalate(api_base: str, cid: str, agent_id: str, alias: Opti
         pass
 
 
+def _fetch_task_listing_covering(api_base: str, cid: str, claimed_ids, timeout: float = 6.0,
+                                  max_pages: int = 50) -> Optional[dict]:
+    """GH #152 review-fix: `GET .../tasks` defaults to a 10-row page (100 max) — a single
+    fetch can miss a real task that's simply further down the list, which would make the
+    claim-guard hard-fail on a claim that actually persisted. Page through (100 rows/page)
+    until every id in `claimed_ids` has been located or the list is exhausted, capped at
+    `max_pages` as a runaway backstop against a server bug that never clears `has_more`
+    (50 pages * 100 rows = 5000 tasks, far past anything a real container holds).
+
+    Returns a single listing dict shaped like one page's response ({"tasks": [...]}) with
+    every task seen so far, or None if the API is unreachable — same "don't false-alarm on
+    an outage" contract the caller already relies on."""
+    remaining = {str(tid).lower() for tid in claimed_ids}
+    all_tasks: list = []
+    offset = 0
+    for _ in range(max_pages):
+        page = _get_json(f"{api_base}/api/containers/{cid}/tasks?limit=100&offset={offset}",
+                          timeout=timeout)
+        if not isinstance(page, dict):
+            return None
+        tasks = page.get("tasks") or []
+        all_tasks.extend(tasks)
+        remaining -= {str(t.get("id") or "").lower() for t in tasks}
+        if not remaining or not page.get("has_more") or not tasks:
+            break
+        offset += len(tasks)
+    return {"tasks": all_tasks}
+
+
 def cmd_task_claim_guard(args: argparse.Namespace) -> None:
     """GH #152 — SessionEnd audit: cross-check any 'I created/started task <id>' claim in
     the session's last reply against the live container task list, and hard-fail LOUDLY
@@ -2492,8 +2524,8 @@ def cmd_task_claim_guard(args: argparse.Namespace) -> None:
         if not (agent_id and cid):
             return
 
-        listing = _get_json(f"{api_base}/api/containers/{cid}/tasks", timeout=6.0)
-        if not isinstance(listing, dict):
+        listing = _fetch_task_listing_covering(api_base, cid, claimed, timeout=6.0)
+        if listing is None:
             return  # can't reach the API — don't false-alarm on an outage
         real_ids = {str(t.get("id") or "").lower() for t in (listing.get("tasks") or [])}
 
