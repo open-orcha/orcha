@@ -144,4 +144,4 @@ def test_orcha_task_new_skill_preserves_self_referential_context_before_post():
     assert "initial `description` or `protocol.notes`" in check
     assert "create the task unassigned first, post the note, then assign it" in check
     assert "normal fresh handoff path" in check
-    assert "curl -fsS -X POST" in post
+    assert 'curl -sS -w \'\\n%{http_code}\' -X POST' in post
