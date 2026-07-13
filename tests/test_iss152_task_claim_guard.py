@@ -168,6 +168,49 @@ def test_extract_claimed_task_ids_matches_backtick_wrapped_terse_status_report()
     assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
 
 
+def test_extract_claimed_task_ids_matches_multiline_task_id_then_status():
+    """Review-round-5: the orcha-task-new skill's step-6 report is written as separate
+    lines ('task_id, status (pending / ready / in_progress)', one field per line) MORE
+    often than crammed onto a single line, so task_id and status usually land on adjacent
+    lines rather than the same one. That split must not let the claim slip past."""
+    text = f"task_id: {REAL_TASK}\nstatus: ready\nassignee_alias: (unassigned)"
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_matches_bulleted_task_id_then_status():
+    """Same gap, bulleted-list rendering — the natural Markdown shape for the step-6
+    report items."""
+    text = f"- task_id: {REAL_TASK}\n- status: pending\n- depends_on: 0"
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_multiline_status_still_ignores_unrelated_uuid():
+    """Non-regression: splitting the terse-status match across lines must not turn it
+    into an unbounded 'any status anywhere later in the reply' trigger — 'task' appearing
+    on its own bulleted line, with no uuid adjacent to it, still must not sweep in an
+    unrelated id from a different bullet even when a status field follows a few lines
+    down."""
+    text = (f"- request_id: {REQUEST_ID}\n"
+            "- summary: escalated for task follow-up\n"
+            "- status: pending")
+    assert cli._extract_claimed_task_ids(text) == []
+
+
+def test_extract_claimed_task_ids_multiline_terse_status_bounded_past_long_filler():
+    """Non-regression: the multiline gap is capped at two short (<=60-char) line hops, so
+    a real task_id mention followed much later by an unrelated status line — separated by
+    long filler content — must not be swept in just because 'status' eventually appears
+    somewhere downstream in the same reply."""
+    text = (
+        f"task_id: {REAL_TASK}\n"
+        "some unrelated multi-line report content that goes on for a good while "
+        "describing something else entirely and is definitely not a status field here\n"
+        "even more filler content padding this section out well past the bounded gap\n"
+        "status: pending"
+    )
+    assert cli._extract_claimed_task_ids(text) == []
+
+
 # ---- cmd_task_claim_guard decision flow -----------------------------------------------
 
 def _tasks_response(tasks):

@@ -2373,10 +2373,17 @@ _TASK_CLAIM_ADJACENT_RE = re.compile(
 # task-id-adjacent uuid followed, within a short run of the same line, by a
 # "status: ready|pending|in_progress" field. That status field IS the claim — the skill
 # only ever prints it after a confirmed 2xx create/accept — so no separate verb is needed.
+# Review-round-5: step 6 is reported as a bulleted list ("- task_id: ...", "- status:
+# ..."), one field per line, which is the MORE common shape than the single-line form —
+# so task_id and status usually sit on ADJACENT lines, not the same line. The gap below
+# allows the field to fall on the same line OR up to two short lines further down (each
+# capped at 60 chars, so it still can't reach across an unrelated block of text further
+# into a long reply) to cover both the plain-multiline and the bulleted-list renderings.
+_TERSE_STATUS_GAP = r"[^\n]{0,60}(?:\n[ \t]{0,4}(?:[-*•]\s*)?[^\n]{0,60}){0,2}?"
 _TASK_ID_TERSE_STATUS_RE = re.compile(
     r"\btask(?:[\s_]id)?\b[\s:#=-]{0,3}"
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
-    r"[^\n]{0,40}?\bstatus\b\s*[:=]\s*(?:ready|pending|in_progress)\b",
+    rf"{_TERSE_STATUS_GAP}\bstatus\b\s*[:=]\s*(?:ready|pending|in_progress)\b",
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -2392,25 +2399,30 @@ def _extract_claimed_task_ids(text: Optional[str]) -> list:
     reply text (GH #152). A hit needs EITHER (a) a creation/start verb somewhere in the
     sentence AND the literal word 'task' (optionally 'task id') sitting DIRECTLY against
     the uuid, OR (b) the terse skill-taught 'task_id: <uuid>, status: ready|pending|
-    in_progress' report shape, which is itself a claim regardless of verb wording. Tight
-    enough that an unrelated uuid in the same sentence (a request id, an agent id) never
-    gets swept in just because the sentence also happens to use the word 'task' elsewhere
-    (e.g. "created request <id> for task follow-up" must not flag <id>). Markdown/code
-    backticks around the label or id are ignored. Returns deduped, lowercased uuids in
-    first-seen order. Never raises."""
+    in_progress' report shape (same line, or split across the next line/bullet — see
+    review-round-5), which is itself a claim regardless of verb wording. Tight enough that
+    an unrelated uuid in the same sentence (a request id, an agent id) never gets swept in
+    just because the sentence also happens to use the word 'task' elsewhere (e.g. "created
+    request <id> for task follow-up" must not flag <id>). Markdown/code backticks around
+    the label or id are ignored. Returns deduped, lowercased uuids in first-seen order.
+    Never raises."""
     if not text:
         return []
     found: list = []
     seen: set = set()
     normalized = _BACKTICK_RE.sub("", text)
+    # Review-round-5: run over the whole (backtick-stripped) reply, not per-sentence —
+    # `_SENTENCE_SPLIT_RE` splits on every newline, which is exactly where the task_id and
+    # status fields of a bulleted/multiline report sit, so splitting first would hide the
+    # match `_TASK_ID_TERSE_STATUS_RE` is meant to catch. The regex's own bounded gap keeps
+    # this from reaching across an unrelated block further into a long reply.
+    for m in _TASK_ID_TERSE_STATUS_RE.finditer(normalized):
+        uid = m.group(1).lower()
+        if uid not in seen:
+            seen.add(uid)
+            found.append(uid)
     for sentence in _SENTENCE_SPLIT_RE.split(normalized):
-        has_verb = bool(_TASK_CLAIM_VERB_RE.search(sentence))
-        for m in _TASK_ID_TERSE_STATUS_RE.finditer(sentence):
-            uid = m.group(1).lower()
-            if uid not in seen:
-                seen.add(uid)
-                found.append(uid)
-        if not has_verb:
+        if not _TASK_CLAIM_VERB_RE.search(sentence):
             continue
         for m in _TASK_CLAIM_ADJACENT_RE.finditer(sentence):
             uid = m.group(1).lower()
