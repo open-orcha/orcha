@@ -111,6 +111,28 @@ def test_extract_claimed_task_ids_lowercases():
     assert cli._extract_claimed_task_ids(text) == [REAL_TASK.lower()]
 
 
+def test_extract_claimed_task_ids_matches_skill_taught_task_id_colon_phrasing():
+    """Review-round-3: the orcha-task-new skill teaches agents to report success as
+    'task_id: <uuid>, status: ...' (step 6). `\\btask\\b` alone never matches "task_id"
+    since '_' is a word char — no boundary sits between "task" and "_id" — so this exact
+    skill-taught phrasing was silently skipped by the extractor. Must match now."""
+    text = f"Created task_id: {REAL_TASK}, status: in_progress, assignee_alias: Vault."
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_matches_task_id_equals_phrasing():
+    text = f"Spawned task_id={REAL_TASK} for this follow-up."
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_still_ignores_task_follow_up_with_task_id_claim_nearby():
+    """Non-regression (round 1/2 false positive): an unrelated uuid earlier in the
+    sentence, with 'task' only appearing later describing something else, must still not
+    be swept in — even now that 'task_id' is also a recognized adjacency spelling."""
+    text = f"Created request {REQUEST_ID} for task_id follow-up planning."
+    assert cli._extract_claimed_task_ids(text) == []
+
+
 # ---- cmd_task_claim_guard decision flow -----------------------------------------------
 
 def _tasks_response(tasks):

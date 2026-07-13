@@ -2353,12 +2353,16 @@ _TASK_CLAIM_VERB_RE = re.compile(
     r"\b(created|creating|spawned|spawning|started|starting|accepted|in_progress|assigned to me)\b",
     re.IGNORECASE,
 )
-# The word 'task' (optionally 'task id') must sit DIRECTLY against the uuid — only a short
-# run of separator chars between them — not merely "somewhere nearby" in the sentence.
-# That's what keeps "created request <id> for task follow-up" from being swept in: 'task'
-# does appear in that sentence, but not adjacent to <id>, so it must never match it.
+# The word 'task' (optionally 'task id' or 'task_id') must sit DIRECTLY against the uuid —
+# only a short run of separator chars between them — not merely "somewhere nearby" in the
+# sentence. That's what keeps "created request <id> for task follow-up" from being swept
+# in: 'task' does appear in that sentence, but not adjacent to <id>, so it must never match
+# it. Review-round-3: `\btask\b` alone never matches "task_id" — '_' is a word character, so
+# there is no boundary between "task" and "_id" — which missed the orcha-task-new skill's
+# own success-report phrasing ("task_id: <uuid>"). `(?:[\s_]id)?` covers both the space and
+# underscore spellings, and '=' joins the separator class for "task_id=<uuid>".
 _TASK_CLAIM_ADJACENT_RE = re.compile(
-    r"\btask\b(?:\s+id)?[\s:#-]{0,3}"
+    r"\btask(?:[\s_]id)?\b[\s:#=-]{0,3}"
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
     re.IGNORECASE,
 )
