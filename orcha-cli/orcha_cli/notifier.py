@@ -4740,6 +4740,15 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # circuits this tick (the `r["sidecar"]` block above), so we only get here with NO sidecar live.
         inbox = (cand or {}).get("pending_inbox", 0) or 0
         inbox_ack_ts = (cand or {}).get("inbox_ack_ts")
+        # #72: only the events BEFORE an actionable answer are drainable by a sidecar (which may NOT do
+        # task work); the answer itself must stay pending for a real post-exit worker. The server
+        # surfaces `drainable_inbox` = that safe count. When it's 0 (e.g. the sole queued event is the
+        # unblocking answer) DON'T spawn a sidecar — it would drain nothing, and skipping it leaves the
+        # trigger pending so the ephemeral wake fires once this resident's lease clears. Fall back to
+        # the full pending count for an older server that doesn't surface the field.
+        drainable = (cand or {}).get("drainable_inbox")
+        if drainable is None:
+            drainable = inbox
         inbox_wake_task_id = (cand or {}).get("inbox_wake_task_id")
         # ISS-78 anti-thrash backstop (carries the ISS-75/#188 guard forward): don't spawn ANOTHER drain
         # pass when the inbox high-water mark (inbox_ack_ts) hasn't advanced past the last attempt's AND
@@ -4755,8 +4764,10 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # the warm resident no longer spawns a sidecar NOR yields its conversation lease for it. Gated
         # OFF by RESIDENT_WORK_TEARDOWN_ENABLED. The warm resident stays a pure conversation responder
         # here; it is torn down only by the pure idle-reap below or by a real conversation transition.
+        # #72: the gate counts only DRAINABLE events (events before an actionable answer), so a
+        # backlog whose sole trigger is an unblocking answer parks for the post-lease worker.
         if (RESIDENT_WORK_TEARDOWN_ENABLED
-                and not r.get("awaiting_result") and not pending and inbox > 0 and not stalled):
+                and not r.get("awaiting_result") and not pending and drainable > 0 and not stalled):
             if inbox_wake_task_id:
                 # GH #131: this backlog is a resume on an in-progress task the agent already owns.
                 # Leave it on the WORK lane so wake_scan can spawn the normal isolated worker; the
@@ -4787,8 +4798,9 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         # turn) and whose clock-driven auto-wake is DUE yields the lease — the same snapshot+release
         # seam as the ISS-78 inbox-drain (NEVER inject the heartbeat into the warm human session: an
         # auto-wake nudge is task-work and would bleed into the next human turn, the ISS-78 regression).
-        # Reached only with inbox==0 (a real queued event already drained above), so this is the PURE
-        # clock path. stamp_woken=False so this release does NOT reset secs_since_woken — wake-scan still
+        # Reached with nothing left for a sidecar to drain (inbox==0, or #72: only an unblocking answer
+        # is queued — parked, not drained, so a real worker handles it once the lease clears), so this is
+        # the PURE clock path. stamp_woken=False so this release does NOT reset secs_since_woken — wake-scan still
         # reads auto_wake_due and the very next idle tick()'s EPHEMERAL wake performs the heartbeat in its
         # own throwaway session (single-embodiment preserved: the lease is free before it claims). The
         # ephemeral wake's own ack then stamps last_woken_at, anchoring the next cadence correctly. A
