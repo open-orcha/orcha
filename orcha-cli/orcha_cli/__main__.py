@@ -1623,6 +1623,9 @@ def _write_hook_config(claude_dir: pathlib.Path) -> bool:
     - SessionEnd    → `orcha unwatch`        (SIGTERMs the poller)
     - SessionEnd    → `orcha snapshot`       (C1: headless worker writes its
                                               continuity digest before exiting)
+    - SessionEnd    → `orcha task-claim-guard` (GH #152: audits the session's last
+                                              reply for a task-creation claim that
+                                              never persisted, hard-fails loudly)
     - PostToolUse   → `orcha poll-inbox`     (drains the watcher's queue into
                                               Claude's next-turn context)
     - PreToolUse    → `orcha conv-guard`     (GH #91/#90: blocks the task-claim/
@@ -1686,6 +1689,13 @@ def _write_hook_config(claude_dir: pathlib.Path) -> bool:
     # exits. `orcha snapshot` is an internal no-op unless ORCHA_HEADLESS_WORKER=1,
     # so interactive human tabs (which author via /orcha-snapshot) are unaffected.
     added_any |= _ensure("SessionEnd",   "orcha snapshot",      matcher=None)
+    # GH #152: audit the session's last reply for a task-creation claim ("I created/
+    # started task <id>") that never actually persisted, and hard-fail loudly on a
+    # mismatch (digest override + thread flag / human escalation) instead of letting a
+    # hallucinated tool result stand as a silent success narrative. Independent of
+    # `orcha snapshot` — a THIRD SessionEnd entry, not gated to headless workers (the
+    # claim can happen in any embodiment).
+    added_any |= _ensure("SessionEnd",   "orcha task-claim-guard", matcher=None)
     # Epic A: wake daemon comes up with the workspace (idempotent singleton), so an
     # idle agent gets woken out-of-band without anyone hand-starting a daemon.
     added_any |= _ensure("SessionStart", "orcha notifier --ensure", matcher=None)
@@ -2301,10 +2311,12 @@ def _rich_digest_posted_this_session(transcript_path: Optional[str], agent_id: s
     return False
 
 
-def _focus_from_transcript(transcript_path: Optional[str]) -> Optional[str]:
-    """Best-effort current_focus: the worker's LAST assistant text turn, condensed to
-    one line. These are the agent's OWN words (we extract, never synthesize) so the
-    fallback digest stays agent-grounded. Returns None if nothing usable is found."""
+def _last_assistant_text_full(transcript_path: Optional[str]) -> Optional[str]:
+    """The worker's LAST assistant text turn, whitespace-condensed but UNTRUNCATED.
+    Shared by `_focus_from_transcript` (which trims to one line for the digest) and the
+    GH #152 claim-scan (`_extract_claimed_task_ids`), which needs to see the whole reply —
+    a 280-char summary could cut off a task id it must check. Returns None if nothing
+    usable is found."""
     last_text: Optional[str] = None
     for rec in _iter_transcript_records(transcript_path):
         if rec.get("type") == "assistant" or rec.get("role") == "assistant":
@@ -2321,7 +2333,262 @@ def _focus_from_transcript(transcript_path: Optional[str]) -> Optional[str]:
                 last_text = text
     if not last_text:
         return None
-    return " ".join(last_text.split())[:280]
+    return " ".join(last_text.split())
+
+
+def _focus_from_transcript(transcript_path: Optional[str]) -> Optional[str]:
+    """Best-effort current_focus: the worker's LAST assistant text turn, condensed to
+    one line. These are the agent's OWN words (we extract, never synthesize) so the
+    fallback digest stays agent-grounded. Returns None if nothing usable is found."""
+    text = _last_assistant_text_full(transcript_path)
+    return text[:280] if text is not None else None
+
+
+# ---- GH #152: hard-fail a hallucinated task-creation claim ----------------------------
+# An agent can narrate "I created/started task <id>" in its reply text without the
+# underlying create-task/accept-task API call ever actually persisting (call skipped,
+# failed silently, or the model's text ran ahead of the tool result). Below: a best-effort
+# scan for that claim shape, cross-checked against the live container task list.
+_TASK_CLAIM_VERB_RE = re.compile(
+    r"\b(created|creating|spawned|spawning|started|starting|accepted|in_progress|assigned to me)\b",
+    re.IGNORECASE,
+)
+# The word 'task' (optionally 'task id' or 'task_id') must sit DIRECTLY against the uuid —
+# only a short run of separator chars between them — not merely "somewhere nearby" in the
+# sentence. That's what keeps "created request <id> for task follow-up" from being swept
+# in: 'task' does appear in that sentence, but not adjacent to <id>, so it must never match
+# it. Review-round-3: `\btask\b` alone never matches "task_id" — '_' is a word character, so
+# there is no boundary between "task" and "_id" — which missed the orcha-task-new skill's
+# own success-report phrasing ("task_id: <uuid>"). `(?:[\s_]id)?` covers both the space and
+# underscore spellings, and '=' joins the separator class for "task_id=<uuid>".
+_TASK_CLAIM_ADJACENT_RE = re.compile(
+    r"\btask(?:[\s_]id)?\b[\s:#=-]{0,3}"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
+    re.IGNORECASE,
+)
+# Review-round-4: the orcha-task-new skill's own step-6 success report is TERSE and has
+# no creation verb at all — just "task_id: <uuid>, status: ready" (or pending/in_progress)
+# — so requiring a verb-bearing sentence (above) silently let that exact skill-taught
+# phrasing through. This second pattern recognizes that shape on its own terms: a
+# task-id-adjacent uuid followed, within a short run of the same line, by a
+# "status: ready|pending|in_progress" field. That status field IS the claim — the skill
+# only ever prints it after a confirmed 2xx create/accept — so no separate verb is needed.
+# Review-round-5: step 6 is reported as a bulleted list ("- task_id: ...", "- status:
+# ..."), one field per line, which is the MORE common shape than the single-line form —
+# so task_id and status usually sit on ADJACENT lines, not the same line. The gap below
+# allows the field to fall on the same line OR up to two short lines further down (each
+# capped at 60 chars, so it still can't reach across an unrelated block of text further
+# into a long reply) to cover both the plain-multiline and the bulleted-list renderings.
+_TERSE_STATUS_GAP = r"[^\n]{0,60}(?:\n[ \t]{0,4}(?:[-*•]\s*)?[^\n]{0,60}){0,2}?"
+_TASK_ID_TERSE_STATUS_RE = re.compile(
+    r"\btask(?:[\s_]id)?\b[\s:#=-]{0,3}"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
+    rf"{_TERSE_STATUS_GAP}\bstatus\b\s*[:=]\s*(?:ready|pending|in_progress)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+# Markdown/code-formatted ids (review-round-4): an agent reporting `task_id: `<uuid>`` or
+# wrapping the whole claim in a code span would otherwise dodge both patterns above purely
+# because of the extra backtick characters between the label and the uuid. Backticks carry
+# no meaning for claim detection, so they're stripped before either pattern runs.
+_BACKTICK_RE = re.compile("`+")
+
+
+def _extract_claimed_task_ids(text: Optional[str]) -> list:
+    """Best-effort scan for 'task <uuid> created/started' style claims in an agent's own
+    reply text (GH #152). A hit needs EITHER (a) a creation/start verb somewhere in the
+    sentence AND the literal word 'task' (optionally 'task id') sitting DIRECTLY against
+    the uuid, OR (b) the terse skill-taught 'task_id: <uuid>, status: ready|pending|
+    in_progress' report shape (same line, or split across the next line/bullet — see
+    review-round-5), which is itself a claim regardless of verb wording. Tight enough that
+    an unrelated uuid in the same sentence (a request id, an agent id) never gets swept in
+    just because the sentence also happens to use the word 'task' elsewhere (e.g. "created
+    request <id> for task follow-up" must not flag <id>). Markdown/code backticks around
+    the label or id are ignored. Returns deduped, lowercased uuids in first-seen order.
+    Never raises."""
+    if not text:
+        return []
+    found: list = []
+    seen: set = set()
+    normalized = _BACKTICK_RE.sub("", text)
+    # Review-round-5: run over the whole (backtick-stripped) reply, not per-sentence —
+    # `_SENTENCE_SPLIT_RE` splits on every newline, which is exactly where the task_id and
+    # status fields of a bulleted/multiline report sit, so splitting first would hide the
+    # match `_TASK_ID_TERSE_STATUS_RE` is meant to catch. The regex's own bounded gap keeps
+    # this from reaching across an unrelated block further into a long reply.
+    for m in _TASK_ID_TERSE_STATUS_RE.finditer(normalized):
+        uid = m.group(1).lower()
+        if uid not in seen:
+            seen.add(uid)
+            found.append(uid)
+    for sentence in _SENTENCE_SPLIT_RE.split(normalized):
+        if not _TASK_CLAIM_VERB_RE.search(sentence):
+            continue
+        for m in _TASK_CLAIM_ADJACENT_RE.finditer(sentence):
+            uid = m.group(1).lower()
+            if uid not in seen:
+                seen.add(uid)
+                found.append(uid)
+    return found
+
+
+def _flag_agent_digest(api_base: str, agent_id: str, warning: str) -> None:
+    """Carry the prior digest forward (same convention as `cmd_snapshot`'s fallback) but
+    override `current_focus` with the hard-fail warning, so the next `orcha rehydrate`
+    can't miss it. Best-effort — swallows all errors, never raises."""
+    prior: dict = {}
+    try:
+        got = _get_json(f"{api_base}/api/agents/{agent_id}/digest", timeout=4.0)
+        if isinstance(got, dict) and isinstance(got.get("digest"), dict):
+            prior = got["digest"]
+    except Exception:
+        prior = {}
+
+    def _carry(key: str) -> list:
+        v = prior.get(key)
+        return list(v) if isinstance(v, list) else []
+
+    prior_audience = prior.get("audience")
+    audience = prior_audience if isinstance(prior_audience, str) and prior_audience else None
+    open_threads = _carry("open_threads")
+    flag = {"text": warning}
+    if flag not in open_threads:
+        open_threads.insert(0, flag)
+
+    body = {
+        "current_focus": warning,
+        "decisions": _carry("decisions"),
+        "learnings": _carry("learnings"),
+        "open_threads": open_threads,
+        "audience": audience,
+    }
+    try:
+        _post_json(f"{api_base}/api/agents/{agent_id}/digest", body)
+    except Exception:
+        pass
+
+
+def _flag_thread_or_escalate(api_base: str, cid: str, agent_id: str, alias: Optional[str],
+                              listing: dict, warning: str) -> None:
+    """Surface the hard-fail somewhere a human will see it: post to the agent's own live
+    in_progress task thread if it has one, else escalate a new request straight to a
+    human (an omitted `target_alias` is treated as escalated-to-human at birth — same
+    convention `/orcha-ask` uses for `-`/`--human`). Best-effort, never raises."""
+    live_task_id = None
+    for t in (listing.get("tasks") or []):
+        if alias and alias in (t.get("assignees") or []) and t.get("status") == "in_progress":
+            live_task_id = t.get("id")
+            break
+
+    if live_task_id:
+        try:
+            _post_json(f"{api_base}/api/tasks/{live_task_id}/messages",
+                       {"author_agent_id": agent_id, "body": warning})
+            return
+        except Exception:
+            pass  # fall through to escalation
+
+    try:
+        _post_json(f"{api_base}/api/containers/{cid}/requests", {
+            "requester_agent_id": agent_id,
+            "payload": warning,
+            "priority": 10,
+            "type": "info",
+        })
+    except Exception:
+        pass
+
+
+def _fetch_task_listing_covering(api_base: str, cid: str, claimed_ids, timeout: float = 6.0,
+                                  max_pages: int = 50) -> Optional[dict]:
+    """GH #152 review-fix: `GET .../tasks` defaults to a 10-row page (100 max) — a single
+    fetch can miss a real task that's simply further down the list, which would make the
+    claim-guard hard-fail on a claim that actually persisted. Page through (100 rows/page)
+    until every id in `claimed_ids` has been located or the list is exhausted, capped at
+    `max_pages` as a runaway backstop against a server bug that never clears `has_more`
+    (50 pages * 100 rows = 5000 tasks, far past anything a real container holds).
+
+    Returns a single listing dict shaped like one page's response ({"tasks": [...]}) with
+    every task seen so far, or None if the API is unreachable — same "don't false-alarm on
+    an outage" contract the caller already relies on."""
+    remaining = {str(tid).lower() for tid in claimed_ids}
+    all_tasks: list = []
+    offset = 0
+    for _ in range(max_pages):
+        page = _get_json(f"{api_base}/api/containers/{cid}/tasks?limit=100&offset={offset}",
+                          timeout=timeout)
+        if not isinstance(page, dict):
+            return None
+        tasks = page.get("tasks") or []
+        all_tasks.extend(tasks)
+        remaining -= {str(t.get("id") or "").lower() for t in tasks}
+        if not remaining or not page.get("has_more") or not tasks:
+            break
+        offset += len(tasks)
+    return {"tasks": all_tasks}
+
+
+def cmd_task_claim_guard(args: argparse.Namespace) -> None:
+    """GH #152 — SessionEnd audit: cross-check any 'I created/started task <id>' claim in
+    the session's last reply against the live container task list, and hard-fail LOUDLY
+    on a mismatch instead of letting a hallucinated tool result stand as a silent success
+    narrative.
+
+    Registered as a SessionEnd hook. Stop hooks don't fire for headless `claude -p`
+    workers (see `cmd_snapshot`'s docstring) — the exact population most likely to
+    hallucinate unattended — so SessionEnd is the only reliable place this can run, and it
+    can't block the session from ending (SessionEnd hooks are fire-and-forget). "Hard
+    fail" here means: unmissable on the NEXT wake (a digest override `orcha rehydrate`
+    prints) and unmissable to a human (a task-thread message, or an escalated request
+    when the agent has no live task to post on) — not a silently-swallowed log line.
+
+    NEVER raises — a broken audit must not break the worker's teardown."""
+    try:
+        payload = _read_hook_stdin()
+        transcript_path = payload.get("transcript_path")
+        text = _last_assistant_text_full(transcript_path)
+        claimed = _extract_claimed_task_ids(text)
+        if not claimed:
+            return  # nothing claimed this turn — fast, silent no-op; no API calls made
+
+        cwd = pathlib.Path.cwd()
+        config_path = cwd / ".claude" / "orcha.json"
+        if not config_path.exists():
+            return
+        config = json.loads(config_path.read_text())
+        api_base = config.get("api_base_url")
+        if not api_base:
+            return
+        binding = _resolve_any_binding(cwd, getattr(args, "alias", None))
+        if not binding:
+            return
+        agent_id = binding.get("agent_id")
+        alias = binding.get("alias")
+        cid = binding.get("container_id")
+        if not (agent_id and cid):
+            return
+
+        listing = _fetch_task_listing_covering(api_base, cid, claimed, timeout=6.0)
+        if listing is None:
+            return  # can't reach the API — don't false-alarm on an outage
+        real_ids = {str(t.get("id") or "").lower() for t in (listing.get("tasks") or [])}
+
+        missing = [tid for tid in claimed if tid not in real_ids]
+        if not missing:
+            return  # every claim checks out — silent, as it should be
+
+        warning = (
+            f"⚠️ GH #152 HARD-FAIL: last session claimed task(s) {', '.join(missing)} — "
+            f"NOT FOUND in the container's task list. That claim did not persist to the "
+            f"DB. Do not trust it; re-verify via the container task list before "
+            f"continuing or reporting it as real work."
+        )
+        print(f"[orcha] {warning}")
+
+        _flag_agent_digest(api_base, agent_id, warning)
+        _flag_thread_or_escalate(api_base, cid, agent_id, alias, listing, warning)
+    except Exception:
+        return
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
@@ -2747,6 +3014,17 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--alias", default=None,
                           help="binding to snapshot (overrides $ORCHA_ALIAS and single-binding fallback)")
     snapshot.set_defaults(func=cmd_snapshot)
+
+    claim_guard = sub.add_parser(
+        "task-claim-guard",
+        help="GH #152 SessionEnd hook — audits the session's last reply for a "
+             "task-creation claim ('I created/started task <id>') that never actually "
+             "persisted, and hard-fails loudly (digest override + thread flag / human "
+             "escalation) on a mismatch. Fast no-op when no claim is present.",
+    )
+    claim_guard.add_argument("--alias", default=None,
+                             help="binding to audit (overrides $ORCHA_ALIAS and single-binding fallback)")
+    claim_guard.set_defaults(func=cmd_task_claim_guard)
 
     self_wake = sub.add_parser(
         "self-wake",
