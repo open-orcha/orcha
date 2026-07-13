@@ -54,6 +54,7 @@ window.OrchaData = (function () {
     const agents = (raw.agents || []).map((a) => ({
       id: a.id, alias: a.alias, kind: a.kind, role: a.role || "—",
       model: a.model != null ? a.model : null,
+      reasoning_effort: a.reasoning_effort != null ? a.reasoning_effort : null,
       status: a.status,
       // §3b/E1 (#141): the agent's single-flight EMBODIMENT — idle|ephemeral|resident|live.
       // Drives the S3 terminal guard + the conversation live-lock (Orcha.leaseOf).

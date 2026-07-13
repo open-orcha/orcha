@@ -420,6 +420,8 @@ _CODEX_EXEC_FALLBACKS = (
     "/usr/local/bin/codex",
     "~/.local/bin/codex",
 )
+# GH #51: Codex reasoning-effort tiers don't include 'xhigh' — fold it into 'high'. Others pass through.
+_CODEX_EFFORT = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high"}
 
 
 def _normalize_runtime(runtime: Optional[str]) -> str:
@@ -1105,6 +1107,7 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
                    *, alias: Optional[str] = None,
                    system_prompt: Optional[str] = None,
                    model: Optional[str] = None,
+                   reasoning_effort: Optional[str] = None,
                    runtime: Optional[str] = None,
                    resume_session_id: Optional[str] = None,
                    log_path: Optional[pathlib.Path] = None,
@@ -1147,6 +1150,10 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
                  "--skip-git-repo-check"]
         if model:
             argv += ["--model", model]
+        # GH #51: Codex takes reasoning effort as a config override. It has no 'xhigh' tier, so
+        # map it to its top 'high'; the others pass through.
+        if reasoning_effort:
+            argv += ["-c", f"model_reasoning_effort={_CODEX_EFFORT.get(reasoning_effort, reasoning_effort)}"]
         if last_message_path:
             argv += ["--output-last-message", str(last_message_path)]
         argv.extend(extra)
@@ -1173,6 +1180,10 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
         # so by here `model` is always a currently-spawnable id (or None → claude's own default).
         if model:
             argv += ["--model", model]
+        # GH #51: per-agent reasoning effort. wake-scan preserves NULL as "omit the flag" and
+        # resolves stale unknown choices to a valid `claude --effort` level.
+        if reasoning_effort:
+            argv += ["--effort", reasoning_effort]
         if system_prompt:
             argv += ["--append-system-prompt", system_prompt]
         # A daemon-spawned worker has NO tty to answer permission prompts, so it must run
@@ -1191,6 +1202,9 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
     if system_prompt and runtime == RUNTIME_CODEX:
         persona_note = " <prompt includes persona+digest>"
     model_note = f" --model {model}" if model else ""
+    if reasoning_effort:
+        model_note += (f" --effort {reasoning_effort}" if runtime == RUNTIME_CLAUDE
+                       else f" -c model_reasoning_effort={_CODEX_EFFORT.get(reasoning_effort, reasoning_effort)}")
     perm_note = ""
     if runtime == RUNTIME_CODEX:
         perm_note = " --dangerously-bypass-approvals-and-sandbox"
@@ -1302,6 +1316,7 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
                    resume_session_id: Optional[str] = None,
                    alias: Optional[str] = None, flags: Optional[str] = None,
                    model: Optional[str] = None,
+                   reasoning_effort: Optional[str] = None,
                    runtime: Optional[str] = None,
                    run_token: Optional[str] = None,
                    conversation: bool = False,
@@ -1334,6 +1349,8 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
     # (set_agent_model clears session_id) — by which point this `--model` takes effect on cold.
     if model:
         argv += ["--model", model]
+    if reasoning_effort:                                   # GH #51
+        argv += ["--effort", reasoning_effort]
     if system_prompt:
         argv += ["--append-system-prompt", system_prompt]
     extra = flags.split() if flags else []
@@ -1343,6 +1360,8 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
     argv.extend(extra)
     mode = f"--resume {resume_session_id}" if resume_session_id else "cold"
     model_note = f" --model {model}" if model else ""
+    if reasoning_effort:
+        model_note += f" --effort {reasoning_effort}"
     repr_ = (f"(cd {cwd} && ORCHA_ALIAS={alias or '?'} ORCHA_HEADLESS_WORKER=1 claude -p "
              f"--input-format stream-json --output-format stream-json --include-partial-messages "
              f"--verbose [{mode}]{model_note}"
@@ -2822,6 +2841,7 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
     sent, _cmd, newproc = spawn_headless(run_cwd, ctx.get("prompt", ""), ctx.get("flags"), False,
                                          alias=ctx.get("alias"), system_prompt=persona,
                                          model=ctx.get("model"),
+                                         reasoning_effort=ctx.get("reasoning_effort"),
                                          runtime=ctx.get("model_runtime"),
                                          log_path=log_path, run_token=new_tok)
     if not (sent and newproc is not None):
@@ -3744,6 +3764,7 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                        cand.get("headless_flags"), dry_run,
                                        alias=cand.get("alias"), system_prompt=persona,
                                        model=cand.get("model"),
+                                       reasoning_effort=cand.get("reasoning_effort"),
                                        runtime=cand.get("model_runtime"),
                                        log_path=log_path, run_token=ephemeral_tok,
                                        conversation=(ephemeral_lane == "conversation"))
@@ -3807,6 +3828,7 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     "respawn_ctx": {"prompt": prompt, "flags": cand.get("headless_flags"),
                                     "alias": cand.get("alias"),
                                     "model": cand.get("model"),
+                                    "reasoning_effort": cand.get("reasoning_effort"),  # GH #51
                                     "model_runtime": cand.get("model_runtime"),
                                     "task_id": auto[0] if auto else cand.get("wake_task_id"),
                                     # GH#110: carry the task-worktree flag through a checkpoint-
@@ -4323,6 +4345,7 @@ def _close_resident(api_base: str, r: dict, reason: str = "idle", teardown_workt
 
 def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Optional[list] = None,
                          ack_ts=None, model: Optional[str] = None,
+                         reasoning_effort: Optional[str] = None,
                          dry_run: bool = False, quiet: bool = False) -> bool:
     """#247 B3 (§5.2 warm-zone): spawn a THROWAWAY one-shot drain worker for a warm resident's queued
     NON-conversation inbox WITHOUT releasing the resident's embodiment lease or tearing down the warm
@@ -4357,7 +4380,8 @@ def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Option
         # --resume session to protect), and `claude -p` is the drain transport the ephemeral uses.
         sent, _, proc = spawn_headless(base_cwd, prompt, None, False,
                                        alias=r.get("alias"), system_prompt=persona,
-                                       model=model, runtime=RUNTIME_CLAUDE, log_path=log_path)
+                                       model=model, reasoning_effort=reasoning_effort,
+                                       runtime=RUNTIME_CLAUDE, log_path=log_path)
         if not sent or proc is None:
             return False
         # Gate P1a: stash the wake cursor watermark captured AT SPAWN (active-conversations'
@@ -4782,6 +4806,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                            messages=(cand or {}).get("inbox_messages"),
                                            ack_ts=inbox_ack_ts,
                                            model=(cand or {}).get("model"),
+                                           reasoning_effort=(cand or {}).get("reasoning_effort"),
                                            dry_run=dry_run, quiet=quiet)
             if not spawned:
                 # §8 fail-open: sidecar spawn failed/raised → fall back to the A2 idle-YIELD so the next
@@ -4896,7 +4921,9 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 api_base, c["agent_id"], "conversation", "headless")
             sent, _, proc = spawn_headless(run_cwd, prompt, None, dry_run,
                                            alias=c.get("agent_alias"), system_prompt=persona,
-                                           model=c.get("model"), runtime=runtime,
+                                           model=c.get("model"),
+                                           reasoning_effort=c.get("reasoning_effort"),
+                                           runtime=runtime,
                                            resume_session_id=(session_id if use_resume else None),
                                            log_path=log_path,
                                            last_message_path=last_message_path,
@@ -5065,6 +5092,7 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                                            system_prompt=persona, log_path=log_path,
                                            resume_session_id=None if cold else session_id,
                                            alias=c.get("agent_alias"), model=c.get("model"),
+                                           reasoning_effort=c.get("reasoning_effort"),
                                            runtime=c.get("model_runtime"),
                                            run_token=conv_tok, conversation=True,
                                            dry_run=dry_run)
