@@ -710,8 +710,14 @@ def build_wake_prompt(cand: dict) -> str:
             "(2) do not claim a task just because you were woken for inbox/event work — "
             "assignment is the only task trigger; "
         )
+    # GH #34 (scoped): the fixed operating instructions (steps 1-3, `task_step`) are the SAME text
+    # every time a given agent hits a given branch — only the trailing "[orcha wake] ..." summary
+    # (alias/count/manifest/directed-message) is unique per wake. Rendering the instructions FIRST
+    # and the volatile per-wake summary LAST gives the two consecutive prompts of a busy agent the
+    # longest possible shared prefix, instead of breaking it at byte 0 with the always-different
+    # manifest. Same information either way — only the order changed.
     return (
-        f"[orcha wake] {alias}: {what}.{manifest}{directed} You are a ONE-SHOT headless worker: drain your "
+        f"You are a ONE-SHOT headless worker: drain your "
         f"FULL inbox, then EXIT — do NOT enter the `/orcha-listen` long-poll watch loop "
         f"(it never returns and piles up stuck workers). Steps: (1) drain the ENTIRE "
         f"backlog — handle ALL your open requests AND all unacked events, repeating until "
@@ -719,7 +725,8 @@ def build_wake_prompt(cand: dict) -> str:
         f"until the next wake); {task_step}(3) once the inbox is empty and you've "
         f"reached a natural stop — or you need the human — STOP and exit; another wake "
         f"resumes you when there's more. Never self-certify: stop at needs_verification "
-        f"and let the human verify."
+        f"and let the human verify. "
+        f"[orcha wake] {alias}: {what}.{manifest}{directed}"
     )
 
 
@@ -997,6 +1004,14 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     #326 (A1): the task's standing protocol (RULES) rides AHEAD of / independent of the digest —
     it is human-authored and read fresh every wake, so an edit takes effect on the next wake. It
     lands after the guardrail and before the digest (rules frame the work before the recalled facts).
+
+    GH #34 (scoped): sections are assembled STABLE-first so consecutive wakes of the same agent
+    share the longest possible byte-identical prefix (a provider-side prompt cache hits on a
+    stable prefix, not on the whole string). `persona` / `HUMAN_COMMS_GUARDRAIL` /
+    `CONVERSATION_LANE_DIRECTIVE` never vary per-wake; `body_section` / `proto_section` vary only
+    when the resolved task or its protocol changes (rare relative to wake frequency); the resume
+    context and the digest vary on nearly every wake (a fresh self-wake wait-point, or the agent's
+    own freshly-written memory) and so are rendered LAST, after everything more stable.
     """
     parts = []
     if persona and persona.get("system_prompt"):
@@ -1015,14 +1030,17 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     body_section = _render_task_body(protocol)
     if body_section:
         parts.append(body_section)
-    if render_resume:
-        resume_section = _render_resume_context(protocol)
-        if resume_section:
-            parts.append(resume_section)
     # #326 (A1): RULES (protocol) ahead of the digest — read fresh every wake, human-editable.
     proto_section = _render_protocol(protocol)
     if proto_section:
         parts.append(proto_section)
+    # GH #34 (scoped): the resume context (a self-wake's saved wait-point, usually distinct every
+    # time it fires) is MORE volatile than the protocol/task-body above it, so it renders AFTER
+    # them — grouped with the digest at the tail instead of splitting the stable prefix in two.
+    if render_resume:
+        resume_section = _render_resume_context(protocol)
+        if resume_section:
+            parts.append(resume_section)
     d = (digest or {}).get("digest")
     if d:
         # #325: lead with WHO the agent is talking to (their register) so tone is framed
