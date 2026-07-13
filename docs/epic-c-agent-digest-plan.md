@@ -78,7 +78,8 @@ tables at rehydrate (no duplication).
 - **Standalone:** `/orcha-snapshot` skill the agent runs any time.
 - **No server cron:** the server can't author reasoning, so reminding the agent is
   the only honest cadence. (Follow-up: a gentle "N min since last digest" reminder in
-  `/orcha-listen` timeout + `/orcha-checkpoint` output.)
+  `/orcha-listen`'s (default loop primitive) timeout, or in `/orcha-checkpoint`'s
+  (legacy polling fallback) output.)
 
 ## D2 — SessionStart auto-resume / rehydrate
 
