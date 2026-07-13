@@ -2366,23 +2366,51 @@ _TASK_CLAIM_ADJACENT_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
     re.IGNORECASE,
 )
+# Review-round-4: the orcha-task-new skill's own step-6 success report is TERSE and has
+# no creation verb at all — just "task_id: <uuid>, status: ready" (or pending/in_progress)
+# — so requiring a verb-bearing sentence (above) silently let that exact skill-taught
+# phrasing through. This second pattern recognizes that shape on its own terms: a
+# task-id-adjacent uuid followed, within a short run of the same line, by a
+# "status: ready|pending|in_progress" field. That status field IS the claim — the skill
+# only ever prints it after a confirmed 2xx create/accept — so no separate verb is needed.
+_TASK_ID_TERSE_STATUS_RE = re.compile(
+    r"\btask(?:[\s_]id)?\b[\s:#=-]{0,3}"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
+    r"[^\n]{0,40}?\bstatus\b\s*[:=]\s*(?:ready|pending|in_progress)\b",
+    re.IGNORECASE,
+)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+# Markdown/code-formatted ids (review-round-4): an agent reporting `task_id: `<uuid>`` or
+# wrapping the whole claim in a code span would otherwise dodge both patterns above purely
+# because of the extra backtick characters between the label and the uuid. Backticks carry
+# no meaning for claim detection, so they're stripped before either pattern runs.
+_BACKTICK_RE = re.compile("`+")
 
 
 def _extract_claimed_task_ids(text: Optional[str]) -> list:
     """Best-effort scan for 'task <uuid> created/started' style claims in an agent's own
-    reply text (GH #152). A hit needs BOTH a creation/start verb somewhere in the sentence
-    AND the literal word 'task' (optionally 'task id') sitting DIRECTLY against the uuid —
-    tight enough that an unrelated uuid in the same sentence (a request id, an agent id)
-    never gets swept in just because the sentence also happens to use the word 'task'
-    elsewhere (e.g. "created request <id> for task follow-up" must not flag <id>). Returns
-    deduped, lowercased uuids in first-seen order. Never raises."""
+    reply text (GH #152). A hit needs EITHER (a) a creation/start verb somewhere in the
+    sentence AND the literal word 'task' (optionally 'task id') sitting DIRECTLY against
+    the uuid, OR (b) the terse skill-taught 'task_id: <uuid>, status: ready|pending|
+    in_progress' report shape, which is itself a claim regardless of verb wording. Tight
+    enough that an unrelated uuid in the same sentence (a request id, an agent id) never
+    gets swept in just because the sentence also happens to use the word 'task' elsewhere
+    (e.g. "created request <id> for task follow-up" must not flag <id>). Markdown/code
+    backticks around the label or id are ignored. Returns deduped, lowercased uuids in
+    first-seen order. Never raises."""
     if not text:
         return []
     found: list = []
     seen: set = set()
-    for sentence in _SENTENCE_SPLIT_RE.split(text):
-        if not _TASK_CLAIM_VERB_RE.search(sentence):
+    normalized = _BACKTICK_RE.sub("", text)
+    for sentence in _SENTENCE_SPLIT_RE.split(normalized):
+        has_verb = bool(_TASK_CLAIM_VERB_RE.search(sentence))
+        for m in _TASK_ID_TERSE_STATUS_RE.finditer(sentence):
+            uid = m.group(1).lower()
+            if uid not in seen:
+                seen.add(uid)
+                found.append(uid)
+        if not has_verb:
             continue
         for m in _TASK_CLAIM_ADJACENT_RE.finditer(sentence):
             uid = m.group(1).lower()

@@ -133,6 +133,41 @@ def test_extract_claimed_task_ids_still_ignores_task_follow_up_with_task_id_clai
     assert cli._extract_claimed_task_ids(text) == []
 
 
+def test_extract_claimed_task_ids_matches_terse_status_ready_report_without_verb():
+    """Review-round-4: the orcha-task-new skill's step-6 report is TERSE and has no
+    creation verb at all — 'task_id: <uuid>, status: ready' — so the verb-required
+    adjacency match alone silently skipped it. The status field itself is the claim."""
+    text = f"task_id: {REAL_TASK}, status: ready, assignee_alias: (unassigned)."
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_matches_terse_status_pending_report_without_verb():
+    text = f"task_id: {REAL_TASK}, status: pending, depends_on: 2."
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_terse_status_still_ignores_unrelated_uuid():
+    """The terse-status pattern must obey the same adjacency discipline as the verb path:
+    an unrelated uuid with 'task' only appearing later, and no status field near IT, must
+    not be swept in even though the reply elsewhere reports an unrelated status."""
+    text = (f"Responded to request {REQUEST_ID} for task follow-up. "
+            f"Current queue status: pending review.")
+    assert cli._extract_claimed_task_ids(text) == []
+
+
+def test_extract_claimed_task_ids_matches_backtick_wrapped_id():
+    """Review-round-4: Markdown/code-formatted task ids — the uuid itself wrapped in a
+    code span — must not dodge detection just because of the extra backtick chars."""
+    text = f"Created task `{REAL_TASK}`, assigned to me, status in_progress."
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
+def test_extract_claimed_task_ids_matches_backtick_wrapped_terse_status_report():
+    """Combined case: the skill-taught terse report with the id itself code-formatted."""
+    text = f"task_id: `{REAL_TASK}`, status: ready."
+    assert cli._extract_claimed_task_ids(text) == [REAL_TASK]
+
+
 # ---- cmd_task_claim_guard decision flow -----------------------------------------------
 
 def _tasks_response(tasks):
