@@ -774,7 +774,13 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
     """GH #58: advance agent_wake_state.delivered_ts to the CONTIGUOUS floor — the ts just below the
     OLDEST still-unhandled WAKING event past the cursor — never over an unhandled one. So an event a
     run could not handle (a cross-task task_bound left pending) keeps re-surfacing instead of being
-    skipped by a blanket high-water jump. Idempotent; only ever moves the cursor forward (GREATEST)."""
+    skipped by a blanket high-water jump. Idempotent; only ever moves the cursor forward (GREATEST).
+
+    delivered_ts is the WORK-lane cursor (every caller is a work seam or the run-completion ack), so
+    "unhandled WAKING" is judged with _WORK_NON_WAKING_EVENTS — a bare conversation_turn never pins
+    the floor. That matches the wake_scan contract (a work ack advances past conversation turns; the
+    conversation lane consumes them via its own conv_delivered_ts), and keeps the GH #138 safety net
+    one-shot: an old chat turn is not re-injected into every later work wake once a work ack lands."""
     cur.execute("SELECT COALESCE(delivered_ts, 0) AS d FROM agent_wake_state WHERE agent_id=%s", (aid,))
     row = cur.fetchone()
     delivered = (row["d"] if row else 0.0) or 0.0
@@ -783,7 +789,7 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
            WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id=%s AND a.event_id=e.id)""",
-        (aid, delivered, list(_NON_WAKING_EVENTS), aid))
+        (aid, delivered, list(_WORK_NON_WAKING_EVENTS), aid))
     min_unhandled = cur.fetchone()["m"]
     if min_unhandled is None:
         # nothing waking left unhandled → advance past EVERYTHING above the cursor (incl. trailing

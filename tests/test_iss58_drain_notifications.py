@@ -169,6 +169,46 @@ async def test_ack_handled_is_scoped_to_own_key(client, container, make_agent, m
     assert db.execute("SELECT 1 FROM agent_event_acks WHERE agent_id=%s", (y["agent_id"],)) == []
 
 
+async def test_work_ack_floor_skips_conversation_turn(
+        client, container, make_agent, db):
+    """GH #58 (PR #167 review fix): delivered_ts is the WORK-lane cursor, so the contiguous-floor
+    recompute must judge "unhandled waking" with _WORK_NON_WAKING_EVENTS — a bare conversation_turn
+    (the conversation lane's own surface, consumed via conv_delivered_ts) must never pin the floor.
+    Otherwise, after a work run acks its prompt, the floor stays parked below the old chat turn and
+    the GH #138 safety-net line is re-injected into EVERY later work wake instead of riding along
+    once."""
+    x = await make_agent("x", "eng")
+    aid = x["agent_id"]
+    # an old unanswered chat turn, then a prompt (the reviewer's repro ordering)
+    db.execute(
+        """INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload)
+           VALUES (%s, %s, %s, 'conversation_turn', 1000.0, %s::jsonb)""",
+        (container["id"], aid, aid, json.dumps({"conversation_id": "c1",
+                                                "content": "are you still there?"})))
+    await client.post(f"/api/agents/{aid}/prompt", json={"message": "first prompt"})
+
+    # first wake: the prompt drains, and the chat rides along ONCE as the GH #138 safety net
+    cand = _cand(await _scan(client, container["id"]), aid)
+    assert any("first prompt" in m for m in cand["prompt_messages"])
+    assert any("are you still there?" in m for m in cand["prompt_messages"])
+    conv_id = db.execute(
+        "SELECT id, ts FROM agent_events WHERE event_key=%s AND event_name='conversation_turn'",
+        (aid,))[0]
+    assert conv_id["id"] not in set(cand["handled_event_ids"])   # never work-acked per-event
+
+    # the run completes and acks what it handled → the floor must advance PAST the chat turn
+    r = await client.post(f"/api/agents/{aid}/events/ack-handled",
+                          json={"event_ids": cand["handled_event_ids"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["delivered_ts"] > conv_id["ts"]              # not pinned at the conversation_turn
+
+    # a second prompt arrives: the old chat text is NOT re-injected into this work wake
+    await client.post(f"/api/agents/{aid}/prompt", json={"message": "second prompt"})
+    cand2 = _cand(await _scan(client, container["id"]), aid)
+    assert any("second prompt" in m for m in cand2["prompt_messages"])
+    assert not any("are you still there?" in m for m in cand2["prompt_messages"])
+
+
 # ===================== wake-scan — drain SAME-task in one run + FYI =====================
 
 async def test_drain_all_same_task_plus_fyi_in_one_run(
