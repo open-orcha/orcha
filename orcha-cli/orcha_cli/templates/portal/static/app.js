@@ -425,6 +425,30 @@ window.Orcha = (function () {
   }
 
   /* ---- shell ----------------------------------------------------------- */
+  /* ---- collapsible sidebar (icon rail) --------------------------------- *
+   * Browser-local, same contract as the theme/skin picks: persisted in
+   * localStorage "orcha:sidebar" and applied pre-paint by each page's <head>
+   * script as data-sidebar="collapsed" on <html>, so the rail never flashes
+   * at the wrong width. CSS owns both layouts; the toggle just flips state
+   * (no re-render needed — the same DOM serves both). */
+  function sidebarCollapsed() {
+    try { return localStorage.getItem("orcha:sidebar") === "collapsed"; } catch (e) { return false; }
+  }
+  function toggleSidebar() {
+    const collapsed = !sidebarCollapsed();
+    try { localStorage.setItem("orcha:sidebar", collapsed ? "collapsed" : "expanded"); } catch (e) {}
+    const d = document.documentElement;
+    if (collapsed) d.setAttribute("data-sidebar", "collapsed");
+    else d.removeAttribute("data-sidebar");
+    const btn = document.getElementById("sbToggle");
+    if (btn) {
+      const t = collapsed ? "Expand sidebar" : "Collapse sidebar";
+      btn.title = t;
+      btn.setAttribute("aria-label", t);
+      btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
+  }
+
   function mountShell(page, opts) {
     opts = opts || {};
     const a = attnItems();
@@ -444,19 +468,24 @@ window.Orcha = (function () {
 
     const sidebar = document.getElementById("sidebar");
     if (sidebar) {
+      const sbT0 = sidebarCollapsed() ? "Expand sidebar" : "Collapse sidebar";
       sidebar.innerHTML = `
-        <a class="brand" href="/" style="color:inherit">
-          <span class="mark">${orcaSVG()}</span>
-          <span class="word">Orcha<small>orchestration portal</small></span>
-        </a>
+        <div class="brand-row">
+          <a class="brand" href="/" style="color:inherit">
+            <span class="mark">${orcaSVG()}</span>
+            <span class="word">Orcha<small>orchestration portal</small></span>
+          </a>
+          <button class="sb-toggle" id="sbToggle" type="button" title="${sbT0}" aria-label="${sbT0}"
+            aria-expanded="${sidebarCollapsed() ? "false" : "true"}">${icon("chev", "ico")}</button>
+        </div>
         <nav class="nav">
           <div class="lbl">Control room</div>
-          ${nv.map((n) => `<a href="${n.href}" class="${n.key === page ? "active" : ""}">
+          ${nv.map((n) => `<a href="${n.href}" class="${n.key === page ? "active" : ""}" title="${n.label}${n.count != null ? " · " + n.count : ""}">
             ${icon(n.ico, "ico")}<span class="grow">${n.label}</span>
             ${n.count != null ? `<span class="ncount${n.attn && n.count ? " attn" : ""}">${n.count}</span>` : ""}
           </a>`).join("")}
           <div class="lbl">Live</div>
-          <a href="/agents" class="">
+          <a href="/agents" class="" title="Run feed">
             ${icon("live", "ico")}<span class="grow">Run feed</span>
           </a>
         </nav>
@@ -466,7 +495,12 @@ window.Orcha = (function () {
           <div class="big tnum">${a.count}</div>
           <div class="sub">${a.verifs.length} to verify · ${a.escs.length} escalation${a.escs.length === 1 ? "" : "s"}</div>
           <a class="go" href="/#needs">Open action queue ${icon("arrow", "")}</a>
-        </div>`;
+        </div>
+        <a class="attn-mini" href="/#needs" title="Needs you · ${a.count} — open action queue">
+          ${icon("bell", "")}<span class="n tnum">${a.count}</span>
+        </a>`;
+      const sbT = document.getElementById("sbToggle");
+      if (sbT) sbT.addEventListener("click", toggleSidebar);
     }
 
     const topbar = document.getElementById("topbar");

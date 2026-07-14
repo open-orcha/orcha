@@ -6,9 +6,9 @@
 <title>Orcha · Settings</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/styles.css">
-<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<script>(function(){try{var d=document.documentElement,t=localStorage.getItem('orcha:theme')||'auto',s=localStorage.getItem('orcha:skin'),b=localStorage.getItem('orcha:sidebar');d.setAttribute('data-theme',t);if(s&&s!=='classic')d.setAttribute('data-skin',s);if(b==='collapsed')d.setAttribute('data-sidebar','collapsed');}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
 <style>
   /* settings-specific layout — reuses styles.css tokens, no new color literals */
   .set-wrap { max-width: 760px; }
@@ -79,6 +79,22 @@
   .set-savebar .saved { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
   .set-savebar .saved svg { width: 15px; height: 15px; color: var(--ok); }
   .set-err { color: var(--danger); font-size: 12.5px; }
+
+  /* appearance / design picker — browser-local, applies instantly */
+  .skin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .skin-grid { grid-template-columns: 1fr; } }
+  .skin-tile { text-align: left; cursor: pointer; font: inherit; color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+    padding: 14px 15px; transition: border-color .15s ease; }
+  .skin-tile:hover { border-color: var(--accent-line); }
+  .skin-tile.on { border-color: var(--accent); box-shadow: var(--ring); }
+  .skin-tile .sw { display: flex; gap: 5px; margin-bottom: 11px; }
+  .skin-tile .sw i { width: 20px; height: 20px; border: 1px solid rgba(0,0,0,.25); display: block; }
+  .skin-tile[data-skin="classic"] .sw i { border-radius: 6px; }
+  .skin-tile[data-skin="swiss"] .sw i { border-radius: 0 !important; }
+  .skin-tile .nm { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 660; }
+  .skin-tile .nm svg { width: 15px; height: 15px; color: var(--accent); margin-left: auto; flex: none; }
+  .skin-tile .ds { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -131,6 +147,16 @@
           <div class="card-b">
             <div class="lead">Pair the Orcha mobile app with this workspace on your local Wi-Fi network.</div>
             <div id="pairingCard"></div>
+          </div>
+        </div>
+
+        <div class="card set-card">
+          <div class="card-h"><h2>Appearance</h2></div>
+          <div class="card-b">
+            <div class="lead">How the portal looks in this browser — applies instantly, per
+              device. Dark / light stays on the theme toggle in the top bar; this picks the
+              design language.</div>
+            <div class="skin-grid" id="skinGrid"></div>
           </div>
         </div>
 

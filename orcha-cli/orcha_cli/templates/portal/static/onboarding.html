@@ -6,9 +6,9 @@
 <title>Orcha · Set up your workspace</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/styles.css">
-<script>(function(){try{var t=localStorage.getItem('orcha:theme')||'auto';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
+<script>(function(){try{var d=document.documentElement,t=localStorage.getItem('orcha:theme')||'auto',s=localStorage.getItem('orcha:skin'),b=localStorage.getItem('orcha:sidebar');d.setAttribute('data-theme',t);if(s&&s!=='classic')d.setAttribute('data-skin',s);if(b==='collapsed')d.setAttribute('data-sidebar','collapsed');}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
 <style>
   /* ---- guided banner under the topbar (lifted from the O-series mockup) ---- */
   .guide-rail { display: flex; align-items: center; gap: 14px; padding: 11px 18px; margin-bottom: 22px;
