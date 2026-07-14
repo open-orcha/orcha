@@ -98,6 +98,7 @@ except ImportError:  # host daemon / pytest: import from the package on sys.path
 
 DB = os.environ["DATABASE_URL"]
 ONBOARDING_LOG = logging.getLogger("orcha.onboarding")
+KEYTEST_LOG = logging.getLogger("orcha.llm-key-test")
 PAIRING_TTL_SECONDS = 5 * 60
 PAIRING_TOKEN_EXCHANGE_FOLLOWUP = {
     "status": "follow_up",
@@ -1079,6 +1080,20 @@ _ATTACHMENT_INLINE_EXT = {"png", "jpg", "jpeg", "gif", "webp"}
 _SAFE_STORED_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+def _contained_path(base_dir: pathlib.Path, *parts: str) -> Optional[pathlib.Path]:
+    """Join request-supplied segments under base_dir, refusing anything that escapes it.
+
+    THE single traversal gate for every attachment-store path built from request input: the
+    joined path is fully normalized (realpath — symlinks + '..' collapsed) and must remain
+    STRICTLY inside the normalized base dir, else None. Callers use the returned path (never
+    the raw segments) for all filesystem access."""
+    base = os.path.realpath(base_dir)
+    candidate = os.path.realpath(os.path.join(base, *parts))
+    if not candidate.startswith(base + os.sep):
+        return None
+    return pathlib.Path(candidate)
+
+
 def _attachment_ext(name: str) -> Optional[str]:
     """Lowercased extension if it's in the allowlist, else None."""
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -1113,7 +1128,8 @@ def _attachment_text_cache_path(scope: str, owner_id: str, stored_name: str) -> 
     """
     if not stored_name or not _SAFE_STORED_NAME.match(stored_name):
         return None
-    return ATTACHMENTS_DIR / ".extracted-text" / scope / owner_id / f"{stored_name}.json"
+    return _contained_path(ATTACHMENTS_DIR / ".extracted-text", scope, owner_id,
+                           f"{stored_name}.json")
 
 
 def _read_cached_attachment_text(scope: str, owner_id: str, stored_name: str) -> str:
@@ -1232,13 +1248,16 @@ def _attachment_extracted_text(scope: str, owner_id: str, stored_name: str,
 # is a thin wrapper, not a copy — there is one path-traversal gate, one ref shape, one validator.
 def _resolve_stored_in(base_dir: pathlib.Path, stored_name: str) -> Optional[pathlib.Path]:
     """Map (base_dir, stored basename) → an on-disk path, or None if it's unsafe / missing.
-    Defends against path traversal: the name must match _SAFE_STORED_NAME (no '/', no '..')
-    AND the resolved file's parent must be exactly base_dir."""
+    Defends against path traversal: the name must match _SAFE_STORED_NAME (no '/', no '..'),
+    the normalized path must stay inside base_dir (_contained_path), and the file's parent
+    must be exactly base_dir (no nesting)."""
     if not stored_name or not _SAFE_STORED_NAME.match(stored_name):
         return None
-    p = (base_dir / stored_name).resolve()
+    p = _contained_path(base_dir, stored_name)
+    if p is None:
+        return None
     try:
-        if p.parent != base_dir.resolve() or not p.is_file():
+        if os.path.dirname(p) != os.path.realpath(base_dir) or not p.is_file():
             return None
     except OSError:
         return None
@@ -1291,7 +1310,10 @@ def _validate_refs_in(base_dir: pathlib.Path, ref_builder, refs: Optional[list],
 
 # --- task-thread scope (#301/#330) — signatures unchanged; now delegate to the core -----------
 def _task_attachments_dir(tid: str) -> pathlib.Path:
-    return ATTACHMENTS_DIR / tid
+    d = _contained_path(ATTACHMENTS_DIR, tid)
+    if d is None:  # unreachable behind _valid_uuid route guards; belt-and-braces
+        raise HTTPException(400, "invalid task id")
+    return d
 
 
 def _resolve_stored_attachment(tid: str, stored_name: str) -> Optional[pathlib.Path]:
@@ -1320,7 +1342,10 @@ def _validate_attachment_refs(tid: str, refs: Optional[list],
 def _conversation_attachments_dir(conv_id: str) -> pathlib.Path:
     # Nested under a "conversations/" prefix so a conversation id can never collide with a task
     # id's dir (tasks live directly under ATTACHMENTS_DIR/<tid>).
-    return ATTACHMENTS_DIR / "conversations" / conv_id
+    d = _contained_path(ATTACHMENTS_DIR / "conversations", conv_id)
+    if d is None:  # unreachable behind _valid_uuid route guards; belt-and-braces
+        raise HTTPException(400, "invalid conversation id")
+    return d
 
 
 def _resolve_stored_conv_attachment(conv_id: str, stored_name: str) -> Optional[pathlib.Path]:
@@ -3291,6 +3316,19 @@ def delete_container_llm_key(cid: str, body: LlmKeyActor):
     return {"configured": False, "source": None, "masked": None}
 
 
+def _llm_error_public_detail(provider_label: str, e: Exception) -> str:
+    """Client-safe verdict for a failed key-test ping. Provider error text can embed upstream
+    response bodies / stack fragments (py/stack-trace-exposure), so the ONLY thing surfaced from
+    the exception is the leading HTTP status code (laundered through int()); the full error goes
+    to the server log at the call site."""
+    m = re.match(r"HTTP (\d{3}) ", str(e))
+    if m:
+        return (f"the {provider_label} API returned HTTP {int(m.group(1))} — "
+                "check the key (full error in the portal server log)")
+    return (f"could not reach the {provider_label} API — "
+            "check the key and network (full error in the portal server log)")
+
+
 @app.post("/api/containers/{cid}/settings/llm-key/test", status_code=200)
 def test_container_llm_key(cid: str, body: LlmKeyTest):
     """Server-side credential ping against the Anthropic API. HUMAN-AUTHORITY gated. With `api_key`
@@ -3321,7 +3359,8 @@ def test_container_llm_key(cid: str, body: LlmKeyTest):
                       messages=[{"role": "user", "content": "ping"}], api_key=candidate)
         return {"ok": True, "detail": "key accepted by the Anthropic API"}
     except llm_util.LLMError as e:
-        return {"ok": False, "detail": str(e)[:300]}
+        KEYTEST_LOG.warning("anthropic key test failed for container %s: %s", cid, e)
+        return {"ok": False, "detail": _llm_error_public_detail("Anthropic", e)}
 
 
 # ---------- container settings: per-PROVIDER LLM keys (multi-provider, follow-on to #294 Item 1) ----------
@@ -3359,7 +3398,8 @@ def _ping_provider_key(provider: str, candidate: str) -> dict:
                       messages=[{"role": "user", "content": "ping"}], api_key=candidate)
         return {"ok": True, "detail": f"key accepted by the {p['name']} API"}
     except llm_util.LLMError as e:
-        return {"ok": False, "detail": str(e)[:300]}
+        KEYTEST_LOG.warning("%s key test failed: %s", provider, e)
+        return {"ok": False, "detail": _llm_error_public_detail(p["name"], e)}
 
 
 @app.get("/api/containers/{cid}/settings/provider-keys", status_code=200)
@@ -7367,7 +7407,9 @@ async def upload_attachment(tid: str, file: UploadFile = File(...)):
         tdir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         raise HTTPException(500, f"attachment store unavailable: {e}")
-    dest = tdir / stored
+    dest = _contained_path(tdir, stored)
+    if dest is None:  # unreachable: `stored` is uuid-hex + sanitized basename
+        raise HTTPException(400, "invalid attachment name")
     size = 0
     try:
         with open(dest, "wb") as out:
@@ -7450,7 +7492,9 @@ async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(.
         cdir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         raise HTTPException(500, f"attachment store unavailable: {e}")
-    dest = cdir / stored
+    dest = _contained_path(cdir, stored)
+    if dest is None:  # unreachable: `stored` is uuid-hex + sanitized basename
+        raise HTTPException(400, "invalid attachment name")
     size = 0
     try:
         with open(dest, "wb") as out:
