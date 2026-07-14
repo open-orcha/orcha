@@ -268,12 +268,12 @@ class _ExitedProc:
     def wait(self, timeout=None): return self.returncode
 
 
-def _task_worker(work, wt, branch, log_path, runtime, *, task_id, code=0, pending_ack_ts=42.0):
+def _task_worker(work, wt, branch, log_path, runtime, *, task_id, code=0, wake_ack_ts=42.0):
     """A live_workers entry shaped exactly like tick() builds for a DURABLE task-worktree wake."""
     return {"proc": _ExitedProc(returncode=code),
             "run_id": "RUN-1", "log_path": str(log_path),
             "worktree": wt, "branch": branch, "base_cwd": str(work),
-            "task_worktree": True, "started_ts": 1.0, "pending_ack_ts": pending_ack_ts,
+            "task_worktree": True, "started_ts": 1.0, "wake_ack_ts": wake_ack_ts,
             "agent_id": "agent-X",
             "hard_deadline": time.time() + 100, "last_size": 0, "last_progress_ts": time.time(),
             "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",

@@ -750,6 +750,13 @@ def build_resident_sidecar_drain_prompt(alias: Optional[str], inbox: int,
          claiming + working a task here would be a SECOND concurrent embodiment, violating the
          Kedar-locked §3 ONE-EMBODIMENT contract. So: drain notifications/requests only, then EXIT.
 
+    GH #58 (§5.2 safe-rows-only): the caller (service_residents) spawns this sidecar ONLY when the
+    queued backlog is pure FYI + taskless-actionable (active-conversations' drain_taskbound == 0); if
+    any TASK_BOUND / NEW_WORK / DIRECTIVE row is present it yields the lease to a protocol-bound
+    ephemeral instead. So this run, which carries NO injected task protocol, never needs to reason
+    about a specific task — it only clears protocol-less rows, and the caller acks exactly those ids
+    (drain_ackable_ids) via /events/ack-handled on its clean exit.
+
     Gate P1b: `prompt`/`task_message`/`task_assigned` events carry content with NO inbox surface —
     surfacing the text is the ONLY delivery path (same as build_wake_prompt / wake_scan). So the
     caller threads the bounded directed-message batch (active-conversations' `inbox_messages`) in
@@ -2966,12 +2973,19 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         # worker across the swap. Without these keys the reaper reads task_worktree=False on the
         # respawned worker's clean exit and _teardown_worktree FORCE-REMOVES the durable task
         # worktree (Andrew's data-loss scenario), skips the checkpoint/saved_ref/digest, and drops
-        # the withheld cursor (pending_ack_ts) so drained events redeliver. Carry them through.
+        # the bounded-release cursor (wake_ack_ts) — so a respawned worker that later hits
+        # FAILED_DRAIN_MAX would release on delivered_ts=None (no advance) and never stop
+        # re-waking. Carry them through (wake_task_id also keeps the GH#36 no-op-kill re-assert
+        # correctly DISABLED for a task worker across the swap).
         "task_worktree": bool(w.get("task_worktree")),
-        "pending_ack_ts": w.get("pending_ack_ts"),
+        "wake_ack_ts": w.get("wake_ack_ts"),
+        "wake_task_id": w.get("wake_task_id"),
         "started_ts": w.get("started_ts"),
         "agent_id": w.get("agent_id") or aid,
         "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
+        # GH #58: the original wake's handled-set rides the respawn so the FINAL clean exit acks it
+        # (the checkpoint-respawn finishes the old run but the wake's work is still in flight).
+        "handled_event_ids": ctx.get("handled_event_ids") or w.get("handled_event_ids") or [],
         "cap": cap, "respawns": n, "respawn_ctx": ctx, "lane": w.get("lane", "work"),
         "run_token": new_tok}   # GH #91/#90: track the fresh work token for teardown revoke
     # Non-releasing ack: keep the single-flight lease (the new worker continues under it) but
@@ -3012,10 +3026,14 @@ def _drain_task_failure(api_base: str, w: dict, aid: str, task_id, status: str,
         human = "worker exited without finishing — work saved and preserved; it will retry"
     _record_task_saved_ref(api_base, w, _saved_ref(w, None, diff), human)
     if n >= FAILED_DRAIN_MAX:
-        # bounded redelivery: stop the hot-loop — advance the cursor (stashed ts) and
-        # surface a plain-language failure so a human can look, then clear the counter.
+        # bounded redelivery: stop the hot-loop — advance the cursor and surface a plain-language
+        # failure so a human can look, then clear the counter. GH #58 (R5 blocker): the release
+        # cursor is wake_ack_ts (the ack_through_ts/max_event_ts batch high-water stashed at
+        # spawn), NOT the retired pending_ack_ts — that stash is always None now, which the
+        # server reads as "no advance", so releasing on it left the same events pending and
+        # restarted the identical failure cycle from zero.
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"delivered_ts": w.get("pending_ack_ts"),
+                   {"delivered_ts": w.get("wake_ack_ts"),
                     "kind": "worker_drain_failed_released", "release_lease": True,
                     "lane": w_lane})
         _record_task_saved_ref(
@@ -3106,8 +3124,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             if is_task_wt:
                 # GH#110 SUCCESS: checkpoint-commit the dirty tree onto the durable branch + KEEP
                 # the worktree (next same-task wake resumes from it), record the saved_ref + inject
-                # a continuity digest, clear the failed-drain counter, and advance the cursor with
-                # the ts stashed at spawn (the work actually drained now).
+                # a continuity digest, clear the failed-drain counter. GH #58: the cursor advances
+                # via the ack-handled seam below (contiguous floor), so delivered_ts stays None.
                 sha = _checkpoint_task_worktree(w.get("base_cwd"), w.get("worktree"),
                                                 w.get("branch"), task_id, w.get("run_id"))
                 failed_drains.pop((aid, task_id), None)
@@ -3118,12 +3136,19 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                     _synthesize_task_digest(api_base, aid, task_id, saved,
                                             w.get("started_ts"), human)
                 _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                           {"delivered_ts": w.get("pending_ack_ts"),
+                           {"delivered_ts": None,
                             "kind": "released", "release_lease": True, "lane": w_lane})
             else:
                 _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
                 _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
                            {"kind": "released", "release_lease": True, "lane": w_lane})
+            # GH #58: on a CLEAN exit (rc 0) record the per-event handled-set this run drained so it
+            # stops re-waking — the server then advances delivered_ts to the contiguous floor (events
+            # the run could NOT handle stay pending and re-surface). A non-zero exit, or a
+            # rate_limited/failed task drain (handled above via `continue`), marks nothing.
+            if proc.returncode == 0:
+                _post_json(f"{api_base}/api/agents/{aid}/events/ack-handled",
+                           {"event_ids": w.get("handled_event_ids") or []})
             _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
@@ -3224,8 +3249,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             exit_code = 0 if rstatus == "success" else proc.returncode
             _finish_run(api_base, w.get("run_id"), drain_status, exit_code, w.get("log_path"), diff)
             # GH#110: a COMPLETED task worker preserves its worktree exactly like the clean-exit
-            # success path (checkpoint-commit + keep + saved_ref + digest + advance the stashed
-            # cursor); only a non-task ephemeral worker is torn down here.
+            # success path (checkpoint-commit + keep + saved_ref + digest; GH #58: the cursor
+            # advances via ack-handled below); only a non-task ephemeral worker is torn down here.
             if bool(w.get("task_worktree")):
                 task_id = (w.get("respawn_ctx") or {}).get("task_id")
                 sha = _checkpoint_task_worktree(w.get("base_cwd"), w.get("worktree"),
@@ -3238,7 +3263,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                     _synthesize_task_digest(api_base, aid, task_id, saved,
                                             w.get("started_ts"), human)
                 _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                           {"delivered_ts": w.get("pending_ack_ts"),
+                           {"delivered_ts": None,
                             "kind": "worker_completed_reaped", "release_lease": True,
                             "lane": w_lane})
             else:
@@ -3246,6 +3271,11 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                 _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
                            {"kind": "worker_completed_reaped", "release_lease": True,
                             "lane": w_lane})
+            # GH #58: same completion seam as the clean-poll exit above — a successful drain acks its
+            # handled-set; a non-success (rstatus != success) marks nothing so the events re-surface.
+            if exit_code == 0:
+                _post_json(f"{api_base}/api/agents/{aid}/events/ack-handled",
+                           {"event_ids": w.get("handled_event_ids") or []})
             _retire_headless(api_base, live_workers, aid)   # GH #91/#90: revoke token, then pop
             if not quiet:
                 print(f"[notifier] worker for {aid} (pid {proc.pid}) completed but lingered "
@@ -3773,11 +3803,19 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # judgment + reasoning continuity, not as a generic Claude.
             # GH #56 (Point 3 / FLAG 2a part d): pass the wake's originating-task hint so the injected
             # protocol is that task's (the link), not a guess at the agent's one in_progress task.
+            # GH #58 (R2 fix): the task THIS run is bound to — persona/protocol, run attribution, and
+            # the drain all key off ONE value. Prefer the server's context_task_id (the task /orcha-next
+            # will claim — auto_start[0] — else the directed wake_task_id); recompute that same formula
+            # locally only for version skew where an older server didn't send it. wake_task_id ALONE
+            # was the bug: it can be a DIFFERENT in_progress task A while the run claims ready task B,
+            # booting B's worker under A's protocol and attributing the run to A.
+            auto = cand.get("auto_start_task_ids") or []
+            run_task_id = cand.get("context_task_id") or (auto[0] if auto else cand.get("wake_task_id"))
             if dry_run:
                 persona = None
             else:
                 _persona_result = _build_persona(
-                    api_base, cand["agent_id"], task_id=cand.get("wake_task_id"),
+                    api_base, cand["agent_id"], task_id=run_task_id,
                     self_wake={"injected": cand.get("self_wake_injected"),
                                "task_id": cand.get("self_wake_task_id")},
                     return_resume_rendered=True)
@@ -3802,7 +3840,6 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # that might hide one) gets isolated (ISS-8.1-b). Pure single-request wakes still
             # skip to save the ~200-500ms + disk. Only the daemon loop (live_workers present)
             # provisions — it alone can reap + tear down; --once has no reaper.
-            auto = cand.get("auto_start_task_ids") or []
             # request_created is published for BOTH info AND task requests (the payload's
             # `type` distinguishes them, but wake-scan only exposes the event NAME) — and a
             # task-request, once accepted, spawns an in_progress task + code work. So it is
@@ -3858,7 +3895,9 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                 # and the run was invisible in the thread it was answering.
                 run = _post_json(f"{api_base}/api/agents/{cand['agent_id']}/runs",
                                  {"wake_kind": "ephemeral", "wake_event": event,
-                                  "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                  # GH #58 (R2): attribute the run to the SAME context task the persona
+                                  # + drain keyed off (run_task_id).
+                                  "task_id": run_task_id,
                                   "log_path": str(log_path) if log_path else None,
                                   "pid": getattr(proc, "pid", None),
                                   "runtime": cand.get("model_runtime"),
@@ -3882,11 +3921,11 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     "run_id": run_id, "log_path": log_path,
                     "worktree": worktree, "branch": branch, "base_cwd": hc,
                     # GH#110: a DURABLE task worktree is preserved (checkpoint-committed + kept) on
-                    # a clean exit instead of torn down; started_ts guards the digest-clobber check;
-                    # pending_ack_ts is the cursor advance withheld at spawn, emitted only on a
-                    # SUCCESSFUL drain (set in the ack block below).
+                    # a clean exit instead of torn down; started_ts guards the digest-clobber check.
+                    # GH #58 (R5): the pending_ack_ts stash is RETIRED — a successful drain
+                    # advances via /events/ack-handled, and the FAILED_DRAIN_MAX backstop
+                    # force-advances to wake_ack_ts (below), its bounded-release cursor.
                     "task_worktree": task_worktree, "started_ts": time.time(),
-                    "pending_ack_ts": None,
                     "agent_id": cand["agent_id"],
                     # ISS-39: per-worker cursor for streaming stream-json lines into the DB
                     "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
@@ -3896,6 +3935,8 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     # GH#36: the trigger this boot consumed — so a NO-OP stall/cap kill (no task
                     # attributed AND no uncommitted diff) can re-assert the cursor advance to this
                     # ts and never re-arm the SAME wake into another empty-inbox boot→stall→kill.
+                    # GH #58 (R5): wake_ack_ts is ALSO the bounded-release cursor
+                    # _drain_task_failure force-advances to when FAILED_DRAIN_MAX is hit.
                     "wake_event": event,
                     "wake_task_id": auto[0] if auto else cand.get("wake_task_id"),
                     "wake_ack_ts": (cand.get("ack_through_ts")
@@ -3903,15 +3944,26 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                                     else cand.get("max_event_ts")),
                     # [P2 #218] carry the resolved model: the replacement worker must come up
                     # on the agent's model, not claude's default (per-agent contract, #202)
+                    # GH #58: the per-event handled-set wake-scan computed for THIS run (FYI +
+                    # taskless + its context-task's task_bound rows). Posted to /events/ack-handled
+                    # only on a CLEAN exit (reap_workers) — a crash marks nothing, so the events
+                    # re-surface (no loss). Carried in respawn_ctx so a checkpoint-respawn keeps it.
+                    "handled_event_ids": cand.get("handled_event_ids") or [],
                     "respawn_ctx": {"prompt": prompt, "flags": cand.get("headless_flags"),
                                     "alias": cand.get("alias"),
                                     "model": cand.get("model"),
                                     "reasoning_effort": cand.get("reasoning_effort"),  # GH #51
                                     "model_runtime": cand.get("model_runtime"),
-                                    "task_id": auto[0] if auto else cand.get("wake_task_id"),
+                                    # GH #58 (R2 fix): run_task_id, not a re-derived auto[0]/wake_task_id
+                                    # — same one-value-everywhere fix as the persona build above.
+                                    "task_id": run_task_id,
                                     # GH#110: carry the task-worktree flag through a checkpoint-
                                     # respawn so the respawned worker is still preserved on exit.
                                     "task_worktree": task_worktree,
+                                    # GH #58: also carried in respawn_ctx (belt-and-suspenders with
+                                    # the top-level key above) since the checkpoint-respawn path
+                                    # reads ctx.get("handled_event_ids") first.
+                                    "handled_event_ids": cand.get("handled_event_ids") or [],
                                     "event": event},
                     # GH #91/#90: track the token so _retire_headless revokes it on teardown. Stored
                     # even when POST /runs came back falsy ("running unseen") — the worker still holds
@@ -3955,19 +4007,32 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # A3: ack only THROUGH the prompt batch we actually surfaced (ack_through_ts);
             # if wake-scan capped a large prompt backlog, the rest stay pending for the next
             # wake instead of being acked-away undelivered. Falls back to max_event_ts.
-            ack_ts = cand.get("ack_through_ts")
-            if ack_ts is None:
-                ack_ts = cand.get("max_event_ts")
-            delivered_ts = ack_ts if (sent and cand.get("pending_events")) else None
-            # GH#110: for a DURABLE task-worktree wake, WITHHOLD the cursor at spawn — a Codex 429
-            # (or any failed drain) must not advance the cursor past unhandled work. Stash the
-            # intended ts on the tracked worker; reap_workers emits it only on a SUCCESSFUL drain
-            # (or once FAILED_DRAIN_MAX is hit). Read the flag off the tracked worker so this is
-            # correct regardless of the local branch's scope.
-            tracked = live_workers.get(cand["agent_id"]) if live_workers is not None else None
-            if tracked and tracked.get("task_worktree") and delivered_ts is not None:
-                tracked["pending_ack_ts"] = ack_ts
-                delivered_ts = None
+            # GH #58: a reaped ephemeral worker (tracked in live_workers) acks its handled-set at
+            # COMPLETION via /events/ack-handled (contiguous-floor advance), NOT here at spawn — so a
+            # spawn-then-crash re-surfaces the events instead of high-watering past undrained ones.
+            # The single-flight lease suppresses any re-wake while it runs. This subsumes GH#110's
+            # task-worktree withhold: a task_worktree worker is provisioned only when live_workers is
+            # not None and gets added to live_workers on spawn (see above), so it was never a case
+            # distinct from ephemeral_reaped — the pending_ack_ts stash it used to set is retired
+            # (success advances via ack-handled; the FAILED_DRAIN_MAX backstop releases on
+            # wake_ack_ts).
+            ephemeral_reaped = (kind == "ephemeral" and sent and live_workers is not None
+                                and cand["agent_id"] in live_workers)
+            # GH #58 (review fix): the NON-reaped delivery paths (`--once` with no reaper, and tmux
+            # sends) used to BLANKET high-water delivered_ts to ack_through_ts (|| max_event_ts) at
+            # spawn — which skipped past rows wake_scan deliberately left UN-handled (a cross-task
+            # task_bound, a NEW_WORK/DIRECTIVE), the exact skipped-notification class this PR removes.
+            # Instead they now post the SAME per-event handled-set (FYI + taskless + context-task
+            # task_bound, bounded by ack_through_ts) to /events/ack-handled, which advances the cursor
+            # only to the contiguous floor: handled rows stop re-waking while an unhandled one
+            # re-surfaces next tick (acked at its own seam when the agent acts). Identical semantics to
+            # the reaper and the resident drain sidecar. delivered_ts stays None on every path; the
+            # wake-ack below still stamps cooldown/lease. An unreachable/failed send acks nothing.
+            non_reaped_drain = (sent and not ephemeral_reaped and cand.get("pending_events"))
+            if non_reaped_drain:
+                _post_json(f"{api_base}/api/agents/{cand['agent_id']}/events/ack-handled",
+                           {"event_ids": cand.get("handled_event_ids") or []})
+            delivered_ts = None
             # We claim a single-flight lease ONLY for an ephemeral spawn. If that spawn
             # then failed (no claude, bad cwd, Popen error), no worker exists — release
             # the lease we just won so the agent isn't suppressed for the whole TTL.
@@ -4424,7 +4489,8 @@ def _close_resident(api_base: str, r: dict, reason: str = "idle", teardown_workt
 
 
 def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Optional[list] = None,
-                         ack_ts=None, model: Optional[str] = None,
+                         ack_ts=None, ackable_ids: Optional[list] = None,
+                         model: Optional[str] = None,
                          reasoning_effort: Optional[str] = None,
                          dry_run: bool = False, quiet: bool = False) -> bool:
     """#247 B3 (§5.2 warm-zone): spawn a THROWAWAY one-shot drain worker for a warm resident's queued
@@ -4470,9 +4536,15 @@ def _spawn_drain_sidecar(api_base: str, r: dict, inbox: int, *, messages: Option
         # ts (release_lease=False) so the drained backlog stops re-surfacing as pending_inbox. Pinning
         # the spawn-time mark (not the next tick's) means events that arrive DURING the drain stay
         # pending and are drained next tick — never silently acked away.
+        # GH #58: stash the EXACT per-event ids this sidecar may mark handled — only the FYI +
+        # taskless-actionable rows active-conversations classified as safe for a protocol-less run
+        # (drain_ackable_ids). On confirmed-success the caller posts these to /events/ack-handled
+        # (per-event ack + contiguous-floor advance), replacing the old delivered_ts high-water park
+        # so a task-bound row that slipped in never gets acked away by the resident. ack_ts retained
+        # for log/back-compat only.
         r["sidecar"] = {"proc": proc, "log_path": log_path,
                         "hard_deadline": time.time() + HARD_CAP_MIN_SECS,
-                        "ack_ts": ack_ts}
+                        "ack_ts": ack_ts, "ackable_ids": list(ackable_ids or [])}
         if not quiet:
             print(f"[notifier] resident {r.get('alias')} idle with {inbox} queued inbox event(s) — "
                   f"spawned a throwaway drain sidecar (pid {proc.pid}) in its OWN session; warm "
@@ -4803,25 +4875,25 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                           f"(pid {getattr(sproc, 'pid', None)}) exceeded its hard cap — killed; warm "
                           f"resident + lease KEPT, cursor NOT advanced (#247 B3)")
             if done:
-                ack_ts = side.get("ack_ts")
-                # Gate P1a — SUCCESS only: a NATURAL exit with rc 0 means the drain ran to completion,
-                # so PARK the wake cursor (delivered_ts=ack_ts) with release_lease=False — the drained
-                # backlog stops re-surfacing as pending_inbox (no re-drain on the warm resident's real
-                # wake, no re-spawn after a notifier restart) while the warm lease is KEPT. A wedged-kill
-                # or a NON-ZERO exit means the backlog may be only partially drained → DO NOT advance the
-                # cursor; the un-acked events re-surface and the next tick spawns a fresh drain (Gate
-                # tooth 3: failure must never advance the cursor). release_lease stays False on every
-                # branch — never regress to the A2 yield/teardown model.
+                # GH #58 — SUCCESS only: a NATURAL exit with rc 0 means the drain ran to completion,
+                # so POST the per-event handled-set (the FYI/taskless ids captured at spawn) to
+                # /events/ack-handled — the server records the acks and advances delivered_ts to the
+                # contiguous floor, so the drained rows stop re-surfacing as pending_inbox while ANY
+                # row the run could not handle stays pending. A wedged-kill or a NON-ZERO exit posts
+                # nothing → the backlog re-surfaces for a fresh drain next tick (failure never advances
+                # the cursor). The lease is always KEPT (no wake-ack here) — never regress to the A2
+                # yield/teardown model. Replaces the old delivered_ts high-water park, which could ack
+                # past a task-bound row the resident must not clear.
                 success = natural and sproc.returncode == 0
+                ackable_ids = side.get("ackable_ids") or []
                 r["sidecar"] = None                       # finished/killed → no worker_run to finish
-                if success and ack_ts is not None:
-                    _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-                               {"delivered_ts": ack_ts, "kind": "resident_drain_sidecar",
-                                "event": "inbox_drain", "release_lease": False})
+                if success:
+                    _post_json(f"{api_base}/api/agents/{r['agent_id']}/events/ack-handled",
+                               {"event_ids": ackable_ids})
                     if not quiet:
                         print(f"[notifier] resident {r.get('alias')} drain sidecar finished — inbox "
-                              f"drained in its own session; cursor parked at {ack_ts} (lease KEPT), "
-                              f"warm conversation intact (#247 B3)")
+                              f"drained in its own session; {len(ackable_ids)} event(s) acked-handled "
+                              f"(lease KEPT), warm conversation intact (#247 B3 / GH #58)")
                 elif not quiet:
                     print(f"[notifier] resident {r.get('alias')} drain sidecar ended without a clean "
                           f"completion — cursor NOT advanced; the backlog re-surfaces for a fresh "
@@ -4854,6 +4926,14 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         if drainable is None:
             drainable = inbox
         inbox_wake_task_id = (cand or {}).get("inbox_wake_task_id")
+        # GH #58 (§5.2 safe-rows-only): active-conversations classifies the queued backlog. A resident
+        # carries NO injected task protocol, so it may only drain FYI + taskless-actionable rows
+        # (drain_ackable_ids). If ANY TASK_BOUND / NEW_WORK / DIRECTIVE row is present (drain_taskbound
+        # > 0) the sidecar must NOT run — those need a fresh ephemeral bound to that task; so YIELD the
+        # lease (the existing A2 idle-yield) and let tick()'s protocol-bound ephemeral drain the whole
+        # backlog (FYI rows ride along). A pure FYI/taskless backlog drains in the warm-zone sidecar.
+        drain_taskbound = (cand or {}).get("drain_taskbound", 0) or 0
+        drain_ackable_ids = (cand or {}).get("drain_ackable_ids") or []
         # ISS-78 anti-thrash backstop (carries the ISS-75/#188 guard forward): don't spawn ANOTHER drain
         # pass when the inbox high-water mark (inbox_ack_ts) hasn't advanced past the last attempt's AND
         # we attempted within the cooldown — a stuck/echo event the drain can't ack away would otherwise
@@ -4881,10 +4961,22 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                           f"for an in-progress task — leaving inbox for the work worker; warm "
                           f"conversation + lease KEPT (GH #131)")
                 continue
+            if drain_taskbound > 0:
+                # A task-bound / new-work / directive row needs a protocol-bound ephemeral, which the
+                # resident is not → YIELD the lease so the next tick()'s ephemeral (carrying that task's
+                # protocol) drains the whole backlog. Same teardown seam as the §8 fail-open below.
+                if not quiet:
+                    print(f"[notifier] resident {r.get('alias')} has {drain_taskbound} task-bound "
+                          f"inbox row(s) needing a protocol-bound run — yielding the lease for an "
+                          f"ephemeral drain instead of the warm-zone sidecar (#247 B3 §5.2 / GH #58)")
+                _close_resident(api_base, r, reason="inbox_drain_yield")
+                _retire_resident(api_base, live_residents, conv_id)
+                continue
             _RESIDENT_DRAIN_YIELD[conv_id] = (inbox_ack_ts, time.time())   # mark this drain attempt
             spawned = _spawn_drain_sidecar(api_base, r, inbox,
                                            messages=(cand or {}).get("inbox_messages"),
                                            ack_ts=inbox_ack_ts,
+                                           ackable_ids=drain_ackable_ids,
                                            model=(cand or {}).get("model"),
                                            reasoning_effort=(cand or {}).get("reasoning_effort"),
                                            dry_run=dry_run, quiet=quiet)

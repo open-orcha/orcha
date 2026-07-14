@@ -54,10 +54,12 @@ class _ExitedProc:
     def wait(self, timeout=None): return self.returncode
 
 
-def _task_worker(work, wt, branch, log_path, runtime, *, task_id, pending_ack_ts=42.0):
+def _task_worker(work, wt, branch, log_path, runtime, *, task_id, wake_ack_ts=42.0):
+    # GH #58 (R5): mirrors the spawn-path shape — no pending_ack_ts stash anymore; wake_ack_ts is
+    # the bounded-release cursor _drain_task_failure advances to at FAILED_DRAIN_MAX.
     return {"proc": _ExitedProc(), "run_id": "RUN-1", "log_path": str(log_path),
             "worktree": wt, "branch": branch, "base_cwd": str(work),
-            "task_worktree": True, "started_ts": 1.0, "pending_ack_ts": pending_ack_ts,
+            "task_worktree": True, "started_ts": 1.0, "wake_ack_ts": wake_ack_ts,
             "agent_id": "agent-X",
             "hard_deadline": time.time() + 100, "last_size": 0, "last_progress_ts": time.time(),
             "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
@@ -101,9 +103,11 @@ def test_claude_task_worker_preserved_on_clean_exit(tmp_path, monkeypatch):
     assert (pathlib.Path(wt) / "wip.py").read_text() == "half-done work\n"
     rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
     assert out.strip() == "1"                                         # checkpoint-committed
-    # a SUCCESSFUL drain advances the cursor with the stashed ts (work actually drained)
+    # GH #58: a SUCCESSFUL drain advances via the ack-handled seam (contiguous floor) — never a
+    # blanket delivered_ts high-water at the wake-ack
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
-    assert ack.get("delivered_ts") == 42.0
+    assert ack.get("delivered_ts") is None
+    assert any(u.endswith("/events/ack-handled") for u, _ in posts)
 
 
 # ---------- test 6a: Codex 429 clean-exit classified rate_limited, cursor withheld ----------
@@ -213,7 +217,7 @@ def test_failed_drain_bound_advances_cursor_after_N_and_clears_on_success(tmp_pa
     for i in range(notifier.FAILED_DRAIN_MAX):
         posts = one_wake(_rate_limit_log(tmp_path, f"rlx{i}.log"), monkeypatch)
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
-    assert ack.get("delivered_ts") == 42.0                          # cursor force-advanced at the bound
+    assert ack.get("delivered_ts") == 42.0                          # force-advanced to wake_ack_ts at the bound
     assert any("failed to finish" in (b.get("body") or "").lower()
                for u, b in posts if u.endswith("/messages"))        # human-visible failure line
     assert ("agent-X", "flaky") not in fd                           # counter cleared after release
@@ -221,12 +225,12 @@ def test_failed_drain_bound_advances_cursor_after_N_and_clears_on_success(tmp_pa
 
 # ---------- BLOCKER 1 (PR #121 review): checkpoint-respawn keeps task-worktree protection ----------
 
-def _respawn_worker(work, wt, branch, runtime, *, task_id, pending_ack_ts=42.0):
+def _respawn_worker(work, wt, branch, runtime, *, task_id, wake_ack_ts=42.0):
     """A tracked worker carrying the respawn_ctx + GH#110 continuity keys _checkpoint_and_respawn
     reads, mirroring the shape spawn_headless builds."""
     return {"proc": _ExitedProc(), "run_id": "RUN-A", "log_path": None,
             "base_cwd": str(work), "worktree": wt, "branch": branch,
-            "task_worktree": True, "pending_ack_ts": pending_ack_ts, "started_ts": 1.0,
+            "task_worktree": True, "wake_ack_ts": wake_ack_ts, "started_ts": 1.0,
             "agent_id": "agent-X", "cap": 1200, "respawns": 0,
             "respawn_ctx": {"prompt": "p", "flags": None, "alias": "Andrew", "model": None,
                             "model_runtime": runtime, "task_id": task_id,
@@ -234,8 +238,9 @@ def _respawn_worker(work, wt, branch, runtime, *, task_id, pending_ack_ts=42.0):
 
 
 def test_checkpoint_respawn_preserves_task_worktree_and_cursor(tmp_path, monkeypatch):
-    # Fails on OLD behavior: the rebuilt live_workers[aid] dropped task_worktree/pending_ack_ts, so
-    # the respawned worker's clean exit force-removed the durable worktree (Andrew's vanished APK).
+    # Fails on OLD behavior: the rebuilt live_workers[aid] dropped task_worktree/wake_ack_ts, so
+    # the respawned worker's clean exit force-removed the durable worktree (Andrew's vanished APK)
+    # and a later FAILED_DRAIN_MAX release had no cursor to advance to.
     work = _make_repo(tmp_path)
     wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "long-build")
     (pathlib.Path(wt) / "apk.txt").write_text("android build artifact\n")
@@ -253,7 +258,7 @@ def test_checkpoint_respawn_preserves_task_worktree_and_cursor(tmp_path, monkeyp
 
     rebuilt = live["agent-X"]                                        # the respawned worker
     assert rebuilt["task_worktree"] is True                         # STILL a task worker (carried through)
-    assert rebuilt["pending_ack_ts"] == 42.0                        # withheld cursor carried through
+    assert rebuilt["wake_ack_ts"] == 42.0                           # bounded-release cursor carried through
     assert rebuilt["started_ts"] == 1.0 and rebuilt["agent_id"] == "agent-X"
 
     posts2 = []
@@ -263,8 +268,10 @@ def test_checkpoint_respawn_preserves_task_worktree_and_cursor(tmp_path, monkeyp
     assert (pathlib.Path(wt) / "apk.txt").read_text() == "android build artifact\n"
     rc, out = notifier._run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=wt)
     assert out.strip() == "1"                                       # checkpoint-committed
+    # GH #58: success advances via ack-handled, never a blanket delivered_ts at the wake-ack
     ack = next(b for u, b in posts2 if u.endswith("/wake-ack"))
-    assert ack.get("delivered_ts") == 42.0                          # stashed cursor advanced on success
+    assert ack.get("delivered_ts") is None
+    assert any(u.endswith("/events/ack-handled") for u, _ in posts2)
 
 
 def test_checkpoint_respawn_spawn_failure_preserves_task_worktree(tmp_path, monkeypatch):
@@ -438,3 +445,89 @@ def test_codex_lingering_terminal_failure_preserved_and_cursor_withheld(tmp_path
     assert "delivered_ts" not in ack                                 # cursor withheld -> wake retries
     assert ack["kind"] == "worker_drain_failed"
     assert fd[("agent-X", "fail-task")] == 1                         # failed drain counted, not cleared
+
+
+# ---------- GH #58 R5 blocker: a REAL tick()-spawned worker still stops the failure hot-loop ----------
+
+@pytest.mark.asyncio
+async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
+        tmp_path, client, container, make_agent, make_task, db, monkeypatch):
+    """PR #167 R5 blocker: the spawn path retired the pending_ack_ts stash, so a worker produced by
+    the REAL tick() (not a hand-seeded live-worker dict) reached FAILED_DRAIN_MAX with no release
+    cursor — the bound-hit wake-ack posted delivered_ts=None ("no advance"), left the same events
+    pending, and the identical failure cycle restarted from zero instead of stopping.
+
+    Drives the real wake-scan + tick() to build the tracked worker, then reaps that worker (only
+    proc/log_path overridden to simulate each Codex-429 exit) through FAILED_DRAIN_MAX drains.
+
+    TEETH: drop wake_ack_ts from tick's live_workers entry (the old shape) and the bound-hit ack
+    has no real delivered_ts → the final asserts flip red."""
+    work = _make_repo(tmp_path)
+    andy = await make_agent("TickAndy")
+    poster = await make_agent("TickPoster")
+    task = await make_task("flaky tick task", "dod", assignee_alias="TickAndy")
+    tid = task["id"]
+    # Codex runtime so a 429 log classifies the drain rate_limited (the GH#110 failure path)
+    r = await client.post(f"/api/agents/{andy['agent_id']}/model", json={"model": "gpt-5.5"})
+    assert r.status_code == 200, r.text
+    # a teammate's task-thread note → a task_message event for TickAndy (a task-linked code wake)
+    db.execute("INSERT INTO agent_tasks (agent_id, task_id, assignment_status) "
+               "VALUES (%s, %s, 'working')", (poster["agent_id"], tid))
+    r = await client.post(f"/api/tasks/{tid}/messages",
+                          json={"author_agent_id": poster["agent_id"], "body": "please retry the build"})
+    assert r.status_code == 201, r.text
+
+    scan = (await client.get(f"/api/containers/{container['id']}/wake-scan",
+                             params={"cooldown": 0, "min_idle": 0})).json()
+
+    posts = []
+
+    def _get(url, **k):
+        return scan if "wake-scan" in url else {"digest": None}
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        if "wake-claim" in url:
+            return {"claimed": True}
+        if "reachability" in url:
+            return {"headless_cwd": str(work)}   # spawnable in the throwaway repo THIS tick
+        return {}
+
+    monkeypatch.setattr(notifier, "_get_json", _get)
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_triage_wake", lambda *a, **k: {"wake": True, "reason": "test"})
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "codex exec", _ExitedProc(pid=777)))
+
+    live: dict = {}
+    notifier.tick("http://x", container["id"], dry_run=False, cooldown=0, min_idle=0,
+                  quiet=True, live_workers=live, base_cwd=str(work))
+
+    spawned = live.get(andy["agent_id"])
+    assert spawned is not None, "tick must track TickAndy's ephemeral task worker"
+    assert spawned["task_worktree"] is True                        # durable per-(agent+task) worktree
+    cursor = spawned.get("wake_ack_ts")
+    assert cursor is not None                                      # the bounded-release cursor EXISTS
+
+    # now drive THAT worker shape through FAILED_DRAIN_MAX consecutive Codex-429 drains
+    fd, hold = {}, {}
+    ack = None
+    for i in range(notifier.FAILED_DRAIN_MAX):
+        w = dict(spawned)                                          # each wake re-spawns the same shape
+        w["proc"] = _ExitedProc()
+        w["log_path"] = str(_rate_limit_log(tmp_path, f"tick-rl{i}.log"))
+        round_posts = []
+        monkeypatch.setattr(notifier, "_post_json",
+                            lambda url, body, **k: round_posts.append((url, body)) or {})
+        notifier.reap_workers("http://x", {andy["agent_id"]: w}, quiet=True,
+                              failed_drains=fd, agent_hold_until=hold)
+        ack = next(b for u, b in round_posts if u.endswith("/wake-ack"))
+        if i < notifier.FAILED_DRAIN_MAX - 1:
+            assert "delivered_ts" not in ack                       # withheld → retry next wake
+
+    assert ack["kind"] == "worker_drain_failed_released"
+    assert ack.get("delivered_ts") == cursor                       # released on the REAL stashed cursor
+    assert ack.get("delivered_ts") is not None                     # ...not a None no-advance
+    assert (andy["agent_id"], tid) not in fd                       # counter cleared after release
