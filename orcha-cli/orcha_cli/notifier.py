@@ -2973,9 +2973,13 @@ def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict
         # worker across the swap. Without these keys the reaper reads task_worktree=False on the
         # respawned worker's clean exit and _teardown_worktree FORCE-REMOVES the durable task
         # worktree (Andrew's data-loss scenario), skips the checkpoint/saved_ref/digest, and drops
-        # the withheld cursor (pending_ack_ts) so drained events redeliver. Carry them through.
+        # the bounded-release cursor (wake_ack_ts) — so a respawned worker that later hits
+        # FAILED_DRAIN_MAX would release on delivered_ts=None (no advance) and never stop
+        # re-waking. Carry them through (wake_task_id also keeps the GH#36 no-op-kill re-assert
+        # correctly DISABLED for a task worker across the swap).
         "task_worktree": bool(w.get("task_worktree")),
-        "pending_ack_ts": w.get("pending_ack_ts"),
+        "wake_ack_ts": w.get("wake_ack_ts"),
+        "wake_task_id": w.get("wake_task_id"),
         "started_ts": w.get("started_ts"),
         "agent_id": w.get("agent_id") or aid,
         "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
@@ -3022,10 +3026,14 @@ def _drain_task_failure(api_base: str, w: dict, aid: str, task_id, status: str,
         human = "worker exited without finishing — work saved and preserved; it will retry"
     _record_task_saved_ref(api_base, w, _saved_ref(w, None, diff), human)
     if n >= FAILED_DRAIN_MAX:
-        # bounded redelivery: stop the hot-loop — advance the cursor (stashed ts) and
-        # surface a plain-language failure so a human can look, then clear the counter.
+        # bounded redelivery: stop the hot-loop — advance the cursor and surface a plain-language
+        # failure so a human can look, then clear the counter. GH #58 (R5 blocker): the release
+        # cursor is wake_ack_ts (the ack_through_ts/max_event_ts batch high-water stashed at
+        # spawn), NOT the retired pending_ack_ts — that stash is always None now, which the
+        # server reads as "no advance", so releasing on it left the same events pending and
+        # restarted the identical failure cycle from zero.
         _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"delivered_ts": w.get("pending_ack_ts"),
+                   {"delivered_ts": w.get("wake_ack_ts"),
                     "kind": "worker_drain_failed_released", "release_lease": True,
                     "lane": w_lane})
         _record_task_saved_ref(
@@ -3116,8 +3124,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             if is_task_wt:
                 # GH#110 SUCCESS: checkpoint-commit the dirty tree onto the durable branch + KEEP
                 # the worktree (next same-task wake resumes from it), record the saved_ref + inject
-                # a continuity digest, clear the failed-drain counter, and advance the cursor with
-                # the ts stashed at spawn (the work actually drained now).
+                # a continuity digest, clear the failed-drain counter. GH #58: the cursor advances
+                # via the ack-handled seam below (contiguous floor), so delivered_ts stays None.
                 sha = _checkpoint_task_worktree(w.get("base_cwd"), w.get("worktree"),
                                                 w.get("branch"), task_id, w.get("run_id"))
                 failed_drains.pop((aid, task_id), None)
@@ -3128,7 +3136,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                     _synthesize_task_digest(api_base, aid, task_id, saved,
                                             w.get("started_ts"), human)
                 _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                           {"delivered_ts": w.get("pending_ack_ts"),
+                           {"delivered_ts": None,
                             "kind": "released", "release_lease": True, "lane": w_lane})
             else:
                 _teardown_worktree(w.get("base_cwd"), w.get("worktree"), w.get("branch"))
@@ -3241,8 +3249,8 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
             exit_code = 0 if rstatus == "success" else proc.returncode
             _finish_run(api_base, w.get("run_id"), drain_status, exit_code, w.get("log_path"), diff)
             # GH#110: a COMPLETED task worker preserves its worktree exactly like the clean-exit
-            # success path (checkpoint-commit + keep + saved_ref + digest + advance the stashed
-            # cursor); only a non-task ephemeral worker is torn down here.
+            # success path (checkpoint-commit + keep + saved_ref + digest; GH #58: the cursor
+            # advances via ack-handled below); only a non-task ephemeral worker is torn down here.
             if bool(w.get("task_worktree")):
                 task_id = (w.get("respawn_ctx") or {}).get("task_id")
                 sha = _checkpoint_task_worktree(w.get("base_cwd"), w.get("worktree"),
@@ -3255,7 +3263,7 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
                     _synthesize_task_digest(api_base, aid, task_id, saved,
                                             w.get("started_ts"), human)
                 _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                           {"delivered_ts": w.get("pending_ack_ts"),
+                           {"delivered_ts": None,
                             "kind": "worker_completed_reaped", "release_lease": True,
                             "lane": w_lane})
             else:
@@ -3913,11 +3921,11 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     "run_id": run_id, "log_path": log_path,
                     "worktree": worktree, "branch": branch, "base_cwd": hc,
                     # GH#110: a DURABLE task worktree is preserved (checkpoint-committed + kept) on
-                    # a clean exit instead of torn down; started_ts guards the digest-clobber check;
-                    # pending_ack_ts is the cursor advance withheld at spawn, emitted only on a
-                    # SUCCESSFUL drain (set in the ack block below).
+                    # a clean exit instead of torn down; started_ts guards the digest-clobber check.
+                    # GH #58 (R5): the pending_ack_ts stash is RETIRED — a successful drain
+                    # advances via /events/ack-handled, and the FAILED_DRAIN_MAX backstop
+                    # force-advances to wake_ack_ts (below), its bounded-release cursor.
                     "task_worktree": task_worktree, "started_ts": time.time(),
-                    "pending_ack_ts": None,
                     "agent_id": cand["agent_id"],
                     # ISS-39: per-worker cursor for streaming stream-json lines into the DB
                     "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
@@ -3927,6 +3935,8 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
                     # GH#36: the trigger this boot consumed — so a NO-OP stall/cap kill (no task
                     # attributed AND no uncommitted diff) can re-assert the cursor advance to this
                     # ts and never re-arm the SAME wake into another empty-inbox boot→stall→kill.
+                    # GH #58 (R5): wake_ack_ts is ALSO the bounded-release cursor
+                    # _drain_task_failure force-advances to when FAILED_DRAIN_MAX is hit.
                     "wake_event": event,
                     "wake_task_id": auto[0] if auto else cand.get("wake_task_id"),
                     "wake_ack_ts": (cand.get("ack_through_ts")
@@ -4003,9 +4013,9 @@ def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
             # The single-flight lease suppresses any re-wake while it runs. This subsumes GH#110's
             # task-worktree withhold: a task_worktree worker is provisioned only when live_workers is
             # not None and gets added to live_workers on spawn (see above), so it was never a case
-            # distinct from ephemeral_reaped — the tracked pending_ack_ts stash this used to set (and
-            # reap_workers' delivered_ts emission on success) is now always a no-op None, which the
-            # server treats as "no advance" and is superseded by ack-handled.
+            # distinct from ephemeral_reaped — the pending_ack_ts stash it used to set is retired
+            # (success advances via ack-handled; the FAILED_DRAIN_MAX backstop releases on
+            # wake_ack_ts).
             ephemeral_reaped = (kind == "ephemeral" and sent and live_workers is not None
                                 and cand["agent_id"] in live_workers)
             # GH #58 (review fix): the NON-reaped delivery paths (`--once` with no reaper, and tmux
