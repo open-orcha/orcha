@@ -10,6 +10,17 @@ missing.
 
 ## [Unreleased]
 
+### Added
+- The wake notifier now starts itself — no more hand-running `orcha notifier
+  --ensure` after a reboot or after restarting a stopped stack. On macOS a
+  per-project launchd LaunchAgent brings it up at login and restarts it within a
+  minute if it dies (removed again by `orcha notifier --stop` / `orcha down`;
+  opt out with `ORCHA_NO_AUTOSTART=1`), and `orcha up --project <name>` now
+  ensures the notifier and terminal bridge in the project's checkout just like
+  plain `orcha up` (with `orcha down --project` stopping them symmetrically).
+  Linux keeps the runtime ensure paths; `docs/notifier-autostart.md` carries a
+  sample systemd user unit for reboot parity.
+
 ## [0.4.0] - 2026-07-04
 
 ### Added

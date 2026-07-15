@@ -25,6 +25,12 @@ import pytest
 import pytest_asyncio
 import httpx
 
+# The notifier's ensure/stop paths now manage a launchd LaunchAgent on macOS
+# (orcha_cli/autostart.py). Tests exercising ensure_daemon/stop_daemon must NEVER
+# touch the developer's real ~/Library/LaunchAgents or call launchctl — opt the
+# whole suite out; the autostart tests re-enable it against monkeypatched seams.
+os.environ.setdefault("ORCHA_NO_AUTOSTART", "1")
+
 # --- locate the shipped app + schema (templates live under orcha-cli/) ---
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PORTAL_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"

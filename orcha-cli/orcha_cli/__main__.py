@@ -856,6 +856,45 @@ def _project_exists(project_name: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def _project_root_for(project_name: str) -> Optional[pathlib.Path]:
+    """Host project root for a compose project, via its working_dir label.
+
+    `orcha up/down --project <name>` runs from anywhere, but the notifier daemon is
+    anchored to the project checkout (pidfile + orcha.json under <root>/.claude). The
+    compose containers carry `com.docker.compose.project.working_dir` — the directory
+    holding docker-compose.yml, i.e. `<root>/.orcha` — so the root is recoverable
+    without asking the user. Returns None when the label is missing (never-created
+    stack) or the recorded path no longer looks like an Orcha project."""
+    result = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={_full_project(project_name)}",
+         "--format", '{{.Label "com.docker.compose.project.working_dir"}}'],
+        capture_output=True, text=True, check=False,
+    )
+    for line in (result.stdout or "").splitlines():
+        wd = line.strip()
+        if not wd:
+            continue
+        for candidate in (pathlib.Path(wd).parent, pathlib.Path(wd)):
+            if (candidate / ".claude" / "orcha.json").exists():
+                return candidate
+    return None
+
+
+def _bring_up_host_daemons(root: pathlib.Path) -> None:
+    """Epic A: relaunching a workspace brings the wake daemon back up too — plus the
+    S3 §3b live-terminal bridge. Best-effort; shared by both `orcha up` paths."""
+    try:
+        ensure_daemon(root)
+    except Exception as e:
+        print(f"[orcha] warn: notifier daemon didn't start ({e}); start it with `orcha notifier --ensure`")
+    try:
+        from orcha_cli.terminal_bridge import ensure_bridge
+        ensure_bridge(root)
+    except Exception as e:
+        print(f"[orcha] warn: terminal bridge didn't start ({e}); start it with `orcha terminal-bridge --ensure`")
+
+
 def cmd_up(args: argparse.Namespace) -> None:
     if args.project:
         if not _project_exists(args.project):
@@ -864,6 +903,16 @@ def cmd_up(args: argparse.Namespace) -> None:
                 f"Run `orcha ls` to see available projects, or `orcha init` in a fresh dir."
             )
         _by_project(args.project, "up", "-d")
+        # The --project path used to return here WITHOUT the daemons — restarting a
+        # stopped stack from elsewhere left wakes dead until someone hand-ran
+        # `orcha notifier --ensure` in the checkout. Recover the checkout root from
+        # the compose working_dir label and bring the daemons up there too.
+        root = _project_root_for(args.project)
+        if root:
+            _bring_up_host_daemons(root)
+        else:
+            print("[orcha] warn: couldn't locate this project's checkout — notifier not started; "
+                  "run `orcha notifier --ensure` in the project directory")
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"
     if not (orcha_dir / "docker-compose.yml").exists():
@@ -876,23 +925,13 @@ def cmd_up(args: argparse.Namespace) -> None:
     prefs_path = _install_project_preferences(pathlib.Path.cwd())
     if prefs_path:
         print(f"[orcha] backfilled {prefs_path} (#298 loosely-hardened project rules)")
-    # Epic A: relaunching the workspace brings the wake daemon back up too.
-    try:
-        ensure_daemon(pathlib.Path.cwd())
-    except Exception as e:
-        print(f"[orcha] warn: notifier daemon didn't start ({e}); start it with `orcha notifier --ensure`")
-    try:    # S3 §3b: and the host-side live-terminal bridge
-        from orcha_cli.terminal_bridge import ensure_bridge
-        ensure_bridge(pathlib.Path.cwd())
-    except Exception as e:
-        print(f"[orcha] warn: terminal bridge didn't start ({e}); start it with `orcha terminal-bridge --ensure`")
+    _bring_up_host_daemons(pathlib.Path.cwd())
 
 
 def cmd_down(args: argparse.Namespace) -> None:
     extra = ["-v"] if args.volumes else []
     # Epic A: the wake daemon dies with the stack — otherwise a daemon would keep
-    # polling a DB that's going away (and, with -v, a wiped one). Best-effort, local
-    # cwd only (a --project down from elsewhere can't locate that project's pidfile).
+    # polling a DB that's going away (and, with -v, a wiped one). Best-effort.
     try:
         stop_daemon(pathlib.Path.cwd())
     except Exception:
@@ -909,6 +948,21 @@ def cmd_down(args: argparse.Namespace) -> None:
                 f"error: no docker compose project named '{_full_project(args.project)}' found. "
                 f"Run `orcha ls` to see available projects."
             )
+        # A --project down runs from anywhere; the cwd stop above missed that project's
+        # daemon (and would leave its autostart watchdog resurrecting a daemon that
+        # polls a stack that's now gone). Stop it via the checkout recovered from the
+        # compose working_dir label — same recovery `orcha up --project` uses.
+        root = _project_root_for(args.project)
+        if root and root != pathlib.Path.cwd():
+            try:
+                stop_daemon(root)
+            except Exception:
+                pass
+            try:
+                from orcha_cli.terminal_bridge import stop_bridge
+                stop_bridge(root)
+            except Exception:
+                pass
         _by_project(args.project, "down", *extra)
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"

@@ -41,6 +41,11 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+# Login-persistent autostart (launchd LaunchAgent on macOS). Imported as a module so tests
+# can monkeypatch `autostart.install_autostart` / `autostart.uninstall_autostart` through
+# the single reference the daemon code uses.
+from orcha_cli import autostart
+
 # E3 V1 history-injection (Vault's PR #120): a PURE formatter for the cold-boot conversation
 # prefix, in its own module (zero merge surface). OPTIONAL — bound to None until #120 lands in
 # main, so this branch is self-consistent and doesn't hard-depend on merge order; the history
@@ -5611,7 +5616,7 @@ def _terminate_and_wait(pid: int, cid: Optional[str], grace: float = 8.0) -> Non
         time.sleep(0.25)
 
 
-def stop_daemon(cwd: pathlib.Path, quiet: bool = False) -> bool:
+def stop_daemon(cwd: pathlib.Path, quiet: bool = False, keep_autostart: bool = False) -> bool:
     """Stop the daemon serving this project's CONTAINER (SIGTERM via the PID files). Idempotent.
 
     Called by `orcha down` so the daemon dies with the stack, and by `ensure_daemon(
@@ -5622,11 +5627,17 @@ def stop_daemon(cwd: pathlib.Path, quiet: bool = False) -> bool:
     the container-global claim, not this cwd's pidfile. `orcha down` from here must stop
     that one too: left alive it polls a stack that is going away, and after `down -v &&
     up` its still-live claim makes `--ensure` believe the container is already serviced.
+
+    An explicit stop also removes the login-autostart LaunchAgent — otherwise its 60s
+    watchdog would resurrect the daemon right after `orcha notifier --stop`/`orcha down`.
+    `keep_autostart=True` is for the restart path, which re-installs it immediately.
     """
     import signal
     pid = daemon_running(cwd)
     pidf = _pid_path(cwd)
     cid = _container_id_for(cwd)
+    if not keep_autostart:
+        autostart.uninstall_autostart(cid, quiet=quiet)
     if not pid:
         if pidf.exists():
             try:
@@ -5679,6 +5690,9 @@ def stop_daemon_for_container(container_id: str, quiet: bool = False) -> bool:
     import signal
     if not container_id:
         return False
+    # the old container's login autostart dies with it — a watchdog for a 404'd
+    # container would respawn a daemon that immediately self-refuses, forever
+    autostart.uninstall_autostart(container_id, quiet=quiet)
     holder = daemon_running_for_container(container_id)  # identity-vetted (P1 #1) + clears stale claim
     try:
         _global_pid_path(container_id).unlink()      # clear live claim or stale debris
@@ -5714,12 +5728,14 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
     if restart:
         # stop_daemon is container-global [P2 #218]: it stops a same-cwd daemon AND one
         # started from another worktree (via the claim file), so a restart always gets a
-        # genuinely fresh daemon for this container.
-        stop_daemon(cwd, quiet=True)
+        # genuinely fresh daemon for this container. keep_autostart: a restart must not
+        # even transiently drop the login persistence we're about to re-install.
+        stop_daemon(cwd, quiet=True, keep_autostart=True)
     pid = daemon_running(cwd)
     if pid:
         if not quiet:
             print(f"[notifier] already running (pid {pid})")
+        autostart.install_autostart(cwd, cid, quiet=quiet)
         return True
     # [P2 #224 review] The 404 refusal must hold on THIS managed path too, BEFORE any
     # claim/pidfile is written — otherwise --ensure returns success, leaves a pidfile +
@@ -5752,6 +5768,7 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
                     print(f"[notifier] already running for this container (pid {holder[0]}{frm})")
                 else:
                     print("[notifier] another --ensure is starting this container's daemon — yielding")
+            autostart.install_autostart(cwd, cid, quiet=quiet)
             return True
         # claim_won=False with holder=None: claim file unusable — per-cwd guard only
     exe = shutil.which("orcha")
@@ -5783,6 +5800,10 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
         # hand the claim to the child: replace our provisional claimant pid with the
         # daemon's, so liveness now tracks the daemon (not this short-lived parent)
         _write_global_pid(cid, proc.pid, cwd)
+    # Reboot persistence: a LaunchAgent watchdog re-runs this same ensure at login and
+    # every minute (macOS; no-op elsewhere / under ORCHA_NO_AUTOSTART). Installed on the
+    # success paths only — a refused/failed ensure must not persist itself.
+    autostart.install_autostart(cwd, cid, quiet=quiet)
     if not quiet:
         print(f"[notifier] started daemon (pid {proc.pid}); log: {log}")
     return True
