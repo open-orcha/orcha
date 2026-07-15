@@ -51,10 +51,11 @@ class FakeLaunchctl:
         return [c[0] for c in self.calls]
 
 
-def _make_project(root: pathlib.Path, cid: str = CID) -> pathlib.Path:
+def _make_project(root: pathlib.Path, cid: str = CID, name: str | None = None) -> pathlib.Path:
     (root / ".claude").mkdir(parents=True, exist_ok=True)
     (root / ".claude" / "orcha.json").write_text(
-        json.dumps({"current_container_id": cid, "api_base_url": "http://localhost:9/api"})
+        json.dumps({"current_container_id": cid, "api_base_url": "http://localhost:9/api",
+                    "project_name": name or root.name})
     )
     return root
 
@@ -277,6 +278,37 @@ def test_project_root_for_none_when_label_missing(monkeypatch):
     assert cli._project_root_for("proj") is None
 
 
+def test_project_root_for_rejects_reused_checkout(project, monkeypatch, tmp_path):
+    """Stale working_dir label: the path was deleted and reused for a DIFFERENT Orcha
+    project. Its orcha.json names another project, so recovery must refuse — returning
+    it would run the other project's compose file / stop its daemons."""
+    other = _make_project(tmp_path / "other-project")
+    (other / ".orcha").mkdir()
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: _label_stdout(other / ".orcha"))
+    assert cli._project_root_for("proj") is None
+
+
+def test_project_root_for_skips_stale_label_and_finds_match(project, monkeypatch, tmp_path):
+    """Two containers carry the label (one stale, pointing at a reused checkout;
+    one current). The mismatching candidate is skipped, not fatal."""
+    other = _make_project(tmp_path / "other-project")
+    (other / ".orcha").mkdir()
+    (project / ".orcha").mkdir()
+    stdout = f"{other / '.orcha'}\n{project / '.orcha'}\n"
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess([], 0, stdout=stdout, stderr=""))
+    assert cli._project_root_for("proj") == project
+
+
+def test_project_root_for_rejects_unreadable_config(project, monkeypatch):
+    (project / ".orcha").mkdir()
+    (project / ".claude" / "orcha.json").write_text("{not json")
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: _label_stdout(project / ".orcha"))
+    assert cli._project_root_for("proj") is None
+
+
 def _make_compose_file(root: pathlib.Path) -> pathlib.Path:
     (root / ".orcha").mkdir(parents=True, exist_ok=True)
     compose = root / ".orcha" / "docker-compose.yml"
@@ -341,6 +373,42 @@ def test_down_by_project_stops_only_target_daemons(project, monkeypatch):
     assert stops == [project]  # target only — never the cwd
     assert ("stop_bridge", project) in calls
     assert ("compose", "proj", ("down",)) in calls
+
+
+def test_up_by_project_refuses_before_compose_when_checkout_reused(monkeypatch, tmp_path):
+    """End-to-end through the real _project_root_for: the label resolves to a checkout
+    whose orcha.json names a DIFFERENT project ⇒ `up --project` must exit before
+    compose, not start the other project's services under this project's name."""
+    other = _make_project(tmp_path / "other-project")
+    _make_compose_file(other)
+    monkeypatch.setattr(cli, "_project_exists", lambda name: True)
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: _label_stdout(other / ".orcha"))
+    monkeypatch.setattr(cli, "_by_project",
+                        lambda name, *a: pytest.fail("must not run compose against a reused checkout"))
+    monkeypatch.setattr(cli, "ensure_daemon",
+                        lambda root: pytest.fail("must not ensure daemons for a reused checkout"))
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_up(argparse.Namespace(project="proj"))
+    assert "checkout" in str(exc.value)
+
+
+def test_down_by_project_leaves_reused_checkout_daemons_alone(monkeypatch, tmp_path, capsys):
+    """Same stale-label scenario on the way down: the other project's notifier/bridge
+    (and its LaunchAgent, via stop_daemon) must NOT be stopped; the compose stack
+    still goes down under its own project name."""
+    other = _make_project(tmp_path / "other-project")
+    _make_compose_file(other)
+    calls = []
+    monkeypatch.setattr(cli, "_project_exists", lambda name: True)
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: _label_stdout(other / ".orcha"))
+    monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
+    monkeypatch.setattr(cli, "stop_daemon",
+                        lambda root: pytest.fail("must not stop a different project's daemons"))
+    cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
+    assert ("compose", "proj", ("down",)) in calls
+    assert "was not stopped" in capsys.readouterr().out
 
 
 def test_down_by_project_warns_but_still_downs_when_root_unresolvable(monkeypatch, capsys):

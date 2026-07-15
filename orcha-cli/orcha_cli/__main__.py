@@ -864,7 +864,10 @@ def _project_root_for(project_name: str) -> Optional[pathlib.Path]:
     compose containers carry `com.docker.compose.project.working_dir` — the directory
     holding docker-compose.yml, i.e. `<root>/.orcha` — so the root is recoverable
     without asking the user. Returns None when the label is missing (never-created
-    stack) or the recorded path no longer looks like an Orcha project."""
+    stack) or the recorded path no longer belongs to THIS project: the label survives
+    the checkout being deleted and the path reused for a DIFFERENT Orcha project, and
+    following it blindly would run that other project's compose file / stop its
+    daemons — so the candidate's orcha.json must name the requested project."""
     result = subprocess.run(
         ["docker", "ps", "-a",
          "--filter", f"label=com.docker.compose.project={_full_project(project_name)}",
@@ -876,7 +879,14 @@ def _project_root_for(project_name: str) -> Optional[pathlib.Path]:
         if not wd:
             continue
         for candidate in (pathlib.Path(wd).parent, pathlib.Path(wd)):
-            if (candidate / ".claude" / "orcha.json").exists():
+            config_path = candidate / ".claude" / "orcha.json"
+            if not config_path.exists():
+                continue
+            try:
+                recorded = json.loads(config_path.read_text()).get("project_name")
+            except (OSError, ValueError):
+                continue
+            if recorded == project_name:
                 return candidate
     return None
 
