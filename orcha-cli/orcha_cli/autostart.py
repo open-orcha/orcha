@@ -22,7 +22,8 @@ resurrected by the watchdog 60s later.
 
 Linux: no launchd — install is a no-op. `orcha up` and the SessionStart hook still
 ensure the daemon at runtime; docs/notifier-autostart.md carries a sample systemd
-user unit for reboot parity. Opt out anywhere with ORCHA_NO_AUTOSTART=1.
+user unit for reboot parity. Opt out of installs with ORCHA_NO_AUTOSTART=1
+(uninstall ignores the opt-out so a pre-existing agent can always be removed).
 """
 from __future__ import annotations
 
@@ -71,12 +72,14 @@ def plist_path(container_id: str) -> pathlib.Path:
     return _launch_agents_dir() / f"{autostart_label(container_id)}.plist"
 
 
+def _launchd_available() -> bool:
+    return _platform() == "darwin" and _which("launchctl") is not None
+
+
 def autostart_supported() -> bool:
     if os.environ.get("ORCHA_NO_AUTOSTART"):
         return False
-    if _platform() != "darwin":
-        return False
-    return _which("launchctl") is not None
+    return _launchd_available()
 
 
 # ---------- plist construction ----------
@@ -188,9 +191,12 @@ def install_autostart(cwd: pathlib.Path, container_id: Optional[str], quiet: boo
 def uninstall_autostart(container_id: Optional[str], quiet: bool = True) -> bool:
     """Unload + remove the LaunchAgent so an explicit stop STAYS stopped.
 
-    Gated like install (darwin + launchctl + not opted out); returns True iff an
-    agent was actually unloaded or a plist removed."""
-    if not container_id or not autostart_supported():
+    Deliberately NOT gated on ORCHA_NO_AUTOSTART: the opt-out suppresses new
+    installs, but an agent installed before the env var was set must still be
+    cleaned up — otherwise the leftover watchdog resurrects the daemon anyway.
+    Only requires darwin + launchctl. Returns True iff an agent was actually
+    unloaded or a plist removed."""
+    if not container_id or not _launchd_available():
         return False
     try:
         out = _launchctl("bootout", f"{_gui_domain()}/{autostart_label(container_id)}")

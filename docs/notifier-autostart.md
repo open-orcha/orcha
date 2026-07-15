@@ -14,8 +14,10 @@ Two mechanisms close that gap. Nothing is required from the user.
 `orcha up` in the project directory has ensured the daemon for a while. Now
 `orcha up --project <name>` (run from anywhere) does too: the project checkout is
 recovered from the compose containers' `com.docker.compose.project.working_dir`
-label, and the notifier + terminal bridge are ensured there. Symmetrically,
-`orcha down --project <name>` stops that project's daemon and bridge.
+label, compose runs against **that checkout's** `.orcha/docker-compose.yml`
+(never whatever file is in the current directory), and the notifier + terminal
+bridge are ensured there. Symmetrically, `orcha down --project <name>` stops
+**only that project's** daemon and bridge — never the current directory's.
 
 ## 2. macOS: a launchd LaunchAgent watchdog (reboot persistence)
 
@@ -50,7 +52,10 @@ LaunchAgent:
 ### Opting out
 
 Set `ORCHA_NO_AUTOSTART=1` (in the environment of whatever runs `orcha up` /
-`--ensure`) to skip installing the agent. To remove an already-installed one:
+`--ensure`) to skip installing the agent. The opt-out only suppresses *installs*
+— removal ignores it, so an agent installed before the variable was set is still
+cleaned up by `orcha notifier --stop` / `orcha down` instead of silently
+resurrecting the daemon. To remove an already-installed one:
 
 ```bash
 orcha notifier --stop        # unloads + deletes the LaunchAgent, stops the daemon

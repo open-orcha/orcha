@@ -167,6 +167,16 @@ def test_uninstall_idempotent(mac):
     assert autostart.uninstall_autostart(CID) is False  # nothing installed
 
 
+def test_uninstall_ignores_optout_env(mac, project, monkeypatch):
+    """ORCHA_NO_AUTOSTART set AFTER an agent was installed must not strand it —
+    a leftover watchdog would resurrect the daemon despite the opt-out."""
+    autostart.install_autostart(project, CID)
+    monkeypatch.setenv("ORCHA_NO_AUTOSTART", "1")
+    assert autostart.uninstall_autostart(CID) is True
+    assert not autostart.plist_path(CID).exists()
+    assert f"io.openorcha.notifier.{CID}" not in mac.loaded
+
+
 # ---------- wiring: ensure_daemon / stop_daemon ----------
 
 @pytest.fixture
@@ -240,8 +250,18 @@ def test_project_root_for_none_when_label_missing(monkeypatch):
     assert cli._project_root_for("proj") is None
 
 
+def _make_compose_file(root: pathlib.Path) -> pathlib.Path:
+    (root / ".orcha").mkdir(parents=True, exist_ok=True)
+    compose = root / ".orcha" / "docker-compose.yml"
+    compose.write_text("services: {}\n")
+    return compose
+
+
 def test_up_by_project_brings_daemons_up_at_root(project, monkeypatch):
-    """The --project path used to return before ensure_daemon — the reported gap."""
+    """The --project path used to return before ensure_daemon — the reported gap.
+    Compose must run against the TARGET checkout's compose file (-f), never
+    whatever file happens to sit in the current directory."""
+    compose = _make_compose_file(project)
     calls = []
     monkeypatch.setattr(cli, "_project_exists", lambda name: True)
     monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
@@ -250,30 +270,73 @@ def test_up_by_project_brings_daemons_up_at_root(project, monkeypatch):
     import orcha_cli.terminal_bridge as tb
     monkeypatch.setattr(tb, "ensure_bridge", lambda root: calls.append(("bridge", root)))
     cli.cmd_up(argparse.Namespace(project="proj"))
-    assert ("compose", "proj", ("up", "-d")) in calls
+    assert ("compose", "proj", ("-f", str(compose), "up", "-d")) in calls
     assert ("ensure", project) in calls
     assert ("bridge", project) in calls
 
 
-def test_up_by_project_warns_when_root_unresolvable(monkeypatch, capsys):
+def test_up_by_project_exits_when_root_unresolvable(monkeypatch):
+    """No recoverable checkout ⇒ fail BEFORE compose — running `up` against the
+    current directory's compose file could start the wrong project's services."""
     monkeypatch.setattr(cli, "_project_exists", lambda name: True)
-    monkeypatch.setattr(cli, "_by_project", lambda name, *a: None)
+    monkeypatch.setattr(cli, "_by_project",
+                        lambda name, *a: pytest.fail("must not run compose without a resolved root"))
     monkeypatch.setattr(cli, "_project_root_for", lambda name: None)
     monkeypatch.setattr(cli, "ensure_daemon",
                         lambda root: pytest.fail("must not ensure without a resolved root"))
-    cli.cmd_up(argparse.Namespace(project="proj"))
-    assert "notifier not started" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_up(argparse.Namespace(project="proj"))
+    assert "checkout" in str(exc.value)
 
 
-def test_down_by_project_stops_daemon_at_root(project, monkeypatch):
+def test_up_by_project_exits_when_compose_file_missing(project, monkeypatch):
+    monkeypatch.setattr(cli, "_project_exists", lambda name: True)
+    monkeypatch.setattr(cli, "_by_project",
+                        lambda name, *a: pytest.fail("must not run compose without a compose file"))
+    monkeypatch.setattr(cli, "_project_root_for", lambda name: project)  # no .orcha/ inside
+    with pytest.raises(SystemExit):
+        cli.cmd_up(argparse.Namespace(project="proj"))
+
+
+def test_down_by_project_stops_only_target_daemons(project, monkeypatch):
+    """`down --project` must stop the TARGET's daemons and nothing else — stop_daemon
+    also removes the autostart watchdog, so stopping the current directory's daemon
+    here would disable another project's wakes while its stack is still up."""
     calls = []
+    stops = []
     monkeypatch.setattr(cli, "_project_exists", lambda name: True)
     monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
     monkeypatch.setattr(cli, "_project_root_for", lambda name: project)
-    monkeypatch.setattr(cli, "stop_daemon", lambda root: calls.append(("stop", root)))
+    monkeypatch.setattr(cli, "stop_daemon", lambda root: stops.append(root))
     import orcha_cli.terminal_bridge as tb
     monkeypatch.setattr(tb, "stop_bridge", lambda root: calls.append(("stop_bridge", root)))
     cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
-    assert ("stop", project) in calls
+    assert stops == [project]  # target only — never the cwd
     assert ("stop_bridge", project) in calls
     assert ("compose", "proj", ("down",)) in calls
+
+
+def test_down_by_project_warns_but_still_downs_when_root_unresolvable(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "_project_exists", lambda name: True)
+    monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
+    monkeypatch.setattr(cli, "_project_root_for", lambda name: None)
+    monkeypatch.setattr(cli, "stop_daemon",
+                        lambda root: pytest.fail("must not stop daemons without a resolved root"))
+    cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
+    assert ("compose", "proj", ("down",)) in calls
+    assert "was not stopped" in capsys.readouterr().out
+
+
+def test_down_local_stops_cwd_daemons(project, monkeypatch):
+    _make_compose_file(project)
+    monkeypatch.chdir(project)
+    calls = []
+    monkeypatch.setattr(cli, "_compose", lambda d, *a: calls.append(("compose", d, a)))
+    monkeypatch.setattr(cli, "stop_daemon", lambda root: calls.append(("stop", root)))
+    import orcha_cli.terminal_bridge as tb
+    monkeypatch.setattr(tb, "stop_bridge", lambda root: calls.append(("stop_bridge", root)))
+    cli.cmd_down(argparse.Namespace(project=None, volumes=False))
+    assert ("stop", project) in calls
+    assert ("stop_bridge", project) in calls
+    assert ("compose", project / ".orcha", ("down",)) in calls

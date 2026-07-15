@@ -31,6 +31,17 @@ import httpx
 # whole suite out; the autostart tests re-enable it against monkeypatched seams.
 os.environ.setdefault("ORCHA_NO_AUTOSTART", "1")
 
+
+@pytest.fixture(autouse=True)
+def _no_real_launchd(monkeypatch, tmp_path):
+    """The env opt-out above does NOT gate uninstall_autostart (an opt-out set after
+    install must still clean up an existing agent), so on a darwin dev machine a test
+    hitting a stop path could reach the real launchctl. Point the launchd seams at
+    inert fakes suite-wide; the autostart tests re-patch them with recorders."""
+    from orcha_cli import autostart
+    monkeypatch.setattr(autostart, "_launchctl", lambda *a: None)
+    monkeypatch.setattr(autostart, "_launch_agents_dir", lambda: tmp_path / "launch-agents-guard")
+
 # --- locate the shipped app + schema (templates live under orcha-cli/) ---
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PORTAL_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"
