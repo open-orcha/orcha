@@ -5752,6 +5752,11 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
                       f"daemon. This usually means a stale .claude/orcha.json (api_base_url/"
                       f"current_container_id from a previous stack). Fix the config or re-run "
                       f"`orcha connect <project>`.", file=sys.stderr)
+            # A definitive 404 must also remove the LaunchAgent watchdog: it re-runs this
+            # very ensure every _START_INTERVAL seconds, so leaving it installed turns a
+            # dead container into a forever-looping launchd job that can never succeed.
+            # Transient 'unreachable' never reaches here — the watchdog survives API bounces.
+            autostart.uninstall_autostart(cid, quiet=quiet)
             return False
     # container-global guard: the same container may already be serviced by a daemon
     # started from a DIFFERENT worktree — the per-cwd file above can't see it. Two
@@ -5947,6 +5952,10 @@ def cmd_notifier(args) -> None:
                               f"404) — self-terminating this orphaned daemon (issue #36). The "
                               f"container was likely replaced (orcha up / init) or "
                               f".claude/orcha.json points at a previous stack.", file=sys.stderr)
+                    # Take the LaunchAgent watchdog down with the daemon: on a definitive
+                    # 404 it would otherwise re-run `notifier --ensure` every minute forever
+                    # (ensure also 404-refuses, so nothing ever comes back up — pure churn).
+                    autostart.uninstall_autostart(cid, quiet=args.quiet)
                     break
             try:
                 # Release leases of workers that finished since the last tick, BEFORE

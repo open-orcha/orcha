@@ -208,6 +208,33 @@ def test_ensure_daemon_installs_autostart_on_spawn(project, record_autostart, mo
     assert record_autostart["install"] == [(project, CID)]
 
 
+def test_ensure_daemon_missing_container_uninstalls_autostart(project, record_autostart, monkeypatch):
+    """Definitive 404 refusal must tear the watchdog DOWN, not just decline to start:
+    the LaunchAgent re-runs this ensure every minute, so a leftover agent on a dead
+    container is a forever-looping launchd job that can never succeed."""
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "missing")
+    assert notifier.ensure_daemon(project, quiet=True) is False
+    assert record_autostart["uninstall"] == [CID]
+    assert record_autostart["install"] == []
+
+
+def test_ensure_daemon_unreachable_api_keeps_autostart(project, record_autostart, monkeypatch, tmp_path):
+    """The transient counterpart: an unreachable API (stack booting during `orcha up`)
+    must NOT remove the watchdog — only a definitive 404 does."""
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "unreachable")
+    monkeypatch.setattr(notifier, "_claim_container", lambda cid: (True, None))
+    monkeypatch.setattr(notifier, "_global_pid_path", lambda cid: tmp_path / f"claim-{cid}.pid")
+
+    class FakeProc:
+        pid = 7778
+    monkeypatch.setattr(notifier.subprocess, "Popen", lambda *a, **k: FakeProc())
+    assert notifier.ensure_daemon(project, quiet=True) is True
+    assert record_autostart["uninstall"] == []
+    assert record_autostart["install"] == [(project, CID)]
+
+
 def test_stop_daemon_removes_autostart(project, record_autostart, monkeypatch):
     monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
     monkeypatch.setattr(notifier, "daemon_running_for_container", lambda cid: None)
