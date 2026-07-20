@@ -78,3 +78,37 @@ async def test_pairing_endpoint_is_in_openapi(client):
     r = await client.get("/openapi.json")
     assert r.status_code == 200, r.text
     assert "/api/containers/{cid}/pairing" in r.json()["paths"]
+
+
+async def test_pairing_includes_remote_url_when_configured(client, container, make_agent, monkeypatch):
+    """ORCHA_REMOTE_URL (e.g. the host's Tailscale IP, auto-detected by `orcha up`)
+    rides the payload + QR as remoteBaseUrl so one scan configures the phone's
+    local↔remote failover. A bare host inherits the portal's scheme/port like the
+    LAN baseUrl does; absent env keeps the payload exactly as before."""
+    monkeypatch.setenv("ORCHA_PAIRING_HOST", "192.168.1.24")
+    human = await make_agent("Kedar", "operator", kind="human")
+    url = f"/api/containers/{container['id']}/pairing?human_agent_id={human['agent_id']}"
+
+    # bare host → inherits request scheme + port
+    monkeypatch.setenv("ORCHA_REMOTE_URL", "100.113.140.69")
+    r = await client.get(url, headers={"host": "localhost:8001"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["remoteBaseUrl"] == "http://100.113.140.69:8001"
+    assert json.loads(data["qrText"])["remoteBaseUrl"] == "http://100.113.140.69:8001"
+
+    # explicit port and MagicDNS-style names pass through
+    monkeypatch.setenv("ORCHA_REMOTE_URL", "my-mac.tailnet.ts.net:9999")
+    r = await client.get(url, headers={"host": "localhost:8001"})
+    assert r.json()["remoteBaseUrl"] == "http://my-mac.tailnet.ts.net:9999"
+
+    # local-only values are ignored (a misconfigured env can't poison the QR)
+    monkeypatch.setenv("ORCHA_REMOTE_URL", "localhost:8001")
+    r = await client.get(url, headers={"host": "localhost:8001"})
+    assert "remoteBaseUrl" not in r.json()
+    assert "remoteBaseUrl" not in json.loads(r.json()["qrText"])
+
+    # absent env → payload unchanged from the pre-remote contract
+    monkeypatch.delenv("ORCHA_REMOTE_URL", raising=False)
+    r = await client.get(url, headers={"host": "localhost:8001"})
+    assert "remoteBaseUrl" not in r.json()

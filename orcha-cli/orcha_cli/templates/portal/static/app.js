@@ -1177,6 +1177,7 @@ window.Orcha = (function () {
       <div class="pair-qr-wrap">
         <div class="pair-qr" aria-label="Orcha phone pairing QR code">${data.qrSvg || ""}</div>
         <div class="pair-url mono">${esc(data.baseUrl || "")}</div>
+        ${data.remoteBaseUrl ? `<div class="pair-url mono" title="Remote (Tailscale) address — the phone uses it automatically when it leaves this network">remote · ${esc(data.remoteBaseUrl)}</div>` : ""}
       </div>
       <div class="pair-meta">
         <div>
@@ -1188,7 +1189,7 @@ window.Orcha = (function () {
           <div class="pair-code mono">${esc(data.shortCode || "")}</div>
         </div>
         <div class="pill s-warn" id="pairCountdown">${icon("clock", "gl")}expires soon</div>
-        <div class="pair-foot">Your phone talks directly to this computer on your network. Nothing goes through the cloud.</div>
+        <div class="pair-foot">Your phone talks directly to this computer on your network. Nothing goes through the cloud.${data.remoteBaseUrl ? " Off this Wi-Fi, the phone switches to the remote (Tailscale) address automatically — still device-to-device, nothing exposed publicly." : ""}</div>
       </div>
     </div>`;
     startPairingCountdown(data, humanId || data.humanAgentId);

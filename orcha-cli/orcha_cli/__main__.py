@@ -37,6 +37,7 @@ PKG_TEMPLATES = PKG_ROOT / "templates"
 # out of the box; see _ensure_secret_key.
 _MASTER_KEY_ENV = "ORCHA_SECRET_KEY"
 _PAIRING_HOST_ENV = "ORCHA_PAIRING_HOST"
+_REMOTE_URL_ENV = "ORCHA_REMOTE_URL"
 
 
 # Pure-stdlib shared modules that the portal container imports top-level (`import <name>`) but
@@ -327,6 +328,34 @@ def _export_pairing_host() -> None:
         os.environ[_PAIRING_HOST_ENV] = host
 
 
+def _tailscale_ipv4() -> Optional[str]:
+    """The host's Tailscale IPv4, if the tailscale CLI is installed and up."""
+    for cli in ("/Applications/Tailscale.app/Contents/MacOS/Tailscale", "tailscale"):
+        try:
+            out = subprocess.run([cli, "ip", "-4"], capture_output=True, text=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if out.returncode != 0 or not out.stdout:
+            continue
+        ip = out.stdout.strip().splitlines()[0].strip()
+        if ip.startswith("100."):
+            return ip
+    return None
+
+
+def _export_remote_url() -> None:
+    """Expose an optional remote address so the pairing QR carries a second
+    candidate — the phone stores it and fails over automatically off Wi-Fi.
+    An already-set ORCHA_REMOTE_URL always wins (any address that routes to
+    this host works); otherwise auto-detect Tailscale. Absent both, pairing
+    stays local-only, exactly as before."""
+    if os.environ.get(_REMOTE_URL_ENV):
+        return
+    ip = _tailscale_ipv4()
+    if ip:
+        os.environ[_REMOTE_URL_ENV] = ip
+
+
 def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
     if "up" in args:
         # SSE: the portal bind-mounts the host wake-log dir (../.claude/.orcha-wakes). Create
@@ -349,6 +378,7 @@ def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: b
         # gets it on this up (init / up / upgrade all funnel through here).
         _ensure_secret_key(orcha_dir)
         _export_pairing_host()
+        _export_remote_url()
     cmd = ["docker", "compose", "-f", str(orcha_dir / "docker-compose.yml"), *args]
     return subprocess.run(cmd, check=check, capture_output=capture, text=capture)
 
@@ -841,6 +871,7 @@ def _by_project(project_name: str, *args: str) -> None:
     """Run `docker compose -p orcha-<name> <args...>` from anywhere."""
     if "up" in args:
         _export_pairing_host()
+        _export_remote_url()
     cmd = ["docker", "compose", "-p", _full_project(project_name), *args]
     subprocess.run(cmd, check=True)
 

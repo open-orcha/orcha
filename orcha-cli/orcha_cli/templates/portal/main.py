@@ -2512,6 +2512,35 @@ def _pairing_base_url(request: Request) -> tuple[Optional[str], Optional[dict]]:
     return f"{scheme}://{authority}", None
 
 
+def _pairing_remote_base_url(request: Request) -> Optional[str]:
+    """Optional second address for the pairing payload — typically the host's
+    Tailscale name/IP, auto-detected by `orcha up` into ORCHA_REMOTE_URL (an
+    already-set env value always wins; any address that routes to this host
+    works). Accepts a bare host, host:port, or a full URL; a bare host inherits
+    the portal's scheme/port the same way the LAN baseUrl does. Local-only
+    values are ignored so a misconfigured env can't produce a useless QR."""
+    raw = (os.environ.get("ORCHA_REMOTE_URL") or "").strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(raw)
+        host = parsed.hostname or ""
+        port = parsed.port
+        scheme = parsed.scheme or "http"
+    else:
+        scheme = request.url.scheme or "http"
+        host, _, port_s = raw.partition(":")
+        port = int(port_s) if port_s.isdigit() else None
+    if _is_local_pairing_host(host):
+        return None
+    port = port or request.url.port
+    default_port = (scheme == "http" and port in (None, 80)) or (scheme == "https" and port in (None, 443))
+    authority = host if default_port else f"{host}:{port}"
+    return f"{scheme}://{authority}"
+
+
 def _short_pairing_code() -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     raw = "".join(secrets.choice(alphabet) for _ in range(8))
@@ -2587,6 +2616,7 @@ def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[s
 
     expires = datetime.now(timezone.utc).timestamp() + PAIRING_TTL_SECONDS
     expires_at = datetime.fromtimestamp(expires, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    remote_url = _pairing_remote_base_url(request)
     payload = {
         "v": 1,
         "kind": "orcha-pair",
@@ -2600,10 +2630,16 @@ def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[s
         "expiresAt": expires_at,
         "tokenExchange": PAIRING_TOKEN_EXCHANGE_FOLLOWUP,
     }
-    qr_payload = {k: payload[k] for k in (
+    qr_keys = [
         "v", "kind", "baseUrl", "containerId", "containerName", "humanAgentId",
         "humanAgentAlias", "token", "shortCode", "expiresAt",
-    )}
+    ]
+    if remote_url:
+        # One scan configures both paths: the phone stores this as the container's
+        # remote address and fails over to it automatically off Wi-Fi.
+        payload["remoteBaseUrl"] = remote_url
+        qr_keys.append("remoteBaseUrl")
+    qr_payload = {k: payload[k] for k in qr_keys}
     qr_text, svg = _qr_svg(qr_payload)
     return {
         **payload,

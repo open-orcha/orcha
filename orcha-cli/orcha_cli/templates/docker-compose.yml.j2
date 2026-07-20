@@ -48,6 +48,9 @@ services:
       # Docker. The host CLI discovers it before compose up and passes it here; the pairing
       # endpoint refuses with a clear warning when this is unavailable.
       ORCHA_PAIRING_HOST: ${ORCHA_PAIRING_HOST:-}
+      # Optional remote (e.g. Tailscale) address for the pairing QR — auto-detected
+      # by the host CLI when tailscale is installed; empty = local-only pairing.
+      ORCHA_REMOTE_URL: ${ORCHA_REMOTE_URL:-}
     ports: ["{{ api_port }}:8000"]
     volumes:
       - ./migrations:/app/migrations:ro   # R1: portal reads migrations to apply pending ones (no wipe)
