@@ -891,11 +891,67 @@ def _project_root_for(project_name: str) -> Optional[pathlib.Path]:
     return None
 
 
+def _project_label_roots(project_name: str) -> list:
+    """Candidate checkout roots for a compose project, from its working_dir labels —
+    WITHOUT the orcha.json identity check `_project_root_for` applies. Used only to clean
+    up a project's notifier when the checkout is GONE or has been reused by a different
+    project (so `_project_root_for` returns None): the LaunchAgent still records the root
+    as its WorkingDirectory, so matching on that recovers the container id from the
+    watchdog even when orcha.json is unreadable or names another project."""
+    result = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={_full_project(project_name)}",
+         "--format", '{{.Label "com.docker.compose.project.working_dir"}}'],
+        capture_output=True, text=True, check=False,
+    )
+    roots = []
+    for line in (result.stdout or "").splitlines():
+        wd = line.strip()
+        if not wd:
+            continue
+        for candidate in (pathlib.Path(wd).parent, pathlib.Path(wd)):
+            if candidate not in roots:
+                roots.append(candidate)
+    return roots
+
+
+def _stop_orphaned_project_daemons(project_name: str) -> int:
+    """Stop the notifier daemon(s) + remove the LaunchAgent watchdog for a project whose
+    checkout is GONE — the compose working_dir label points at a path that no longer holds
+    an Orcha checkout. Recovers each container id from the LaunchAgent whose
+    WorkingDirectory matches that (now-empty) path.
+
+    Only acts on a label path with NO `.claude/orcha.json`, i.e. a definitively deleted
+    checkout. If the path was *reused* by a DIFFERENT project (its orcha.json names another
+    project), we deliberately do nothing: the LaunchAgents there belong to the new occupant
+    and stopping them by path would take down the wrong project's wakes. Returns the number
+    of container watchdogs cleaned up."""
+    from orcha_cli import autostart
+    from orcha_cli.notifier import stop_daemon_for_container
+    seen = set()
+    for root in _project_label_roots(project_name):
+        # A path that still holds any Orcha checkout is off-limits: if it were still THIS
+        # project's, `_project_root_for` would have resolved it; otherwise it belongs to
+        # whatever project reused the path. Either way, don't touch daemons anchored there.
+        if (root / ".claude" / "orcha.json").exists():
+            continue
+        for cid in autostart.container_ids_for_workdir(root):
+            if cid in seen:
+                continue
+            seen.add(cid)
+            # stop_daemon_for_container tombstones the container, stops any live daemon,
+            # and uninstalls its LaunchAgent — the full "explicit stop stays stopped" path.
+            stop_daemon_for_container(cid, quiet=False)
+    return len(seen)
+
+
 def _bring_up_host_daemons(root: pathlib.Path) -> None:
     """Epic A: relaunching a workspace brings the wake daemon back up too — plus the
     S3 §3b live-terminal bridge. Best-effort; shared by both `orcha up` paths."""
     try:
-        ensure_daemon(root)
+        # `orcha up` is an explicit bring-up: clear any prior explicit-stop tombstone so
+        # the daemon starts, even if the notifier had been deliberately stopped earlier.
+        ensure_daemon(root, clear_stop=True)
     except Exception as e:
         print(f"[orcha] warn: notifier daemon didn't start ({e}); start it with `orcha notifier --ensure`")
     try:
@@ -976,8 +1032,17 @@ def cmd_down(args: argparse.Namespace) -> None:
         if root:
             _stop_host_daemons(root)
         else:
-            print("[orcha] warn: couldn't locate this project's checkout — its notifier "
-                  "was not stopped; run `orcha notifier --stop` in the project directory")
+            # Checkout missing or moved (label path deleted, or reused by a DIFFERENT
+            # project so orcha.json no longer matches). We can still stop this project's
+            # notifier and remove its watchdog by recovering the container id from the
+            # LaunchAgent whose WorkingDirectory matches the compose working_dir label —
+            # otherwise the daemon keeps polling a going-away stack and the 60s watchdog
+            # resurrects it forever.
+            cleaned = _stop_orphaned_project_daemons(args.project)
+            if not cleaned:
+                print("[orcha] warn: couldn't locate this project's checkout or a matching "
+                      "notifier watchdog — if a daemon lingers, run `orcha notifier --stop` "
+                      "in the project directory")
         _by_project(args.project, "down", *extra)
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"

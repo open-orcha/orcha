@@ -38,9 +38,14 @@ def _no_real_launchd(monkeypatch, tmp_path):
     install must still clean up an existing agent), so on a darwin dev machine a test
     hitting a stop path could reach the real launchctl. Point the launchd seams at
     inert fakes suite-wide; the autostart tests re-patch them with recorders."""
-    from orcha_cli import autostart
+    from orcha_cli import autostart, notifier
     monkeypatch.setattr(autostart, "_launchctl", lambda *a: None)
     monkeypatch.setattr(autostart, "_launch_agents_dir", lambda: tmp_path / "launch-agents-guard")
+    # The explicit-stop tombstone lives under the real ~/.orcha; never let a test write it
+    # there. Sandbox it suite-wide (tests still control _global_pid_path individually).
+    marker_dir = tmp_path / "orcha-state-guard"
+    monkeypatch.setattr(notifier, "_stop_marker_path",
+                        lambda cid: marker_dir / f"notifier-{cid}.stopped")
 
 # --- locate the shipped app + schema (templates live under orcha-cli/) ---
 REPO = pathlib.Path(__file__).resolve().parent.parent

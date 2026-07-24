@@ -5456,6 +5456,44 @@ def _global_pid_path(container_id: str) -> pathlib.Path:
     return pathlib.Path.home() / ".orcha" / f"notifier-{container_id}.pid"
 
 
+def _stop_marker_path(container_id: str) -> pathlib.Path:
+    """Tombstone for a container whose notifier was EXPLICITLY stopped.
+
+    `orcha down` / `orcha notifier --stop` removes the LaunchAgent watchdog, but a
+    watchdog `--ensure` already IN FLIGHT when the stop lands would spawn a fresh daemon
+    right after the kill — undoing the explicit stop. This persistent, container-keyed
+    marker lets an auto/watchdog `--ensure` refuse to resurrect a deliberately-stopped
+    daemon; an explicit bring-up (`orcha up`, `orcha init`, a foreground `orcha notifier`)
+    clears it. Host-global so it survives the checkout being deleted or moved."""
+    return pathlib.Path.home() / ".orcha" / f"notifier-{container_id}.stopped"
+
+
+def _write_stop_marker(container_id: Optional[str]) -> None:
+    """Tombstone the container so auto/watchdog --ensure won't resurrect it. Best-effort."""
+    if not container_id:
+        return
+    p = _stop_marker_path(container_id)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("")
+    except OSError:
+        pass
+
+
+def _clear_stop_marker(container_id: Optional[str]) -> None:
+    """Lift the explicit-stop tombstone — called on any explicit bring-up. Best-effort."""
+    if not container_id:
+        return
+    try:
+        _stop_marker_path(container_id).unlink()
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _stop_marker_exists(container_id: Optional[str]) -> bool:
+    return bool(container_id) and _stop_marker_path(container_id).exists()
+
+
 def _container_id_for(cwd: pathlib.Path) -> Optional[str]:
     """current_container_id from this project's .claude/orcha.json, or None."""
     try:
@@ -5637,6 +5675,12 @@ def stop_daemon(cwd: pathlib.Path, quiet: bool = False, keep_autostart: bool = F
     pidf = _pid_path(cwd)
     cid = _container_id_for(cwd)
     if not keep_autostart:
+        # Tombstone the container BEFORE the kill: a watchdog `--ensure` already in flight
+        # re-checks this marker before spawning (ensure_daemon), so it refuses to respawn
+        # instead of undoing the explicit stop. Pairs with removing the LaunchAgent so
+        # nothing resurrects it a minute later. keep_autostart=True is the restart path —
+        # not an explicit stop — so it neither tombstones nor uninstalls.
+        _write_stop_marker(cid)
         autostart.uninstall_autostart(cid, quiet=quiet)
     if not pid:
         if pidf.exists():
@@ -5691,7 +5735,9 @@ def stop_daemon_for_container(container_id: str, quiet: bool = False) -> bool:
     if not container_id:
         return False
     # the old container's login autostart dies with it — a watchdog for a 404'd
-    # container would respawn a daemon that immediately self-refuses, forever
+    # container would respawn a daemon that immediately self-refuses, forever.
+    # Tombstone it too so an in-flight --ensure can't re-spawn between here and the kill.
+    _write_stop_marker(container_id)
     autostart.uninstall_autostart(container_id, quiet=quiet)
     holder = daemon_running_for_container(container_id)  # identity-vetted (P1 #1) + clears stale claim
     try:
@@ -5710,7 +5756,8 @@ def stop_daemon_for_container(container_id: str, quiet: bool = False) -> bool:
     return True
 
 
-def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False) -> bool:
+def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False,
+                  clear_stop: bool = False) -> bool:
     """Start `orcha notifier` detached iff one isn't already running for this project.
 
     Idempotent singleton (PID file under .claude/) — safe to call from `orcha init`,
@@ -5721,10 +5768,27 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
     `restart=True` (used by `orcha init`) first stops any running daemon, so the new one
     binds to the just-created container — without it a re-init strands the old daemon on
     a dead container_id (it resolves the container once, at startup).
+
+    `clear_stop=True` marks this as an EXPLICIT bring-up (`orcha up`): it lifts any
+    prior explicit-stop tombstone. An auto/watchdog ensure (`clear_stop=False`, e.g. the
+    SessionStart hook and the launchd watchdog) instead HONORS the tombstone and refuses
+    to resurrect a deliberately-stopped daemon — so an explicit stop stays stopped even
+    against an --ensure already in flight when the stop landed.
     """
     if not (cwd / ".claude" / "orcha.json").exists():
         return False  # not an orcha project — nothing to wake
     cid = _container_id_for(cwd)
+    if restart or clear_stop:
+        # an explicit bring-up (orcha up / re-init) lifts the explicit-stop tombstone
+        _clear_stop_marker(cid)
+    elif _stop_marker_exists(cid):
+        # auto/watchdog ensure: the user explicitly stopped this container's notifier.
+        # Do NOT resurrect it, and drop the watchdog so it stops re-trying every 60s.
+        autostart.uninstall_autostart(cid, quiet=quiet)
+        if not quiet:
+            print(f"[notifier] container {cid} was explicitly stopped — not resurrecting "
+                  f"(run `orcha up` or `orcha notifier` to start it again)")
+        return False
     if restart:
         # stop_daemon is container-global [P2 #218]: it stops a same-cwd daemon AND one
         # started from another worktree (via the claim file), so a restart always gets a
@@ -5776,6 +5840,18 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False)
             autostart.install_autostart(cwd, cid, quiet=quiet)
             return True
         # claim_won=False with holder=None: claim file unusable — per-cwd guard only
+    # Final tombstone re-check under the claim: if an explicit stop landed after the top
+    # check but before we won the spawn slot, honor it now — release the claim and refuse.
+    # With stop writing the marker BEFORE its kill, this makes an explicit stop impossible
+    # to undo via an --ensure that was already mid-flight.
+    if not (restart or clear_stop) and _stop_marker_exists(cid):
+        if claim_won:
+            try:
+                _global_pid_path(cid).unlink()
+            except (FileNotFoundError, OSError):
+                pass
+        autostart.uninstall_autostart(cid, quiet=quiet)
+        return False
     exe = shutil.which("orcha")
     argv = [exe, "notifier", "--quiet"] if exe else [sys.executable, "-m", "orcha_cli", "notifier", "--quiet"]
     if cid:
@@ -5917,6 +5993,9 @@ def cmd_notifier(args) -> None:
     # own the container-keyed file too (cid resolved above) — a directly-started daemon
     # (not via --ensure) must still be visible to --ensure from OTHER worktrees
     _write_global_pid(cid, os.getpid(), cwd)
+    # a foreground `orcha notifier` is an explicit start — lift any explicit-stop tombstone
+    # so the watchdog ensure stops refusing (and re-installs the LaunchAgent below).
+    _clear_stop_marker(cid)
     if not args.quiet:
         print(f"[notifier] daemon up (pid {os.getpid()}) — scanning {api_base} every {args.interval}s "
               f"(cooldown={args.cooldown}s, min-idle={args.min_idle}s). Ctrl-C to stop.")

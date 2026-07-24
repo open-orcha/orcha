@@ -9,6 +9,14 @@ were dead until someone typed `orcha notifier --ensure` by hand.
 
 Two mechanisms close that gap. Nothing is required from the user.
 
+> **Claude Code vs Codex.** The SessionStart hook above is Claude-specific — Codex
+> has no equivalent lifecycle hook, so a Codex session does not itself run
+> `orcha notifier --ensure`. That is fine: the hook is only a convenience for
+> interactive Claude sessions. The daemon's real guarantees are runtime-agnostic —
+> `orcha up` (and `orcha up --project`) ensure it regardless of which agent you open,
+> and on macOS the launchd watchdog respawns it every 60s no matter what started the
+> session. So wakes keep working under Codex without a Codex-specific hook.
+
 ## 1. `orcha up` — both paths ensure the daemon
 
 `orcha up` in the project directory has ensured the daemon for a while. Now

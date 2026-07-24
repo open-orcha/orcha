@@ -212,3 +212,37 @@ def uninstall_autostart(container_id: Optional[str], quiet: bool = True) -> bool
         if not quiet:
             print(f"[notifier] warn: autostart removal failed ({e})", file=sys.stderr)
         return False
+
+
+def container_ids_for_workdir(workdir: pathlib.Path) -> list:
+    """Container ids of installed LaunchAgents whose WorkingDirectory == workdir.
+
+    `orcha down --project <name>` anchors the daemon to the checkout via the compose
+    working_dir label, but when that checkout is deleted (or its path reused by a
+    DIFFERENT project) the label no longer resolves to a valid root, so orcha.json can't
+    hand us the container id to stop. The LaunchAgent still records the checkout root as
+    its WorkingDirectory and carries the container id in its filename — so we recover the
+    id from the watchdog itself and clean up only THIS project's daemon. Scans the plist
+    directory directly (no launchctl), so it is monkeypatchable in tests; empty list when
+    the directory is absent."""
+    d = _launch_agents_dir()
+    if not d.is_dir():
+        return []
+    ids = []
+    prefix = f"{_LABEL_PREFIX}."
+    suffix = ".plist"
+    try:
+        candidates = sorted(d.glob(f"{_LABEL_PREFIX}.*{suffix}"))
+    except OSError:
+        return []
+    for p in candidates:
+        try:
+            wd = _plist_workdir(p.read_bytes())
+        except OSError:
+            continue
+        if wd != workdir:
+            continue
+        cid = p.name[len(prefix):-len(suffix)]
+        if cid:
+            ids.append(cid)
+    return ids

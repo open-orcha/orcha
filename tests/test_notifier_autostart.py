@@ -259,6 +259,80 @@ def test_stop_daemon_for_container_removes_autostart(record_autostart, monkeypat
     assert record_autostart["uninstall"] == [CID]
 
 
+# ---------- explicit stop vs. an in-flight watchdog --ensure (race) ----------
+
+def test_stop_daemon_tombstones_before_removing_autostart(project, record_autostart, monkeypatch):
+    """An explicit stop must leave NO daemon and NO watchdog — and drop the tombstone an
+    in-flight `--ensure` re-checks — with the tombstone written BEFORE the LaunchAgent is
+    torn down, so an ensure that raced in can never observe 'agent gone but not tombstoned'."""
+    order = []
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "daemon_running_for_container", lambda cid: None)
+    monkeypatch.setattr(notifier, "_global_pid_path", lambda cid: project / f"claim-{cid}.pid")
+    monkeypatch.setattr(notifier, "_write_stop_marker", lambda cid: order.append(("mark", cid)))
+    monkeypatch.setattr(notifier.autostart, "uninstall_autostart",
+                        lambda cid, quiet=True: order.append(("uninstall", cid)) or True)
+    notifier.stop_daemon(project, quiet=True)
+    # tombstone first, THEN the watchdog comes down — never the reverse
+    assert order == [("mark", CID), ("uninstall", CID)]
+
+
+def test_ensure_daemon_honors_explicit_stop_tombstone(project, record_autostart, monkeypatch):
+    """A watchdog/auto `--ensure` (clear_stop=False) that fires after an explicit stop must
+    refuse to resurrect the daemon and tear its own LaunchAgent down — otherwise the 60s
+    watchdog respawns a deliberately-stopped notifier. The tombstone persists (stays stopped)."""
+    notifier._write_stop_marker(CID)  # explicit stop already landed
+    spawned = []
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier.subprocess, "Popen",
+                        lambda *a, **k: spawned.append(a) or pytest.fail("must not spawn a stopped daemon"))
+    assert notifier.ensure_daemon(project, quiet=True) is False
+    assert spawned == []
+    assert record_autostart["uninstall"] == [CID]
+    assert record_autostart["install"] == []
+    assert notifier._stop_marker_exists(CID)  # explicit stop stays stopped
+
+
+def test_ensure_daemon_clear_stop_lifts_tombstone_and_spawns(project, record_autostart, monkeypatch, tmp_path):
+    """An EXPLICIT bring-up (`orcha up` ⇒ clear_stop=True) lifts the tombstone and starts a
+    fresh daemon — the deliberate stop is over because the user asked for the daemon back."""
+    notifier._write_stop_marker(CID)
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "present")
+    monkeypatch.setattr(notifier, "_claim_container", lambda cid: (True, None))
+    monkeypatch.setattr(notifier, "_global_pid_path", lambda cid: tmp_path / f"claim-{cid}.pid")
+
+    class FakeProc:
+        pid = 9191
+    monkeypatch.setattr(notifier.subprocess, "Popen", lambda *a, **k: FakeProc())
+    assert notifier.ensure_daemon(project, quiet=True, clear_stop=True) is True
+    assert record_autostart["install"] == [(project, CID)]
+    assert not notifier._stop_marker_exists(CID)  # tombstone lifted
+
+
+def test_inflight_ensure_loses_race_to_explicit_stop(project, record_autostart, monkeypatch, tmp_path):
+    """The core race: an auto `--ensure` passes the top tombstone check (none yet), then an
+    explicit stop lands DURING the claim window (writes the tombstone). The final re-check
+    under the claim must catch it — release the claim, tear the watchdog down, and NOT spawn
+    a fresh daemon. Without it, the in-flight ensure would resurrect a just-stopped notifier."""
+    claim_file = tmp_path / f"claim-{CID}.pid"
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "present")
+    monkeypatch.setattr(notifier, "_global_pid_path", lambda cid: claim_file)
+
+    def _claim_then_stop_lands(cid):
+        claim_file.write_text("")            # this ensure won the claim slot...
+        notifier._write_stop_marker(cid)     # ...but an explicit stop lands right here
+        return (True, None)
+    monkeypatch.setattr(notifier, "_claim_container", _claim_then_stop_lands)
+    monkeypatch.setattr(notifier.subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn after an explicit stop lands"))
+    assert notifier.ensure_daemon(project, quiet=True) is False
+    assert record_autostart["uninstall"] == [CID]  # watchdog torn down
+    assert record_autostart["install"] == []       # no autostart reinstalled
+    assert not claim_file.exists()                  # claim released, not left pointing at a phantom
+
+
 # ---------- wiring: orcha up/down --project ----------
 
 def _label_stdout(orcha_dir: pathlib.Path) -> subprocess.CompletedProcess:
@@ -325,12 +399,14 @@ def test_up_by_project_brings_daemons_up_at_root(project, monkeypatch):
     monkeypatch.setattr(cli, "_project_exists", lambda name: True)
     monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
     monkeypatch.setattr(cli, "_project_root_for", lambda name: project)
-    monkeypatch.setattr(cli, "ensure_daemon", lambda root: calls.append(("ensure", root)))
+    monkeypatch.setattr(cli, "ensure_daemon",
+                        lambda root, clear_stop=False: calls.append(("ensure", root, clear_stop)))
     import orcha_cli.terminal_bridge as tb
     monkeypatch.setattr(tb, "ensure_bridge", lambda root: calls.append(("bridge", root)))
     cli.cmd_up(argparse.Namespace(project="proj"))
     assert ("compose", "proj", ("-f", str(compose), "up", "-d")) in calls
-    assert ("ensure", project) in calls
+    # `orcha up` is an explicit bring-up ⇒ clears any prior explicit-stop tombstone
+    assert ("ensure", project, True) in calls
     assert ("bridge", project) in calls
 
 
@@ -406,9 +482,12 @@ def test_down_by_project_leaves_reused_checkout_daemons_alone(monkeypatch, tmp_p
     monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
     monkeypatch.setattr(cli, "stop_daemon",
                         lambda root: pytest.fail("must not stop a different project's daemons"))
+    monkeypatch.setattr(notifier, "stop_daemon_for_container",
+                        lambda cid, quiet=True: pytest.fail("must not stop the reused checkout's daemon"))
     cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
     assert ("compose", "proj", ("down",)) in calls
-    assert "was not stopped" in capsys.readouterr().out
+    # the reused path still holds another project's orcha.json ⇒ recovery skips it and warns
+    assert "couldn't locate" in capsys.readouterr().out
 
 
 def test_down_by_project_warns_but_still_downs_when_root_unresolvable(monkeypatch, capsys):
@@ -416,11 +495,42 @@ def test_down_by_project_warns_but_still_downs_when_root_unresolvable(monkeypatc
     monkeypatch.setattr(cli, "_project_exists", lambda name: True)
     monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
     monkeypatch.setattr(cli, "_project_root_for", lambda name: None)
+    # no compose labels at all ⇒ no checkout to recover a daemon from
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess([], 0, stdout="", stderr=""))
     monkeypatch.setattr(cli, "stop_daemon",
                         lambda root: pytest.fail("must not stop daemons without a resolved root"))
     cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
     assert ("compose", "proj", ("down",)) in calls
-    assert "was not stopped" in capsys.readouterr().out
+    assert "couldn't locate" in capsys.readouterr().out
+
+
+def test_down_by_project_cleans_orphaned_daemon_when_checkout_deleted(monkeypatch, tmp_path, capsys):
+    """The reported gap: `down --project` when the checkout was DELETED (or moved) — its
+    compose working_dir label points at a path that no longer holds an Orcha checkout, so
+    `_project_root_for` can't hand us the container id. We must still stop that project's
+    daemon and remove its LaunchAgent by recovering the id from the watchdog whose
+    WorkingDirectory matches the label path; otherwise the 60s watchdog resurrects a daemon
+    that polls a going-away stack forever. End state: stack down, NO autostart left behind."""
+    gone = tmp_path / "deleted-checkout"          # nothing lives here anymore
+    gone_wd = gone / ".orcha"                       # compose's working_dir label
+    calls = []
+    stopped = []
+    monkeypatch.setattr(cli, "_project_exists", lambda name: True)
+    monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
+    monkeypatch.setattr(cli, "_project_root_for", lambda name: None)  # checkout unresolvable
+    # docker reports the compose working_dir label at the now-empty checkout path
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess([], 0, stdout=f"{gone_wd}\n", stderr=""))
+    # the LaunchAgent still records the checkout ROOT as WorkingDirectory and names the container
+    monkeypatch.setattr(autostart, "container_ids_for_workdir",
+                        lambda wd: [CID] if wd == gone else [])
+    monkeypatch.setattr(notifier, "stop_daemon_for_container",
+                        lambda cid, quiet=True: stopped.append(cid) or True)
+    cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
+    assert ("compose", "proj", ("down",)) in calls   # stack still goes down
+    assert stopped == [CID]                            # orphaned daemon + watchdog cleaned up
+    assert "couldn't locate" not in capsys.readouterr().out  # recovery succeeded ⇒ no warning
 
 
 def test_down_local_stops_cwd_daemons(project, monkeypatch):
