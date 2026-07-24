@@ -81,13 +81,18 @@ async def test_fable5_listed_and_selectable(client, container, make_agent):
     ids = {m["id"] for m in models}
     assert "claude-fable-5" in ids
     assert "gpt-5.5" in ids and "gpt-5.3-codex-spark" in ids
+    assert {"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-tera", "gpt-5.6-luna"} <= ids
     by_id = {m["id"]: m for m in models}
     assert by_id["claude-fable-5"]["runtime"] == "claude"
     assert by_id["gpt-5.5"]["runtime"] == "codex"
+    assert by_id["gpt-5.6-luna"]["runtime"] == "codex"
     a = await make_agent("Faby", "eng")
     r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5"})
     assert r.status_code == 200, r.text
     assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5"
+    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "gpt-5.6-luna"})
+    assert r.status_code == 200, r.text
+    assert await _agent_model_in_payload(client, container["id"], "Faby") == "gpt-5.6-luna"
 
 
 def test_resolve_model_falls_back_when_retired(monkeypatch):
@@ -104,6 +109,10 @@ def test_resolve_model_falls_back_when_retired(monkeypatch):
 
 def test_resolve_model_runtime_matches_curated_runtime(monkeypatch):
     assert main.resolve_model_runtime("claude-fable-5") == "claude"
+    assert main.resolve_model_runtime("gpt-5.6") == "codex"
+    assert main.resolve_model_runtime("gpt-5.6-sol") == "codex"
+    assert main.resolve_model_runtime("gpt-5.6-tera") == "codex"
+    assert main.resolve_model_runtime("gpt-5.6-luna") == "codex"
     assert main.resolve_model_runtime("gpt-5.5") == "codex"
     assert main.resolve_model_runtime("some-old-id") == "claude"
     monkeypatch.setattr(main, "_MODEL_IDS", main._MODEL_IDS - {"gpt-5.5"})

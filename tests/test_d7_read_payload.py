@@ -68,6 +68,7 @@ async def test_list_models_endpoint(client):
     ids = {m["id"] for m in body["models"]}
     assert "claude-opus-4-8" in ids and "claude-sonnet-5" in ids
     assert "gpt-5.5" in ids and "gpt-5.4-mini" in ids
+    assert {"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-tera", "gpt-5.6-luna"} <= ids
     assert all("id" in m and "name" in m for m in body["models"])   # {id,name} shape
     assert all("runtime" in m for m in body["models"])
 
