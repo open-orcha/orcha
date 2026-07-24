@@ -64,6 +64,7 @@ from .notifier_codex_events import (
     _codex_tail_is_live,
 )
 from .notifier_codex_result import _codex_result_status
+from . import notifier_conversation as _conversation
 from .notifier_process import _capture_run_output, _kill_worker, _usage_from_log
 from .notifier_session_io import (
     _extract_codex_session_id,
@@ -2733,21 +2734,7 @@ def _conversation_reply_path(log_path) -> Optional[pathlib.Path]:
 
 
 def _simple_history(turns: list[dict]) -> str:
-    rows = []
-    for t in turns[-20:]:
-        content = (t.get("content") or "").strip()
-        atts = [a for a in (t.get("attachments") or []) if isinstance(a, dict)]
-        if not content and not atts:
-            continue
-        who = "Human" if t.get("role") == "human" else "Agent"
-        # #338: name any files shared on this turn (context marker; the open-instructions live with
-        # the pending turn via _render_attachment_feed).
-        marker = ""
-        if atts:
-            names = ", ".join(f"{a.get('name') or a.get('id')} ({a.get('kind') or 'file'})" for a in atts)
-            marker = f"  [attached {len(atts)} file(s): {names}]"
-        rows.append(f"{who}: {content}{marker}")
-    return "## Conversation so far\n\n" + "\n\n".join(rows) if rows else ""
+    return _conversation.simple_history(turns)
 
 
 # GH #91/#90: the dispatch directive for a ONE-SHOT conversation worker (Codex cold + resume). Same
@@ -2756,19 +2743,7 @@ def _simple_history(turns: list[dict]) -> str:
 # This REPLACES the older "do not post through task/request endpoints unless the human asked" line —
 # the whole point of #91/#90 is that the conversation worker SHOULD create+dispatch a task for real
 # work; it just must not do that work inline.
-_CONVERSATION_DISPATCH_DIRECTIVE = (
-    "Decide whether the human's ask is QUICK or REAL WORK. QUICK (a question, brainstorm, status, a "
-    "small lookup — under ~3-4 min): answer it directly as your chat reply. REAL WORK (more than "
-    "~3-4 min, or touching code, tests, PRs, or a long investigation): do NOT do it inline — CREATE "
-    "an assigned task (clear plain-English title; a description preserving the human's ask + context; "
-    "a definition of done; and a protocol note telling the assigned worker to POST its findings back "
-    "to the task thread), then make your chat reply ONE short line plus the task link, e.g. \"I'll "
-    "handle this in the background — follow the task thread: <link>\". You may decide up front or "
-    "mid-reply. For a self-referential task assigned to yourself/current agent that overlaps your "
-    "live context from this conversation, do only the tiny resident-only slice first and include its result in "
-    "the initial task description or protocol notes before assignment, so the worker inherits it and "
-    "does not redo it; unrelated tasks keep the normal fresh handoff path. Do not call `/orcha-listen`."
-)
+_CONVERSATION_DISPATCH_DIRECTIVE = _conversation.DISPATCH_DIRECTIVE
 
 
 def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_turns: list[dict],
@@ -2779,38 +2754,11 @@ def _conversation_worker_prompt(alias: str, pending_turns: list[dict], history_t
     conversation reply is a fresh `codex exec`. We inject the thread history and ask Codex to make
     its final response the message that Orcha appends back to the Conversation tab.
     """
-    # #247 item-3: Codex has no --resume, so a one-shot conversation worker re-injects the whole
-    # history every turn — curating a long history (summarize-older + recent-verbatim) is the win.
-    # _cold_boot_history fails open to the mechanical block, then we degrade to _simple_history.
-    history = _cold_boot_history(history_turns)
-    if not history:
-        history = _simple_history(history_turns)
-    # #338: a pending turn counts if it has text OR attachments (an attachment-only message must
-    # still reach the agent). Aggregate attachment refs across the pending turns for the feed.
-    pending = [t for t in pending_turns
-               if (t.get("content") or "").strip() or (t.get("attachments") or [])]
-    latest = "\n\n".join(
-        f"Human turn seq {t.get('seq')}: {(t.get('content') or '').strip() or '(no text — see attached files)'}"
-        for t in pending
-    )
-    if not latest:
-        latest = "(empty human message)"
-    pending_atts = [a for t in pending for a in (t.get("attachments") or []) if isinstance(a, dict)]
-    # #338 Codex image->text: Codex cannot view pixels, so OCR any image/PDF to text it can read.
-    extracted = _extract_attachment_text(pending_atts, api_base)
-    feed = _render_attachment_feed(pending_atts, api_base=api_base, runtime="codex",
-                                   extracted=extracted)
-    feed_block = f"\n\n{feed}" if feed else ""
-    return (
-        f"[orcha conversation] {alias or 'agent'}: reply to the human in Orcha's "
-        "Conversation tab. This is a ONE-SHOT Codex conversation worker, not a resident "
-        "stdin session. Use tools if needed, but make your final answer the chat reply "
-        "that should be appended to the conversation.\n"
-        f"{_CONVERSATION_DISPATCH_DIRECTIVE}\n\n"
-        f"{history}\n\n"
-        "## Pending Human Message(s)\n\n"
-        f"{latest}\n"
-        f"{feed_block}"
+    return _conversation.worker_prompt(
+        alias, pending_turns, history_turns, api_base,
+        cold_history=_cold_boot_history,
+        extract_attachment_text=_extract_attachment_text,
+        render_attachment_feed=_render_attachment_feed,
     )
 
 
@@ -2822,38 +2770,11 @@ def _codex_resume_prompt(alias: str, pending_turns: list[dict]) -> str:
     the history tokens this feature exists to save. Carries ONLY the framing reminder + the new
     pending human turn(s). The cost win lives here: a multi-turn Codex review now pays history once
     (the cold turn-1 rollout) instead of every turn."""
-    latest = "\n\n".join(
-        f"Human turn seq {t.get('seq')}: {(t.get('content') or '').strip()}"
-        for t in pending_turns
-        if (t.get("content") or "").strip()
-    )
-    if not latest:
-        latest = "(empty human message)"
-    return (
-        f"[orcha conversation] {alias or 'agent'}: continue replying to the human in Orcha's "
-        "Conversation tab. This RESUMES your existing Codex session — the prior conversation is "
-        "already in your context, so do NOT restate it. Make your final answer the chat reply "
-        "appended to the conversation.\n"
-        f"{_CONVERSATION_DISPATCH_DIRECTIVE}\n\n"
-        "## New Human Message(s)\n\n"
-        f"{latest}\n"
-    )
+    return _conversation.resume_prompt(alias, pending_turns)
 
 
 def _text_from_content(content) -> Optional[str]:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for blk in content:
-            if not isinstance(blk, dict):
-                continue
-            if isinstance(blk.get("text"), str):
-                parts.append(blk["text"])
-            elif blk.get("type") in ("text", "output_text") and isinstance(blk.get("content"), str):
-                parts.append(blk["content"])
-        return "\n".join(p for p in parts if p).strip() or None
-    return None
+    return _conversation.text_from_content(content)
 
 
 def _conversation_reply_text(log_path, last_message_path=None) -> Optional[str]:
@@ -2863,45 +2784,9 @@ def _conversation_reply_text(log_path, last_message_path=None) -> Optional[str]:
     both Claude stream-json and Codex-ish assistant message shapes so tests and future CLI changes
     fail soft instead of leaving the Conversation tab blank.
     """
-    if last_message_path:
-        try:
-            text = pathlib.Path(last_message_path).read_text().strip()
-            if text:
-                return text
-        except OSError:
-            pass
-    res = _result_after(log_path, 0)
-    if res and res.get("text"):
-        return str(res["text"]).strip() or None
-    if not log_path:
-        return None
-    try:
-        lines = pathlib.Path(log_path).read_text(errors="replace").splitlines()
-    except OSError:
-        return None
-    last = None
-    for line in lines:
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        typ = obj.get("type")
-        msg = obj.get("message")
-        role = obj.get("role")
-        if role is None and isinstance(msg, dict):
-            role = msg.get("role")
-        candidate = None
-        if typ == "result":
-            candidate = obj.get("result")
-        elif role == "assistant" or typ in {"assistant", "agent_message", "assistant_message"}:
-            if isinstance(msg, str):
-                candidate = msg
-            elif isinstance(msg, dict):
-                candidate = _text_from_content(msg.get("content"))
-            candidate = candidate or _text_from_content(obj.get("content")) or obj.get("text")
-        if isinstance(candidate, str) and candidate.strip():
-            last = candidate.strip()
-    return last
+    return _conversation.reply_text(
+        log_path, last_message_path, result_after=_result_after
+    )
 
 
 class _ExternalProcess:
