@@ -9,7 +9,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import importlib.resources as pkg_res
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -17,9 +16,7 @@ import json
 import os
 import pathlib
 import re
-import secrets
 import shutil
-import socket
 import subprocess
 import sys
 from typing import Optional
@@ -34,6 +31,7 @@ from orcha_cli.cli_text import (  # pure text / front-matter helpers
 from orcha_cli.cli_env import (  # dotenv-file primitives
     _append_env_file, _read_env_file_value, _tighten_env_file)
 from orcha_cli.cli_http import _get_json, _post_json, _wait_for_portal  # tiny urllib JSON helpers
+from orcha_cli import cli_project_setup as _project_setup
 
 
 PKG_ROOT = pkg_res.files("orcha_cli")
@@ -100,44 +98,19 @@ def _cli_version() -> str:
 # re-imported at the top of this module.
 
 def _find_free_port(start: int, span: int = 100) -> int:
-    for port in range(start, start + span):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("127.0.0.1", port))
-                return port
-        except OSError:
-            continue
-    raise SystemExit(f"error: no free port in range {start}..{start + span}")
+    return _project_setup.find_free_port(start, span)
 
 
 def _copy_tree(src, dst: pathlib.Path) -> None:
     """Recursively copy from a Traversable (importlib.resources) to a Path."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir():
-            _copy_tree(item, target)
-        else:
-            target.write_bytes(item.read_bytes())
+    _project_setup.copy_tree(src, dst)
 
 
 def _install_orcha_skill_templates(project_root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """Install Orcha command prompts for Claude Code and Codex into this workspace."""
-    claude_commands = project_root / ".claude" / "commands"
-    codex_skills = project_root / ".agents" / "skills"
-    claude_commands.mkdir(parents=True, exist_ok=True)
-    codex_skills.mkdir(parents=True, exist_ok=True)
-    for md_file in (PKG_TEMPLATES / "skills").iterdir():
-        if not md_file.name.endswith(".md"):
-            continue
-        command_md = md_file.read_text()
-        claude_name = md_file.name
-        skill_name = md_file.name[:-3]
-        (claude_commands / claude_name).write_text(command_md)
-        skill_dir = codex_skills / skill_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(_codex_skill_body(skill_name, command_md))
-    return claude_commands, codex_skills
+    return _project_setup.install_skill_templates(
+        project_root, PKG_TEMPLATES, _codex_skill_body
+    )
 
 
 def _install_project_preferences(project_root: pathlib.Path) -> Optional[pathlib.Path]:
@@ -154,12 +127,7 @@ def _install_project_preferences(project_root: pathlib.Path) -> Optional[pathlib
     edited rules (init re-run with --force, `orcha up`/`upgrade` on an existing project). Returns
     the path when written, else None.
     """
-    prefs_path = project_root / "docs" / "orcha-project-preferences.md"
-    if prefs_path.exists():
-        return None
-    prefs_path.parent.mkdir(parents=True, exist_ok=True)
-    prefs_path.write_text((PKG_TEMPLATES / "project-preferences.md").read_text())
-    return prefs_path
+    return _project_setup.install_project_preferences(project_root, PKG_TEMPLATES)
 
 
 def _ensure_secret_key(orcha_dir: pathlib.Path) -> None:
@@ -181,44 +149,14 @@ def _ensure_secret_key(orcha_dir: pathlib.Path) -> None:
 
     Honest threat-model note (mirrors secret_box's docstring): this master key sits next to the
     DB on the same host — it's defense-in-depth for leaked DB snapshots, not a trust boundary."""
-    if os.environ.get(_MASTER_KEY_ENV):
-        return  # operator-provided — respect it, don't persist or override
-    env_file = orcha_dir / ".env"
-    persisted = _read_env_file_value(env_file, _MASTER_KEY_ENV)
-    if persisted:
-        os.environ[_MASTER_KEY_ENV] = persisted
-        # A previously-persisted key may live in a .env that pre-dates the 0600 clamp (e.g. a
-        # hand-created 0644 file, or one written before _append_env_file tightened on every
-        # append). The mint path clamps; this load path never appends, so tighten here too —
-        # otherwise a world-readable secret survives, contradicting the 0600 we advertise.
-        _tighten_env_file(env_file)
-        return
-    key = secrets.token_urlsafe(32)
-    try:
-        _append_env_file(env_file, _MASTER_KEY_ENV, key)
-        print(f"[orcha] generated a secret_box master key ({_MASTER_KEY_ENV}) and persisted it to "
-              f"{env_file} (0600) — encrypted at-rest storage of per-container LLM keys is enabled.")
-    except OSError as e:
-        # Couldn't persist — still export for THIS run so up works, but warn it won't survive
-        # (a key that changes between runs makes previously-stored blobs un-decryptable).
-        print(f"[orcha] WARNING: could not persist {_MASTER_KEY_ENV} to {env_file} ({e}); using an "
-              f"ephemeral key for this run only — stored LLM keys won't survive a restart.")
-    os.environ[_MASTER_KEY_ENV] = key
+    _project_setup.ensure_secret_key(
+        orcha_dir, _read_env_file_value, _append_env_file, _tighten_env_file
+    )
 
 
 def _usable_pairing_ip(value: str) -> Optional[str]:
     """Return a phone-reachable LAN-ish IP, or None for localhost/link-local/etc."""
-    try:
-        ip = ipaddress.ip_address((value or "").strip())
-    except ValueError:
-        return None
-    if ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local:
-        return None
-    # Prefer private LANs for the direct phone-to-laptop story. If a site uses a routed
-    # corporate address, allow it as long as it is not one of the known non-reachable classes.
-    if ip.version == 4 and str(ip).startswith("169.254."):
-        return None
-    return str(ip)
+    return _project_setup.usable_pairing_ip(value)
 
 
 def _discover_pairing_host() -> Optional[str]:
@@ -227,64 +165,23 @@ def _discover_pairing_host() -> Optional[str]:
     This runs on the Mac/host before Docker starts. Doing it inside the portal container would
     usually find Docker's bridge address, which a phone cannot reach.
     """
-    supplied = _usable_pairing_ip(os.environ.get(_PAIRING_HOST_ENV, ""))
-    if supplied:
-        return supplied
-
-    candidates: list[str] = []
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.settimeout(0.2)
-            s.connect(("1.1.1.1", 80))
-            candidates.append(s.getsockname()[0])
-    except OSError:
-        pass
-    try:
-        for family, _typ, _proto, _canon, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
-            if family == socket.AF_INET and sockaddr:
-                candidates.append(sockaddr[0])
-    except OSError:
-        pass
-
-    for c in candidates:
-        ip = _usable_pairing_ip(c)
-        if ip:
-            return ip
-    return None
+    return _project_setup.discover_pairing_host()
 
 
 def _export_pairing_host() -> None:
     """Expose the host LAN IP to docker compose for the portal's pairing endpoint."""
-    if os.environ.get(_PAIRING_HOST_ENV):
-        return
-    host = _discover_pairing_host()
-    if host:
-        os.environ[_PAIRING_HOST_ENV] = host
+    _project_setup.export_pairing_host(_discover_pairing_host)
+
 
 def _compose(orcha_dir: pathlib.Path, *args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
-    if "up" in args:
-        # SSE: the portal bind-mounts the host wake-log dir (../.claude/.orcha-wakes). Create
-        # it (as the user) BEFORE `compose up`, else on Linux Docker creates the missing bind
-        # source as ROOT and the user-space notifier can't write logs → spawn_headless falls
-        # back to DEVNULL and SSE + reap-time capture both go silently empty.
-        try:
-            (orcha_dir.parent / ".claude" / ".orcha-wakes").mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        # #301: the portal bind-mounts a WRITABLE attachments dir (../.claude/.orcha-attachments)
-        # where it writes task-message file uploads. Same rationale as .orcha-wakes above —
-        # create it (as the user) BEFORE `compose up` so Linux doesn't bind-create the missing
-        # source as ROOT, which would make the portal's user-space uploads fail with EACCES.
-        try:
-            (orcha_dir.parent / ".claude" / ".orcha-attachments").mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        # #294 Item 1: ensure the secret_box master key exists + is exported so the portal env
-        # gets it on this up (init / up / upgrade all funnel through here).
-        _ensure_secret_key(orcha_dir)
-        _export_pairing_host()
-    cmd = ["docker", "compose", "-f", str(orcha_dir / "docker-compose.yml"), *args]
-    return subprocess.run(cmd, check=check, capture_output=capture, text=capture)
+    return _project_setup.compose(
+        orcha_dir,
+        *args,
+        check=check,
+        capture=capture,
+        ensure_key=_ensure_secret_key,
+        export_host=_export_pairing_host,
+    )
 
 
 # ---------- commands ----------
