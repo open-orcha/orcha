@@ -317,3 +317,124 @@ def test_install_copies_secret_box_byte_identical(tmp_path):
     _install_llm_util(tmp_path)
     copied = (tmp_path / "portal" / "secret_box.py").read_bytes()
     assert copied == (PKG_ROOT / "secret_box.py").read_bytes()
+
+
+# ---- _llm_error_public_detail classification (unit; no DB / no network) ----
+# The key-test verdict must be ACCURATE without EVER echoing the upstream response body
+# (py/stack-trace-exposure): the body is real Anthropic JSON that can carry stack fragments and
+# account context. These tests assert the right static message per case AND that no body substring
+# leaks. The exception text is exactly what llm_util raises: "HTTP {code} from {url}: {body}".
+
+# A representative out-of-credit 400 — Anthropic returns HTTP 400 with a typed invalid_request_error
+# whose message names the credit balance. This whole JSON blob is the "body" that must NOT leak.
+_CREDIT_BODY = ('{"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"Your credit balance is too low to access the Anthropic API. '
+                'Please go to Plans & Billing to upgrade or purchase credits."}}')
+# A generic 400 (e.g. a malformed request) that is NOT a billing case — must fall through to generic.
+_GENERIC_400_BODY = ('{"type":"error","error":{"type":"invalid_request_error",'
+                     '"message":"messages: at least one message is required"}}')
+
+
+def _import_portal_main():
+    """The portal FastAPI module (the CLI template copy); already importable via conftest path setup."""
+    import main  # noqa: PLC0415
+    return main
+
+
+def test_public_detail_401_says_invalid_key():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError("HTTP 401 from .../v1/messages: invalid x-api-key"))
+    assert "401" in d
+    assert "invalid" in d.lower() or "revoked" in d.lower()
+    # the raw body ("invalid x-api-key") must not be echoed verbatim
+    assert "x-api-key" not in d
+
+
+def test_public_detail_403_says_permission():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError('HTTP 403 from .../v1/messages: {"error":"forbidden secret"}'))
+    assert "403" in d and "permission" in d.lower()
+    assert "forbidden secret" not in d
+
+
+def test_public_detail_429_says_rate_limited():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError('HTTP 429 from .../v1/messages: {"detail":"slow down bucket-42"}'))
+    assert "429" in d and "rate" in d.lower()
+    assert "bucket-42" not in d
+
+
+def test_public_detail_400_credit_balance_says_billing_no_body_leak():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError(f"HTTP 400 from .../v1/messages: {_CREDIT_BODY}"))
+    # accurate: it's a billing/credit problem, NOT a bad key
+    assert "credit" in d.lower()
+    assert "console.anthropic.com" in d
+    assert "check the key" not in d.lower()
+    # no-body-leak: none of the upstream JSON is echoed
+    assert "invalid_request_error" not in d
+    assert "Plans & Billing to upgrade" not in d
+    assert "credit balance is too low" not in d.lower()
+
+
+def test_public_detail_400_credit_balance_is_case_insensitive():
+    main = _import_portal_main()
+    upper = _CREDIT_BODY.replace("credit balance", "Credit Balance")
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError(f"HTTP 400 from .../v1/messages: {upper}"))
+    assert "credit" in d.lower() and "console.anthropic.com" in d
+
+
+def test_public_detail_generic_400_falls_through_to_generic():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError(f"HTTP 400 from .../v1/messages: {_GENERIC_400_BODY}"))
+    # a non-billing 400 keeps the generic "check the key" verdict...
+    assert "400" in d and "check the key" in d.lower()
+    # ...and still never echoes the body
+    assert "at least one message is required" not in d
+    assert "invalid_request_error" not in d
+
+
+def test_public_detail_unknown_4xx_is_generic():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError('HTTP 418 from .../v1/messages: {"secret":"teapot"}'))
+    assert "418" in d and "check the key" in d.lower()
+    assert "teapot" not in d
+
+
+def test_public_detail_non_http_error_is_network_generic():
+    main = _import_portal_main()
+    d = main._llm_error_public_detail(
+        "Anthropic", llm_util.LLMError("transport error to https://api.anthropic.com: timed out"))
+    assert "network" in d.lower()
+    # no host/detail from the exception is echoed
+    assert "api.anthropic.com" not in d and "timed out" not in d
+
+
+class _Fake400Credit(llm_util.Provider):
+    name = "anthropic"
+
+    def complete(self, **_):
+        raise llm_util.LLMError(f"HTTP 400 from .../v1/messages: {_CREDIT_BODY}")
+
+
+@pytest.mark.asyncio
+async def test_test_route_credit_balance_maps_to_billing_no_leak(client, container, make_agent, monkeypatch):
+    """End-to-end: a valid key on an unfunded account (Anthropic 400 credit-balance) must return a
+    billing verdict — never "check the key" — and never leak the upstream body to the client."""
+    monkeypatch.setattr(llm_util, "get_provider", lambda name: _Fake400Credit())
+    hid = await _human(make_agent)
+    r = await client.post(f"/api/containers/{container['id']}/settings/llm-key/test",
+                          json={"actor_agent_id": hid, "api_key": KEY})
+    body = r.json()
+    assert r.status_code == 200 and body["ok"] is False
+    assert "credit" in body["detail"].lower()
+    assert "console.anthropic.com" in body["detail"]
+    assert "check the key" not in body["detail"].lower()
+    assert "credit balance is too low" not in body["detail"].lower()

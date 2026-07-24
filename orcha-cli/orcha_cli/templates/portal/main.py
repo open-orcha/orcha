@@ -3322,15 +3322,37 @@ def delete_container_llm_key(cid: str, body: LlmKeyActor):
 
 def _llm_error_public_detail(provider_label: str, e: Exception) -> str:
     """Client-safe verdict for a failed key-test ping. Provider error text can embed upstream
-    response bodies / stack fragments (py/stack-trace-exposure), so the ONLY thing surfaced from
-    the exception is the leading HTTP status code (laundered through int()); the full error goes
-    to the server log at the call site."""
-    m = re.match(r"HTTP (\d{3}) ", str(e))
-    if m:
-        return (f"the {provider_label} API returned HTTP {int(m.group(1))} — "
-                "check the key (full error in the portal server log)")
-    return (f"could not reach the {provider_label} API — "
-            "check the key and network (full error in the portal server log)")
+    response bodies / stack fragments (py/stack-trace-exposure), so NOTHING from the exception is
+    echoed verbatim — the full error goes to the server log at the call site. We DO inspect the
+    exception text to classify the failure into an accurate, fully-STATIC message (status code +
+    safe substring probes), because "check the key" is actively misleading for a billing/rate/
+    permission failure on a perfectly good key. Every branch returns a hardcoded string; the only
+    dynamic values are the laundered int() status code and the trusted provider_label."""
+    err = str(e)
+    m = re.match(r"HTTP (\d{3}) ", err)
+    if not m:
+        return (f"could not reach the {provider_label} API — "
+                "check the key and network (full error in the portal server log)")
+    status = int(m.group(1))
+    if status == 401:
+        return f"the {provider_label} API rejected the key (HTTP 401) — the key is invalid or revoked"
+    if status == 403:
+        return (f"the {provider_label} API returned HTTP 403 — "
+                "the key lacks permission for this request")
+    if status == 429:
+        return (f"the {provider_label} API is rate-limiting (HTTP 429) — "
+                "the key is fine; try again shortly")
+    if status == 400:
+        # Anthropic signals an out-of-credit account as a 400 invalid_request_error whose message
+        # mentions the credit balance. We key on the TYPED error + a billing substring (never echo
+        # the body) so a valid key on an unfunded account isn't blamed on the key. Case-insensitive
+        # so wording variants ("credit balance", "Credit Balance") still map.
+        low = err.lower()
+        if "invalid_request_error" in low and "credit balance" in low:
+            return (f"the {provider_label} key is valid, but the account has no credit — "
+                    "add credits under Plans & Billing at console.anthropic.com")
+    return (f"the {provider_label} API returned HTTP {status} — "
+            "check the key (full error in the portal server log)")
 
 
 @app.post("/api/containers/{cid}/settings/llm-key/test", status_code=200)
