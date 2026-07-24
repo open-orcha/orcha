@@ -5494,6 +5494,14 @@ def _stop_marker_exists(container_id: Optional[str]) -> bool:
     return bool(container_id) and _stop_marker_path(container_id).exists()
 
 
+def _auto_ensure_stopped(container_id: Optional[str], quiet: bool) -> bool:
+    """True when a watchdog/auto ensure must honor an explicit-stop marker."""
+    if not _stop_marker_exists(container_id):
+        return False
+    autostart.uninstall_autostart(container_id, quiet=quiet)
+    return True
+
+
 def _container_id_for(cwd: pathlib.Path) -> Optional[str]:
     """current_container_id from this project's .claude/orcha.json, or None."""
     try:
@@ -5700,6 +5708,8 @@ def stop_daemon(cwd: pathlib.Path, quiet: bool = False, keep_autostart: bool = F
                 _global_pid_path(cid).unlink()   # live holder stopped, or stale debris
             except (FileNotFoundError, OSError):
                 pass
+            if other and not keep_autostart:
+                autostart.uninstall_autostart(cid, quiet=quiet)
             if other:
                 return True
         return False
@@ -5717,6 +5727,11 @@ def stop_daemon(cwd: pathlib.Path, quiet: bool = False, keep_autostart: bool = F
                 _global_pid_path(cid).unlink()
             except (FileNotFoundError, OSError):
                 pass
+    if not keep_autostart:
+        # A watchdog ensure that started before the stop marker existed may still have seen
+        # the old daemon and reinstalled the LaunchAgent while we were waiting for exit.
+        # Remove it again after the kill so explicit stop/down finishes with no watchdog.
+        autostart.uninstall_autostart(cid, quiet=quiet)
     if not quiet:
         print(f"[notifier] stopped daemon (pid {pid})")
     return True
@@ -5781,10 +5796,9 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False,
     if restart or clear_stop:
         # an explicit bring-up (orcha up / re-init) lifts the explicit-stop tombstone
         _clear_stop_marker(cid)
-    elif _stop_marker_exists(cid):
+    elif _auto_ensure_stopped(cid, quiet=quiet):
         # auto/watchdog ensure: the user explicitly stopped this container's notifier.
         # Do NOT resurrect it, and drop the watchdog so it stops re-trying every 60s.
-        autostart.uninstall_autostart(cid, quiet=quiet)
         if not quiet:
             print(f"[notifier] container {cid} was explicitly stopped — not resurrecting "
                   f"(run `orcha up` or `orcha notifier` to start it again)")
@@ -5797,6 +5811,8 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False,
         stop_daemon(cwd, quiet=True, keep_autostart=True)
     pid = daemon_running(cwd)
     if pid:
+        if not (restart or clear_stop) and _auto_ensure_stopped(cid, quiet=quiet):
+            return False
         if not quiet:
             print(f"[notifier] already running (pid {pid})")
         autostart.install_autostart(cwd, cid, quiet=quiet)
@@ -5831,6 +5847,8 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False,
     if cid:
         claim_won, holder = _claim_container(cid)
         if not claim_won and holder is not None:
+            if not (restart or clear_stop) and _auto_ensure_stopped(cid, quiet=quiet):
+                return False
             if not quiet:
                 if holder[0]:
                     frm = f" from {holder[1]}" if holder[1] else ""
@@ -5844,13 +5862,12 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False,
     # check but before we won the spawn slot, honor it now — release the claim and refuse.
     # With stop writing the marker BEFORE its kill, this makes an explicit stop impossible
     # to undo via an --ensure that was already mid-flight.
-    if not (restart or clear_stop) and _stop_marker_exists(cid):
+    if not (restart or clear_stop) and _auto_ensure_stopped(cid, quiet=quiet):
         if claim_won:
             try:
                 _global_pid_path(cid).unlink()
             except (FileNotFoundError, OSError):
                 pass
-        autostart.uninstall_autostart(cid, quiet=quiet)
         return False
     exe = shutil.which("orcha")
     argv = [exe, "notifier", "--quiet"] if exe else [sys.executable, "-m", "orcha_cli", "notifier", "--quiet"]
@@ -5881,6 +5898,18 @@ def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False,
         # hand the claim to the child: replace our provisional claimant pid with the
         # daemon's, so liveness now tracks the daemon (not this short-lived parent)
         _write_global_pid(cid, proc.pid, cwd)
+    if not (restart or clear_stop) and _auto_ensure_stopped(cid, quiet=quiet):
+        _terminate_and_wait(proc.pid, cid)
+        try:
+            _pid_path(cwd).unlink()
+        except (FileNotFoundError, OSError):
+            pass
+        if cid:
+            try:
+                _global_pid_path(cid).unlink()
+            except (FileNotFoundError, OSError):
+                pass
+        return False
     # Reboot persistence: a LaunchAgent watchdog re-runs this same ensure at login and
     # every minute (macOS; no-op elsewhere / under ORCHA_NO_AUTOSTART). Installed on the
     # success paths only — a refused/failed ensure must not persist itself.

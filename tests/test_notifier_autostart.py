@@ -333,6 +333,78 @@ def test_inflight_ensure_loses_race_to_explicit_stop(project, record_autostart, 
     assert not claim_file.exists()                  # claim released, not left pointing at a phantom
 
 
+def test_inflight_ensure_already_running_does_not_reinstall_watchdog(project, record_autostart, monkeypatch):
+    """Regression for the review race: an auto ensure can pass the initial tombstone check,
+    then an explicit stop lands before it reaches the "already running" branch. It must not
+    reinstall the LaunchAgent while stop_daemon is killing the old daemon."""
+    monkeypatch.setattr(notifier, "daemon_running",
+                        lambda cwd: notifier._write_stop_marker(CID) or 4242)
+    assert notifier.ensure_daemon(project, quiet=True) is False
+    assert record_autostart["install"] == []
+    assert record_autostart["uninstall"] == [CID]
+
+
+def test_inflight_ensure_global_holder_does_not_reinstall_watchdog(project, record_autostart, monkeypatch):
+    """The same explicit-stop interleaving through the container-global holder path."""
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "present")
+
+    def _claim_after_stop_lands(cid):
+        notifier._write_stop_marker(cid)
+        return False, (5252, str(project))
+
+    monkeypatch.setattr(notifier, "_claim_container", _claim_after_stop_lands)
+    assert notifier.ensure_daemon(project, quiet=True) is False
+    assert record_autostart["install"] == []
+    assert record_autostart["uninstall"] == [CID]
+
+
+def test_inflight_ensure_spawned_daemon_is_stopped_if_explicit_stop_lands(
+    project, record_autostart, monkeypatch, tmp_path
+):
+    """Delayed variant: the watchdog ensure wins the claim and spawns, then the explicit-stop
+    marker appears before autostart install. The fresh daemon must be stopped and no LaunchAgent
+    left behind."""
+    claim_file = tmp_path / f"claim-{CID}.pid"
+    stopped = []
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: None)
+    monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "present")
+    monkeypatch.setattr(notifier, "_claim_container", lambda cid: (True, None))
+    monkeypatch.setattr(notifier, "_global_pid_path", lambda cid: claim_file)
+    monkeypatch.setattr(notifier, "_write_global_pid",
+                        lambda cid, pid, cwd: notifier._write_stop_marker(cid))
+    monkeypatch.setattr(notifier, "_terminate_and_wait",
+                        lambda pid, cid, grace=8.0: stopped.append((pid, cid)))
+
+    class FakeProc:
+        pid = 6161
+
+    monkeypatch.setattr(notifier.subprocess, "Popen", lambda *a, **k: FakeProc())
+    assert notifier.ensure_daemon(project, quiet=True) is False
+    assert stopped == [(6161, CID)]
+    assert record_autostart["install"] == []
+    assert record_autostart["uninstall"] == [CID]
+    assert not (project / ".claude" / ".orcha-notifier.pid").exists()
+    assert not claim_file.exists()
+
+
+def test_stop_daemon_finally_removes_watchdog_reinstalled_by_inflight_ensure(project, monkeypatch):
+    """If an already-running watchdog ensure reinstalls autostart while stop_daemon waits for
+    the old daemon to exit, stop_daemon must remove it again before returning."""
+    order = []
+    monkeypatch.setattr(notifier, "daemon_running", lambda cwd: 4242)
+    monkeypatch.setattr(notifier, "daemon_running_for_container", lambda cid: None)
+    monkeypatch.setattr(notifier, "_global_pid_path", lambda cid: project / f"claim-{cid}.pid")
+    monkeypatch.setattr(notifier.autostart, "uninstall_autostart",
+                        lambda cid, quiet=True: order.append(("uninstall", cid)) or True)
+    monkeypatch.setattr(notifier.autostart, "install_autostart",
+                        lambda cwd, cid, quiet=True: order.append(("install", cid)) or True)
+    monkeypatch.setattr(notifier, "_terminate_and_wait",
+                        lambda pid, cid, grace=8.0: notifier.autostart.install_autostart(project, cid))
+    assert notifier.stop_daemon(project, quiet=True) is True
+    assert order == [("uninstall", CID), ("install", CID), ("uninstall", CID)]
+
+
 # ---------- wiring: orcha up/down --project ----------
 
 def _label_stdout(orcha_dir: pathlib.Path) -> subprocess.CompletedProcess:
@@ -515,7 +587,6 @@ def test_down_by_project_cleans_orphaned_daemon_when_checkout_deleted(monkeypatc
     gone = tmp_path / "deleted-checkout"          # nothing lives here anymore
     gone_wd = gone / ".orcha"                       # compose's working_dir label
     calls = []
-    stopped = []
     monkeypatch.setattr(cli, "_project_exists", lambda name: True)
     monkeypatch.setattr(cli, "_by_project", lambda name, *a: calls.append(("compose", name, a)))
     monkeypatch.setattr(cli, "_project_root_for", lambda name: None)  # checkout unresolvable
@@ -526,10 +597,10 @@ def test_down_by_project_cleans_orphaned_daemon_when_checkout_deleted(monkeypatc
     monkeypatch.setattr(autostart, "container_ids_for_workdir",
                         lambda wd: [CID] if wd == gone else [])
     monkeypatch.setattr(notifier, "stop_daemon_for_container",
-                        lambda cid, quiet=True: stopped.append(cid) or True)
+                        lambda cid, quiet=True: calls.append(("stop", cid)) or True)
     cli.cmd_down(argparse.Namespace(project="proj", volumes=False))
     assert ("compose", "proj", ("down",)) in calls   # stack still goes down
-    assert stopped == [CID]                            # orphaned daemon + watchdog cleaned up
+    assert calls.index(("stop", CID)) < calls.index(("compose", "proj", ("down",)))
     assert "couldn't locate" not in capsys.readouterr().out  # recovery succeeded ⇒ no warning
 
 
