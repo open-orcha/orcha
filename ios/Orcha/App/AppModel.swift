@@ -43,6 +43,10 @@ final class AppModel {
     var selectedContainer: StoredContainer?
     var selectedTab: WorkspaceTab = .home
     var themeMode: ThemeMode
+    /// "Catch me up": the digest from the human's LAST look + how long ago,
+    /// captured once per workspace session when the gap is meaningful. The
+    /// Home card narrates the delta against the live snapshot, on-device.
+    var catchUp: (previous: String, gapLabel: String)?
 
     // workspace data
     var snapshot: ContainerSnapshot?
@@ -165,8 +169,33 @@ final class AppModel {
         selectedContainer = stored
         selectedTab = .home
         error = nil
+        catchUp = nil
         Task { await refresh() }
         startPolling()
+    }
+
+    /// "Catch me up" bookkeeping — GAP-based, not session-based: last-seen
+    /// saves continuously while the human is looking, so any refresh that
+    /// finds the last save ≥30 minutes old means they were away (backgrounded
+    /// counts — iOS keeps the app alive for hours, and returning never re-runs
+    /// openContainer). Arms the delta card whenever the state also changed.
+    private func noteSeen(_ snap: ContainerSnapshot, container: StoredContainer) {
+        let digest = WorkspaceDigest.make(snap)
+        if catchUp == nil,
+           let seen = store.lastSeen(for: container.id),
+           seen.digest != digest,
+           Date.now.timeIntervalSince(seen.at) > 30 * 60 {
+            catchUp = (seen.digest, Self.gapLabel(since: seen.at))
+        }
+        store.saveLastSeen(digest, for: container.id)
+    }
+
+    private static func gapLabel(since date: Date) -> String {
+        let mins = Int(Date.now.timeIntervalSince(date) / 60)
+        if mins < 90 { return "\(mins) minutes" }
+        let hours = mins / 60
+        if hours < 36 { return "\(hours) hours" }
+        return "\(hours / 24) days"
     }
 
     func closeWorkspace() {
@@ -214,6 +243,7 @@ final class AppModel {
                 selectedContainer = upgraded
             }
             error = nil
+            noteSeen(snap, container: selectedContainer ?? sel)
         } catch {
             self.error = friendly(error)
         }

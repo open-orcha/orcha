@@ -28,6 +28,9 @@ struct PlanApprovalSheet: View {
                                     .font(.system(size: 13)).foregroundStyle(p.text2)
                             }
                         }
+                        if let body = task.planMessage?.body, !body.isEmpty {
+                            PlanBriefCard(text: body)
+                        }
                         SectionH(title: "Proposed plan")
                         OrchaCard(container: p.surface2) {
                             if let body = task.planMessage?.body, !body.isEmpty {

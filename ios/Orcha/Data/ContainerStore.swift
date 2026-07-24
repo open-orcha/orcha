@@ -66,4 +66,17 @@ struct ContainerStore {
     func saveThemeMode(_ mode: ThemeMode) {
         defaults.set(mode.rawValue, forKey: Self.themeKey)
     }
+
+    /// "Catch me up": the workspace digest as of the human's last look, per
+    /// container, so the next open can brief the delta.
+    func lastSeen(for id: String) -> (digest: String, at: Date)? {
+        guard let digest = defaults.string(forKey: "orcha_seen_digest_\(id)"),
+              let at = defaults.object(forKey: "orcha_seen_at_\(id)") as? Date else { return nil }
+        return (digest, at)
+    }
+
+    func saveLastSeen(_ digest: String, for id: String) {
+        defaults.set(digest, forKey: "orcha_seen_digest_\(id)")
+        defaults.set(Date.now, forKey: "orcha_seen_at_\(id)")
+    }
 }
