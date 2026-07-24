@@ -868,81 +868,18 @@ def _brew_upgrade(keg: str) -> bool:
 
 
 def cmd_update(args: argparse.Namespace) -> None:
-    """ONE idempotent command to apply a code change to a running project — safe to
-    re-run even when nothing changed, and even when a portal rebuild / daemon respawn /
-    bridge respawn isn't strictly required (every step is a no-op-or-refresh).
+    """Apply the host and project update phases through the compatibility entrypoint."""
+    from orcha_cli.cli_update import update_command
 
-    Folds the whole host dance into one command so operators never hand-kill/respawn
-    host processes:
-      0. (auto) self-update the host CLI — editable/source installs reinstall from
-         source; Homebrew-managed installs run `brew upgrade` (a versioned orcha@X.Y.Z
-         keg is a user pin and is never moved) — then re-exec under the new code so the
-         steps below run the just-pulled logic. Any other packaged install skips this
-         and is updated via the user's package manager.
-      1. `upgrade` — re-copy portal/migrations/skills templates, re-render compose,
-         re-register hooks, rebuild the portal (NO data wipe). Pending DB migrations
-         then apply on the portal's startup.
-      2. restart the notifier wake daemon — picks up new notifier/runtime code.
-      3. restart the live-terminal bridge — picks up new bridge code.
-    Steps 2–3 are a brief, safe respawn; an unchanged daemon simply comes back identical.
-    """
-    cwd = pathlib.Path.cwd()
-    if not (cwd / ".orcha" / "docker-compose.yml").exists() or not (cwd / ".claude" / "orcha.json").exists():
-        sys.exit("error: no .orcha/ + .claude/orcha.json here — run `orcha update` from an "
-                 "existing project directory (or `orcha init` to bootstrap a new one).")
-
-    # ── Phase 0: self-update the host CLI, then re-exec under new code ──
-    if not args.no_self:
-        src = _cli_source_root()
-        keg = None if src else _brew_keg()
-        if src is not None:
-            if _reinstall_cli(src):
-                exe = shutil.which("orcha") or "orcha"
-                print("[orcha] ✓ host CLI reinstalled — re-running update under the new code ...\n")
-                # Re-exec the freshly-installed CLI for the remaining phases so a change to
-                # `update` itself takes effect this run. --no-self prevents an infinite loop.
-                forward = [exe, "update", "--no-self"]
-                if args.no_bridge:
-                    forward.append("--no-bridge")
-                sys.exit(subprocess.run(forward).returncode)
-            else:
-                print("[orcha] warn: CLI self-reinstall failed — continuing with the "
-                      "currently-installed code.", file=sys.stderr)
-        elif keg is not None:
-            if _brew_upgrade(keg):
-                exe = shutil.which("orcha") or "orcha"
-                print("[orcha] ✓ host CLI upgraded via brew — re-running update under the new code ...\n")
-                forward = [exe, "update", "--no-self"]
-                if args.no_bridge:
-                    forward.append("--no-bridge")
-                sys.exit(subprocess.run(forward).returncode)
-            else:
-                print("[orcha] continuing with the currently-installed CLI.")
-        else:
-            print("[orcha] host CLI is a packaged install — update it via your package "
-                  "manager (e.g. `uv tool upgrade orcha-cli` or `pip install -U orcha-cli`), "
-                  "then re-run `orcha update`. Skipping CLI self-update.")
-
-    # ── Phase 1: portal/templates/compose/hooks + rebuild (data preserved) ──
-    cmd_upgrade(args)
-
-    # ── Phase 2: restart the wake daemon so new notifier/runtime code takes effect ──
-    try:
-        ensure_daemon(cwd, restart=True)
-    except Exception as e:
-        print(f"[orcha] warn: notifier daemon restart failed ({e}); "
-              f"start it with `orcha notifier --ensure`", file=sys.stderr)
-
-    # ── Phase 3: restart the live-terminal bridge (unless suppressed) ──
-    if not args.no_bridge:
-        try:
-            from orcha_cli.terminal_bridge import ensure_bridge
-            ensure_bridge(cwd, restart=True)
-        except Exception as e:
-            print(f"[orcha] warn: terminal bridge restart failed ({e}); "
-                  f"start it with `orcha terminal-bridge --ensure`", file=sys.stderr)
-
-    print("[orcha] ✓ update complete — portal rebuilt, hooks current, daemon + bridge restarted.")
+    update_command(
+        args,
+        source_root=_cli_source_root,
+        brew_keg=_brew_keg,
+        reinstall_cli=_reinstall_cli,
+        brew_upgrade=_brew_upgrade,
+        upgrade=cmd_upgrade,
+        ensure_notifier=ensure_daemon,
+    )
 
 
 def cmd_status(_: argparse.Namespace) -> None:
