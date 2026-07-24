@@ -94,6 +94,7 @@ from .notifier_runtime import (
     _runtime_executable,
     _runtime_extra_flags,
 )
+from . import notifier_wake_decisions as _wake_decisions
 
 
 
@@ -249,84 +250,13 @@ def _triage_config_from_scan(scan: dict) -> Optional[dict]:
 
 
 def decide_wake_suppression(cand, *, triage_fn=_triage_wake):
-    """#288: PURE decision — should this candidate's EPHEMERAL wake be SUPPRESSED (no spawn)?
-
-    Returns None to wake normally (the conservative default), or a dict
-    ``{tier, reason, request_id}`` to suppress. ``triage_fn(text)->{"wake":bool,"reason":str}`` is
-    injected (``llm_util.triage_wake``) so tests can drive it without a network call.
-
-    FAIL-OPEN everywhere: a candidate with no ``triage_hint``, an unknown tier, a non-False
-    ``wake`` verdict, OR any triage exception all return None (wake). Only a structural BARE FYI,
-    or an explicit ``wake is False`` triage verdict, suppresses. ``request_id`` is set (Tier-1
-    ``request_answered`` only) so the caller can auto-close the answered request.
-
-    GH #91/#90 (Round 10): an OWED, unaccepted task request (``has_pending_task_request``) is NEVER
-    suppressible — the agent must full-boot to accept it. Return None (wake) before consulting the
-    hint, so even a stale suppression hint riding along can't strand the task."""
-    if (cand or {}).get("has_pending_task_request"):
-        return None
-    hint = (cand or {}).get("triage_hint")
-    if not hint:
-        return None
-    tier = hint.get("tier")
-    if tier == "structural":
-        return {"tier": "structural",
-                "reason": f"bare {hint.get('event_name')}",
-                "request_id": hint.get("request_id")}
-    if tier == "llm":
-        try:
-            verdict = triage_fn(hint.get("text") or "")
-        except Exception:
-            return None   # fail-open — a flaky triage can never suppress a wake
-        # only an explicit boolean False suppresses; missing/null/non-bool wakes (bool(None) trap).
-        if isinstance(verdict, dict) and verdict.get("wake") is False:
-            return {"tier": "llm",
-                    "reason": str(verdict.get("reason", "")),
-                    "request_id": hint.get("request_id")}
-        return None
-    return None
-
-
-# The T2 cheap-act actions the daemon knows how to complete. An event tagged with anything NOT in
-# this set FAILS OPEN to a full boot (decide_wake_tier) — never a silent no-op.
-_T2_ACTIONS = ("ack_close", "ack_verify")
+    """Compatibility facade for the pure wake-suppression grader."""
+    return _wake_decisions.decide_wake_suppression(cand, triage_fn=triage_fn)
 
 
 def decide_wake_tier(cand, *, triage_fn=_triage_wake):
-    """#307: PURE grading of a candidate into the CHEAPEST SUFFICIENT substrate —
-    ``structural`` | ``llm`` (both = #288 suppress), ``act`` (T2 cheap handoff), or ``full`` (boot).
-
-    A strict SUPERSET of ``decide_wake_suppression``: it first asks #288 "would this be suppressed?"
-    and returns that verdict VERBATIM (so T2 can NEVER steal a wake #288 already handles, TOOTH A).
-    Only when #288 would let the event FULL-BOOT does it look at the server's ``t2`` tag: a KNOWN
-    routine action grades ``act`` (the boot-saving rung, TOOTH B); an unknown action or no tag
-    grades ``full`` (FAIL-OPEN — an untagged/novel event always earns a full embodiment).
-
-    ``triage_fn`` is injected exactly as in ``decide_wake_suppression`` (one triage call total)."""
-    # GH #91/#90 (Round 11): an owed, unaccepted task request ALWAYS earns a full boot — it must never
-    # be suppressed (structural/llm) NOR cheap-acted (T2 'act'), both of which skip the spawn the
-    # accept-task step needs. Guard here, the sole ephemeral-path grader, BEFORE reading triage_hint
-    # or calling decide_wake_suppression, so it covers every downstream rung in one place.
-    if (cand or {}).get("has_pending_task_request"):
-        return {"tier": "full", "reason": "owed task request — full boot"}
-    hint = (cand or {}).get("triage_hint")
-    if not hint:
-        return {"tier": "full"}
-    # #288 first: a structural bare FYI or a triage=skip answer stays a suppress, verbatim.
-    suppress = decide_wake_suppression(cand, triage_fn=triage_fn)
-    if suppress is not None:
-        return suppress
-    # Not suppressed → this would full-boot today. Cheap-act ONLY a server-tagged routine handoff.
-    t2 = hint.get("t2") if isinstance(hint, dict) else None
-    action = t2.get("action") if isinstance(t2, dict) else None
-    if action in _T2_ACTIONS:
-        verdict = {"tier": "act", "action": action, "text": hint.get("text") or ""}
-        if action == "ack_close":
-            verdict["request_id"] = t2.get("request_id")
-        elif action == "ack_verify":
-            verdict["task_id"] = t2.get("task_id")
-        return verdict
-    return {"tier": "full"}   # untagged / unknown action → conservative full boot
+    """Compatibility facade for the pure wake-tier grader."""
+    return _wake_decisions.decide_wake_tier(cand, triage_fn=triage_fn)
 
 
 def _ack_config_from_scan(scan: dict) -> Optional[dict]:
