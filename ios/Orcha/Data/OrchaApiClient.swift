@@ -1,5 +1,7 @@
 import Foundation
 
+// Responsibility: Orcha API read operations and worker-run stream decoding.
+
 /// One parsed frame of the worker-run SSE stream (`main.py:5671-5673`):
 /// `data: {"seq","line"}` progress lines and a terminal `data: {"seq","done","status"}`.
 enum RunStreamEvent {
@@ -10,11 +12,11 @@ enum RunStreamEvent {
 /// Thin async URLSession client over the Orcha REST surface — the same endpoints
 /// the Android client is proven against. All calls throw on non-2xx.
 struct OrchaApiClient {
-    private let session: URLSession
+    let session: URLSession
     /// A separate, un-timed-out session for the run-log SSE stream: a running run never
     /// closes, so the 20s `timeoutIntervalForResource` on `session` would kill it (Issue 3).
     private let streamSession: URLSession
-    private let decoder = JSONDecoder()
+    let decoder = JSONDecoder()
 
     init() {
         let config = URLSessionConfiguration.ephemeral
@@ -147,207 +149,4 @@ struct OrchaApiClient {
         return nil
     }
 
-    // MARK: writes (actor ids per the human-authority contract)
-
-    func postTaskMessage(_ base: String, _ tid: String, actor: String, body: String) async throws {
-        try await post(base, "/api/tasks/\(tid)/messages", ["author_agent_id": actor, "body": body])
-    }
-
-    func cancelTask(_ base: String, _ tid: String, actor: String, reason: String?) async throws {
-        try await post(base, "/api/tasks/\(tid)/cancel", ["actor_agent_id": actor, "reason": reason])
-    }
-
-    func verifyTask(_ base: String, _ tid: String, actor: String, approve: Bool, feedback: String?) async throws {
-        try await post(base, "/api/tasks/\(tid)/verify", ["approve": approve, "feedback": feedback, "actor_agent_id": actor])
-    }
-
-    func decidePlan(_ base: String, _ tid: String, actor: String, approve: Bool, reason: String?, target: String?) async throws {
-        try await post(base, "/api/decisions", [
-            "subject_type": "plan_approval",
-            "subject_id": tid,
-            "decision": approve ? "approve" : "reject",
-            "reason": reason,
-            "actor_agent_id": actor,
-            "target_agent_id": target,
-        ])
-    }
-
-    func respondRequest(_ base: String, _ rid: String, actor: String, response: String) async throws {
-        try await post(base, "/api/requests/\(rid)/respond", ["responder_agent_id": actor, "response": response])
-    }
-
-    func closeRequest(_ base: String, _ rid: String, actor: String, reason: String?) async throws {
-        try await post(base, "/api/requests/\(rid)/close", ["requester_agent_id": actor, "reason": reason])
-    }
-
-    /// GH #148 — the notifier (kill-switch). Human-only on the server; `actor` is the
-    /// paired human, not an agent id.
-    func setWakes(_ base: String, _ cid: String, actor: String, enabled: Bool) async throws {
-        try await post(base, "/api/containers/\(cid)/wakes", ["enabled": enabled, "actor_agent_id": actor])
-    }
-
-    /// GH #148 — the autonomy gearbox (`plan` | `pr` | `full`). Human-gated on the server.
-    func setAutonomy(_ base: String, _ cid: String, actor: String, level: String) async throws {
-        try await post(base, "/api/containers/\(cid)/autonomy", ["level": level, "actor_agent_id": actor])
-    }
-
-    /// Flow 07a: returns the routed outcome so the UI can tell a real wake
-    /// (`nudged:true` → "Nudged {alias}") from the human-owns-it no-op (`nudged:false`).
-    func nudgeRequest(_ base: String, _ rid: String, actor: String, note: String?) async throws -> NudgeResult {
-        try await postDecoding(base, "/api/requests/\(rid)/nudge", ["actor_agent_id": actor, "note": note])
-    }
-
-    func escalateRequest(_ base: String, _ rid: String, actor: String, reason: String?) async throws {
-        try await post(base, "/api/requests/\(rid)/escalate", ["requester_agent_id": actor, "reason": reason])
-    }
-
-    func acceptTaskRequest(_ base: String, _ rid: String, actor: String, note: String?) async throws {
-        try await post(base, "/api/requests/\(rid)/accept-task", ["responder_agent_id": actor, "note": note])
-    }
-
-    func rejectTaskRequest(_ base: String, _ rid: String, actor: String, reason: String) async throws {
-        try await post(base, "/api/requests/\(rid)/reject-task", ["responder_agent_id": actor, "reason": reason])
-    }
-
-    func convertRequest(_ base: String, _ rid: String, actor: String, title: String, dod: String, assignee: String?) async throws {
-        try await post(base, "/api/requests/\(rid)/convert-to-task", [
-            "requester_agent_id": actor,
-            "title": title,
-            "definition_of_done": dod,
-            "assignee_alias": assignee,
-        ])
-    }
-
-
-    func updateAgentModel(_ base: String, _ aid: String, model: String) async throws {
-        try await post(base, "/api/agents/\(aid)/model", ["model": model])
-    }
-
-    func updateAutoWake(_ base: String, _ aid: String, actor: String, intervalSecs: Int?) async throws {
-        try await patch(base, "/api/agents/\(aid)/auto-wake", ["actor_agent_id": actor, "interval_secs": intervalSecs])
-    }
-
-    func renameAgent(_ base: String, _ aid: String, actor: String, alias: String) async throws {
-        try await patch(base, "/api/agents/\(aid)", ["actor_agent_id": actor, "alias": alias])
-    }
-
-    func retireAgent(_ base: String, _ aid: String, actor: String) async throws {
-        try await post(base, "/api/agents/\(aid)/retire", ["actor_agent_id": actor])
-    }
-
-    func startConversation(_ base: String, _ aid: String, actor: String) async throws -> ConversationResponse {
-        try await postDecoding(base, "/api/agents/\(aid)/conversations", ["actor_agent_id": actor])
-    }
-
-    func sendTurn(_ base: String, _ conversationId: String, actor: String, content: String) async throws {
-        try await post(base, "/api/conversations/\(conversationId)/turns", [
-            "role": "human", "author_agent_id": actor, "content": content,
-        ])
-    }
-
-    func endConversation(_ base: String, _ conversationId: String, actor: String) async throws {
-        try await post(base, "/api/conversations/\(conversationId)/end", ["actor_agent_id": actor])
-    }
-
-    func stopRun(_ base: String, _ runId: String, actor: String) async throws {
-        try await post(base, "/api/runs/\(runId)/stop", ["actor_agent_id": actor])
-    }
-
-    func createTask(
-        _ base: String, _ cid: String, actor: String,
-        title: String, description: String?, dod: String,
-        assignee: String?, priority: Int, dependsOn: [String], notReady: Bool
-    ) async throws -> GenericIdResponse {
-        try await postDecoding(base, "/api/containers/\(cid)/tasks", [
-            "title": title,
-            "description": description,
-            "definition_of_done": dod,
-            "priority": priority,
-            "created_by_agent_id": actor,
-            "assignee_alias": assignee,
-            "depends_on": dependsOn,
-            "not_ready": notReady,
-        ])
-    }
-
-    // MARK: plumbing
-
-    private func url(_ base: String, _ path: String) throws -> URL {
-        guard let url = URL(string: base + path) else { throw URLError(.badURL) }
-        return url
-    }
-
-    /// Build a `?a=1&b=2` suffix, dropping nil values and percent-encoding each value
-    /// (ISO cursors carry `:`/`+` — over-encode to a conservative unreserved set).
-    private func query(_ items: [String: String?]) -> String {
-        let pairs = items
-            .sorted { $0.key < $1.key }
-            .compactMap { key, value -> String? in
-                guard let value else { return nil }
-                let encoded = value.addingPercentEncoding(withAllowedCharacters: .orchaQueryValue) ?? value
-                return "\(key)=\(encoded)"
-            }
-        return pairs.isEmpty ? "" : "?" + pairs.joined(separator: "&")
-    }
-
-    private func raw(_ base: String, _ path: String) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(from: url(base, path))
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else {
-            throw OrchaApiError(status: http.statusCode, body: String(decoding: data.prefix(300), as: UTF8.self))
-        }
-        return (data, http)
-    }
-
-    private func get<T: Decodable>(_ base: String, _ path: String) async throws -> T {
-        let (data, _) = try await raw(base, path)
-        return try decoder.decode(T.self, from: data)
-    }
-
-    private func send(_ base: String, _ path: String, method: String, _ body: [String: Any?]) async throws -> Data {
-        var request = URLRequest(url: try url(base, path))
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let cleaned = body.compactMapValues { $0 }
-        request.httpBody = try JSONSerialization.data(withJSONObject: cleaned)
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else {
-            throw OrchaApiError(status: http.statusCode, body: String(decoding: data.prefix(300), as: UTF8.self))
-        }
-        return data
-    }
-
-    private func post(_ base: String, _ path: String, _ body: [String: Any?]) async throws {
-        _ = try await send(base, path, method: "POST", body)
-    }
-
-    private func postDecoding<T: Decodable>(_ base: String, _ path: String, _ body: [String: Any?]) async throws -> T {
-        let data = try await send(base, path, method: "POST", body)
-        return try decoder.decode(T.self, from: data)
-    }
-
-    private func patch(_ base: String, _ path: String, _ body: [String: Any?]) async throws {
-        _ = try await send(base, path, method: "PATCH", body)
-    }
-}
-
-private extension CharacterSet {
-    /// Conservative unreserved set for query VALUES — encodes `:`, `+`, `&`, `=`, space, etc.
-    static let orchaQueryValue = CharacterSet(charactersIn:
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-}
-
-struct OrchaApiError: LocalizedError {
-    let status: Int
-    let body: String
-
-    var errorDescription: String? {
-        switch status {
-        case 403: "This action is not allowed for the paired human."
-        case 409: "Orcha rejected this action because the item changed. Refresh and try again."
-        case 422: "Orcha needs more information for this action."
-        default: "Orcha answered with an error (\(status))."
-        }
-    }
 }
