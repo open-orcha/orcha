@@ -144,6 +144,23 @@ async def test_retired_agent_blocked_on_work_paths(client, container, make_agent
 
 
 @pytest.mark.asyncio
+async def test_retired_agent_cannot_reject_task_request(client, container, make_agent, make_request):
+    """Guard parity with accept-task: a retired target can't act on a task request in either
+    direction — reject-task previously missed the _reject_if_retired gate its sibling has."""
+    human = await make_agent("Boss11", "human", kind="human")
+    asker = await make_agent("Asker", "eng")
+    gone = await make_agent("Gone", "eng")
+    req = await make_request(asker["agent_id"], "please build X", target_alias="Gone",
+                             type="task", task={"title": "t", "definition_of_done": "d"})
+    await client.post(f"/api/agents/{gone['agent_id']}/retire",
+                      json={"actor_agent_id": human["agent_id"]})
+    r = await client.post(f"/api/requests/{req['request_id']}/reject-task",
+                          json={"responder_agent_id": gone["agent_id"], "reason": "no"})
+    assert r.status_code == 409, r.text
+    assert "retired" in r.text
+
+
+@pytest.mark.asyncio
 async def test_retire_preserves_done_assignment_history(client, container, make_agent, make_task, db):
     """[P2 review fix] retiring must NOT erase terminal ('done') assignment rows —
     completed-task assignee history (task.assignees) must survive."""

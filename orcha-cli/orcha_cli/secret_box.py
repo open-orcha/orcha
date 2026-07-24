@@ -46,7 +46,7 @@ from typing import Mapping, Optional
 
 _SCHEME = "v1"
 _MASTER_ENV = "ORCHA_SECRET_KEY"
-_OVERRIDE_ENV = "ORCHA_LLM_API_KEY"  # env override wins over any stored key (read path)
+_OVERRIDE_ENV = "ORCHA_LLM_API_KEY"  # env override wins over the stored ANTHROPIC key (read path)
 _NONCE_LEN = 16
 _TAG_LEN = 32
 _HASH = hashlib.sha256
@@ -167,22 +167,25 @@ def last4(key: str) -> str:
 
 
 def resolve_llm_key(stored_blob: Optional[str], *,
+                    provider: str = "anthropic",
                     env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """The READ PATH (#294 deliverable). Return the effective LLM API key, or None.
 
-    Precedence — env override > DB-stored (decrypted) > None:
-      1. ``ORCHA_LLM_API_KEY`` env  — operator override, always wins (mirrors llm_util's own
-         precedence; lets ops force a key without touching the DB).
-      2. ``stored_blob`` decrypted  — the per-container key sealed via :func:`seal`.
+    Precedence — env override (Anthropic only) > DB-stored (decrypted) > None:
+      1. ``ORCHA_LLM_API_KEY`` env  — operator override (mirrors llm_util's own precedence;
+         lets ops force a key without touching the DB). ANTHROPIC-SCOPED: the var predates the
+         multi-provider catalog and an API key is provider-specific, so it must never shadow
+         another provider's stored key (an Anthropic key sent to xAI is a guaranteed 401).
+      2. ``stored_blob`` decrypted  — the per-(container, provider) key sealed via :func:`seal`.
       3. ``None``                   — caller passes this straight to ``llm_util`` as ``api_key=``,
-         which then keeps its own provider-env fallback (ANTHROPIC_API_KEY).
+         which then keeps its own provider-env fallback (ANTHROPIC_API_KEY / XAI_API_KEY / …).
 
     A stored blob that cannot be decrypted (no master key / corrupt / tampered) is treated as
     'no stored key' rather than raising, so a bad row degrades to the env/None fallback instead
     of breaking every read. Triage call-site wiring is downstream (#288/#290) — this function is
     the read path those callers will use after fetching the row's ``llm_api_key_enc``."""
     e = os.environ if env is None else env
-    override = e.get(_OVERRIDE_ENV)
+    override = e.get(_OVERRIDE_ENV) if provider == "anthropic" else None
     if override:
         return override
     if stored_blob:
