@@ -1863,275 +1863,94 @@ def cmd_rehydrate(args: argparse.Namespace) -> None:
         return
 
 
-def _live_boot_prefix(api_base: Optional[str], agent_id: Optional[str]) -> Optional[str]:
-    """COLD-boot `--append-system-prompt` text for an S3 live embodiment: the agent's persona
-    + latest memory digest (Epic A/C, via notifier.format_persona) followed by recent
-    conversation history (V1 #120 formatter). This reuses the SAME assembly the headless wake
-    path injects, so a terminal session boots AS the agent with full continuity instead of as
-    a generic Claude. Best-effort: returns whatever it could fetch (or None) — a live boot must
-    never fail on a missing digest / unreachable API."""
-    if not api_base or not agent_id:
-        return None
-    parts = []
-    try:
-        from orcha_cli import notifier  # reuse format_persona + _build_persona (persona + digest)
-        p = notifier._build_persona(api_base, agent_id)
-        if p:
-            parts.append(p)
-    except Exception:
-        pass
-    try:
-        from orcha_cli.conversation_prefix import format_conversation_history
-        conv = _get_json(f"{api_base}/api/agents/{agent_id}/conversation", timeout=4.0)
-        hist = format_conversation_history((conv or {}).get("turns") or [])
-        if hist:
-            parts.append(hist)
-    except Exception:
-        pass
-    return "\n\n".join(parts) if parts else None
+def _live_boot_prefix(
+    api_base: Optional[str], agent_id: Optional[str]
+) -> Optional[str]:
+    """Compatibility facade for cold-boot persona and conversation context."""
+    from orcha_cli import cli_live
+
+    return cli_live.live_boot_prefix(api_base, agent_id, get_json=_get_json)
 
 
-RUNTIME_CLAUDE = "claude"
-RUNTIME_CODEX = "codex"
-ORCHA_CLAUDE_EXEC = "ORCHA_CLAUDE_EXEC"
-ORCHA_CODEX_EXEC = "ORCHA_CODEX_EXEC"
-_CODEX_EXEC_FALLBACKS = (
-    "/Applications/Codex.app/Contents/Resources/codex",
-    "/opt/homebrew/bin/codex",
-    "/usr/local/bin/codex",
-    "~/.local/bin/codex",
+from orcha_cli.cli_live import (  # public compatibility constants
+    RUNTIME_CLAUDE,
+    RUNTIME_CODEX,
+    ORCHA_CLAUDE_EXEC,
+    ORCHA_CODEX_EXEC,
 )
+from orcha_cli import cli_live as _cli_live
+
+_CODEX_EXEC_FALLBACKS = _cli_live.CODEX_EXEC_FALLBACKS
 
 
 def _normalize_runtime(runtime: Optional[str], model: Optional[str] = None) -> str:
-    if runtime == RUNTIME_CODEX:
-        return RUNTIME_CODEX
-    if runtime == RUNTIME_CLAUDE:
-        return RUNTIME_CLAUDE
-    if model and not str(model).startswith("claude-"):
-        return RUNTIME_CODEX
-    return RUNTIME_CLAUDE
+    return _cli_live.normalize_runtime(runtime, model)
 
 
 def _executable_override(env_var: str) -> Optional[str]:
-    override = os.environ.get(env_var)
-    if not override:
-        return None
-    if shutil.which(override):
-        return override
-    p = pathlib.Path(override).expanduser()
-    return str(p) if p.is_file() and os.access(p, os.X_OK) else None
+    return _cli_live.executable_override(env_var)
 
 
 def _runtime_executable(runtime: Optional[str]) -> str:
-    return "codex" if _normalize_runtime(runtime) == RUNTIME_CODEX else "claude"
+    return _cli_live.runtime_executable(runtime)
 
 
 def _resolve_runtime_executable(runtime: Optional[str]) -> Optional[str]:
-    runtime = _normalize_runtime(runtime)
-    leaf = _runtime_executable(runtime)
-    override = _executable_override(ORCHA_CODEX_EXEC if runtime == RUNTIME_CODEX else ORCHA_CLAUDE_EXEC)
-    if override:
-        return override
-    if shutil.which(leaf):
-        return leaf
-    if runtime == RUNTIME_CODEX:
-        for candidate in _CODEX_EXEC_FALLBACKS:
-            p = pathlib.Path(candidate).expanduser()
-            if p.is_file() and os.access(p, os.X_OK):
-                return str(p)
-    return None
+    return _cli_live.resolve_runtime_executable(
+        runtime, fallbacks=_CODEX_EXEC_FALLBACKS
+    )
 
 
-def _build_live_argv(cold: bool, resume_sid: Optional[str],
-                     boot_prefix: Optional[str], model: Optional[str] = None,
-                     runtime: Optional[str] = None) -> list:
-    """Pure: argv for an S3 live embodiment.
-
-    Claude COLD injects the persona/digest/history boot prefix via `--append-system-prompt`;
-    Codex COLD sends that same prefix as the initial prompt. Both pin the selected model with
-    `--model`. WARM resumes never re-pass a model: the pinned session already booted on its
-    model, and set_agent_model clears that session on a change so the next COLD reconnect picks
-    the new one. A WARM boot with no session_id degrades to a plain runtime launch.
-    """
-    runtime = _normalize_runtime(runtime, model)
-    if runtime == RUNTIME_CODEX:
-        argv = ["codex"]
-        if cold:
-            if model:
-                argv += ["--model", model]
-            if boot_prefix:
-                argv.append(boot_prefix)
-        elif resume_sid:
-            argv += ["resume", resume_sid]
-        return argv
-
-    argv = ["claude"]
-    if cold:
-        if boot_prefix:
-            argv += ["--append-system-prompt", boot_prefix]
-        if model:
-            argv += ["--model", model]
-    elif resume_sid:
-        argv += ["--resume", resume_sid]
-    return argv
+def _build_live_argv(
+    cold: bool,
+    resume_sid: Optional[str],
+    boot_prefix: Optional[str],
+    model: Optional[str] = None,
+    runtime: Optional[str] = None,
+) -> list:
+    return _cli_live.build_live_argv(cold, resume_sid, boot_prefix, model, runtime)
 
 
-def _live_agent_launch(api_base: Optional[str], agent_id: Optional[str]) -> tuple[Optional[str], str]:
-    """Resolved (model, runtime) for a live session boot/resume, from GET /persona.
-
-    Best-effort like _live_agent_model: the embedded terminal should still open if the
-    API is unreachable. Missing runtime is inferred from the model id for compatibility
-    with older portals that did not yet return model_runtime.
-    """
-    if not api_base or not agent_id:
-        return None, RUNTIME_CLAUDE
-    try:
-        persona = _get_json(f"{api_base}/api/agents/{agent_id}/persona", timeout=4.0) or {}
-        model = persona.get("model")
-        return model, _normalize_runtime(persona.get("model_runtime"), model)
-    except Exception:
-        return None, RUNTIME_CLAUDE
+def _live_agent_launch(
+    api_base: Optional[str], agent_id: Optional[str]
+) -> tuple[Optional[str], str]:
+    return _cli_live.live_agent_launch(api_base, agent_id, get_json=_get_json)
 
 
-def _live_agent_model(api_base: Optional[str], agent_id: Optional[str]) -> Optional[str]:
-    """The model to boot a COLD live session on, resolved server-side via GET /persona (retired/
-    unknown → DEFAULT_MODEL; human → None). Best-effort: a live boot must never fail on an
-    unreachable API, so any error → None (claude falls back to its own default)."""
+def _live_agent_model(
+    api_base: Optional[str], agent_id: Optional[str]
+) -> Optional[str]:
+    """Return the server-resolved model used for a cold live boot."""
     return _live_agent_launch(api_base, agent_id)[0]
 
 
-def _exec_live_session(cwd: pathlib.Path, alias: str, binding_file: pathlib.Path) -> None:
-    """Replace THIS process with the agent's interactive coding CLI (S3 live embodiment).
-
-    Invoked by `cmd_use` when the host PTY bridge spawned us with ORCHA_LIVE=1 inside a tty.
-    Env from the bridge (sourced from its wake-claim(kind='live') response): ORCHA_LIVE_COLD=
-    1|0 and ORCHA_LIVE_RESUME_SID=<sid> on a warm resume. COLD → boot prefix; WARM → --resume.
-    ORCHA_ALIAS is propagated so the agent's work-skills + the SessionEnd snapshot resolve to
-    this agent.
-
-    ORCHA_LIVE_EXEC: a test seam (R2 smoke gate). When set, it names the program to exec in
-    place of the runtime binary — the built argv is preserved and passed through, so a stub can
-    assert the cold/warm boot decision + env + cwd while EVERY other seam (bridge ⇄ /persona ⇄
-    lease ⇄ PTY ⇄ close ⇄ release) stays real. It only substitutes the editor leaf, never the
-    path under test. Unset in production → the selected runtime binary."""
-    try:
-        binding = json.loads(binding_file.read_text())
-    except Exception:
-        binding = {}
-    agent_id = binding.get("agent_id")
-    api_base = None
-    config_path = cwd / ".claude" / "orcha.json"
-    if config_path.exists():
-        try:
-            api_base = json.loads(config_path.read_text()).get("api_base_url")
-        except Exception:
-            api_base = None
-    cold = os.environ.get("ORCHA_LIVE_COLD", "1") != "0"
-    boot_prefix = _live_boot_prefix(api_base, agent_id) if cold else None
-    # GAP A: pin the agent's selected model on a COLD boot (the WARM --resume keeps the session's
-    # booted model — see _build_live_argv). Runtime is fetched on warm too so a Codex agent resumes
-    # with `codex resume` rather than falling back to Claude.
-    # #297: PREFER the model+runtime the PTY bridge already resolved and handed down via
-    # ORCHA_LIVE_MODEL/ORCHA_LIVE_RUNTIME — that came from the bridge's own /persona fetch (the one
-    # that authorized this terminal), so it's authoritative and skips a SECOND fail-open round-trip.
-    # The bridge sets ORCHA_LIVE_RUNTIME whenever it resolved a target (model-less human → 'claude'),
-    # so its presence marks a bridge-spawn. Only a DIRECT `orcha use` (no bridge) re-resolves from
-    # /persona — and that fallback is now non-silent so a degrade-to-default is diagnosable (#297).
-    env_runtime = os.environ.get("ORCHA_LIVE_RUNTIME")
-    if env_runtime:
-        env_model = os.environ.get("ORCHA_LIVE_MODEL") or None
-        live_model, runtime = env_model, _normalize_runtime(env_runtime, env_model)
-    else:
-        live_model, runtime = _live_agent_launch(api_base, agent_id)
-        if live_model is None and api_base and agent_id:
-            sys.stderr.write(
-                f"orcha live: could not resolve the agent's selected model from {api_base}"
-                f"/api/agents/{agent_id}/persona — booting the runtime default instead. "
-                "The terminal may not match the agent's configured model/runtime (#297).\n")
-    model = live_model if cold else None
-    argv = _build_live_argv(cold, os.environ.get("ORCHA_LIVE_RESUME_SID"),
-                            boot_prefix, model, runtime)
-    exec_cmd = os.environ.get("ORCHA_LIVE_EXEC") or _resolve_runtime_executable(runtime)
-    if not exec_cmd:
-        leaf = _runtime_executable(runtime)
-        hint = (f" Install Codex CLI or set {ORCHA_CODEX_EXEC}=/absolute/path/to/codex."
-                if runtime == RUNTIME_CODEX
-                else f" Install Claude Code or set {ORCHA_CLAUDE_EXEC}=/absolute/path/to/claude.")
-        sys.exit(f"error: `{leaf}` not found — cannot start the live session.{hint}")
-    if os.environ.get("ORCHA_LIVE_EXEC") and not shutil.which(exec_cmd):
-        sys.exit(f"error: `{exec_cmd}` not found on PATH — cannot start the live session.")
-    argv[0] = exec_cmd   # substitute the editor leaf (claude, or the ORCHA_LIVE_EXEC test stub)
-    env = dict(os.environ)
-    env["ORCHA_ALIAS"] = alias
-    env["ORCHA_AGENT_RUNTIME"] = runtime
-    # Replace the process image: the PTY now runs the coding CLI directly AS the agent, so the
-    # terminal IS the agent's session and the bridge relays its stdio.
-    os.execvpe(exec_cmd, argv, env)
+def _exec_live_session(
+    cwd: pathlib.Path, alias: str, binding_file: pathlib.Path
+) -> None:
+    """Compatibility facade retaining the live-session monkeypatch seams."""
+    _cli_live.exec_live_session(
+        cwd,
+        alias,
+        binding_file,
+        boot_prefix=_live_boot_prefix,
+        agent_launch=_live_agent_launch,
+        build_argv=_build_live_argv,
+        resolve_executable=_resolve_runtime_executable,
+        runtime_leaf=_runtime_executable,
+        normalize=_normalize_runtime,
+    )
 
 
 def cmd_use(args: argparse.Namespace) -> None:
-    """Print `export ORCHA_ALIAS=<alias>` for the user to eval into their shell — OR, when the
-    S3 PTY bridge spawns us with ORCHA_LIVE=1, BECOME the agent: exec an interactive `claude`
-    booted AS this agent (persona+digest+history on cold, `--resume` on warm).
-
-    A slash command / hook can't mutate the parent shell's env, so the default follows the
-    ssh-agent idiom: `eval "$(orcha use Vault)"` sets the var in YOUR shell so every subsequent
-    /orcha-* skill (and a fresh `claude`) resolves to that agent without --alias. Validates the
-    binding exists so typos fail loudly.
-    """
-    cwd = pathlib.Path.cwd()
-    alias = args.alias
-    binding_file = cwd / ".claude" / "orcha-tabs" / f"{alias}.json"
-    if not binding_file.exists():
-        sys.exit(
-            f"error: no binding for alias '{alias}' in .claude/orcha-tabs/. "
-            f"Register it first (/orcha-register-agent {alias} ...) or check the spelling."
-        )
-    # S3 live embodiment (set by the host PTY bridge): become the agent's interactive claude.
-    if os.environ.get("ORCHA_LIVE"):
-        _exec_live_session(cwd, alias, binding_file)
-        return  # unreachable — execvpe replaced the process image
-    print(f"export ORCHA_ALIAS={alias}")
+    """Print an alias export or become the selected live agent."""
+    _cli_live.use_command(args, exec_session=_exec_live_session)
 
 
 def cmd_terminal_bridge(args: argparse.Namespace) -> None:
-    """S3 §3b: run the host-side PTY/websocket bridge for the LIVE embedded-terminal embodiment.
+    """Run or ensure the embedded-terminal websocket bridge."""
+    from orcha_cli.cli_bridge import terminal_bridge_command
 
-    Resolves the API base from --api-base or .claude/orcha.json, then serves the localhost
-    websocket forever. `websockets` is imported lazily inside serve_bridge so the rest of the
-    CLI works without the dependency installed."""
-    import asyncio
-    from orcha_cli import terminal_bridge
-
-    cwd = pathlib.Path.cwd()
-    # `--ensure`: idempotent singleton spawn (used by up/init/SessionStart). Returns immediately;
-    # the spawned child runs the server. A managed embodiment skips it (handled in ensure_bridge).
-    if getattr(args, "ensure", False):
-        terminal_bridge.ensure_bridge(cwd, quiet=args.quiet)
-        return
-    api_base = args.api_base
-    cfg_bridge_port = None
-    cfg_path = cwd / ".claude" / "orcha.json"
-    if cfg_path.exists():
-        try:
-            _cfg = json.loads(cfg_path.read_text())
-            if not api_base:
-                api_base = _cfg.get("api_base_url")
-            cfg_bridge_port = _cfg.get("bridge_port")
-        except (OSError, ValueError):
-            pass
-    if not api_base:
-        sys.exit("error: no api_base_url — pass --api-base or run from a project with .claude/orcha.json")
-    host = args.host or terminal_bridge.BRIDGE_HOST
-    # ISS-84/#235: per-project bridge port — explicit --port wins, else orcha.json's bridge_port,
-    # else the 8765 back-compat constant (orcha.json predating this field).
-    port = args.port or cfg_bridge_port or terminal_bridge.BRIDGE_PORT
-    try:
-        asyncio.run(terminal_bridge.serve_bridge(
-            api_base, str(cwd), host=host, port=port, quiet=args.quiet))
-    except KeyboardInterrupt:
-        pass
+    terminal_bridge_command(args)
 
 
 def _read_hook_stdin() -> dict:
