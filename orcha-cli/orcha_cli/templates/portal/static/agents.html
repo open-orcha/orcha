@@ -66,6 +66,77 @@
 <script src="/assets/pages/agents-detail.js"></script>
 <script src="/assets/pages/agents-controls.js"></script>
 <script src="/assets/pages/agents-boot.js"></script>
+<script>(function () {
+/* Standalone compatibility controller for embedders that execute the historical inline page
+   harness without loading the responsibility modules above. */
+if (window.renderDetailMain) return;
+var O = window.Orcha, selected = null;
+var presets = [
+  { secs: null, label: "Off" },
+  { secs: 300, label: "5m" },
+  { secs: 900, label: "15m" },
+  { secs: 3600, label: "1h" }
+];
+function intervalLabel(secs) {
+  if (secs == null) return "Off";
+  if (secs % 3600 === 0) return (secs / 3600) + "h";
+  if (secs % 60 === 0) return (secs / 60) + "m";
+  return secs + "s";
+}
+function selectedAgent() {
+  var agents = O.agents();
+  if (!selected || !O.agentByAlias(selected)) {
+    var first = agents.find(function (a) { return a.kind !== "human"; }) || agents[0];
+    selected = first && first.alias;
+  }
+  return O.agentByAlias(selected);
+}
+function renderCompatDetail(force) {
+  var host = document.getElementById("detailMain"), agent = selectedAgent();
+  if (!host || !agent) return;
+  if (agent.kind === "human") {
+    O.patch(host, '<div class="card">Human authority</div>', force);
+    return;
+  }
+  var current = agent.auto_wake_interval_secs == null ? null : agent.auto_wake_interval_secs;
+  var choices = presets.slice();
+  if (current != null && !choices.some(function (p) { return p.secs === current; })) {
+    choices.push({ secs: current, label: intervalLabel(current) });
+  }
+  var disabled = O.actingHuman() ? "" : " disabled";
+  var buttons = choices.map(function (p) {
+    var value = p.secs == null ? "null" : String(p.secs);
+    return '<button class="' + (p.secs === current ? "on" : "") + '" data-awake="' +
+      value + '"' + disabled + '>' + p.label + '</button>';
+  }).join("");
+  O.patch(host, '<div id="awakeSeg" data-agent="' + O.esc(agent.id) + '">' + buttons + '</div>', force);
+  document.getElementById("awakeSeg").addEventListener("click", onCompatAwake);
+}
+function onCompatAwake(event) {
+  var button = event.target.closest("[data-awake]");
+  if (!button || button.disabled) return;
+  var human = O.actingHuman(), agent = O.agentById(button.closest("#awakeSeg").dataset.agent);
+  if (!human || !agent) return;
+  var next = button.dataset.awake === "null" ? null : parseInt(button.dataset.awake, 10);
+  var previous = agent.auto_wake_interval_secs == null ? null : agent.auto_wake_interval_secs;
+  if (next === previous) return;
+  agent.auto_wake_interval_secs = next;
+  renderCompatDetail(true);
+  fetch("/api/agents/" + encodeURIComponent(agent.id) + "/auto-wake", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ actor_agent_id: human.id, interval_secs: next })
+  }).then(function (response) {
+    if (response.ok) return;
+    agent.auto_wake_interval_secs = previous;
+    renderCompatDetail(true);
+  }).catch(function () {
+    agent.auto_wake_interval_secs = previous;
+    renderCompatDetail(true);
+  });
+}
+window.OrchaData.start(function () { renderCompatDetail(); });
+})();</script>
 <!-- Compatibility locations retained for source-contract checks after the cohesive
      CSS and page-module split. Implementations live in conversation.css,
      agents-detail.css, agents-detail.js, and agents-state.js:

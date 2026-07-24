@@ -7,6 +7,7 @@ if (typeof D === "undefined") {
   function F_applySnapshot(fresh) {
     if (fresh && typeof fresh === "object") Object.keys(fresh).forEach((k) => { F_D[k] = fresh[k]; });
     F_paintAutonomy();
+    F_paintNotifications();
     return F_D;
   }
   function F_agents() { return F_D.agents || []; }
@@ -30,6 +31,7 @@ if (typeof D === "undefined") {
   document.documentElement.setAttribute("data-theme", F_currentTheme());
   const F_STAT = { needs_verification: { l: "Needs verify", c: "s-attn" }, working: { l: "Working", c: "s-working" }, completed: { l: "Completed", c: "s-done" }, idle: { l: "Idle", c: "s-idle" } };
   const F_noop = () => {}, F_blank = () => "", F_false = () => false, F_zero = () => 0;
+  const F_icon = (name) => name === "sliders" ? '<svg><circle></circle><circle></circle></svg>' : "";
   const F_avatar = (alias, kind, size) => `<span class="av ${size || ""} ${kind === "human" ? "human" : ""}">${F_esc((alias || "?").charAt(0).toUpperCase())}</span>`;
   function F_pill(status) { const m = F_STAT[status] || { l: status || "unknown", c: "s-idle" }; return `<span class="pill ${m.c}"><svg class="gl"></svg>${F_esc(m.l)}</span>`; }
   function F_attnItems() {
@@ -46,6 +48,7 @@ if (typeof D === "undefined") {
     if (side) side.innerHTML = `<a href="/settings" class="${page === "settings" ? "active" : ""}">Settings</a><div>Needs you <span>${a.count}</span></div>`;
     if (top) top.innerHTML = `<div>${F_esc((opts || {}).title || "")}</div><div>acting as ${who ? F_esc(who.alias) : "no human registered"}</div><button id="pairPhoneBtn">Pair phone</button>`;
     F_paintAutonomy();
+    F_wireNotifPill();
   }
   function F_startRunStream() { return () => {}; }
   const LEASES = ["idle", "ephemeral", "resident", "live"];
@@ -54,7 +57,7 @@ if (typeof D === "undefined") {
     return v && LEASES.indexOf(v) >= 0 ? v : "idle";
   };
   window.Orcha = {
-    D: F_D, applySnapshot: F_applySnapshot, esc: F_esc, linkify: F_esc, mdText: F_esc, trunc: (s, n) => ((s || "").length > n ? (s || "").slice(0, n - 1) + "..." : (s || "")), shortId: (s) => (s ? String(s).slice(0, 8) : "-"), relTime: () => "-", clockTime: () => "-", recencyTs: F_zero, recencyBand: () => 1, avatar: F_avatar, icon: F_blank, pill: F_pill, statusClass: (s) => (F_STAT[s] || { c: "s-idle" }).c, glyph: F_blank,
+    D: F_D, applySnapshot: F_applySnapshot, esc: F_esc, linkify: F_esc, mdText: F_esc, trunc: (s, n) => ((s || "").length > n ? (s || "").slice(0, n - 1) + "..." : (s || "")), shortId: (s) => (s ? String(s).slice(0, 8) : "-"), relTime: () => "-", clockTime: () => "-", recencyTs: F_zero, recencyBand: () => 1, avatar: F_avatar, icon: F_icon, pill: F_pill, statusClass: (s) => (F_STAT[s] || { c: "s-idle" }).c, glyph: F_blank,
     sortState: () => ({ key: "time", dir: "desc" }), sortControlHtml: F_blank, sortComparator: () => (() => 0), wireSortControl: F_noop,
     kindBadge: (k) => k === "human" ? '<span class="kind human">Human</span>' : '<span class="kind ai">AI</span>', agentLink: F_esc, taskLink: (id, label) => F_esc(label || id), requestLink: (id, label) => F_esc(label || id), taskByRef: (id) => F_tasks().find((t) => t.id === id) || null, taskRefs: (h) => h || "", attnItems: F_attnItems, mountShell: F_mountShell, modal: F_modal, closeModal: F_closeModal, openPairingModal: F_openPairingModal,
     toast: F_toast, copyText: F_noop, renderDiff: F_blank, runCard: F_runCard, stopRun: F_stopRun, activateRuns: () => (() => {}), startRunStream: F_startRunStream, paintFinished: F_noop, classifyLine: () => [],
@@ -119,6 +122,53 @@ if (typeof D === "undefined") {
     let toast = document.getElementById("__toast");
     if (!toast) { toast = document.createElement("div"); toast.id = "__toast"; document.body.appendChild(toast); }
     toast.textContent = message;
+  }
+  /* The standalone fallback keeps the historical notification-center contract used by
+     embedders that load app.js without the responsibility modules. */
+  let F_ncOpen = false, F_ncRows = [], F_ncBefore = null, F_ncBeforeId = null;
+  function F_ncRow(row) {
+    const labels = { task_verified: "Task verified", request_answered: "Request answered" };
+    const label = labels[row.type] || String(row.type || "notification").replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+    const href = row.deeplink && row.deeplink.id && (row.deeplink.kind === "task" || row.deeplink.kind === "request")
+      ? `/${row.deeplink.kind}s?${row.deeplink.kind === "task" ? "task" : "req"}=${encodeURIComponent(row.deeplink.id)}` : null;
+    return `<${href ? "a" : "div"} class="nrow${row.read ? "" : " unread"}"${href ? ` href="${href}"` : ""}>${F_esc(label)}${row.preview ? " · " + F_esc(row.preview) : ""}</${href ? "a" : "div"}>`;
+  }
+  function F_ncRender() {
+    const host = document.getElementById("ncFloat"); if (!host) return;
+    const a = F_attnItems(), needs = []
+      .concat(a.plans.map((t) => `<a class="nrow" href="/tasks?task=${encodeURIComponent(t.id)}">Plan approval · ${F_esc(t.title || t.id)}</a>`))
+      .concat(a.verifs.map((t) => `<a class="nrow" href="/tasks?task=${encodeURIComponent(t.id)}">Verify task · ${F_esc(t.title || t.id)}</a>`))
+      .concat(a.escs.map((r) => `<a class="nrow" href="/requests?req=${encodeURIComponent(r.id)}">Escalation · ${F_esc((r.payload || "").slice(0, 52))}</a>`));
+    const earlier = F_actingHuman() ? F_ncRows.map(F_ncRow).join("") : "Pick an acting human to see your activity feed.";
+    host.innerHTML = `<div>Notifications <span id="ncMark">Mark all read</span></div><div>Needs you <span class="ct">(${a.count})</span></div>${needs.join("")}<div>Earlier</div>${earlier}${F_ncBefore != null ? '<div id="ncMore">Load earlier</div>' : ""}`;
+    const mark = document.getElementById("ncMark"), more = document.getElementById("ncMore");
+    if (mark) mark.addEventListener("click", () => F_ncMark());
+    if (more) more.addEventListener("click", () => F_ncLoad(false));
+  }
+  function F_ncLoad(reset) {
+    const who = F_actingHuman(); if (!who) return;
+    let url = `/api/agents/${encodeURIComponent(who.id)}/notifications?zone=earlier&limit=20`;
+    if (!reset && F_ncBefore != null) url += `&before_ts=${encodeURIComponent(F_ncBefore)}&before_id=${encodeURIComponent(F_ncBeforeId)}`;
+    fetch(url).then((r) => r.json()).then((d) => {
+      F_ncRows = reset ? (d.notifications || []) : F_ncRows.concat(d.notifications || []);
+      F_ncBefore = d.next_before_ts; F_ncBeforeId = d.next_before_id; F_ncRender();
+    }).catch((e) => F_toast("Could not load notifications: " + e.message));
+  }
+  function F_ncMark() {
+    const who = F_actingHuman(); if (!who) return;
+    F_ncRows.forEach((row) => { row.read = true; }); F_ncRender();
+    fetch(`/api/agents/${encodeURIComponent(who.id)}/notifications/read`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  }
+  function F_wireNotifPill() {
+    let host = document.getElementById("ncFloat");
+    if (!host) { host = document.createElement("div"); host.id = "ncFloat"; host.className = "ncenter float"; document.body.appendChild(host); }
+    const pill = document.getElementById("attnPill"); if (!pill) return;
+    pill.addEventListener("click", (e) => { e.preventDefault(); F_ncOpen = !F_ncOpen; host.classList.toggle("show", F_ncOpen); if (F_ncOpen) { F_ncRender(); F_ncLoad(true); } });
+  }
+  function F_paintNotifications() {
+    const pill = document.getElementById("attnPill"), count = pill && pill.querySelector(".n");
+    if (count) count.textContent = String(F_attnItems().count);
+    if (F_ncOpen) F_ncRender();
   }
   function F_openPairingModal() {
     if (!F_D.container) return;
