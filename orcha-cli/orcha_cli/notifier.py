@@ -73,6 +73,16 @@ from .notifier_session_io import (
 )
 from .notifier_worker_status import _last_event_type, _result_status, _terminal_status, _worker_is_live
 from . import notifier_runtime as _notifier_runtime
+from .notifier_host import (
+    _api_and_cid,
+    _extract_attachment_text,
+    _get_json,
+    _load_config,
+    _post_json,
+    _probe_container,
+    send_tmux,
+    tmux_pane_live,
+)
 from .notifier_runtime import (
     ORCHA_CLAUDE_EXEC,
     ORCHA_CODEX_EXEC,
@@ -464,63 +474,6 @@ def _resolve_runtime_executable(runtime: Optional[str]) -> Optional[str]:
     )
 
 
-def _load_config(cwd: pathlib.Path) -> dict:
-    cfg = cwd / ".claude" / "orcha.json"
-    if not cfg.exists():
-        sys.exit(
-            "error: no .claude/orcha.json in CWD. Run the notifier from the project "
-            "root (where `orcha init`/`orcha connect` was run)."
-        )
-    return json.loads(cfg.read_text())
-
-
-def _api_and_cid(cwd: pathlib.Path, api_override: Optional[str],
-                 cid_override: Optional[str]) -> tuple[str, str]:
-    # Both overrides supplied → don't require a project config file (lets the
-    # daemon run from anywhere, e.g. a systemd unit or the demo harness).
-    if api_override and cid_override:
-        return api_override.rstrip("/"), cid_override
-    cfg = _load_config(cwd)
-    api_base = (api_override or cfg.get("api_base_url") or "").rstrip("/")
-    cid = cid_override or cfg.get("current_container_id")
-    if not api_base:
-        sys.exit("error: api_base_url missing from .claude/orcha.json")
-    if not cid:
-        sys.exit("error: no container_id — pass --container or set current_container_id "
-                 "in .claude/orcha.json (run /orcha-container).")
-    return api_base, cid
-
-
-def _get_json(url: str, timeout: float = 8.0) -> Optional[dict]:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
-        return None
-
-
-def _probe_container(api_base: str, cid: str) -> str:
-    """Does this API actually know this container? 'ok' | 'missing' (definitive HTTP 404)
-    | 'unreachable' (API down/booting). _get_json can't distinguish a 404 from a dead API —
-    this can, and ONLY a definitive 404 should make the daemon refuse to start.
-
-    Why it matters: a daemon bound to a container its API doesn't know is a permanent no-op
-    that still LOOKS alive in ps. The 2026-06-10 postmortem found stale orcha.json files
-    pointing at OTHER projects' API ports after a stack reshuffle — those daemons would idle
-    forever, deepening the which-daemon-is-which confusion during an incident."""
-    url = f"{api_base}/api/containers/{cid}/wake-scan?cooldown=15&min_idle=30"
-    try:
-        with urllib.request.urlopen(url, timeout=8.0) as resp:
-            resp.read()
-        return "ok"
-    except urllib.error.HTTPError as e:
-        # 404 = the API answered and doesn't know the container. Any other HTTP error
-        # means the API is alive — not grounds to refuse.
-        return "missing" if e.code == 404 else "ok"
-    except (urllib.error.URLError, ValueError, OSError):
-        return "unreachable"
-
-
 # Issue #36: how often a RUNNING daemon re-checks that its container still exists. Far longer
 # than the scan --interval (default 2s) — this is a cheap liveness guard, not a hot path, and a
 # minute's delay before an orphan self-terminates is harmless. The startup 404-refusal posture
@@ -543,77 +496,7 @@ def _container_vanished(api_base: str, cid: str) -> bool:
     return _probe_container(api_base, cid) == "missing"
 
 
-def _post_json(url: str, body: dict, timeout: float = 8.0) -> Optional[dict]:
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode(), method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
-        return None
-
-
-def _extract_attachment_text(attachments, api_base: Optional[str] = None) -> dict:
-    """#338 Codex image->text. Read upload/validation-time cached OCR text from attachment refs and
-    return ``{attachment-id: text}`` for the feed renderer. ``api_base`` is kept for compatibility
-    with the first-pass call sites/tests, but this helper deliberately performs NO network fetch
-    and NO LLM call — cached text is the single source so task-thread and conversation wakes do not
-    re-OCR per turn. FAIL-OPEN: malformed refs simply omit that id."""
-    out: dict = {}
-    for a in attachments or []:
-        if not isinstance(a, dict):
-            continue
-        aid = a.get("id")
-        text = (a.get("extracted_text") or "").strip()
-        if text:
-            out[aid] = text
-    return out
-
-
 # ---------- transports (host-side side-effects) ----------
-
-def _tmux_available() -> bool:
-    return shutil.which("tmux") is not None
-
-
-def tmux_pane_live(target: str) -> bool:
-    """True if `target` (session:window.pane) exists and runs a Claude session.
-
-    Best-effort: Claude Code runs as a `node` process, so we accept node/claude as
-    the pane's foreground command. If we can't confirm a Claude-ish process we
-    return False — sending keystrokes into a bare shell would execute the prompt as
-    a command, which we must never do.
-    """
-    if not target or not _tmux_available():
-        return False
-    try:
-        out = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", target, "#{pane_current_command}"],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if out.returncode != 0:
-        return False
-    cmd = out.stdout.strip().lower()
-    return cmd in {"node", "claude", "claude-code"}
-
-
-def send_tmux(target: str, prompt: str, dry_run: bool) -> tuple[bool, str]:
-    """Inject `prompt` + Enter into the tmux pane. Returns (sent, command-repr)."""
-    literal = ["tmux", "send-keys", "-t", target, "-l", prompt]
-    enter = ["tmux", "send-keys", "-t", target, "Enter"]
-    repr_ = f"tmux send-keys -t {target} -l <prompt>; tmux send-keys -t {target} Enter"
-    if dry_run:
-        return False, repr_
-    try:
-        subprocess.run(literal, check=True, timeout=5)
-        subprocess.run(enter, check=True, timeout=5)
-        return True, repr_
-    except (OSError, subprocess.SubprocessError):
-        return False, repr_
 
 
 # #285: per-wake persona+digest reuse. run_daemon is a long-lived loop, so an agent's persona
