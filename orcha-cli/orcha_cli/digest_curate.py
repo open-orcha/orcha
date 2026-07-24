@@ -33,18 +33,18 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional
 
-# llm_util is the SINGLE git source (orcha_cli/llm_util.py). The host daemon imports it as
-# `orcha_cli.llm_util`; the portal container gets a top-level copy alongside main.py (see
-# __main__._install_llm_util / _PORTAL_SHARED_MODULES), so `import llm_util` works there. Guarded both ways and
-# bound to None if absent — the write-side dedup + the deterministic boot trim never need it,
-# so curation degrades gracefully (the LLM summary just falls back to an honest breadcrumb).
-try:  # host daemon
-    from orcha_cli import llm_util as _llm_util  # type: ignore
-except ImportError:  # portal container (top-level copy) or missing
-    try:
-        import llm_util as _llm_util  # type: ignore
-    except ImportError:
-        _llm_util = None  # type: ignore
+try:
+    from orcha_cli.digest_recalibrate import recalibrate_digest
+    from orcha_cli.digest_summary import (
+        _llm_util,
+        summarize_with_client as _summarize_with_client,
+    )
+except ImportError:  # portal container: shared modules are copied beside main.py
+    from digest_recalibrate import recalibrate_digest  # type: ignore
+    from digest_summary import (  # type: ignore
+        _llm_util,
+        summarize_with_client as _summarize_with_client,
+    )
 
 # --- planned sizes (Kedar-approved #287 Q2: deliberately generous = conservative) ---
 DEFAULT_KEEP = {"decisions": 15, "learnings": 15, "open_threads": 10}
@@ -55,6 +55,11 @@ _SUMMARY_MARK = ("[older context auto-summarised for brevity — machine-written
                  "verbatim words; full history via GET /api/agents/{aid}/rehydrate]")
 
 _LIST_FIELDS = ("decisions", "learnings", "open_threads")
+
+
+def llm_summarizer(field: str, tail: list) -> Optional[str]:
+    """Compatibility seam for callers that replace this module's LLM client."""
+    return _summarize_with_client(_llm_util, field, tail)
 
 
 # ------------------------------------------------------------------- entry helpers
@@ -125,102 +130,6 @@ def dedup_digest(digest: dict) -> dict:
         v = digest.get(field)
         if isinstance(v, list):
             out[field] = _dedup(v)
-    return out
-
-
-# ---------------------------------------------------- completion recalibration (GH #35)
-#
-# A digest only ever ACCUMULATES: nothing trims it when the work it describes closes. So when a
-# task finishes, the agent's latest digest still carries that task's "I still need to do X" open
-# threads and its task-scoped decisions, and the NEXT wake rehydrates them as if they were live —
-# the agent re-verifies finished work or reasons off a stale picture (GH #35, the write-side twin
-# of the #33 read-side gap). `recalibrate_digest` prunes what the closed task closed out while
-# preserving durable learnings, so the next rehydration starts clean.
-#
-# Conservative by design (per the issue): match a task by its id (full UUID or the conventional
-# 8-char short form) or a distinctive title substring; drop task-scoped OPEN THREADS and DECISIONS;
-# NEVER touch learnings (durable — they survive); and keep a still-pending human-verification thread
-# when the task only reached needs_verification (agents must not self-certify). Pure + deterministic;
-# the caller (main.py) persists the result as a NEW append-only snapshot, so the prior full digest
-# stays in the agent_memory_digests history — this demotes, it never hard-deletes the record.
-
-_TITLE_MATCH_MIN = 12   # only match on title when it's distinctive enough to avoid false positives
-
-# Hints that an open thread referencing the just-closed task is about a STILL-pending human
-# verification (kept when the task only reached needs_verification). Erring toward KEEPING is the
-# safe side of the "never drop something still pending human verification" rule.
-_VERIFY_HINTS = ("verif", "human", "sign-off", "signoff", "approv", "await", "pending", "kedar")
-
-
-def _references_task(text: str, task_id: str, task_title: str) -> bool:
-    """True when `text` names the closed task — by full UUID, its 8-char short form, or a
-    distinctive (>= _TITLE_MATCH_MIN chars) title substring. Normalised (whitespace + case)."""
-    n = _norm(text)
-    if not n:
-        return False
-    tid = (task_id or "").strip().lower()
-    if len(tid) >= 8 and tid[:8] in n:        # short form contains-check also catches the full UUID
-        return True
-    title = _norm(task_title or "")
-    if len(title) >= _TITLE_MATCH_MIN and title in n:
-        return True
-    return False
-
-
-def _is_verification_thread(text: str) -> bool:
-    n = _norm(text)
-    return any(h in n for h in _VERIFY_HINTS)
-
-
-def _reset_focus(task_id: str, verification_pending: bool) -> str:
-    short = (task_id or "")[:8]
-    if verification_pending:
-        return (f"Task {short} finished and handed off — awaiting human verification. Recalibrated: "
-                f"pick the next focus from your live tasks / inbox on wake.")
-    return (f"Task {short} closed. Recalibrated: pick the next focus from your live tasks / "
-            f"inbox on wake.")
-
-
-def recalibrate_digest(digest: dict, task_id: str, task_title: str, *,
-                       verification_pending: bool, next_focus: Optional[str] = None) -> dict:
-    """GH #35 completion recalibration. Return a NEW digest dict with the just-closed task's stale
-    context pruned:
-
-      * open_threads referencing the task are dropped — EXCEPT, when `verification_pending` is True
-        (the task only reached needs_verification), a thread about the still-pending human
-        verification is KEPT (agents must not self-certify).
-      * decisions referencing the task (scoped to it) are dropped.
-      * learnings are left completely untouched — durable knowledge survives the task that taught it.
-      * current_focus is reset (to `next_focus`, else a neutral recalibrated marker) ONLY when it
-        pointed at the closed task; an unrelated focus is left alone.
-
-    Pure + deterministic; the input dict is never mutated. A non-dict input is returned unchanged."""
-    if not isinstance(digest, dict):
-        return digest
-    out = dict(digest)
-
-    threads = digest.get("open_threads")
-    if isinstance(threads, list):
-        kept = []
-        for e in threads:
-            if not _references_task(_entry_text(e), task_id, task_title):
-                kept.append(e)                                  # unrelated thread — keep
-            elif verification_pending and _is_verification_thread(_entry_text(e)):
-                kept.append(e)                                  # still-pending human verify — keep
-            # else: references the closed task and is not a live verify thread → prune
-        out["open_threads"] = kept
-
-    decisions = digest.get("decisions")
-    if isinstance(decisions, list):
-        out["decisions"] = [e for e in decisions
-                            if not _references_task(_entry_text(e), task_id, task_title)]
-
-    # learnings: deliberately untouched — they are the durable takeaways that must survive.
-
-    focus = digest.get("current_focus")
-    if isinstance(focus, str) and _references_task(focus, task_id, task_title):
-        out["current_focus"] = next_focus or _reset_focus(task_id, verification_pending)
-
     return out
 
 
@@ -318,47 +227,3 @@ def curate_injected_digest(envelope, *, summarizer: Optional[Callable] = None) -
     out = dict(envelope)
     out["digest"] = curate_inner(inner, summarizer=summarizer)
     return out
-
-
-# ---------------------------------------------------------------- LLM summariser
-
-
-_SUMMARY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string",
-                    "description": "One or two terse sentences capturing the gist of the older "
-                                   "entries, in the agent's third-person voice. No invented detail."},
-    },
-    "required": ["summary"],
-}
-
-_SUMMARY_SYSTEM = (
-    "You compress an autonomous software agent's OLDER memory-digest entries into one or two "
-    "short sentences so they still fit inside a wake prompt. Preserve the substance — decisions "
-    "made, lessons learned, threads left open — in the agent's own terse third-person voice. "
-    "Do NOT invent anything that is not present in the entries. Be brief."
-)
-
-
-def _entries_to_text(entries: list) -> str:
-    return "\n".join(f"- {_entry_text(e)}" for e in entries)
-
-
-def llm_summarizer(field: str, tail: list) -> Optional[str]:
-    """Default boot-copy summariser backed by llm_util (cheap model). Returns a one-line summary
-    string, or None on any error / no client (the caller then uses the deterministic omission
-    breadcrumb). NEVER raises — continuity must survive a flaky LLM."""
-    if _llm_util is None or not tail:
-        return None
-    try:
-        result = _llm_util.classify(
-            "digest_summary",
-            system=_SUMMARY_SYSTEM,
-            user=f"Older '{field}' entries (oldest first):\n{_entries_to_text(tail)}",
-            schema=_SUMMARY_SCHEMA,
-        )
-        s = (result or {}).get("summary")
-        return s.strip() if isinstance(s, str) and s.strip() else None
-    except Exception:
-        return None

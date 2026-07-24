@@ -46,7 +46,13 @@ _PAIRING_HOST_ENV = "ORCHA_PAIRING_HOST"
 #   * llm_util    (#290) — universal LLM client
 #   * secret_box  (#294) — at-rest encryption for the per-container LLM API key
 #   * digest_curate (#287) — write-side digest dedup + boot-copy trim
-_PORTAL_SHARED_MODULES = ("llm_util.py", "secret_box.py", "digest_curate.py")
+_PORTAL_SHARED_MODULES = (
+    "llm_util.py",
+    "secret_box.py",
+    "digest_curate.py",
+    "digest_recalibrate.py",
+    "digest_summary.py",
+)
 
 
 def _install_llm_util(orcha_dir: pathlib.Path) -> None:
