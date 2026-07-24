@@ -55,6 +55,14 @@ _PAIRING_HOST_ENV = "ORCHA_PAIRING_HOST"
 #   * digest_curate (#287) — write-side digest dedup + boot-copy trim
 _PORTAL_SHARED_MODULES = (
     "llm_util.py",
+    "llm_catalog.py",
+    "llm_decisions.py",
+    "llm_formats.py",
+    "llm_http.py",
+    "llm_observability.py",
+    "llm_providers.py",
+    "llm_stream.py",
+    "llm_vision.py",
     "secret_box.py",
     "digest_curate.py",
     "digest_recalibrate.py",
