@@ -48,7 +48,7 @@ struct Bubble<Trailing: View>: View {
                         Text(body_)
                     }
                 }
-                .font(.system(size: 12))
+                .font(p.uiFont(12))
                 .foregroundStyle(p.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)
@@ -73,7 +73,7 @@ struct Bubble<Trailing: View>: View {
                 VStack(alignment: .leading, spacing: 3) {
                     if !mine, let author {
                         Text(author)
-                            .font(.system(size: 11, weight: .bold))
+                            .font(p.uiFont(11, .bold))
                             .foregroundStyle(p.accent)
                     }
                     Group {
@@ -83,7 +83,7 @@ struct Bubble<Trailing: View>: View {
                             Text(body_)
                         }
                     }
-                    .font(.system(size: 14.5))
+                    .font(p.uiFont(14.5))
                     .foregroundStyle(mine ? p.accentInk : p.text)
                     if let time {
                         Text(time)

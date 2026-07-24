@@ -11,10 +11,14 @@ struct StoredContainer: Codable, Identifiable, Equatable {
     /// Short-lived QR pairing token (A2 device-token exchange is a backend follow-up;
     /// held now so the exchange has it once that ships). Absent for manual entry.
     var pairingToken: String?
+    /// Opt-in second address (typically the computer's Tailscale name/IP) tried
+    /// when `baseUrl` doesn't answer; on success the two swap so the working
+    /// path stays active. Nil = local-only, the default.
+    var remoteBaseUrl: String?
     var lastOpenedAt: Date = .now
 
     enum CodingKeys: String, CodingKey {
-        case id, displayName, baseUrl, humanAgentId, humanAlias, pairingToken, lastOpenedAt
+        case id, displayName, baseUrl, humanAgentId, humanAlias, pairingToken, remoteBaseUrl, lastOpenedAt
     }
 }
 
@@ -24,6 +28,7 @@ struct ContainerStore {
     private let defaults = UserDefaults.standard
     private static let key = "orcha_containers"
     private static let themeKey = "orcha_theme_mode"
+    private static let skinKey = "orcha_skin_mode"
 
     func load() -> [StoredContainer] {
         guard let data = defaults.data(forKey: Self.key) else { return [] }
@@ -50,6 +55,15 @@ struct ContainerStore {
         return next
     }
 
+    func setRemoteUrl(_ id: String, to url: String?) -> [StoredContainer] {
+        var next = load()
+        if let i = next.firstIndex(where: { $0.id == id }) {
+            next[i].remoteBaseUrl = url
+        }
+        save(next)
+        return next
+    }
+
     func rename(_ id: String, to name: String) -> [StoredContainer] {
         var next = load()
         if let i = next.firstIndex(where: { $0.id == id }) {
@@ -65,5 +79,34 @@ struct ContainerStore {
 
     func saveThemeMode(_ mode: ThemeMode) {
         defaults.set(mode.rawValue, forKey: Self.themeKey)
+    }
+
+    func loadSkinMode() -> SkinMode {
+        SkinMode(rawValue: defaults.string(forKey: Self.skinKey) ?? "classic") ?? .classic
+    }
+
+    func loadNotificationsEnabled() -> Bool {
+        defaults.bool(forKey: "orcha_notifications_enabled")
+    }
+
+    /// "Catch me up": the workspace digest as of the human's last look, per
+    /// container, so the next open can brief the delta.
+    func lastSeen(for id: String) -> (digest: String, at: Date)? {
+        guard let digest = defaults.string(forKey: "orcha_seen_digest_\(id)"),
+              let at = defaults.object(forKey: "orcha_seen_at_\(id)") as? Date else { return nil }
+        return (digest, at)
+    }
+
+    func saveLastSeen(_ digest: String, for id: String) {
+        defaults.set(digest, forKey: "orcha_seen_digest_\(id)")
+        defaults.set(Date.now, forKey: "orcha_seen_at_\(id)")
+    }
+
+    func saveNotificationsEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: "orcha_notifications_enabled")
+    }
+
+    func saveSkinMode(_ skin: SkinMode) {
+        defaults.set(skin.rawValue, forKey: Self.skinKey)
     }
 }

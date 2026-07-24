@@ -29,6 +29,17 @@ struct TaskDetailScreen: View {
         return !task.isRoot && task.status != "completed" && task.status != "cancelled"
     }
 
+    /// Widget plan taps arrive with pendingPlanReview set; auto-present the
+    /// read-first plan sheet once the task is in the snapshot. Cleared even
+    /// when the plan is already decided so a stale tap doesn't re-arm.
+    private func presentPendingPlanIfNeeded() {
+        guard let task, model.pendingPlanReview == task.id else { return }
+        model.pendingPlanReview = nil
+        if task.planMessage != nil, task.planDecision == nil, task.status == "in_progress" {
+            planSheetTask = task
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
@@ -82,6 +93,8 @@ struct TaskDetailScreen: View {
         }
         .sheet(item: $verifySheetTask) { VerifySheet(task: $0) }
         .sheet(item: $planSheetTask) { PlanApprovalSheet(task: $0) }
+        .onAppear { presentPendingPlanIfNeeded() }
+        .onChange(of: task?.id) { presentPendingPlanIfNeeded() }
         .task { await model.loadTaskDetail(taskId) }
         .refreshable {
             await model.refresh()
@@ -121,17 +134,17 @@ struct TaskDetailScreen: View {
                 Spacer()
             }
             Text(task.title)
-                .font(.system(size: 20, weight: .bold))
+                .font(p.uiFont(20, .bold))
                 .foregroundStyle(p.text)
             HStack(spacing: 8) {
                 if let assignee = task.assignees.first ?? task.ownerAlias {
                     AgentAvatar(alias: assignee, size: 30)
                     Text(assignee)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.text2)
                 } else {
                     Text("unassigned")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.faint)
                 }
             }
@@ -145,10 +158,10 @@ struct TaskDetailScreen: View {
         if task.status == "needs_verification" {
             OrchaCard(borderColor: p.violetLine) {
                 Text("AWAITING YOUR VERIFICATION")
-                    .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                    .font(p.uiFont(11, .bold)).tracking(0.8)
                     .foregroundStyle(p.violet)
                 Text(task.result ?? "The agent marked this done — review against the definition of done.")
-                    .font(.system(size: 13.5))
+                    .font(p.uiFont(13.5))
                     .foregroundStyle(p.text2)
                     .lineLimit(4)
                 KitButton(title: "Review & verify", small: true) { verifySheetTask = task }
@@ -157,10 +170,10 @@ struct TaskDetailScreen: View {
         if task.planMessage != nil, task.planDecision == nil, task.status == "in_progress" {
             OrchaCard(borderColor: p.violetLine) {
                 Text("PLAN AWAITING YOUR APPROVAL")
-                    .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                    .font(p.uiFont(11, .bold)).tracking(0.8)
                     .foregroundStyle(p.violet)
                 Text(task.planMessage?.body ?? "")
-                    .font(.system(size: 13.5))
+                    .font(p.uiFont(13.5))
                     .foregroundStyle(p.text2)
                     .lineLimit(4)
                 KitButton(title: "Review plan", small: true) { planSheetTask = task }
@@ -177,7 +190,7 @@ struct TaskDetailScreen: View {
             SectionH(title: "Description")
             OrchaCard {
                 Text(description)
-                    .font(.system(size: 13.5))
+                    .font(p.uiFont(13.5))
                     .foregroundStyle(p.text2)
             }
         }
@@ -196,10 +209,10 @@ struct TaskDetailScreen: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("✓")
-                        .font(.system(size: 14.5, weight: .heavy))
+                        .font(p.uiFont(14.5, .heavy))
                         .foregroundStyle(p.accent)
                     Text(line)
-                        .font(.system(size: 14.5))
+                        .font(p.uiFont(14.5))
                         .foregroundStyle(p.text)
                 }
             }
@@ -218,10 +231,10 @@ struct TaskDetailScreen: View {
                     OrchaCard {
                         HStack(spacing: 8) {
                             Text(dep?.status == "completed" ? "✓" : "🔒")
-                                .font(.system(size: 14, weight: .heavy))
+                                .font(p.uiFont(14, .heavy))
                                 .foregroundStyle(dep?.status == "completed" ? p.ok : p.warn)
                             Text(dep?.title ?? depId)
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(p.uiFont(14, .semibold))
                                 .foregroundStyle(p.text)
                                 .lineLimit(1)
                             Spacer()
@@ -246,22 +259,22 @@ struct TaskDetailScreen: View {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Thread · \(model.taskMessages.count) messages")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(p.uiFont(14, .semibold))
                             .foregroundStyle(p.text)
                         if let last = model.taskMessages.last {
                             Text("\(last.authorAlias ?? (last.isHuman ? "you" : "agent")): \(last.body)")
-                                .font(.system(size: 13))
+                                .font(p.uiFont(13))
                                 .foregroundStyle(p.muted)
                                 .lineLimit(1)
                         } else {
                             Text("No messages yet — say hi.")
-                                .font(.system(size: 13))
+                                .font(p.uiFont(13))
                                 .foregroundStyle(p.faint)
                         }
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(p.uiFont(13, .semibold))
                         .foregroundStyle(p.faint)
                 }
             }
@@ -294,7 +307,7 @@ struct TaskDetailScreen: View {
         if !allRuns, model.taskRuns.count > 3 {
             Button("All runs (\(model.taskRuns.count))") { allRuns = true }
                 .buttonStyle(.plain)
-                .font(.system(size: 13, weight: .bold))
+                .font(p.uiFont(13, .bold))
                 .foregroundStyle(p.accent)
         }
     }
@@ -309,7 +322,7 @@ struct RunRowCard: View {
         OrchaCard {
             HStack(spacing: 8) {
                 Image(systemName: "terminal")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(p.uiFont(15, .semibold))
                     .foregroundStyle(p.accent)
                 Text(run.runId.prefix(6))
                     .font(.system(size: 12, design: .monospaced))
@@ -324,7 +337,7 @@ struct RunRowCard: View {
                     .foregroundStyle(p.faint)
             }
             Text(run.taskTitle ?? run.wakeEvent ?? "worker run")
-                .font(.system(size: 13))
+                .font(p.uiFont(13))
                 .foregroundStyle(p.text2)
                 .lineLimit(1)
         }
@@ -363,7 +376,7 @@ struct TaskThreadScreen: View {
                                 ProgressView().frame(maxWidth: .infinity)
                             } else {
                                 Text("Load earlier messages")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(p.uiFont(12, .bold))
                                     .foregroundStyle(p.accent)
                                     .frame(maxWidth: .infinity)
                             }
@@ -387,7 +400,7 @@ struct TaskThreadScreen: View {
                             if !model.actionInFlight {
                                 Button("Not sent · Tap to retry") { send(unsent) }
                                     .buttonStyle(.plain)
-                                    .font(.system(size: 11, weight: .bold))
+                                    .font(p.uiFont(11, .bold))
                                     .foregroundStyle(p.danger)
                             }
                         }
@@ -419,11 +432,11 @@ struct TaskThreadScreen: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text("Thread")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(p.uiFont(15, .semibold))
                         .foregroundStyle(p.text)
                     if let title = task?.title {
                         Text(title)
-                            .font(.system(size: 11))
+                            .font(p.uiFont(11))
                             .foregroundStyle(p.muted)
                             .lineLimit(1)
                     }
@@ -457,14 +470,14 @@ struct TaskThreadScreen: View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Message \(assignee ?? "the thread")…", text: $draft, axis: .vertical)
                 .lineLimit(1...4)
-                .font(.system(size: 14.5))
+                .font(p.uiFont(14.5))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(p.surface2, in: RoundedRectangle(cornerRadius: 20))
                 .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(p.border2, lineWidth: 1))
             Button(action: sendDraft) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 32))
+                    .font(p.uiFont(32))
                     .foregroundStyle(canSend ? p.accent : p.faint)
             }
             .buttonStyle(.plain)
@@ -510,20 +523,38 @@ struct RunDetailScreen: View {
     @State private var confirmStop = false
     @State private var pinned = true
 
+    private enum RunPane: String, CaseIterable {
+        case log = "Log", changes = "Changes"
+    }
+
+    @State private var pane: RunPane = .log
+
     var body: some View {
         VStack(spacing: 10) {
             header
+            Picker("View", selection: $pane) {
+                ForEach(RunPane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
             if run.status != "running" {
                 terminalBanner
             }
             if let note = model.runStreamNote {
                 Banner(kind: .info, text: note)
             }
-            logCard
-            if let error = model.error {
-                Banner(kind: .danger, text: error, action: "Retry") {
-                    model.startRunLog(run)
+            switch pane {
+            case .log:
+                if run.status != "running" {
+                    RunDigestCard(feed: model.runFeed)
                 }
+                logCard
+                if let error = model.error {
+                    Banner(kind: .danger, text: error, action: "Retry") {
+                        model.startRunLog(run)
+                    }
+                }
+            case .changes:
+                changesPane
             }
         }
         .padding(16)
@@ -568,12 +599,38 @@ struct RunDetailScreen: View {
         return Banner(kind: kind, text: "Run \(MobileUx.statusCopy(run.status))\(ago)")
     }
 
+    /// GitHub-style "Changes" pane — the run's net unified diff, parsed and
+    /// rendered per file with hunks, line numbers, and add/del row tints.
+    @ViewBuilder
+    private var changesPane: some View {
+        if let diff = run.diff, !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ScrollView {
+                DiffViewer(diff: diff)
+                    .padding(.bottom, 12)
+            }
+        } else if run.status == "running" {
+            OrchaCard {
+                Text("The diff lands when the worker finishes — watch the log meanwhile.")
+                    .font(p.uiFont(13))
+                    .foregroundStyle(p.muted)
+            }
+            Spacer()
+        } else {
+            OrchaCard {
+                Text("No diff captured for this run.")
+                    .font(p.uiFont(13))
+                    .foregroundStyle(p.muted)
+            }
+            Spacer()
+        }
+    }
+
     private var logCard: some View {
         OrchaCard {
             if model.runFeed.isEmpty {
                 ScrollView {
                     Text(emptyLogText)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -603,7 +660,7 @@ struct RunDetailScreen: View {
                                 withAnimation { proxy.scrollTo("log-bottom", anchor: .bottom) }
                             } label: {
                                 Text("Auto-scroll paused · Jump to latest")
-                                    .font(.system(size: 11, weight: .bold))
+                                    .font(p.uiFont(11, .bold))
                                     .foregroundStyle(p.accent)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 6)

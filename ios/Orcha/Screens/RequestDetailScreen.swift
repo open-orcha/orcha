@@ -67,7 +67,7 @@ struct RequestDetailScreen: View {
         if req.parentRequestId != nil {
             OrchaCard {
                 Text("↳ part of a request chain (depth \(req.chainDepth))")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.muted)
             }
         }
@@ -76,10 +76,10 @@ struct RequestDetailScreen: View {
             NavigationLink(value: WorkspaceRoute.task(tid)) {
                 OrchaCard {
                     Text("SPAWNED TASK →")
-                        .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                        .font(p.uiFont(11, .bold)).tracking(0.8)
                         .foregroundStyle(p.violet)
                     Text(req.taskLink?.title ?? tid)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(p.uiFont(15, .semibold))
                         .foregroundStyle(p.text)
                         .multilineTextAlignment(.leading)
                 }
@@ -90,7 +90,7 @@ struct RequestDetailScreen: View {
         SectionH(title: "Payload")
         OrchaCard {
             LinkedMessageText(text: req.payload, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                .font(.system(size: 15))
+                .font(p.uiFont(15))
                 .foregroundStyle(p.text)
         }
 
@@ -98,7 +98,7 @@ struct RequestDetailScreen: View {
             SectionH(title: "Response")
             OrchaCard(borderColor: p.okLine) {
                 LinkedMessageText(text: response, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                    .font(.system(size: 15)).foregroundStyle(p.text2)
+                    .font(p.uiFont(15)).foregroundStyle(p.text2)
             }
         }
 
@@ -106,7 +106,7 @@ struct RequestDetailScreen: View {
             SectionH(title: "Rejection")
             OrchaCard(borderColor: p.dangerLine) {
                 LinkedMessageText(text: rejection, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                    .font(.system(size: 15)).foregroundStyle(p.text2)
+                    .font(p.uiFont(15)).foregroundStyle(p.text2)
             }
         }
 
@@ -297,10 +297,10 @@ private struct OperatorNote: View {
         OrchaCard(borderColor: p.warn) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "flag.fill")
-                    .font(.system(size: 12))
+                    .font(p.uiFont(12))
                     .foregroundStyle(p.warn)
                 Text("Acting as operator (\(you)). Closing another agent's request needs a reason — it's sent to the owner so they know why.")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.muted)
             }
         }
@@ -325,14 +325,14 @@ private struct RequestFlowHeader: View {
         OrchaCard {
             HStack(spacing: 10) {
                 AgentAvatar(alias: requesterAlias ?? (isRequester ? "you" : "A"), human: isRequester)
-                Text("→").font(.system(size: 17)).foregroundStyle(p.faint)
+                Text("→").font(p.uiFont(17)).foregroundStyle(p.faint)
                 AgentAvatar(alias: request.targetId == nil ? "H" : (targetAlias ?? "A"), human: isTarget)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(isRequester ? "you" : (requesterAlias ?? "agent")) → \(isTarget ? "you" : (targetAlias ?? "agent"))")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(p.uiFont(15, .semibold))
                         .foregroundStyle(p.text)
                     Text(metaLine)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -366,7 +366,7 @@ private struct TimelineDotRow: View {
                 .fill(reached ? p.accent : p.border2)
                 .frame(width: 9, height: 9)
             Text(label)
-                .font(.system(size: 13))
+                .font(p.uiFont(13))
                 .foregroundStyle(reached ? p.text : p.faint)
             Spacer()
             Text(MobileUx.agoLabel(at) ?? "")
@@ -404,14 +404,14 @@ struct RequestTextSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(kicker)
-                            .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                            .font(p.uiFont(11, .bold)).tracking(0.8)
                             .foregroundStyle(destructive ? p.danger : p.accent)
                         Text(title)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(p.uiFont(15, .semibold))
                             .foregroundStyle(p.text2)
                         TextField(label, text: $text, axis: .vertical)
                             .lineLimit(3...6)
@@ -470,11 +470,11 @@ struct ConvertSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("CONVERT TO TASK")
-                            .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                            .font(p.uiFont(11, .bold)).tracking(0.8)
                             .foregroundStyle(p.violet)
                         field("Task title", text: $title, multiline: false)
                         field("Definition of done", text: $dod, multiline: true)
@@ -531,7 +531,7 @@ struct PillChip: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .font(p.uiFont(13, .semibold))
                 .foregroundStyle(selected ? p.accent : p.muted)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)

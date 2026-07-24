@@ -63,6 +63,15 @@ struct HomeTabView: View {
         return ScrollView {
             VStack(spacing: 10) {
                 ConnectionBanners()
+                if let cu = model.catchUp {
+                    CatchUpCard(
+                        previous: cu.previous,
+                        current: WorkspaceDigest.make(snapshot),
+                        gap: cu.gapLabel,
+                        onDismiss: { model.catchUp = nil }
+                    )
+                }
+                WorkspaceBriefCard(digest: WorkspaceDigest.make(snapshot))
                 SectionH(title: "Needs you", count: "\(plans.count + verifs.count + reqs.count)")
                 if plans.isEmpty && verifs.isEmpty && reqs.isEmpty {
                     OrchaCard {
@@ -70,13 +79,16 @@ struct HomeTabView: View {
                             .foregroundStyle(p.muted)
                     }
                 }
+                // Kicker colors mirror the portal's gate spines (plan/verify = amber
+                // family, escalation = red) instead of the old arbitrary violet/green
+                // that clashed with the status pill on the same row.
                 ForEach(plans) { task in
-                    QueueCard(kicker: "PLAN APPROVAL", kickerColor: p.violet, task: task) {
+                    QueueCard(kicker: "PLAN APPROVAL", kickerColor: p.warn, task: task) {
                         planSheetTask = task
                     }
                 }
                 ForEach(verifs) { task in
-                    QueueCard(kicker: "VERIFY TASK", kickerColor: p.ok, task: task) {
+                    QueueCard(kicker: "VERIFY TASK", kickerColor: p.warn, task: task) {
                         verifySheetTask = task
                     }
                 }
@@ -97,7 +109,7 @@ struct HomeTabView: View {
                                         AgentAvatar(alias: agent.alias, size: 30)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(agent.alias)
-                                                .font(.system(size: 15, weight: .semibold))
+                                                .font(p.uiFont(15, .semibold))
                                                 .foregroundStyle(p.text)
                                                 .lineLimit(1)
                                             StatusPill(status: agent.status ?? "idle", domain: .agent)
@@ -129,7 +141,7 @@ struct HomeTabView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack {
                                             Text(msg.authorAlias ?? (msg.isHuman ? "you" : "system"))
-                                                .font(.system(size: 15, weight: .semibold))
+                                                .font(p.uiFont(15, .semibold))
                                                 .foregroundStyle(p.text)
                                             Spacer()
                                             Text(MobileUx.agoLabel(msg.createdAt) ?? "")
@@ -137,7 +149,7 @@ struct HomeTabView: View {
                                                 .foregroundStyle(p.faint)
                                         }
                                         Text(msg.body)
-                                            .font(.system(size: 13))
+                                            .font(p.uiFont(13))
                                             .foregroundStyle(p.text2)
                                             .lineLimit(2)
                                     }
@@ -169,7 +181,7 @@ private struct QueueCard: View {
         OrchaCard {
             HStack {
                 Text(kicker)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(p.uiFont(11, .bold))
                     .tracking(0.8)
                     .foregroundStyle(kickerColor)
                 Spacer()
@@ -177,7 +189,7 @@ private struct QueueCard: View {
             }
             NavigationLink(value: WorkspaceRoute.task(task.id)) {
                 Text(task.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(p.uiFont(15, .semibold))
                     .foregroundStyle(p.text)
                     .multilineTextAlignment(.leading)
                     .lineLimit(2)
@@ -185,7 +197,7 @@ private struct QueueCard: View {
             .buttonStyle(.plain)
             if let excerpt = task.planMessage?.body ?? task.definitionOfDone, !excerpt.isEmpty {
                 Text(excerpt)
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.muted)
                     .lineLimit(2)
             }
@@ -203,24 +215,24 @@ private struct RequestQueueCard: View {
         OrchaCard {
             HStack {
                 Text("REQUEST FOR YOU")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(p.uiFont(11, .bold))
                     .tracking(0.8)
-                    .foregroundStyle(p.info)
+                    .foregroundStyle(p.danger)
                 Spacer()
                 StatusPill(status: request.status, domain: .request)
             }
             Text("“\(request.payload)”")
-                .font(.system(size: 15, weight: .semibold))
+                .font(p.uiFont(15, .semibold))
                 .foregroundStyle(p.text)
                 .lineLimit(3)
             HStack(spacing: 8) {
                 AgentAvatar(alias: request.requesterAlias ?? "?", size: 30)
                 Text("\(request.requesterAlias ?? "agent") → you\(MobileUx.agoLabel(request.createdAt).map { " · \($0)" } ?? "")")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.text2)
                 Spacer()
                 Text("Respond")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(p.uiFont(13, .bold))
                     .foregroundStyle(p.accent)
             }
         }

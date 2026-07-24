@@ -30,6 +30,11 @@ enum OrchaServerAddress {
         let humanAgentId: String?
         let humanAgentAlias: String?
         let token: String?
+        /// Optional second address the portal may include in the QR (typically the
+        /// computer's Tailscale name/IP) — stored as the container's remote address
+        /// so one scan configures the local↔remote failover. Absent in older
+        /// payloads and manual entry.
+        let remoteBaseUrl: String?
     }
 
     /// Parse a raw scan/paste into either a plain normalized base URL or a full pairing
@@ -48,15 +53,19 @@ enum OrchaServerAddress {
                 throw AddressError.notPairingCode
             }
             guard let base = obj["baseUrl"] as? String else { throw AddressError.notPairingCode }
+            // Tolerant: a malformed remote address degrades to local-only pairing
+            // rather than failing the scan.
+            let remote = (obj["remoteBaseUrl"] as? String).flatMap { try? normalizeBaseURL($0) }
             return Payload(
                 baseUrl: try normalizeBaseURL(base),
                 containerId: obj["containerId"] as? String,
                 humanAgentId: obj["humanAgentId"] as? String,
                 humanAgentAlias: obj["humanAgentAlias"] as? String,
-                token: obj["token"] as? String
+                token: obj["token"] as? String,
+                remoteBaseUrl: remote
             )
         }
-        return Payload(baseUrl: try normalizeBaseURL(input), containerId: nil, humanAgentId: nil, humanAgentAlias: nil, token: nil)
+        return Payload(baseUrl: try normalizeBaseURL(input), containerId: nil, humanAgentId: nil, humanAgentAlias: nil, token: nil, remoteBaseUrl: nil)
     }
 
     /// Back-compat: just the normalized base URL (host:port / URL / pairing JSON).

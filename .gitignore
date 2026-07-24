@@ -256,3 +256,6 @@ docs/_local/*
 # #289 control-project token baselines + #284 continuity-eval results (machine/run-specific)
 tools/efficiency/baselines/*.json
 tools/efficiency/baselines/**/*.json
+ios/project.local.yml
+ios/dd/
+ios/dd-sim/

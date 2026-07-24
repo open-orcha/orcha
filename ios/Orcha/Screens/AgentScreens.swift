@@ -143,9 +143,9 @@ struct AgentDetailScreen: View {
             HStack(spacing: 12) {
                 AgentAvatar(alias: agent.alias, human: agent.kind == "human", size: 56)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.alias).font(.system(size: 20, weight: .heavy)).foregroundStyle(p.text)
+                    Text(agent.alias).font(p.uiFont(20, .heavy)).foregroundStyle(p.text)
                     Text(agent.role ?? (agent.kind == "human" ? "Human authority" : "agent"))
-                        .font(.system(size: 13)).foregroundStyle(p.muted).lineLimit(1)
+                        .font(p.uiFont(13)).foregroundStyle(p.muted).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 StatusPill(status: agent.status ?? agent.kind, domain: .agent)
@@ -187,9 +187,9 @@ struct AgentDetailScreen: View {
             NavigationLink(value: WorkspaceRoute.task(tid)) {
                 OrchaCard {
                     HStack(spacing: 8) {
-                        Text("▸").font(.system(size: 15, weight: .heavy)).foregroundStyle(p.accent)
+                        Text("▸").font(p.uiFont(15, .heavy)).foregroundStyle(p.accent)
                         Text(title ?? tid)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(p.uiFont(15, .semibold))
                             .foregroundStyle(p.text)
                             .lineLimit(2)
                     }
@@ -215,7 +215,7 @@ struct AgentDetailScreen: View {
                         StatusPill(status: "running", domain: .run)
                         MetaTag(text: run.wakeKind ?? "headless")
                         Spacer()
-                        Text("streaming").font(.system(size: 11, weight: .bold)).foregroundStyle(p.accent)
+                        Text("streaming").font(p.uiFont(11, .bold)).foregroundStyle(p.accent)
                     }
                 }
             }
@@ -241,8 +241,8 @@ struct AgentDetailScreen: View {
                 ) { showWakePicker = true }
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Wake daemon").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.text)
-                        Text("Managed from the laptop").font(.system(size: 13)).foregroundStyle(p.muted)
+                        Text("Wake daemon").font(p.uiFont(15, .semibold)).foregroundStyle(p.text)
+                        Text("Managed from the laptop").font(p.uiFont(13)).foregroundStyle(p.muted)
                     }
                     Spacer()
                     MetaTag(text: agent.wakeEnabled == false ? "off" : "on")
@@ -257,8 +257,8 @@ struct AgentDetailScreen: View {
         Button(action: enabled ? action : {}) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(p.text)
-                    Text(sub).font(.system(size: 13)).foregroundStyle(p.muted)
+                    Text(title).font(p.uiFont(15, .semibold)).foregroundStyle(p.text)
+                    Text(sub).font(p.uiFont(13)).foregroundStyle(p.muted)
                 }
                 Spacer()
                 tag
@@ -279,7 +279,7 @@ struct AgentDetailScreen: View {
                 SectionH(title: "Persona")
                 if let full, !full.isEmpty {
                     Button(personaOpen ? "collapse" : "expand") { personaOpen.toggle() }
-                        .font(.system(size: 11, weight: .bold))
+                        .font(p.uiFont(11, .bold))
                         .foregroundStyle(p.accent)
                 }
             }
@@ -290,7 +290,7 @@ struct AgentDetailScreen: View {
                         .foregroundStyle(p.text2)
                 } else {
                     Text(preview)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.text2)
                         .lineLimit(2)
                 }
@@ -306,19 +306,19 @@ struct AgentDetailScreen: View {
             SectionH(title: "Memory", count: MobileUx.agoLabel(d.createdAt) ?? "")
             OrchaCard {
                 if let focus = d.currentFocus, !focus.isEmpty {
-                    Text("FOCUS").font(.system(size: 11, weight: .bold)).tracking(0.6).foregroundStyle(p.accent)
-                    Text(focus).font(.system(size: 13)).foregroundStyle(p.text)
+                    Text("FOCUS").font(p.uiFont(11, .bold)).tracking(0.6).foregroundStyle(p.accent)
+                    Text(focus).font(p.uiFont(13)).foregroundStyle(p.text)
                 }
                 if !d.decisions.isEmpty {
-                    Text("DECISIONS · \(d.decisions.count)").font(.system(size: 11, weight: .bold)).tracking(0.6).foregroundStyle(p.muted)
+                    Text("DECISIONS · \(d.decisions.count)").font(p.uiFont(11, .bold)).tracking(0.6).foregroundStyle(p.muted)
                     ForEach(Array(d.decisions.prefix(3).enumerated()), id: \.offset) { _, item in
-                        Text("• \(item.text)").font(.system(size: 13)).foregroundStyle(p.text2)
+                        Text("• \(item.text)").font(p.uiFont(13)).foregroundStyle(p.text2)
                     }
                 }
                 if !d.openThreads.isEmpty {
-                    Text("OPEN THREADS · \(d.openThreads.count)").font(.system(size: 11, weight: .bold)).tracking(0.6).foregroundStyle(p.muted)
+                    Text("OPEN THREADS · \(d.openThreads.count)").font(p.uiFont(11, .bold)).tracking(0.6).foregroundStyle(p.muted)
                     ForEach(Array(d.openThreads.prefix(3).enumerated()), id: \.offset) { _, item in
-                        Text("• \(item.text)").font(.system(size: 13)).foregroundStyle(p.text2)
+                        Text("• \(item.text)").font(p.uiFont(13)).foregroundStyle(p.text2)
                     }
                 }
             }
@@ -335,7 +335,7 @@ struct AgentDetailScreen: View {
             OrchaCard {
                 KVRow(key: "Incoming open", value: "\(extras.inboxCount ?? 0)")
                 if let preview = extras.inboxPreview {
-                    Text("“\(preview)”").font(.system(size: 13)).foregroundStyle(p.muted).lineLimit(1)
+                    Text("“\(preview)”").font(p.uiFont(13)).foregroundStyle(p.muted).lineLimit(1)
                 }
                 KVRow(key: "Outgoing open / answered", value: "\(extras.outboxOpen ?? 0) / \(extras.outboxAnswered ?? 0)")
             }
@@ -399,7 +399,7 @@ private struct KitButtonLabel: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 15, weight: .bold))
+            .font(p.uiFont(15, .bold))
             .foregroundStyle(role == .primary ? p.accentInk : p.accent)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
@@ -427,11 +427,11 @@ struct ModelPickerSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("MODEL").font(.system(size: 11, weight: .bold)).tracking(0.8).foregroundStyle(p.accent)
-                        Text("Applies at the next wake.").font(.system(size: 13)).foregroundStyle(p.muted)
+                        Text("MODEL").font(p.uiFont(11, .bold)).tracking(0.8).foregroundStyle(p.accent)
+                        Text("Applies at the next wake.").font(p.uiFont(13)).foregroundStyle(p.muted)
                         ForEach(groups, id: \.0) { group, rows in
                             SectionH(title: group)
                             ForEach(rows) { m in
@@ -440,7 +440,7 @@ struct ModelPickerSheet: View {
                                         Image(systemName: picked == m.id ? "largecircle.fill.circle" : "circle")
                                             .foregroundStyle(picked == m.id ? p.accent : p.border2)
                                         VStack(alignment: .leading, spacing: 1) {
-                                            Text(m.name ?? m.id).font(.system(size: 15, weight: .semibold)).foregroundStyle(p.text)
+                                            Text(m.name ?? m.id).font(p.uiFont(15, .semibold)).foregroundStyle(p.text)
                                             Text(m.id).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(p.muted)
                                         }
                                         Spacer()
@@ -485,12 +485,12 @@ struct AutoWakeSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("AUTO-WAKE").font(.system(size: 11, weight: .bold)).tracking(0.8).foregroundStyle(p.accent)
+                        Text("AUTO-WAKE").font(p.uiFont(11, .bold)).tracking(0.8).foregroundStyle(p.accent)
                         Text("Wakes the agent on a clock while idle. Off relies on events only.")
-                            .font(.system(size: 13)).foregroundStyle(p.muted)
+                            .font(p.uiFont(13)).foregroundStyle(p.muted)
                         HStack(spacing: 8) {
                             ForEach(presets, id: \.0) { label, secs in
                                 PillChip(label: label, selected: picked == secs) { picked = secs }
@@ -588,7 +588,7 @@ struct ConversationScreen: View {
                     if model.turns.count > revealed {
                         Button { revealed += Self.revealStep } label: {
                             Text("Load earlier messages")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(p.uiFont(12, .bold))
                                 .foregroundStyle(p.accent)
                                 .frame(maxWidth: .infinity)
                         }
@@ -609,7 +609,7 @@ struct ConversationScreen: View {
                     turnRows
                     if working {
                         Text("\(agent?.alias ?? "The agent") is working…")
-                            .font(.system(size: 13))
+                            .font(p.uiFont(13))
                             .foregroundStyle(p.muted)
                             .opacity(!reduceMotion && pulse ? 0.4 : 1)
                             .animation(.easeInOut(duration: 1).repeatForever(autoreverses: true), value: pulse)
@@ -664,7 +664,7 @@ struct ConversationScreen: View {
                 if let rid = turn.runId {
                     NavigationLink(value: WorkspaceRoute.run(RunDto(runId: rid, agentId: agentId, agentAlias: alias, status: "exited"))) {
                         Text("Open work log →")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(p.uiFont(11, .bold))
                             .foregroundStyle(p.accent)
                     }
                     .buttonStyle(.plain)
@@ -684,13 +684,14 @@ struct ConversationScreen: View {
                 .padding(.vertical, 9)
                 .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
+            DictationMicButton(text: $draft)
             Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 draft = ""
                 Task { await model.sendTurn(agentId, content: text) }
             } label: {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(p.uiFont(16, .semibold))
                     .foregroundStyle(p.accentInk)
                     .frame(width: 40, height: 40)
                     .background(p.accent, in: Circle())
