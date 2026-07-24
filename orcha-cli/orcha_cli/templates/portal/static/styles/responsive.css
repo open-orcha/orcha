@@ -1,0 +1,127 @@
+/* Portal responsive layout and skin overrides. */
+  --info:   #5a72ff; --info-soft:   rgba(90, 114, 255, .15); --info-line:   rgba(90, 114, 255, .40);
+  --warn:   #e0a13a; --warn-soft:   rgba(224, 161, 58, .16); --warn-line:   rgba(224, 161, 58, .46);
+  --danger: #ff5a5f; --danger-soft: rgba(255, 90, 95, .15);  --danger-line: rgba(255, 90, 95, .46);
+  --violet: #9a7bff; --violet-soft: rgba(154, 123, 255, .15); --violet-line: rgba(154, 123, 255, .40);
+  --idle:   #6a6a64; --idle-soft:   rgba(106, 106, 100, .16); --idle-line:   rgba(106, 106, 100, .34);
+
+  --diff-add:  #8fe3a8; --diff-add-bg:  rgba(66, 184, 119, .10);
+  --diff-del:  #ff9a9e; --diff-del-bg:  rgba(255, 90, 95, .10);
+  --diff-hunk: #5a72ff; --diff-hunk-bg: rgba(90, 114, 255, .08);
+
+  /* flat — the grid is the depth cue, not shadows */
+  --shadow-sm: none;
+  --shadow:    none;
+  --shadow-lg: none;
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+html[data-skin="swiss"][data-theme="light"] {
+  color-scheme: light;
+
+  /* paper surfaces, near-black hairlines — high-contrast editorial grid */
+  --bg:        #f3f3f0;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface:   #fbfbf9;
+  --surface-2: #ecebe4;
+  --surface-3: #e3e2da;
+  --raised:    #fbfbf9;
+  --border:    #16161a;
+  --border-2:  #16161a;
+  --hover:     #ecebe4;
+
+  --text:   #16161a;
+  --text-2: #3a3931;
+  --muted:  #6a685f;
+  --faint:  #9a988c;
+
+  --accent:      #1b4dff;
+  --accent-ink:  #ffffff;
+  --accent-soft: rgba(27, 77, 255, .10);
+  --accent-line: rgba(27, 77, 255, .42);
+  --accent-glow: rgba(27, 77, 255, .20);
+
+  --amber: #e5734d;
+
+  --ok:     #157a4a; --ok-soft:     rgba(21, 122, 74, .12);  --ok-line:     rgba(21, 122, 74, .38);
+  --info:   #1b4dff; --info-soft:   rgba(27, 77, 255, .10);  --info-line:   rgba(27, 77, 255, .38);
+  --warn:   #b26b00; --warn-soft:   rgba(178, 107, 0, .12);  --warn-line:   rgba(178, 107, 0, .42);
+  --danger: #e5484d; --danger-soft: rgba(229, 72, 77, .11);  --danger-line: rgba(229, 72, 77, .42);
+  --violet: #6d4bd6; --violet-soft: rgba(109, 75, 214, .11); --violet-line: rgba(109, 75, 214, .38);
+  --idle:   #9a988c; --idle-soft:   rgba(154, 152, 140, .16); --idle-line:  rgba(154, 152, 140, .40);
+
+  --diff-add:  #157a4a; --diff-add-bg:  rgba(21, 122, 74, .10);
+  --diff-del:  #e5484d; --diff-del-bg:  rgba(229, 72, 77, .10);
+  --diff-hunk: #1b4dff; --diff-hunk-bg: rgba(27, 77, 255, .08);
+
+  --shadow-sm: none;
+  --shadow:    none;
+  --shadow-lg: none;
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+@media (prefers-color-scheme: light) {
+  html[data-skin="swiss"][data-theme="auto"] {
+    color-scheme: light;
+    --bg:        #f3f3f0;
+    --bg-grad-1: transparent;
+    --bg-grad-2: transparent;
+    --surface:   #fbfbf9;
+    --surface-2: #ecebe4;
+    --surface-3: #e3e2da;
+    --raised:    #fbfbf9;
+    --border:    #16161a;
+    --border-2:  #16161a;
+    --hover:     #ecebe4;
+    --text:   #16161a;
+    --text-2: #3a3931;
+    --muted:  #6a685f;
+    --faint:  #9a988c;
+    --accent:      #1b4dff;
+    --accent-ink:  #ffffff;
+    --accent-soft: rgba(27, 77, 255, .10);
+    --accent-line: rgba(27, 77, 255, .42);
+    --accent-glow: rgba(27, 77, 255, .20);
+    --amber: #e5734d;
+    --ok:     #157a4a; --ok-soft:     rgba(21, 122, 74, .12);  --ok-line:     rgba(21, 122, 74, .38);
+    --info:   #1b4dff; --info-soft:   rgba(27, 77, 255, .10);  --info-line:   rgba(27, 77, 255, .38);
+    --warn:   #b26b00; --warn-soft:   rgba(178, 107, 0, .12);  --warn-line:   rgba(178, 107, 0, .42);
+    --danger: #e5484d; --danger-soft: rgba(229, 72, 77, .11);  --danger-line: rgba(229, 72, 77, .42);
+    --violet: #6d4bd6; --violet-soft: rgba(109, 75, 214, .11); --violet-line: rgba(109, 75, 214, .38);
+    --idle:   #9a988c; --idle-soft:   rgba(154, 152, 140, .16); --idle-line:  rgba(154, 152, 140, .40);
+    --diff-add:  #157a4a; --diff-add-bg:  rgba(21, 122, 74, .10);
+    --diff-del:  #e5484d; --diff-del-bg:  rgba(229, 72, 77, .10);
+    --diff-hunk: #1b4dff; --diff-hunk-bg: rgba(27, 77, 255, .08);
+    --shadow-sm: none;
+    --shadow:    none;
+    --shadow-lg: none;
+    --ring:      0 0 0 3px var(--accent-glow);
+  }
+}
+
+/* ---- swiss structure: sharp corners, grotesk type, mono status language -- */
+html[data-skin="swiss"] body {
+  font-family: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+/* Sharp corners everywhere — the defining move of this direction. Squares
+   status dots and avatars too; the amber ring keeps humans distinct. */
+html[data-skin="swiss"] *,
+html[data-skin="swiss"] *::before,
+html[data-skin="swiss"] *::after { border-radius: 0 !important; }
+
+/* brand tile: ink block with an accent hairline instead of the teal radial */
+html[data-skin="swiss"] .brand .mark {
+  background: #16161a;
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+/* status language goes mono-uppercase — pills, counts, priority chips */
+html[data-skin="swiss"] .pill,
+html[data-skin="swiss"] .ncount,
+html[data-skin="swiss"] .prio,
+html[data-skin="swiss"] .rstat {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+html[data-skin="swiss"] .pill { text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+html[data-skin="swiss"] .pill.lg { font-size: 11px; }

@@ -1,0 +1,184 @@
+/* Portal component styles: buttons, badges, cards, tables, lists, and utilities. */
+/* ============================================================================
+   PRIMITIVES
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  background: var(--accent); color: var(--accent-ink); border: 1px solid transparent;
+  font: inherit; font-weight: 620; font-size: 13px; padding: 8px 15px; border-radius: 9px;
+  cursor: pointer; white-space: nowrap; transition: filter .14s, transform .05s, border-color .14s, background .14s, color .14s;
+}
+.btn:hover { filter: brightness(1.07); }
+.btn:active { transform: translateY(1px); }
+.btn svg { width: 15px; height: 15px; }
+.btn.ghost { background: transparent; color: var(--text-2); border-color: var(--border-2); }
+.btn.ghost:hover { color: var(--text); border-color: var(--accent-line); background: var(--hover); filter: none; }
+.btn.subtle { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
+.btn.subtle:hover { color: var(--text); border-color: var(--border-2); filter: none; }
+.btn.approve { background: var(--ok); color: #04231a; }
+.btn.danger { background: var(--danger); color: #2a0a0d; }
+[data-theme="light"] .btn.danger, [data-theme="auto"] .btn.danger { color: #fff; }
+/* SPEC-2 T2 — Stop-run control: square "halt" glyph (button sizing reuses the existing .btn.sm rule below). */
+.btn .sq { width: 11px; height: 11px; border-radius: 2px; background: currentColor; }
+.btn.stop { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-line); }
+.btn.stop:hover { background: var(--danger); color: #2a0a0d; filter: none; }
+[data-theme="light"] .btn.stop:hover, [data-theme="auto"] .btn.stop:hover { color: #fff; }
+.btn.stop:disabled { background: var(--surface-2); color: var(--muted); border-color: var(--border); cursor: default; }
+.btn.stop:disabled:hover { filter: none; background: var(--surface-2); color: var(--muted); }
+[data-theme="light"] .btn.approve, [data-theme="auto"] .btn.approve { color: #fff; }
+.btn.sm { padding: 6px 11px; font-size: 12px; border-radius: 8px; }
+.btn:disabled { opacity: .42; cursor: not-allowed; filter: none; transform: none; }
+.pair-top { flex: none; }
+
+/* status pill — text + icon + colour, identical in lists & detail */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 640; font-size: 11.5px; line-height: 1;
+  padding: 5px 10px 5px 8px; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap; vertical-align: middle;
+}
+.pill .gl { width: 12px; height: 12px; flex: none; display: block; }
+.pill.lg { font-size: 12.5px; padding: 7px 13px 7px 10px; }
+.pill.lg .gl { width: 13px; height: 13px; }
+.pill.s-working   { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.pill.s-ok        { color: var(--ok);     background: var(--ok-soft);     border-color: var(--ok-line); }
+.pill.s-ready,
+.pill.s-info      { color: var(--info);   background: var(--info-soft);   border-color: var(--info-line); }
+.pill.s-attn,
+.pill.s-warn      { color: var(--warn);   background: var(--warn-soft);   border-color: var(--warn-line); }
+.pill.s-bad       { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.pill.s-done,
+.pill.s-acc       { color: var(--violet); background: var(--violet-soft); border-color: var(--violet-line); }
+.pill.s-idle      { color: var(--idle);   background: var(--idle-soft);   border-color: var(--idle-line); }
+/* live dot animation for the working pill */
+.pill.s-working .gl circle.core { animation: pulse 2s infinite; transform-origin: center; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* priority tag */
+.prio { font-size: 10.5px; font-weight: 700; letter-spacing: .03em; color: var(--faint);
+  font-variant-numeric: tabular-nums; }
+.prio.p-hi { color: var(--danger); }
+.prio.p-md { color: var(--warn); }
+
+/* kind badge — human vs AI, never second-classing either */
+.kind { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px 3px 6px; border-radius: 6px;
+  border: 1px solid var(--border-2); color: var(--muted); }
+.kind svg { width: 11px; height: 11px; }
+.kind.ai { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.kind.human { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 40%, transparent);
+  background: color-mix(in oklab, var(--amber) 12%, transparent); }
+
+/* avatar — deterministic gradient. AI = squircle, human = circle + ring */
+.av { width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center;
+  font-weight: 750; font-size: 13px; color: #07141a; letter-spacing: -.02em;
+  box-shadow: var(--shadow-sm); position: relative; }
+.av.human { border-radius: 50%; box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--amber); }
+.av.lg { width: 48px; height: 48px; border-radius: 14px; font-size: 19px; }
+.av.lg.human { border-radius: 50%; box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 4.5px var(--amber); }
+.av.sm { width: 24px; height: 24px; border-radius: 8px; font-size: 11px; }
+.av.sm.human { border-radius: 50%; box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 2.5px var(--amber); }
+
+/* cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 15px;
+  box-shadow: var(--shadow-sm); }
+.card.pad { padding: 18px 20px; }
+.card-h { display: flex; align-items: center; gap: 10px; padding: 15px 18px; border-bottom: 1px solid var(--border); }
+.card-h h2, .card-h h3 { font-size: 14.5px; font-weight: 650; }
+.card-h .count { font-size: 12px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.card-h .grow { flex: 1; }
+.card-h .seeall { font-size: 12px; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.card-h .seeall:hover { color: var(--accent); }
+.card-b { padding: 8px 10px; }
+.card-b.flush { padding: 0; }
+
+.section-title { display: flex; align-items: center; gap: 10px; margin: 26px 2px 13px; }
+.section-title h2 { font-size: 13px; font-weight: 680; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.section-title .ln { flex: 1; height: 1px; background: var(--border); }
+
+/* key/value meta strip */
+.meta { display: flex; flex-wrap: wrap; gap: 7px 30px; }
+.meta > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.meta .k { color: var(--faint); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; white-space: nowrap; }
+.meta .v { font-size: 13.5px; font-weight: 600; }
+.meta .v.mono { font-size: 12.5px; font-weight: 500; }
+
+/* generic dense table */
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl thead th { text-align: left; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--faint); font-weight: 650; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tbl tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.tbl tbody tr { transition: background .1s; }
+.tbl tbody tr:hover { background: var(--hover); }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl tbody tr.clickable { cursor: pointer; }
+.tbl .num { font-variant-numeric: tabular-nums; }
+.tbl td .t1 { font-weight: 600; font-size: 13.5px; }
+.tbl td .t2 { color: var(--muted); font-size: 12px; }
+
+/* row link (lists) */
+.lrow { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-radius: 11px;
+  border: 1px solid transparent; color: inherit; cursor: pointer; transition: background .12s, border-color .12s; }
+.lrow:hover { background: var(--hover); border-color: var(--border); }
+.lrow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
+.lrow .grow { flex: 1; min-width: 0; }
+.lrow .t1 { font-weight: 620; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lrow .t2 { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+/* chips / tags */
+.tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; white-space: nowrap;
+  padding: 2px 8px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--muted); }
+.tag.root { color: var(--violet); border-color: var(--violet-line); background: var(--violet-soft); }
+.tag.model { font-family: "JetBrains Mono", monospace; font-size: 10.5px; }
+.tag.wake-on { color: var(--ok); border-color: var(--ok-line); background: var(--ok-soft); }
+.tag.wake-off { color: var(--idle); }
+
+/* deeplink chip */
+.dlink { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12.5px;
+  color: var(--text-2); }
+.dlink:hover { color: var(--accent); }
+.dlink .av { width: 19px; height: 19px; border-radius: 6px; font-size: 9.5px; }
+.dlink .av.human { border-radius: 50%; box-shadow: 0 0 0 1px var(--bg), 0 0 0 2px var(--amber); }
+/* ISS-44: clickable URLs inside authored text (linkify) — accent, underlined, wrap long links */
+.lnk { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; word-break: break-word; }
+/* ISS-82: inline [task name] chip rendered in place of a bare task-id in authored text.
+   Inline (NOT inline-flex like .dlink) so it flows naturally mid-sentence; accent on hover. */
+.tref { color: var(--accent); font-weight: 600; text-decoration: none; border-radius: 5px;
+  padding: 0 2px; transition: background .12s ease; }
+.tref:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); text-decoration: underline; text-underline-offset: 2px; }
+.lnk:hover { text-decoration-thickness: 2px; }
+
+/* mono id pill */
+.idpill { display: inline-flex; align-items: center; gap: 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 6px 4px 12px; }
+.idpill code { font-size: 12px; color: var(--text-2); }
+.idpill .lbl { color: var(--faint); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; font-weight: 650; }
+.idpill button { background: var(--surface-3); border: 1px solid var(--border); color: var(--muted);
+  border-radius: 999px; padding: 3px 9px; font-size: 11px; cursor: pointer; transition: .14s; }
+.idpill button:hover { color: var(--text); border-color: var(--accent-line); }
+
+/* progress meter */
+.meter { height: 6px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.meter > i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+
+/* empty / none */
+.none { color: var(--faint); font-size: 13px; border: 1px dashed var(--border); border-radius: 12px;
+  padding: 22px; text-align: center; }
+.none .em { font-size: 26px; opacity: .6; display: block; margin-bottom: 6px; }
+
+/* live indicator */
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); animation: pulse 1.6s infinite; }
+.live.accent .d { background: var(--accent); }
+
+/* skeleton shimmer */
+.sk { background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%; animation: sh 1.3s ease infinite; border-radius: 7px; }
+@keyframes sh { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+/* ============================================================================
+   THREAD / MESSAGES
+   ========================================================================== */
+.thread { display: flex; flex-direction: column; gap: 16px; }
+.msg { display: flex; gap: 12px; }

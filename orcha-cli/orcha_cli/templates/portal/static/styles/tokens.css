@@ -1,0 +1,175 @@
+/* Portal tokens and reset styles shared by all pages. */
+/* ============================================================================
+   Orcha portal — design tokens + component system
+   Product: Orcha (teal orca).
+   Both light + dark are first-class, driven entirely by CSS custom properties.
+   A single [data-theme] switch on <html> flips everything.
+   ========================================================================== */
+
+/* ---- token layer -------------------------------------------------------- */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg:        #0a0d12;
+  --bg-grad-1: rgba(21, 192, 198, .055);
+  --bg-grad-2: rgba(125, 145, 255, .045);
+  --surface:   #111620;
+  --surface-2: #161d29;
+  --surface-3: #1c2532;
+  --raised:    #1a2230;
+  --border:    #232d3d;
+  --border-2:  #2c3848;
+  --hover:     #1a2230;
+
+  /* text */
+  --text:   #e8edf6;
+  --text-2: #c4cedd;
+  --muted:  #8b98ae;
+  --faint:  #5a6678;
+
+  /* brand accent — teal, the Orcha colour. Reserved for primary actions,
+     focus, links, the "live/working" pulse — never decorative fills. */
+  --accent:      #1fc7cd;
+  --accent-ink:  #04181a;       /* text on top of a solid accent button */
+  --accent-soft: rgba(31, 199, 205, .12);
+  --accent-line: rgba(31, 199, 205, .34);
+  --accent-glow: rgba(31, 199, 205, .22);
+
+  /* amber accent — used for warning/attention states. */
+  --amber:       #f2a83c;
+
+  /* semantic state — each has fg / soft bg / border so pills read in 2 themes */
+  --ok:        #38d39a;  --ok-soft:   rgba(56, 211, 154, .12);  --ok-line:   rgba(56, 211, 154, .32);
+  --info:      #5aa6ff;  --info-soft: rgba(90, 166, 255, .12);  --info-line: rgba(90, 166, 255, .32);
+  --warn:      #f5b13d;  --warn-soft: rgba(245, 177, 61, .13);  --warn-line: rgba(245, 177, 61, .34);
+  --danger:    #f6757e;  --danger-soft: rgba(246, 117, 126, .12); --danger-line: rgba(246, 117, 126, .32);
+  --violet:    #b08cff;  --violet-soft: rgba(176, 140, 255, .13); --violet-line: rgba(176, 140, 255, .32);
+  --idle:      #6b788e;  --idle-soft: rgba(107, 120, 142, .14);  --idle-line: rgba(107, 120, 142, .30);
+
+  /* diff */
+  --diff-add:    #8fe3a8; --diff-add-bg: rgba(56, 211, 154, .10);
+  --diff-del:    #f6909a; --diff-del-bg: rgba(246, 117, 126, .10);
+  --diff-hunk:   #5aa6ff; --diff-hunk-bg: rgba(90, 166, 255, .07);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.30);
+  --shadow:    0 8px 28px rgba(0,0,0,.40);
+  --shadow-lg: 0 24px 60px rgba(0,0,0,.55);
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg:        #f3f6fa;
+  --bg-grad-1: rgba(21, 192, 198, .07);
+  --bg-grad-2: rgba(125, 145, 255, .06);
+  --surface:   #ffffff;
+  --surface-2: #f5f8fc;
+  --surface-3: #eef3f9;
+  --raised:    #ffffff;
+  --border:    #e4eaf2;
+  --border-2:  #d3dce8;
+  --hover:     #f1f5fa;
+
+  --text:   #0e1722;
+  --text-2: #2c3a4d;
+  --muted:  #5a6678;
+  --faint:  #8794a6;
+
+  --accent:      #0c9aa0;
+  --accent-ink:  #ffffff;
+  --accent-soft: rgba(12, 154, 160, .10);
+  --accent-line: rgba(12, 154, 160, .30);
+  --accent-glow: rgba(12, 154, 160, .18);
+
+  --amber: #d9881c;
+
+  --ok:     #11a472;  --ok-soft:   rgba(17, 164, 114, .11);  --ok-line:   rgba(17, 164, 114, .28);
+  --info:   #2f74e6;  --info-soft: rgba(47, 116, 230, .10);  --info-line: rgba(47, 116, 230, .26);
+  --warn:   #c9871a;  --warn-soft: rgba(201, 135, 26, .13);  --warn-line: rgba(201, 135, 26, .30);
+  --danger: #d94a55;  --danger-soft: rgba(217, 74, 85, .10); --danger-line: rgba(217, 74, 85, .26);
+  --violet: #7b54d6;  --violet-soft: rgba(123, 84, 214, .11); --violet-line: rgba(123, 84, 214, .26);
+  --idle:   #768296;  --idle-soft: rgba(118, 130, 150, .13);  --idle-line: rgba(118, 130, 150, .26);
+
+  --diff-add:  #1c7a4a; --diff-add-bg: rgba(17, 164, 114, .12);
+  --diff-del:  #c43d48; --diff-del-bg: rgba(217, 74, 85, .10);
+  --diff-hunk: #2f74e6; --diff-hunk-bg: rgba(47, 116, 230, .08);
+
+  --shadow-sm: 0 1px 2px rgba(16,28,48,.06);
+  --shadow:    0 10px 30px rgba(16,28,48,.10);
+  --shadow-lg: 0 24px 60px rgba(16,28,48,.16);
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+@media (prefers-color-scheme: light) {
+  [data-theme="auto"] {
+    color-scheme: light;
+    --bg:        #f3f6fa;
+    --bg-grad-1: rgba(21, 192, 198, .07);
+    --bg-grad-2: rgba(125, 145, 255, .06);
+    --surface:   #ffffff;
+    --surface-2: #f5f8fc;
+    --surface-3: #eef3f9;
+    --raised:    #ffffff;
+    --border:    #e4eaf2;
+    --border-2:  #d3dce8;
+    --hover:     #f1f5fa;
+    --text:   #0e1722;
+    --text-2: #2c3a4d;
+    --muted:  #5a6678;
+    --faint:  #8794a6;
+    --accent:      #0c9aa0;
+    --accent-ink:  #ffffff;
+    --accent-soft: rgba(12, 154, 160, .10);
+    --accent-line: rgba(12, 154, 160, .30);
+    --accent-glow: rgba(12, 154, 160, .18);
+    --amber: #d9881c;
+    --ok:     #11a472;  --ok-soft:   rgba(17, 164, 114, .11);  --ok-line:   rgba(17, 164, 114, .28);
+    --info:   #2f74e6;  --info-soft: rgba(47, 116, 230, .10);  --info-line: rgba(47, 116, 230, .26);
+    --warn:   #c9871a;  --warn-soft: rgba(201, 135, 26, .13);  --warn-line: rgba(201, 135, 26, .30);
+    --danger: #d94a55;  --danger-soft: rgba(217, 74, 85, .10); --danger-line: rgba(217, 74, 85, .26);
+    --violet: #7b54d6;  --violet-soft: rgba(123, 84, 214, .11); --violet-line: rgba(123, 84, 214, .26);
+    --idle:   #768296;  --idle-soft: rgba(118, 130, 150, .13);  --idle-line: rgba(118, 130, 150, .26);
+    --diff-add:  #1c7a4a; --diff-add-bg: rgba(17, 164, 114, .12);
+    --diff-del:  #c43d48; --diff-del-bg: rgba(217, 74, 85, .10);
+    --diff-hunk: #2f74e6; --diff-hunk-bg: rgba(47, 116, 230, .08);
+    --shadow-sm: 0 1px 2px rgba(16,28,48,.06);
+    --shadow:    0 10px 30px rgba(16,28,48,.10);
+    --shadow-lg: 0 24px 60px rgba(16,28,48,.16);
+  }
+}
+
+/* ---- reset -------------------------------------------------------------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 560px at 85% -8%, var(--bg-grad-1), transparent 60%),
+    radial-gradient(900px 520px at -8% 4%, var(--bg-grad-2), transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: none; }
+code, kbd, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+::selection { background: var(--accent-glow); }
+h1, h2, h3, h4 { margin: 0; font-weight: 650; letter-spacing: -.01em; }
+:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 8px; }
+
+/* default icon / status-glyph sizing (contextual rules override these) */
+svg.ico { width: 16px; height: 16px; flex: none; }
+svg.gl  { width: 13px; height: 13px; flex: none; }
+
+/* thin scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--idle); background-clip: content-box; }

@@ -1,0 +1,227 @@
+/* Portal shell styles: sidebar, topbar, controls, and content frame. */
+/* ============================================================================
+   APP SHELL — persistent sidebar + sticky topbar
+   ========================================================================== */
+.app {
+  display: grid;
+  grid-template-columns: 246px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* ---- sidebar ---- */
+.sidebar {
+  position: sticky; top: 0; align-self: start;
+  height: 100vh;
+  display: flex; flex-direction: column;
+  padding: 18px 14px 16px;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface), color-mix(in oklab, var(--surface) 92%, var(--bg)));
+  gap: 6px;
+}
+.brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 14px; }
+.brand .mark {
+  width: 38px; height: 38px; border-radius: 11px; flex: none;
+  display: grid; place-items: center;
+  background: radial-gradient(120% 120% at 50% 30%, #0e2d33, #06171c);
+  border: 1px solid var(--border-2);
+  box-shadow: var(--shadow-sm);
+}
+[data-theme="light"] .brand .mark,
+[data-theme="auto"] .brand .mark { background: radial-gradient(120% 120% at 50% 30%, #0c2c31, #0a2227); }
+.brand .mark svg { width: 27px; height: 27px; display: block; }
+.brand .word { font-size: 18px; font-weight: 720; letter-spacing: -.02em; line-height: 1; }
+.brand .word small { display: block; font-weight: 550; font-size: 10.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+
+.nav { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.nav .lbl { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
+  padding: 12px 10px 5px; font-weight: 650; }
+.nav a {
+  display: flex; align-items: center; gap: 11px;
+  padding: 8px 10px; border-radius: 9px;
+  color: var(--text-2); font-weight: 550; font-size: 13.5px;
+  border: 1px solid transparent; transition: background .12s, color .12s, border-color .12s;
+}
+.nav a:hover { background: var(--hover); color: var(--text); }
+.nav a.active { background: var(--accent-soft); color: var(--text); border-color: var(--accent-line); }
+.nav a .ico { width: 17px; height: 17px; flex: none; color: var(--muted); }
+.nav a.active .ico { color: var(--accent); }
+.nav a .grow { flex: 1; }
+.nav .ncount { font-size: 11px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.nav .ncount.attn { color: var(--warn); }
+
+.sb-spacer { flex: 1; }
+
+/* "needs you" sidebar card */
+.attn-card {
+  margin: 6px 4px 8px; padding: 13px 14px; border-radius: 13px;
+  background: linear-gradient(180deg, var(--warn-soft), transparent);
+  border: 1px solid var(--warn-line);
+}
+.attn-card .h { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700;
+  color: var(--warn); letter-spacing: .02em; }
+.attn-card .big { font-size: 30px; font-weight: 760; letter-spacing: -.03em; margin: 6px 0 1px;
+  font-variant-numeric: tabular-nums; }
+.attn-card .sub { color: var(--muted); font-size: 12px; }
+.attn-card a.go { display: inline-flex; align-items: center; gap: 5px; margin-top: 9px;
+  font-size: 12.5px; font-weight: 650; color: var(--text); }
+.attn-card a.go:hover { color: var(--accent); }
+
+/* ---- collapsible sidebar (icon rail) ---- */
+.brand-row { display: flex; align-items: flex-start; }
+.brand-row .brand { flex: 1; min-width: 0; }
+.sb-toggle { width: 26px; height: 26px; margin: 8px 0 0; flex: none; display: grid; place-items: center;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--faint);
+  cursor: pointer; padding: 0; }
+.sb-toggle:hover { background: var(--hover); color: var(--text); border-color: var(--border); }
+.sb-toggle .ico { width: 15px; height: 15px; transform: rotate(90deg); transition: transform .15s ease; }
+.attn-mini { display: none; }
+
+/* collapsed: a 64px icon rail — labels, counts, and the attn card give way to
+   icons + tooltips; the attn card shrinks to a bell+count chip that still
+   deep-links to the action queue. State lives on <html data-sidebar>. */
+html[data-sidebar="collapsed"] .app { grid-template-columns: 64px minmax(0, 1fr); }
+html[data-sidebar="collapsed"] .sidebar { padding: 18px 9px 16px; }
+html[data-sidebar="collapsed"] .brand-row { flex-direction: column; align-items: center; gap: 4px; }
+html[data-sidebar="collapsed"] .brand { padding: 4px 0 2px; }
+html[data-sidebar="collapsed"] .brand .word,
+html[data-sidebar="collapsed"] .nav .lbl,
+html[data-sidebar="collapsed"] .nav a .grow,
+html[data-sidebar="collapsed"] .nav .ncount,
+html[data-sidebar="collapsed"] .attn-card { display: none; }
+html[data-sidebar="collapsed"] .sb-toggle { margin: 0; }
+html[data-sidebar="collapsed"] .sb-toggle .ico { transform: rotate(-90deg); }
+html[data-sidebar="collapsed"] .nav { margin-top: 10px; }
+html[data-sidebar="collapsed"] .nav a { justify-content: center; padding: 9px 0; }
+html[data-sidebar="collapsed"] .attn-mini { display: flex; flex-direction: column; align-items: center;
+  gap: 3px; margin: 6px 0 8px; padding: 9px 6px; border-radius: 11px; color: var(--warn);
+  background: linear-gradient(180deg, var(--warn-soft), transparent); border: 1px solid var(--warn-line); }
+/* collapsing is an explicit ask for real estate — lift the content width cap
+   so the page actually uses the reclaimed space (inner wrappers like
+   .set-wrap / .ob keep their own caps where narrow columns are the point). */
+html[data-sidebar="collapsed"] .content { max-width: none; }
+.attn-mini svg { width: 16px; height: 16px; }
+.attn-mini .n { font-size: 13px; font-weight: 760; color: var(--text); }
+
+/* ---- main column ---- */
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px 14px;
+  padding: 14px 26px; min-height: 62px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg) 78%, transparent);
+  backdrop-filter: saturate(140%) blur(12px);
+}
+/* Two logical lines (identity/search/alerts + controls) live side by side on one row when the
+   topbar is wide, and break to two balanced rows when it isn't. Each line stays nowrap so it
+   moves as a whole unit — the topbar wraps between the lines, never orphaning a single chip. */
+.topbar .tb-line { display: flex; align-items: center; flex-wrap: nowrap; justify-content: flex-end;
+  gap: 10px 14px; min-width: 0; }
+.topbar .tb-line-1 { flex: 1 1 auto; }     /* takes the slack so search + alerts sit right of the title */
+.topbar .tb-line-2 { flex: 0 1 auto; }     /* hugs its content; drops to its own row when it can't fit */
+.topbar .crumbs { display: flex; align-items: baseline; gap: 9px; flex-shrink: 0; margin-right: auto; }
+.topbar .crumbs .page { font-size: 17px; font-weight: 680; letter-spacing: -.02em; white-space: nowrap; }
+.topbar .crumbs .ctx { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+
+.search { position: relative; display: flex; align-items: center; flex: 0 1 230px; min-width: 130px; transition: flex-basis .18s; }
+.search svg { position: absolute; left: 11px; width: 15px; height: 15px; color: var(--faint); pointer-events: none; }
+.search input {
+  width: 100%; min-width: 0; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 30px 8px 33px; border-radius: 9px; text-overflow: ellipsis;
+  font: inherit; font-size: 13px; outline: none; transition: border-color .14s, box-shadow .14s;
+}
+.search input::placeholder { color: var(--faint); }
+.search input:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.search:focus-within { flex-basis: 280px; }
+.search .kbd { position: absolute; right: 9px; font-size: 10.5px; color: var(--faint);
+  border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 5px; font-family: inherit; }
+
+/* topbar action-queue button — persistent, reachable everywhere */
+.attn-pill {
+  display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0;
+  padding: 7px 12px 7px 11px; border-radius: 999px;
+  background: var(--warn-soft); border: 1px solid var(--warn-line);
+  color: var(--text); font-weight: 600; font-size: 12.5px; white-space: nowrap;
+  transition: filter .14s, transform .05s;
+}
+.attn-pill:hover { filter: brightness(1.06); }
+.attn-pill:active { transform: translateY(1px); }
+.attn-pill .n { background: var(--warn); color: #1c1304; font-weight: 800; font-size: 11.5px;
+  border-radius: 999px; min-width: 19px; height: 19px; padding: 0 5px; display: grid; place-items: center;
+  font-variant-numeric: tabular-nums; }
+.attn-pill .bell { width: 15px; height: 15px; color: var(--warn); }
+
+/* GH #148 — topbar controls. TWO orthogonal controls, NOT one fused slider:
+   NOTIFIER (#notifTop) is the LIVE binary kill-switch (wakes_enabled) shown Paused(red)/
+   Running(green); AUTONOMY (#autTop) is the 3-level engine gearbox (autonomy_level), the
+   active level lit in its tone (plan=warn / pr=info / full=accent). A divider keeps them
+   reading as two things; they wrap together on narrow widths, labels intact. Both reuse the
+   shared `.aut`/`.seg` pill styling below. All tokens pre-exist in :root. */
+.ctl-wrap { display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; flex-shrink: 0; }
+.ctl-group { display: inline-flex; align-items: center; gap: 11px; }
+.ctl-div { align-self: stretch; width: 1px; min-height: 24px; background: var(--border); }
+.aut-lab { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); font-weight: 650; }
+.aut { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); position: relative; }
+.aut .seg { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 650; color: var(--muted); cursor: pointer; border: 1px solid transparent;
+  transition: background .15s, color .15s, border-color .15s; white-space: nowrap; user-select: none; }
+.aut .seg .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .55; transition: opacity .15s; }
+.aut .seg:hover { color: var(--text); }
+.aut .seg.on .d { opacity: 1; }
+/* notifier live binary — explicit state classes so Running reads neutral green, Paused red. */
+/* the "Running" segment carries the bare class `run`, which collides with the unrelated run-feed
+   `.run` card style (margin-bottom/overflow/background). Neutralize it so the live pill sits on the
+   same baseline as the level pills instead of being nudged up by that stray margin. */
+.aut .seg.run { margin: 0; overflow: visible; }
+.aut .seg.run.on    { color: var(--ok);     background: var(--ok-soft);     border-color: var(--ok-line); }
+.aut .seg.paused.on { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.aut .seg.paused.on .d { animation: pulse 1.4s infinite; }
+/* autonomy levels (#298, containers.autonomy_level). The ACTIVE level lights in its spec tone
+   (plan=warn / pr=info / full=accent); inactive levels stay muted + selectable via base .seg. */
+.aut .seg.lvl.on.warn   { color: var(--warn);   background: var(--warn-soft);   border-color: var(--warn-line); }
+.aut .seg.lvl.on.info   { color: var(--info);   background: var(--info-soft);   border-color: var(--info-line); }
+.aut .seg.lvl.on.accent { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+/* read-only when no acting human */
+.aut.locked .seg { cursor: not-allowed; }
+/* GH #148: Autonomy is de-emphasized while the notifier is Paused ("applies when running"),
+   but stays legible + editable so you can pre-set the level before resuming. Full opacity on
+   hover/focus so interacting with it never fights the dimming. */
+.aut.dimmed { opacity: .6; transition: opacity .15s; }
+.aut.dimmed:hover, .aut.dimmed:focus-within { opacity: 1; }
+
+/* paused-state reinforcement on the whole topbar + persistent micro-banner */
+.topbar.paused { border-top: 2px solid var(--danger); }
+.pausebar { display: none; align-items: center; gap: 8px; padding: 7px 26px; font-size: 12px; font-weight: 650;
+  color: var(--danger); background: var(--danger-soft); border-bottom: 1px solid var(--danger-line); }
+.pausebar.show { display: flex; }
+.pausebar .resume { margin-left: auto; cursor: pointer; color: var(--text); border: 1px solid var(--border-2);
+  border-radius: 999px; padding: 3px 11px; font-size: 11.5px; font-weight: 600; }
+.pausebar .resume:hover { border-color: var(--accent-line); color: var(--accent); }
+
+/* acting-as */
+.acting { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 5px 6px 5px 12px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
+.acting .lbl { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.acting .who { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+
+/* icon button (theme toggle etc.) */
+.iconbtn {
+  width: 36px; height: 36px; flex: none; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2);
+  color: var(--muted); cursor: pointer; transition: color .14s, border-color .14s, background .14s;
+}
+.iconbtn:hover { color: var(--text); border-color: var(--border-2); background: var(--hover); }
+.iconbtn svg { width: 17px; height: 17px; }
+.iconbtn .moon { display: none; }
+[data-theme="dark"] .iconbtn .moon { display: block; }
+[data-theme="dark"] .iconbtn .sun { display: none; }
+@media (prefers-color-scheme: dark) {
+  [data-theme="auto"] .iconbtn .moon { display: block; }
+  [data-theme="auto"] .iconbtn .sun { display: none; }
+}
+
+.content { padding: 24px 26px 64px; max-width: 1320px; width: 100%; }
+.content.narrow { max-width: 1080px; }

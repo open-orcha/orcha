@@ -1,0 +1,135 @@
+/* Portal conversation and terminal pairing styles. */
+  color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.pair-remedy code { white-space: normal; word-break: break-word; }
+@media (max-width: 720px) {
+  .pair-grid { grid-template-columns: 1fr; }
+  .pair-qr { width: min(304px, 100%); height: auto; aspect-ratio: 1; margin: 0 auto; }
+  .pair-url { text-align: left; }
+}
+
+/* toast */
+.toast { position: fixed; right: 22px; bottom: 22px; z-index: 90; background: var(--surface);
+  border: 1px solid var(--border-2); border-left: 3px solid var(--accent); border-radius: 12px;
+  padding: 12px 16px; box-shadow: var(--shadow-lg); font-size: 13px; max-width: 380px;
+  opacity: 0; transform: translateY(10px); transition: .22s; pointer-events: none; }
+.toast.show { opacity: 1; transform: none; }
+.toast.ok { border-left-color: var(--ok); }
+.toast.bad { border-left-color: var(--danger); }
+
+/* utilities */
+.row { display: flex; align-items: center; gap: 10px; }
+.col { display: flex; flex-direction: column; }
+.wrap-g { display: flex; flex-wrap: wrap; gap: 8px; }
+.grow { flex: 1; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.mono { font-family: "JetBrains Mono", monospace; }
+.nowrap { white-space: nowrap; }
+.hidden { display: none !important; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* grids */
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.split { display: grid; grid-template-columns: 320px minmax(0,1fr); gap: 18px; align-items: start; }
+.split.wide { grid-template-columns: 360px minmax(0,1fr); }
+@media (max-width: 1080px) { .g3 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 940px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .split, .g2, .g3, .gate-cols { grid-template-columns: 1fr; }
+}
+
+/* sticky aside */
+.stick { position: sticky; top: 78px; }
+
+/* ISS-331 — shared sort control (Time/Priority + asc/desc), reused across the Tasks list,
+   Requests list, and the agent-detail current-tasks / incoming / outgoing lists. ONE style,
+   never forked. Mirrors the .seg segmented look so it reads as a native control. */
+.sortctl { display: inline-flex; align-items: center; gap: 2px; background: var(--surface-3);
+  border: 1px solid var(--border); border-radius: 8px; padding: 2px; vertical-align: middle; }
+.sortctl button { border: 0; background: transparent; color: var(--muted); font: inherit;
+  font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; line-height: 1;
+  padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+.sortctl button:hover { color: var(--text); }
+.sortctl button.on { background: var(--accent); color: var(--accent-ink); }
+.sortctl .sortdir { min-width: 22px; text-align: center; font-size: 12.5px; font-weight: 700; }
+
+/* ===== SPEC-3: notification center (topbar "Needs you" dropdown) ===== */
+.ncenter { width: 392px; background: var(--surface); border: 1px solid var(--border-2);
+  border-radius: 14px; box-shadow: var(--shadow-lg); overflow: hidden; }
+.ncenter.float { position: absolute; top: 60px; right: 26px; z-index: 60; display: none; }
+.ncenter.float.show { display: block; animation: ncMd .16s ease; }
+@keyframes ncMd { from { opacity: 0; transform: translateY(-6px); } }
+.nc-h { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+.nc-h h3 { font-size: 14px; font-weight: 680; }
+.nc-h .mark { margin-left: auto; font-size: 11.5px; font-weight: 620; color: var(--muted); cursor: pointer; }
+.nc-h .mark:hover { color: var(--accent); }
+.nc-zlbl { display: flex; align-items: center; gap: 8px; padding: 9px 16px 5px; font-size: 10px;
+  font-weight: 750; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+.nc-zlbl.needs { color: var(--warn); }
+.nc-zlbl .ct { color: var(--faint); font-weight: 700; }
+.nc-list { max-height: 340px; overflow: auto; }
+.nrow { display: flex; gap: 11px; padding: 10px 16px; cursor: pointer; border-left: 2px solid transparent;
+  align-items: flex-start; border-top: 1px solid var(--border); color: inherit; text-decoration: none; }
+.nc-list .nrow:first-child { border-top: 0; }
+.nrow:hover { background: var(--hover); }
+.nrow.unread { border-left-color: var(--accent); }
+.nrow .ic { width: 26px; height: 26px; border-radius: 8px; flex: none; display: grid; place-items: center; }
+.nrow .ic svg { width: 14px; height: 14px; }
+.nrow .ic .ncdot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.nrow .b { flex: 1; min-width: 0; }
+.nrow .ti { font-size: 12.5px; font-weight: 620; line-height: 1.35; }
+.nrow .me { font-size: 11.5px; color: var(--muted); margin-top: 2px; display: flex;
+  align-items: center; gap: 6px; flex-wrap: wrap; }
+.nrow .when { font-size: 11px; color: var(--faint); white-space: nowrap; }
+.nrow .go { color: var(--faint); align-self: center; }
+.nc-foot { padding: 10px 16px; text-align: center; font-size: 12px; color: var(--muted);
+  cursor: pointer; border-top: 1px solid var(--border); }
+.nc-foot:hover { color: var(--accent); }
+.nc-empty { padding: 26px; text-align: center; color: var(--faint); font-size: 13px; }
+/* type-icon colour helpers (reuse existing tokens — no new colours) */
+.ncenter .c-warn { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-line); }
+.ncenter .c-danger { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); }
+.ncenter .c-violet { color: var(--violet); background: var(--violet-soft); border: 1px solid var(--violet-line); }
+.ncenter .c-info { color: var(--info); background: var(--info-soft); border: 1px solid var(--info-line); }
+.ncenter .c-idle { color: var(--idle); background: var(--idle-soft); border: 1px solid var(--idle-line); }
+
+/* ============================================================================
+   Skin: "Swiss" — opt-in design, selectable from Settings → Appearance.
+   Direction 1b of the redesign explorations: Space Grotesk + mono accents,
+   hairline grid, electric indigo, sharp corners, no shadows.
+   Applied as [data-skin="swiss"] on <html>, orthogonal to [data-theme]
+   (dark / light / auto all keep working). Default (no attribute) = classic teal.
+   ========================================================================== */
+
+html[data-skin="swiss"],
+html[data-skin="swiss"][data-theme="dark"] {
+  /* surfaces — warm near-blacks, hairline borders */
+  --bg:        #0e0e10;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface:   #151517;
+  --surface-2: #1c1c1f;
+  --surface-3: #242428;
+  --raised:    #242428;
+  --border:    #3a3a40;
+  --border-2:  #4a4a52;
+  --hover:     #242428;
+
+  --text:   #f2f2ee;
+  --text-2: #c9c9c2;
+  --muted:  #a2a29a;
+  --faint:  #6a6a64;
+
+  /* brand accent — electric indigo replaces teal */
+  --accent:      #5a72ff;
+  --accent-ink:  #ffffff;
+  --accent-soft: rgba(90, 114, 255, .13);
+  --accent-line: rgba(90, 114, 255, .42);
+  --accent-glow: rgba(90, 114, 255, .25);
+
+  /* maker / human accent — coral replaces amber */
+  --amber: #ff7a52;
+
+  --ok:     #42b877; --ok-soft:     rgba(66, 184, 119, .15); --ok-line:     rgba(66, 184, 119, .40);
