@@ -38,10 +38,10 @@ struct AgentsTabView: View {
                                 AgentAvatar(alias: human.alias, human: true)
                                 VStack(alignment: .leading) {
                                     Text(human.alias)
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .font(p.uiFont(15, .semibold))
                                         .foregroundStyle(p.text)
                                     Text("Human authority")
-                                        .font(.system(size: 13))
+                                        .font(p.uiFont(13))
                                         .foregroundStyle(p.muted)
                                 }
                             }
@@ -72,10 +72,10 @@ private struct AgentRowCard: View {
                 AgentAvatar(alias: agent.alias)
                 VStack(alignment: .leading) {
                     Text(agent.alias)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(p.uiFont(15, .semibold))
                         .foregroundStyle(p.text)
                     Text(agent.role ?? "agent")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                         .lineLimit(1)
                 }
@@ -84,7 +84,7 @@ private struct AgentRowCard: View {
             }
             if agent.status == "working", let title = agent.currentTask?.title {
                 Text("▸ \(title)")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.text2)
                     .lineLimit(1)
             }

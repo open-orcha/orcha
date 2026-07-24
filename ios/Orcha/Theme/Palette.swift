@@ -39,6 +39,27 @@ struct Palette {
     let idleLine: Color
     let isDark: Bool
 
+    // Skin traits (portal [data-skin] parity). Classic keeps the shipped
+    // geometry; Swiss squares everything off and sets status text in mono.
+    var radiusCard: CGFloat = 12
+    var radiusButton: CGFloat = 12
+    var radiusTag: CGFloat = 5
+    var pillMono = false
+    var flatChrome = false   // Swiss: no brand radial glows behind content
+    var displayFamily: String?   // Swiss: bundled Space Grotesk; nil = SF
+
+    /// UI font for the active skin: the bundled display family when the skin
+    /// sets one (Swiss = Space Grotesk, portal parity), else the system font.
+    /// Mono call sites keep `.system(design: .monospaced)` on both skins, the
+    /// way JetBrains Mono survives the web's Swiss.
+    func uiFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        if let displayFamily {
+            Font.custom(displayFamily, size: size).weight(weight)
+        } else {
+            .system(size: size, weight: weight)
+        }
+    }
+
     static let dark = Palette(
         bg: Color(hex: 0x0A0D12),
         surface: Color(hex: 0x111620),
@@ -113,13 +134,111 @@ struct Palette {
         isDark: false
     )
 
-    /// Resolve for an explicit theme mode; Auto resolves per system in views via
-    /// the environment (see `PaletteReader`).
-    static func current(_ mode: ThemeMode, systemDark: Bool = true) -> Palette {
-        switch mode {
-        case .auto: systemDark ? .dark : .light
-        case .dark: .dark
-        case .light: .light
+    /// Swiss skin (portal `[data-skin="swiss"]` tokens 1:1): warm near-blacks,
+    /// hairline borders, electric indigo — sharp corners + mono status chips.
+    static let swissDark: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0x0E0E10),
+            surface: Color(hex: 0x151517),
+            surface2: Color(hex: 0x1C1C1F),
+            surface3: Color(hex: 0x242428),
+            raised: Color(hex: 0x242428),
+            border: Color(hex: 0x3A3A40),
+            border2: Color(hex: 0x4A4A52),
+            text: Color(hex: 0xF2F2EE),
+            text2: Color(hex: 0xC9C9C2),
+            muted: Color(hex: 0xA2A29A),
+            faint: Color(hex: 0x6A6A64),
+            accent: Color(hex: 0x5A72FF),
+            accentInk: .white,
+            accentSoft: Color(hex: 0x5A72FF, alpha: 0.13),
+            accentLine: Color(hex: 0x5A72FF, alpha: 0.42),
+            ok: Color(hex: 0x42B877),
+            okSoft: Color(hex: 0x42B877, alpha: 0.15),
+            okLine: Color(hex: 0x42B877, alpha: 0.40),
+            info: Color(hex: 0x5A72FF),
+            infoSoft: Color(hex: 0x5A72FF, alpha: 0.15),
+            infoLine: Color(hex: 0x5A72FF, alpha: 0.40),
+            warn: Color(hex: 0xE0A13A),
+            warnSoft: Color(hex: 0xE0A13A, alpha: 0.16),
+            warnLine: Color(hex: 0xE0A13A, alpha: 0.46),
+            danger: Color(hex: 0xFF5A5F),
+            dangerSoft: Color(hex: 0xFF5A5F, alpha: 0.15),
+            dangerLine: Color(hex: 0xFF5A5F, alpha: 0.46),
+            violet: Color(hex: 0x9A7BFF),
+            violetSoft: Color(hex: 0x9A7BFF, alpha: 0.15),
+            violetLine: Color(hex: 0x9A7BFF, alpha: 0.40),
+            idle: Color(hex: 0x6A6A64),
+            idleSoft: Color(hex: 0x6A6A64, alpha: 0.16),
+            idleLine: Color(hex: 0x6A6A64, alpha: 0.34),
+            isDark: true
+        )
+        p.applySwissTraits()
+        return p
+    }()
+
+    /// Swiss light: paper surfaces with near-black hairlines — the editorial grid.
+    static let swissLight: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0xF3F3F0),
+            surface: Color(hex: 0xFBFBF9),
+            surface2: Color(hex: 0xECEBE4),
+            surface3: Color(hex: 0xE3E2DA),
+            raised: Color(hex: 0xFBFBF9),
+            border: Color(hex: 0x16161A),
+            border2: Color(hex: 0x16161A),
+            text: Color(hex: 0x16161A),
+            text2: Color(hex: 0x3A3931),
+            muted: Color(hex: 0x6A685F),
+            faint: Color(hex: 0x9A988C),
+            accent: Color(hex: 0x1B4DFF),
+            accentInk: .white,
+            accentSoft: Color(hex: 0x1B4DFF, alpha: 0.10),
+            accentLine: Color(hex: 0x1B4DFF, alpha: 0.42),
+            ok: Color(hex: 0x157A4A),
+            okSoft: Color(hex: 0x157A4A, alpha: 0.12),
+            okLine: Color(hex: 0x157A4A, alpha: 0.38),
+            info: Color(hex: 0x1B4DFF),
+            infoSoft: Color(hex: 0x1B4DFF, alpha: 0.10),
+            infoLine: Color(hex: 0x1B4DFF, alpha: 0.38),
+            warn: Color(hex: 0xB26B00),
+            warnSoft: Color(hex: 0xB26B00, alpha: 0.12),
+            warnLine: Color(hex: 0xB26B00, alpha: 0.42),
+            danger: Color(hex: 0xE5484D),
+            dangerSoft: Color(hex: 0xE5484D, alpha: 0.11),
+            dangerLine: Color(hex: 0xE5484D, alpha: 0.42),
+            violet: Color(hex: 0x6D4BD6),
+            violetSoft: Color(hex: 0x6D4BD6, alpha: 0.11),
+            violetLine: Color(hex: 0x6D4BD6, alpha: 0.38),
+            idle: Color(hex: 0x9A988C),
+            idleSoft: Color(hex: 0x9A988C, alpha: 0.16),
+            idleLine: Color(hex: 0x9A988C, alpha: 0.40),
+            isDark: false
+        )
+        p.applySwissTraits()
+        return p
+    }()
+
+    private mutating func applySwissTraits() {
+        radiusCard = 2
+        radiusButton = 2
+        radiusTag = 0
+        pillMono = true
+        flatChrome = true
+        displayFamily = "Space Grotesk"
+    }
+
+    /// Resolve for an explicit theme mode + skin; Auto resolves per system in
+    /// views via the environment (see `OrchaThemed`).
+    static func current(_ mode: ThemeMode, skin: SkinMode = .classic, systemDark: Bool = true) -> Palette {
+        let dark = switch mode {
+        case .auto: systemDark
+        case .dark: true
+        case .light: false
+        }
+        return switch skin {
+        case .classic: dark ? .dark : .light
+        case .swiss: dark ? .swissDark : .swissLight
         }
     }
 }

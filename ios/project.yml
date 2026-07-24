@@ -25,12 +25,23 @@ targets:
         CFBundleDisplayName: Orcha
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        UIAppFonts:
+          - SpaceGrotesk.ttf
         NSCameraUsageDescription: "Orcha uses the camera only to scan the pairing QR from your portal."
-        # A2 (doc 13): LAN base URLs are runtime IPs — the clean ATS carve-out is
-        # local networking, not arbitrary loads.
+        # Arbitrary loads ONLY — do not re-add NSAllowsLocalNetworking beside it:
+        # when both keys are present iOS treats ArbitraryLoads as a legacy fallback
+        # and enforces just the granular key, which silently re-blocks the opt-in
+        # remote path (Tailscale 100.64/10 + *.ts.net are not "local" to ATS).
+        # Verified live: Safari reached the portal over the tailnet while the app's
+        # URLSession got blocked with both keys set. The app only ever talks to
+        # addresses the user typed or scanned.
         NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: "Orcha connects to the Orcha server running on your computer over your local network."
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - io.openorcha.mobile.refresh
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
     settings:

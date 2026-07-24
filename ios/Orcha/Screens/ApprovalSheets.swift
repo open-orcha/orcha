@@ -14,29 +14,29 @@ struct PlanApprovalSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("PLAN APPROVAL")
-                            .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                            .font(p.uiFont(11, .bold)).tracking(0.8)
                             .foregroundStyle(p.violet)
-                        Text(task.title).font(.system(size: 17, weight: .bold))
+                        Text(task.title).font(p.uiFont(17, .bold))
                         if let author = task.planMessage?.authorAlias {
                             HStack(spacing: 8) {
                                 AgentAvatar(alias: author, size: 30)
                                 Text("\(author) proposes a plan")
-                                    .font(.system(size: 13)).foregroundStyle(p.text2)
+                                    .font(p.uiFont(13)).foregroundStyle(p.text2)
                             }
                         }
                         SectionH(title: "Proposed plan")
                         OrchaCard(container: p.surface2) {
                             if let body = task.planMessage?.body, !body.isEmpty {
                                 LinkedMessageText(text: body, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                                    .font(.system(size: 15))
+                                    .font(p.uiFont(15))
                                     .foregroundStyle(p.text)
                             } else {
                                 Text("No plan text found on the thread.")
-                                    .font(.system(size: 15))
+                                    .font(p.uiFont(15))
                                     .foregroundStyle(p.text)
                             }
                         }
@@ -47,7 +47,7 @@ struct PlanApprovalSheet: View {
                                 .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
                                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
                             Text("\(task.planMessage?.authorAlias ?? "The agent") sees this on the next wake — required.")
-                                .font(.system(size: 13)).foregroundStyle(p.muted)
+                                .font(p.uiFont(13)).foregroundStyle(p.muted)
                             HStack(spacing: 8) {
                                 KitButton(title: "Send back with changes", role: .dangerTonal, enabled: !reason.isEmpty && !model.actionInFlight) {
                                     Task { if await model.decidePlan(task, approve: false, reason: reason) { dismiss() } }
@@ -86,23 +86,23 @@ struct VerifySheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("VERIFY TASK")
-                            .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                            .font(p.uiFont(11, .bold)).tracking(0.8)
                             .foregroundStyle(p.ok)
-                        Text(task.title).font(.system(size: 17, weight: .bold))
+                        Text(task.title).font(p.uiFont(17, .bold))
                         SectionH(title: "Definition of done")
                         OrchaCard(borderColor: p.okLine, container: p.surface2) {
                             Text(task.definitionOfDone ?? "No definition of done was provided.")
-                                .font(.system(size: 15)).foregroundStyle(p.text)
+                                .font(p.uiFont(15)).foregroundStyle(p.text)
                         }
                         if let claimed = task.result ?? task.messageSummary?.last?.body {
                             SectionH(title: "Claimed result")
                             OrchaCard(container: p.surface2) {
                                 LinkedMessageText(text: claimed, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                                    .font(.system(size: 15)).foregroundStyle(p.text2).lineLimit(8)
+                                    .font(p.uiFont(15)).foregroundStyle(p.text2).lineLimit(8)
                             }
                         }
                         if rejecting {
@@ -112,7 +112,7 @@ struct VerifySheet: View {
                                 .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
                                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
                             Text("Returns the task to in progress — required.")
-                                .font(.system(size: 13)).foregroundStyle(p.muted)
+                                .font(p.uiFont(13)).foregroundStyle(p.muted)
                             HStack(spacing: 8) {
                                 KitButton(title: "Send back", role: .dangerTonal, enabled: !feedback.isEmpty && !model.actionInFlight) {
                                     Task { if await model.verifyTask(task.id, approve: false, feedback: feedback) { dismiss() } }

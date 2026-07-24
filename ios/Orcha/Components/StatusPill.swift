@@ -96,18 +96,50 @@ struct StatusPill: View {
         let tint = palette.tint(statusColorName(status, domain))
         HStack(spacing: 6) {
             PulseDot(color: tint.color, animated: pillPulses(status, domain) && !reduceMotion)
-            Text(MobileUx.statusCopy(status.lowercased()))
-                .font(.system(size: 11, weight: .bold))
-                .tracking(0.2)
+            Text(pillLabel(MobileUx.statusCopy(status.lowercased()), palette))
+                .font(pillFont(palette))
+                .tracking(pillTracking(palette))
                 .foregroundStyle(tint.color)
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .padding(.vertical, 3)
-        .background(tint.soft, in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.line, lineWidth: 1))
+        .background(tint.soft, in: PillShape(mono: palette.pillMono))
+        .overlay(PillShape(mono: palette.pillMono).strokeBorder(tint.line, lineWidth: 1))
         .accessibilityElement(children: .combine)
     }
+}
+
+/// Swiss squares the pill off and sets it in mono-uppercase (the portal's
+/// `[data-skin="swiss"] .pill` rules); Classic keeps the capsule.
+struct PillShape: InsettableShape {
+    let mono: Bool
+    var inset: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let base = rect.insetBy(dx: inset, dy: inset)
+        return mono
+            ? Path(base)
+            : Capsule().path(in: base)
+    }
+
+    func inset(by amount: CGFloat) -> PillShape {
+        var copy = self
+        copy.inset += amount
+        return copy
+    }
+}
+
+func pillLabel(_ text: String, _ p: Palette) -> String {
+    p.pillMono ? text.uppercased() : text
+}
+
+func pillFont(_ p: Palette) -> Font {
+    p.pillMono ? .system(size: 10, weight: .bold, design: .monospaced) : .system(size: 11, weight: .bold)
+}
+
+func pillTracking(_ p: Palette) -> CGFloat {
+    p.pillMono ? 0.7 : 0.2
 }
 
 /// Issue 1 — request status pill with a per-type GLYPH (mobile adaptation of the web's
@@ -126,16 +158,16 @@ struct RequestStatusPill: View {
             Image(systemName: MobileUx.requestStatusGlyph(status.lowercased(), escalated: escalated))
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(tint.color)
-            Text(label)
-                .font(.system(size: 11, weight: .bold))
-                .tracking(0.2)
+            Text(pillLabel(label, palette))
+                .font(pillFont(palette))
+                .tracking(pillTracking(palette))
                 .foregroundStyle(tint.color)
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .padding(.vertical, 3)
-        .background(tint.soft, in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.line, lineWidth: 1))
+        .background(tint.soft, in: PillShape(mono: palette.pillMono))
+        .overlay(PillShape(mono: palette.pillMono).strokeBorder(tint.line, lineWidth: 1))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
     }

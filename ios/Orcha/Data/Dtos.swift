@@ -378,11 +378,13 @@ struct RunDto: Decodable, Identifiable {
     var wakeEvent: String?
     var startedAt: String?
     var endedAt: String?
+    /// Unified git diff of the run's net change (the portal's "Runs & diffs").
+    var diff: String?
 
     var id: String { runId }
 
     enum CodingKeys: String, CodingKey {
-        case status
+        case status, diff
         case runId = "run_id"
         case agentId = "agent_id"
         case agentAlias = "agent_alias"

@@ -20,7 +20,7 @@ struct AgentExtras {
 }
 
 enum WorkspaceTab: Hashable {
-    case home, tasks, requests, agents
+    case home, tasks, requests, agents, search
 }
 
 /// The app's single source of truth — a 1:1 port of the Android `OrchaViewModel`
@@ -41,8 +41,23 @@ final class AppModel {
     // navigation
     var containers: [StoredContainer]
     var selectedContainer: StoredContainer?
+    /// The address that answered most recently for the selected workspace, when
+    /// it differs from the configured `baseUrl` (i.e. the Tailscale remote took
+    /// over). Session-only and never written back to the store, so Settings
+    /// keeps showing the configured local/remote addresses truthfully. Nil =
+    /// use `baseUrl`. Reset on open/close, and while remote is active every
+    /// successful refresh re-probes the local address in the background
+    /// (`probeLocalSwitchback`), so coming home to Wi-Fi switches back even
+    /// though the Tailscale path never stopped answering.
+    private var activeBaseUrl: String?
+    private var switchbackProbe: Task<Void, Never>?
     var selectedTab: WorkspaceTab = .home
     var themeMode: ThemeMode
+    var skinMode: SkinMode
+    var notificationsEnabled: Bool = false
+    /// Home tab's navigation path — bound so notification taps can push the
+    /// exact task/request screen programmatically.
+    var homePath: [WorkspaceRoute] = []
 
     // workspace data
     var snapshot: ContainerSnapshot?
@@ -77,6 +92,8 @@ final class AppModel {
     init() {
         containers = store.load()
         themeMode = store.loadThemeMode()
+        skinMode = store.loadSkinMode()
+        notificationsEnabled = store.loadNotificationsEnabled()
         // Dev/UI-test seam: `-orchaOpenContainer <id>` opens straight into a paired
         // workspace on launch (also the shape a future deep link would take).
         if let idx = ProcessInfo.processInfo.arguments.firstIndex(of: "-orchaOpenContainer"),
@@ -100,6 +117,28 @@ final class AppModel {
     func setThemeMode(_ mode: ThemeMode) {
         themeMode = mode
         store.saveThemeMode(mode)
+    }
+
+    func setSkinMode(_ skin: SkinMode) {
+        skinMode = skin
+        store.saveSkinMode(skin)
+    }
+
+    func setNotificationsEnabled(_ enabled: Bool) {
+        notificationsEnabled = enabled
+        store.saveNotificationsEnabled(enabled)
+        if enabled { NotificationCoordinator.scheduleAppRefresh() }
+    }
+
+    /// Notification tap → the exact linked screen: open the right container,
+    /// land on Home, and push the task/request detail.
+    func openFromNotification(containerId: String, route: WorkspaceRoute) {
+        if selectedContainer?.id != containerId {
+            guard containers.contains(where: { $0.id == containerId }) else { return }
+            openContainer(containerId)
+        }
+        selectedTab = .home
+        homePath = [route]
     }
 
     func renameContainer(_ id: String, to name: String) {
@@ -144,7 +183,8 @@ final class AppModel {
                 baseUrl: base,
                 humanAgentId: human?.id ?? payload.humanAgentId,
                 humanAlias: human?.alias ?? payload.humanAgentAlias,
-                pairingToken: payload.token
+                pairingToken: payload.token,
+                remoteBaseUrl: payload.remoteBaseUrl
             )
             containers = store.upsert(stored)
             selectedContainer = stored
@@ -165,57 +205,123 @@ final class AppModel {
         selectedContainer = stored
         selectedTab = .home
         error = nil
+        activeBaseUrl = nil        // retry the local address first on every open
         Task { await refresh() }
         startPolling()
     }
 
     func closeWorkspace() {
         pollTask?.cancel()
+        switchbackProbe?.cancel()
         selectedContainer = nil
         snapshot = nil
+        activeBaseUrl = nil
         probeContainers()
     }
 
     /// Flow 04 H1: per-card reachability + glance counts, non-blocking per card.
+    /// Uses the same local→remote fallback as workspace refresh, so a container
+    /// reachable only over its Tailscale address still shows live counts.
     func probeContainers() {
         for stored in containers {
             containerHealth[stored.id, default: ContainerHealth(state: "probing")].state = "probing"
             Task {
-                do {
-                    let snap = try await api.snapshot(stored.baseUrl, stored.id)
-                    let plans = snap.tasks.filter { $0.status == "in_progress" && $0.planMessage != nil && $0.planDecision == nil }
-                    let verifs = snap.tasks.filter { $0.status == "needs_verification" }
-                    let reqs = snap.requests.filter { $0.status == "open" && ($0.targetId == stored.humanAgentId || $0.targetId == nil) }
-                    containerHealth[stored.id] = ContainerHealth(
-                        state: "polling", agents: snap.agents.count, tasks: snap.tasks.count,
-                        needsYou: plans.count + verifs.count + reqs.count
-                    )
-                } catch {
-                    containerHealth[stored.id] = ContainerHealth(state: "unreachable")
+                var snap = try? await api.snapshot(stored.baseUrl, stored.id)
+                if snap == nil, let remote = stored.remoteBaseUrl, !remote.isEmpty {
+                    snap = try? await api.snapshot(remote, stored.id)
                 }
+                guard let snap else {
+                    containerHealth[stored.id] = ContainerHealth(state: "unreachable")
+                    return
+                }
+                let plans = snap.tasks.filter { $0.status == "in_progress" && $0.planMessage != nil && $0.planDecision == nil }
+                let verifs = snap.tasks.filter { $0.status == "needs_verification" }
+                let reqs = snap.requests.filter { $0.status == "open" && ($0.targetId == stored.humanAgentId || $0.targetId == nil) }
+                containerHealth[stored.id] = ContainerHealth(
+                    state: "polling", agents: snap.agents.count, tasks: snap.tasks.count,
+                    needsYou: plans.count + verifs.count + reqs.count
+                )
             }
         }
     }
 
     // MARK: workspace refresh + 30s polling (SSE is the listed follow-up)
 
+    /// The address workspace calls should use right now (failover-aware).
+    private func apiBase(_ sel: StoredContainer) -> String {
+        activeBaseUrl ?? sel.baseUrl
+    }
+
     func refresh() async {
         guard let sel = selectedContainer else { return }
         loading = true
         defer { loading = false }
         do {
-            let snap = try await api.snapshot(sel.baseUrl, sel.id)
-            snapshot = snap
-            if sel.humanAgentId == nil, let human = snap.agents.first(where: { $0.kind == "human" }) {
-                var upgraded = sel
-                upgraded.humanAgentId = human.id
-                upgraded.humanAlias = human.alias
-                containers = store.upsert(upgraded)
-                selectedContainer = upgraded
-            }
-            error = nil
+            let snap = try await api.snapshot(apiBase(sel), sel.id)
+            applyRefresh(snap, sel: sel)
+            probeLocalSwitchback(sel)
         } catch {
+            // Opt-in remote failover (Tailscale): if the active address didn't
+            // answer and the other configured one exists, try it and keep the
+            // working path active until the local address answers again — in
+            // memory only, never rewriting the stored addresses. Symmetric, so
+            // it also falls back to LAN when the remote path is the dead one.
+            let current = apiBase(sel)
+            let alternate = [sel.baseUrl, sel.remoteBaseUrl ?? ""]
+                .first { !$0.isEmpty && $0 != current }
+            if let alternate, let snap = try? await api.snapshot(alternate, sel.id) {
+                activeBaseUrl = alternate == sel.baseUrl ? nil : alternate
+                applyRefresh(snap, sel: sel)
+                toast = "Connected via \(alternate)"
+                return
+            }
             self.error = friendly(error)
+        }
+    }
+
+    /// The switch-back half of the failover promise ("…and back again the same
+    /// way"): while the remote path is active it keeps answering even at home,
+    /// so waiting for it to fail would leave the app remote forever. Instead,
+    /// each successful remote refresh re-probes the configured local address
+    /// concurrently — off the refresh the user is waiting on, since away from
+    /// home the probe just burns its 10s timeout — and the moment it answers,
+    /// the local path becomes active again.
+    private func probeLocalSwitchback(_ sel: StoredContainer) {
+        guard activeBaseUrl != nil, switchbackProbe == nil else { return }
+        switchbackProbe = Task {
+            defer { switchbackProbe = nil }
+            guard (try? await api.snapshot(sel.baseUrl, sel.id)) != nil else { return }
+            // Only flip if this workspace is still open and still failed over.
+            guard selectedContainer?.id == sel.id, activeBaseUrl != nil else { return }
+            activeBaseUrl = nil
+            toast = "Connected via \(sel.baseUrl)"
+        }
+    }
+
+    /// Shared success path for BOTH the primary and the failover fetch — the
+    /// markSeen catch-up must run wherever the snapshot became visible.
+    private func applyRefresh(_ snap: ContainerSnapshot, sel: StoredContainer) {
+        snapshot = snap
+        if sel.humanAgentId == nil, let human = snap.agents.first(where: { $0.kind == "human" }) {
+            var upgraded = sel
+            upgraded.humanAgentId = human.id
+            upgraded.humanAlias = human.alias
+            containers = store.upsert(upgraded)
+            selectedContainer = upgraded
+        }
+        error = nil
+        // Anything visible in the open app counts as seen — it must never
+        // fire later as a background needs-you notification.
+        NotificationCoordinator.shared.markSeen(snap, container: selectedContainer ?? sel)
+    }
+
+    func setRemoteUrl(_ id: String, to url: String?) {
+        containers = store.setRemoteUrl(id, to: url)
+        if let sel = selectedContainer, sel.id == id {
+            selectedContainer = containers.first { $0.id == id }
+            // The active path may be the address that was just edited away —
+            // fall back to the configured local URL and let refresh re-failover.
+            activeBaseUrl = nil
         }
     }
 
@@ -237,12 +343,12 @@ final class AppModel {
     func loadTaskDetail(_ taskId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20)
+            let page = try await api.taskMessages(apiBase(sel), taskId, limit: 20)
             taskMessages = page.messages
             threadHasMore = page.hasMore
             threadNextBefore = page.nextBefore
             threadNextBeforeId = page.nextBeforeId
-            taskRuns = try await api.taskRuns(sel.baseUrl, taskId).runs
+            taskRuns = try await api.taskRuns(apiBase(sel), taskId).runs
         } catch {
             self.error = friendly(error)
         }
@@ -256,7 +362,7 @@ final class AppModel {
         threadLoadingEarlier = true
         defer { threadLoadingEarlier = false }
         do {
-            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20, before: before, beforeId: beforeId)
+            let page = try await api.taskMessages(apiBase(sel), taskId, limit: 20, before: before, beforeId: beforeId)
             taskMessages = MobileUx.prependMessages(page.messages, before: taskMessages)
             threadHasMore = page.hasMore
             threadNextBefore = page.nextBefore
@@ -271,7 +377,7 @@ final class AppModel {
     private func reloadNewestThreadPage(_ taskId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            let page = try await api.taskMessages(sel.baseUrl, taskId, limit: 20)
+            let page = try await api.taskMessages(apiBase(sel), taskId, limit: 20)
             let have = Set(taskMessages.compactMap { $0.messageId })
             let fresh = page.messages.filter { m in m.messageId.map { !have.contains($0) } ?? true }
             taskMessages.append(contentsOf: fresh)
@@ -284,23 +390,23 @@ final class AppModel {
         guard let sel = selectedContainer else { return }
         agentExtras = AgentExtras()
         do {
-            let headless = try await api.agentRuns(sel.baseUrl, agentId).runs
-            let resident = (try? await api.residentRuns(sel.baseUrl, agentId).runs) ?? []
+            let headless = try await api.agentRuns(apiBase(sel), agentId).runs
+            let resident = (try? await api.residentRuns(apiBase(sel), agentId).runs) ?? []
             var seen = Set<String>()
             agentRuns = (headless + resident)
                 .filter { seen.insert($0.runId).inserted }
                 .sorted { ($0.startedAt ?? "") > ($1.startedAt ?? "") }
-            models = try await api.models(sel.baseUrl).models
+            models = try await api.models(apiBase(sel)).models
         } catch {
             self.error = friendly(error)
         }
-        agentExtras.persona = try? await api.persona(sel.baseUrl, agentId)
-        agentExtras.digest = (try? await api.digest(sel.baseUrl, agentId))?.digest
-        if let inboxRows = try? await api.inbox(sel.baseUrl, agentId).openRequests {
+        agentExtras.persona = try? await api.persona(apiBase(sel), agentId)
+        agentExtras.digest = (try? await api.digest(apiBase(sel), agentId))?.digest
+        if let inboxRows = try? await api.inbox(apiBase(sel), agentId).openRequests {
             agentExtras.inboxCount = inboxRows.count
             agentExtras.inboxPreview = inboxRows.first?.payload
         }
-        if let outboxRows = try? await api.outbox(sel.baseUrl, agentId).outgoingRequests {
+        if let outboxRows = try? await api.outbox(apiBase(sel), agentId).outgoingRequests {
             agentExtras.outboxOpen = outboxRows.filter { $0.status == "open" }.count
             agentExtras.outboxAnswered = outboxRows.filter { $0.status == "answered" }.count
         }
@@ -336,7 +442,7 @@ final class AppModel {
             var attempt = 0
             while !Task.isCancelled {
                 do {
-                    streaming: for try await event in api.runStream(sel.baseUrl, aid, run.runId) {
+                    streaming: for try await event in api.runStream(apiBase(sel), aid, run.runId) {
                         if Task.isCancelled { return }
                         switch event {
                         case let .line(seq, text):
@@ -391,7 +497,7 @@ final class AppModel {
         loading = true
         defer { loading = false }
         do {
-            let text = try await api.runStreamText(sel.baseUrl, aid, run.runId)
+            let text = try await api.runStreamText(apiBase(sel), aid, run.runId)
             runFeed = Self.feedFromStreamText(text)
         } catch {
             self.error = friendly(error)
@@ -403,7 +509,7 @@ final class AppModel {
     func loadConversation(_ agentId: String) async {
         guard let sel = selectedContainer else { return }
         do {
-            let response = try await api.conversation(sel.baseUrl, agentId, limit: 80)
+            let response = try await api.conversation(apiBase(sel), agentId, limit: 80)
             conversation = response.conversation
             turns = response.turns
         } catch {
@@ -420,7 +526,7 @@ final class AppModel {
         }
         do {
             let lastSeq = turns.map(\.seq).max() ?? 0
-            let delta = try await api.conversationTurns(sel.baseUrl, conv.id, afterSeq: lastSeq, limit: 50).turns
+            let delta = try await api.conversationTurns(apiBase(sel), conv.id, afterSeq: lastSeq, limit: 50).turns
             turns = MobileUx.appendTurns(turns, delta: delta)
         } catch {
             self.error = friendly(error)
@@ -440,7 +546,7 @@ final class AppModel {
         error = nil
         defer { actionInFlight = false }
         do {
-            try await block(sel.baseUrl, actor)
+            try await block(apiBase(sel), actor)
             toast = success
             return true
         } catch {
@@ -523,7 +629,7 @@ final class AppModel {
         error = nil
         defer { actionInFlight = false }
         do {
-            let result = try await api.nudgeRequest(sel.baseUrl, rid, actor: actor, note: note)
+            let result = try await api.nudgeRequest(apiBase(sel), rid, actor: actor, note: note)
             toast = nudgeToast(result)
             await refresh()
             return true

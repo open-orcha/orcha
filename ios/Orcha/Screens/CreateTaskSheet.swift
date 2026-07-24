@@ -37,7 +37,7 @@ struct CreateTaskSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         titleField
@@ -61,7 +61,7 @@ struct CreateTaskSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Create") { submit() }
-                        .font(.system(size: 16, weight: .heavy))
+                        .font(p.uiFont(16, .heavy))
                         .disabled(!valid)
                 }
             }
@@ -118,7 +118,7 @@ struct CreateTaskSheet: View {
             if agents.isEmpty {
                 OrchaCard {
                     Text("No agents registered yet — the task will start unassigned.")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                 }
             } else {
@@ -167,7 +167,7 @@ struct CreateTaskSheet: View {
             .padding(.top, 4)
         } label: {
             Text("ADVANCED")
-                .font(.system(size: 11, weight: .bold))
+                .font(p.uiFont(11, .bold))
                 .tracking(0.8)
                 .foregroundStyle(p.muted)
         }
@@ -176,9 +176,9 @@ struct CreateTaskSheet: View {
 
     private var dependsOnCard: some View {
         OrchaCard {
-            Text("Depends on").font(.system(size: 14, weight: .bold)).foregroundStyle(p.text)
+            Text("Depends on").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
             Text("This task won't become ready until these complete.")
-                .font(.system(size: 13)).foregroundStyle(p.muted)
+                .font(p.uiFont(13)).foregroundStyle(p.muted)
             ForEach(openTasks.prefix(12)) { task in
                 Button {
                     if dependsOn.contains(task.id) {
@@ -191,7 +191,7 @@ struct CreateTaskSheet: View {
                         Image(systemName: dependsOn.contains(task.id) ? "checkmark.square.fill" : "square")
                             .foregroundStyle(dependsOn.contains(task.id) ? p.accent : p.faint)
                         Text(task.title)
-                            .font(.system(size: 13))
+                            .font(p.uiFont(13))
                             .foregroundStyle(p.text)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -209,9 +209,9 @@ struct CreateTaskSheet: View {
         OrchaCard {
             Toggle(isOn: $parked) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Park it").font(.system(size: 14, weight: .bold)).foregroundStyle(p.text)
+                    Text("Park it").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
                     Text("The agent won't start yet — task is created pending.")
-                        .font(.system(size: 13)).foregroundStyle(p.muted)
+                        .font(p.uiFont(13)).foregroundStyle(p.muted)
                 }
             }
             .tint(p.accent)
@@ -222,7 +222,7 @@ struct CreateTaskSheet: View {
 
     private func helper(_ text: String, danger: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(p.uiFont(12))
             .foregroundStyle(danger ? p.danger : p.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -288,7 +288,7 @@ private struct AssigneeChip: View {
                     AgentAvatar(alias: alias, size: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(alias)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(p.uiFont(14, .semibold))
                             .foregroundStyle(p.text)
                         if let status {
                             StatusPill(status: status, domain: .agent)
@@ -296,7 +296,7 @@ private struct AssigneeChip: View {
                     }
                     if status == "working" {
                         Text("working — will pick this up next")
-                            .font(.system(size: 11))
+                            .font(p.uiFont(11))
                             .foregroundStyle(p.muted)
                     }
                 }

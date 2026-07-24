@@ -16,8 +16,8 @@ struct OrchaCard<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(container ?? p.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(borderColor ?? p.border, lineWidth: 1))
+        .background(container ?? p.surface, in: RoundedRectangle(cornerRadius: p.radiusCard))
+        .overlay(RoundedRectangle(cornerRadius: p.radiusCard).strokeBorder(borderColor ?? p.border, lineWidth: 1))
     }
 }
 
@@ -30,12 +30,12 @@ struct SectionH: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
+                .font(p.uiFont(11, .bold))
                 .tracking(0.8)
                 .foregroundStyle(p.muted)
             if let count {
                 Text(count)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(p.uiFont(11, .semibold))
                     .foregroundStyle(p.faint)
             }
             Spacer()
@@ -59,7 +59,7 @@ struct MetaTag: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: p.radiusTag)
                     .strokeBorder((tint ?? p.border2).opacity(tint == nil ? 1 : 0.4), lineWidth: 1)
             )
             .lineLimit(1)
@@ -91,29 +91,51 @@ struct KitButton: View {
     }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: small ? 13 : 15, weight: .semibold))
+        let label = HStack(spacing: 8) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: small ? 13 : 15, weight: .semibold))
+            }
+            Text(title)
+                .font(p.uiFont(small ? 13 : 15, .bold))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, small ? 8 : 12)
+        .padding(.horizontal, small ? 14 : 18)
+        // .plain buttons hit-test only opaque content, and the fill lives outside
+        // the Button (KitButtonSurface) — without this, only the title text was
+        // tappable across the whole app.
+        .contentShape(RoundedRectangle(cornerRadius: p.radiusButton))
+
+        Button(action: action) { label }
+            .buttonStyle(.plain)
+            .foregroundStyle(colors.fg)
+            .modifier(KitButtonSurface(role: role, colors: colors, radius: p.radiusButton))
+            .opacity(enabled ? 1 : 0.45)
+            .disabled(!enabled)
+    }
+}
+
+/// The button surface: primary actions get interactive Liquid Glass on iOS 26
+/// (tinted with the palette accent so both skins keep their identity); tonal /
+/// neutral roles and earlier OSes keep the flat token fill with the line border.
+private struct KitButtonSurface: ViewModifier {
+    let role: KitButtonRole
+    let colors: (fill: Color, fg: Color, line: Color?)
+    let radius: CGFloat
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), role == .primary {
+            content.glassEffect(.regular.tint(colors.fill).interactive(), in: .rect(cornerRadius: radius))
+        } else {
+            content
+                .background(colors.fill, in: RoundedRectangle(cornerRadius: radius))
+                .overlay {
+                    if let line = colors.line {
+                        RoundedRectangle(cornerRadius: radius).strokeBorder(line, lineWidth: 1)
+                    }
                 }
-                Text(title)
-                    .font(.system(size: small ? 13 : 15, weight: .bold))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, small ? 8 : 12)
-            .padding(.horizontal, small ? 14 : 18)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(colors.fg)
-        .background(colors.fill, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            if let line = colors.line {
-                RoundedRectangle(cornerRadius: 12).strokeBorder(line, lineWidth: 1)
-            }
-        }
-        .opacity(enabled ? 1 : 0.45)
-        .disabled(!enabled)
     }
 }
 
@@ -127,7 +149,7 @@ struct AgentAvatar: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: human ? size / 2 : size * 12 / 40)
         Text(alias.prefix(1).uppercased())
-            .font(.system(size: size * 15 / 40, weight: .heavy))
+            .font(p.uiFont(size * 15 / 40, .heavy))
             .foregroundStyle(human ? p.violet : p.accent)
             .frame(width: size, height: size)
             .background(human ? p.violetSoft : p.accentSoft, in: shape)
@@ -202,10 +224,10 @@ struct StatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
-                .font(.system(size: 20, weight: .heavy))
+                .font(p.uiFont(20, .heavy))
                 .foregroundStyle(tint)
             Text(label.uppercased())
-                .font(.system(size: 10.5, weight: .bold))
+                .font(p.uiFont(10.5, .bold))
                 .tracking(0.5)
                 .foregroundStyle(p.muted)
                 .lineLimit(1)
@@ -242,13 +264,13 @@ struct Banner: View {
     var body: some View {
         HStack(spacing: 10) {
             Text(text)
-                .font(.system(size: 13, weight: .semibold))
+                .font(p.uiFont(13, .semibold))
                 .foregroundStyle(tint.color)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let action, let onAction {
                 Button(action) { onAction() }
                     .buttonStyle(.plain)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(p.uiFont(13, .bold))
                     .foregroundStyle(tint.color)
                     .underline()
             }
@@ -260,11 +282,14 @@ struct Banner: View {
     }
 }
 
-/// `.conn` — connection indicator: pulsing dot + word.
+/// `.conn` — connection indicator: pulsing dot + word. `compact` drops the word
+/// (toolbar use, where "polling" truncated to "p…" and squeezed the nav title);
+/// VoiceOver keeps the full state either way.
 struct ConnChip: View {
     @Environment(\.palette) private var p
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let state: String
+    var compact = false
 
     var body: some View {
         let (color, word): (Color, String) = switch state.lowercased() {
@@ -276,12 +301,15 @@ struct ConnChip: View {
         }
         HStack(spacing: 6) {
             PulseDot(color: color, animated: !reduceMotion && ["live", "active", "polling"].contains(state.lowercased()))
-            Text(word)
-                .font(.system(size: 11, weight: .bold))
-                .tracking(0.2)
-                .foregroundStyle(color)
+            if !compact {
+                Text(word)
+                    .font(p.uiFont(11, .bold))
+                    .tracking(0.2)
+                    .foregroundStyle(color)
+            }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("Connection: \(word)")
     }
 }
 
@@ -318,11 +346,11 @@ struct StateLayout<Glyph: View, Actions: View>: View {
                 .background(danger ? p.dangerSoft : p.surface2, in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(danger ? p.dangerLine : p.border, lineWidth: 1))
             Text(title)
-                .font(.system(size: 17, weight: .bold))
+                .font(p.uiFont(17, .bold))
                 .multilineTextAlignment(.center)
             if let sub {
                 Text(sub)
-                    .font(.system(size: 13.5))
+                    .font(p.uiFont(13.5))
                     .foregroundStyle(p.muted)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 290)
@@ -344,7 +372,7 @@ struct KVRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Text(key)
-                .font(.system(size: 13.5))
+                .font(p.uiFont(13.5))
                 .foregroundStyle(p.muted)
             Spacer()
             Text(value)
@@ -394,13 +422,15 @@ struct FeedRow: View {
                     .foregroundStyle(tint)
                 if hasDetail {
                     Text(expanded ? "▾" : "▸")
-                        .font(.system(size: 10))
+                        .font(p.uiFont(10))
                         .foregroundStyle(p.faint)
                 }
             }
             if !row.text.isEmpty {
+                // Narration is prose → the skin's display face (Space Grotesk on
+                // Swiss); everything else stays mono like the portal's log.
                 Text(row.text)
-                    .font(row.type == "narrate" ? .system(size: 14) : .system(size: 11.5, design: .monospaced))
+                    .font(row.type == "narrate" ? p.uiFont(14) : .system(size: 11.5, design: .monospaced))
                     .foregroundStyle(row.type == "narrate" ? p.text : tint)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

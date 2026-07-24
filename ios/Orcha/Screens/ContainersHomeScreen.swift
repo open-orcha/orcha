@@ -85,7 +85,7 @@ struct ContainersHomeScreen: View {
                 KitButton(title: "Add your Orcha", systemImage: "qrcode.viewfinder") { showScanner = true }
                     .frame(maxWidth: 260)
                 Button("Enter address manually") { showManualEntry = true }
-                    .font(.system(size: 14, weight: .bold))
+                    .font(p.uiFont(14, .bold))
                     .foregroundStyle(p.accent)
             }
         }
@@ -111,7 +111,7 @@ struct ContainersHomeScreen: View {
                     }
                 }
                 Text("Long-press a card to rename or disconnect. Your phone talks to each Orcha directly on your network.")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.faint)
                     .padding(.horizontal, 4)
                     .padding(.top, 4)
@@ -132,7 +132,7 @@ private struct ContainerCard: View {
                 BrandMark()
                 VStack(alignment: .leading, spacing: 2) {
                     Text(container.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(p.uiFont(15, .semibold))
                         .foregroundStyle(p.text)
                         .lineLimit(1)
                     Text(container.baseUrl)
@@ -143,22 +143,22 @@ private struct ContainerCard: View {
                 Spacer()
                 ConnChip(state: health?.state ?? "probing")
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(p.uiFont(12, .semibold))
                     .foregroundStyle(p.faint)
             }
             switch health?.state {
             case nil, "probing":
                 Text("Checking…")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.faint)
             case "unreachable":
                 Text("Last seen a while ago — is the laptop awake?")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.muted)
             default:
                 HStack(spacing: 8) {
                     Text("\(health?.agents ?? 0) agents · \(health?.tasks ?? 0) tasks")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                     Spacer()
                     if let needs = health?.needsYou, needs > 0 {

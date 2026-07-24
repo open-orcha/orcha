@@ -28,7 +28,7 @@ struct ContainerControlsSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if laptopPaused {
@@ -38,7 +38,7 @@ struct ContainerControlsSheet: View {
                         autonomySection
                         if model.humanId == nil {
                             Text("Change autonomy from the laptop.")
-                                .font(.system(size: 12.5))
+                                .font(p.uiFont(12.5))
                                 .foregroundStyle(p.muted)
                         }
                         if let error = model.error {
@@ -95,9 +95,9 @@ struct ContainerControlsSheet: View {
             OrchaCard {
                 Toggle(isOn: Binding(get: { wakesEnabled }, set: { pendingWakes = $0 })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Notifier").font(.system(size: 14, weight: .bold)).foregroundStyle(p.text)
+                        Text("Notifier").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
                         Text(wakesEnabled ? "Running — agents wake normally" : "Paused — nothing wakes")
-                            .font(.system(size: 13))
+                            .font(p.uiFont(13))
                             .foregroundStyle(wakesEnabled ? p.ok : p.danger)
                     }
                 }
@@ -125,7 +125,7 @@ struct ContainerControlsSheet: View {
                 .disabled(readOnly || model.actionInFlight)
                 .opacity(wakesEnabled ? 1 : 0.6)
                 Text(autonomyFooter)
-                    .font(.system(size: 12.5))
+                    .font(p.uiFont(12.5))
                     .foregroundStyle(p.muted)
             }
         }

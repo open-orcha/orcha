@@ -73,7 +73,7 @@ struct TasksTabView: View {
                         SectionH(title: MobileUx.statusCopy(status), count: "\(rows.count)")
                         if terminal {
                             Button(showTerminals ? "hide" : "show") { showTerminals.toggle() }
-                                .font(.system(size: 11, weight: .bold))
+                                .font(p.uiFont(11, .bold))
                                 .foregroundStyle(p.accent)
                         }
                     }
@@ -89,7 +89,7 @@ struct TasksTabView: View {
                 if ordered.count > visible.count {
                     Button("Load more · \(visible.count) of \(ordered.count)") { shown += Self.TASKS_PAGE }
                         .buttonStyle(.plain)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(p.uiFont(13, .bold))
                         .foregroundStyle(p.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
@@ -119,7 +119,7 @@ struct FilterChip: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .font(p.uiFont(13, .semibold))
                 .foregroundStyle(on ? p.accent : p.muted)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
@@ -148,7 +148,7 @@ struct TaskRowCard: View {
                 )
             }
             Text(task.title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(p.uiFont(15, .semibold))
                 .foregroundStyle(p.text)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -156,11 +156,11 @@ struct TaskRowCard: View {
                 if let assignee = task.assignees.first ?? task.ownerAlias {
                     AgentAvatar(alias: assignee, size: 30)
                     Text(assignee)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.text2)
                 } else {
                     Text("unassigned")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.faint)
                 }
                 if !task.dependsOn.isEmpty {
@@ -168,7 +168,7 @@ struct TaskRowCard: View {
                 }
                 Spacer()
                 Text(MobileUx.agoLabel(task.startedAt ?? task.createdAt).map { "updated \($0)" } ?? "")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.faint)
             }
         }
