@@ -21,6 +21,43 @@ missing.
   Linux keeps the runtime ensure paths; `docs/notifier-autostart.md` carries a
   sample systemd user unit for reboot parity.
 
+## [0.5.0] - 2026-07-20
+
+### Added
+- Per-agent reasoning effort: pick an effort level (low → xhigh) alongside an
+  agent's model, and its workers launch with it (Orcha#51).
+- Autonomy and the Event-notifier are now separate, independently toggled
+  controls in the web portal and the Android and iOS apps (Orcha#148).
+- Agents can schedule a task-scoped self-wake that restores their saved context
+  when it fires (Orcha#122).
+- Task links in requests, conversations, and thread messages are clickable in
+  the iOS and Android apps; the desktop app reuses the existing portal window
+  for same-origin task links (Orcha#140).
+- Work-shaped info requests are auto-promoted into task requests, so real work
+  gets tracked instead of being answered away (Orcha#71).
+- Portal: an opt-in "Swiss" design skin (selectable from Settings) and a
+  collapsible sidebar.
+
+### Fixed
+- Worker continuity (Orcha#110): a task worker's worktree and uncommitted work
+  now survive across wakes instead of restarting from origin/main.
+- One wake drains all handleable notifications instead of just the first
+  (Orcha#58), and a drain turn can no longer swallow the answer event that
+  unblocks the agent's own task (Orcha#72).
+- Task attribution: a worker session that spans multiple tasks now narrates on
+  every task it touched (Orcha#144, Orcha#83), and agents' "Now" labels are
+  accurate again (Orcha#125, Orcha#126).
+- A claimed-but-nonexistent "task created/started" report now hard-fails loudly
+  at session end instead of being narrated as success (Orcha#152).
+- Orphaned notifier daemons self-terminate when their container is gone
+  (Orcha#36), and switching a live agent's model recycles the warm session so
+  the next reply actually uses the new model (Orcha#88).
+- Portal: resolved 22 CodeQL alerts (path containment, no error-body leaks).
+
+### Docs
+- `orcha-listen` is documented as the default event-loop primitive for agents
+  (Orcha#160).
+
 ## [0.4.0] - 2026-07-04
 
 ### Added
