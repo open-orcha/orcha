@@ -94,9 +94,8 @@ from .notifier_runtime import (
     _runtime_executable,
     _runtime_extra_flags,
 )
+from . import notifier_wake_actions as _wake_actions
 from . import notifier_wake_decisions as _wake_decisions
-
-
 
 # E3 V1 history-injection (Vault's PR #120): a PURE formatter for the cold-boot conversation
 # prefix, in its own module (zero merge surface). OPTIONAL — bound to None until #120 lands in
@@ -260,138 +259,53 @@ def decide_wake_tier(cand, *, triage_fn=_triage_wake):
 
 
 def _ack_config_from_scan(scan: dict) -> Optional[dict]:
-    """#307: map a wake-scan's per-container `ack_model` into the {use_case: {...}} config shape
-    llm_util.resolve_spec expects, symmetric with `_triage_config_from_scan`. None when no override
-    is configured (the common case) so handoff_ack uses #290's shipped default (Haiku)."""
-    am = (scan or {}).get("ack_model")
-    if isinstance(am, dict) and (am.get("provider") or am.get("model")):
-        return {"ack": am}
-    return None
+    """Compatibility facade for acknowledgement-model configuration."""
+    return _wake_actions.ack_config_from_scan(scan)
 
 
 def _log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
-    """#284 measurement: emit ONE structured record per graded T2 — whether the act actually fired
-    (autonomy='full') or was only logged (the default gate). This is the before/after token signal
-    the continuity-eval harness reads.
-
-    Writes the record straight to STDOUT (ensure_daemon redirects the daemon's stdout+stderr to its
-    log file), NOT through logging.getLogger: the daemon never configures the logging module, so an
-    .info() record under the unconfigured root (default level WARNING, no handler) is silently
-    DROPPED and never reaches the daemon log at runtime. Emitted UNCONDITIONALLY — the daemon always
-    runs --quiet, but the #284 measurement must land regardless of the quiet flag. The greppable
-    `graded_wake` tag lets the continuity-eval harness parse it. Never crashes the wake path."""
-    try:
-        record = json.dumps({
-            "event": "graded_wake",
-            "tier": verdict.get("tier"),
-            "action": verdict.get("action"),
-            "acted": bool(acted),
-            "would_boot": True,            # a graded 'act' is BY DEFINITION one #288 would full-boot
-            "autonomy_level": autonomy_level,
-        })
-        print(f"[notifier] graded_wake {record}", flush=True)
-    except Exception:
-        pass
+    """Compatibility facade for structured graded-wake logging."""
+    _wake_actions.log_graded_wake(verdict, autonomy_level, acted)
 
 
 def _advance_wake_cursor(api_base: str, cand: dict, event) -> None:
-    """Advance the wake cursor WITHOUT spawning — the no-spawn ack shared by the T2 cheap-act
-    success path and the GH#36 already-resolved no-op path (mirrors _suppress_wake exactly).
-    Acks only THROUGH the surfaced batch (ack_through_ts), falling back to max_event_ts."""
-    ack_ts = cand.get("ack_through_ts")
-    if ack_ts is None:
-        ack_ts = cand.get("max_event_ts")
-    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
-               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+    """Compatibility facade for no-spawn cursor acknowledgement."""
+    _wake_actions.advance_wake_cursor(api_base, cand, event, post_json=_post_json)
 
 
 def _request_actionable(api_base: str, rid: str) -> Optional[bool]:
-    """GH#36: True iff request `rid` is still in 'answered' state (a real ack_close to perform);
-    False if it's a resolved NO-OP (closed/escalated/any non-answered status); None if we can't
-    tell (API unreachable, or a 404 _get_json can't distinguish from a dead API). The caller treats
-    None CONSERVATIVELY — escalate to a full boot — so a transient read failure never silently drops
-    a still-actionable request; only a DEFINITIVE non-answered status suppresses the boot."""
-    data = _get_json(f"{api_base}/api/requests/{rid}")
-    if not isinstance(data, dict):
-        return None
-    status = data.get("status")
-    if not status:
-        return None
-    return status == "answered"
+    """Compatibility facade for request actionability checks."""
+    return _wake_actions.request_actionable(api_base, rid, get_json=_get_json)
 
 
 def _apply_wake_act(api_base: str, cand: dict, event, verdict: dict, *,
                     quiet: bool, ack_config: Optional[dict] = None,
                     ack_api_key: Optional[str] = None) -> bool:
-    """#307 T2: complete a routine handoff on the CHEAP substrate via the agent's EXISTING routes,
-    WITHOUT a spawn. Returns True iff the handoff was acked + the cursor advanced; False ESCALATES
-    (the caller full-boots) on any of: no cheap client, a missing target id, the model declining
-    (ack=False), or a failed write. NEVER advances the cursor unless the write succeeded — an
-    escalated/failed event re-grades next tick and ultimately full-boots, so work is never lost."""
-    action = verdict.get("action")
-    target = verdict.get("request_id") if action == "ack_close" else (
-        verdict.get("task_id") if action == "ack_verify" else None)
-    if not target:
-        return False                       # nothing to act on → escalate
-    # GH#36: an ack_close whose request is NO LONGER actionable (already closed/escalated/gone) is a
-    # pure no-op — advance the cursor and DON'T escalate to a full headless boot (the empty-inbox
-    # boot→stall→watchdog-kill loop). Checked BEFORE the cheap substrate so a flaky/absent ack model
-    # can't turn an already-resolved request into an endless boot. Only a DEFINITIVE non-answered
-    # status suppresses; None (unreachable / can't tell) and 'answered' fall through to the normal
-    # cheap-act → boot escalation, so a still-open answer is never silently dropped.
-    if action == "ack_close" and _request_actionable(api_base, target) is False:
-        if not quiet:
-            print(f"[notifier] ack_close for {cand.get('alias')} is already resolved "
-                  f"(request {str(target)[:8]} not 'answered') — advancing cursor, NO boot (GH#36)")
-        _advance_wake_cursor(api_base, cand, event)
-        return True
-    if _llm_util is None:
-        return False                       # no cheap substrate → escalate
-    try:
-        decision = _llm_util.handoff_ack(verdict.get("text") or "", config=ack_config,
-                                         api_key=ack_api_key)
-    except Exception:
-        return False                       # fail-closed → escalate
-    line = (decision.get("text") or "").strip() if isinstance(decision, dict) else ""
-    if not (isinstance(decision, dict) and decision.get("ack") and line):
-        return False                       # model judged it non-routine → escalate, NO write
-    # Perform the cheap write via the same route a full agent would have used.
-    if action == "ack_close":
-        resp = _post_json(f"{api_base}/api/requests/{target}/triage-close",
-                          {"triage_reason": line[:500]})
-    else:  # ack_verify
-        resp = _post_json(f"{api_base}/api/tasks/{target}/messages",
-                          {"author_agent_id": cand["agent_id"], "body": line})
-    if resp is None:
-        if not quiet:
-            print(f"[notifier] WARN T2 {action} write failed for {cand.get('alias')} "
-                  f"— escalating to a full boot (cursor not advanced)", file=sys.stderr)
-        return False                       # write failed → DON'T advance the cursor; re-grade later
-    # Write landed → advance the cursor WITHOUT spawning (mirrors _suppress_wake exactly).
-    _advance_wake_cursor(api_base, cand, event)
-    return True
+    """Compatibility facade for cheap routine handoff actions."""
+    return _wake_actions.apply_wake_act(
+        api_base,
+        cand,
+        event,
+        verdict,
+        quiet=quiet,
+        llm_util=_llm_util,
+        get_json=_get_json,
+        post_json=_post_json,
+        ack_config=ack_config,
+        ack_api_key=ack_api_key,
+    )
 
 
 def _suppress_wake(api_base: str, cand: dict, event, suppress: dict, *, quiet: bool) -> None:
-    """#288: apply a wake suppression — auto-close the answered request (Tier-1 only), then advance
-    the wake cursor so the same event doesn't re-trigger (and re-charge the LLM) every tick. NEVER
-    spawns. Cursor advance is best-effort-after-close: even if triage-close fails (transient), we
-    still suppress + ack — the request lingering 'answered' is the pre-#288 status quo, no regression."""
-    rid = suppress.get("request_id")
-    if rid:
-        resp = _post_json(f"{api_base}/api/requests/{rid}/triage-close",
-                          {"triage_reason": (suppress.get("reason") or "")[:500]})
-        if resp is None and not quiet:
-            print(f"[notifier] WARN triage-close failed for request {rid} "
-                  f"({cand.get('alias')}) — wake still suppressed; request stays 'answered'",
-                  file=sys.stderr)
-    # advance the cursor WITHOUT spawning; kind='skipped' (documented WakeAck value) so the
-    # cooldown/metrics see a real no-spawn pass. ack_through_ts falls back to max_event_ts.
-    ack_ts = cand.get("ack_through_ts")
-    if ack_ts is None:
-        ack_ts = cand.get("max_event_ts")
-    _post_json(f"{api_base}/api/agents/{cand['agent_id']}/wake-ack",
-               {"delivered_ts": ack_ts, "kind": "skipped", "event": event, "release_lease": False})
+    """Compatibility facade for suppressed-wake side effects."""
+    _wake_actions.suppress_wake(
+        api_base,
+        cand,
+        event,
+        suppress,
+        quiet=quiet,
+        post_json=_post_json,
+    )
 
 
 # ---------- config ----------
