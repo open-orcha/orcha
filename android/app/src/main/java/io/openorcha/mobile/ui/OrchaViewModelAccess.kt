@@ -34,36 +34,35 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** Coordinates Android UI state through focused action modules. */
-internal class OrchaViewModel(application: Application) : AndroidViewModel(application),
-    ContainerNavigationActions,
-    TaskAndAgentDetailActions,
-    RunAndConversationActions,
-    TaskAndRequestHumanActions,
-    AgentAndWorkspaceHumanActions,
-    OrchaViewModelSupport {
-    override val store = ContainerStore(application)
-    override val api = OrchaApiClient()
-    override val json = Json { ignoreUnknownKeys = true }
-    override var pollingJob: Job? = null
-    override var runStreamJob: Job? = null
+import kotlinx.coroutines.CoroutineScope
 
-    override val _uiState = MutableStateFlow(
-        OrchaUiState(
-            containers = store.load(),
-            themeMode = runCatching {
-                io.openorcha.mobile.ui.theme.ThemeMode.valueOf(
-                    store.loadThemeMode().replaceFirstChar { it.uppercase() },
-                )
-            }.getOrDefault(io.openorcha.mobile.ui.theme.ThemeMode.Auto),
-        ),
-    )
-    val uiState: StateFlow<OrchaUiState> = _uiState
+/** Web-parity retained-line cap for the run feed. */
+internal const val RUN_FEED_CAP = 400
 
-    init {
-        val first = _uiState.value.containers.firstOrNull()
-        if (first != null) openContainer(first.id) else probeContainers()
-    }
+/** Slim snapshot window for the saved-container health probes. */
+internal const val PROBE_LIMIT = 50
 
-    override val scope get() = viewModelScope
+/** Supplies shared state and cross-module operations to the view-model action modules. */
+internal interface OrchaViewModelAccess {
+    val store: ContainerStore
+    val api: OrchaApiClient
+    val json: Json
+    var pollingJob: Job?
+    var runStreamJob: Job?
+    val _uiState: MutableStateFlow<OrchaUiState>
+    val scope: CoroutineScope
+
+    fun showWorkspace()
+    fun refreshSelected()
+    fun refreshSelectedTask()
+    fun refreshAgentDetail()
+    fun refreshConversation()
+    fun refreshRunLog()
+    fun openTask(taskId: String)
+    fun cancelRunStream()
+    fun startPolling()
+    fun pairingBaseUrl(raw: String): String
+    fun friendlyConnectionError(err: Throwable? = null): String
+    fun messageKey(message: TaskMessageDto): Any
+    fun runHumanAction(success: String, block: suspend (StoredContainer, String) -> Unit)
 }

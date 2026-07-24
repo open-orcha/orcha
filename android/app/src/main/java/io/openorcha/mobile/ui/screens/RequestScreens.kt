@@ -1,5 +1,7 @@
 package io.openorcha.mobile.ui.screens
 
+/** Owns request-detail navigation, action-sheet routing, and owner-close confirmation. */
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -76,7 +78,7 @@ import io.openorcha.mobile.ui.theme.Orcha
    timeline, and the state×role action matrix. Actions run through bottom sheets.
    ============================================================================= */
 
-private enum class RequestSheet { None, Respond, Reject, Convert, Nudge, CloseWithReason }
+internal enum class RequestSheet { None, Respond, Reject, Convert, Nudge, CloseWithReason }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,104 +141,15 @@ fun RequestDetailScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                OrchaCard {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Avatar(fromAlias ?: "?", human = req.requesterId == humanId || RequestsView.kindFor(agents, req.requesterId) == "human")
-                        Text("→", color = p.faint, style = MaterialTheme.typography.titleMedium)
-                        Avatar(
-                            if (req.targetId == null) "H" else toAlias ?: "?",
-                            human = isTarget || RequestsView.kindFor(agents, req.targetId) == "human",
-                        )
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "${if (isRequester) "you" else fromAlias ?: "agent"} → ${if (isTarget) "you" else toAlias ?: "agent"}",
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            Text(
-                                listOfNotNull(req.type, MobileUx.agoLabel(req.createdAt)?.let { "opened $it" }).joinToString(" · "),
-                                style = MaterialTheme.typography.bodyMedium, color = p.muted,
-                            )
-                        }
-                        RequestStatusPill(req.status, escalated = RequestsView.isEscalatedOpen(req, agents))
-                    }
-                }
-            }
-            req.parentRequestId?.let {
-                item { OrchaCard { Text("↳ part of a request chain (depth ${req.chainDepth})", color = p.muted, style = MaterialTheme.typography.bodyMedium) } }
-            }
-            req.taskLink?.taskId?.let { tid ->
-                item {
-                    OrchaCard(onClick = { onOpenTask(tid) }) {
-                        Text("SPAWNED TASK →", style = MaterialTheme.typography.labelMedium, color = p.violet)
-                        Text(req.taskLink.title ?: tid, style = MaterialTheme.typography.titleSmall)
-                    }
-                }
-            }
-            val knownTasks = state.snapshot?.tasks.orEmpty()
-            item { SectionH("Payload") }
-            item { OrchaCard { LinkifiedText(req.payload, knownTasks, onOpenTask, color = p.text) } }
-            req.response?.let {
-                item { SectionH("Response") }
-                item { OrchaCard(borderColor = p.okLine) { LinkifiedText(it, knownTasks, onOpenTask, color = p.text2) } }
-            }
-            req.rejectionReason?.let {
-                item { SectionH("Rejection") }
-                item { OrchaCard(borderColor = p.dangerLine) { LinkifiedText(it, knownTasks, onOpenTask, color = p.text2) } }
-            }
-            item { SectionH("Timeline") }
-            item {
-                OrchaCard {
-                    TimelineDot("created", req.createdAt, true)
-                    if (req.status in setOf("accepted", "answered", "closed", "converted_to_task")) TimelineDot("accepted", null, req.status != "open")
-                    if (req.respondedAt != null || req.status in setOf("answered", "closed", "converted_to_task")) TimelineDot("answered", req.respondedAt, true)
-                    if (req.closedAt != null || req.status in setOf("closed", "rejected", "converted_to_task")) TimelineDot(MobileUx.statusCopy(req.status), req.closedAt, true)
-                }
-            }
-            // Action zone (flow 07a): role-specific "Your move" on top, then the universal
-            // operator tier (Nudge · Close) that lights up on any request the human can see.
-            item {
-                val ops = RequestsView.operatorActions(req, humanId)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // ── Your move (role-specific) ──
-                    if (req.status == "open" && isTarget && req.type == "info") {
-                        PrimaryButton("Respond", { sheet = RequestSheet.Respond }, Modifier.fillMaxWidth(), enabled = !state.actionInFlight)
-                    }
-                    if (req.status == "open" && isTarget && req.type == "task") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PrimaryButton("Accept task", { onAcceptTask(null) }, Modifier.weight(1f), enabled = !state.actionInFlight)
-                            DangerTonalButton("Reject…", { sheet = RequestSheet.Reject }, Modifier.weight(1f), enabled = !state.actionInFlight)
-                        }
-                    }
-                    if (isRequester && req.status == "answered") {
-                        TonalButton("Convert to task", { sheet = RequestSheet.Convert }, Modifier.fillMaxWidth(), enabled = !state.actionInFlight)
-                    }
-
-                    // ── Operator actions (universal) ──
-                    if (ops.showOperatorNote) {
-                        Banner(
-                            BannerKind.Info,
-                            "Acting as operator (${state.selectedContainer?.humanAlias ?: "you"}). " +
-                                "Closing another agent's request needs a reason — it's sent to the owner so they know why.",
-                        )
-                    }
-                    if (ops.showNudge || ops.showClose) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (ops.showNudge) {
-                                TonalButton("Nudge", { sheet = RequestSheet.Nudge }, Modifier.weight(1f), enabled = !state.actionInFlight)
-                            }
-                            if (ops.showClose) {
-                                if (ops.closeNeedsReason) {
-                                    DangerTonalButton("Close", { sheet = RequestSheet.CloseWithReason }, Modifier.weight(1f), enabled = !state.actionInFlight)
-                                } else {
-                                    NeutralButton("Close", { confirmOwnerClose = true }, Modifier.weight(1f), enabled = !state.actionInFlight)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            state.error?.let { item { Banner(BannerKind.Danger, it) } }
+            RequestDetailContent(
+                state = state, req = req, agents = agents, humanId = humanId,
+                palette = p,
+                fromAlias = fromAlias, toAlias = toAlias,
+                isRequester = isRequester, isTarget = isTarget,
+                onSheet = { sheet = it },
+                onConfirmOwnerClose = { confirmOwnerClose = true },
+                onAcceptTask = onAcceptTask, onOpenTask = onOpenTask,
+            )
         }
 
         when (sheet) {
@@ -291,7 +204,7 @@ fun RequestDetailScreen(
 }
 
 @Composable
-private fun TimelineDot(label: String, at: String?, reached: Boolean) {
+internal fun TimelineDot(label: String, at: String?, reached: Boolean) {
     val p = Orcha.palette
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 3.dp)) {
         Box(Modifier.size(9.dp).background(if (reached) p.accent else p.border2, CircleShape))
@@ -302,103 +215,3 @@ private fun TimelineDot(label: String, at: String?, reached: Boolean) {
 }
 
 /** Shared one-field bottom sheet (respond / reject / nudge / close-with-reason). */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TextSheet(
-    kicker: String,
-    title: String,
-    label: String,
-    required: Boolean,
-    confirm: String,
-    busy: Boolean,
-    destructive: Boolean = false,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    val p = Orcha.palette
-    var text by remember { mutableStateOf("") }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.raised) {
-        // A1: a multi-thousand-char payload must never push the field/buttons out of
-        // reach — cap the title (full body stays on the detail screen behind the sheet),
-        // make the sheet scrollable, and keep it above the keyboard.
-        Column(
-            Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp)
-                .padding(bottom = 30.dp)
-                .imePadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(kicker, style = MaterialTheme.typography.labelMedium, color = if (destructive) p.danger else p.accent)
-            Text(title, style = MaterialTheme.typography.titleSmall, color = p.text2, maxLines = 4, overflow = TextOverflow.Ellipsis)
-            OrchaField(text, { text = it }, label = label, minLines = 3)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (destructive) {
-                    DangerTonalButton(confirm, { onConfirm(text.trim()) }, Modifier.weight(1f), enabled = (!required || text.isNotBlank()) && !busy)
-                } else {
-                    PrimaryButton(confirm, { onConfirm(text.trim()) }, Modifier.weight(1f), enabled = (!required || text.isNotBlank()) && !busy)
-                }
-                NeutralButton("Cancel", onDismiss, enabled = !busy)
-            }
-        }
-    }
-}
-
-/** Convert-to-task sheet: Title + DoD + assignee, same validation as Create task. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ConvertSheet(
-    busy: Boolean,
-    agents: List<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (String, String, String?) -> Unit,
-) {
-    val p = Orcha.palette
-    var title by remember { mutableStateOf("") }
-    var dod by remember { mutableStateOf("") }
-    var assignee by remember { mutableStateOf<String?>(null) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.raised) {
-        // A1: same scroll guard as TextSheet — field + button stay reachable with keyboard open
-        Column(
-            Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp)
-                .padding(bottom = 30.dp)
-                .imePadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("CONVERT TO TASK", style = MaterialTheme.typography.labelMedium, color = p.violet)
-            OrchaField(title, { title = it }, label = "Task title")
-            OrchaField(dod, { dod = it }, label = "Definition of done", minLines = 3)
-            SectionH("Assign to", assignee ?: "unassigned")
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    AssigneeChip("Unassigned", assignee == null) { assignee = null }
-                }
-                items(agents.size) { i ->
-                    AssigneeChip(agents[i], assignee == agents[i]) { assignee = agents[i] }
-                }
-            }
-            PrimaryButton(
-                "Convert", { onConfirm(title.trim(), dod.trim(), assignee) },
-                Modifier.fillMaxWidth(),
-                enabled = title.isNotBlank() && dod.isNotBlank() && !busy,
-            )
-        }
-    }
-}
-
-@Composable
-fun AssigneeChip(label: String, on: Boolean, onClick: () -> Unit) {
-    val p = Orcha.palette
-    Text(
-        label,
-        modifier = Modifier
-            .background(if (on) p.accentSoft else p.surface2, RoundedCornerShape(999.dp))
-            .border(BorderStroke(1.dp, if (on) p.accentLine else p.border), RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W600),
-        color = if (on) p.accent else p.muted,
-    )
-}

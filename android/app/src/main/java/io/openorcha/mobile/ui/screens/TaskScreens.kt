@@ -1,17 +1,14 @@
 package io.openorcha.mobile.ui.screens
 
-import androidx.compose.foundation.clickable
+/** Owns task detail presentation and its approval and close entry points. */
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -232,30 +229,14 @@ fun TaskDetailScreen(
         }
     }
 
-    if (closing && task != null) {
-        AlertDialog(
-            onDismissRequest = { closing = false },
-            title = { Text("Close ${task.title}?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    val implications = state.closeImplications
-                    if (implications != null) {
-                        implications.forEach { Text("• $it") }
-                    } else {
-                        Text("The task is force-closed and anything waiting on it unblocks. A reason is routed to the assignee.")
-                    }
-                    OrchaField(closeReason, { closeReason = it }, label = "Reason (recommended)", minLines = 2)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { closing = false; onCancelTask(closeReason.ifBlank { null }) }) {
-                    Text("Close task", color = p.danger, fontWeight = FontWeight.W700)
-                }
-            },
-            dismissButton = { TextButton(onClick = { closing = false }) { Text("Cancel", color = p.accent) } },
-            containerColor = p.raised,
-        )
-    }
+    TaskCloseDialog(
+        task = task?.takeIf { closing },
+        implications = state.closeImplications,
+        reason = closeReason,
+        onReasonChange = { closeReason = it },
+        onDismiss = { closing = false },
+        onClose = { closing = false; onCancelTask(closeReason.ifBlank { null }) },
+    )
     if (showVerify && task != null) {
         VerifySheet(task, state.actionInFlight, onDismiss = { showVerify = false }) { approve, feedback ->
             showVerify = false; onVerify(approve, feedback)
@@ -265,271 +246,5 @@ fun TaskDetailScreen(
         PlanApprovalSheet(task, state.actionInFlight, onDismiss = { showPlan = false }) { approve, reason ->
             showPlan = false; onDecidePlan(approve, reason)
         }
-    }
-}
-
-@Composable
-fun RunRow(run: RunDto, onOpenRun: (RunDto) -> Unit) {
-    val p = Orcha.palette
-    OrchaCard(onClick = { onOpenRun(run) }) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Rounded.Terminal, null, tint = p.accent, modifier = Modifier.size(18.dp))
-            Text(run.runId.take(6), style = MonoStyle, color = p.text)
-            run.agentAlias?.let {
-                Avatar(it, human = false, size = AvatarSize.Sm)
-            }
-            StatusPill(run.status, StatusDomain.Run)
-            Spacer(Modifier.weight(1f))
-            Text(MobileUx.agoLabel(run.startedAt) ?: "", style = MonoSmStyle, color = p.faint)
-        }
-        Text(run.taskTitle ?: run.wakeEvent ?: "worker run", style = MaterialTheme.typography.bodyMedium, color = p.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-/* ---------- flow 05 T8 — the task thread (chat surface + composer) ---------- */
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-fun TaskThreadScreen(
-    state: OrchaUiState,
-    onBack: () -> Unit,
-    onRefresh: () -> Unit,
-    onSendMessage: (String) -> Unit,
-    onLoadEarlier: () -> Unit,
-    onOpenTask: (String) -> Unit,
-) {
-    val p = Orcha.palette
-    val task = state.selectedTask
-    var draft by remember { mutableStateOf("") }
-    var pendingSend by remember { mutableStateOf<String?>(null) }
-    // a send that errored keeps its text as an unsent bubble with a retry chip
-    val unsent = if (state.error != null) pendingSend else null
-    val listState = rememberLazyListState()
-    val imeVisible = WindowInsets.isImeVisible
-    // issue 2: keep the newest messages in view when the keyboard opens or a message lands.
-    // Keyed on the NEWEST message's identity (same expression as the item keys), not the list
-    // size — a "Load earlier" prepend grows the size but leaves the newest message unchanged,
-    // so the effect stays put and LazyColumn's key-based anchoring holds the viewport at the seam.
-    val newestMessageKey = state.taskMessages.lastOrNull()?.let { it.messageId ?: "${it.createdAt}-${it.body.hashCode()}" }
-    LaunchedEffect(newestMessageKey, imeVisible) {
-        val last = listState.layoutInfo.totalItemsCount - 1
-        if (last >= 0 && (imeVisible || state.taskMessages.isNotEmpty())) listState.animateScrollToItem(last)
-    }
-    Scaffold(
-        containerColor = p.bg,
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = {
-                    Column {
-                        Text("Thread", style = MaterialTheme.typography.titleMedium)
-                        Text(task?.title ?: "", style = MaterialTheme.typography.bodyMedium, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
-                actions = { IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh") } },
-            )
-        },
-    ) { padding ->
-        // issue 2: consumeWindowInsets stops imePadding re-adding the nav-bar inset the
-        // Scaffold padding already applied (with adjustResize, that was the visible gap)
-        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                state = listState,
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // issue 4: keyset "Load earlier" — older pages prepend above (web reveal affordance)
-                if (state.threadHasMore) {
-                    item(key = "load-earlier") {
-                        androidx.compose.material3.TextButton(
-                            onClick = onLoadEarlier,
-                            enabled = !state.threadLoadingEarlier,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                if (state.threadLoadingEarlier) "Loading…" else "Load earlier messages",
-                                color = p.accent, fontWeight = FontWeight.W700,
-                            )
-                        }
-                    }
-                }
-                if (state.taskMessages.isEmpty()) {
-                    item {
-                        OrchaCard {
-                            Text(
-                                "No messages yet — say hi to ${task?.assignees?.firstOrNull() ?: "the assignee"}.",
-                                color = p.muted,
-                            )
-                        }
-                    }
-                }
-                items(state.taskMessages, key = { it.messageId ?: "${it.createdAt}-${it.body.hashCode()}" }) { msg ->
-                    ThreadBubble(msg, state.selectedContainer?.humanAgentId, state.snapshot?.tasks.orEmpty(), onOpenTask)
-                }
-                unsent?.let { text ->
-                    item {
-                        Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
-                            Bubble(BubbleKind.Mine, text)
-                            Text(
-                                "Not sent · Tap to retry",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = p.danger,
-                                modifier = Modifier
-                                    .padding(top = 2.dp)
-                                    .clickable { onSendMessage(text) },
-                            )
-                        }
-                    }
-                }
-                if (unsent == null) state.error?.let { item { Banner(BannerKind.Danger, it) } }
-            }
-            // `.composer` — rounded field + round send button
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OrchaField(
-                    draft, { draft = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = "Message ${task?.assignees?.firstOrNull() ?: "the thread"}…",
-                    maxLines = 4,
-                )
-                IconButton(
-                    onClick = { pendingSend = draft.trim(); onSendMessage(draft.trim()); draft = "" },
-                    enabled = draft.isNotBlank() && !state.actionInFlight,
-                    colors = androidx.compose.material3.IconButtonDefaults.iconButtonColors(
-                        containerColor = p.accent, contentColor = p.accentInk,
-                        disabledContainerColor = p.accent.copy(alpha = 0.4f), disabledContentColor = p.accentInk,
-                    ),
-                ) { Icon(Icons.AutoMirrored.Rounded.Send, "Send") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ThreadBubble(msg: TaskMessageDto, humanId: String?, tasks: List<TaskDto>, onOpenTask: (String) -> Unit) {
-    val mine = msg.authorId != null && msg.authorId == humanId
-    val system = msg.authorId == null && !msg.isHuman
-    when {
-        system -> Bubble(BubbleKind.System, msg.body, tasks = tasks, onOpenTask = onOpenTask)
-        mine -> Bubble(BubbleKind.Mine, msg.body, time = MobileUx.agoLabel(msg.createdAt), tasks = tasks, onOpenTask = onOpenTask)
-        else -> Bubble(
-            BubbleKind.Theirs, msg.body,
-            author = msg.authorAlias ?: if (msg.isHuman) "human" else "agent",
-            time = MobileUx.agoLabel(msg.createdAt),
-            tasks = tasks, onOpenTask = onOpenTask,
-        )
-    }
-}
-
-/* ---------- flow 06 R2 — run detail: mono log, pin-to-bottom, stop-run ---------- */
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun RunDetailScreen(
-    state: OrchaUiState,
-    onBack: () -> Unit,
-    onRefresh: () -> Unit,
-    onStop: () -> Unit,
-) {
-    val p = Orcha.palette
-    val run = state.selectedRun
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    var confirmStop by remember { mutableStateOf(false) }
-    val listState = rememberLazyListState()
-    val atBottom by remember {
-        androidx.compose.runtime.derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
-        }
-    }
-    LaunchedEffect(state.runFeed.size) {
-        // pin-to-bottom only while the user hasn't scrolled up (flow 06 §auto-scroll)
-        if (state.runFeed.isNotEmpty() && atBottom) listState.animateScrollToItem(state.runFeed.size - 1)
-    }
-    Scaffold(
-        containerColor = p.bg,
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = {
-                    Column {
-                        Text(run?.runId?.take(6) ?: "run", style = MonoStyle.copy(fontWeight = FontWeight.W700))
-                        Text(run?.taskTitle ?: run?.wakeEvent ?: "", style = MaterialTheme.typography.bodyMedium, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
-                actions = { IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh") } },
-            )
-        },
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            run?.let {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatusPill(it.status, StatusDomain.Run)
-                    it.wakeKind?.let { wk -> MetaTag(wk) }
-                    it.agentAlias?.let { a -> MetaTag(a) }
-                    Spacer(Modifier.weight(1f))
-                    if (it.status == "running") {
-                        DangerTonalButton("Stop run", { confirmStop = true }, small = true, enabled = !state.actionInFlight)
-                    }
-                }
-                if (it.status != "running") {
-                    val kind = when (it.status) {
-                        "exited", "finished" -> BannerKind.Info
-                        "killed", "failed", "error" -> BannerKind.Danger
-                        else -> BannerKind.Info
-                    }
-                    Banner(kind, "Run ${MobileUx.statusCopy(it.status)}${MobileUx.agoLabel(it.endedAt)?.let { t -> " · $t" } ?: ""}")
-                }
-            }
-            state.runStreamNote?.let { Banner(BannerKind.Info, it) }
-            OrchaCard(Modifier.weight(1f)) {
-                if (state.runFeed.isEmpty()) {
-                    Text(
-                        when {
-                            state.loading -> "Loading stream…"
-                            run?.status == "running" -> "Streaming — waiting for the first log line…"
-                            else -> "No log lines yet."
-                        },
-                        color = p.muted,
-                    )
-                } else {
-                    androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth()) {
-                        LazyColumn(state = listState) {
-                            items(state.runFeed.size) { i ->
-                                val row = state.runFeed[i]
-                                FeedRow(row.type, row.label, row.text, row.detail)
-                            }
-                        }
-                        if (!atBottom) {
-                            androidx.compose.material3.SuggestionChip(
-                                onClick = { scope.launch { listState.animateScrollToItem(state.runFeed.size - 1) } },
-                                label = { Text("Auto-scroll paused · Jump to latest", style = MaterialTheme.typography.labelMedium) },
-                                modifier = Modifier.align(Alignment.BottomCenter),
-                            )
-                        }
-                    }
-                }
-            }
-            state.error?.let { Banner(BannerKind.Danger, it, action = "Retry", onAction = onRefresh) }
-        }
-    }
-    if (confirmStop) {
-        AlertDialog(
-            onDismissRequest = { confirmStop = false },
-            title = { Text("Stop this run?") },
-            text = { Text("${run?.agentAlias ?: "The"} worker is interrupted mid-turn. The log so far is kept and the run is marked stopped.") },
-            confirmButton = {
-                TextButton(onClick = { confirmStop = false; onStop() }) { Text("Stop run", color = p.danger, fontWeight = FontWeight.W700) }
-            },
-            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Cancel", color = p.accent) } },
-            containerColor = p.raised,
-        )
     }
 }

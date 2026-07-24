@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -192,14 +191,7 @@ fun CreateTaskScreen(
                     }
                 }
             }
-            item { SectionH("Priority", "P${MobileUx.priorityFor(band)}") }
-            item {
-                SegControl(
-                    options = listOf("Low", "Normal", "High"),
-                    selected = when (band) { PriorityBand.Low -> 0; PriorityBand.High -> 2; else -> 1 },
-                    onSelect = { band = when (it) { 0 -> PriorityBand.Low; 2 -> PriorityBand.High; else -> PriorityBand.Normal } },
-                )
-            }
+            item { CreateTaskPrioritySelector(band) { band = it } }
             item {
                 SectionH("Advanced", trailing = {
                     Text(
@@ -249,16 +241,9 @@ fun CreateTaskScreen(
         }
     }
 
-    if (confirmDiscard) {
-        AlertDialog(
-            onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard draft?") },
-            text = { Text("Your task draft will be lost.") },
-            confirmButton = {
-                TextButton(onClick = { confirmDiscard = false; onBack() }) { Text("Discard draft", color = p.danger, fontWeight = FontWeight.W700) }
-            },
-            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing", color = p.accent) } },
-            containerColor = p.raised,
-        )
-    }
+    CreateTaskDiscardDialog(
+        visible = confirmDiscard,
+        onKeep = { confirmDiscard = false },
+        onDiscard = { confirmDiscard = false; onBack() },
+    )
 }
