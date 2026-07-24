@@ -319,7 +319,7 @@ REQUEST_STATUSES = {"open", "accepted", "rejected", "answered", "converted_to_ta
 # `--model` launch (notifier spawns the worker with the chosen model). `runtime`
 # names the local coding-agent CLI that can actually run the model.
 AVAILABLE_MODELS = [
-    {"id": "claude-opus-4-8", "name": "Opus 4.8", "runtime": "claude"},
+    {"id": "claude-opus-5", "name": "Opus 5", "runtime": "claude"},
     # Fable 5 is a LIMITED-AVAILABILITY model (offered only through 2026-06-22). Per-agent
     # selection works while it's listed here; the moment this entry is removed, every agent
     # that had chosen it auto-falls-back to DEFAULT_MODEL at spawn time (resolve_model below)
@@ -336,7 +336,7 @@ AVAILABLE_MODELS = [
     {"id": "gpt-5.4-mini", "name": "GPT-5.4 mini", "runtime": "codex"},
     {"id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark", "runtime": "codex"},
 ]
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "claude-opus-5"
 _MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
 _MODELS_BY_ID = {m["id"]: m for m in AVAILABLE_MODELS}
 
@@ -1826,7 +1826,7 @@ class AgentCreate(BaseModel):
     )
     kind: str = Field(default="ai", pattern="^(ai|human)$")
     # D7: the LLM model this agent runs on. Curated static set (no live list API);
-    # the portal create-agent dropdown defaults to Opus 4.8. Defaulted server-side
+    # the portal create-agent dropdown defaults to Opus 5. Defaulted server-side
     # for kind='ai' when omitted; left NULL for humans (no LLM).
     model: Optional[str] = Field(default=None, max_length=64)
     initial_task: Optional[InitialTask] = None
@@ -3791,7 +3791,7 @@ def register_agent(cid: str, body: AgentCreate):
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
 
-        # D7: default the model for AI agents (Opus 4.8) when the caller omits it;
+        # D7: default the model for AI agents (Opus 5) when the caller omits it;
         # humans carry no model. A supplied model must be one of the curated ids.
         model = body.model
         if body.kind == "human":

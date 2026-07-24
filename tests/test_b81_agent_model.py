@@ -22,7 +22,7 @@ async def _agent_model_in_payload(client, cid, alias):
 async def test_set_model_persists_and_flows_through_read_payload(client, container, make_agent):
     a = await make_agent("Switch", "eng")            # defaults to opus
     aid = a["agent_id"]
-    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-4-8"
+    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-5"
 
     r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-sonnet-5"})
     assert r.status_code == 200, r.text
@@ -43,20 +43,20 @@ async def test_unknown_model_rejected(client, container, make_agent):
 
 @pytest.mark.asyncio
 async def test_unknown_agent_404(client):
-    r = await client.post(f"/api/agents/{uuid.uuid4()}/model", json={"model": "claude-opus-4-8"})
+    r = await client.post(f"/api/agents/{uuid.uuid4()}/model", json={"model": "claude-opus-5"})
     assert r.status_code == 404, r.text
 
 
 @pytest.mark.asyncio
 async def test_bad_uuid_400(client):
-    r = await client.post("/api/agents/not-a-uuid/model", json={"model": "claude-opus-4-8"})
+    r = await client.post("/api/agents/not-a-uuid/model", json={"model": "claude-opus-5"})
     assert r.status_code == 400, r.text
 
 
 @pytest.mark.asyncio
 async def test_human_rejected(client, container, make_agent):
     h = await make_agent("Human", "human", kind="human")
-    r = await client.post(f"/api/agents/{h['agent_id']}/model", json={"model": "claude-opus-4-8"})
+    r = await client.post(f"/api/agents/{h['agent_id']}/model", json={"model": "claude-opus-5"})
     assert r.status_code == 400, r.text
     assert "humans carry no model" in r.text
 
@@ -104,7 +104,7 @@ def test_resolve_model_falls_back_when_retired(monkeypatch):
     """A persisted choice no longer in the curated list resolves to the default — the spawn
     seam that gives ZERO breakage the moment Fable is removed from AVAILABLE_MODELS."""
     assert main.resolve_model("claude-fable-5") == "claude-fable-5"   # while listed
-    assert main.resolve_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert main.resolve_model("claude-opus-5") == "claude-opus-5"
     assert main.resolve_model(None) == main.DEFAULT_MODEL
     assert main.resolve_model("some-old-id") == main.DEFAULT_MODEL
     # simulate Fable retired: drop it from the curated id set
@@ -157,7 +157,7 @@ async def test_persona_carries_resolved_model_for_live_terminal(client, containe
     aid = a["agent_id"]
     r = await client.get(f"/api/agents/{aid}/persona")
     assert r.status_code == 200, r.text
-    assert r.json()["model"] == "claude-opus-4-8"
+    assert r.json()["model"] == "claude-opus-5"
     assert r.json()["model_runtime"] == "claude"
 
     await client.post(f"/api/agents/{aid}/model", json={"model": "claude-fable-5"})
@@ -218,7 +218,7 @@ async def test_setting_same_model_does_not_reset_session(client, container, make
         (container["id"], aid, human["agent_id"], sid))
     conv_id = str(rows[0]["id"])
 
-    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-opus-4-8"})
+    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-opus-5"})
     assert r.json()["cold_reset_conversations"] == []
     after = db.execute("SELECT session_id FROM conversations WHERE id=%s", (conv_id,))
     assert str(after[0]["session_id"]) == sid       # untouched

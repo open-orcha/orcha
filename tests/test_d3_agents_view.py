@@ -100,7 +100,7 @@ def test_agents_runs_use_the_shared_engine():
 
 def test_agents_model_control_posts_ids_not_labels():
     """Review P1: POST /api/agents/{id}/model only accepts curated MODEL IDS
-    (claude-opus-4-8, …), not display labels (Opus 4.8). The control must render
+    (claude-opus-5, …), not display labels (Opus 5). The control must render
     {id,name} pairs — display the name, send the id, highlight on id===a.model — and
     fetch /api/models as the source of truth."""
     html = (STATIC / "agents.html").read_text()
@@ -110,7 +110,8 @@ def test_agents_model_control_posts_ids_not_labels():
     assert "m.id===a.model" in html or "m.id === a.model" in html, "current-model highlight compares label to id (never matches)"
     # the curated list is the source of truth + a real curated id is present (not just labels)
     assert "/api/models" in html, "doesn't fetch the canonical model list"
-    assert "claude-opus-4-8" in html, "no curated model id (would 400 on every click)"
+    assert "claude-opus-5" in html, "no curated model id (would 400 on every click)"
+    assert "claude-opus-4-8" not in html, "Opus 4.8 replaced by Opus 5"
     assert 'id: "gpt-5.6-terra", name: "GPT-5.6 Terra"' in html
     assert 'id: "gpt-5.6", name: "GPT-5.6"' not in html
     assert "gpt-5.6-tera" not in html
