@@ -26,6 +26,8 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         NSCameraUsageDescription: "Orcha uses the camera only to scan the pairing QR from your portal."
+        NSMicrophoneUsageDescription: "Orcha uses the microphone only while you dictate a message to your agents. Speech is transcribed on this device — audio never leaves your phone."
+        NSSpeechRecognitionUsageDescription: "Dictated audio is transcribed to editable text on this device."
         # A2 (doc 13): LAN base URLs are runtime IPs — the clean ATS carve-out is
         # local networking, not arbitrary loads.
         NSAppTransportSecurity:

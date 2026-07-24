@@ -519,6 +519,9 @@ struct ConversationScreen: View {
     let agentId: String
 
     @State private var draft = ""
+    /// True while dictation is live — send stays disabled so it can't clear the
+    /// draft out from under the still-running mic engine (which would rewrite it).
+    @State private var dictating = false
     @State private var confirmEnd = false
     @State private var pulse = false
     /// Issue 4 — client-side reveal window over the already-fetched turns (web parity:
@@ -684,6 +687,7 @@ struct ConversationScreen: View {
                 .padding(.vertical, 9)
                 .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
+            DictationMicButton(text: $draft, isActive: $dictating)
             Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 draft = ""
@@ -705,7 +709,7 @@ struct ConversationScreen: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInFlight
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInFlight && !dictating
     }
 
     // MARK: day dividers
