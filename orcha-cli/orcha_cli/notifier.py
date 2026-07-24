@@ -65,6 +65,7 @@ from .notifier_codex_events import (
 )
 from .notifier_codex_result import _codex_result_status
 from . import notifier_conversation as _conversation
+from . import notifier_embodiment as _embodiment
 from .notifier_process import _capture_run_output, _kill_worker, _usage_from_log
 from .notifier_session_io import (
     _extract_codex_session_id,
@@ -769,65 +770,31 @@ pending_revokes: list[str] = []
 
 
 def _mint_embodiment_token(api_base: str, aid: str, lane: str, kind: str) -> Optional[str]:
-    """Mint a process-scoped embodiment token for `aid` in `lane` ('work'|'conversation'), `kind`
-    ('headless'|'resident'|'live'). POSTs to the mint endpoint and returns the run_token, or None on
-    failure. A None return is NOT fatal: the caller spawns token-less (degraded — the worker's gated
-    calls 403), never blocked on the mint. Never raises (a network hiccup must not crash the daemon)."""
-    try:
-        resp = _post_json(f"{api_base}/api/agents/{aid}/embodiment-tokens",
-                          {"lane": lane, "kind": kind})
-    except Exception:
-        resp = None
-    tok = (resp or {}).get("run_token") or (resp or {}).get("token") or (resp or {}).get("token_id")
-    if not tok:
-        # Log + continue: the spawn proceeds without gated authority rather than being blocked.
-        try:
-            print(f"[notifier] embodiment mint FAILED aid={aid} lane={lane} kind={kind} "
-                  f"— spawning token-less", flush=True)
-        except Exception:
-            pass
-        return None
-    return tok
+    """Compatibility facade for process-scoped capability minting."""
+    return _embodiment.mint_token(api_base, aid, lane, kind, post_json=_post_json)
 
 
 def _revoke_embodiment_token(api_base: str, token: Optional[str]) -> bool:
-    """Best-effort revoke of a minted token (idempotent server-side). Returns True on a confirmed
-    revoke, False on failure — the caller appends a failed token to `pending_revokes` for retry. Never
-    raises. A falsy token is a no-op success (nothing to revoke)."""
-    if not token:
-        return True
-    try:
-        resp = _post_json(f"{api_base}/api/embodiment-tokens/{token}/revoke", {})
-    except Exception:
-        resp = None
-    return resp is not None
+    """Compatibility facade for best-effort token revocation."""
+    return _embodiment.revoke_token(api_base, token, post_json=_post_json)
 
 
 def _revoke_or_defer(api_base: str, token: Optional[str]) -> None:
-    """Revoke a token; if the POST fails, park it in `pending_revokes` for a best-effort retry each
-    tick. The durable server-side run-terminal revoke is the backstop, so this is best-effort only."""
-    if not token:
-        return
-    if not _revoke_embodiment_token(api_base, token):
+    """Compatibility facade retaining the notifier's shared retry list."""
+    if token and not _revoke_embodiment_token(api_base, token):
         pending_revokes.append(token)
 
 
 def _drain_pending_revokes(api_base: str) -> None:
-    """Retry any parked failed revokes (called once per daemon tick). Best-effort — a still-failing
-    token stays parked; the server's run-terminal revoke covers the durable case regardless."""
-    if not pending_revokes:
-        return
-    still: list[str] = []
-    for token in pending_revokes:
-        if not _revoke_embodiment_token(api_base, token):
-            still.append(token)
-    pending_revokes[:] = still
+    """Retry parked revocations through the patchable compatibility facade."""
+    pending_revokes[:] = [
+        token for token in pending_revokes
+        if not _revoke_embodiment_token(api_base, token)
+    ]
 
 
 def _retire_headless(api_base: str, live_workers: dict, aid) -> Optional[dict]:
-    """GH #91/#90: the single teardown choke for a headless/ephemeral worker — REVOKE its stored token
-    (or defer on failure) THEN pop it from live_workers. EVERY live_workers.pop MUST route through here
-    so no exit path can leak a live token. Returns the popped state dict (or None if absent)."""
+    """Revoke and retire a headless worker through the shared teardown path."""
     w = live_workers.get(aid)
     if w is not None:
         _revoke_or_defer(api_base, w.get("run_token"))
@@ -835,9 +802,7 @@ def _retire_headless(api_base: str, live_workers: dict, aid) -> Optional[dict]:
 
 
 def _retire_resident(api_base: str, live_residents: dict, conv_id) -> Optional[dict]:
-    """GH #91/#90: the single teardown choke for a resident (conversation) worker — REVOKE its stored
-    conversation token (or defer) THEN pop it from live_residents. EVERY live_residents.pop MUST route
-    through here. Returns the popped state dict (or None if absent)."""
+    """Revoke and retire a resident through the shared teardown path."""
     r = live_residents.get(conv_id)
     if r is not None:
         _revoke_or_defer(api_base, r.get("run_token"))
@@ -846,72 +811,39 @@ def _retire_resident(api_base: str, live_residents: dict, conv_id) -> Optional[d
 
 def _finish_run(api_base: str, run_id, status: str, exit_code, log_path, diff=None,
                 kill_reason=None) -> None:
-    """A2/ISS-8: record a run's terminal state + captured stream-json output + net git
-    diff via the API (no direct DB). #270: `kill_reason` is a structured JSON diagnostic the
-    stall/hard-cap watchdog attaches when it kills a worker — NULL on every clean path.
-    #289: also attaches the wake's token usage (parsed from the same log) for the meter."""
-    if not run_id:
-        return
-    _post_json(f"{api_base}/api/runs/{run_id}/finish",
-               {"status": status, "exit_code": exit_code,
-                "output": _capture_run_output(log_path), "diff": diff,
-                "kill_reason": kill_reason, **_usage_from_log(log_path)})
+    """Compatibility facade for terminal run persistence."""
+    _embodiment.finish_run(
+        api_base,
+        run_id,
+        status,
+        exit_code,
+        log_path,
+        post_json=_post_json,
+        capture_output=_capture_run_output,
+        usage_from_log=_usage_from_log,
+        diff=diff,
+        kill_reason=kill_reason,
+    )
 
 
 def _run_pid_alive(pid) -> bool:
-    """919050a5: is this HOST run pid a live process? Only the notifier can ask (the API runs in
-    Docker and can't see host PIDs). A NULL/0 pid is treated as dead (unknown == not provably alive,
-    so it gets reaped). A PermissionError means the pid exists but is owned by another user → alive
-    (distinct from the daemon-singleton `_pid_alive`, which only cares about its OWN pid). NOTE:
-    deliberately a separate helper from `_pid_alive` — same-name shadowing would silently change
-    daemon_running()'s 0/perm semantics."""
-    if not pid:
-        return False
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except (OSError, ValueError, TypeError):
-        return False
+    """Compatibility facade for host process liveness checks."""
+    return _embodiment.run_pid_alive(pid)
 
 
 def _reap_dead_pid_resident_runs(api_base: str, aid: str, live_pids=frozenset(),
                                  *, quiet: bool = True) -> int:
-    """919050a5: cross-daemon single-flight + fast liveness release. Read this agent's RUNNING
-    resident runs and their host pids; for any whose process is dead, reconcile it. This is the only
-    truth that survives daemon turnover / cross-worktree double-daemons: the shared DB row + a host
-    os.kill(pid,0). `live_pids` = pids THIS daemon knows are alive (its own live_residents) — never
-    reaped even if os.kill momentarily races. Behaviour:
-      * NO live process backs the lease  → release the resident wake-lease (the server reconciles
-        the agent's running runs to 'orphaned', e4b77f3f) so suppressed event wakes resume in
-        SECONDS, not the >1260s ISS-60-B heartbeat window.
-      * a live sibling DOES exist (true double-spawn) → finish ONLY the dead orphan rows (killed),
-        keep the lease the live resident still renews. Never two running resident rows per agent.
-    Returns the number of dead runs reaped."""
-    data = _get_json(f"{api_base}/api/agents/{aid}/resident-runs?status=running") or {}
-    runs = data.get("runs", [])
-    if not runs:
-        return 0
-    def _alive(r):
-        pid = r.get("pid")
-        return (pid in live_pids) or _run_pid_alive(pid)
-    dead = [r for r in runs if not _alive(r)]
-    if not dead:
-        return 0
-    live_sibling = any(_alive(r) for r in runs)
-    if live_sibling:
-        for r in dead:
-            _finish_run(api_base, r.get("run_id"), "killed", -1, None)
-    else:
-        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": "resident_dead_pid", "release_lease": True, "lane": "conversation"})
-    if not quiet:
-        print(f"[notifier] reaped {len(dead)} dead-pid resident run(s) for {aid} "
-              f"({'kept lease (live sibling)' if live_sibling else 'released lease'})")
-    return len(dead)
+    """Compatibility facade preserving notifier monkeypatch seams."""
+    return _embodiment.reap_dead_resident_runs(
+        api_base,
+        aid,
+        live_pids,
+        get_json=_get_json,
+        post_json=_post_json,
+        finish_run=_finish_run,
+        pid_alive=_run_pid_alive,
+        quiet=quiet,
+    )
 
 
 # ---------- ISS-8: per-worker git worktree isolation + net-diff capture ----------
