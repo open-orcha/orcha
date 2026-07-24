@@ -31,7 +31,9 @@ from orcha_cli.cli_env import (  # dotenv-file primitives
     _append_env_file, _read_env_file_value, _tighten_env_file)
 from orcha_cli.cli_http import _get_json, _post_json, _wait_for_portal  # tiny urllib JSON helpers
 from orcha_cli import cli_project_setup as _project_setup
+from orcha_cli import cli_connect as _cli_connect
 from orcha_cli import cli_lifecycle as _cli_lifecycle
+from orcha_cli import cli_stacks as _cli_stacks
 from orcha_cli import cli_transcript as _cli_transcript
 
 
@@ -418,224 +420,39 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def _resolve_bridge_port(api_base: str) -> Optional[int]:
-    """ISS-84/#235: ask the portal which terminal-bridge port it advertises, so a connected
-    client binds the same per-project port. GET /api/terminal/config returns
-    {"ws_url": "ws://127.0.0.1:<port>"}; we extract <port>. Best-effort: returns None if the
-    portal is unreachable or the URL has no port (caller then omits bridge_port → 8765 fallback)."""
-    import urllib.parse
-    data = _get_json(f"{api_base}/api/terminal/config")
-    if not data:
-        return None
-    ws_url = data.get("ws_url") or ""
-    try:
-        return urllib.parse.urlparse(ws_url).port
-    except ValueError:
-        return None
+    return _cli_connect.resolve_bridge_port(api_base, get_json=_get_json)
 
 
 def cmd_connect(args: argparse.Namespace) -> None:
-    """Orcha#28: adopt an existing stack from the CURRENT folder.
-
-    Stack:db:container is 1:1:1, so "connect to a container" means "point this
-    folder's .claude/orcha.json at a running stack's API." After this you can
-    run any /orcha-* skill (e.g. /orcha-register-agent) from THIS folder and
-    it lands in the named stack's DB. Optionally registers an additional
-    human (kind='human') via --as <alias> in one shot.
-
-    Does NOT create a .orcha/ directory — this folder is a client, not a host.
-    """
-    cwd = pathlib.Path.cwd()
-    claude_dir = cwd / ".claude"
-    claude_config = claude_dir / "orcha.json"
-    tabs_dir = claude_dir / "orcha-tabs"
-
-    project_short = _sanitize_name(args.project_name)
-    stacks = _discover_stacks()
-    match = next((s for s in stacks if s["project_short"] == project_short), None)
-    if not match:
-        available = ", ".join(s["project_short"] for s in stacks) or "(none)"
-        sys.exit(
-            f"error: no running stack named '{project_short}'.\n"
-            f"  running stacks: {available}\n"
-            f"  start one with `orcha up --project <name>` or `orcha init` in a fresh dir."
-        )
-    if not match["api_port"]:
-        sys.exit(f"error: stack '{project_short}' is running but its portal port is unknown.")
-
-    api_base = f"http://localhost:{match['api_port']}"
-
-    # Refuse to clobber an existing local stack — if this folder ran `orcha init`,
-    # it has its OWN docker-compose; connect would silently divert its skills to
-    # someone else's stack.
-    if (cwd / ".orcha").exists():
-        sys.exit(
-            f"error: this folder has its own .orcha/ stack — connecting would point "
-            f"its skills at '{project_short}' instead of the local stack. "
-            f"Either run this from a fresh folder, or remove .orcha/ first."
-        )
-
-    _wait_for_portal(api_base, timeout_s=5.0)
-
-    # Verify a container actually exists in the target stack.
-    data = _get_json(f"{api_base}/api/containers")
-    if not data or not data.get("containers"):
-        sys.exit(
-            f"error: stack '{project_short}' has no container yet — run "
-            f"`orcha init` in its owning folder first."
-        )
-    container = data["containers"][0]
-    container_id = container["id"]
-
-    # ISS-84/#235: resolve the REMOTE stack's per-project bridge port so this connected
-    # folder's `terminal-bridge --ensure` (SessionStart hook, installed below) binds the
-    # port the portal advertises — not the fixed 8765 fallback. The portal is the source of
-    # truth: GET /api/terminal/config returns ws_url = ws://127.0.0.1:<bridge_port>, set from
-    # the ORCHA_TERMINAL_WS_URL compose env. Without this, a connected client for a 2nd+
-    # project would bind 8765 while the portal points elsewhere — the very collision #235 fixes.
-    bridge_port = _resolve_bridge_port(api_base)
-
-    # Lay down command templates so /orcha-* works in Claude and $orcha-* works in Codex.
-    claude_commands, codex_skills = _install_orcha_skill_templates(cwd)
-
-    # Write the client config. project_name + ports reflect the REMOTE stack so
-    # cohabiting tools (e.g. `orcha status` in this folder) talk to the right one.
-    config = {
-        "api_base_url": api_base,
-        "project_name": project_short,
-        "api_port": match["api_port"],
-        "db_port": match["db_port"],
-        "current_container_id": container_id,
-        "connected": True,  # client-only marker — distinguishes from a host folder
-    }
-    if bridge_port:
-        config["bridge_port"] = bridge_port
-    claude_config.parent.mkdir(parents=True, exist_ok=True)
-    claude_config.write_text(json.dumps(config, indent=2) + "\n")
-    tabs_dir.mkdir(parents=True, exist_ok=True)
-
-    # Orcha#33: register the poll-inbox PostToolUse hook here too. A connected
-    # folder typically registers AI agents (via /orcha-register-agent) that
-    # benefit from the same near-real-time inbox surfacing.
-    _write_hook_config(claude_config.parent)
-
-    # Optional: register an additional human in one step.
-    human_agent_id: Optional[str] = None
-    human_alias = (args.as_user or "").strip() or None
-    if human_alias:
-        try:
-            resp = _post_json(
-                f"{api_base}/api/containers/{container_id}/agents",
-                {"alias": human_alias, "role": "operator", "kind": "human"},
-            )
-            human_agent_id = resp["agent_id"]
-            binding = {
-                "alias": human_alias,
-                "agent_id": human_agent_id,
-                "container_id": container_id,
-                "kind": "human",
-            }
-            (tabs_dir / f"{human_alias}.json").write_text(
-                json.dumps(binding, indent=2) + "\n"
-            )
-            print(f"[orcha] ✓ registered as human '{human_alias}' (agent_id {human_agent_id})")
-        except Exception as e:
-            print(
-                f"[orcha] warn: --as registration failed ({e}); "
-                f"add yourself manually with /orcha-register-human"
-            )
-
-    print()
-    print(f"[orcha] ✓ connected '{cwd}' → stack '{project_short}'")
-    print(f"        api:           {api_base}/")
-    print(f"        container:     {container.get('name')}  ({container_id})")
-    print(f"        config:        {claude_config}")
-    print(f"        skills:        {claude_commands}")
-    print(f"        codex:         {codex_skills}")
-    print()
-    print("Next steps:")
-    if human_agent_id:
-        print(f"  1. export ORCHA_ALIAS={human_alias}  (in your shell, for sticky identity)")
-        print( "  2. Open Claude Code or Codex here and use Orcha commands as usual.")
-    else:
-        print( "  1. Register yourself as a human (recommended for cross-folder collab):")
-        print( "       /orcha-register-human <YourName>")
-        print( "  2. Or register an AI agent now:")
-        print( "       /orcha-register-agent <Alias> --role \"...\" --prompt \"...\"")
+    _cli_connect.connect_command(
+        args,
+        sanitize_name=_sanitize_name,
+        discover_stacks=_discover_stacks,
+        wait_for_portal=_wait_for_portal,
+        get_json=_get_json,
+        resolve_port=_resolve_bridge_port,
+        install_skill_templates=_install_orcha_skill_templates,
+        write_hook_config=_write_hook_config,
+        post_json=_post_json,
+    )
 
 
 def _discover_stacks() -> list[dict]:
-    """Find all running orcha-* docker compose stacks on this host.
-
-    Returns a list of dicts: {project, project_short, api_port, db_port,
-    portal_status}. Cross-folder discovery (Orcha#28) — used by both
-    `orcha ls` and `orcha connect`.
-    """
-    result = subprocess.run(
-        ["docker", "ps", "--format",
-         "{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Label \"com.docker.compose.project\"}}"],
-        capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        sys.exit(f"error running docker ps:\n{result.stderr}")
-
-    from collections import defaultdict
-    by_project: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
-    for ln in result.stdout.splitlines():
-        parts = ln.split("\t")
-        if len(parts) < 4:
-            continue
-        name, status, ports, project = parts
-        if project.startswith("orcha-"):
-            by_project[project].append((name, status, ports))
-
-    out: list[dict] = []
-    for project in sorted(by_project):
-        api_port = None
-        db_port = None
-        portal_status = ""
-        for name, status, ports in by_project[project]:
-            if "portal" in name:
-                portal_status = status
-                api_port = _parse_host_port(ports, "8000")
-            elif "db" in name:
-                db_port = _parse_host_port(ports, "5432")
-        out.append({
-            "project": project,
-            "project_short": project.removeprefix("orcha-"),
-            "api_port": api_port,
-            "db_port": db_port,
-            "portal_status": portal_status,
-        })
-    return out
+    return _cli_stacks.discover_stacks(parse_host_port=_parse_host_port)
 
 
 def _full_project(project_name: str) -> str:
-    """Always prepend 'orcha-' to match what `orcha ls` displays.
-
-    `orcha ls` always strips ONE leading 'orcha-' from the docker compose project name
-    for display, so users who type the displayed name need the prefix added back.
-    Whatever they type, we wrap with 'orcha-'.
-    """
-    return f"orcha-{project_name}"
+    return _cli_stacks.full_project(project_name)
 
 
 def _by_project(project_name: str, *args: str) -> None:
-    """Run `docker compose -p orcha-<name> <args...>` from anywhere."""
-    if "up" in args:
-        _export_pairing_host()
-    cmd = ["docker", "compose", "-p", _full_project(project_name), *args]
-    subprocess.run(cmd, check=True)
+    _cli_stacks.by_project(
+        project_name, *args, export_pairing_host=_export_pairing_host
+    )
 
 
 def _project_exists(project_name: str) -> bool:
-    """Check if a docker compose project with that name has containers."""
-    result = subprocess.run(
-        ["docker", "ps", "-a",
-         "--filter", f"label=com.docker.compose.project={_full_project(project_name)}",
-         "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=False,
-    )
-    return bool(result.stdout.strip())
+    return _cli_stacks.project_exists(project_name)
 
 
 def cmd_up(args: argparse.Namespace) -> None:
