@@ -20,7 +20,6 @@ import shutil
 import subprocess
 import sys
 from typing import Optional
-from urllib.parse import urlencode
 
 from orcha_cli.notifier import (  # Epic A: wake daemon / cron stopgap
     cmd_notifier, ensure_daemon, stop_daemon, stop_daemon_for_container)
@@ -32,6 +31,8 @@ from orcha_cli.cli_env import (  # dotenv-file primitives
     _append_env_file, _read_env_file_value, _tighten_env_file)
 from orcha_cli.cli_http import _get_json, _post_json, _wait_for_portal  # tiny urllib JSON helpers
 from orcha_cli import cli_project_setup as _project_setup
+from orcha_cli import cli_lifecycle as _cli_lifecycle
+from orcha_cli import cli_transcript as _cli_transcript
 
 
 PKG_ROOT = pkg_res.files("orcha_cli")
@@ -1791,40 +1792,13 @@ def _read_hook_stdin() -> dict:
     """SessionEnd/Stop hooks receive a JSON payload on stdin ({session_id,
     transcript_path, hook_event_name, ...}). Return it parsed, or {} when there's
     nothing to read (e.g. a manual `orcha snapshot` from a terminal). Never raises."""
-    try:
-        if sys.stdin is None or sys.stdin.isatty():
-            return {}
-        raw = sys.stdin.read()
-    except Exception:
-        return {}
-    if not raw or not raw.strip():
-        return {}
-    try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    return _cli_transcript.read_hook_input(sys.stdin)
 
 
 def _iter_transcript_records(transcript_path: Optional[str]):
     """Yield parsed JSONL records from a Claude Code transcript, oldest→newest.
     Silent (yields nothing) on any problem — callers degrade gracefully."""
-    if not transcript_path:
-        return
-    try:
-        p = pathlib.Path(transcript_path)
-        if not p.exists():
-            return
-        for line in p.read_text(errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except Exception:
-                continue
-    except Exception:
-        return
+    yield from _cli_transcript.iter_records(transcript_path)
 
 
 def _rich_digest_posted_this_session(transcript_path: Optional[str], agent_id: str) -> bool:
@@ -1833,19 +1807,7 @@ def _rich_digest_posted_this_session(transcript_path: Optional[str], agent_id: s
     /digest endpoint anywhere in the transcript. If so, the SessionEnd fallback must
     NOT write a thin row that would shadow it (the digest table is append-only, so the
     latest row wins). Best-effort string match on the agent's own /digest call."""
-    if not agent_id:
-        return False
-    needle = f"/agents/{agent_id}/digest"
-    for rec in _iter_transcript_records(transcript_path):
-        try:
-            blob = json.dumps(rec)
-        except Exception:
-            continue
-        if needle in blob and "digest" in blob:
-            # A bare GET of /digest (rehydrate uses /rehydrate, not /digest) is unlikely;
-            # treat any appearance of the agent's own /digest call as "already snapshotted".
-            return True
-    return False
+    return _cli_transcript.rich_digest_posted(transcript_path, agent_id)
 
 
 def _last_assistant_text_full(transcript_path: Optional[str]) -> Optional[str]:
@@ -1854,31 +1816,14 @@ def _last_assistant_text_full(transcript_path: Optional[str]) -> Optional[str]:
     GH #152 claim-scan (`_extract_claimed_task_ids`), which needs to see the whole reply —
     a 280-char summary could cut off a task id it must check. Returns None if nothing
     usable is found."""
-    last_text: Optional[str] = None
-    for rec in _iter_transcript_records(transcript_path):
-        if rec.get("type") == "assistant" or rec.get("role") == "assistant":
-            msg = rec.get("message") if isinstance(rec.get("message"), dict) else rec
-            content = msg.get("content")
-            text = None
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                parts = [b.get("text") for b in content
-                         if isinstance(b, dict) and b.get("type") == "text" and b.get("text")]
-                text = " ".join(parts).strip() or None
-            if text:
-                last_text = text
-    if not last_text:
-        return None
-    return " ".join(last_text.split())
+    return _cli_transcript.last_assistant_text(transcript_path)
 
 
 def _focus_from_transcript(transcript_path: Optional[str]) -> Optional[str]:
     """Best-effort current_focus: the worker's LAST assistant text turn, condensed to
     one line. These are the agent's OWN words (we extract, never synthesize) so the
     fallback digest stays agent-grounded. Returns None if nothing usable is found."""
-    text = _last_assistant_text_full(transcript_path)
-    return text[:280] if text is not None else None
+    return _cli_transcript.focus_from_transcript(transcript_path)
 
 
 # ---- GH #152: hard-fail a hallucinated task-creation claim ----------------------------
@@ -2224,145 +2169,36 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         return
 
 
-_SELF_WAKE_DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhSMH]?)\s*$")
-
-
 def _parse_self_wake_delay(raw: str) -> int:
-    m = _SELF_WAKE_DURATION_RE.match(raw or "")
-    if not m:
-        raise SystemExit("error: --in must look like 90s, 10m, or 2h")
-    n = int(m.group(1))
-    unit = (m.group(2) or "s").lower()
-    multiplier = {"s": 1, "m": 60, "h": 3600}[unit]
-    secs = n * multiplier
-    if secs < 60:
-        raise SystemExit("error: self-wake delay must be at least 60 seconds")
-    if secs > 86_400:
-        raise SystemExit("error: self-wake delay must be no more than 24 hours")
-    return secs
+    return _cli_lifecycle.parse_self_wake_delay(raw)
 
 
 def _read_project_api_base(cwd: pathlib.Path) -> str:
-    config_path = cwd / ".claude" / "orcha.json"
-    if not config_path.exists():
-        sys.exit(
-            "error: no .claude/orcha.json in CWD. Run from an Orcha project, or connect this "
-            "folder with `orcha connect`."
-        )
-    config = json.loads(config_path.read_text())
-    api_base = config.get("api_base_url")
-    if not api_base:
-        sys.exit("error: api_base_url missing from .claude/orcha.json")
-    return api_base.rstrip("/")
+    return _cli_lifecycle.read_project_api_base(cwd)
 
 
 def _self_wake_request(url: str, *, method: str, body: Optional[dict] = None) -> dict:
-    import urllib.error
-    import urllib.request
-
-    token = os.environ.get("ORCHA_RUN_TOKEN")
-    if not token:
-        sys.exit("error: self-wake is work-lane only and needs ORCHA_RUN_TOKEN")
-    headers = {"X-Orcha-Run-Token": token}
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        sys.exit(f"error: HTTP {e.code} from {url}\n{e.read().decode(errors='replace')}")
-    except urllib.error.URLError as e:
-        sys.exit(f"error: cannot reach {url} — is the stack up? ({e.reason})")
+    return _cli_lifecycle.self_wake_request(url, method=method, body=body)
 
 
 def cmd_self_wake(args: argparse.Namespace) -> None:
     """GH #122: schedule or cancel a one-shot task resume wake for the acting work agent."""
-    if os.environ.get("ORCHA_CONVERSATION_WORKER"):
-        sys.exit("error: self-wake is for work-lane task workers, not conversation workers")
-    cwd = pathlib.Path.cwd()
-    binding = _require_any_binding(cwd, args.alias, verb="orcha self-wake")
-    agent_id = binding["agent_id"]
-    api_base = _read_project_api_base(cwd)
-
-    if args.all and args.cancel_task_id is None:
-        sys.exit("error: --all is only valid with --cancel")
-    cancelling = args.cancel_task_id is not None
-    if cancelling:
-        task_id = args.cancel_task_id or args.task_id
-        if args.all:
-            query = urlencode({"all": "true"})
-        else:
-            if not task_id:
-                sys.exit("error: pass a task id with --cancel, or use --all")
-            query = urlencode({"task_id": task_id})
-        data = _self_wake_request(
-            f"{api_base}/api/agents/{agent_id}/self-wake?{query}", method="DELETE")
-        print(f"cancelled {data.get('deleted', 0)} scheduled wake(s)")
-        return
-
-    if not args.task_id:
-        sys.exit("error: task_id is required")
-    if not args.delay:
-        sys.exit("error: --in is required")
-    context = (args.context or "").strip()
-    if not context:
-        sys.exit("error: --context must be non-empty")
-    delay_secs = _parse_self_wake_delay(args.delay)
-    data = _self_wake_request(
-        f"{api_base}/api/agents/{agent_id}/self-wake",
-        method="POST",
-        body={"task_id": args.task_id, "delay_secs": delay_secs, "context": context},
+    _cli_lifecycle.self_wake_command(
+        args,
+        require_binding=_require_any_binding,
+        parse_delay=_parse_self_wake_delay,
+        read_api_base=_read_project_api_base,
+        request=_self_wake_request,
     )
-    print(f"scheduled one-shot wake for {data.get('resume_at', '?')}. Exit now instead of polling.")
 
 
 def _lifecycle_call(container_id: Optional[str], new_status: str, verb: str) -> None:
-    """Shared helper for pause/resume/stop: POST /api/containers/{cid}/status.
-
-    The portal API (Orcha#30) now requires actor_agent_id and enforces
-    kind='human'. We resolve the acting human from $ORCHA_ALIAS or the single
-    binding file under .claude/orcha-tabs/ — see _resolve_human_agent_id.
-    """
-    cwd = pathlib.Path.cwd()
-    config_path = cwd / ".claude" / "orcha.json"
-    if not config_path.exists():
-        sys.exit(
-            "error: no .claude/orcha.json in CWD. cd to your project root (the dir where "
-            "`orcha init` was run), or use a slash skill from inside Claude Code."
-        )
-    config = json.loads(config_path.read_text())
-    api_base = config.get("api_base_url")
-    if not api_base:
-        sys.exit("error: api_base_url missing from .claude/orcha.json — re-init with `orcha init --force`?")
-    cid = container_id or config.get("current_container_id")
-    if not cid:
-        sys.exit(
-            "error: no container_id given and no current_container_id in .claude/orcha.json. "
-            f"Pass it as: `orcha {verb} <container_id>`."
-        )
-    actor_agent_id = _resolve_human_agent_id(cwd)
-
-    import urllib.error
-    import urllib.request
-
-    url = f"{api_base}/api/containers/{cid}/status"
-    body = json.dumps({"status": new_status, "actor_agent_id": actor_agent_id}).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": "application/json"},
+    _cli_lifecycle.lifecycle_call(
+        container_id,
+        new_status,
+        verb,
+        resolve_human_agent_id=_resolve_human_agent_id,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        sys.exit(f"error: HTTP {e.code} from {url}\n{e.read().decode(errors='replace')}")
-    except urllib.error.URLError as e:
-        sys.exit(f"error: cannot reach {url} — is the stack up? ({e.reason})")
-
-    print(f"container {cid}: {data.get('from', '?')} → {data.get('status', '?')}")
 
 
 def cmd_pause(args: argparse.Namespace) -> None:
