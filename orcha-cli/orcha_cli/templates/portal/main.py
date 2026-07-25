@@ -62,7 +62,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import psycopg
-from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
@@ -70,8 +70,45 @@ from fastapi.responses import (
     JSONResponse,
     StreamingResponse,
 )
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from portal_backend.attachment_config import (
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_EXTRACTED_TEXT_CHARS,
+    configure_compatibility as _configure_attachment_compatibility,
+)
+from portal_backend.attachment_references import (
+    attachment_ref as _attachment_ref,
+    attachment_ref_for as _attachment_ref_for,
+    conv_attachment_ref as _conv_attachment_ref,
+    conversation_attachments_dir as _conversation_attachments_dir,
+    render_attachment_feed_line as _render_attachment_feed_line,
+    resolve_stored_attachment as _resolve_stored_attachment,
+    resolve_stored_conv_attachment as _resolve_stored_conv_attachment,
+    task_attachments_dir as _task_attachments_dir,
+    validate_attachment_refs as _validate_attachment_refs,
+    validate_conv_attachment_refs as _validate_conv_attachment_refs,
+    validate_refs_in as _validate_refs_in,
+)
+from portal_backend.attachment_storage import (
+    ATTACHMENT_INLINE_EXT as _ATTACHMENT_INLINE_EXT,
+    ATTACHMENT_TYPES as _ATTACHMENT_TYPES,
+    SAFE_STORED_NAME as _SAFE_STORED_NAME,
+    attachment_content_type as _attachment_content_type,
+    attachment_ext as _attachment_ext,
+    attachment_extracted_text as _attachment_extracted_text,
+    attachment_kind as _attachment_kind,
+    attachment_text_cache_path as _attachment_text_cache_path,
+    contained_path as _contained_path,
+    read_cached_attachment_text as _read_cached_attachment_text,
+    resolve_stored_in as _resolve_stored_in,
+    sanitize_attachment_name as _sanitize_attachment_name,
+    write_cached_attachment_text as _write_cached_attachment_text,
+)
+from portal_backend.application import (
+    app,
+    no_store_dynamic_responses as _no_store_dynamic_responses,
+)
 from portal_backend.database import DB, db_cursor, run_migrations
 from portal_backend.agent_status import (
     bump_agent,
@@ -85,6 +122,30 @@ from portal_backend.events import (
     poke_path_forward as _poke_path_forward,
     publish_event as _publish_event,
     wait_for_event as _wait_for_event,
+)
+from portal_backend.event_acknowledgement import (
+    _ack_events_handled,
+    _recompute_delivered_floor,
+)
+from portal_backend.event_policy import (
+    _NON_WAKING_EVENTS,
+    _RESIDENT_DRAIN_AUDIT_EVENTS,
+    _TIER0_FYI_EVENTS,
+    _WORK_NON_WAKING_EVENTS,
+    _triage_hint_for,
+)
+from portal_backend.drain_classification import (
+    _DRAIN_DIRECTIVE,
+    _DRAIN_FYI,
+    _DRAIN_NEW_WORK,
+    _DRAIN_NON_WAKING,
+    _DRAIN_RUN_ACKABLE,
+    _DRAIN_TASK_BOUND,
+    _DRAIN_TASKLESS_ACTIONABLE,
+    _DRAIN_TASK_SCOPED,
+    _drain_class,
+    _drain_task_status,
+    _is_cross_task_drain_row,
 )
 from portal_backend.guards import (
     agent_participates_in_task as _agent_participates_in_task,
@@ -110,6 +171,57 @@ from portal_backend.limits import (
     MAX_SELF_WAKE_CONTEXT_LEN,
     MAX_TURN_LEN,
 )
+from portal_backend.model_policy import (
+    AVAILABLE_MODELS,
+    AVAILABLE_REASONING_EFFORTS,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    MODELS_BY_ID as _MODELS_BY_ID,
+    MODEL_IDS as _MODEL_IDS,
+    REASONING_EFFORT_IDS as _REASONING_EFFORT_IDS,
+    resolve_reasoning_effort,
+)
+from portal_backend.provider_keys import (
+    container_llm_key as _container_llm_key,
+    effective_use_case_provider as _effective_use_case_provider,
+    provider_api_key as _provider_api_key,
+    provider_key_enc as _provider_key_enc,
+    provider_stored_row as _provider_stored_row,
+)
+from portal_backend.notification_formatting import (
+    _classify_notification,
+    _notification_origin_order,
+    _notification_rank,
+    _notification_surface,
+)
+from portal_backend.notification_taxonomy import (
+    _NOTIF_ACTOR_FIELDS,
+    _NOTIF_PREVIEW_FIELDS,
+    _NOTIF_PRI_ANSWER,
+    _NOTIF_PRI_CLOSE,
+    _NOTIF_PRI_HUMAN_CONVO,
+    _NOTIF_PRI_INTERRUPT,
+    _NOTIF_PRI_OWN_WORK,
+    _NOTIF_PRI_REQUEST_IN,
+    _NOTIF_PRI_TASK,
+    _NOTIF_PRI_UNKNOWN,
+    _NOTIF_PRIORITY_LADDER,
+    _NOTIF_PRIORITY_TO_LABEL,
+    _NOTIF_PRIORITY_TO_RANK,
+    _NOTIF_SUPPRESSED,
+    _NOTIF_TAXONOMY,
+    _WAKE_NOTIFICATION_MANIFEST_LIMIT,
+)
+from portal_backend.request_ownership import (
+    STALE_ANSWERED_SECS,
+    _annotate_request_ownership,
+)
+from portal_backend.static_pages import (
+    STATIC_DIR as _STATIC_DIR,
+    missing_static_page as _missing_static_page,
+    serve_page as _serve,
+)
+from portal_backend.wake_manifest import _wake_notification_manifest
 from portal_backend.schemas.agent_state import (
     AgentModelUpdate,
     AgentReasoningEffortUpdate,
@@ -220,6 +332,13 @@ PAIRING_TOKEN_EXCHANGE_FOLLOWUP = {
     "endpoint": "POST /api/pair/device-token",
     "note": "Mobile device-token exchange/auth is not implemented in this slice.",
 }
+ATTACHMENTS_DIR = pathlib.Path(
+    os.environ.get("ORCHA_ATTACHMENTS_DIR", "/app/orcha-attachments")
+)
+_configure_attachment_compatibility(
+    lambda: ATTACHMENTS_DIR,
+    lambda: MAX_ATTACHMENT_BYTES,
+)
 
 # ---------- Phase 3 / Orcha#5 + Orcha#25: durable DB-backed event bus ----------
 # This was an in-process ring buffer (_event_buf): events published while no
@@ -237,113 +356,6 @@ PAIRING_TOKEN_EXCHANGE_FOLLOWUP = {
 # container SSE still observes agent-addressed events.
 
 
-# ---------- static HTML loader (review #7) ----------
-# Each dashboard page used to be a ~500-line triple-quoted constant in this
-# file. They now live in portal/static/*.html, read once at import time and
-# cached. The route handlers below call _serve(name) instead of returning the
-# constant directly.
-_STATIC_DIR = pathlib.Path(__file__).parent / "static"
-_HTML_CACHE: dict[str, str] = {}
-
-
-def _serve(name: str) -> HTMLResponse:
-    # Issue #13: if portal/static/ (or a single page) is missing, the project's
-    # stack predates PR #10 (when the dashboard HTML moved out of main.py into
-    # static/). A browser hitting /requests would otherwise get a bare 500 /
-    # FileNotFoundError with no clue what to do. Instead, render a styled,
-    # actionable page (503 — the server is up but mis-provisioned) that names
-    # the exact fix. This is what makes #13 "loads with a clear message"
-    # instead of "white screen / raw 500".
-    if name not in _HTML_CACHE:
-        path = _STATIC_DIR / name
-        if not path.is_file():
-            dir_missing = not _STATIC_DIR.is_dir()
-            cause = (
-                "the portal/static/ directory is missing entirely"
-                if dir_missing
-                else f"portal/static/{name} is missing"
-            )
-            return HTMLResponse(_missing_static_page(name, cause), status_code=503)
-        _HTML_CACHE[name] = path.read_text(encoding="utf-8")
-    return HTMLResponse(_HTML_CACHE[name])
-
-
-def _missing_static_page(name: str, cause: str) -> str:
-    # Self-contained (no external CSS/JS — those are the files that are missing)
-    # error page, themed to match the dashboard so it doesn't look like a crash.
-    return f"""<!doctype html>
-<html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width, initial-scale=1">
-<title>Orcha · portal not provisioned</title>
-<style>
-  body{{margin:0;min-height:100vh;display:grid;place-items:center;
-    background:#0b0e14;color:#e6ebf5;
-    font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial}}
-  .card{{max-width:640px;margin:24px;padding:28px 30px;background:#141925;
-    border:1px solid #263149;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.35)}}
-  h1{{margin:0 0 6px;font-size:20px}}
-  .sub{{color:#fbbf24;font-weight:600;margin-bottom:18px}}
-  p{{color:#8a97b1;margin:10px 0}}
-  code,pre{{font:13px ui-monospace,SFMono-Regular,Menlo,monospace}}
-  pre{{background:#0b0e14;border:1px solid #263149;border-radius:10px;
-    padding:12px 14px;overflow-x:auto;color:#e6ebf5}}
-  .muted{{color:#5b6680;font-size:13px;margin-top:18px}}
-</style></head><body>
-<div class=card>
-  <h1>Portal not fully provisioned</h1>
-  <div class=sub>Static page <code>{name}</code> couldn&#39;t be served</div>
-  <p>The API is running, but {cause}. This <code>.orcha/</code> stack most
-     likely predates PR&nbsp;#10, when the dashboard HTML moved out of
-     <code>main.py</code> into <code>portal/static/</code>.</p>
-  <p>Fix it from this project root:</p>
-  <pre>uv tool install --reinstall --from &lt;repo&gt;/orcha-cli orcha-cli
-orcha down -v &amp;&amp; orcha init</pre>
-  <p class=muted>After re-init, reload this page (a hard refresh clears any
-     cached old bundle). — Orcha #13</p>
-</div></body></html>"""
-
-
-app = FastAPI(title="Orcha API", version="0.6.0")
-
-# D0 (portal redesign): serve the shared design-system assets (styles.css, app.js,
-# and any future D-series static files) from portal/static at /assets. Read per
-# request — unlike the import-time _HTML_CACHE pages, asset edits show up without a
-# restart, which keeps D1-D6 iteration fast. A mount (not an @app route), so it is
-# not part of the Swagger/OpenAPI API surface (static assets aren't API routes).
-# Mount ONLY when portal/static/ exists: a mis-provisioned old stack (#13) must still
-# BOOT and _serve() its styled "run orcha up" 503. Without the dir we skip the mount
-# entirely, so /assets/* is a harmless 404 — not an import crash (check_dir=True) nor a
-# runtime 500 (Starlette's lazy check_config on a missing dir). check_dir=False guards
-# the slim race where the dir vanishes after this check.
-if _STATIC_DIR.is_dir():
-    app.mount(
-        "/assets",
-        StaticFiles(directory=str(_STATIC_DIR), check_dir=False),
-        name="assets",
-    )
-
-
-@app.middleware("http")
-async def _no_store_dynamic_responses(request, call_next):
-    """#140 (onboarding 'ghost'): after a workspace reset the portal could still show an
-    agent that no longer exists until a HARD refresh. One contributor (the issue names
-    three) is the **browser HTTP cache**: the portal HTML shells and the live `/api/*`
-    JSON carried NO cache headers, so a soft refresh could re-render a cached onboarding
-    success screen / stale roster instead of re-fetching live state.
-
-    Mark every dynamic response `no-store` so the browser always revalidates against the
-    DB on reload. Scope = the HTML page shells (content-type text/html, incl. the #13 503)
-    + all `/api/*` responses (JSON snapshots and the SSE event stream, which must never be
-    cached anyway). URL-versioned `/assets/*` (css/js) are intentionally left cacheable —
-    asset staleness is a separate, restart-driven concern, not the reset ghost. This is the
-    infra half of #140; clearing the SPA's own client state on reset stays frontend-owned."""
-    response = await call_next(request)
-    ctype = response.headers.get("content-type", "")
-    if request.url.path.startswith("/api/") or ctype.startswith("text/html"):
-        response.headers["Cache-Control"] = "no-store"
-    return response
-
-
 ALLOWED_CONTAINER_STATUSES = {"active", "paused", "completed", "cancelled", "failed"}
 
 # The full request lifecycle vocabulary (requests.status, free TEXT — see
@@ -359,43 +371,9 @@ REQUEST_STATUSES = {
     "closed",
 }
 
-# D7: the curated model list the create-agent dropdown renders. There is no live
-# "list models" API from the CLI, so this is a maintained constant ({id, name}).
-# The selected id is persisted on agents.model; B8 adds the picker UI + the
-# `--model` launch (notifier spawns the worker with the chosen model). `runtime`
-# names the local coding-agent CLI that can actually run the model.
-AVAILABLE_MODELS = [
-    {"id": "claude-opus-5", "name": "Opus 5", "runtime": "claude"},
-    # Fable 5 is a LIMITED-AVAILABILITY model (offered only through 2026-06-22). Per-agent
-    # selection works while it's listed here; the moment this entry is removed, every agent
-    # that had chosen it auto-falls-back to DEFAULT_MODEL at spawn time (resolve_model below)
-    # with ZERO breakage — the persisted agents.model choice is left intact, so re-adding the
-    # entry restores it automatically. To retire Fable: just delete this one line.
-    {"id": "claude-fable-5", "name": "Fable 5", "runtime": "claude"},
-    {"id": "claude-sonnet-5", "name": "Sonnet 5", "runtime": "claude"},
-    {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5", "runtime": "claude"},
-    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "runtime": "codex"},
-    {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "runtime": "codex"},
-    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "runtime": "codex"},
-    {"id": "gpt-5.5", "name": "GPT-5.5", "runtime": "codex"},
-    {"id": "gpt-5.4", "name": "GPT-5.4", "runtime": "codex"},
-    {"id": "gpt-5.4-mini", "name": "GPT-5.4 mini", "runtime": "codex"},
-    {"id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark", "runtime": "codex"},
-]
-DEFAULT_MODEL = "claude-opus-5"
-_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
-_MODELS_BY_ID = {m["id"]: m for m in AVAILABLE_MODELS}
-
 
 def resolve_model(model: Optional[str]) -> str:
-    """Map a PERSISTED agents.model choice to the model id to actually spawn with.
-
-    The curated AVAILABLE_MODELS list is the single source of truth for what is spawnable
-    RIGHT NOW. A persisted choice that is no longer listed (a limited-availability model like
-    Fable 5 that has been retired, or an id from an older deploy) gracefully falls back to
-    DEFAULT_MODEL — so a removed model never reaches the `--model` argv and breaks the spawn.
-    The agent's stored choice is NOT mutated, so if the model is ever re-listed the agent picks
-    it back up. NULL (no choice / a future non-Claude platform) also resolves to the default."""
+    """Compatibility seam for tests that temporarily retire a model."""
     return model if model in _MODEL_IDS else DEFAULT_MODEL
 
 
@@ -407,773 +385,6 @@ def resolve_model_runtime(model: Optional[str]) -> str:
     Claude-backed, while Codex model selections tell the host daemon to spawn Codex.
     """
     return _MODELS_BY_ID.get(resolve_model(model), {}).get("runtime", "claude")
-
-
-# GH #51: per-agent reasoning effort. The id is the level passed straight to the worker —
-# `claude --effort <id>` (low|medium|high|xhigh|max) and, for Codex agents, mapped to
-# `-c model_reasoning_effort=<...>`. Curated like AVAILABLE_MODELS so an unknown/retired
-# persisted value gracefully resolves to DEFAULT_REASONING_EFFORT and never breaks a spawn.
-# NULL means "no explicit effort flag"; preserve it so the runtime's own default remains in charge.
-AVAILABLE_REASONING_EFFORTS = [
-    {"id": "low", "name": "Low"},
-    {"id": "medium", "name": "Medium"},
-    {"id": "high", "name": "High"},
-    {"id": "xhigh", "name": "Extra-high"},
-]
-DEFAULT_REASONING_EFFORT = "medium"
-_REASONING_EFFORT_IDS = {e["id"] for e in AVAILABLE_REASONING_EFFORTS}
-
-
-def resolve_reasoning_effort(effort: Optional[str]) -> Optional[str]:
-    """Map a PERSISTED agents.reasoning_effort choice to the level to actually spawn with.
-    NULL (no choice) stays NULL so no worker argv is emitted. Unknown/stale values resolve to
-    DEFAULT_REASONING_EFFORT so bad data never reaches the worker argv. The stored choice is left
-    intact."""
-    if effort is None:
-        return None
-    return effort if effort in _REASONING_EFFORT_IDS else DEFAULT_REASONING_EFFORT
-
-
-# Validation limits live with the request/response schemas in portal_backend.limits.
-# ISS-58: self-echo / notification events that must NEVER by themselves wake an agent. The C1
-# digest snapshot emits `digest_snapshotted` (a dashboard notification, not actionable work); when
-# it was delivered to the agent's OWN key it self-woke the agent in a ~60s loop (the wake spawns a
-# worker → SessionEnd snapshots → republishes → re-wakes). The publish is now container-scoped
-# (target=NULL), and wake-scan also excludes these names from its should_wake count as a backstop.
-_NON_WAKING_EVENTS = ("digest_snapshotted",)
-# GH #91/#90: the WORK lane must NOT wake on a bare `conversation_turn`. A conversation_turn is the
-# conversation lane's own actionable surface (the resident chat responds to it); after the lane
-# split it must not by itself count as work-lane pending, or every human chat message would boot a
-# WORK embodiment. The work pending-count / latest-event / max_ts consumption use this widened set;
-# the conversation lane still wakes on conversation_turn via its own (unchanged) path.
-_WORK_NON_WAKING_EVENTS = _NON_WAKING_EVENTS + ("conversation_turn",)
-# ISS-75 (#188) / ISS-77 (#200): the SOLE event that must NOT, on its own, trigger a RESIDENT
-# inbox-drain. `request_closed` is SELF-ECHOING: when the resident drains and closes a request, the
-# close emits a NEW `request_closed` event → re-counts as pending_inbox → re-drains → the #185
-# runaway (a turn burned every tick). It carries no drain surface, so excluding it loses nothing.
-# ISS-77 CORRECTION: `request_answered` was ALSO excluded here, which stranded a resident whose
-# request got answered — it never woke to act on the answer. But `request_answered` does NOT
-# self-echo (acting on an answer doesn't emit another `request_answered`), so it is a genuine
-# "my request was answered → wake + act" signal and MUST count toward the drain. It is no longer
-# excluded. The exclusion is scoped to the resident drain count ONLY — the ephemeral one-shot wake
-# path (gated by _NON_WAKING_EVENTS, digest_snapshotted only) still wakes on request_closed too
-# (a worker resumes a parent then EXITS, so it can't loop). Mirrors ISS-58.
-# `request_created` (a NEW incoming request TO the resident) is NOT here — it is real, actionable work.
-_RESIDENT_DRAIN_AUDIT_EVENTS = ("request_closed",)
-# #288 wake-suppression: terminal / FYI event types whose LONE, BARE delivery is a "no-action"
-# wake — the recipient would spawn an ephemeral worker only to find nothing to do. wake-scan
-# uses this set (plus `request_answered`, handled by LLM triage) to attach a `triage_hint` to a
-# candidate; the notifier daemon makes the actual suppress decision and ALWAYS fails open (any
-# error/ambiguity wakes). Per Helm's bareness rule, a human comment riding on any of these flips
-# it from a silent structural skip to LLM triage — never a silent drop of human-authored content.
-_TIER0_FYI_EVENTS = ("request_closed", "task_verified", "agent_suggestion_decided")
-
-
-def _triage_hint_for(event_name, payload, *, full_answer=None):
-    """#288: classify a single pending event into a wake-suppression *hint*, or return None when
-    the event must always wake (the conservative default).
-
-    Returns ``{tier, event_name, bare, request_id, text}``:
-      - ``tier='structural'`` — a BARE terminal/FYI event: the daemon skips the spawn
-        deterministically ($0, no LLM). ``request_id`` stays None (nothing to auto-close).
-      - ``tier='llm'`` — feed ``text`` to ``llm_util.triage_wake`` (which fails open to wake).
-        For ``request_answered`` this is the answer text and ``request_id`` is set so a pure-ack
-        verdict auto-closes the request. For a structural FYI that CARRIES a human note
-        (Helm's bareness rule) the note is triaged instead of being silently skipped.
-
-    Only ever called for a candidate whose ONLY pending signal is this one event (pending==1, no
-    ready task, no directed message) — so suppressing it cannot hide other actionable work."""
-    payload = payload or {}
-    if event_name == "request_answered":
-        # the AMBIGUOUS case: an answer always carries text, so the LLM decides ack-vs-follow-up.
-        # #307 T2: if it IS a pure ack, the routine next-hop is to CLOSE the request — a cheap
-        # write the daemon can do on the 'ack' substrate instead of a full embodiment. The `t2`
-        # tag rides alongside `tier` (the suppress path ignores it); the graded-wake decider only
-        # consults it when the cheap rules DON'T already suppress.
-        return {
-            "tier": "llm",
-            "event_name": event_name,
-            "bare": False,
-            "request_id": payload.get("request_id"),
-            "text": (full_answer or payload.get("preview") or ""),
-            "t2": {"action": "ack_close", "request_id": payload.get("request_id")},
-        }
-    if event_name == "request_closed":
-        # a human force-close ROUTES its reason as a SEPARATE prompt event (pending would be >1),
-        # so a lone request_closed is always bare. Nothing to auto-close (already closed).
-        return {
-            "tier": "structural",
-            "event_name": event_name,
-            "bare": True,
-            "request_id": None,
-            "text": "",
-        }
-    if event_name == "task_verified":
-        if payload.get("approved") is not True:
-            return None  # a REJECTED verify is a rework signal — always wake
-        feedback = (payload.get("feedback") or "").strip()
-        if not feedback:
-            return {
-                "tier": "structural",
-                "event_name": event_name,
-                "bare": True,
-                "request_id": None,
-                "text": "",
-            }
-        # approved WITH a verifier note → triage the note (bareness rule), don't silently skip.
-        # #307 T2: an APPROVAL's only routine next-hop is acknowledging the note on the task
-        # thread — a cheap write, no full boot. Tag it so the graded-wake decider can route the
-        # ack to the 'ack' substrate when it would otherwise spend a full embodiment.
-        return {
-            "tier": "llm",
-            "event_name": event_name,
-            "bare": False,
-            "request_id": None,
-            "text": feedback,
-            "t2": {"action": "ack_verify", "task_id": payload.get("task_id")},
-        }
-    if event_name == "agent_suggestion_decided":
-        if payload.get("kind") != "refuse":
-            return None  # create/reassign → a new agent/target now owns it; requester should wake
-        reason = (payload.get("reason") or "").strip()
-        if not reason:
-            return {
-                "tier": "structural",
-                "event_name": event_name,
-                "bare": True,
-                "request_id": None,
-                "text": "",
-            }
-        return {
-            "tier": "llm",
-            "event_name": event_name,
-            "bare": False,
-            "request_id": None,
-            "text": reason,
-        }
-    return None
-
-
-# ---------- #247 KEYSTONE: typed notification registry (classify-over-the-bus) ----------
-# The durable bus (agent_events) is ALREADY a per-recipient stream — rows keyed on the target
-# agent's id, indexed (event_key, ts, id). What it LACKS is a typed taxonomy, a priority/ranking,
-# and per-recipient read-state. The #247 registry supplies those by laying a typed classifier +
-# a read-cursor + a read-API OVER the existing bus — NOT a parallel notifications table (events
-# already persist atomically with their cause; a dual-write would only re-introduce drift).
-# Classification is PURE and happens at READ time, so wake/notifier behaviour is unchanged.
-#
-# Each notification carries two ORTHOGONAL axes:
-#   * zone     — SPEC-3 visual grouping: 'needs_you' (actionable) vs 'earlier' (informational).
-#                The canonical NEEDS-YOU surface stays sourced from live attnItems(); this zone
-#                is a high-signal hint a consumer MAY use to pull an item up.
-#   * priority — a numeric DRAIN rank for the downstream wake-boot router, ordered to the locked
-#                #247 contract ladder (Helm sign-off), highest first:
-#                  interrupt/stop > approval|rejection-on-own-work > live human convo
-#                  > task-assignment|thread-msg > request-in > answer-to-request > human close/cancel
-#                Lower int = higher priority; gaps leave room for future rungs. The canonical drain
-#                order is `ORDER BY priority ASC, ts ASC` — DOCUMENTED here; the actual drain-then-park
-#                wake-boot BEHAVIOUR is the downstream D task, NOT wired in this keystone.
-_NOTIF_PRI_INTERRUPT = 0  # a directed interrupt / nudge injected into my turn
-_NOTIF_PRI_OWN_WORK = (
-    10  # an approve / reject / decision on work or an ask that is MINE
-)
-_NOTIF_PRI_HUMAN_CONVO = 20  # a human needs me / an escalation surfaced to the operator
-_NOTIF_PRI_TASK = 30  # task assignment / readiness / thread message
-_NOTIF_PRI_REQUEST_IN = 40  # a fresh incoming request from another agent
-_NOTIF_PRI_ANSWER = 50  # a request of mine was answered
-_NOTIF_PRI_CLOSE = 60  # a request of mine was closed / cancelled
-_NOTIF_PRI_UNKNOWN = 90  # an event_name with no taxonomy entry (graceful degrade)
-
-_NOTIF_PRIORITY_LADDER = [
-    (_NOTIF_PRI_INTERRUPT, "interrupt"),
-    (_NOTIF_PRI_OWN_WORK, "own_work"),
-    (_NOTIF_PRI_HUMAN_CONVO, "human_conversation"),
-    (_NOTIF_PRI_TASK, "task"),
-    (_NOTIF_PRI_REQUEST_IN, "request_in"),
-    (_NOTIF_PRI_ANSWER, "answer"),
-    (_NOTIF_PRI_CLOSE, "close"),
-    (_NOTIF_PRI_UNKNOWN, "unknown"),
-]
-_NOTIF_PRIORITY_TO_RANK = {
-    priority: i + 1 for i, (priority, _label) in enumerate(_NOTIF_PRIORITY_LADDER)
-}
-_NOTIF_PRIORITY_TO_LABEL = dict(_NOTIF_PRIORITY_LADDER)
-_WAKE_NOTIFICATION_MANIFEST_LIMIT = 20
-
-# event_name -> static classification. `request_created` is resolved DYNAMICALLY (its rung
-# depends on whether the requester is a human), so it is handled in _classify_notification, not
-# here. `link_kind`/`link_field` name the entity the panel row deep-links to and the payload
-# field carrying its id.
-_NOTIF_TAXONOMY = {
-    "prompt": {
-        "type": "directed",
-        "zone": "needs_you",
-        "priority": _NOTIF_PRI_INTERRUPT,
-        "link_kind": None,
-        "link_field": None,
-    },
-    "task_verified": {
-        "type": "task_verified",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_OWN_WORK,
-        "link_kind": "task",
-        "link_field": "task_id",
-    },
-    "task_request_rejected": {
-        "type": "agent_blocked",
-        "zone": "needs_you",
-        "priority": _NOTIF_PRI_OWN_WORK,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-    "task_request_accepted": {
-        "type": "request_answered",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_OWN_WORK,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-    "agent_suggestion_decided": {
-        "type": "plan_decided",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_OWN_WORK,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-    "decision_made": {
-        "type": "plan_decided",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_OWN_WORK,
-        "link_kind": "decision",
-        "link_field": "decision_id",
-    },
-    "request_escalated": {
-        "type": "escalation",
-        "zone": "needs_you",
-        "priority": _NOTIF_PRI_HUMAN_CONVO,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-    "agent_suggested": {
-        "type": "agent_suggested",
-        "zone": "needs_you",
-        "priority": _NOTIF_PRI_HUMAN_CONVO,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-    "task_assigned": {
-        "type": "task_assigned",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_TASK,
-        "link_kind": "task",
-        "link_field": "task_id",
-    },
-    "task_ready": {
-        "type": "task_ready",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_TASK,
-        "link_kind": "task",
-        "link_field": "task_id",
-    },
-    "task_message": {
-        "type": "task_message",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_TASK,
-        "link_kind": "task",
-        "link_field": "task_id",
-    },
-    "task_unassigned": {
-        "type": "task_unassigned",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_TASK,
-        "link_kind": "task",
-        "link_field": "task_id",
-    },
-    "request_answered": {
-        "type": "request_answered",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_ANSWER,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-    "request_closed": {
-        "type": "request_closed",
-        "zone": "earlier",
-        "priority": _NOTIF_PRI_CLOSE,
-        "link_kind": "request",
-        "link_field": "request_id",
-    },
-}
-
-# event_names that must NEVER surface as an operator notification: the self-echo dashboard ping
-# (digest_snapshotted, container-scoped so it doesn't even reach an agent key — suppressed defensively)
-# and the live-conversation channel (conversation_turn — that is the chat transcript, delivered to the
-# agent's OWN key, and is NOT a notification). The classifier returns None for these (dropped).
-_NOTIF_SUPPRESSED = ("digest_snapshotted", "conversation_turn")
-
-# payload fields carrying a short human-readable preview, in priority order.
-_NOTIF_PREVIEW_FIELDS = ("preview", "message", "reason", "feedback", "title")
-# payload fields carrying the acting agent's id, in priority order. Q2 (Helm sign-off): the actor is
-# resolved at READ time from these — NO ~25-site agent_events.actor_id backfill; a missing actor
-# degrades to None (SPEC-3 graceful-degrade covers it).
-_NOTIF_ACTOR_FIELDS = ("from_agent_id", "by_agent_id")
-
-
-def _classify_notification(event_name, payload, *, requester_is_human=False):
-    """Classify one bus row into a typed notification, or None to suppress it.
-
-    PURE (no DB) so it is exhaustively unit-testable. The route resolves the two read-time
-    inputs the static taxonomy can't see — `requester_is_human` (the request_created
-    human-convo-vs-request-in rung split) and the actor alias — and layers the read flag on top.
-
-    Returns ``{type, zone, priority, deeplink: {kind, id} | None, actor_ref, preview}`` or
-    ``None`` when the event must not appear in the feed.
-    """
-    payload = payload or {}
-    if event_name in _NOTIF_SUPPRESSED:
-        return None
-
-    if event_name == "request_created":
-        # A fresh incoming request addressed to me. A HUMAN requester is a live-human-convo rung
-        # (the operator is talking to me); an AGENT requester is the ordinary request-in rung.
-        if requester_is_human:
-            spec = {
-                "type": "escalation",
-                "zone": "needs_you",
-                "priority": _NOTIF_PRI_HUMAN_CONVO,
-                "link_kind": "request",
-                "link_field": "request_id",
-            }
-        else:
-            spec = {
-                "type": "request_created",
-                "zone": "needs_you",
-                "priority": _NOTIF_PRI_REQUEST_IN,
-                "link_kind": "request",
-                "link_field": "request_id",
-            }
-    else:
-        spec = _NOTIF_TAXONOMY.get(event_name)
-        if spec is None:
-            # graceful degrade (SPEC-3 presenceOf pattern): an unknown event_name still renders,
-            # typed by its raw name, parked at the bottom of the EARLIER zone — a new event type
-            # never breaks the panel.
-            spec = {
-                "type": event_name,
-                "zone": "earlier",
-                "priority": _NOTIF_PRI_UNKNOWN,
-                "link_kind": None,
-                "link_field": None,
-            }
-
-    deeplink = None
-    if spec["link_kind"]:
-        lid = payload.get(spec["link_field"])
-        if lid:
-            deeplink = {"kind": spec["link_kind"], "id": str(lid)}
-
-    actor_ref = None
-    for f in _NOTIF_ACTOR_FIELDS:
-        if payload.get(f):
-            actor_ref = str(payload[f])
-            break
-
-    preview = ""
-    for f in _NOTIF_PREVIEW_FIELDS:
-        v = payload.get(f)
-        if v:
-            preview = str(v)
-            break
-
-    # #359: a TASK-request (a teammate asking me to DO work) is the one request kind whose correct
-    # drain is "accept → spawn the task → work it", NOT "answer/defer to empty the inbox". The
-    # static taxonomy can't see it (request_created is one event_name for both info and task), so
-    # derive it from the payload `type` the create-route stamps on the bus event. The wake manifest
-    # surfaces this so build_wake_prompt can steer the worker into the work instead of deflecting it.
-    is_task_request = event_name == "request_created" and (
-        payload.get("type") == "task"
-    )
-
-    return {
-        "type": spec["type"],
-        "zone": spec["zone"],
-        "priority": spec["priority"],
-        "deeplink": deeplink,
-        "actor_ref": actor_ref,
-        "preview": preview,
-        "is_task_request": is_task_request,
-    }
-
-
-def _notification_rank(priority: int) -> int:
-    return _NOTIF_PRIORITY_TO_RANK.get(
-        priority, _NOTIF_PRIORITY_TO_RANK[_NOTIF_PRI_UNKNOWN]
-    )
-
-
-def _notification_origin_order(actor_kind: Optional[str]) -> int:
-    if actor_kind == "human":
-        return 0
-    if actor_kind == "ai":
-        return 1
-    return 2
-
-
-def _notification_surface(n: dict) -> str:
-    deeplink = n.get("deeplink") or {}
-    kind = deeplink.get("kind")
-    ident = deeplink.get("id")
-    if kind and ident:
-        return f"{kind}:{ident}"
-    return (n.get("type") or n.get("event_name") or "notification").replace("_", "-")
-
-
-# ---------- GH #58: drain classification + per-event handled-set (one run drains many) ----------
-# _classify_notification (above) answers "how does this row LOOK in the operator panel". _drain_class
-# answers the ORTHOGONAL wake question: "may the CURRENTLY-AWAKE run mark this pending event handled,
-# or must it leave it for a different/fresh ephemeral?" Every emitted event_name maps to exactly one
-# bucket, so nothing is implicitly "safe to ack":
-#   NON_WAKING          - self-echo / live-chat channel; never wakes, never counted (digest_snapshotted,
-#                         conversation_turn). Excluded from the pending set entirely.
-#   FYI                 - informational; no task-context reasoning needed, so ANY awake run acks it so
-#                         they don't pile up (task_unassigned, a broadcast task_ready, status_changed, an
-#                         APPROVED task_verified, a task_close / non-task decision_made, request_closed,
-#                         request_escalated, the task_request_* receipts, agent_suggested/-decided, and a
-#                         stale task_assigned whose task is already terminal/gone).
-#   TASKLESS_ACTIONABLE - needs reasoning but carries no task identity, so any awake run may drain it
-#                         (the resident yields to a protocol-bound ephemeral — docs/orcha-review-protocol
-#                         §5.2): prompt, an INFO request_created, a request_answered with no originating task.
-#   TASK_BOUND          - actioning it needs reasoning bound to a SPECIFIC task, so it is handled ONLY by a
-#                         run whose context == that task; a different-task run LEAVES IT PENDING:
-#                         task_message; a request_answered carrying originating_task_id (the #56 link); a
-#                         decision_made on a live non-terminal task subject (plan_approval, keyed on
-#                         subject_id — the thread mirror is NOT a task_message bus event, so this event is
-#                         the sole wake for "proceed/revise").
-#   NEW_WORK            - claiming/accepting it STARTS the work, so a drain NEVER acks it; it is consumed at
-#                         the /next CLAIM (or accept/reject seam): a task_assigned/task_ready on a `ready`
-#                         task; a request_created of type 'task'.
-#   DIRECTIVE           - a STATUS-SENSITIVE start/rework directive on an in_progress task: surfaced as the
-#                         assignee's wake reason but NOT acked by any drain — only at that worker's
-#                         clean-completion / terminal seam (/done, cancel, unassign): a task_assigned on an
-#                         in_progress task; a task_verified{approved:false} (a rejected verify is a rework
-#                         directive, never an FYI — FYI-acking it would clear the rework wake before the
-#                         restored assignee sees it).
-_DRAIN_NON_WAKING = "non_waking"
-_DRAIN_FYI = "fyi"
-_DRAIN_TASKLESS_ACTIONABLE = "taskless_actionable"
-_DRAIN_TASK_BOUND = "task_bound"
-_DRAIN_NEW_WORK = "new_work"
-_DRAIN_DIRECTIVE = "directive"
-# the run MAY ack these buckets in a single drain pass (FYI + taskless any run; task_bound only when its
-# task == the run context, decided in wake_scan). NEW_WORK/DIRECTIVE are acked at their own seams, never here.
-_DRAIN_RUN_ACKABLE = (_DRAIN_FYI, _DRAIN_TASKLESS_ACTIONABLE)
-# the buckets whose actioning is bound to a SPECIFIC task — a run may surface/handle one only when that
-# task IS the run context; otherwise it belongs to a different (or fresh) ephemeral and stays pending.
-_DRAIN_TASK_SCOPED = (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE)
-
-
-def _is_cross_task_drain_row(bucket, task_id, context_task_id) -> bool:
-    """GH #58 (R3): True when a pending row is task-scoped to a DIFFERENT task than this run's context,
-    so this run must neither surface nor ack it — it stays pending for that task's own protocol-bound
-    ephemeral. The SINGLE predicate behind both the directed-message filter (prompt_messages) and the
-    wake-manifest filter, so surfacing-via-message and surfacing-via-manifest can never disagree.
-    A task-less task-scoped row (e.g. a 'task' request_created with no task_id yet) is NOT cross-task —
-    any run may accept it."""
-    return bool(
-        bucket in _DRAIN_TASK_SCOPED
-        and task_id
-        and str(task_id) != str(context_task_id)
-    )
-
-
-def _drain_task_status(cur, task_id) -> Optional[str]:
-    """The current status of a task referenced by an event payload, or None if missing/gone/not-a-uuid."""
-    if not task_id or not _valid_uuid(str(task_id)):
-        return None
-    cur.execute("SELECT status FROM tasks WHERE id=%s", (str(task_id),))
-    row = cur.fetchone()
-    return row["status"] if row else None
-
-
-def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) -> dict:
-    """Classify one pending bus row into a drain bucket. Returns {"bucket": str, "task_id": id|None}.
-    `task_id` is set for TASK_BOUND / NEW_WORK(task) / DIRECTIVE so wake_scan can compare it against the
-    run's context task. See the bucket taxonomy above."""
-    payload = payload or {}
-    if event_name in _NON_WAKING_EVENTS or event_name == "conversation_turn":
-        return {"bucket": _DRAIN_NON_WAKING, "task_id": None}
-    if event_name == "task_message":
-        return {"bucket": _DRAIN_TASK_BOUND, "task_id": payload.get("task_id")}
-    if event_name == "prompt":
-        return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
-    if event_name == "request_answered":
-        otid = payload.get("originating_task_id")
-        if otid and _drain_task_status(cur, otid) is not None:
-            return {"bucket": _DRAIN_TASK_BOUND, "task_id": str(otid)}
-        return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
-    if event_name == "request_created":
-        rtype = payload.get("type")
-        if rtype is None:
-            rid = payload.get("request_id")
-            if rid and _valid_uuid(str(rid)):
-                cur.execute("SELECT type FROM requests WHERE id=%s", (str(rid),))
-                rr = cur.fetchone()
-                rtype = rr["type"] if rr else None
-        if rtype == "task":
-            return {
-                "bucket": _DRAIN_NEW_WORK,
-                "task_id": None,
-            }  # a TASK request → accept/reject seam
-        return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
-    if event_name == "task_assigned":
-        tid = payload.get("task_id")
-        st = _drain_task_status(cur, tid)
-        if st == "ready":
-            return {"bucket": _DRAIN_NEW_WORK, "task_id": str(tid)}
-        if st == "in_progress":
-            return {"bucket": _DRAIN_DIRECTIVE, "task_id": str(tid)}
-        return {
-            "bucket": _DRAIN_FYI,
-            "task_id": None,
-        }  # pending/terminal/gone → informational
-    if event_name == "task_ready":
-        if target_id is None:
-            return {
-                "bucket": _DRAIN_FYI,
-                "task_id": None,
-            }  # container-wide availability ping
-        tid = payload.get("task_id")
-        st = _drain_task_status(cur, tid)
-        if st in (None, "completed", "cancelled"):
-            return {"bucket": _DRAIN_FYI, "task_id": None}
-        return {
-            "bucket": _DRAIN_NEW_WORK,
-            "task_id": str(tid),
-        }  # assigned+targeted readiness → claim
-    if event_name == "task_verified":
-        if payload.get("approved") is False:
-            return {
-                "bucket": _DRAIN_DIRECTIVE,
-                "task_id": payload.get("task_id"),
-            }  # rework directive
-        return {"bucket": _DRAIN_FYI, "task_id": None}
-    if event_name == "decision_made":
-        st, sid = payload.get("subject_type"), payload.get("subject_id")
-        if (
-            st == "plan_approval"
-            and sid
-            and _drain_task_status(cur, sid) not in (None, "completed", "cancelled")
-        ):
-            return {"bucket": _DRAIN_TASK_BOUND, "task_id": str(sid)}
-        return {
-            "bucket": _DRAIN_FYI,
-            "task_id": None,
-        }  # task_close / request / checkpoint / dummy subject
-    # task_unassigned, status_changed, request_closed/escalated, task_request_*, agent_suggested/-decided,
-    # and any unknown event_name (graceful degrade) → FYI: any awake run may ack it.
-    return {"bucket": _DRAIN_FYI, "task_id": None}
-
-
-def _recompute_delivered_floor(cur, aid: str) -> float:
-    """GH #58: advance agent_wake_state.delivered_ts to the CONTIGUOUS floor — the ts just below the
-    OLDEST still-unhandled WAKING event past the cursor — never over an unhandled one. So an event a
-    run could not handle (a cross-task task_bound left pending) keeps re-surfacing instead of being
-    skipped by a blanket high-water jump. Idempotent; only ever moves the cursor forward (GREATEST).
-
-    delivered_ts is the WORK-lane cursor (every caller is a work seam or the run-completion ack), so
-    "unhandled WAKING" is judged with _WORK_NON_WAKING_EVENTS — a bare conversation_turn never pins
-    the floor. That matches the wake_scan contract (a work ack advances past conversation turns; the
-    conversation lane consumes them via its own conv_delivered_ts), and keeps the GH #138 safety net
-    one-shot: an old chat turn is not re-injected into every later work wake once a work ack lands."""
-    cur.execute(
-        "SELECT COALESCE(delivered_ts, 0) AS d FROM agent_wake_state WHERE agent_id=%s",
-        (aid,),
-    )
-    row = cur.fetchone()
-    delivered = (row["d"] if row else 0.0) or 0.0
-    cur.execute(
-        """SELECT min(e.ts) AS m FROM agent_events e
-           WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
-             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
-                              WHERE a.agent_id=%s AND a.event_id=e.id)""",
-        (aid, delivered, list(_WORK_NON_WAKING_EVENTS), aid),
-    )
-    min_unhandled = cur.fetchone()["m"]
-    if min_unhandled is None:
-        # nothing waking left unhandled → advance past EVERYTHING above the cursor (incl. trailing
-        # non-waking / already-handled rows) so a later scan starts clean.
-        cur.execute(
-            "SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s",
-            (aid, delivered),
-        )
-        new_floor = cur.fetchone()["m"]
-    else:
-        # advance to the largest event ts strictly BELOW the oldest unhandled one — everything there is
-        # acked or non-waking, safe to skip; the unhandled event still re-surfaces on the next scan.
-        cur.execute(
-            "SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s AND ts < %s",
-            (aid, delivered, min_unhandled),
-        )
-        new_floor = cur.fetchone()["m"]
-    if new_floor is None or new_floor <= delivered:
-        return delivered
-    cur.execute(
-        """INSERT INTO agent_wake_state (agent_id, delivered_ts) VALUES (%s, %s)
-           ON CONFLICT (agent_id) DO UPDATE SET
-             delivered_ts = GREATEST(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)""",
-        (aid, new_floor),
-    )
-    return new_floor
-
-
-def _ack_events_handled(
-    cur, agent_id, event_name: str, link_field: str, link_value
-) -> None:
-    """GH #58: mark every pending agent_events row of `event_name` on `agent_id`'s key whose payload
-    `link_field` == `link_value` as handled (the per-event ack), then advance the contiguous floor.
-    Called at each NEW_WORK / DIRECTIVE resolution seam — the /next claim, /done, accept/reject-task,
-    unassign, cancel, request close/escalate — in the SAME txn that consumes the work, so a
-    started/finished item stops re-waking. Idempotent (PK ON CONFLICT DO NOTHING)."""
-    if not agent_id or not _valid_uuid(str(agent_id)) or link_value is None:
-        return
-    cur.execute(
-        """INSERT INTO agent_event_acks (agent_id, event_id)
-           SELECT %s, e.id FROM agent_events e
-           WHERE e.event_key=%s AND e.event_name=%s AND e.payload->>%s = %s
-           ON CONFLICT DO NOTHING""",
-        (str(agent_id), str(agent_id), event_name, link_field, str(link_value)),
-    )
-    _recompute_delivered_floor(cur, str(agent_id))
-
-
-def _wake_notification_manifest(
-    cur,
-    aid: str,
-    delivered_ts: float,
-    *,
-    limit: int = _WAKE_NOTIFICATION_MANIFEST_LIMIT,
-) -> tuple[list[dict], bool]:
-    """Rank pending agent_events with the #247 notification registry for wake routing.
-
-    This is the wake/boot consumer of the KEYSTONE registry: it reads the same bus rows that
-    drive pending_events, classifies them through _classify_notification, resolves origin +
-    object priority, and returns a compact rank-ordered manifest for the notifier prompt.
-    The prompt limit is applied AFTER ranking the full pending set; otherwise an older low-rank
-    backlog can hide a newer interrupt/human request from the wake prompt.
-    """
-    cur.execute(
-        """SELECT e.id, e.event_name, e.ts, e.payload, e.target_id
-           FROM agent_events e
-           WHERE e.event_key = %s AND e.ts > %s AND e.event_name <> ALL(%s)
-             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
-                              WHERE a.agent_id = %s AND a.event_id = e.id)
-           ORDER BY e.ts ASC, e.id ASC""",
-        (aid, delivered_ts, list(_NON_WAKING_EVENTS), aid),
-    )
-    raw = cur.fetchall()
-
-    ids: set[str] = set()
-    for r in raw:
-        p = r["payload"] or {}
-        for f in _NOTIF_ACTOR_FIELDS:
-            if p.get(f):
-                ids.add(str(p[f]))
-    people: dict[str, dict] = {}
-    if ids:
-        cur.execute(
-            "SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),)
-        )
-        people = {str(a["id"]): a for a in cur.fetchall()}
-
-    items = []
-    task_ids: set[str] = set()
-    request_ids: set[str] = set()
-    for r in raw:
-        p = r["payload"] or {}
-        requester_is_human = False
-        if r["event_name"] == "request_created":
-            fa = str(p["from_agent_id"]) if p.get("from_agent_id") else None
-            requester_is_human = bool(
-                fa and (people.get(fa) or {}).get("kind") == "human"
-            )
-        n = _classify_notification(
-            r["event_name"], p, requester_is_human=requester_is_human
-        )
-        if n is None:
-            continue
-
-        actor = people.get(n["actor_ref"]) or {} if n["actor_ref"] else {}
-        deeplink = n["deeplink"] or {}
-        if deeplink.get("kind") == "task" and _valid_uuid(deeplink.get("id")):
-            task_ids.add(deeplink["id"])
-        if deeplink.get("kind") == "request" and _valid_uuid(deeplink.get("id")):
-            request_ids.add(deeplink["id"])
-
-        # GH #58 (R3): carry the SAME drain classification used for prompt_messages / handled_event_ids
-        # so wake_scan can drop a cross-task task-scoped row from the rendered manifest once the run
-        # context is known — the manifest is rendered verbatim as "drain in this order", so an unfiltered
-        # cross-task row would tell a task-B worker to drain task A's row (the R3 gap).
-        dc = _drain_class(cur, r["event_name"], p, target_id=r["target_id"])
-        priority = n["priority"]
-        item = {
-            "event_name": r["event_name"],
-            "type": n["type"],
-            "zone": n["zone"],
-            "priority": priority,
-            "rank": _notification_rank(priority),
-            "rank_label": _NOTIF_PRIORITY_TO_LABEL.get(priority, "unknown"),
-            "actor_ref": n["actor_ref"],
-            "actor_alias": actor.get("alias"),
-            "actor_kind": actor.get("kind"),
-            "deeplink": n["deeplink"],
-            "preview": n["preview"],
-            "ts": r["ts"],
-            "object_priority": None,
-            "is_task_request": n.get(
-                "is_task_request", False
-            ),  # #359: steer the wake prompt into the work
-            "drain_bucket": dc["bucket"],
-            "drain_task_id": dc["task_id"],
-        }
-        item["surface"] = _notification_surface(item)
-        items.append(item)
-
-    object_priorities: dict[tuple[str, str], int] = {}
-    if task_ids:
-        cur.execute(
-            "SELECT id, priority FROM tasks WHERE id = ANY(%s)", (list(task_ids),)
-        )
-        object_priorities.update(
-            {("task", str(r["id"])): r["priority"] for r in cur.fetchall()}
-        )
-    if request_ids:
-        cur.execute(
-            "SELECT id, priority FROM requests WHERE id = ANY(%s)", (list(request_ids),)
-        )
-        object_priorities.update(
-            {("request", str(r["id"])): r["priority"] for r in cur.fetchall()}
-        )
-
-    for item in items:
-        deeplink = item.get("deeplink") or {}
-        key = (deeplink.get("kind"), deeplink.get("id"))
-        item["object_priority"] = object_priorities.get(key)
-
-    def _sort_key(item):
-        object_priority = (
-            item["object_priority"]
-            if item["object_priority"] is not None
-            else 1_000_000
-        )
-        return (
-            item["rank"],
-            object_priority,
-            _notification_origin_order(item.get("actor_kind")),
-            item["ts"],
-        )
-
-    items.sort(key=_sort_key)
-    return items[:limit], len(items) > limit
 
 
 # ISS-60(B): heartbeat-keyed orphan-lease reaper threshold. A single-flight lease whose agent
@@ -1190,55 +401,6 @@ ORPHAN_LEASE_SECS = 1260.0
 # The frontend (terminal.js) discovers its URL here instead of assuming `location.host`. Default
 # is the bridge's localhost bind; override with ORCHA_TERMINAL_WS_URL for a non-default port/host.
 TERMINAL_WS_URL = os.environ.get("ORCHA_TERMINAL_WS_URL", "ws://127.0.0.1:8765")
-# ISS-47: an answered request the requester never closed within a day is a dangling thread.
-STALE_ANSWERED_SECS = 24 * 3600
-
-
-def _annotate_request_ownership(rows, *, now=None):
-    """ISS-47 — questions/decisions fragment across surfaces → dangling threads + ambiguous
-    ownership. Stamp every request read-row with a CANONICAL next-action ownership so each
-    surface (snapshot, container list, inbox, outbox) agrees on *who holds the ball* and
-    *whether the thread is dangling*, instead of each consumer re-deriving it (the
-    /orcha-inbox skill did this client-side). Added fields:
-
-      owner_id        — agent who owns the next action: open→target, answered→requester, else None
-      owner_alias     — that agent's alias, when the SQL resolved it (mixed all-request views do)
-      pending_action  — 'answer' | 'close' | None
-      is_stale        — dangling-thread signal: an OPEN request past its expiry, or an ANSWERED
-                        request left unclosed past STALE_ANSWERED_SECS
-
-    Mutates each row dict in place and returns the list. Tolerant of a row missing a column
-    (computes only what the fields allow). No DB access, no state change — pure derive.
-    """
-    if now is None:
-        now = datetime.now(timezone.utc)
-    for r in rows:
-        status = r.get("status")
-        if status == "open":
-            owner = r.get("target_id")
-            pending = "answer"
-        elif status == "answered":
-            owner = r.get("requester_id")
-            pending = "close"
-        else:
-            owner = None
-            pending = None
-        r["owner_id"] = str(owner) if owner else None
-        r["pending_action"] = pending
-        r.setdefault(
-            "owner_alias", None
-        )  # mixed views resolve it in SQL; single-side views leave None
-        stale = False
-        if status == "open":
-            exp = r.get("expires_at")
-            if exp is not None and exp < now:
-                stale = True
-        elif status == "answered":
-            rat = r.get("responded_at")
-            if rat is not None and (now - rat).total_seconds() > STALE_ANSWERED_SECS:
-                stale = True
-        r["is_stale"] = stale
-    return rows
 
 
 # Epic B / P0: clear over-length errors instead of a silent 422.
@@ -1290,424 +452,6 @@ async def _too_long_or_invalid(request: Request, exc: RequestValidationError):
 # This applies migrations/*.sql in lexical order, each in its own txn, idempotently
 # (tracked in schema_migrations), so `orcha up` (which restarts the portal -> startup
 # hook below) applies pending migrations to an EXISTING volume with NO wipe.
-# ---------- #301: task-message file attachments (local files, no DB blobs) ----------
-# Bytes are written under a WRITABLE host bind-mount (per-task subdir); task_messages.attachments
-# (mig 025) stores ONLY path/metadata refs. Tests override main.ATTACHMENTS_DIR directly.
-ATTACHMENTS_DIR = pathlib.Path(
-    os.environ.get("ORCHA_ATTACHMENTS_DIR", "/app/orcha-attachments")
-)
-MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MiB per file
-MAX_ATTACHMENTS_PER_MESSAGE = 10
-MAX_EXTRACTED_TEXT_CHARS = 8_000
-# ext -> mime. ONLY these extensions are accepted on upload and served. SVG/HTML are deliberately
-# absent: they can carry inline script, and we never want a served attachment to run in the portal
-# origin (XSS). Raster images render inline; everything else downloads (see _ATTACHMENT_INLINE_EXT).
-_ATTACHMENT_TYPES = {
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "gif": "image/gif",
-    "webp": "image/webp",
-    "pdf": "application/pdf",
-    "txt": "text/plain; charset=utf-8",
-    "md": "text/markdown; charset=utf-8",
-    "csv": "text/csv; charset=utf-8",
-    "log": "text/plain; charset=utf-8",
-    "json": "application/json",
-}
-# Only raster images are served with Content-Disposition: inline (safe to render in-page). Every
-# other allowed type (incl. text/pdf) is served as an attachment → the browser downloads it rather
-# than rendering in the portal origin.
-_ATTACHMENT_INLINE_EXT = {"png", "jpg", "jpeg", "gif", "webp"}
-# A stored basename is "<32-hex>_<sanitized-name>"; the sanitized part is [A-Za-z0-9._-] only. This
-# regex is the path-traversal gate on the serve route: no "/", no "..", nothing but safe chars.
-_SAFE_STORED_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
-def _contained_path(base_dir: pathlib.Path, *parts: str) -> Optional[pathlib.Path]:
-    """Join request-supplied segments under base_dir, refusing anything that escapes it.
-
-    THE single traversal gate for every attachment-store path built from request input: the
-    joined path is fully normalized (realpath — symlinks + '..' collapsed) and must remain
-    STRICTLY inside the normalized base dir, else None. Callers use the returned path (never
-    the raw segments) for all filesystem access."""
-    base = os.path.realpath(base_dir)
-    candidate = os.path.realpath(os.path.join(base, *parts))
-    if not candidate.startswith(base + os.sep):
-        return None
-    return pathlib.Path(candidate)
-
-
-def _attachment_ext(name: str) -> Optional[str]:
-    """Lowercased extension if it's in the allowlist, else None."""
-    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    return ext if ext in _ATTACHMENT_TYPES else None
-
-
-def _sanitize_attachment_name(name: str) -> str:
-    """Reduce a client filename to a safe DISPLAY basename: strip any path, keep only
-    [A-Za-z0-9._-] (others → '_'), bound length. Never trusted for the on-disk path —
-    the stored name is uuid-prefixed and re-validated — this is just the shown label."""
-    base = os.path.basename(name or "").strip() or "file"
-    base = re.sub(r"[^A-Za-z0-9._-]", "_", base)
-    base = base.lstrip(".") or "file"  # no leading dots (hidden / "..")
-    return base[:120]
-
-
-def _attachment_content_type(stored_name: str) -> str:
-    ext = _attachment_ext(stored_name) or ""
-    return _ATTACHMENT_TYPES.get(ext, "application/octet-stream")
-
-
-def _attachment_kind(stored_name: str) -> str:
-    ext = _attachment_ext(stored_name) or ""
-    return "image" if ext in _ATTACHMENT_INLINE_EXT else "file"
-
-
-def _attachment_text_cache_path(
-    scope: str, owner_id: str, stored_name: str
-) -> Optional[pathlib.Path]:
-    """Sidecar cache for upload-time OCR text.
-
-    The cache lives OUTSIDE the served per-task/per-conversation directories so a metadata sidecar
-    can never be fetched through /attachments/{stored_name} or accepted as a staged attachment ref.
-    """
-    if not stored_name or not _SAFE_STORED_NAME.match(stored_name):
-        return None
-    return _contained_path(
-        ATTACHMENTS_DIR / ".extracted-text", scope, owner_id, f"{stored_name}.json"
-    )
-
-
-def _read_cached_attachment_text(scope: str, owner_id: str, stored_name: str) -> str:
-    p = _attachment_text_cache_path(scope, owner_id, stored_name)
-    if p is None:
-        return ""
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return ""
-    text = raw.get("text") if isinstance(raw, dict) else None
-    return str(text or "").strip()[:MAX_EXTRACTED_TEXT_CHARS]
-
-
-def _write_cached_attachment_text(
-    scope: str, owner_id: str, stored_name: str, text: str
-) -> None:
-    clean = (text or "").strip()[:MAX_EXTRACTED_TEXT_CHARS]
-    if not clean:
-        return
-    p = _attachment_text_cache_path(scope, owner_id, stored_name)
-    if p is None:
-        return
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"text": clean}, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
-
-
-def _container_llm_key(cur, cid: str) -> Optional[str]:
-    """Resolve the Orcha-managed LLM key for a container (env override > encrypted DB > None).
-    Anthropic-scoped: vision/curation (the non-overridable use-cases that call this) always run
-    on Anthropic. Provider-overridable use-cases resolve via _provider_api_key instead."""
-    return _provider_api_key(cur, cid, "anthropic")
-
-
-def _provider_stored_row(cur, cid: str, provider: str):
-    """The stored-key row for one (container, provider), or None. ALL providers — Anthropic
-    included — live in container_provider_keys (migration 027); the legacy
-    containers.llm_api_key_enc columns are retired (backfilled by 027, no longer read)."""
-    cur.execute(
-        "SELECT key_enc, key_hint, set_at FROM container_provider_keys "
-        "WHERE container_id=%s AND provider=%s",
-        (cid, provider),
-    )
-    return cur.fetchone()
-
-
-def _provider_api_key(cur, cid: str, provider: str) -> Optional[str]:
-    """Resolve the usable plaintext key for (container, provider): env override
-    (ORCHA_LLM_API_KEY) > stored+unsealed key for THIS provider > None. The provider-scoped
-    sibling of _container_llm_key, for use-cases whose provider a human can override (#290 catalog)."""
-    try:
-        row = _provider_stored_row(cur, cid, provider)
-        return secret_box.resolve_llm_key(row["key_enc"] if row else None)
-    except Exception:
-        return None
-
-
-def _provider_key_enc(cur, cid: str, provider: str) -> Optional[str]:
-    """Return the SEALED key blob (ciphertext) for (container, provider), or None — NEVER the
-    plaintext. Safe to hand to the host daemon over the loopback wake-scan API: the blob alone is
-    not a usable credential (the master key lives off-row in ORCHA_SECRET_KEY). The daemon, which
-    shares ORCHA_SECRET_KEY on the same host, unseals it locally — so triage/ack can use a
-    Settings-stored provider key without any plaintext crossing the wire."""
-    try:
-        row = _provider_stored_row(cur, cid, provider)
-        return row["key_enc"] if row else None
-    except Exception:
-        return None
-
-
-def _effective_use_case_provider(
-    model_override: Optional[dict], use_case_key: str
-) -> str:
-    """The provider a use-case actually runs on: the human's per-container override if set, else
-    the #290 shipped default for that use-case. Drives which provider's stored key the daemon needs."""
-    if isinstance(model_override, dict) and model_override.get("provider"):
-        return model_override["provider"]
-    try:
-        import llm_util  # noqa: PLC0415 (dual-context import, see top of file)
-    except ImportError:
-        from orcha_cli import llm_util
-    return llm_util.resolve_spec(use_case_key).provider
-
-
-def _attachment_extracted_text(
-    scope: str,
-    owner_id: str,
-    stored_name: str,
-    path: Optional[pathlib.Path],
-    *,
-    api_key: Optional[str] = None,
-) -> str:
-    """Return cached OCR text for an image/PDF ref, computing it once from disk when possible.
-
-    FAIL-OPEN: missing key, unsupported media, read errors, provider errors, or cache write errors
-    all return "" and leave the normal file URL path intact.
-    """
-    ctype = _attachment_content_type(stored_name)
-    if not llm_util.can_describe(ctype):
-        return ""
-    cached = _read_cached_attachment_text(scope, owner_id, stored_name)
-    if cached:
-        return cached
-    if api_key is None or path is None:
-        return ""
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return ""
-    try:
-        text = llm_util.describe_image(data, ctype, api_key=api_key)
-    except Exception:
-        return ""
-    if text:
-        _write_cached_attachment_text(scope, owner_id, stored_name, text)
-        return text.strip()[:MAX_EXTRACTED_TEXT_CHARS]
-    return ""
-
-
-# --- scope-parametric core (#338) ------------------------------------------------------------
-# #301/#330 introduced these for task-thread messages; #338 reuses the EXACT same logic for
-# conversation turns. The core takes a base dir / url-prefix so a second scope (conversations)
-# is a thin wrapper, not a copy — there is one path-traversal gate, one ref shape, one validator.
-def _resolve_stored_in(
-    base_dir: pathlib.Path, stored_name: str
-) -> Optional[pathlib.Path]:
-    """Map (base_dir, stored basename) → an on-disk path, or None if it's unsafe / missing.
-    Defends against path traversal: the name must match _SAFE_STORED_NAME (no '/', no '..'),
-    the normalized path must stay inside base_dir (_contained_path), and the file's parent
-    must be exactly base_dir (no nesting)."""
-    if not stored_name or not _SAFE_STORED_NAME.match(stored_name):
-        return None
-    p = _contained_path(base_dir, stored_name)
-    if p is None:
-        return None
-    try:
-        if os.path.dirname(p) != os.path.realpath(base_dir) or not p.is_file():
-            return None
-    except OSError:
-        return None
-    return p
-
-
-def _attachment_ref_for(
-    url_prefix: str,
-    stored_name: str,
-    display_name: str,
-    size: int,
-    *,
-    extracted_text: str = "",
-) -> dict:
-    """Build the canonical ref stored in JSONB / returned to the client. content_type and kind
-    are DERIVED server-side from the allowlisted extension — never trusted from input. url_prefix
-    is the serve-route base for this scope (".../attachments"); the stored name is appended.
-    Optional extracted_text is cached server-side OCR text for Codex/text-only delivery."""
-    ref = {
-        "id": stored_name,
-        "name": display_name,
-        "size": size,
-        "content_type": _attachment_content_type(stored_name),
-        "kind": _attachment_kind(stored_name),
-        "url": f"{url_prefix}/{stored_name}",
-    }
-    text = (extracted_text or "").strip()[:MAX_EXTRACTED_TEXT_CHARS]
-    if text:
-        ref["extracted_text"] = text
-    return ref
-
-
-def _validate_refs_in(
-    base_dir: pathlib.Path,
-    ref_builder,
-    refs: Optional[list],
-    *,
-    api_key: Optional[str] = None,
-) -> list[dict]:
-    """Turn client-supplied attachment refs into canonical, disk-backed refs. Each input ref must
-    name a stored file that ACTUALLY EXISTS under base_dir (i.e. was produced by a prior upload).
-    Size/type are re-read from disk so the persisted JSONB can't be poisoned with fabricated
-    metadata or foreign paths. `ref_builder(stored, display, size)` builds the scoped ref. Raises
-    400 on any bad/missing ref."""
-    if not refs:
-        return []
-    if len(refs) > MAX_ATTACHMENTS_PER_MESSAGE:
-        raise HTTPException(
-            400, f"too many attachments (max {MAX_ATTACHMENTS_PER_MESSAGE})"
-        )
-    out: list[dict] = []
-    for ref in refs:
-        if not isinstance(ref, dict):
-            raise HTTPException(400, "each attachment must be an object")
-        stored = str(ref.get("id") or "")
-        p = _resolve_stored_in(base_dir, stored)
-        if p is None:
-            raise HTTPException(
-                400, f"attachment not found on disk: {stored!r} (upload it first)"
-            )
-        display = _sanitize_attachment_name(str(ref.get("name") or stored))
-        out.append(ref_builder(stored, display, p.stat().st_size, p, api_key=api_key))
-    return out
-
-
-# --- task-thread scope (#301/#330) — signatures unchanged; now delegate to the core -----------
-def _task_attachments_dir(tid: str) -> pathlib.Path:
-    d = _contained_path(ATTACHMENTS_DIR, tid)
-    if d is None:  # unreachable behind _valid_uuid route guards; belt-and-braces
-        raise HTTPException(400, "invalid task id")
-    return d
-
-
-def _resolve_stored_attachment(tid: str, stored_name: str) -> Optional[pathlib.Path]:
-    return _resolve_stored_in(_task_attachments_dir(tid), stored_name)
-
-
-def _attachment_ref(
-    tid: str,
-    stored_name: str,
-    display_name: str,
-    size: int,
-    path: Optional[pathlib.Path] = None,
-    *,
-    api_key: Optional[str] = None,
-) -> dict:
-    p = path or _resolve_stored_attachment(tid, stored_name)
-    extracted = _attachment_extracted_text(
-        "tasks", tid, stored_name, p, api_key=api_key
-    )
-    return _attachment_ref_for(
-        f"/api/tasks/{tid}/attachments",
-        stored_name,
-        display_name,
-        size,
-        extracted_text=extracted,
-    )
-
-
-def _validate_attachment_refs(
-    tid: str, refs: Optional[list], *, api_key: Optional[str] = None
-) -> list[dict]:
-    return _validate_refs_in(
-        _task_attachments_dir(tid),
-        lambda stored, display, size, path, *, api_key=None: _attachment_ref(
-            tid, stored, display, size, path, api_key=api_key
-        ),
-        refs,
-        api_key=api_key,
-    )
-
-
-# --- conversation scope (#338) — mirror of the task scope, conversation-scoped dir + url -------
-def _conversation_attachments_dir(conv_id: str) -> pathlib.Path:
-    # Nested under a "conversations/" prefix so a conversation id can never collide with a task
-    # id's dir (tasks live directly under ATTACHMENTS_DIR/<tid>).
-    d = _contained_path(ATTACHMENTS_DIR / "conversations", conv_id)
-    if d is None:  # unreachable behind _valid_uuid route guards; belt-and-braces
-        raise HTTPException(400, "invalid conversation id")
-    return d
-
-
-def _resolve_stored_conv_attachment(
-    conv_id: str, stored_name: str
-) -> Optional[pathlib.Path]:
-    return _resolve_stored_in(_conversation_attachments_dir(conv_id), stored_name)
-
-
-def _conv_attachment_ref(
-    conv_id: str,
-    stored_name: str,
-    display_name: str,
-    size: int,
-    path: Optional[pathlib.Path] = None,
-    *,
-    api_key: Optional[str] = None,
-) -> dict:
-    p = path or _resolve_stored_conv_attachment(conv_id, stored_name)
-    extracted = _attachment_extracted_text(
-        "conversations", conv_id, stored_name, p, api_key=api_key
-    )
-    return _attachment_ref_for(
-        f"/api/conversations/{conv_id}/attachments",
-        stored_name,
-        display_name,
-        size,
-        extracted_text=extracted,
-    )
-
-
-def _validate_conv_attachment_refs(
-    conv_id: str, refs: Optional[list], *, api_key: Optional[str] = None
-) -> list[dict]:
-    return _validate_refs_in(
-        _conversation_attachments_dir(conv_id),
-        lambda stored, display, size, path, *, api_key=None: _conv_attachment_ref(
-            conv_id, stored, display, size, path, api_key=api_key
-        ),
-        refs,
-        api_key=api_key,
-    )
-
-
-def _render_attachment_feed_line(attachments: Optional[list]) -> str:
-    """#338 feed-to-agent (task-thread, server-side): a compact one-line addendum naming the files
-    on a task-thread message + their serve-route paths, so the woken agent OPENS them rather than
-    only seeing text. The portal doesn't know the agent's external API base, so it emits the
-    RELATIVE serve path — the agent fetches it on the same Orcha API it reads the thread from. ""
-    when there are no (valid) attachments. Mirrors conversation_prefix.render_attachment_feed."""
-    atts = [a for a in (attachments or []) if isinstance(a, dict)]
-    if not atts:
-        return ""
-    parts = []
-    for a in atts:
-        name = a.get("name") or a.get("id") or "file"
-        kind = a.get("kind") or "file"
-        url = a.get("url") or ""
-        detail = f"{name} ({kind}; GET {url})"
-        text = (a.get("extracted_text") or "").strip()
-        if text:
-            detail += f"; auto-transcribed text: {text[:MAX_EXTRACTED_TEXT_CHARS]}"
-        parts.append(detail)
-    return (
-        f" — 📎 {len(atts)} attached file(s): "
-        + "; ".join(parts)
-        + " — fetch each via GET on your Orcha API (e.g. curl), then read/view it with your "
-        "tools. Text-only runtimes should use any auto-transcribed text above for image/PDF "
-        "content."
-    )
-
-
 def _startup_migrate() -> None:
     """R1.3: on portal boot, wait for the DB then apply pending migrations.
 
