@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -84,6 +85,27 @@ def overlay_runtime_config(base: pathlib.Path, worktree: pathlib.Path) -> None:
                     shutil.copy2(source, destination / "orcha-tabs" / source.name)
                 except OSError:
                     pass
+
+
+def seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
+    """Create a missing portal-agent CLI binding without overwriting user state."""
+    if not (base_cwd and alias and agent_id):
+        return False
+    try:
+        tabs = pathlib.Path(base_cwd) / ".claude" / "orcha-tabs"
+        destination = tabs / f"{alias}.json"
+        if destination.exists():
+            return False
+        tabs.mkdir(parents=True, exist_ok=True)
+        binding = {
+            "alias": alias,
+            "agent_id": agent_id,
+            "container_id": container_id,
+        }
+        destination.write_text(json.dumps(binding, indent=2) + "\n")
+        return True
+    except OSError:
+        return False
 
 
 def provision_disposable(base_cwd, alias, services: Any):
