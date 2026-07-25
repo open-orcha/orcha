@@ -69,6 +69,104 @@ def parse_rate_limit_reset(log_path, services) -> float:
     return max(5.0, min(seconds, 3600.0))
 
 
+def drain_task_failure(
+    api_base: str,
+    worker: dict,
+    agent_id: str,
+    task_id,
+    status: str,
+    returncode,
+    diff,
+    *,
+    failed_drains: dict,
+    agent_hold_until: dict,
+    now: float,
+    quiet: bool,
+    lane: str,
+    live_workers: dict,
+    pid,
+    drain_desc: str,
+    services,
+) -> None:
+    """Preserve failed task work and apply bounded retry bookkeeping."""
+    services._finish_run(
+        api_base,
+        worker.get("run_id"),
+        status,
+        returncode,
+        worker.get("log_path"),
+        diff,
+        kill_reason=json.dumps(
+            {
+                "run_id": str(worker.get("run_id")),
+                "agent_id": agent_id,
+                "cause": status,
+                "task_id": task_id,
+            }
+        ),
+    )
+    key = (agent_id, task_id)
+    failed_drains[key] = failed_drains.get(key, 0) + 1
+    attempts = failed_drains[key]
+    if status == "rate_limited":
+        hold = services._parse_rate_limit_reset(worker.get("log_path"))
+        agent_hold_until[agent_id] = now + hold
+        human = (
+            "worker hit a rate limit (Codex 429) — work saved and preserved; "
+            "it will retry after the cooldown"
+        )
+    else:
+        human = (
+            "worker exited without finishing — work saved and preserved; "
+            "it will retry"
+        )
+    saved_ref = services._saved_ref(worker, None, diff)
+    services._record_task_saved_ref(api_base, worker, saved_ref, human)
+
+    if attempts >= services.FAILED_DRAIN_MAX:
+        services._post_json(
+            f"{api_base}/api/agents/{agent_id}/wake-ack",
+            {
+                "delivered_ts": worker.get("wake_ack_ts"),
+                "kind": "worker_drain_failed_released",
+                "release_lease": True,
+                "lane": lane,
+            },
+        )
+        services._record_task_saved_ref(
+            api_base,
+            worker,
+            saved_ref,
+            f"heads up: this worker has failed to finish {attempts} times "
+            "in a row — releasing it for now so it doesn't loop; the work "
+            "is saved on its branch",
+        )
+        failed_drains.pop(key, None)
+    else:
+        kind = (
+            "worker_rate_limited"
+            if status == "rate_limited"
+            else "worker_drain_failed"
+        )
+        services._post_json(
+            f"{api_base}/api/agents/{agent_id}/wake-ack",
+            {"kind": kind, "release_lease": True, "lane": lane},
+        )
+
+    services._retire_headless(api_base, live_workers, agent_id)
+    if not quiet:
+        cursor = (
+            "advanced (bound hit)"
+            if attempts >= services.FAILED_DRAIN_MAX
+            else "withheld"
+        )
+        print(
+            f"[notifier] task worker for {agent_id} (pid {pid}) "
+            f"{drain_desc} {status} ({attempts}/{services.FAILED_DRAIN_MAX}) "
+            f"— worktree PRESERVED, cursor {cursor}"
+        )
+
+
 def _tail_events(log_path):
     """Yield dictionary events from the bounded tail of a worker log."""
     if not log_path:
