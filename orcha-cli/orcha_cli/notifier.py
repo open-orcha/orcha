@@ -98,6 +98,8 @@ from .notifier_runtime import (
 )
 from . import notifier_wake_actions as _wake_actions
 from . import notifier_wake_decisions as _wake_decisions
+from . import notifier_worktree_base as _worktree_base
+from . import notifier_worktree_stable as _worktree_stable
 
 # E3 V1 history-injection (Vault's PR #120): a PURE formatter for the cold-boot conversation
 # prefix, in its own module (zero merge surface). OPTIONAL — bound to None until #120 lands in
@@ -849,100 +851,30 @@ def _reap_dead_pid_resident_runs(api_base: str, aid: str, live_pids=frozenset(),
 # ---------- ISS-8: per-worker git worktree isolation + net-diff capture ----------
 
 def _run_git(args, cwd=None, timeout: float = 30.0):
-    """Run a git command; return (returncode, stdout). Never raises."""
-    try:
-        out = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
-                             text=True, timeout=timeout)
-        return out.returncode, out.stdout
-    except (OSError, subprocess.SubprocessError):
-        return 1, ""
+    """Compatibility facade for best-effort Git commands."""
+    return _worktree_base.run_git(args, cwd, timeout)
 
 
 def _safe_ref(alias) -> str:
-    """A git-ref-safe, filesystem-safe slug from a display alias. Aliases aren't
-    constrained to ref-legal text ('QA Bot', 'bad..ref', 'x~y', 'x:y'), and a bad branch
-    name would make `git worktree add -b` fail → silent fallback to the shared checkout
-    (defeating isolation). Map anything outside [A-Za-z0-9._-] to '-', collapse dots
-    (kills '..'), strip leading/trailing '.'/'-'."""
-    s = re.sub(r"[^A-Za-z0-9._-]", "-", str(alias or "agent"))
-    s = re.sub(r"\.+", ".", s).strip(".-")
-    return s or "agent"
+    """Compatibility facade for Git-safe alias normalization."""
+    return _worktree_base.safe_ref(alias)
 
 
 def _ensure_worktree_exclude(base_cwd) -> None:
-    """Add `.orcha-worktrees/` to the repo-local git exclude so a base-checkout
-    `git add -A` can't stage a LIVE worker worktree as an embedded repo/gitlink during
-    the concurrency window (would pollute commits in the shared checkout)."""
-    rc, gitdir = _run_git(["rev-parse", "--git-common-dir"], cwd=base_cwd)
-    if rc != 0:
-        return
-    gitdir = gitdir.strip()
-    excl = pathlib.Path(gitdir if os.path.isabs(gitdir) else os.path.join(base_cwd, gitdir)) / "info" / "exclude"
-    try:
-        excl.parent.mkdir(parents=True, exist_ok=True)
-        existing = excl.read_text() if excl.exists() else ""
-        if ".orcha-worktrees/" not in existing.split():
-            with open(excl, "a") as f:
-                f.write(("" if existing.endswith("\n") or not existing else "\n")
-                        + "# orcha: isolated headless-worker worktrees (never commit)\n.orcha-worktrees/\n")
-    except OSError:
-        pass
+    """Compatibility facade for the repository-local worktree exclusion."""
+    _worktree_base.ensure_exclude(base_cwd, sys.modules[__name__])
 
 
 def _provision_worktree(base_cwd, alias):
-    """Create an isolated git worktree off origin/main for a CODE-TOUCHING worker, so
-    concurrent workers don't tangle in the shared checkout (ISS-8). Overlays the runtime
-    .claude/orcha.json + orcha-tabs (gitignored — absent from a fresh checkout) so the
-    worker can still resolve its binding + reach the API. Returns (worktree_path, branch),
-    or (None, None) on any failure (caller falls back to the shared cwd)."""
-    if not base_cwd or _run_git(["rev-parse", "--git-dir"], cwd=base_cwd)[0] != 0:
-        return None, None
-    base = pathlib.Path(base_cwd)
-    _ensure_worktree_exclude(base_cwd)   # keep .orcha-worktrees/ out of the base checkout's index
-    # ref-safe slug independent of the (possibly ref-illegal) display alias
-    stamp = f"{_safe_ref(alias)}-{int(time.time() * 1000)}"
-    branch = f"orcha/wk-{stamp}"
-    wt = base / ".orcha-worktrees" / stamp
-    _run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)   # best-effort fresh base
-    rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), "origin/main"],
-                     cwd=base_cwd, timeout=60)
-    if rc != 0:
-        return None, None
-    _overlay_runtime_config(base, wt)
-    return str(wt), branch
+    """Compatibility facade for disposable worker worktrees."""
+    return _worktree_base.provision_disposable(
+        base_cwd, alias, sys.modules[__name__]
+    )
 
 
 def _overlay_runtime_config(base, wt):
-    """Overlay the gitignored runtime config (.claude/orcha.json + orcha-tabs + settings.json)
-    that a fresh checkout lacks, so a worker/resident in the worktree resolves its binding,
-    reaches the API, AND fires its notification hooks."""
-    dst = wt / ".claude"
-    dst.mkdir(parents=True, exist_ok=True)
-    cfg = base / ".claude" / "orcha.json"
-    if cfg.exists():
-        try:
-            shutil.copy2(cfg, dst / "orcha.json")
-        except OSError:
-            pass
-    # settings.json carries the SessionEnd `orcha snapshot` hook (C1 continuity, _write_hook_config).
-    # It's gitignored, so a worktree checked out from origin/main lacks it → claude there has no
-    # SessionEnd hook → snapshot-on-exit never runs (silent for headless workers AND the S3 live
-    # terminal, whose bridge delegates snapshot-on-close to exactly this hook). Overlay it too.
-    settings = base / ".claude" / "settings.json"
-    if settings.exists():
-        try:
-            shutil.copy2(settings, dst / "settings.json")
-        except OSError:
-            pass
-    tabs = base / ".claude" / "orcha-tabs"
-    if tabs.is_dir():
-        (dst / "orcha-tabs").mkdir(parents=True, exist_ok=True)
-        for f in tabs.iterdir():
-            if f.is_file():
-                try:
-                    shutil.copy2(f, dst / "orcha-tabs" / f.name)
-                except OSError:
-                    pass
+    """Compatibility facade for ignored runtime configuration overlay."""
+    _worktree_base.overlay_runtime_config(base, wt)
 
 
 def _seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
@@ -973,106 +905,24 @@ def _seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
 
 
 def _provision_resident_worktree(base_cwd, conv_id):
-    """ISS-61: a STABLE per-conversation worktree (deterministic path, REUSED across boots) — vs
-    _provision_worktree's fresh-per-call path. `claude --resume <sid>` keys its session storage by
-    the CWD, so a new worktree path every reboot (the #149 regression) made --resume fail
-    (error_during_execution) and crash-loop. A stable path keeps the session resumable. Created
-    once; reused on later boots; removed only when the conversation ENDS. (None, None) on failure."""
-    if not base_cwd or _run_git(["rev-parse", "--git-dir"], cwd=base_cwd)[0] != 0:
-        return None, None
-    base = pathlib.Path(base_cwd)
-    _ensure_worktree_exclude(base_cwd)
-    slug = _safe_ref(conv_id)
-    branch = f"orcha/resident-{slug}"
-    wt = base / ".orcha-worktrees" / f"resident-{slug}"
-    if wt.exists():
-        return str(wt), branch                       # reuse → stable cwd → --resume works
-    _run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
-    rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), "origin/main"], cwd=base_cwd, timeout=60)
-    if rc != 0:
-        # the branch may survive a pruned dir from a prior boot — reuse it rather than fail
-        rc, _ = _run_git(["worktree", "add", str(wt), branch], cwd=base_cwd, timeout=60)
-        if rc != 0:
-            return None, None
-    _overlay_runtime_config(base, wt)
-    return str(wt), branch
+    """Compatibility facade for stable conversation worktrees."""
+    return _worktree_stable.provision_resident(
+        base_cwd, conv_id, sys.modules[__name__]
+    )
 
 
 def _provision_live_worktree(base_cwd, alias):
-    """ISS-67/B2: a STABLE per-agent worktree for the S3 LIVE terminal embodiment — a deterministic
-    path REUSED across reopens (vs _provision_worktree's fresh-timestamp-per-call path, which made
-    every terminal reopen pay a fresh `git worktree add` + a cold `claude` re-injection — the
-    reopen-latency this fixes). A stable path is the PREREQUISITE for the bridge's grace-window
-    keepalive (B1: a reopen reattaches the SAME warm claude+PTY+CWD instantly): the warm claude's
-    CWD *is* this worktree, so reattach is only coherent if the path persists. It also lets a
-    human's in-progress edits survive a reconnect — a re-provision returns the SAME dir, and a
-    grace-expiry teardown that finds it dirty PRESERVES it (safe_teardown_worktree), so the next
-    open reuses those edits. Created once; reused while it exists; (None, None) on failure → the
-    caller falls back to the shared checkout (today's in-place behavior)."""
-    if not base_cwd or _run_git(["rev-parse", "--git-dir"], cwd=base_cwd)[0] != 0:
-        return None, None
-    base = pathlib.Path(base_cwd)
-    _ensure_worktree_exclude(base_cwd)
-    slug = _safe_ref(alias)
-    branch = f"orcha/live-{slug}"
-    wt = base / ".orcha-worktrees" / f"live-{slug}"
-    if wt.exists():
-        return str(wt), branch                       # reuse → stable cwd → reattach/edits persist
-    _run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
-    rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), "origin/main"], cwd=base_cwd, timeout=60)
-    if rc != 0:
-        # the branch may survive a pruned dir from a prior session — reuse it rather than fail
-        rc, _ = _run_git(["worktree", "add", str(wt), branch], cwd=base_cwd, timeout=60)
-        if rc != 0:
-            return None, None
-    _overlay_runtime_config(base, wt)
-    return str(wt), branch
+    """Compatibility facade for stable live-terminal worktrees."""
+    return _worktree_stable.provision_live(
+        base_cwd, alias, sys.modules[__name__]
+    )
 
 
 def _provision_task_worktree(base_cwd, alias, task_id):
-    """GH#110: a STABLE per-(agent+task) worktree — deterministic path + branch, REUSED across
-    wakes (vs _provision_worktree's fresh-timestamp-per-call, which restarts every wake from a
-    clean origin/main checkout and loses the prior wake's uncommitted work). This is what lets a
-    code-touching TASK worker resume from its prior state: first wake creates the branch from
-    origin/main; a later wake re-attaches to that branch (its checkpoint commits + preserved tree),
-    NOT a fresh origin/main. Runtime-agnostic (Claude + Codex). Mirrors the reuse-then-reattach
-    shape of _provision_resident_worktree / _provision_live_worktree. (None, None) on failure so
-    the caller falls back to the disposable ephemeral worktree."""
-    if not base_cwd or not task_id or _run_git(["rev-parse", "--git-dir"], cwd=base_cwd)[0] != 0:
-        return None, None
-    base = pathlib.Path(base_cwd)
-    _ensure_worktree_exclude(base_cwd)
-    slug = f"{_safe_ref(alias)}-{_safe_ref(task_id)[:12]}"
-    branch = f"orcha/task-{slug}"
-    wt = base / ".orcha-worktrees" / f"task-{slug}"
-    if wt.exists():
-        # already a live/registered worktree for this (agent, task) → REUSE it as-is (its prior
-        # checkpoint commits + preserved dirty tree carry over). No fetch/add/overlay churn.
-        rc, _ = _run_git(["-C", str(wt), "rev-parse", "--git-dir"], cwd=base_cwd)
-        if rc == 0:
-            return str(wt), branch
-    # a dir that was manually removed can leave a stale worktree registration — prune it so the
-    # `worktree add` below doesn't fail with "already registered".
-    _run_git(["worktree", "prune"], cwd=base_cwd)
-    # branch survives even when its worktree dir was pruned — re-attach to the PRIOR state
-    # (its commits) rather than restarting from origin/main. Check local then origin.
-    rc_local, _ = _run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=base_cwd)
-    rc_remote, _ = _run_git(["rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
-                            cwd=base_cwd)
-    if rc_local == 0:
-        rc, _ = _run_git(["worktree", "add", str(wt), branch], cwd=base_cwd, timeout=60)
-    elif rc_remote == 0:
-        rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), f"origin/{branch}"],
-                         cwd=base_cwd, timeout=60)
-    else:
-        # first wake for this (agent, task): create the durable branch from a fresh origin/main.
-        _run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
-        rc, _ = _run_git(["worktree", "add", "-b", branch, str(wt), "origin/main"],
-                         cwd=base_cwd, timeout=60)
-    if rc != 0:
-        return None, None
-    _overlay_runtime_config(base, wt)
-    return str(wt), branch
+    """Compatibility facade for durable per-task worktrees."""
+    return _worktree_stable.provision_task(
+        base_cwd, alias, task_id, sys.modules[__name__]
+    )
 
 
 # the runtime config we overlay into a worktree (see _provision_worktree /
