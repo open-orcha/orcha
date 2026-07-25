@@ -80,6 +80,28 @@ from portal_backend.limits import (
     MAX_SELF_WAKE_CONTEXT_LEN,
     MAX_TURN_LEN,
 )
+from portal_backend.schemas.agent_state import (
+    AgentModelUpdate, AgentReasoningEffortUpdate, AgentRetire, AgentUpdate,
+    AutoWakeUpdate, DecisionCreate, DigestSnapshot, NotificationsRead,
+    ReachabilityUpsert, SelfWakeSet,
+)
+from portal_backend.schemas.conversations import (
+    ConversationActor, ConversationSession, ConversationStart, TurnAppend,
+)
+from portal_backend.schemas.requests import (
+    AgentSuggestion, NudgeBody, RequestActorBody, RequestConvert, RequestCreate,
+    RequestRespond, SuggestionDecision, TaskRequestAccept, TaskRequestPayload,
+    TaskRequestReject, TriageCloseBody,
+)
+from portal_backend.schemas.task_operations import (
+    AssignTask, TaskCancel, TaskDone, TaskMessage, TaskReadiness, TaskUnassign, TaskVerify,
+)
+from portal_backend.schemas.wakes import (
+    AutonomyUpdate, EmbodimentTokenMint, EventsAckHandled, PromptEvent, WakeAck, WakeClaim, WakesToggle,
+)
+from portal_backend.schemas.worker_runs import (
+    WorkerRunFinish, WorkerRunLines, WorkerRunStart, WorkerRunStop,
+)
 from portal_backend.schemas import (
     AgentCreate,
     AgentCreateResponse,
@@ -1987,194 +2009,43 @@ def _normalize_roster_payload(raw: Any) -> dict:
     }
 
 
-class TaskMessage(BaseModel):
-    author_agent_id: Optional[str] = None
-    body: str = Field(..., max_length=MAX_PAYLOAD_LEN)
-    # #301: optional attachment refs the client staged via POST .../attachments (uploaded
-    # FIRST, then referenced here by stored `id`). Each is re-validated against disk on post
-    # (see _validate_attachment_refs) — the client cannot poison the JSONB with arbitrary
-    # paths/sizes. Each item: {"id": "<stored basename>", "name": "<display name>"}.
-    attachments: Optional[list[dict]] = None
 
 
-class TaskDone(BaseModel):
-    agent_id: str
-    result: str = Field(..., max_length=MAX_PAYLOAD_LEN)
 
 
-class AssignTask(BaseModel):
-    actor_agent_id: str = Field(..., description="the actor (human or dispatching AI orchestrator) — Orcha#30 + #327")
-    agent_id: str = Field(..., description="the AI agent to assign this task to")
-    reassign: bool = Field(default=False,
-                           description="if the task already has a DIFFERENT active assignee, release them and reassign (else 409)")
 
 
-class TaskReadiness(BaseModel):
-    """#326 (B3): POST /api/tasks/{tid}/readiness — flip a task between 'not_ready' (held) and
-    'ready' (dispatchable). HUMAN-AUTHORITY gated (#327: AI cannot yet flip readiness). Holding
-    parks a ready/pending row as 'not_ready' so it leaves the ready-queue and can't be claimed via
-    /orcha-next; releasing returns it to 'ready' (or 'pending' if its deps aren't satisfied)."""
-    actor_agent_id: str = Field(..., description="UUID of the human (kind='human') flipping readiness")
-    ready: bool = Field(..., description="true = release to ready (or pending if deps unmet); false = hold as not_ready")
 
 
-class TaskUnassign(BaseModel):
-    """#326 (B2): POST /api/tasks/{tid}/unassign — clear the active assignee(s) so the row returns
-    to the ready queue (owner==null). HUMAN-AUTHORITY gated (Orcha#30 — a deliberate dispatch reset,
-    pairs with #327 AI-can't-assign). Mirrors the release half of the /assign reassign branch."""
-    actor_agent_id: str = Field(..., description="UUID of the human (kind='human') clearing the assignee")
 
 
-class TaskVerify(BaseModel):
-    approve: bool
-    feedback: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
-    actor_agent_id: str = Field(..., description="UUID of the human agent verifying (kind='human')")
 
 
-class TaskCancel(BaseModel):
-    """B7 (ISS-23) + #327: force-close a task. A human OR a dispatching AI orchestrator may cancel
-    ANY non-root task. reason is required when the actor cancels a task assigned to someone else
-    (routed to the displaced owner via the B0 decision primitive)."""
-    actor_agent_id: str = Field(..., description="UUID of the actor (human or AI orchestrator may cancel any non-root task)")
-    reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
-class AgentRetire(BaseModel):
-    """ISS-51: retire an agent. Human-authority gated (actor must be kind='human')."""
-    actor_agent_id: str
 
 
-class AgentModelUpdate(BaseModel):
-    """B8.1: change the LLM model an agent runs on. Must be one of the curated ids
-    (AVAILABLE_MODELS); new providers are added there as supported."""
-    model: str = Field(..., max_length=64)
 
 
-class AgentReasoningEffortUpdate(BaseModel):
-    """GH #51: change the reasoning effort an agent's worker runs at. Must be one of the
-    curated levels (AVAILABLE_REASONING_EFFORTS), or null to use the runtime default."""
-    reasoning_effort: Optional[str] = Field(..., max_length=16)
 
 
-class AgentUpdate(BaseModel):
-    """Agent-update: edit an agent's role / system_prompt / alias (onboarding +
-    re-profiles). Human-authority gated. All fields optional except the actor — a
-    PARTIAL update: omit a field to leave it unchanged."""
-    actor_agent_id: str
-    role: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN)
-    system_prompt: Optional[str] = Field(default=None, max_length=MAX_PROMPT_LEN)
-    alias: Optional[str] = Field(default=None, max_length=64)
 
 
-class AutoWakeUpdate(BaseModel):
-    """#266: set/clear an agent's clock-driven AUTO-WAKE cadence. HUMAN-AUTHORITY gated.
-    `interval_secs` is REQUIRED but NULLABLE — send an int (>=60s floor) to enable a recurring
-    heartbeat wake, or null to DISABLE (opt-out). Unlike a partial PATCH (where an omitted field
-    means 'unchanged'), the value is always explicit here, so null unambiguously means 'disable'
-    rather than 'don't touch'. The 60s floor + nullability are also enforced by the DB CHECK."""
-    actor_agent_id: str
-    interval_secs: Optional[int] = Field(
-        ..., ge=60,
-        description="seconds between clock-driven auto-wakes (>=60s floor); null disables auto-wake")
 
 
-class SelfWakeSet(BaseModel):
-    """GH #122: an ephemeral worker schedules a one-shot resume wake for active task work."""
-    task_id: str = Field(..., description="task the worker is actively waiting on")
-    delay_secs: Optional[int] = Field(default=None, ge=60, le=86_400,
-                                      description="wake after this many seconds")
-    resume_in_seconds: Optional[int] = Field(default=None, ge=60, le=86_400,
-                                             description="compat alias for delay_secs")
-    resume_at: Optional[datetime] = Field(default=None,
-                                          description="absolute wake time; must be at least 60s out")
-    context: str = Field(..., max_length=MAX_SELF_WAKE_CONTEXT_LEN,
-                         description="short, non-empty wait-point to inject on the scheduled wake")
 
 
 # ---- E3 conversation store (resident-session thread; docs/orcha-conversation-model.md) ----
-class ConversationStart(BaseModel):
-    """A human opens (or re-opens) the conversation with an AI agent."""
-    actor_agent_id: str
 
 
-class TurnAppend(BaseModel):
-    """Append one turn. Human turn = the human's message; agent turn = ONE per stream-json
-    'result' event (E2 findings), linked to its worker_run via run_id (the live token
-    stream lives in worker_run_lines/ISS-39, not here)."""
-    role: str = Field(..., pattern="^(human|agent)$")
-    author_agent_id: str
-    content: str = Field(..., max_length=MAX_TURN_LEN)
-    run_id: Optional[str] = None
-    meta: Optional[dict] = None
-    # #338: staged attachment refs (each {"id": <stored basename>, ...}), validated against this
-    # conversation's on-disk store before persist — mirrors TaskMessage.attachments (#330). Typed
-    # as an object-array (list[dict]) so the OpenAPI schema matches the route's runtime contract
-    # (_validate_attachment_refs requires each item be an object, main.py:846).
-    attachments: Optional[list[dict]] = None
 
 
-class ConversationSession(BaseModel):
-    """Record the claude --session-id so the resident can pin/resume the same session."""
-    session_id: str
 
 
-class ConversationActor(BaseModel):
-    actor_agent_id: str
 
 
-class ReachabilityUpsert(BaseModel):
-    """Epic A: how the notifier daemon can reach this agent's Claude session to wake it.
-
-    Recorded at /orcha-register-agent and refreshed at SessionStart (the tmux pane
-    changes every session). Partial upsert — only the fields supplied are written,
-    so SessionStart can refresh tmux_target without clobbering a wake_enabled=false
-    opt-out the human set earlier.
-    """
-    tmux_target: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN,
-                                       description='"session:window.pane" for live send-keys wakes')
-    headless_cwd: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN,
-                                        description="project dir for out-of-band `claude -p` wakes")
-    headless_flags: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
-    wake_enabled: Optional[bool] = Field(default=None,
-                                         description="ON by default; set false to opt out of wakes")
-class DigestSnapshot(BaseModel):
-    """Epic C / D3: one per-agent memory digest the agent composes + POSTs.
-
-    The server never synthesises these (reasoning isn't derivable from rows); it
-    only stores what the agent sends. current_focus is a one-liner; the three
-    lists are free-form [{text, ...}] objects (or bare strings, normalised on
-    write). See docs/epic-c-agent-digest-plan.md for the ownership boundary.
-    """
-    current_focus: Optional[str] = Field(default=None, max_length=MAX_PAYLOAD_LEN)
-    decisions: list = Field(default_factory=list)
-    learnings: list = Field(default_factory=list)
-    open_threads: list = Field(default_factory=list)
-    # #325: the plain-language conversational register — who the agent is talking to,
-    # their vocabulary, what they already understand. Free text, like current_focus.
-    # Carried across wakes so tone survives (the facts above never captured HOW to talk
-    # to a human, so each wake the agent reverted to internal jargon). Optional/additive.
-    audience: Optional[str] = Field(default=None, max_length=MAX_PAYLOAD_LEN)
 
 
-class DecisionCreate(BaseModel):
-    """B0 / G1: the one shape every human-decision surface speaks.
-
-    A decision is `approve` or `reject` plus a free-text `reason` (REQUIRED on
-    reject, optional on approve). subject_type/subject_id name what's being decided
-    (a task verify, a request, a checkpoint, a dummy demo) so a single endpoint
-    serves every surface. The decision + reason are persisted (auditable) and an
-    event is routed to target_agent_id so the agent sees *why* on its next wake.
-    """
-    subject_type: str = Field(..., max_length=MAX_NAME_LEN,
-                              description="what's being decided, e.g. 'task_verify'|'request'|'checkpoint'|'dummy'")
-    subject_id: str = Field(..., max_length=MAX_NAME_LEN,
-                            description="id of the thing being decided (task/request/etc)")
-    decision: Literal["approve", "reject"]
-    reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN,
-                                  description="REQUIRED on reject, optional on approve")
-    actor_agent_id: str = Field(..., description="UUID of the deciding human (kind='human')")
-    target_agent_id: Optional[str] = Field(
-        default=None, description="agent that consumes {decision,reason} on next wake (omit if none)")
 
 
 # ---------- containers ----------
@@ -3902,11 +3773,6 @@ def agent_outbox(aid: str, status: Optional[str] = None, include_closed: bool = 
 
 # ---------- #247 KEYSTONE: typed notification feed (classify-over-the-bus) ----------
 
-class NotificationsRead(BaseModel):
-    through_ts: Optional[float] = Field(
-        None,
-        description="advance the read cursor to this bus ts (epoch seconds); omit to mark ALL "
-                    "current notifications read (cursor jumps to the agent's newest event ts)")
 
 
 @app.get("/api/agents/{aid}/notifications")
@@ -5173,81 +5039,10 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
     return result
 
 
-class WakeAck(BaseModel):
-    """Notifier daemon acknowledges that it issued (or attempted) a wake."""
-    delivered_ts: Optional[float] = Field(
-        default=None,
-        description="advance the agent's wake cursor to this agent_events.ts (omit if no events consumed)")
-    kind: str = Field(..., description="tmux | ephemeral | resident | unreachable | skipped (or a *_killed/*_failed/released reason)")
-    lane: Optional[str] = Field(
-        default=None, pattern="^(work|conversation)$",
-        description="GH #91/#90: which lease slot this ack acts on. None -> resolved to 'work' for "
-                    "backward compat (existing ephemeral/live acks are work-lane; a resident "
-                    "conversation ack passes 'conversation'). release_lease / cursor advance / "
-                    "running->orphaned reconcile are all scoped to this lane.")
-    event: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN,
-                                 description="the event_name / reason that triggered the wake")
-    release_lease: bool = Field(
-        default=False,
-        description="R2.4: a one-shot worker that has finished draining sets this on its final "
-                    "ack to release its single-flight lease immediately (snappy continuity). The "
-                    "daemon's post-spawn ack leaves it false; the lease TTL is the crash-safe net.")
-    stamp_woken: bool = Field(
-        default=True,
-        description="#266: whether this ack counts as a WAKE (stamps last_woken_at=now(), resetting "
-                    "the cooldown + the clock-driven auto-wake cadence). Default true for every real "
-                    "wake/finish. The auto-wake idle-yield sets it FALSE so a resident that merely "
-                    "steps aside to let the ephemeral clock-wake fire does NOT reset secs_since_woken "
-                    "out from under its own auto_wake_due (the real ephemeral wake stamps it instead).")
-    clear_self_wake: bool = Field(
-        default=False,
-        description="GH #122: clear the one-shot self-wake row after its resume context rendered")
-    self_wake_task_id: Optional[str] = Field(
-        default=None,
-        description="GH #122: task id of the exact per-task self-wake row to clear")
 
 
-class PromptEvent(BaseModel):
-    """A3: a directed human/teammate message that wakes an agent. Posting one publishes a
-    `prompt` agent_event carrying the text; wake-scan counts it as pending work and the daemon
-    surfaces the message in the woken worker's context. Keystone for B2 (prompt-from-portal)
-    and B12 (poke / reject-loop)."""
-    message: str = Field(..., min_length=1, max_length=MAX_PAYLOAD_LEN,
-                         description="the directed message the woken agent should act on")
-    from_agent_id: Optional[str] = Field(
-        default=None, description="UUID of the sender (a human or agent); omitted for system pokes")
 
 
-class WakeClaim(BaseModel):
-    """R2.4: the daemon's atomic single-flight claim before spawning a headless worker."""
-    lease_ttl: float = Field(
-        default=300.0, ge=1, le=3600,
-        description="seconds the lease is held; the worker should finish well within this, and the "
-                    "TTL auto-expires it on crash so the agent is never stuck unwakeable")
-    kind: str = Field(default="ephemeral", description="transport about to be used: ephemeral | tmux | resident | live")
-    lane: Optional[str] = Field(
-        default=None, pattern="^(work|conversation)$",
-        description="GH #91/#90: which lease slot to claim. When None it is derived from lease_kind/"
-                    "kind (see _resolve_claim_lane): a 'resident' embodiment (or an explicit "
-                    "'conversation' kind) claims the CONVERSATION lane; ephemeral/live claim WORK. "
-                    "The two lanes have independent lease slots on the one agent_wake_state row, so a "
-                    "warm resident chat and a work worker can be live for the same agent at once.")
-    event: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN,
-                                 description="the event_name / reason driving this wake")
-    lease_kind: str = Field(default="ephemeral", pattern="^(ephemeral|resident|live)$",
-                            description="E1/§3b: embodiment holding the lease — 'ephemeral' (a one-shot "
-                                        "`claude -p` wake), 'resident' (a background warm conversation "
-                                        "session, also headless), or 'live' (a human interactively driving "
-                                        "an embedded terminal AS the agent via `orcha use`). All three share "
-                                        "the one single-flight lease, so one excludes the others "
-                                        "(one-embodiment-per-agent).")
-    preempt: bool = Field(
-        default=False,
-        description="ISS-69(b): if the claim is DENIED because an IDLE warm RESIDENT holds the lease, "
-                    "record a yield request on the held row instead of just refusing. The daemon reads "
-                    "it back on its next wake-renew and gracefully yields the idle resident (snapshot + "
-                    "release) so this claim can win on retry. No effect when the holder is ephemeral or "
-                    "another live terminal (those stay 4409).")
 
 
 def _resolve_claim_lane(body) -> str:
@@ -5917,12 +5712,6 @@ def wake_ack(aid: str, body: WakeAck):
     return {"agent_id": aid, "lane": lane, "cleared_self_wake": cleared_self_wake, **row}
 
 
-class EventsAckHandled(BaseModel):
-    """GH #58: the per-event handled-set a finished drain run marks. The daemon posts the ids the run
-    actually handled (FYI + taskless + its context-task's task_bound rows) so they stop re-waking,
-    while events it could NOT handle (a cross-task task_bound, a NEW_WORK/DIRECTIVE) stay pending for
-    the right run/seam."""
-    event_ids: list[int] = Field(default_factory=list)
 
 
 @app.post("/api/agents/{aid}/events/ack-handled", status_code=200)
@@ -6327,9 +6116,6 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
                         "idle_seconds": round(float(r["idle_seconds"]), 1)} for r in reaped]}
 
 
-class WakesToggle(BaseModel):
-    enabled: bool = Field(..., description="false = halt ALL wakes for this container")
-    actor_agent_id: Optional[str] = Field(default=None, description="who flipped it (for the audit row)")
 
 
 # #298: the autonomy SLIDER write body. `level` is the engine enum; `actor_agent_id` MUST be a
@@ -6339,9 +6125,6 @@ class WakesToggle(BaseModel):
 AUTONOMY_LEVELS = ("plan", "pr", "full")
 
 
-class AutonomyUpdate(BaseModel):
-    level: str = Field(..., description="engine autonomy level: 'plan' | 'pr' | 'full'")
-    actor_agent_id: str = Field(..., description="UUID of the human (kind='human') moving the slider")
 
 
 @app.post("/api/containers/{cid}/wakes", status_code=200)
@@ -6408,11 +6191,6 @@ def set_autonomy_level(cid: str, body: AutonomyUpdate):
 # revokes a run's token on EVERY terminal transition it observes (finish / wake-ack orphan /
 # reap-orphan-leases / dead-pid sweep) so a revoked capability can never outlive its process.
 
-class EmbodimentTokenMint(BaseModel):
-    """GH #91/#90: mint a per-process capability token before a spawn."""
-    lane: str = Field(..., pattern="^(work|conversation)$",
-                      description="work = may claim/work/complete tasks; conversation = dispatch only")
-    kind: str = Field(..., description="informational: headless | resident | live")
 
 
 @app.post("/api/agents/{aid}/embodiment-tokens", status_code=201)
@@ -6536,60 +6314,12 @@ def _revoke_tokens_for_runs(cur, run_ids):
 
 # ---------- A2: worker runs (persist + expose headless wake output) ----------
 
-class WorkerRunStart(BaseModel):
-    """Notifier records a spawned worker (status=running)."""
-    wake_kind: str = Field(default="ephemeral", description="transport: ephemeral | tmux | resident | live")
-    wake_event: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN)
-    task_id: Optional[str] = Field(default=None, description="the wake's auto-start task, if any")
-    log_path: Optional[str] = Field(default=None, description="host path of the per-wake stream-json log (A1)")
-    pid: Optional[int] = Field(default=None, description="919050a5: host PID of the spawned worker, so "
-                               "the notifier can os.kill(pid,0)-reap a run whose process is dead")
-    runtime: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN)
-    conversation_id: Optional[str] = Field(default=None, description="conversation answered by this run, if any")
-    conversation_ack_ts: Optional[float] = Field(default=None, description="event cursor claimed for this conversation turn")
-    last_message_path: Optional[str] = Field(default=None, description="Codex --output-last-message sidecar path")
-    worktree: Optional[str] = Field(default=None, description="isolated worktree cwd, if any")
-    branch: Optional[str] = Field(default=None, description="isolated worktree branch, if any")
-    base_cwd: Optional[str] = Field(default=None, description="host project cwd that owns the worktree/logs")
-    # GH #91/#90: the run's lane. This is the SINGLE insert choke point where a run is tagged, so it
-    # is validated here (DB CHECK is the backstop). Default 'work' keeps every existing caller landing
-    # on the work lane; the conversation resident/turn spawns pass 'conversation'.
-    lane: str = Field(default="work", pattern="^(work|conversation)$",
-                      description="GH #91/#90: work | conversation — scopes the single-flight belt, "
-                                  "wake gates and orphan reaper per lane")
-    # GH #91/#90: the embodiment run_token this process was minted BEFORE spawn (if any). When
-    # present, the server binds it to the freshly-created run_id (+pid) so revocation survives daemon
-    # turnover — the server can revoke a run's token on any terminal transition it observes.
-    token_id: Optional[str] = Field(default=None, description="the run_token to bind to this run, if any")
 
 
-class WorkerRunFinish(BaseModel):
-    """Notifier finishes a run on reap (clean exit or ISS-15 kill)."""
-    status: str = Field(..., description="exited | killed | rate_limited | failed")
-    exit_code: Optional[int] = None
-    output: Optional[str] = Field(default=None, description="captured stream-json text from the per-wake log")
-    diff: Optional[str] = Field(default=None, description="ISS-8: net `git diff` vs origin/main from the worker's isolated worktree")
-    kill_reason: Optional[str] = Field(default=None, description="#270: structured watchdog diagnostic (JSON) when the stall/hard-cap reaper kills a worker — explains WHY it was reaped")
-    input_tokens: Optional[int] = Field(default=None, description="#289: input tokens for the wake (from the stream-json result event's usage)")
-    output_tokens: Optional[int] = Field(default=None, description="#289: output tokens for the wake")
-    cache_read_input_tokens: Optional[int] = Field(default=None, description="#289: cached input tokens READ — cheap in $ but count against the plan quota")
-    cache_creation_input_tokens: Optional[int] = Field(default=None, description="#289: input tokens written to cache")
-    total_cost_usd: Optional[float] = Field(default=None, description="#289: total dollar cost the CLI reported for the wake")
 
 
-class WorkerRunStop(BaseModel):
-    """#240 + #171/ISS-72: a human requests a graceful STOP of a running worker run / resident
-    turn. The API only RECORDS the intent (it can't signal host PIDs); the host daemon enforces
-    it on its next wake-renew tick. Human-gated."""
-    actor_agent_id: str = Field(..., description="UUID of the human (kind='human') requesting the stop")
 
 
-class WorkerRunLines(BaseModel):
-    """ISS-39: the daemon posts a batch of new stream-json lines for a running worker.
-    `start_seq` is the seq of the FIRST line; the rest are start_seq+1, +2, … Idempotent
-    (PK (run_id, seq), ON CONFLICT DO NOTHING) so a retried batch never duplicates."""
-    start_seq: int = Field(..., ge=1, description="seq of lines[0]; subsequent lines increment")
-    lines: list[str] = Field(..., description="raw NDJSON stream-json lines, in order")
 
 
 def _run_row(r: dict) -> dict:
@@ -8342,86 +8072,22 @@ def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
     return ("info", None)
 
 
-class TaskRequestPayload(BaseModel):
-    """Embedded inside a request when type='task' (Orcha#5, Phase 3)."""
-    title: str = Field(..., max_length=MAX_NAME_LEN)
-    description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
-    definition_of_done: str = Field(..., max_length=MAX_DOD_LEN)
-    priority: int = 100
-    # GH #55: a task request may carry the per-task protocol (loop rules). It rides in the
-    # request's `detail` JSONB (no schema change) and is read into the spawned task's protocol
-    # on /accept-task — so a request-born task gets its loop rules without a follow-up PATCH.
-    protocol: Optional[ProtocolFields] = None
 
 
-class RequestCreate(BaseModel):
-    requester_agent_id: str
-    target_alias: Optional[str] = Field(default=None, max_length=64)   # mutually exclusive with target_agent_id
-    target_agent_id: Optional[str] = None                                # ditto; both null → API picks the human via _pick_human() (Orcha#30)
-    payload: str = Field(..., max_length=MAX_PAYLOAD_LEN)
-    priority: int = 100
-    expires_minutes: int = Field(default=60, ge=0, le=10080)             # cap at 7 days
-    parent_request_id: Optional[str] = None                              # Orcha#1: chain off another request
-    # GH #56 (Point 3): the task the REQUESTER was working on when it asked. Optional + agent-supplied
-    # (never backend-guessed — a requester can have several tasks in progress). Null for conversation /
-    # taskless asks. When present it is server-validated (must be a real task in this container the
-    # requester participates in) and then rides the answer back so the requester wakes ON that task.
-    originating_task_id: Optional[str] = None
-    # Phase 3 (Orcha#5):
-    type: str = Field(default="info", pattern="^(info|task)$")
-    task: Optional[TaskRequestPayload] = None                            # required when type='task'
 
 
-class RequestRespond(BaseModel):
-    responder_agent_id: str
-    response: str = Field(..., max_length=MAX_PAYLOAD_LEN)
 
 
-class RequestActorBody(BaseModel):
-    requester_agent_id: str
-    reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
-class TaskRequestAccept(BaseModel):
-    """Target agent accepts a task request. Creates the task, assigns, starts."""
-    responder_agent_id: str
-    note: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
-class TaskRequestReject(BaseModel):
-    """Target agent rejects a task request."""
-    responder_agent_id: str
-    reason: str = Field(..., max_length=MAX_FEEDBACK_LEN)
 
 
-class AgentSuggestion(BaseModel):
-    """Requester suggests a new agent be created (after task-request rejection or directly)."""
-    requester_agent_id: str
-    proposed_alias: str = Field(..., max_length=64)
-    proposed_role: str = Field(..., max_length=200)
-    proposed_prompt: str = Field(..., max_length=MAX_PROMPT_LEN)
-    rationale: str = Field(..., max_length=MAX_FEEDBACK_LEN)
 
 
-class SuggestionDecision(BaseModel):
-    """Human resolves an agent suggestion."""
-    kind: str = Field(..., pattern="^(create|reassign|refuse)$")
-    # for reassign: which existing agent gets the task
-    target_alias: Optional[str] = Field(default=None, max_length=64)
-    # for refuse: why
-    reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
-    # for create: optional turn budget for the new agent (else default)
-    turn_budget: Optional[int] = None
-    actor_agent_id: str = Field(..., description="UUID of the human agent deciding (kind='human')")
 
 
-class RequestConvert(BaseModel):
-    """Convert an answered info request into a task (Phase 3)."""
-    requester_agent_id: str
-    title: str = Field(..., max_length=MAX_NAME_LEN)
-    definition_of_done: str = Field(..., max_length=MAX_DOD_LEN)
-    priority: int = 100
-    assignee_alias: Optional[str] = Field(default=None, max_length=64)
 
 
 @app.post("/api/containers/{cid}/requests", status_code=201)
@@ -8821,10 +8487,6 @@ def close_request(rid: str, body: RequestActorBody):
     return {"request_id": rid, "status": "closed", "forced_by_human": forced}
 
 
-class NudgeBody(BaseModel):
-    """#60: a standalone request nudge — wakes whoever owns the NEXT ACTION, no state change."""
-    actor_agent_id: str
-    note: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
 
 
 def _task_request_context_block(detail) -> str:
@@ -8962,13 +8624,6 @@ def nudge_request(rid: str, body: NudgeBody):
             "nudged_role": role, "nudged_agent_id": recipient_id}
 
 
-class TriageCloseBody(BaseModel):
-    """#288 wake-suppression: the notifier daemon auto-closes an ANSWERED request whose answer was
-    a pure ack (no actionable follow-up), so the requester is never spawned just to close it."""
-    triage_reason: Optional[str] = Field(
-        default=None, max_length=500,
-        description="why the wake was suppressed (the triage verdict reason) — stamped into the "
-                    "request_closed event JSONB so #289 can measure suppressions with no schema change")
 
 
 @app.post("/api/requests/{rid}/triage-close", status_code=200)

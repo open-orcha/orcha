@@ -17,18 +17,10 @@ class ProtocolFields(BaseModel):
     is FREE TEXT for now (NOT an L1/L2/L3 enum; that waits on the SPEC-1 autonomy design-call).
     Used both as the create-time `protocol` block and (with actor_agent_id) as the PATCH body."""
 
-    review_chain: Optional[str] = Field(
-        default=None, max_length=MAX_PROTOCOL_FIELD_LEN
-    )
-    handoff_to: Optional[str] = Field(
-        default=None, max_length=MAX_PROTOCOL_FIELD_LEN
-    )
-    autonomy: Optional[str] = Field(
-        default=None, max_length=MAX_PROTOCOL_FIELD_LEN
-    )
-    notes: Optional[str] = Field(
-        default=None, max_length=MAX_PROTOCOL_FIELD_LEN
-    )
+    review_chain: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
+    handoff_to: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
+    autonomy: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
+    notes: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
 
 
 class ProtocolUpdate(ProtocolFields):

@@ -24,9 +24,7 @@ class ContainerReset(BaseModel):
 
 
 class ContainerStatusUpdate(BaseModel):
-    status: str = Field(
-        ..., description="active|paused|completed|cancelled|failed"
-    )
+    status: str = Field(..., description="active|paused|completed|cancelled|failed")
     actor_agent_id: str = Field(
         ...,
         description="UUID of the human agent performing the action (kind='human')",
@@ -125,8 +123,6 @@ class ProposeDialogueTurn(BaseModel):
 class ProposeBody(BaseModel):
     """SPEC-292 request body for POST /api/onboarding/propose."""
 
-    cid: str = Field(
-        ..., description="container id for the workspace being staffed"
-    )
+    cid: str = Field(..., description="container id for the workspace being staffed")
     goal: str = Field(..., max_length=MAX_PAYLOAD_LEN)
     dialogue: list[ProposeDialogueTurn] = Field(default_factory=list)
