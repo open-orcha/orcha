@@ -66,6 +66,7 @@ from .notifier_codex_events import (
 from .notifier_codex_result import _codex_result_status
 from . import notifier_conversation as _conversation
 from . import notifier_boot_context as _boot_context
+from . import notifier_daemon_registry as _daemon_registry
 from . import notifier_embodiment as _embodiment
 from . import notifier_persona_cache as _persona_cache
 from .notifier_process import _capture_run_output, _kill_worker, _usage_from_log
@@ -3319,99 +3320,36 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
 # ---------- daemon singleton (so init / up / SessionStart can auto-start it) ----------
 
 def _pid_path(cwd: pathlib.Path) -> pathlib.Path:
-    return cwd / ".claude" / ".orcha-notifier.pid"
+    return _daemon_registry.pid_path(cwd)
+
 
 
 def _log_path(cwd: pathlib.Path) -> pathlib.Path:
-    return cwd / ".claude" / ".orcha-notifier.log"
+    return _daemon_registry.log_path(cwd)
+
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError, ValueError, TypeError):
-        return False
+    return _daemon_registry.pid_alive(pid, services=sys.modules[__name__])
+
 
 
 def _ps_inspect(pid: int) -> Optional[tuple]:
-    """(state, command) for `pid` via `ps`, or None if `ps` is unusable / gives us nothing.
+    """Compatibility facade for portable process inspection."""
+    return _daemon_registry.ps_inspect(pid, services=sys.modules[__name__])
 
-    Portable across macOS + Linux: `ps -o state= -o command= -p <pid>` (empty headers, so
-    no header row to strip). Returns None on any error / non-zero exit / empty output — the
-    caller treats that as "can't tell" and FAILS OPEN to the os.kill verdict (no regression
-    on a host without a usable `ps`)."""
-    try:
-        out = subprocess.run(
-            ["ps", "-o", "state=", "-o", "command=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=2.0,
-        )
-    except Exception:
-        # ANY failure consulting `ps` (missing binary, OSError, timeout, a sandboxed/odd
-        # environment) is "can't tell" → fail open. Deliberately broad: this is a best-effort
-        # vetting helper whose whole contract is to never make the caller WORSE than os.kill.
-        return None
-    if out.returncode != 0:
-        return None
-    line = (out.stdout or "").strip()
-    if not line:
-        return None
-    state, _, command = line.partition(" ")
-    return state, command.strip()
 
 
 def _daemon_pid_live(pid: int, cid: Optional[str] = None) -> bool:
-    """ISS-22 / #92: is `pid` a LIVE notifier daemon — not a zombie, not a reused pid?
+    """Compatibility facade for notifier process identity checks."""
+    return _daemon_registry.daemon_pid_live(pid, cid, services=sys.modules[__name__])
 
-    Bare `os.kill(pid, 0)` reports SUCCESS for two non-live states that make `--ensure`
-    wrongly refuse to start a replacement: a ZOMBIE (the daemon exited but the OS hasn't
-    reaped it yet) and a REUSED pid (after a SIGKILL the finally-block never cleared the
-    pidfile, and the OS handed that pid to an unrelated process). Vet the pid against `ps`:
-    reject a zombie state and require the command to actually be a notifier — and, when the
-    container is known AND the daemon's argv carries an explicit `--container` (it does when
-    `ensure_daemon` spawned it, see below), require it to be OURS.
-
-    FAIL-OPEN: if `ps` can't tell us (missing / errored / empty), fall back to today's
-    os.kill-only verdict. So this can only ADD rejections that `ps` positively justifies —
-    it never newly reports a genuinely-live daemon as dead on a box without a usable `ps`."""
-    if not _pid_alive(pid):
-        return False
-    info = _ps_inspect(pid)
-    if info is None:
-        return True  # fail-open — exactly today's os.kill-only behavior
-    state, command = info
-    if state and state[0] == "Z":
-        return False  # zombie: exited, awaiting reap — not a live daemon
-    if "notifier" not in command:
-        return False  # pid was reused for an unrelated process
-    # A notifier stamped for a DIFFERENT container on this pid ⇒ the pid was reused by another
-    # project's daemon. A notifier with NO `--container` token (started directly without one)
-    # can't be disambiguated, so it's accepted as ours.
-    if cid and "--container" in command and cid not in command:
-        return False
-    return True
 
 
 def daemon_running(cwd: pathlib.Path) -> Optional[int]:
-    """Return the live notifier daemon's pid for this project, or None.
+    """Return the live notifier daemon PID for this project, if present."""
+    return _daemon_registry.daemon_running(cwd, services=sys.modules[__name__])
 
-    ISS-22: liveness is zombie- & pid-reuse-aware (`_daemon_pid_live`). A pidfile pointing at
-    a dead / zombie / foreign pid is CLEARED here, so a stale pidfile (e.g. a SIGKILL'd daemon
-    whose finally-block never ran) can't make `--ensure` refuse to spawn a replacement forever."""
-    p = _pid_path(cwd)
-    if not p.exists():
-        return None
-    try:
-        pid = int(p.read_text().strip())
-    except (ValueError, OSError):
-        return None
-    if _daemon_pid_live(pid, _container_id_for(cwd)):
-        return pid
-    try:
-        p.unlink()  # stale pidfile (dead / zombie / reused pid) — clear it
-    except OSError:
-        pass
-    return None
 
 
 # The daemon is CONTAINER-global (it resolves container_id once at startup and services
@@ -3424,120 +3362,35 @@ def daemon_running(cwd: pathlib.Path) -> Optional[int]:
 # every worktree sees the same file.
 
 def _global_pid_path(container_id: str) -> pathlib.Path:
-    return pathlib.Path.home() / ".orcha" / f"notifier-{container_id}.pid"
+    return _daemon_registry.global_pid_path(container_id)
+
 
 
 def _container_id_for(cwd: pathlib.Path) -> Optional[str]:
-    """current_container_id from this project's .claude/orcha.json, or None."""
-    try:
-        cfg = json.loads((cwd / ".claude" / "orcha.json").read_text())
-        return cfg.get("current_container_id") or None
-    except (OSError, ValueError):
-        return None
+    return _daemon_registry.container_id_for(cwd)
+
 
 
 def _api_base_for(cwd: pathlib.Path) -> Optional[str]:
-    """api_base_url from this project's .claude/orcha.json, or None."""
-    try:
-        cfg = json.loads((cwd / ".claude" / "orcha.json").read_text())
-        return (cfg.get("api_base_url") or "").rstrip("/") or None
-    except (OSError, ValueError):
-        return None
+    return _daemon_registry.api_base_for(cwd)
+
 
 
 def _write_global_pid(container_id: str, pid: int, cwd: pathlib.Path) -> None:
-    p = _global_pid_path(container_id)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(f"{pid}\n{cwd}")
-    except OSError:
-        pass  # best-effort — the per-cwd file still guards same-checkout double-spawns
+    _daemon_registry.write_global_pid(container_id, pid, cwd, services=sys.modules[__name__])
+
 
 
 def daemon_running_for_container(container_id: str) -> Optional[tuple]:
-    """(pid, started_from_cwd) of a LIVE daemon serving container_id — from ANY worktree, or None.
+    """Return the live daemon serving a container from any worktree."""
+    return _daemon_registry.daemon_running_for_container(container_id, services=sys.modules[__name__])
 
-    #92 / #276 rework (Gate P1 #1): liveness here is the SAME zombie- & pid-reuse-aware identity
-    vet (`_daemon_pid_live`) the per-cwd `daemon_running` uses — a bare `_pid_alive` let a stale
-    GLOBAL claim pointing at a zombie / reused / foreign pid masquerade as a live daemon, so
-    `ensure_daemon` returned "already running" and never spawned a replacement (#92 still
-    reproducible through the container-global path even after the local pidfile was fixed). A stale
-    global pidfile is CLEARED here too — symmetry with `daemon_running` — so it can't wedge
-    `--ensure` (or a stop path) forever."""
-    p = _global_pid_path(container_id)
-    try:
-        lines = p.read_text().splitlines()
-        pid = int(lines[0].strip())
-    except (OSError, ValueError, IndexError):
-        return None
-    if not _daemon_pid_live(pid, container_id):
-        try:
-            p.unlink()  # stale global claim (dead / zombie / reused / foreign pid) — clear it
-        except OSError:
-            pass
-        return None
-    return pid, (lines[1].strip() if len(lines) > 1 else "")
 
 
 def _claim_container(container_id: str):
-    """Atomically claim the container BEFORE spawning a daemon [P1 review].
+    """Compatibility facade for atomic container-wide daemon claims."""
+    return _daemon_registry.claim_container(container_id, services=sys.modules[__name__])
 
-    A read-only check followed by spawn-then-claim leaves a window where two concurrent
-    `--ensure` calls (different worktrees) both see no claim and both spawn — the exact
-    double-servicer failure this guard exists to close. So the claim file itself is the
-    lock: O_CREAT|O_EXCL means exactly one claimer wins, and it stamps its own pid
-    immediately so the loser sees a LIVE claimant (the spawned daemon's pid replaces it
-    right after Popen).
-
-    Returns (True, None) when this process now holds the claim;
-    (False, (pid, cwd)) when a live daemon already holds it;
-    (False, (0, "")) when a concurrent claim is in flight (or undecidable) — yield, no spawn;
-    (False, None) when the claim file is unusable (e.g. unwritable $HOME) — caller falls
-    back to the per-cwd guard alone.
-    """
-    p = _global_pid_path(container_id)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False, None
-    for _ in range(3):
-        try:
-            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            holder = daemon_running_for_container(container_id)
-            if holder:
-                return False, holder
-            try:
-                raw = p.read_text().strip()
-            except OSError:
-                continue  # vanished between checks — retry the atomic create
-            stale = False
-            try:
-                # #276 rework (P1 #1): identity-aware, same as the global-claim reader — a bare
-                # _pid_alive would treat a zombie/reused pid as a live claimant and refuse to spawn.
-                stale = not _daemon_pid_live(int(raw.splitlines()[0]), container_id)  # parseable + not-our-daemon = definitive
-            except (ValueError, IndexError):
-                # unreadable claim — a concurrent claimer between ITS O_EXCL create and pid
-                # write looks exactly like this. Yield to a fresh one; clear a lingering one.
-                try:
-                    stale = (time.time() - p.stat().st_mtime) >= 10.0
-                except OSError:
-                    continue
-            if not stale:
-                return False, (0, "")
-            try:
-                p.unlink()  # stale claim — clear it and retry the atomic create
-            except (FileNotFoundError, OSError):
-                pass
-        except OSError:
-            return False, None
-        else:
-            try:
-                os.write(fd, f"{os.getpid()}\n".encode())  # provisional claimant: us
-            finally:
-                os.close(fd)
-            return True, None
-    return False, (0, "")  # undecidable after retries — fail SAFE: no spawn
 
 
 def _terminate_and_wait(pid: int, cid: Optional[str], grace: float = 8.0) -> None:
