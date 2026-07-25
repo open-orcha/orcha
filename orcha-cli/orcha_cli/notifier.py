@@ -108,6 +108,7 @@ from . import notifier_headless as _headless
 from . import notifier_orphan_cleanup as _orphan_cleanup
 from . import notifier_reaper as _reaper
 from . import notifier_resident_spawn as _resident_spawn
+from . import notifier_resident_idle as _resident_idle
 from . import notifier_run_feed as _run_feed
 from . import notifier_task_continuity as _task_continuity
 from . import notifier_wake_actions as _wake_actions
@@ -1613,169 +1614,18 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
             _close_resident(api_base, r, reason="preempted")
             _retire_resident(api_base, live_residents, conv_id)
             continue
-        # #247 B3 (§5.2 warm-zone): a drain SIDECAR may be in flight (spawned below). While it runs,
-        # this resident is "busy draining" — exactly like an in-flight turn: skip every yield/reap
-        # transition this tick so the warm session + lease stay put (both already renewed above). Reap
-        # it on exit, or kill it at its OWN hard deadline (a wedged sidecar can NEVER pin the resident
-        # lease open). Either way the sidecar is this resident's one transition for the tick → continue;
-        # next tick re-reads the drained inbox and decides whether another drain pass is needed. The
-        # sidecar holds no lease and no worker_run, so on exit there is nothing to /finish — clean.
-        side = r.get("sidecar")
-        if side is not None:
-            sproc = side.get("proc")
-            natural = sproc is not None and sproc.poll() is not None   # exited on its own
-            done = sproc is None or natural
-            if not done and time.time() > side.get("hard_deadline", time.time()):
-                _kill_worker(sproc, graceful=True)        # wedged drain → kill; resident + lease KEPT
-                done = True                               # killed, NOT a natural exit → no cursor ack
-                if not quiet:
-                    print(f"[notifier] resident {r.get('alias')} drain sidecar "
-                          f"(pid {getattr(sproc, 'pid', None)}) exceeded its hard cap — killed; warm "
-                          f"resident + lease KEPT, cursor NOT advanced (#247 B3)")
-            if done:
-                # GH #58 — SUCCESS only: a NATURAL exit with rc 0 means the drain ran to completion,
-                # so POST the per-event handled-set (the FYI/taskless ids captured at spawn) to
-                # /events/ack-handled — the server records the acks and advances delivered_ts to the
-                # contiguous floor, so the drained rows stop re-surfacing as pending_inbox while ANY
-                # row the run could not handle stays pending. A wedged-kill or a NON-ZERO exit posts
-                # nothing → the backlog re-surfaces for a fresh drain next tick (failure never advances
-                # the cursor). The lease is always KEPT (no wake-ack here) — never regress to the A2
-                # yield/teardown model. Replaces the old delivered_ts high-water park, which could ack
-                # past a task-bound row the resident must not clear.
-                success = natural and sproc.returncode == 0
-                ackable_ids = side.get("ackable_ids") or []
-                r["sidecar"] = None                       # finished/killed → no worker_run to finish
-                if success:
-                    _post_json(f"{api_base}/api/agents/{r['agent_id']}/events/ack-handled",
-                               {"event_ids": ackable_ids})
-                    if not quiet:
-                        print(f"[notifier] resident {r.get('alias')} drain sidecar finished — inbox "
-                              f"drained in its own session; {len(ackable_ids)} event(s) acked-handled "
-                              f"(lease KEPT), warm conversation intact (#247 B3 / GH #58)")
-                elif not quiet:
-                    print(f"[notifier] resident {r.get('alias')} drain sidecar ended without a clean "
-                          f"completion — cursor NOT advanced; the backlog re-surfaces for a fresh "
-                          f"drain next tick (#247 B3)")
-            continue
-        # ISS-78 (A2) → #247 B3 (§5.2): a warm resident holds the single-embodiment lease, so the
-        # server's wake gate suppresses EVERY ephemeral wake for this agent — decision_made/task_message/
-        # request_* QUEUE and the resident (which only consumes conversation turns) never sees them.
-        # ISS-74 used to drain them INTO the warm session, but that physically left the drain prompt +
-        # the agent's task-work reasoning in the conversation's context window, contaminating the NEXT
-        # human turn (the ISS-78 incoherence Kedar hit live). A2 then IDLE-YIELDED the lease so the next
-        # tick()'s ephemeral drained the backlog — context-bleed solved, but the yield TORE DOWN the warm
-        # session, forcing a cold re-boot on the next human turn and defeating the §5.1 warm-zone hold.
-        # B3 keeps the warm session: instead of yielding, spawn a THROWAWAY DRAIN SIDECAR in its OWN
-        # session/cwd (base checkout, never the pinned --resume worktree) that drains the WHOLE backlog
-        # and exits, WITHOUT releasing the lease or tearing down the conversation. Separate session ⇒
-        # zero bleed; no second lease/worker_run ⇒ the §3 ONE-EMBODIMENT contract (Kedar-locked, B2
-        # @c2b15b5) holds — the resident lease stays the sole body, tick()'s ephemeral stays suppressed.
-        # A real human turn always takes precedence (the `pending` guard above); a live sidecar short-
-        # circuits this tick (the `r["sidecar"]` block above), so we only get here with NO sidecar live.
-        inbox = (cand or {}).get("pending_inbox", 0) or 0
-        inbox_ack_ts = (cand or {}).get("inbox_ack_ts")
-        # #72: only the events BEFORE an actionable answer are drainable by a sidecar (which may NOT do
-        # task work); the answer itself must stay pending for a real post-exit worker. The server
-        # surfaces `drainable_inbox` = that safe count. When it's 0 (e.g. the sole queued event is the
-        # unblocking answer) DON'T spawn a sidecar — it would drain nothing, and skipping it leaves the
-        # trigger pending so the ephemeral wake fires once this resident's lease clears. Fall back to
-        # the full pending count for an older server that doesn't surface the field.
-        drainable = (cand or {}).get("drainable_inbox")
-        if drainable is None:
-            drainable = inbox
-        inbox_wake_task_id = (cand or {}).get("inbox_wake_task_id")
-        # GH #58 (§5.2 safe-rows-only): active-conversations classifies the queued backlog. A resident
-        # carries NO injected task protocol, so it may only drain FYI + taskless-actionable rows
-        # (drain_ackable_ids). If ANY TASK_BOUND / NEW_WORK / DIRECTIVE row is present (drain_taskbound
-        # > 0) the sidecar must NOT run — those need a fresh ephemeral bound to that task; so YIELD the
-        # lease (the existing A2 idle-yield) and let tick()'s protocol-bound ephemeral drain the whole
-        # backlog (FYI rows ride along). A pure FYI/taskless backlog drains in the warm-zone sidecar.
-        drain_taskbound = (cand or {}).get("drain_taskbound", 0) or 0
-        drain_ackable_ids = (cand or {}).get("drain_ackable_ids") or []
-        # ISS-78 anti-thrash backstop (carries the ISS-75/#188 guard forward): don't spawn ANOTHER drain
-        # pass when the inbox high-water mark (inbox_ack_ts) hasn't advanced past the last attempt's AND
-        # we attempted within the cooldown — a stuck/echo event the drain can't ack away would otherwise
-        # thrash a fresh sidecar every cycle. A genuinely NEW event (higher inbox_ack_ts) clears `stalled`
-        # and drains immediately. State is module-level so it survives across ticks (and a yield-fallback,
-        # which destroys the resident dict).
-        prev = _RESIDENT_DRAIN_YIELD.get(conv_id)
-        stalled = (inbox_ack_ts is not None and prev is not None and prev[0] is not None
-                   and inbox_ack_ts <= prev[0]
-                   and time.time() - prev[1] < RESIDENT_DRAIN_COOLDOWN_SECS)
-        # GH #91/#90 (R2-1/R3-4): the WORK lane now drains the non-conversation inbox on its own —
-        # the warm resident no longer spawns a sidecar NOR yields its conversation lease for it. Gated
-        # OFF by RESIDENT_WORK_TEARDOWN_ENABLED. The warm resident stays a pure conversation responder
-        # here; it is torn down only by the pure idle-reap below or by a real conversation transition.
-        # #72: the gate counts only DRAINABLE events (events before an actionable answer), so a
-        # backlog whose sole trigger is an unblocking answer parks for the post-lease worker.
-        if (RESIDENT_WORK_TEARDOWN_ENABLED
-                and not r.get("awaiting_result") and not pending and drainable > 0 and not stalled):
-            if inbox_wake_task_id:
-                # GH #131: this backlog is a resume on an in-progress task the agent already owns.
-                # Leave it on the WORK lane so wake_scan can spawn the normal isolated worker; the
-                # resident drain sidecar is only for no-task drains and new/other task claims.
-                if not quiet:
-                    print(f"[notifier] resident {r.get('alias')} has task-thread work queued "
-                          f"for an in-progress task — leaving inbox for the work worker; warm "
-                          f"conversation + lease KEPT (GH #131)")
-                continue
-            if drain_taskbound > 0:
-                # A task-bound / new-work / directive row needs a protocol-bound ephemeral, which the
-                # resident is not → YIELD the lease so the next tick()'s ephemeral (carrying that task's
-                # protocol) drains the whole backlog. Same teardown seam as the §8 fail-open below.
-                if not quiet:
-                    print(f"[notifier] resident {r.get('alias')} has {drain_taskbound} task-bound "
-                          f"inbox row(s) needing a protocol-bound run — yielding the lease for an "
-                          f"ephemeral drain instead of the warm-zone sidecar (#247 B3 §5.2 / GH #58)")
-                _close_resident(api_base, r, reason="inbox_drain_yield")
-                _retire_resident(api_base, live_residents, conv_id)
-                continue
-            _RESIDENT_DRAIN_YIELD[conv_id] = (inbox_ack_ts, time.time())   # mark this drain attempt
-            spawned = _spawn_drain_sidecar(api_base, r, inbox,
-                                           messages=(cand or {}).get("inbox_messages"),
-                                           ack_ts=inbox_ack_ts,
-                                           ackable_ids=drain_ackable_ids,
-                                           model=(cand or {}).get("model"),
-                                           reasoning_effort=(cand or {}).get("reasoning_effort"),
-                                           dry_run=dry_run, quiet=quiet)
-            if not spawned:
-                # §8 fail-open: sidecar spawn failed/raised → fall back to the A2 idle-YIELD so the next
-                # tick's ephemeral drains the backlog (never crash, never strand). Warm-zone is forfeited
-                # for this one cycle only; the next human turn warm --resume's (or cold-boots) a clean
-                # pre-drain session, so coherence still holds.
-                if not quiet:
-                    print(f"[notifier] resident {r.get('alias')} drain sidecar unavailable — "
-                          f"yielding the lease for an ephemeral drain instead (#247 B3 §8 fail-open)")
-                _close_resident(api_base, r, reason="inbox_drain_yield")
-                _retire_resident(api_base, live_residents, conv_id)
-            continue
-        # #266 (auto-wake FIRING): a warm resident that is idle (no in-flight turn, no pending human
-        # turn) and whose clock-driven auto-wake is DUE yields the lease — the same snapshot+release
-        # seam as the ISS-78 inbox-drain (NEVER inject the heartbeat into the warm human session: an
-        # auto-wake nudge is task-work and would bleed into the next human turn, the ISS-78 regression).
-        # Reached with nothing left for a sidecar to drain (inbox==0, or #72: only an unblocking answer
-        # is queued — parked, not drained, so a real worker handles it once the lease clears), so this is
-        # the PURE clock path. stamp_woken=False so this release does NOT reset secs_since_woken — wake-scan still
-        # reads auto_wake_due and the very next idle tick()'s EPHEMERAL wake performs the heartbeat in its
-        # own throwaway session (single-embodiment preserved: the lease is free before it claims). The
-        # ephemeral wake's own ack then stamps last_woken_at, anchoring the next cadence correctly. A
-        # mid-turn resident never reaches here (awaiting_result short-circuits in section 1).
-        # GH #91/#90 (R3-4): the clock-driven auto-wake is WORK-lane work; the warm conversation
-        # resident must NOT yield its lease for it (the work lane fires its own ephemeral off its own
-        # work lease + heartbeat). Gated OFF by RESIDENT_WORK_TEARDOWN_ENABLED.
-        if (RESIDENT_WORK_TEARDOWN_ENABLED
-                and not r.get("awaiting_result") and not pending and (cand or {}).get("auto_wake_due")):
-            if not quiet:
-                print(f"[notifier] resident {r.get('alias')} idle + clock-driven auto-wake due — "
-                      f"yielding the lease (no clock reset) so an ephemeral worker runs the heartbeat "
-                      f"in its own session (#266, no context-bleed)")
-            _close_resident(api_base, r, reason="auto_wake_yield", stamp_woken=False)
-            _retire_resident(api_base, live_residents, conv_id)
-            continue
-        if (not r.get("awaiting_result") and not pending
-                and time.time() - r.get("last_activity_ts", 0) > RESIDENT_IDLE_REAP_SECS):
-            _close_resident(api_base, r, reason="idle")     # warm session went cold → free the lease
-            _retire_resident(api_base, live_residents, conv_id)
+        _resident_idle.service_idle_resident(
+            api_base,
+            conv_id,
+            r,
+            cand,
+            live_residents,
+            renew,
+            pending,
+            quiet=quiet,
+            dry_run=dry_run,
+            services=sys.modules[__name__],
+        )
 
     # 2) For each conversation with a pending human turn and no resident mid-turn, advance ONE
     #    turn: boot the resident if needed, then feed the next human turn.
