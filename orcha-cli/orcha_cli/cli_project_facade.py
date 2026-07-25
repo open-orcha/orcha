@@ -83,7 +83,8 @@ __all__ = [
 
 
 def _services():
-    return sys.modules["orcha_cli.__main__"]
+    """Resolve the facade in both imported and ``python -m orcha_cli`` execution."""
+    return sys.modules.get("orcha_cli.__main__") or sys.modules["__main__"]
 
 
 def _install_llm_util(orcha_dir: pathlib.Path) -> None:
