@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -82,7 +83,7 @@ def test_pages_mount_the_shared_run_engine():
     """Both detail pages render runs via the shared engine — fetch the agent/task /runs
     endpoint and render each run with O.runCard + O.activateRuns (live stream + diffs)."""
     for page in ("tasks.html", "agents.html"):
-        html = (STATIC / page).read_text()
+        html = page_source(page)
         assert "O.runCard(" in html and "O.activateRuns(" in html, f"{page}: doesn't use the shared run engine"
         assert "/runs" in html, f"{page}: doesn't fetch the /runs feed"
 
@@ -90,7 +91,7 @@ def test_pages_mount_the_shared_run_engine():
 def test_shared_classifier_has_the_full_taxonomy():
     """The classifier lives once in app.js classifyLine (not per page): narration /
     thinking / tool / tool-result / orcha self-actions; the run card flags watchdog-kills."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     assert re.search(r"function classifyLine\(line\) \{", app), "classifyLine missing"
     for token in ("narrate", "think", "tool", "result", "selfAction", "label"):
         assert token in app, f"shared classifier missing '{token}'"
@@ -100,7 +101,7 @@ def test_shared_classifier_has_the_full_taxonomy():
 def _classify(line: str):
     """Run the SHARED app.js classifyLine on one stream-json line via node; returns the
     first classified entry (None if node is unavailable)."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     harness = (
         "global.localStorage={getItem:()=>null,setItem:()=>{}};"
         "global.document={documentElement:{setAttribute(){}},addEventListener(){},getElementById:()=>null,"

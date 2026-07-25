@@ -16,6 +16,7 @@ covered by test_d1_data_adapter).
 import pathlib
 import re
 import pytest
+from portal_source import script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -41,7 +42,7 @@ async def test_stream_endpoint_error_contract(client, make_agent):
 def test_shared_client_wires_eventsource_to_the_stream():
     """startRunStream opens the documented stream endpoint and consumes both message
     shapes: a worker line {seq,line} and the terminal {done}."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     fn = re.search(r"function startRunStream\(logEl, agentId, runId\) \{.*?\n  \}", app, re.S).group(0)
     assert 'new EventSource("/api/agents/" + encodeURIComponent(agentId) + "/runs/" + encodeURIComponent(runId) + "/stream")' in fn, \
         "EventSource not wired to the stream endpoint"
@@ -54,7 +55,7 @@ def test_shared_client_wires_eventsource_to_the_stream():
 def test_shared_client_dedups_replay_and_reconnects_on_timeout():
     """Monotonic seq guard drops reconnect replay; a stream_timeout reopens the stream
     while a real terminal status does not (no infinite loop)."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     fn = re.search(r"function startRunStream\(logEl, agentId, runId\) \{.*?\n  \}", app, re.S).group(0)
     assert "d.seq <= maxSeq" in fn and "return" in fn, "no monotonic dedup of reconnect replay"
     assert 'd.status === "stream_timeout"' in fn and "open()" in fn, "stream_timeout not reconnectable"
@@ -63,7 +64,7 @@ def test_shared_client_dedups_replay_and_reconnects_on_timeout():
 def test_only_running_runs_stream():
     """activateRuns streams only RUNNING runs (live), and paints finished ones from their
     stored output — so a finished run never holds an EventSource open."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     fn = re.search(r"function activateRuns\(runs\) \{.*?\n  \}", app, re.S).group(0)
     assert 'run.status === "running"' in fn and "startRunStream(" in fn, "running runs don't stream"
     assert "paintFinished(" in fn, "finished runs not painted from stored output"

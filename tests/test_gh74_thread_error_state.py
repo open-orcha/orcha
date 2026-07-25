@@ -7,13 +7,14 @@ retries). An explicit retry refetches without a full page reload.
 """
 import pathlib
 import re
+from portal_source import page_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 TASKS = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static" / "tasks.html"
 
 
 def test_thread_fetch_error_latches_and_surfaces_retry():
-    src = TASKS.read_text()
+    src = page_source("tasks.html")
     block = re.search(r"function maybeLoadThread\(.*?\n  \}", src, re.S)
     assert block, "maybeLoadThread not found"
     body = block.group(0)
@@ -27,7 +28,7 @@ def test_thread_fetch_error_latches_and_surfaces_retry():
 
 
 def test_render_shows_retry_affordance_and_is_wired():
-    src = TASKS.read_text()
+    src = page_source("tasks.html")
     # render path offers a retry button (not blank, not perpetual "Loading thread…")
     assert "data-thread-retry" in src, "no retry affordance rendered for a failed thread fetch"
     # an explicit retry refetches via maybeLoadThread(t, true) — clears the latch + refetches in place
@@ -39,7 +40,7 @@ def test_render_shows_retry_affordance_and_is_wired():
 def test_failed_refresh_over_cached_messages_still_offers_retry():
     """Review blocker: a refresh that fails while cached messages are shown must still surface a
     retry control — otherwise the latch silently freezes the thread stale until a full page refresh."""
-    src = TASKS.read_text()
+    src = page_source("tasks.html")
     # there must be a distinct "cached messages present + error latched" branch
     assert "staleError" in src, "no stale-refresh branch for cached-messages-present failures"
     assert re.search(r"staleError\s*=\s*!!threadError\[t\.id\]\s*&&\s*!!msgs\.length", src), \

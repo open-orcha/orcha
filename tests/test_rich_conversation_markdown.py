@@ -10,26 +10,27 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 
 
 def test_mdtext_is_defined_exported_and_wired():
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     assert "const mdText" in app and "mdText," in app, "mdText not defined/exported"
     # esc-first (reuses esc), and code spans are stashed before emphasis runs
     assert "esc(src == null" in app, "mdText doesn't escape first"
-    conv = (STATIC / "conversation.js").read_text()
+    conv = script_source("conversation.js")
     assert "O().mdText(t.content" in conv, "conversation turn body not rendered via mdText"
-    css = (STATIC / "agents.html").read_text()
+    css = page_source("agents.html")
     assert ".tx.md .md-code" in css and ".tx.md .md-pre" in css, "no markdown styling"
     assert ".tx.md .md-table" in css, "no table styling"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 def test_mdtext_is_safe_and_formats_the_subset():
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     harness = r"""
 global.window = {}; global.location = { search: "" }; global.localStorage = { getItem: () => null, setItem: () => {} };
 global.document = { documentElement:{setAttribute(){}}, addEventListener(){}, getElementById:()=>null,

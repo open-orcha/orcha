@@ -12,6 +12,7 @@ import shutil
 import subprocess
 
 import pytest
+from portal_source import page_source, script_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -75,21 +76,21 @@ def test_pages_detect_plan_from_plan_message_not_thread():
     """With the thread trimmed out, the plan-approval gate must fire off `plan_message`. Every
     plan detector falls back to the thread but reads plan_message first."""
     for fn_name, fname in [("planMessageOf", "app.js"), ("planMsgOf", "tasks.html"), ("planMsgOf", "agents.html")]:
-        src = (STATIC / fname).read_text()
+        src = script_source(fname) if fname.endswith(".js") else page_source(fname)
         block = re.search(rf"function {fn_name}\(t\) \{{.*?\n  \}}", src, re.S)
         assert block, f"{fn_name} not found in {fname}"
         assert "t.plan_message" in block.group(0), f"{fn_name} in {fname} doesn't read plan_message"
 
 
 def test_home_activity_feed_uses_message_summary():
-    home = (STATIC / "home.html").read_text()
+    home = page_source("home.html")
     # the feed can no longer flatten every task's full thread — it reads message_summary.last
     block = re.search(r"function activityEvents\(\) \{.*?\n  \}", home, re.S).group(0)
     assert "message_summary" in block and ".last" in block, "activity feed not rebuilt from message_summary.last"
 
 
 def test_tasks_detail_lazy_loads_thread():
-    tasks = (STATIC / "tasks.html").read_text()
+    tasks = page_source("tasks.html")
     assert "threadCache" in tasks and "maybeLoadThread" in tasks, "no lazy per-task thread cache"
     assert "OrchaData.threadOf(" in tasks, "task detail doesn't lazy-fetch the thread"
     # refetch when the summary count outgrows the cached thread (a new message landed)

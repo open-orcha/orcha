@@ -12,13 +12,14 @@ approve), so the Postman collection is unchanged.
 """
 import pathlib
 import re
+from portal_source import page_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 
 
 def test_action_queue_approve_offers_optional_answer():
-    home = (STATIC / "home.html").read_text()
+    home = page_source("home.html")
     # plan approve is no longer a silent one-click send("") — it opens a modal with an optional answer
     assert 'if (approve) return send("")' not in home, "plan approve still one-click (no answer carried)"
     block = home[home.index("function doPlan"):home.index("function doVerify")]
@@ -29,7 +30,7 @@ def test_action_queue_approve_offers_optional_answer():
 
 
 def test_task_gate_approve_offers_optional_answer_plan_only():
-    tasks = (STATIC / "tasks.html").read_text()
+    tasks = page_source("tasks.html")
     gate = re.search(r"function wireGate\(gate, t\) \{.*?\n  \}", tasks, re.S).group(0)
     # plan approve gets an optional answer body; verify-complete stays a plain confirm
     assert 'kind === "plan" ?' in gate and "Answer / additional info for the agent (optional)" in gate, "plan approve has no optional answer field"

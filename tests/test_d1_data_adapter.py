@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,7 +50,7 @@ async def test_data_js_served_and_snapshot_contract(client, make_agent, make_tas
 
 def test_adapter_and_render_primitive_present():
     data_js = (STATIC / "data.js").read_text()
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     for fn in ("mapSnapshot", "resolveCid", "function start", "refresh"):
         assert fn in data_js, f"data.js missing {fn}"
     # maps to the component shape + mutates in place (no D7 dependency: D7 fields fall back)
@@ -92,7 +93,7 @@ def test_attn_count_classifies_mapped_requests_correctly():
     """The mapped snapshot must not make every open request look human-targeted. After
     OrchaData.applies a mapped snapshot, Orcha.attnItems() must classify correctly:
     AI→AI open = 0, →human (explicit or null target) open = 1."""
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     data_js = (STATIC / "data.js").read_text()
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
@@ -102,11 +103,11 @@ global.window = {};
 __APPJS__
 __DATAJS__
 const O = window.Orcha, DA = window.OrchaData;
-const agents = [ {id:"h",alias:"kedar",kind:"human",status:"idle"},
+const snapshotAgents = [ {id:"h",alias:"kedar",kind:"human",status:"idle"},
                  {id:"a",alias:"A",kind:"ai",status:"working"},
                  {id:"b",alias:"B",kind:"ai",status:"working"} ];
 function count(target_id) {
-  O.applySnapshot(DA.mapSnapshot({ container:{id:"c",status:"active"}, agents, tasks:[],
+  O.applySnapshot(DA.mapSnapshot({ container:{id:"c",status:"active"}, agents:snapshotAgents, tasks:[],
     requests:[ {id:"r",type:"info",requester_id:"a",target_id,status:"open",priority:10} ] }));
   return O.attnItems().count;
 }
@@ -202,7 +203,7 @@ console.log(JSON.stringify({
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
 def test_patch_preserves_scroll_skips_unchanged_and_defers_selection():
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.document = { documentElement: { setAttribute(){} }, addEventListener(){}, getElementById: () => null,
@@ -254,7 +255,7 @@ console.log(JSON.stringify({
 def test_patch_defers_when_selection_dragged_into_panel():
     """P3: a selection that STARTS outside el and is dragged INTO it has its anchor
     outside but focus inside — patch must still defer (anchor-only check missed this)."""
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.document = { documentElement:{setAttribute(){}}, addEventListener(){}, getElementById:()=>null,

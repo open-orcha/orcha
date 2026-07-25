@@ -19,6 +19,7 @@ import pathlib
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -27,7 +28,7 @@ STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 # ---------- the wiring is present in the source ----------
 
 def test_presence_contract_is_wired_into_the_panel():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     # reads presence + presence_reason off the top level of the conversation read payload
     assert "d.presence" in js and "d.presence_reason" in js, "doesn't read the presence contract fields"
     # refreshes presence on the poll tick via GET /api/conversations/{id} (not the /turns delta)
@@ -40,7 +41,7 @@ def test_presence_contract_is_wired_into_the_panel():
     assert "function queuedBubble" in js and "presence_reason" in js, "no queued notice"
     assert "is busy with another task" in js, "no generic queued fallback line"
     # the busy pill + queued styles exist
-    css = (STATIC / "agents.html").read_text()
+    css = page_source("agents.html")
     assert ".presence.p-busy" in css and ".conv-queued" in css, "busy pill / queued CSS missing"
 
 
@@ -48,7 +49,7 @@ def test_presence_contract_is_wired_into_the_panel():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
 def test_presence_drives_queued_vs_thinking_vs_fallback():
-    conv_js = (STATIC / "conversation.js").read_text()
+    conv_js = script_source("conversation.js")
     harness = r"""
 function mkEl() {
   return { _html: "", className: "", style: {}, hidden: false, value: "",
@@ -139,7 +140,7 @@ async function run(payload, agentStatus) {
 def test_stale_presence_response_does_not_paint_the_switched_to_agent():
     """Review P2 (PR #128): if a presence poll for agent A is in flight when the user selects
     agent B, A's late response must NOT overwrite B's panel (A's busy reason / p-busy pill)."""
-    conv_js = (STATIC / "conversation.js").read_text()
+    conv_js = script_source("conversation.js")
     harness = r"""
 function mkEl() {
   return { _html:"", className:"", style:{}, hidden:false, value:"",

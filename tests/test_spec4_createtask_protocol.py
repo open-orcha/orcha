@@ -16,6 +16,7 @@ import shutil
 import subprocess
 
 import pytest
+from portal_source import page_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -29,7 +30,7 @@ def test_proto_empty_truth_table():
     """protoEmpty(p) is the empty-state predicate: true when there's no protocol or all four
     free-text keys are blank/absent; false the moment ANY key carries text (a partial protocol
     still renders the panel, not the 'No protocol set' note)."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     m = re.search(r"function protoEmpty\(p\)\s*\{.*?\}", html, re.S)
     assert m, "protoEmpty() not found in tasks.html"
     harness = m.group(0) + r"""
@@ -54,7 +55,7 @@ console.log(JSON.stringify({
 
 def test_protocol_panel_placed_between_gate_and_assignment():
     """SPEC-4: the panel renders directly UNDER the gate / ABOVE Assignment."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     body = html[html.index("function renderDetail"):]
     body = body[: body.index("function gateSurface")]
     i_gate = body.index("html += gateSurface(t)")
@@ -65,7 +66,7 @@ def test_protocol_panel_placed_between_gate_and_assignment():
 
 
 def test_protocol_panel_rows_and_markdown_notes():
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     surf = html[html.index("function protocolSurface"):]
     surf = surf[: surf.index("function ", 10)]
     # the four structured rows
@@ -85,7 +86,7 @@ def test_protocol_panel_rows_and_markdown_notes():
 
 def test_protocol_edit_patches_human_gated():
     """[Edit] is human-authority only -> PATCH /api/tasks/{tid}/protocol with actor_agent_id."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     # a real PATCH helper exists and is used against the protocol route
     assert 'method: "PATCH"' in html, "no PATCH helper"
     assert "/protocol" in html, "protocol route not called"
@@ -97,7 +98,7 @@ def test_protocol_edit_patches_human_gated():
     # Edit/Set buttons only render for the acting human (canEdit gate)
     surf = html[html.index("function protocolSurface"):]
     surf = surf[: surf.index("function ", 10)]
-    assert "const canEdit = !!O.actingHuman()" in surf, "Edit affordance not gated on acting human"
+    assert "const canEdit = !!TasO.actingHuman()" in surf, "Edit affordance not gated on acting human"
     assert 'canEdit ?' in surf, "Edit/Set buttons not behind the canEdit gate"
 
 
@@ -113,7 +114,7 @@ def test_data_adapter_maps_protocol():
 # ---------- Part A: create-task form ----------
 
 def test_new_task_form_human_gated_posts_to_real_route():
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     # a New-Task affordance exists in the list, wired to open the modal
     assert "data-newtask" in html, "no New-Task button"
     assert "openNewTaskModal" in html, "New-Task button not wired to a modal"

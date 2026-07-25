@@ -11,42 +11,43 @@ import pathlib
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source, style_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 
 
 def test_linkify_is_applied_to_authored_text_surfaces():
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     assert "const linkify =" in app and "linkify," in app, "linkify not defined/exported"
     # the authored full-text surfaces switched from esc() to linkify()
-    reqs = (STATIC / "requests.html").read_text()
+    reqs = page_source("requests.html")
     assert reqs.count("O.linkify(") >= 3, "request payload/response/reason not linkified"
-    tasks = (STATIC / "tasks.html").read_text()
+    tasks = page_source("tasks.html")
     assert "O.linkify(m.body)" in tasks, "task thread message not linkified"
     assert "O.linkify(isPlan" in tasks, "plan body / result not linkified (verification gate)"
     # BOTH task-result surfaces must linkify: the verification-gate result AND the normal
     # task-detail Result block — and neither may regress back to bare esc().
     assert "O.linkify(t.result)" in tasks, "normal task-detail Result not linkified"
     assert "O.esc(t.result)" not in tasks, "a task-result surface regressed to bare esc()"
-    conv = (STATIC / "conversation.js").read_text()
+    conv = script_source("conversation.js")
     # conversation turns now render via mdText (rich markdown), which still linkifies URLs —
     # so authored-link coverage is preserved (see test_rich_conversation_markdown for the link case).
     assert "O().mdText(t.content" in conv, "conversation turn content not rendered (mdText)"
-    home = (STATIC / "home.html").read_text()
+    home = page_source("home.html")
     # the dashboard plan-approval card renders the FULL plan body → linkify (the last
     # full-text authored surface; "URLs clickable everywhere").
     assert "O.linkify(planText(t))" in home, "home dashboard plan-text not linkified"
     # ...but the activity-feed row text MUST stay esc(): the whole row is wrapped in an
     # <a class="act"> link, so linkifying it would nest <a> inside <a> (invalid HTML).
     assert "O.esc(e.text)" in home, "activity-feed text must stay esc() (it's inside a row anchor)"
-    css = (STATIC / "styles.css").read_text()
+    css = style_source()
     assert ".lnk" in css, "no link styling"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
 def test_linkify_behavior_is_safe_and_correct():
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.document = { documentElement:{setAttribute(){},classList:{add(){},remove(){}}}, addEventListener(){},

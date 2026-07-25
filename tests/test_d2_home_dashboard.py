@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,10 +28,10 @@ async def test_home_serves_and_wires_the_foundation(client):
     r = await client.get("/")
     assert r.status_code == 200, r.text
     html = r.text
-    for asset in ("/assets/styles.css", "/assets/app.js", "/assets/data.js"):
+    for asset in ("/assets/styles/tokens.css", "/assets/app.js", "/assets/data.js"):
         assert asset in html, f"home doesn't load {asset}"
-    assert 'mountShell("home"' in html, "home doesn't mount the shell"
-    assert "OrchaData.start(render, 3000)" in html, "home doesn't boot the live adapter on the 3s cadence"
+    assert 'mountShell("home"' in page_source("home.html"), "home doesn't mount the shell"
+    assert "OrchaData.start(render, 3000)" in page_source("home.html"), "home doesn't boot the live adapter on the 3s cadence"
     # the five sections are present
     for el in ('id="ctxbar"', 'id="aqGrid"', 'id="agTbl"', 'id="actList"', 'id="kanban"'):
         assert el in html, f"home missing section {el}"
@@ -39,7 +40,7 @@ async def test_home_serves_and_wires_the_foundation(client):
 # ---------- static guards ----------
 
 def test_home_uses_patch_and_served_route_deeplinks():
-    html = (STATIC / "home.html").read_text()
+    html = page_source("home.html")
     # every section repaints via the scroll/selection-safe primitive (ISS-46), not raw innerHTML
     assert "O.patch(" in html, "home doesn't render via Orcha.patch"
     # deeplinks target the served routes, never *.html (review P2 of D1)
@@ -73,7 +74,7 @@ def test_attn_queue_includes_pending_plans_only():
     """attnItems() must surface in-progress tasks whose agent posted a plan and that
     have NO plan_approval decision yet (the hero's 'plans to approve'), alongside
     needs_verification + escalations — and exclude already-decided or plan-less ones."""
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.document = { documentElement:{setAttribute(){}}, addEventListener(){}, getElementById:()=>null,

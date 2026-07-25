@@ -14,9 +14,11 @@ the endpoints round-trip + static guards on the JS contract.
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,7 +32,7 @@ async def test_onboarding_serves_and_boots(client):
     r = await client.get("/onboarding")
     assert r.status_code == 200, r.text
     html = r.text
-    for asset in ("/assets/styles.css", "/assets/app.js", "/assets/data.js", "/assets/onboarding.js"):
+    for asset in ("/assets/styles/tokens.css", "/assets/app.js", "/assets/data.js", "/assets/onboarding.js"):
         assert asset in html, f"onboarding doesn't load {asset}"
     # the shell mount points exist
     for el in ('id="sidebar"', 'id="topbar"', 'id="content"'):
@@ -43,7 +45,7 @@ async def test_onboarding_serves_and_boots(client):
 # ---------- static guards on the wizard contract ----------
 
 def test_onboarding_registers_human_and_creates_agent():
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     # O1: register the operator as a HUMAN via the agents endpoint
     assert "/agents" in js, "doesn't POST to the agents endpoint"
     assert 'kind: "human"' in js, "operator not registered with kind:human"
@@ -56,7 +58,7 @@ def test_onboarding_registers_human_and_creates_agent():
 
 
 def test_onboarding_reads_models_and_supports_initial_task():
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     # O2: models come from GET /api/models (display name, send id), default applied
     assert "/api/models" in js, "doesn't read the canonical model list"
     assert "d.default" in js, "doesn't honor the models default"
@@ -70,7 +72,7 @@ def test_onboarding_reads_models_and_supports_initial_task():
 
 
 def test_onboarding_has_concierge_template_for_first_agent():
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     # O3: a versioned concierge template constant, editable in the textarea
     assert "CONCIERGE_TEMPLATE" in js, "no concierge template constant"
     # the seed mentions its key behaviors: suggest (not create) agents, requests, no self-cert
@@ -81,7 +83,7 @@ def test_onboarding_has_concierge_template_for_first_agent():
 
 
 def test_onboarding_o4_is_a_held_stub_no_assign_wired():
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     # O4 held: a coming-soon stub note, NOT a wired assign/wake step
     assert "coming soon" in js.lower(), "no held coming-soon stub for the assign step"
     assert "B5 assign endpoint" in js, "the held stub doesn't name the missing B5 assign endpoint"
@@ -94,7 +96,7 @@ def test_onboarding_o4_is_a_held_stub_no_assign_wired():
 
 
 def test_onboarding_deeplinks_use_served_routes():
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     # deep-link to an agent on the served route, never the *.html filename
     assert "/agents?agent=" in js, "agent deep-link not on the served /agents route"
     for bad in ('agents.html', 'home.html"', 'tasks.html'):
@@ -112,7 +114,7 @@ def test_onboarding_route_registered_in_main():
 # ---------- home empty-state CTA → /onboarding ----------
 
 def test_home_empty_state_cta_links_to_onboarding():
-    html = (STATIC / "home.html").read_text()
+    html = page_source("home.html")
     # CTA surfaces only when there are no AI agents, and links to the wizard
     assert 'href="/onboarding"' in html, "home empty-state CTA doesn't link to /onboarding"
     assert 'a.kind !== "human"' in html, "CTA condition isn't 'no AI agents'"
@@ -126,7 +128,7 @@ def test_step_machine_transitions_are_pure():
     railKeyFor maps a step to its rail group, and resumeStep decides where the flow
     resumes given whether an operator already exists (skip welcome → fork; never
     double-register)."""
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.document = { getElementById: () => null, addEventListener(){}, documentElement:{setAttribute(){}},
@@ -229,7 +231,7 @@ def test_onboarding_does_not_rebuild_on_every_tick():
     """Bug: the wizard jumped on the 3s repaint because OrchaData.start re-rendered the whole
     form every tick (innerHTML rebuild + scrollTo). Fix: boot ONCE, no per-tick re-render —
     the snapshot stays fresh; user navigation drives renders."""
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     import re as _re
     start = _re.search(r"OrchaData\.start\(\(\) => \{.*?\}, 3000\)", js, _re.S).group(0)
     assert "booted = true; boot();" in start, "doesn't boot once"
@@ -241,9 +243,9 @@ def test_add_another_agent_affordance_and_deeplink():
     """Bug: no way to add a SECOND agent once the empty-state CTA was gone. Fix: a persistent
     '+ New agent' affordance on the dashboard + agents page → /onboarding?new=1, and onboarding
     jumps straight to the create-agent step when ?new=1 (operator already exists)."""
-    home = (STATIC / "home.html").read_text()
-    agents = (STATIC / "agents.html").read_text()
-    js = (STATIC / "onboarding.js").read_text()
+    home = page_source("home.html")
+    agents = page_source("agents.html")
+    js = script_source("onboarding.js")
     assert "/onboarding?new=1" in home, "home has no persistent '+ New agent' entry point"
     assert "/onboarding?new=1" in agents, "agents page has no '+ New agent' entry point"
     assert 'q.get("new") === "1"' in js, "onboarding doesn't honor the ?new=1 deep-link"
@@ -254,7 +256,7 @@ def test_onboarding_refreshes_snapshot_after_writes():
     """review P2: since the per-tick rebuild was removed, a write must explicitly refresh the
     snapshot before rendering the next snapshot-derived step — else a just-created human /
     agent / task won't appear until the user navigates away/back."""
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     assert "async function refreshAnd(step)" in js and "window.OrchaData.refresh()" in js, "no refresh-then-render helper"
     assert 'await refreshAnd("create-agent")' in js, "tasks-first doesn't refresh before the create-agent picker"
     assert 'await refreshAnd("fork")' in js and 'await refreshAnd("agent-created")' in js, "register/create don't refresh before next step"
@@ -264,9 +266,10 @@ def test_onboarding_no_jump_on_any_screen():
     """Finding 3: scroll-to-top belongs to an explicit step change (go), not render() — so a
     refresh/re-render of the CURRENT step (any path) never jumps; and the models-load path
     updates the picker in place instead of a full form rebuild."""
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     assert "render(); window.scrollTo({ top: 0 }); }" in js, "scrollTo not scoped to go() (step change)"
-    assert js.count("window.scrollTo") == 1, "scrollTo still fires outside an explicit step change"
+    executable = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    assert executable.count("window.scrollTo") == 1, "scrollTo still fires outside an explicit step change"
     assert "mc.innerHTML = modelCards(" in js, "models-load still does a full re-render (jump)"
 
 
@@ -275,7 +278,7 @@ def test_onboarding_reconciles_ghost_against_live_snapshot():
     'agent-created' success screen after a workspace reset. boot() reconciles the
     persisted local flow against the live server snapshot, and the success screen
     bails to fork if the celebrated agent is gone from server truth."""
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     # the pure reconciler exists + is exported for tests
     assert "function reconcileGhost(" in js, "no ghost reconciler"
     assert "reconcileGhost," in js, "reconcileGhost not exported on window.OrchaOnboarding"
@@ -289,7 +292,7 @@ def test_onboarding_reconciles_ghost_against_live_snapshot():
 def test_initial_task_picker_selects_by_id_not_index():
     """Finding 4: the existing-task picker selects by task ID (correct after a refresh/reorder),
     not a positional index into a stale snapshot."""
-    js = (STATIC / "onboarding.js").read_text()
+    js = script_source("onboarding.js")
     assert "draft._pickId" in js and "data-pickid" in js, "picker doesn't select by task id"
     assert 'data-pick="${i}"' not in js and "rts[draft._pick]" not in js, "picker still uses a fragile positional index"
     assert "const rtsLive = readyTasks()" in js, "pick list isn't recomputed live"

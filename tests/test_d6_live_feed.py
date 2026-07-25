@@ -17,6 +17,7 @@ import pathlib
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,14 +28,14 @@ STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 # ---------- D6 live run feed is wired via the shared engine ----------
 
 def test_live_run_feed_uses_the_shared_sse_engine():
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     # the per-run SSE client + the 9-type classifier + the run card live once in app.js
     assert "function startRunStream" in app and "/runs/\" + encodeURIComponent(runId) + \"/stream" in app, \
         "no shared per-run SSE client"
     assert "function classifyLine" in app and "function activateRuns" in app, "shared classify/activate missing"
     # redesigned pages render runs through it
     for page in ("agents.html", "tasks.html"):
-        html = (STATIC / page).read_text()
+        html = page_source(page)
         assert "O.runCard(" in html and "O.activateRuns(" in html, f"{page} doesn't mount the shared run engine"
 
 
@@ -71,7 +72,7 @@ def test_action_queue_surfaces_a_freshly_posted_plan():
     """ISS-52: a just-posted plan (an in_progress task whose agent posted the first thread
     message, no plan_decision yet) must appear in Orcha.attnItems().plans straight from the
     snapshot — so the redesigned dashboard live-updates it within one 3s poll."""
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     data_js = (STATIC / "data.js").read_text()
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };

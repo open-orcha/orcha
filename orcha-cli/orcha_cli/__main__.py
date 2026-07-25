@@ -24,6 +24,30 @@ from .cli_text import (
 from .notifier import cmd_notifier, stop_daemon_for_container
 
 
+def _resolve_bridge_port(api_base: str) -> int | None:
+    """Resolve through this public module so legacy monkeypatch seams still work."""
+    from . import cli_connect
+
+    return cli_connect.resolve_bridge_port(api_base, get_json=_get_json)
+
+
+def cmd_connect(args) -> None:
+    """Connect using dependencies exposed by this public compatibility module."""
+    from . import cli_connect
+
+    cli_connect.connect_command(
+        args,
+        sanitize_name=_sanitize_name,
+        discover_stacks=_discover_stacks,
+        wait_for_portal=_wait_for_portal,
+        get_json=_get_json,
+        resolve_port=_resolve_bridge_port,
+        install_skill_templates=_install_orcha_skill_templates,
+        write_hook_config=_write_hook_config,
+        post_json=_post_json,
+    )
+
+
 def _cli_version() -> str:
     """Return installed distribution metadata or a source-tree sentinel."""
     try:

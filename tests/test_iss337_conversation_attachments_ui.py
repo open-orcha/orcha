@@ -16,6 +16,7 @@ import pathlib
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -24,7 +25,7 @@ STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 # ---------- static guards: composer affordance ----------
 
 def test_conversation_composer_has_attachment_affordance():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     # paperclip button + hidden file input + staging tray in the rendered skeleton
     assert 'id="convAttach"' in js and 'id="convAttachInput"' in js, "no attach button / file input in the composer"
     assert 'id="convTray"' in js, "no staging tray in the composer skeleton"
@@ -38,7 +39,7 @@ def test_conversation_composer_has_attachment_affordance():
 # ---------- static guards: upload is conversation-scoped + get-or-create first ----------
 
 def test_conversation_upload_is_conversation_scoped():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     assert 'fetch("/api/conversations/"' in js and "/attachments" in js, \
         "upload not posted to the conversation-scoped attachments route"
     assert "function ensureConv" in js, "no get-or-create helper before a conv-scoped upload"
@@ -50,7 +51,7 @@ def test_conversation_upload_is_conversation_scoped():
 # ---------- static guards: the turn POST carries refs + attachment-only is allowed ----------
 
 def test_turn_post_carries_attachments_and_allows_attachment_only():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     assert "attachments: atts.length ? atts : undefined" in js, "turn POST doesn't carry staged attachment refs"
     assert "done.map((s) => ({ id: s.ref.id, name: s.ref.name }))" in js, \
         "doesn't send minimal {id,name} refs (server re-validates size/type from disk)"
@@ -64,7 +65,7 @@ def test_turn_post_carries_attachments_and_allows_attachment_only():
 # ---------- static guards: read view renders attachments + lightbox ----------
 
 def test_read_view_renders_attachments_with_lightbox():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     assert "function attRow" in js, "no read-view attachment renderer"
     assert "t.attachments" in js and "msg-atts" in js, "bubble() doesn't render the turn's attachments"
     assert "att-img" in js and "data-lightbox" in js, "image attachments not rendered as lightbox thumbnails"
@@ -76,7 +77,7 @@ def test_read_view_renders_attachments_with_lightbox():
 # ---------- static guards: agents.html styles the surface without breaking the §3b lock ----------
 
 def test_agents_css_styles_the_attachment_surface():
-    css = (STATIC / "agents.html").read_text()
+    css = page_source("agents.html")
     for sel in (".conv-attach", ".conv-tray", ".att-chip", ".msg-atts", ".att-img",
                 ".att-file", ".att-lightbox", ".conv.dragover"):
         assert sel in css, f"agents.html missing attachment style {sel}"
@@ -88,7 +89,7 @@ def test_agents_css_styles_the_attachment_surface():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
 def test_upload_then_send_drives_the_conversation_attachment_path(tmp_path):
-    conv_js = (STATIC / "conversation.js").read_text()
+    conv_js = script_source("conversation.js")
     harness = r"""
 function recEl(id) {
   const h = {};
@@ -107,8 +108,8 @@ function recEl(id) {
 const els = {};
 ["convInput","convSend","convList","convPresence","convSlash","convAttach","convAttachInput",
  "convTray","convPair","convMax","convLock","convPairWrap","convTermSlot"].forEach((id) => els[id] = recEl(id));
-const host = recEl("host");
-host.querySelector = (sel) => (sel === ".conv" ? recEl("conv") : null);
+const mountHost = recEl("host");
+mountHost.querySelector = (sel) => (sel === ".conv" ? recEl("conv") : null);
 global.document = { getElementById: (id) => els[id] || null, createElement: () => recEl(),
   addEventListener(){}, removeEventListener(){}, documentElement: { setAttribute(){} }, body: { appendChild(){} } };
 global.window = {};
@@ -138,7 +139,7 @@ __CONVJS__
 const flush = () => new Promise((r) => setTimeout(r, 0));
 async function drain() { for (let i = 0; i < 12; i++) await flush(); }
 async function main() {
-  window.OrchaConvo.mount(host, "a1");
+  window.OrchaConvo.mount(mountHost, "a1");
   await drain();
   // 1) pick a file → the input's change handler stages + uploads it
   els.convAttachInput.files = [{ name: "shot.png", size: 1234 }];
@@ -181,7 +182,7 @@ def test_upload_then_switch_agent_does_not_leak_attachment(tmp_path):
     to B's own conversation and carry no attachment. Pre-fix this leaked: the turn POSTed to A's
     conversation with A's attachment. Drives the real DOM+fetch path; A's create is held open until
     after the remount so the race is deterministic, not timing-dependent."""
-    conv_js = (STATIC / "conversation.js").read_text()
+    conv_js = script_source("conversation.js")
     harness = r"""
 function recEl(id) {
   const h = {};
@@ -200,8 +201,8 @@ function recEl(id) {
 const els = {};
 ["convInput","convSend","convList","convPresence","convSlash","convAttach","convAttachInput",
  "convTray","convPair","convMax","convLock","convPairWrap","convTermSlot"].forEach((id) => els[id] = recEl(id));
-const host = recEl("host");
-host.querySelector = (sel) => (sel === ".conv" ? recEl("conv") : null);
+const mountHost = recEl("host");
+mountHost.querySelector = (sel) => (sel === ".conv" ? recEl("conv") : null);
 global.document = { getElementById: (id) => els[id] || null, createElement: () => recEl(),
   addEventListener(){}, removeEventListener(){}, documentElement: { setAttribute(){} }, body: { appendChild(){} } };
 global.window = {};
@@ -236,13 +237,13 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 async function drain() { for (let i = 0; i < 12; i++) await flush(); }
 async function main() {
   // mount agent A, then pick a file → uploadConvFiles fires A's get-or-create (which HANGS)
-  window.OrchaConvo.mount(host, "a1");
+  window.OrchaConvo.mount(mountHost, "a1");
   await drain();
   els.convAttachInput.files = [{ name: "shot.png", size: 1234 }];
   els.convAttachInput.fire("change");
   await drain();
   // switch to agent B BEFORE A's get-or-create resolves
-  window.OrchaConvo.mount(host, "a2");
+  window.OrchaConvo.mount(mountHost, "a2");
   await drain();
   // now A's stale conversation-create + upload resolve — must be dropped, not applied to B
   releaseA();

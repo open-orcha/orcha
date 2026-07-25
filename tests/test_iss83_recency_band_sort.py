@@ -24,6 +24,7 @@ import shutil
 import subprocess
 
 import pytest
+from portal_source import page_source, script_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -42,7 +43,7 @@ const O = window.Orcha;
 
 
 def _run_node(snippet):
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     src = _HARNESS_HEAD.replace("__APPJS__", app_js) + snippet
     out = subprocess.run(["node", "-e", src], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
@@ -122,7 +123,7 @@ console.log(JSON.stringify({
 # ---------- tasks.html: shared control owns within-group order; band float retired ----------
 
 def test_tasks_sort_uses_shared_control_status_bucket_outer():
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     body = html[html.index("function sorted()"):]
     body = body[: body.index("}", body.index("return"))]
     # ISS-331: within-group ordering routes through the shared control...
@@ -141,7 +142,7 @@ def test_tasks_sort_uses_shared_control_status_bucket_outer():
 # ---------- requests.html: shared control, open-first preserved; band float retired ----------
 
 def test_requests_sort_uses_shared_control_open_first():
-    html = (STATIC / "requests.html").read_text()
+    html = page_source("requests.html")
     assert "function reqSorted" in html, "requests lost their frontend sort"
     assert "reqSorted(reqs().filter(matches))" in html, "the request list isn't run through reqSorted"
     body = html[html.index("function reqSorted"):]

@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -23,7 +24,7 @@ def _inline_js(html: str) -> str:
 
 
 def test_o4_assign_surface_wired_into_task_detail():
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     # the surface + its handlers exist and are mounted in the detail render
     assert "function assignSurface(t)" in html, "no assignSurface"
     assert "html += assignSurface(t);" in html, "assignSurface not rendered in the detail"
@@ -44,7 +45,7 @@ def test_o4_assign_surface_wired_into_task_detail():
 
 
 def test_o4_lets_the_endpoint_be_the_authority_on_assignment_state():
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     # review P2: the snapshot's single display alias (assignees[0]) is NOT authoritative
     # (stale / can't see multiple active assignees), so we must NOT short-circuit client-side.
     assert "is already assigned" not in html, "must not short-circuit same-assignee from stale state"

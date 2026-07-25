@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import script_source, style_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,7 +64,7 @@ def test_missing_static_dir_yields_404_not_crash_or_500():
 # ---------- styles.css: token layer + status system ----------
 
 def test_styles_has_tokens_themes_and_pills():
-    css = (STATIC / "styles.css").read_text()
+    css = style_source()
     assert "[data-theme" in css, "no theme switch"
     assert "prefers-color-scheme" in css, "auto theme doesn't follow OS"
     for tok in ("--accent", "--amber", "--ok", "--warn", "--danger", "--violet"):
@@ -75,7 +76,7 @@ def test_styles_has_tokens_themes_and_pills():
 # ---------- app.js: the three D0 adaptations + exports ----------
 
 def test_app_js_adaptations_and_exports():
-    js = (STATIC / "app.js").read_text()
+    js = script_source("app.js")
     # (1) live, in-place window.ORCHA so the captured D stays valid across the 3s poll
     assert "window.ORCHA = window.ORCHA ||" in js, "window.ORCHA not a live object"
     assert "function applySnapshot" in js, "no in-place snapshot updater"
@@ -103,7 +104,7 @@ def test_shell_mounts_data_driven():
     """Eval app.js against a stubbed DOM + a REAL-shape snapshot, then mountShell:
     the topbar's 'acting as' must render the snapshot's human (kedar), not a hardcoded
     name; pills resolve; agentByAlias reads live data."""
-    js = (STATIC / "app.js").read_text()
+    js = script_source("app.js")
     harness = r"""
 const els = { sidebar: {innerHTML:""}, topbar: {innerHTML:""}, themeBtn:null };
 global.localStorage = { _m:{}, getItem(k){return this._m[k]||null;}, setItem(k,v){this._m[k]=v;} };
@@ -161,7 +162,7 @@ def test_theme_applied_on_load():
     """Review P2: app.js must set <html data-theme> at load from the saved/default
     theme — otherwise CSS's dark :root default wins until the user clicks (a saved
     'light', or 'auto' on a light OS, would flash dark)."""
-    js = (STATIC / "app.js").read_text()
+    js = script_source("app.js")
 
     def applied(saved):
         harness = r"""

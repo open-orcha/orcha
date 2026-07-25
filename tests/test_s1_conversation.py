@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -36,9 +37,9 @@ async def test_agents_loads_conversation_module(client):
 
 
 def test_agents_mounts_the_panel_outside_the_patched_panel():
-    html = (STATIC / "agents.html").read_text()
+    html = page_source("agents.html")
     # mounted into #convWrap (a sibling of #detailMain), remounted only on agent change
-    assert "OrchaConvo.mount($(\"convWrap\")" in html, "panel not mounted into #convWrap"
+    assert 'OrchaConvo.mount(Age$("convWrap")' in html, "panel not mounted into #convWrap"
     assert "OrchaConvo.teardown()" in html, "panel not torn down on agent change"
     assert "a.id === convAgent" in html, "panel remounts every tick (should only on agent change)"
 
@@ -46,7 +47,7 @@ def test_agents_mounts_the_panel_outside_the_patched_panel():
 # ---------- static guards on the conversation module ----------
 
 def test_conversation_module_wires_the_conv_store_contract():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     assert "OrchaConvo" in js and "mount" in js and "teardown" in js, "OrchaConvo.mount/teardown not exposed"
     # S1 read + send against Vault's stable conv-store (#115)
     assert "/api/agents/" in js and "/conversation?limit=" in js, "doesn't load the agent's conversation"
@@ -71,7 +72,7 @@ def test_conversation_caches_turns_no_reload_on_tab_switch():
     """ISS-68: switching agent tabs and back must NOT reload the thread from scratch (flicker +
     lost scroll). A fresh per-agent cache is painted instantly + delta-refreshed; only a missing
     or stale (TTL) cache triggers a full load()."""
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     assert "convCache" in js and "CONV_CACHE_TTL_MS" in js, "no per-agent conversation cache"
     assert "function cacheConv" in js, "conversation state isn't snapshotted into the cache"
     # mount paints from a fresh cache (no full reload) and delta-refreshes; stale/missing -> load()
@@ -112,7 +113,7 @@ async def test_conversation_contract_round_trip(client, make_agent):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
 def test_presence_derived_from_agent_status():
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     harness = r"""
 global.window = {};
 global.fetch = () => Promise.reject("no fetch in test");
@@ -140,13 +141,13 @@ console.log(JSON.stringify(out));
 def test_conversation_shows_thinking_indicator_on_send():
     """After the human sends a turn, a transient 'thinking…' indicator shows until the
     agent's reply turn lands (immediate feedback that the agent is working)."""
-    js = (STATIC / "conversation.js").read_text()
+    js = script_source("conversation.js")
     assert "function thinkingBubble" in js, "no thinking indicator"
     assert "awaiting = true; renderList()" in js, "send doesn't raise the thinking indicator"
     assert 'fresh.some((t) => t.role === "agent")' in js and "awaiting = false" in js, \
         "the indicator isn't cleared when the agent reply lands"
     # the indicator's CSS lives on the agent page
-    assert ".conv-thinking" in (STATIC / "agents.html").read_text(), "no .conv-thinking style"
+    assert ".conv-thinking" in page_source("agents.html"), "no .conv-thinking style"
     # review P2: the module-level awaiting flag must reset on mount/teardown so a pending
     # "thinking…" can't leak to a different agent on a panel switch.
     assert js.count("awaiting = false") >= 3, "awaiting not reset on mount + teardown (would leak between agents)"
@@ -156,7 +157,7 @@ def test_slash_shortcut_guarded_when_an_input_is_focused():
     """The global '/' search shortcut must NOT fire while the user is typing in a field
     (composer, reason box, any input/textarea/select/contenteditable) — else typing '/'
     steals the keystroke + focus into the search bar (#118 S4 follow-up)."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     assert "function isEditableTarget" in app, "no editable-target guard helper"
     assert 'e.key === "/" && !isEditableTarget(document.activeElement)' in app, \
         "the '/' shortcut isn't guarded against a focused input"
@@ -165,5 +166,5 @@ def test_slash_shortcut_guarded_when_an_input_is_focused():
 def test_run_card_relabels_tmux_as_live_tab():
     """Feed display polish: the run-card wake_kind label shows 'live tab' for a tmux run
     (display-only — the stored wake_kind value is unchanged). Other kinds render verbatim."""
-    app = (STATIC / "app.js").read_text()
+    app = script_source("app.js")
     assert 'run.wake_kind === "tmux" ? "live tab"' in app, "tmux not relabeled 'live tab' in the run card"

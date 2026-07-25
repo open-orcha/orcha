@@ -19,6 +19,7 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 from conftest import next_event
+from portal_source import page_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
@@ -97,7 +98,7 @@ def test_tasks_page_mounts_plan_approval_on_in_progress():
     """Static guard (D4 redesign): tasks.html builds the plan from the thread, gates it on
     in_progress + an undecided plan_decision (pendingPlan), and POSTs the B0 decisions
     contract with subject_type='plan_approval' keyed to the task, routed to the plan author."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     assert "function planMsgOf" in html and "function pendingPlan" in html, "plan helpers missing"
     # gated on in_progress + no durable decision yet
     assert re.search(r'pendingPlan\(t\)\s*\{\s*return\s*t\.status\s*===\s*"in_progress"\s*&&\s*!t\.plan_decision', html), \
@@ -111,11 +112,11 @@ def test_tasks_page_mounts_plan_approval_on_in_progress():
 def test_plan_card_shows_full_plan_scrollable():
     """Static guard (ISS-32): an approval gate must show the WHOLE plan — the full thread
     message body (no hard truncation) in a scrollable, pre-wrapped region."""
-    html = (STATIC / "tasks.html").read_text()
-    gate = re.search(r"function gateSurface\(t\) \{.*?\n  \}", html, re.S).group(0)
+    html = page_source("tasks.html")
+    gate = html[html.index("function gateSurface"):html.index("function who", html.index("function gateSurface"))]
     # ISS-44: the full body is now rendered via linkify() (esc-first + clickable URLs), not
     # bare esc() — still the WHOLE body, no truncation.
-    assert "O.linkify(isPlan ? (pm.body" in gate, "plan card should render the full message body"
+    assert "TasO.linkify(isPlan ? (pm.body" in gate, "plan card should render the full message body"
     assert "O.trunc(pm.body" not in gate and "slice(0," not in gate, "plan body must not be hard-truncated"
     assert "max-height:300px;overflow-y:auto" in gate and "white-space:pre-wrap" in gate, "plan region not scrollable/pre-wrapped"
 
@@ -125,9 +126,9 @@ def test_plan_card_is_one_shot_per_session():
     DURABLE plan_decision renders a decided-note (suppressed across reload); a session
     `acted` Set suppresses the gate immediately after a decision POSTs (optimistic), and
     a successful decision marks the task acted."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     assert "const acted = new Set()" in html, "no optimistic acted cache"
-    gate = re.search(r"function gateSurface\(t\) \{.*?\n  \}", html, re.S).group(0)
+    gate = html[html.index("function gateSurface"):html.index("function who", html.index("function gateSurface"))]
     # a durable plan_decision -> quiet decided-note, never a live re-approve (ISS-41)
     assert 'if (t.status === "in_progress" && t.plan_decision)' in gate, "decided plan not gated on the durable plan_decision"
     assert 'Plan ${ok ? "approved" : "rejected"}' in gate, "no decided-note for a decided plan"
@@ -139,7 +140,7 @@ def test_plan_card_is_one_shot_per_session():
 def test_agents_page_has_no_plan_surface():
     """B10 is a tasks-page surface only — the agents page renders no task thread, so it
     hosts no plan-approval *control* (it deep-links instead; see ISS-33 below)."""
-    html = (STATIC / "agents.html").read_text()
+    html = page_source("agents.html")
     assert "renderPlanApprovalCard" not in html
     assert "plan_approval" not in html
 
@@ -150,7 +151,7 @@ def test_agents_page_deeplinks_to_plan_approval():
     task on the Tasks page (where the B10 control lives). ISS-36: surfaced regardless of
     the agent's status. ISS-41: once plan_decision is set it's a decided-note, not a live
     re-approve."""
-    html = (STATIC / "agents.html").read_text()
+    html = page_source("agents.html")
     block = re.search(r"function gateCallout\(a, mine\) \{.*?\n  \}", html, re.S).group(0)
     # detect an agent-posted plan on an in-progress task, surfaced regardless of status
     assert "planMsgOf(t)" in block, "doesn't detect an agent-posted plan"
@@ -166,7 +167,7 @@ def test_agents_all_tasks_are_deeplinked():
     tasks in other states, leaving the human dead-ended when an agent had no in-progress
     task. EVERY assigned task — any status — must deep-link to the Tasks page via the
     'All tasks' chips."""
-    html = (STATIC / "agents.html").read_text()
+    html = page_source("agents.html")
     # the All-tasks chips are anchors pointing at /tasks?task=<id>, built from `mine`
     assert "All tasks ·" in html, "no All-tasks section"
     chips = html[html.index("All tasks ·"):]
@@ -181,13 +182,13 @@ def test_agents_all_tasks_are_deeplinked():
 def test_plan_message_picks_earliest_agent_post():
     """planMessage = the agent's OPENING plan: the earliest non-human message,
     ignoring human messages and preserving author identity for routing."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     # ISS-68: planMsgOf is multi-line now (prefers the snapshot's plan_message, thread fallback);
     # match through its own-line closing brace.
-    m = re.search(r"function planMsgOf\(t\) \{.*?\n  \}", html, re.S)
-    assert m, "planMsgOf not found"
+    start = html.index("function planMsgOf")
+    js = html[start:html.index("function pendingPlan", start)]
     # planMsgOf reads the mapped thread shape ({is_human, from, body}); earliest non-human
-    js = m.group(0) + r"""
+    js += r"""
 const t={thread:[
   {is_human:true,  from:"human", body:"human note"},
   {is_human:false, from:"AG2",   body:"PLAN: do X then Y"},

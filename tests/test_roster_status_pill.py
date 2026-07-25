@@ -6,6 +6,7 @@ same colored TASK_PILL used in the detail view. Static guard; the visual is obvi
 in the portal.
 """
 import pathlib
+from portal_source import page_source
 import re
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -16,7 +17,7 @@ def test_roster_renders_status_pill_per_task():
     """D4 redesign: the task list renders a per-row colored status PILL (the shared
     O.pill component, same as the detail view) and groups by status, so
     needs_verification reads at a glance."""
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     row = re.search(r"function trowHtml\(t\) \{.*?\n  \}", html, re.S)
     assert row, "trowHtml not found"
     assert "O.pill(t.status)" in row.group(0), "task row doesn't render the shared status pill"

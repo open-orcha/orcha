@@ -12,6 +12,7 @@ import pathlib
 import shutil
 import subprocess
 import pytest
+from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -26,7 +27,7 @@ def test_patch_defers_while_a_card_input_is_focused_or_dirty():
     """Orcha.patch must NOT repaint el while the user is mid-typing inside it — a focused
     input/textarea, OR a text input holding unsaved (non-empty) value. An empty, blurred
     input does not block the repaint."""
-    app_js = (STATIC / "app.js").read_text()
+    app_js = script_source("app.js")
     harness = r"""
 global.localStorage = { getItem: () => null, setItem: () => {} };
 function mkEl(opts) {
@@ -75,15 +76,16 @@ async def test_tasks_serves_and_wires_the_foundation(client):
     r = await client.get("/tasks")
     assert r.status_code == 200, r.text
     html = r.text
-    for asset in ("/assets/styles.css", "/assets/app.js", "/assets/data.js"):
+    for asset in ("/assets/styles/tokens.css", "/assets/app.js", "/assets/data.js"):
         assert asset in html, f"tasks doesn't load {asset}"
-    assert 'mountShell("tasks"' in html and "OrchaData.start(render, 3000)" in html, "tasks doesn't boot on the foundation"
+    source = page_source("tasks.html")
+    assert 'mountShell("tasks"' in source and "OrchaData.start(render, 3000)" in source, "tasks doesn't boot on the foundation"
     for el in ('id="tlist"', 'id="detailMain"', 'id="runsWrap"'):
         assert el in html, f"tasks missing section {el}"
 
 
 def test_tasks_static_guards():
-    html = (STATIC / "tasks.html").read_text()
+    html = page_source("tasks.html")
     assert "O.patch(" in html, "tasks doesn't render via Orcha.patch"
     # no *.html deeplinks; agent deeplinks via the shared helper on served routes
     for bad in ('href="agents.html', 'href="tasks.html', "'agents.html"):
@@ -105,15 +107,16 @@ async def test_requests_serves_and_wires_the_foundation(client):
     r = await client.get("/requests")
     assert r.status_code == 200, r.text
     html = r.text
-    for asset in ("/assets/styles.css", "/assets/app.js", "/assets/data.js"):
+    for asset in ("/assets/styles/tokens.css", "/assets/app.js", "/assets/data.js"):
         assert asset in html, f"requests doesn't load {asset}"
-    assert 'mountShell("requests"' in html and "OrchaData.start(render, 3000)" in html, "requests doesn't boot on the foundation"
+    source = page_source("requests.html")
+    assert 'mountShell("requests"' in source and "OrchaData.start(render, 3000)" in source, "requests doesn't boot on the foundation"
     for el in ('id="rlist"', 'id="detailMain"'):
         assert el in html, f"requests missing section {el}"
 
 
 def test_requests_static_guards():
-    html = (STATIC / "requests.html").read_text()
+    html = page_source("requests.html")
     assert "O.patch(" in html, "requests doesn't render via Orcha.patch"
     for bad in ('href="agents.html', 'href="requests.html', "'requests.html"):
         assert bad not in html, f"requests links to a *.html route: {bad}"
@@ -138,8 +141,8 @@ def test_review_p1_fixes():
     B) every successful submit clears its input before re-render, so the ISS-53 dirty-input
        guard can't block the acknowledged repaint (stale controls / double-submit).
     C) every task status stays visible in the list (pending/failed have buckets + a catch-all)."""
-    tasks = (STATIC / "tasks.html").read_text()
-    reqs = (STATIC / "requests.html").read_text()
+    tasks = page_source("tasks.html")
+    reqs = page_source("requests.html")
     # A (#271): the reply POST attributes the acting human and gates on one being selected.
     # Robust to extra fields on the body object (#301 added an optional `attachments`): the
     # guard is that the POST still carries body + the acting human's id, not the exact literal.
@@ -163,10 +166,10 @@ def test_review_p2_fixes():
        dirty-input guard blocks the repaint and the editor stays open forever.
     B) human-target detection must use the SHARED O.isToHuman (resolves any human by id),
        not a first-human shortcut that misses non-first humans in a multi-human container."""
-    reqs = (STATIC / "requests.html").read_text()
+    reqs = page_source("requests.html")
     # A: cancel-answer clears+blurs the box before re-render
     cancel = reqs[reqs.index('act === "cancel-answer"'):reqs.index('act === "cancel-answer"') + 360]
     assert 'ai.value = ""' in cancel and "renderDetail()" in cancel, "cancel-answer doesn't clear #ansIn before repaint"
     # B: delegates to the shared detector; no first-human shortcut
-    assert "return O.isToHuman(r)" in reqs, "doesn't use the shared human-target detector"
-    assert "O.humans()[0]" not in reqs, "still uses the first-human shortcut (misses non-first humans)"
+    assert "return ReqO.isToHuman(r)" in reqs, "doesn't use the shared human-target detector"
+    assert "ReqO.humans()[0]" not in reqs, "still uses the first-human shortcut (misses non-first humans)"
