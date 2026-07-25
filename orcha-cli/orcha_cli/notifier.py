@@ -66,6 +66,7 @@ from .notifier_codex_events import (
 from .notifier_codex_result import _codex_result_status
 from . import notifier_conversation as _conversation
 from . import notifier_boot_context as _boot_context
+from . import notifier_daemon_control as _daemon_control
 from . import notifier_daemon_registry as _daemon_registry
 from . import notifier_embodiment as _embodiment
 from . import notifier_persona_cache as _persona_cache
@@ -3394,227 +3395,27 @@ def _claim_container(container_id: str):
 
 
 def _terminate_and_wait(pid: int, cid: Optional[str], grace: float = 8.0) -> None:
-    """ISS-22 P2: SIGTERM `pid`, then BLOCK until it actually exits, escalating to SIGKILL
-    after `grace` seconds.
+    """Compatibility facade for identity-vetted daemon termination."""
+    _daemon_control.terminate_and_wait(pid, cid, grace, services=sys.modules[__name__])
 
-    `stop_daemon` used to SIGTERM and return IMMEDIATELY — but a SIGTERM'd notifier only sets
-    its stop flag and finishes the in-flight tick before exiting (the graceful-drain window).
-    A `ensure_daemon(restart=True)` (orcha init/up) that didn't wait would then call
-    `daemon_running` mid-drain, see a genuinely-live pid, print "already running", and NOT
-    spawn a replacement — the old daemon then exits and the container is left UNSERVICED (the
-    latent init/up form of #92). Blocking here closes that race.
-
-    Bounded, and ONLY on the explicit stop/restart path — never the steady-state loop. The
-    SIGKILL escalation is logged LOUDLY (it skips that daemon's SessionEnd / C1 digest flush).
-
-    #276 rework (Gate P1 #2): NEVER signal a pid we haven't vetted as OUR live daemon. The pid
-    comes from a pidfile that may name a reused/foreign process (a SIGKILL'd daemon's pidfile the
-    OS handed to `vim`); a blind SIGTERM would kill that unrelated process. We vet with
-    `_daemon_pid_live` BEFORE the SIGTERM and RE-vet immediately before the SIGKILL, so the
-    escalation can never land on a pid that exited and got reused during the grace window."""
-    if not _daemon_pid_live(pid, cid):
-        return  # dead / zombie / reused / foreign — not our daemon, send NO signal
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return  # already gone / not killable — nothing to wait for
-    deadline = time.time() + grace
-    while time.time() < deadline:
-        if not _daemon_pid_live(pid, cid):
-            return  # exited cleanly within grace
-        time.sleep(0.25)
-    # still alive after the grace window → force it down so a follow-up --ensure can spawn. Re-vet
-    # RIGHT BEFORE the SIGKILL: if the pid is no longer our live daemon (exited + reused mid-grace),
-    # don't escalate onto whatever now holds it.
-    if not _daemon_pid_live(pid, cid):
-        return
-    try:
-        os.kill(pid, signal.SIGKILL)
-        print(f"[notifier] WARNING: daemon pid {pid} did not exit {grace:.0f}s after SIGTERM — "
-              f"sent SIGKILL (its SessionEnd digest flush was skipped)", file=sys.stderr)
-    except (ProcessLookupError, PermissionError):
-        return  # raced to exit between the last poll and the kill
-    for _ in range(8):  # brief poll so we don't return while it's still being reaped
-        if not _daemon_pid_live(pid, cid):
-            return
-        time.sleep(0.25)
 
 
 def stop_daemon(cwd: pathlib.Path, quiet: bool = False) -> bool:
-    """Stop the daemon serving this project's CONTAINER (SIGTERM via the PID files). Idempotent.
+    """Stop the daemon serving this project's container."""
+    return _daemon_control.stop_daemon(cwd, quiet, services=sys.modules[__name__])
 
-    Called by `orcha down` so the daemon dies with the stack, and by `ensure_daemon(
-    restart=True)` on `orcha init` so a fresh daemon tracks the NEW container (the
-    daemon resolves its container_id once at startup, so a re-init must restart it).
-
-    [P2 #218] The daemon may have been started from ANOTHER worktree — visible only via
-    the container-global claim, not this cwd's pidfile. `orcha down` from here must stop
-    that one too: left alive it polls a stack that is going away, and after `down -v &&
-    up` its still-live claim makes `--ensure` believe the container is already serviced.
-    """
-    import signal
-    pid = daemon_running(cwd)
-    pidf = _pid_path(cwd)
-    cid = _container_id_for(cwd)
-    if not pid:
-        if pidf.exists():
-            try:
-                pidf.unlink()
-            except OSError:
-                pass
-        # no LOCAL pidfile ≠ no daemon: fall back to the container-global claim
-        if cid:
-            other = daemon_running_for_container(cid)
-            if other:
-                _terminate_and_wait(other[0], cid)  # ISS-22: block until it actually exits
-                if not quiet:
-                    frm = f", started from {other[1]}" if other[1] else ""
-                    print(f"[notifier] stopped daemon (pid {other[0]}{frm})")
-            try:
-                _global_pid_path(cid).unlink()   # live holder stopped, or stale debris
-            except (FileNotFoundError, OSError):
-                pass
-            if other:
-                return True
-        return False
-    _terminate_and_wait(pid, cid)  # ISS-22: block until it actually exits (SIGKILL after grace)
-    try:
-        pidf.unlink()
-    except (FileNotFoundError, OSError):
-        pass
-    # drop the container-keyed file too when it names the daemon we just stopped,
-    # so a follow-up --ensure (from any worktree) doesn't see a stale claim
-    if cid:
-        running = daemon_running_for_container(cid)
-        if running is None or running[0] == pid:
-            try:
-                _global_pid_path(cid).unlink()
-            except (FileNotFoundError, OSError):
-                pass
-    if not quiet:
-        print(f"[notifier] stopped daemon (pid {pid})")
-    return True
 
 
 def stop_daemon_for_container(container_id: str, quiet: bool = False) -> bool:
-    """#255: stop the daemon bound to a SPECIFIC (e.g. now-wiped) container, by its container id.
+    """Stop the daemon bound to a specific, possibly replaced container."""
+    return _daemon_control.stop_daemon_for_container(container_id, quiet, services=sys.modules[__name__])
 
-    `ensure_daemon(restart=True)` on `orcha init` resolves the cid to stop from the CURRENT
-    orcha.json — but `init --force --reset-data` overwrites orcha.json with the NEW cid BEFORE
-    the restart, so `stop_daemon` only ever stops the new daemon. The daemon bound to the OLD
-    (now-404) container survives and polls a dead container forever. This stops THAT one
-    explicitly via its container-keyed pidfile. Idempotent: a no-op when no such daemon exists.
-    Returns True iff a live daemon was signalled."""
-    import signal
-    if not container_id:
-        return False
-    holder = daemon_running_for_container(container_id)  # identity-vetted (P1 #1) + clears stale claim
-    try:
-        _global_pid_path(container_id).unlink()      # clear live claim or stale debris
-    except (FileNotFoundError, OSError):
-        pass
-    if not holder:
-        return False
-    # #276 rework (P1 #2): route the kill through _terminate_and_wait — it RE-vets identity with
-    # _daemon_pid_live before signalling, so we never SIGTERM a reused/foreign pid (the bare
-    # os.kill here was the second signal-before-vet site Gate flagged).
-    _terminate_and_wait(holder[0], container_id)
-    if not quiet:
-        frm = f", started from {holder[1]}" if holder[1] else ""
-        print(f"[notifier] stopped stale daemon for old container {container_id} (pid {holder[0]}{frm})")
-    return True
 
 
 def ensure_daemon(cwd: pathlib.Path, quiet: bool = False, restart: bool = False) -> bool:
-    """Start `orcha notifier` detached iff one isn't already running for this project.
+    """Start the project's detached singleton notifier when needed."""
+    return _daemon_control.ensure_daemon(cwd, quiet, restart, services=sys.modules[__name__])
 
-    Idempotent singleton (PID file under .claude/) — safe to call from `orcha init`,
-    `orcha up`, and a SessionStart hook repeatedly. Silent no-op when this isn't an
-    Orcha project. This is what makes wake ON-BY-DEFAULT: the daemon comes up with the
-    workspace, no hand-starting.
-
-    `restart=True` (used by `orcha init`) first stops any running daemon, so the new one
-    binds to the just-created container — without it a re-init strands the old daemon on
-    a dead container_id (it resolves the container once, at startup).
-    """
-    if not (cwd / ".claude" / "orcha.json").exists():
-        return False  # not an orcha project — nothing to wake
-    cid = _container_id_for(cwd)
-    if restart:
-        # stop_daemon is container-global [P2 #218]: it stops a same-cwd daemon AND one
-        # started from another worktree (via the claim file), so a restart always gets a
-        # genuinely fresh daemon for this container.
-        stop_daemon(cwd, quiet=True)
-    pid = daemon_running(cwd)
-    if pid:
-        if not quiet:
-            print(f"[notifier] already running (pid {pid})")
-        return True
-    # [P2 #224 review] The 404 refusal must hold on THIS managed path too, BEFORE any
-    # claim/pidfile is written — otherwise --ensure returns success, leaves a pidfile +
-    # container claim pointing at a child that immediately refused, and buries the real
-    # error in the daemon log. One quick probe (no retries — this runs in a SessionStart
-    # hook): only a definitive 404 refuses; an unreachable/booting API proceeds and the
-    # child re-probes with retries. If the child still refuses, its dead pid makes the
-    # parent-written pidfile/claim stale, so liveness checks ignore them.
-    if cid:
-        api = _api_base_for(cwd)
-        if api and _probe_container(api, cid) == "missing":
-            if not quiet:
-                print(f"[notifier] container {cid} does not exist at {api} — not starting a "
-                      f"daemon. This usually means a stale .claude/orcha.json (api_base_url/"
-                      f"current_container_id from a previous stack). Fix the config or re-run "
-                      f"`orcha connect <project>`.", file=sys.stderr)
-            return False
-    # container-global guard: the same container may already be serviced by a daemon
-    # started from a DIFFERENT worktree — the per-cwd file above can't see it. Two
-    # daemons on one container breach every spawn gate (incident 2026-06-10). The claim
-    # is taken ATOMICALLY before the spawn (not checked-then-written-after), so two
-    # concurrent --ensure calls can't both pass and double-spawn [P1 review].
-    claim_won = False
-    if cid:
-        claim_won, holder = _claim_container(cid)
-        if not claim_won and holder is not None:
-            if not quiet:
-                if holder[0]:
-                    frm = f" from {holder[1]}" if holder[1] else ""
-                    print(f"[notifier] already running for this container (pid {holder[0]}{frm})")
-                else:
-                    print("[notifier] another --ensure is starting this container's daemon — yielding")
-            return True
-        # claim_won=False with holder=None: claim file unusable — per-cwd guard only
-    exe = shutil.which("orcha")
-    argv = [exe, "notifier", "--quiet"] if exe else [sys.executable, "-m", "orcha_cli", "notifier", "--quiet"]
-    if cid:
-        # [#218 hardening] carry the container in the argv so `ps` is self-explanatory —
-        # during the 2026-06-10 incident every daemon read as an identical `orcha notifier
-        # --quiet` and a legitimate other-project daemon was killed as a "duplicate". Also
-        # makes the daemon pgrep-able by container (`pgrep -f 'orcha notifier.*<cid>'`).
-        # Same value the daemon would resolve from this cwd's orcha.json — not a behavior change.
-        argv += ["--container", cid]
-    log = _log_path(cwd)
-    log.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(log, "ab") as lf:
-            proc = subprocess.Popen(argv, cwd=str(cwd), stdout=lf, stderr=lf,
-                                    stdin=subprocess.DEVNULL, start_new_session=True)
-    except (OSError, subprocess.SubprocessError) as e:
-        if claim_won:
-            try:
-                _global_pid_path(cid).unlink()  # release the claim — nothing was spawned
-            except (FileNotFoundError, OSError):
-                pass
-        if not quiet:
-            print(f"[notifier] could not start daemon: {e}", file=sys.stderr)
-        return False
-    _pid_path(cwd).write_text(str(proc.pid))
-    if cid:
-        # hand the claim to the child: replace our provisional claimant pid with the
-        # daemon's, so liveness now tracks the daemon (not this short-lived parent)
-        _write_global_pid(cid, proc.pid, cwd)
-    if not quiet:
-        print(f"[notifier] started daemon (pid {proc.pid}); log: {log}")
-    return True
 
 
 # ---------- subcommand entry ----------
