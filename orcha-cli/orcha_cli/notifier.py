@@ -109,6 +109,7 @@ from . import notifier_orphan_cleanup as _orphan_cleanup
 from . import notifier_reaper as _reaper
 from . import notifier_resident_spawn as _resident_spawn
 from . import notifier_resident_idle as _resident_idle
+from . import notifier_resident_codex as _resident_codex
 from . import notifier_run_feed as _run_feed
 from . import notifier_task_continuity as _task_continuity
 from . import notifier_wake_actions as _wake_actions
@@ -1381,78 +1382,10 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
             live_residents.pop(conv_id, None)
             continue
         if _resident_runtime(r) == RUNTIME_CODEX:
-            if conv_id not in active_ids:
-                _kill_worker(proc, graceful=True)
-                _finish_run(api_base, r.get("current_run_id"), "killed", proc.returncode,
-                            r.get("log_path"), _capture_diff(r.get("worktree")))
-                _safe_teardown_worktree(r.get("base_cwd"), r.get("worktree"), r.get("branch"))
-                _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-                           _conversation_ack_body("codex_conversation_ended", release_lease=True))
-                _CODEX_RESUME_FAILED.discard(conv_id)   # #286: conversation gone → reset the flag
-                _retire_resident(api_base, live_residents, conv_id)
-                continue
-            _pump_one(api_base, r["agent_id"], r)
-            if proc.poll() is not None:
-                _finish_codex_conversation(
-                    api_base, conv_id, r, status="exited", exit_code=proc.returncode,
-                    ack_kind="codex_conversation_released", post_reply=True,
-                )
-                _retire_resident(api_base, live_residents, conv_id)
-                if not quiet:
-                    print(f"[notifier] Codex conversation worker for {r.get('alias')} "
-                          f"(pid {proc.pid}, rc={proc.returncode}) replied — lease released")
-                continue
-            renew = _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-renew",
-                               {"lease_ttl": WAKE_LEASE_TTL_SECS, "lane": "conversation"})
-            # #240/ISS-72: a human requested a graceful STOP of THIS codex conversation turn (surfaced
-            # on the renew — zero new poll). A live codex conversation worker HAS a worker_runs row, so
-            # POST /api/runs/{id}/stop targets it and APPEARS to succeed — we must honor the signal here
-            # or the process runs on to exit/hard-cap (the P1). Same run-id identity vet as the worker
-            # (1340) and claude-resident (2230) paths — never reap a stale/foreign run. Abort the TURN,
-            # post a stop sentinel so resolved_through advances (the pending human turn is NOT re-run),
-            # finish 'killed' with a structured human_stop reason, release the lease — KEEP the
-            # conversation/worktree (the interrupt preserves state so the human can redirect).
-            if (renew and renew.get("stop_requested")
-                    and r.get("current_run_id")
-                    and str(renew.get("stop_run_id")) == str(r.get("current_run_id"))):
-                _kill_worker(proc, graceful=True)
-                by = renew.get("stop_requested_by") or "a human"
-                _post_conversation_reply(api_base, conv_id, r, f"[turn stopped by {by}]",
-                                         {"runtime": "codex", "stopped": True,
-                                          "by": renew.get("stop_requested_by")})
-                _finish_run(api_base, r.get("current_run_id"), "killed", proc.returncode,
-                            r.get("log_path"), _capture_diff(r.get("worktree")),
-                            kill_reason=json.dumps({"cause": "human_stop",
-                                                    "run_id": str(r.get("current_run_id")),
-                                                    "agent_id": r["agent_id"], "runtime": "codex",
-                                                    "by": renew.get("stop_requested_by")}))
-                _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-                           _conversation_ack_body("codex_conversation_human_stopped",
-                                                  release_lease=True))
-                _retire_resident(api_base, live_residents, conv_id)
-                if not quiet:
-                    print(f"[notifier] Codex conversation worker for {r.get('alias')} TURN STOPPED "
-                          f"by {by} (run {r.get('current_run_id')}) — conversation kept, lease "
-                          f"released")
-                continue
-            size = r.get("last_size", 0)
-            lp = r.get("log_path")
-            if lp:
-                try:
-                    size = os.path.getsize(lp)
-                except OSError:
-                    size = r.get("last_size", 0)
-            if size > r.get("last_size", 0):
-                r["last_size"] = size
-                r["last_progress_ts"] = time.time()
-            if time.time() > r.get("hard_deadline", time.time()):
-                _kill_worker(proc, graceful=True)
-                diff = _capture_diff(r.get("worktree"))
-                _finish_run(api_base, r.get("current_run_id"), "killed", proc.returncode,
-                            r.get("log_path"), diff)
-                _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-                           _conversation_ack_body("codex_conversation_killed", release_lease=True))
-                _retire_resident(api_base, live_residents, conv_id)
+            _resident_codex.advance_codex_resident(
+                sys.modules[__name__], api_base, conv_id, r, live_residents,
+                active_ids, quiet=quiet,
+            )
             continue
         if proc.poll() is not None:            # resident process exited/crashed
             if r.get("current_run_id"):
