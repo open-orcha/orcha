@@ -106,6 +106,22 @@ from .notifier_runtime import (
 )
 from . import notifier_headless as _headless
 from . import notifier_orphan_cleanup as _orphan_cleanup
+from .notifier_policy import (
+    CODEX_RESUME_FAILED as _CODEX_RESUME_FAILED,
+    GRACEFUL_EXIT_SECS,
+    HARD_CAP_MIN_SECS,
+    HARD_CAP_RESPAWN_MAX,
+    RESIDENT_DRAIN_COOLDOWN_SECS,
+    RESIDENT_DRAIN_YIELD as _RESIDENT_DRAIN_YIELD,
+    RESIDENT_IDLE_REAP_SECS,
+    RESIDENT_RESUME_FAILED as _RESIDENT_RESUME_FAILED,
+    RESIDENT_WORK_TEARDOWN_ENABLED,
+    RESUME_FAIL_WINDOW_SECS,
+    TERMINAL_SWEEP_MAX_PAGES as _TERMINAL_SWEEP_MAX_PAGES,
+    TERMINAL_SWEEP_PAGE_SIZE as _TERMINAL_SWEEP_PAGE_SIZE,
+    TERMINAL_TASK_STATES as _TERMINAL_TASK_STATES,
+    WAKE_LEASE_TTL_SECS,
+)
 from . import notifier_reaper as _reaper
 from . import notifier_resident_spawn as _resident_spawn
 from . import notifier_resident_idle as _resident_idle
@@ -844,33 +860,6 @@ def reap_workers(api_base: str, live_workers: dict, quiet: bool, stall_secs: flo
     )
 
 
-# ISS-31: a generous FLOOR for the worker hard cap (single-flight lease + watchdog backstop),
-# decoupled from lease_ttl. Even a stale 300s lease_ttl can't lower the cap below this, so a
-# still-progressing worker is never SIGKILLed at 300s — stall_secs is the primary kill, the cap
-# only catches true runaways. The daemon's worker may legitimately run for many minutes (cold
-# start + long tool calls).
-HARD_CAP_MIN_SECS = 1200.0
-
-# ISS-76 (#194): the hard cap above is now a SOFT, checkpoint-respawn trigger — NOT a kill — for
-# a worker that is STILL PROGRESSING (its stream-json log is still growing) when it crosses the
-# cap. Such a worker is a genuine long task, not a runaway; the old code SIGKILLed it mid-flight,
-# losing the work. Instead reap_workers gracefully checkpoints it (SessionEnd → C1 digest) and
-# respawns a FRESH worker on the SAME worktree so the task continues with a clean context window
-# + the just-written digest. This bounds how many times one task may roll over the cap before it
-# is treated as a runaway and reaped — the preserved hard-cap backstop. GH#49: a STALLED but
-# PROVABLY-ALIVE worker past the cap (log-silent on a long external job, holding an unanswered
-# tool_use) is checkpoint-respawned too, under the same budget — only a stalled worker that is NOT
-# live (no in-flight tool / rate-limit backoff) is killed outright.
-HARD_CAP_RESPAWN_MAX = 3
-
-# Wake-latency fix: the single-flight LEASE is now decoupled from the hard cap. The daemon
-# claims a SHORT lease and RENEWS it every tick while its worker is alive (reap_workers). So a
-# legitimately long worker keeps single-flight, but a crashed/orphaned worker's lease expires
-# within this window instead of squatting for the full 1200s hard-cap — which is what starved a
-# fresh high-priority event for minutes. Renew interval (the tick) must stay well under this.
-WAKE_LEASE_TTL_SECS = 180.0
-
-
 def reap_orphan_leases(api_base: str, cid: str, quiet: bool) -> None:
     """Compatibility facade for stale single-flight lease cleanup."""
     _orphan_cleanup.reap_orphan_leases(
@@ -888,21 +877,6 @@ def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
         quiet=quiet,
         services=sys.modules[__name__],
     )
-
-
-# GH#110 §2c: a task's terminal states. A durable per-(agent+task) worktree is preserved across
-# wakes precisely so a worker resumes prior state; once the task reaches one of these, nothing will
-# resume it, so the worktree/branch must be reclaimed (else orcha/task-* trees accumulate forever).
-# `verified` collapses to `completed` in this schema (POST /verify approve → status='completed'),
-# so the two stored terminal statuses are completed + cancelled.
-_TERMINAL_TASK_STATES = ("completed", "cancelled")
-# PR #121 R3: the terminal-worktree sweep must PAGINATE (the list endpoint clamps limit→100).
-# Terminal tasks are never deleted, so a container accrues them without bound (this one already
-# has 98 completed + 39 cancelled). A page cap is a pure runaway backstop — 200 pages = 20k
-# terminal tasks of one status, far beyond any real container — never a functional limit; if a
-# container ever exceeds it the oldest already-swept pages are simply skipped by swept_tasks.
-_TERMINAL_SWEEP_MAX_PAGES = 200
-_TERMINAL_SWEEP_PAGE_SIZE = 100
 
 
 def reap_terminal_task_worktrees(api_base: str, cid: str, base_cwd: Optional[str],
@@ -937,54 +911,6 @@ def reap_terminal_task_worktrees(api_base: str, cid: str, base_cwd: Optional[str
         failed_drains,
         sys.modules[__name__],
     )
-
-
-# ISS-29: once a worker has emitted its terminal `result`, the agent loop is DONE — but the
-# process can linger before exiting on long headless sessions. Give it this generous window
-# (from when `result` was first seen) to exit on its own so SessionEnd (the C1 digest) runs;
-# only force it down after, and even then record `exited` — the work completed.
-GRACEFUL_EXIT_SECS = 180.0
-
-# E3: a resident conversation session stays WARM between turns (the whole point — warm context,
-# no re-boot cost per turn). When no new human turn has arrived for this long, the manager
-# closes stdin (graceful EOF → claude exits, SessionEnd/C1 runs), ends the conversation, and
-# releases the resident embodiment lease — freeing the agent for ephemeral wakes again. A later
-# human turn re-opens a fresh resident and --resume's the pinned session_id (warm-ish restart).
-# #247 B3 (§5.1): widened 900→1200s so the WARM-ZONE hold matches the heartbeat/lease cadence
-# (HARD_CAP_MIN_SECS / lease_ttl) — a human who steps away for a poll cycle returns to a warm
-# session, not a cold re-boot. Named constant, not a per-tick knob (Kedar §10-Q2 ruling).
-RESIDENT_IDLE_REAP_SECS = 1200.0
-RESUME_FAIL_WINDOW_SECS = 20.0           # ISS-61: a warm boot that dies this fast = a bad --resume
-# ISS-78 (A2): forward-progress backstop for the resident inbox-drain YIELD. ISS-74 used to drain the
-# non-conversation inbox INTO the warm session (the ISS-78 context-bleed); A2 instead idle-YIELDS the
-# lease so an ephemeral worker drains the backlog in its own session. As defense-in-depth (and carrying
-# forward the ISS-75/#188 anti-runaway guard) the daemon refuses to yield AGAIN when the inbox high-
-# water mark (inbox_ack_ts) has NOT advanced past the last yield's within this window — so a stuck/echo
-# event the ephemeral drain can't ack away can't thrash teardown→warm-resume every cycle. A genuinely
-# NEW event (higher inbox_ack_ts) always yields immediately; only a stalled/echo repeat is throttled.
-RESIDENT_DRAIN_COOLDOWN_SECS = 60.0
-# GH #91/#90 (R2-1 / R3-4): the lanes split retires the resident-side WORK teardown. Non-conversation
-# inbox + clock auto-wake now drive the WORK lane independently through wake_scan (its own work lease +
-# work worker_run), so a warm resident must NOT tear down its (conversation) lease to let an ephemeral
-# do that work — the two lanes coexist now. This flag gates BOTH the drain-sidecar spawn and the two
-# work-yield branches (inbox_drain_yield, auto_wake_yield) OFF by default; conversation delivery + the
-# pure idle-reap are untouched. Kept as a flag (not a hard delete) so the old behavior can be restored
-# if the work lane's independent wake regresses in the field. See the plan's R2-1 and R3-4 sections.
-RESIDENT_WORK_TEARDOWN_ENABLED = False
-# ISS-78: per-conversation yield bookkeeping for the backstop above — {conv_id: (inbox_ack_ts, ts)}.
-# Module-level (not on the resident dict) because the resident is destroyed when it yields; this is how
-# the next boot's idle tick remembers the last yield's high-water mark. Cleared on conversation end.
-_RESIDENT_DRAIN_YIELD: dict = {}
-# ISS-61 cold-fallback: conversations whose last WARM (--resume) boot crashed fast (a session
-# claude couldn't resume). The next boot for these forces COLD (ignore the pinned session); cleared
-# on a successful cold boot. Daemon-process in-memory state (like live_residents).
-_RESIDENT_RESUME_FAILED = set()
-# #286 Codex resume fail-open: conversations whose last `codex exec resume <sid>` worker exited
-# WITHOUT producing a reply (a bad session id / unresumable rollout / wrong flag spelling). The next
-# Codex turn for these forces COLD full-history injection so the human never sees a broken turn —
-# bounded to ONE cold retry (cleared on the next successful reply or conversation end). Daemon-
-# process in-memory state, sibling to _RESIDENT_RESUME_FAILED.
-_CODEX_RESUME_FAILED = set()
 
 
 def tick(api_base: str, cid: str, *, dry_run: bool, cooldown: float,
