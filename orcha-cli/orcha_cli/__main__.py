@@ -856,6 +856,111 @@ def _project_exists(project_name: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def _project_root_for(project_name: str) -> Optional[pathlib.Path]:
+    """Host project root for a compose project, via its working_dir label.
+
+    `orcha up/down --project <name>` runs from anywhere, but the notifier daemon is
+    anchored to the project checkout (pidfile + orcha.json under <root>/.claude). The
+    compose containers carry `com.docker.compose.project.working_dir` — the directory
+    holding docker-compose.yml, i.e. `<root>/.orcha` — so the root is recoverable
+    without asking the user. Returns None when the label is missing (never-created
+    stack) or the recorded path no longer belongs to THIS project: the label survives
+    the checkout being deleted and the path reused for a DIFFERENT Orcha project, and
+    following it blindly would run that other project's compose file / stop its
+    daemons — so the candidate's orcha.json must name the requested project."""
+    result = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={_full_project(project_name)}",
+         "--format", '{{.Label "com.docker.compose.project.working_dir"}}'],
+        capture_output=True, text=True, check=False,
+    )
+    for line in (result.stdout or "").splitlines():
+        wd = line.strip()
+        if not wd:
+            continue
+        for candidate in (pathlib.Path(wd).parent, pathlib.Path(wd)):
+            config_path = candidate / ".claude" / "orcha.json"
+            if not config_path.exists():
+                continue
+            try:
+                recorded = json.loads(config_path.read_text()).get("project_name")
+            except (OSError, ValueError):
+                continue
+            if recorded == project_name:
+                return candidate
+    return None
+
+
+def _project_label_roots(project_name: str) -> list:
+    """Candidate checkout roots for a compose project, from its working_dir labels —
+    WITHOUT the orcha.json identity check `_project_root_for` applies. Used only to clean
+    up a project's notifier when the checkout is GONE or has been reused by a different
+    project (so `_project_root_for` returns None): the LaunchAgent still records the root
+    as its WorkingDirectory, so matching on that recovers the container id from the
+    watchdog even when orcha.json is unreadable or names another project."""
+    result = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={_full_project(project_name)}",
+         "--format", '{{.Label "com.docker.compose.project.working_dir"}}'],
+        capture_output=True, text=True, check=False,
+    )
+    roots = []
+    for line in (result.stdout or "").splitlines():
+        wd = line.strip()
+        if not wd:
+            continue
+        for candidate in (pathlib.Path(wd).parent, pathlib.Path(wd)):
+            if candidate not in roots:
+                roots.append(candidate)
+    return roots
+
+
+def _stop_orphaned_project_daemons(project_name: str) -> int:
+    """Stop the notifier daemon(s) + remove the LaunchAgent watchdog for a project whose
+    checkout is GONE — the compose working_dir label points at a path that no longer holds
+    an Orcha checkout. Recovers each container id from the LaunchAgent whose
+    WorkingDirectory matches that (now-empty) path.
+
+    Only acts on a label path with NO `.claude/orcha.json`, i.e. a definitively deleted
+    checkout. If the path was *reused* by a DIFFERENT project (its orcha.json names another
+    project), we deliberately do nothing: the LaunchAgents there belong to the new occupant
+    and stopping them by path would take down the wrong project's wakes. Returns the number
+    of container watchdogs cleaned up."""
+    from orcha_cli import autostart
+    from orcha_cli.notifier import stop_daemon_for_container
+    seen = set()
+    for root in _project_label_roots(project_name):
+        # A path that still holds any Orcha checkout is off-limits: if it were still THIS
+        # project's, `_project_root_for` would have resolved it; otherwise it belongs to
+        # whatever project reused the path. Either way, don't touch daemons anchored there.
+        if (root / ".claude" / "orcha.json").exists():
+            continue
+        for cid in autostart.container_ids_for_workdir(root):
+            if cid in seen:
+                continue
+            seen.add(cid)
+            # stop_daemon_for_container tombstones the container, stops any live daemon,
+            # and uninstalls its LaunchAgent — the full "explicit stop stays stopped" path.
+            stop_daemon_for_container(cid, quiet=False)
+    return len(seen)
+
+
+def _bring_up_host_daemons(root: pathlib.Path) -> None:
+    """Epic A: relaunching a workspace brings the wake daemon back up too — plus the
+    S3 §3b live-terminal bridge. Best-effort; shared by both `orcha up` paths."""
+    try:
+        # `orcha up` is an explicit bring-up: clear any prior explicit-stop tombstone so
+        # the daemon starts, even if the notifier had been deliberately stopped earlier.
+        ensure_daemon(root, clear_stop=True)
+    except Exception as e:
+        print(f"[orcha] warn: notifier daemon didn't start ({e}); start it with `orcha notifier --ensure`")
+    try:
+        from orcha_cli.terminal_bridge import ensure_bridge
+        ensure_bridge(root)
+    except Exception as e:
+        print(f"[orcha] warn: terminal bridge didn't start ({e}); start it with `orcha terminal-bridge --ensure`")
+
+
 def cmd_up(args: argparse.Namespace) -> None:
     if args.project:
         if not _project_exists(args.project):
@@ -863,7 +968,22 @@ def cmd_up(args: argparse.Namespace) -> None:
                 f"error: no docker compose project named '{_full_project(args.project)}' found. "
                 f"Run `orcha ls` to see available projects, or `orcha init` in a fresh dir."
             )
-        _by_project(args.project, "up", "-d")
+        # Resolve the target checkout BEFORE touching compose: `up` needs a compose
+        # file, and using whatever happens to be in the current directory would either
+        # fail or start the WRONG project's services under this project's name.
+        root = _project_root_for(args.project)
+        compose_file = (root / ".orcha" / "docker-compose.yml") if root else None
+        if not compose_file or not compose_file.exists():
+            sys.exit(
+                f"error: couldn't locate the checkout for '{_full_project(args.project)}' "
+                "(compose working_dir label missing or stale). "
+                "Run `orcha up` from inside the project directory instead."
+            )
+        _by_project(args.project, "-f", str(compose_file), "up", "-d")
+        # The --project path used to return here WITHOUT the daemons — restarting a
+        # stopped stack from elsewhere left wakes dead until someone hand-ran
+        # `orcha notifier --ensure` in the checkout.
+        _bring_up_host_daemons(root)
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"
     if not (orcha_dir / "docker-compose.yml").exists():
@@ -876,39 +996,53 @@ def cmd_up(args: argparse.Namespace) -> None:
     prefs_path = _install_project_preferences(pathlib.Path.cwd())
     if prefs_path:
         print(f"[orcha] backfilled {prefs_path} (#298 loosely-hardened project rules)")
-    # Epic A: relaunching the workspace brings the wake daemon back up too.
+    _bring_up_host_daemons(pathlib.Path.cwd())
+
+
+def _stop_host_daemons(root: pathlib.Path) -> None:
+    """Epic A: the wake daemon dies with the stack — otherwise a daemon would keep
+    polling a DB that's going away (and, with -v, a wiped one). Also removes the
+    autostart watchdog (via stop_daemon) so nothing resurrects it. Best-effort.
+    S3 §3b: the live-terminal bridge dies with the stack too (else it holds the
+    port + points at a going-away DB; the portal would still advertise its ws URL)."""
     try:
-        ensure_daemon(pathlib.Path.cwd())
-    except Exception as e:
-        print(f"[orcha] warn: notifier daemon didn't start ({e}); start it with `orcha notifier --ensure`")
-    try:    # S3 §3b: and the host-side live-terminal bridge
-        from orcha_cli.terminal_bridge import ensure_bridge
-        ensure_bridge(pathlib.Path.cwd())
-    except Exception as e:
-        print(f"[orcha] warn: terminal bridge didn't start ({e}); start it with `orcha terminal-bridge --ensure`")
+        stop_daemon(root)
+    except Exception:
+        pass
+    try:
+        from orcha_cli.terminal_bridge import stop_bridge
+        stop_bridge(root)
+    except Exception:
+        pass
 
 
 def cmd_down(args: argparse.Namespace) -> None:
     extra = ["-v"] if args.volumes else []
-    # Epic A: the wake daemon dies with the stack — otherwise a daemon would keep
-    # polling a DB that's going away (and, with -v, a wiped one). Best-effort, local
-    # cwd only (a --project down from elsewhere can't locate that project's pidfile).
-    try:
-        stop_daemon(pathlib.Path.cwd())
-    except Exception:
-        pass
-    try:    # S3 §3b: the live-terminal bridge dies with the stack too (else it holds the port +
-            # points at a going-away DB; the portal would still advertise its ws URL).
-        from orcha_cli.terminal_bridge import stop_bridge
-        stop_bridge(pathlib.Path.cwd())
-    except Exception:
-        pass
     if args.project:
         if not _project_exists(args.project):
             sys.exit(
                 f"error: no docker compose project named '{_full_project(args.project)}' found. "
                 f"Run `orcha ls` to see available projects."
             )
+        # Stop ONLY the target project's daemons — stop_daemon also removes the
+        # autostart watchdog, so touching the current directory here would disable
+        # some OTHER project's wakes while its stack stays up. Recover the target
+        # checkout from the compose working_dir label, same as `orcha up --project`.
+        root = _project_root_for(args.project)
+        if root:
+            _stop_host_daemons(root)
+        else:
+            # Checkout missing or moved (label path deleted, or reused by a DIFFERENT
+            # project so orcha.json no longer matches). We can still stop this project's
+            # notifier and remove its watchdog by recovering the container id from the
+            # LaunchAgent whose WorkingDirectory matches the compose working_dir label —
+            # otherwise the daemon keeps polling a going-away stack and the 60s watchdog
+            # resurrects it forever.
+            cleaned = _stop_orphaned_project_daemons(args.project)
+            if not cleaned:
+                print("[orcha] warn: couldn't locate this project's checkout or a matching "
+                      "notifier watchdog — if a daemon lingers, run `orcha notifier --stop` "
+                      "in the project directory")
         _by_project(args.project, "down", *extra)
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"
@@ -917,6 +1051,7 @@ def cmd_down(args: argparse.Namespace) -> None:
             "error: no .orcha/docker-compose.yml here — nothing to bring down. "
             "Pass `--project <name>` to target a specific stack from anywhere."
         )
+    _stop_host_daemons(pathlib.Path.cwd())
     _compose(orcha_dir, "down", *extra)
 
 

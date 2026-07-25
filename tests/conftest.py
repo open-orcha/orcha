@@ -25,6 +25,28 @@ import pytest
 import pytest_asyncio
 import httpx
 
+# The notifier's ensure/stop paths now manage a launchd LaunchAgent on macOS
+# (orcha_cli/autostart.py). Tests exercising ensure_daemon/stop_daemon must NEVER
+# touch the developer's real ~/Library/LaunchAgents or call launchctl — opt the
+# whole suite out; the autostart tests re-enable it against monkeypatched seams.
+os.environ.setdefault("ORCHA_NO_AUTOSTART", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_launchd(monkeypatch, tmp_path):
+    """The env opt-out above does NOT gate uninstall_autostart (an opt-out set after
+    install must still clean up an existing agent), so on a darwin dev machine a test
+    hitting a stop path could reach the real launchctl. Point the launchd seams at
+    inert fakes suite-wide; the autostart tests re-patch them with recorders."""
+    from orcha_cli import autostart, notifier
+    monkeypatch.setattr(autostart, "_launchctl", lambda *a: None)
+    monkeypatch.setattr(autostart, "_launch_agents_dir", lambda: tmp_path / "launch-agents-guard")
+    # The explicit-stop tombstone lives under the real ~/.orcha; never let a test write it
+    # there. Sandbox it suite-wide (tests still control _global_pid_path individually).
+    marker_dir = tmp_path / "orcha-state-guard"
+    monkeypatch.setattr(notifier, "_stop_marker_path",
+                        lambda cid: marker_dir / f"notifier-{cid}.stopped")
+
 # --- locate the shipped app + schema (templates live under orcha-cli/) ---
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PORTAL_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"

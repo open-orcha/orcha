@@ -113,6 +113,48 @@ def test_daemon_self_terminates_when_container_missing(monkeypatch, tmp_path):
     assert tick_calls == [], "daemon ran a wake tick instead of self-terminating on a missing container"
 
 
+def test_daemon_self_terminate_uninstalls_autostart(monkeypatch, tmp_path):
+    """TEETH (PR #169): self-termination on a definitive 404 must take the LaunchAgent
+    watchdog down with the daemon — otherwise launchd keeps re-running `notifier --ensure`
+    every minute forever against a container that can never come back (ensure 404-refuses
+    too, so the job is pure churn). RED if the in-loop exit stops calling uninstall."""
+    _stub_loop_seams(monkeypatch, tmp_path)
+    monkeypatch.setattr(notifier, "_probe_container", _stateful_probe(["ok", "missing"]))
+    removed = []
+    monkeypatch.setattr(notifier.autostart, "uninstall_autostart",
+                        lambda cid, quiet=True: removed.append(cid) or True)
+
+    def _fake_tick(*a, **k):
+        raise KeyboardInterrupt  # bound the loop IF liveness didn't already break it
+
+    monkeypatch.setattr(notifier, "tick", _fake_tick)
+    try:
+        notifier.cmd_notifier(_make_args())
+    except KeyboardInterrupt:
+        pass
+    assert removed == ["C1"], "self-terminating daemon left the LaunchAgent watchdog installed"
+
+
+def test_daemon_keeps_autostart_when_unreachable(monkeypatch, tmp_path):
+    """The transient side: an 'unreachable' API bounce (routine during `orcha up`) must not
+    uninstall the watchdog any more than it kills the daemon."""
+    _stub_loop_seams(monkeypatch, tmp_path)
+    monkeypatch.setattr(notifier, "_probe_container", _stateful_probe(["ok", "unreachable"]))
+    removed = []
+    monkeypatch.setattr(notifier.autostart, "uninstall_autostart",
+                        lambda cid, quiet=True: removed.append(cid) or True)
+
+    def _fake_tick(*a, **k):
+        raise KeyboardInterrupt  # one pass then stop the loop
+
+    monkeypatch.setattr(notifier, "tick", _fake_tick)
+    try:
+        notifier.cmd_notifier(_make_args())
+    except KeyboardInterrupt:
+        pass
+    assert removed == [], "transient 'unreachable' removed the LaunchAgent watchdog"
+
+
 def test_daemon_does_not_self_terminate_when_unreachable(monkeypatch, tmp_path):
     """TEETH (the other side): a transient 'unreachable' (API mid-restart during `orcha up`) must
     NOT trip the self-terminate path — the daemon proceeds to its normal tick. RED if someone makes
