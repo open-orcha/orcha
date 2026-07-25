@@ -104,6 +104,7 @@ from .notifier_runtime import (
     _runtime_extra_flags,
 )
 from . import notifier_headless as _headless
+from . import notifier_orphan_cleanup as _orphan_cleanup
 from . import notifier_resident_spawn as _resident_spawn
 from . import notifier_run_feed as _run_feed
 from . import notifier_task_continuity as _task_continuity
@@ -1327,76 +1328,22 @@ WAKE_LEASE_TTL_SECS = 180.0
 
 
 def reap_orphan_leases(api_base: str, cid: str, quiet: bool) -> None:
-    """ISS-60(B): TTL-independent backstop — ask the API to release any single-flight lease whose
-    agent hasn't heartbeat in >ORPHAN_LEASE_SECS (a daemon-restart / externally-spawned resident
-    whose lease survived an in-memory live_residents reset, where the short TTL alone wouldn't
-    recover all wakes). The reap DECISION + threshold live server-side (only the API touches the
-    DB); this is a thin transport poll, run each tick alongside reap_workers. SAFE because
-    wake-renew bumps last_heartbeat_at on every keep-alive, so an alive-but-quiet embodiment is
-    never false-orphaned. Idempotent: a released lease is no longer LIVE, so a re-call is a no-op."""
-    res = _post_json(f"{api_base}/api/containers/{cid}/reap-orphan-leases", {})
-    if res and res.get("reaped") and not quiet:
-        for r in res["reaped"]:
-            print(f"[notifier] reaped ORPHAN {r.get('lease_kind')} lease for {r.get('alias')} "
-                  f"(no heartbeat {float(r.get('idle_seconds') or 0):.0f}s) — lease released (ISS-60B)")
+    """Compatibility facade for stale single-flight lease cleanup."""
+    _orphan_cleanup.reap_orphan_leases(
+        api_base, cid, quiet, sys.modules[__name__]
+    )
 
 
 def reap_orphaned_runs(api_base: str, cid: str, live_pids=frozenset(),
                        *, quiet: bool = True) -> int:
-    """#342: CONTAINER-WIDE dead-pid sweep across ALL wake_kinds — the fix for orphaned EPHEMERAL
-    wake-runs left status='running' forever. The per-agent resident reaper (_reap_dead_pid_resident_runs)
-    only runs for agents WITH an active conversation and reads RESIDENT runs; the heartbeat
-    reap-orphan-leases only acts on a still-LIVE lease. So an ephemeral wake-run (request_answered /
-    checkpoint_respawn / conversation_turn) whose daemon RESTARTED — dropping the in-memory Popen handle
-    that reap_workers() would have poll()/finished — falls through BOTH: its lease has already expired
-    (nothing renews it) and it never had a resident row, so it squats 'running' indefinitely, misreporting
-    the agent as busy (blocks re-wake, compounds #340).
-
-    This sweep is keyed on the only truth that survives daemon turnover: the DB run row + a HOST
-    os.kill(pid,0) (the API can't see host PIDs). GH #91/#90: the wake-ack lease release + the
-    server's running->orphaned reconcile are LANE-scoped, so the sweep groups per (agent, lane) —
-    a dead CONVERSATION-lane run releases the conv lease, a dead WORK run the work lease, and a
-    live run in ONE lane never shields a dead run in the OTHER (the lanes lease independently).
-    For each (agent, lane) with a running run whose process is dead:
-      * NO live process backs ANY of that lane's running rows → release that LANE's lease (the
-        server's wake-ack reconcile orphans every running row for the agent IN THAT LANE) so the
-        lane is idle + re-claimable within one poll cycle.
-      * a live SAME-LANE sibling DOES exist (true double-spawn / a fresh worker mid-run) → finish
-        ONLY the dead orphan rows ('killed'), keep the lease the live worker still renews.
-    `live_pids` shields THIS daemon's genuinely-live workers + residents from a racing os.kill. (pid REUSE
-    can mask a dead run as alive — accepted: the ISS-60B heartbeat backstop still catches that tail.)
-    Returns the number of dead runs reaped."""
-    data = _get_json(f"{api_base}/api/containers/{cid}/running-runs") or {}
-    runs = data.get("runs", [])
-    if not runs:
-        return 0
-
-    def _alive(r):
-        pid = r.get("pid")
-        return (pid in live_pids) or _run_pid_alive(pid)
-
-    by_agent_lane: dict = {}
-    for r in runs:
-        # missing lane (pre-030 server mid-upgrade) → 'work', the historical default
-        by_agent_lane.setdefault((r.get("agent_id"), r.get("lane") or "work"), []).append(r)
-    reaped = 0
-    for (aid, lane), arows in by_agent_lane.items():
-        dead = [r for r in arows if not _alive(r)]
-        if not dead:
-            continue
-        live_sibling = any(_alive(r) for r in arows)
-        if live_sibling:
-            for r in dead:
-                _finish_run(api_base, r.get("run_id"), "killed", -1, None)
-        else:
-            _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                       {"kind": "orphan_run_sweep", "release_lease": True, "lane": lane})
-        reaped += len(dead)
-        if not quiet:
-            print(f"[notifier] swept {len(dead)} dead-pid orphaned {lane}-lane run(s) for {aid} "
-                  f"({'finished orphans, kept lease (live sibling)' if live_sibling else 'released lease'}) "
-                  f"(#342)")
-    return reaped
+    """Compatibility facade for dead-pid run reconciliation."""
+    return _orphan_cleanup.reap_orphaned_runs(
+        api_base,
+        cid,
+        live_pids,
+        quiet=quiet,
+        services=sys.modules[__name__],
+    )
 
 
 # GH#110 §2c: a task's terminal states. A durable per-(agent+task) worktree is preserved across
@@ -1436,73 +1383,16 @@ def reap_terminal_task_worktrees(api_base: str, cid: str, base_cwd: Optional[str
     run rows (§2d recorded worktree/branch/base_cwd there) to map a task → its worktree without
     reversing the on-disk slug. Best-effort: any error is swallowed so cleanup never takes down the
     daemon loop. Returns the number of worktrees removed this pass."""
-    if not base_cwd or not _is_git_repo(base_cwd):
-        return 0
-    live_wts = {w.get("worktree") for w in live_workers.values() if w.get("worktree")}
-    removed = 0
-    for state in _TERMINAL_TASK_STATES:
-        # PR #121 R3: PAGINATE. The list endpoint clamps limit→100 and, with a single-status
-        # filter, the default order collapses to (priority ASC, created_at ASC) — so a one-shot
-        # limit=100 GET sees only the ~100 OLDEST terminal tasks, forever. Terminal tasks are never
-        # deleted, so once a container has >100 of them every NEWLY-terminal task — exactly the ones
-        # owning a fresh orcha/task-* worktree post-merge — sits past the horizon and is never swept,
-        # silently re-opening the "worktrees accumulate forever" gap this reaper exists to close.
-        # Walk ALL pages, oldest-first with an id tiebreak (sort=time&dir=asc → deterministic tiling
-        # so no row falls between page boundaries); swept_tasks makes a re-visited page cheap (skip
-        # before the per-task /runs GET). Sweeping a worktree never changes a task's terminal status,
-        # so the query window is stable across a single pass — offset paging is safe here.
-        offset = 0
-        for _page in range(_TERMINAL_SWEEP_MAX_PAGES):
-            data = _get_json(
-                f"{api_base}/api/containers/{cid}/tasks"
-                f"?status={state}&sort=time&dir=asc"
-                f"&limit={_TERMINAL_SWEEP_PAGE_SIZE}&offset={offset}"
-            ) or {}
-            page_tasks = data.get("tasks", [])
-            for t in page_tasks:
-                tid = t.get("id")
-                if not tid or tid in swept_tasks:
-                    continue
-                runs = _get_json(f"{api_base}/api/tasks/{tid}/runs") or {}
-                seen: set = set()
-                defer_sweep = False   # a live worktree or a preserved-dirty tree → retry on a later pass
-                for r in runs.get("runs", []):
-                    wt, br = r.get("worktree"), r.get("branch")
-                    # only DURABLE per-task worktrees (orcha/task-*), never a disposable ephemeral one
-                    if not wt or not br or not str(br).startswith("orcha/task-") or wt in seen:
-                        continue
-                    seen.add(wt)
-                    if wt in live_wts:
-                        defer_sweep = True         # an active worker still holds it — reclaim once it exits
-                        continue
-                    try:
-                        outcome = _reclaim_task_worktree(r.get("base_cwd") or base_cwd, wt, br)
-                    except Exception:
-                        outcome = "preserved-dirty"   # be conservative on any error — don't mark swept
-                    if outcome == "removed":
-                        removed += 1
-                        if not quiet:
-                            print(f"[notifier] reclaimed durable task worktree {wt} (branch {br}) — "
-                                  f"task terminal ({state}), clean tree")
-                    elif outcome == "preserved-dirty":
-                        defer_sweep = True
-                        if not quiet:
-                            print(f"[notifier] task {tid} terminal but its worktree {wt} has "
-                                  f"uncommitted work — PRESERVED for a human, not reclaimed")
-                # PR #121 review note (c): a terminal task can no longer fail-drain — clear its counter.
-                if failed_drains is not None:
-                    for key in [k for k in failed_drains if k[1] == tid]:
-                        failed_drains.pop(key, None)
-                # mark swept only once nothing needs a retry — a live worktree (worker still running)
-                # or a preserved-dirty tree (uncommitted work) stays reclaimable on a subsequent pass.
-                if not defer_sweep:
-                    swept_tasks.add(tid)
-            # stop when the server says no more rows (or an empty/short final page) — has_more is the
-            # authoritative signal; the length guard just avoids a wasted extra GET on an exact boundary.
-            if not data.get("has_more") or not page_tasks:
-                break
-            offset += len(page_tasks)
-    return removed
+    return _orphan_cleanup.reap_terminal_task_worktrees(
+        api_base,
+        cid,
+        base_cwd,
+        live_workers,
+        swept_tasks,
+        quiet,
+        failed_drains,
+        sys.modules[__name__],
+    )
 
 
 # ISS-29: once a worker has emitted its terminal `result`, the agent loop is DONE — but the
