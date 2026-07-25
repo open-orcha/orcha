@@ -68,6 +68,37 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
+from portal_backend.limits import (
+    MAX_DESC_LEN,
+    MAX_DOD_LEN,
+    MAX_FEEDBACK_LEN,
+    MAX_NAME_LEN,
+    MAX_PAYLOAD_LEN,
+    MAX_PROMPT_BATCH_CHARS,
+    MAX_PROMPT_LEN,
+    MAX_PROTOCOL_FIELD_LEN,
+    MAX_SELF_WAKE_CONTEXT_LEN,
+    MAX_TURN_LEN,
+)
+from portal_backend.schemas import (
+    AgentCreate,
+    AgentCreateResponse,
+    ContainerCreate,
+    ContainerCreateResponse,
+    ContainerReset,
+    ContainerStatusUpdate,
+    InitialTask,
+    LlmKeyActor,
+    LlmKeyTest,
+    LlmKeyUpdate,
+    ModelSettingOverride,
+    ModelSettingsUpdate,
+    ProposeBody,
+    ProposeDialogueTurn,
+    ProtocolFields,
+    ProtocolUpdate,
+    TaskCreateBody,
+)
 
 # secret_box (#294): at-rest encryption for the per-container LLM API key. Same dual-context
 # trick the design uses for llm_util — the portal container imports it top-level (copied in at
@@ -388,20 +419,7 @@ def resolve_reasoning_effort(effort: Optional[str]) -> Optional[str]:
     return effort if effort in _REASONING_EFFORT_IDS else DEFAULT_REASONING_EFFORT
 
 
-# Item 8 (review): cap user-supplied text to keep snapshots bounded and the DB sane.
-# Bytes, not chars — Postgres TEXT has no hard limit, but every snapshot returns these.
-MAX_NAME_LEN     = 200
-MAX_DESC_LEN     = 4_000
-MAX_PROMPT_LEN   = 8_000
-MAX_PAYLOAD_LEN  = 4_000   # request / answer text + task result
-MAX_TURN_LEN     = 100_000 # a conversation turn (human message or an agent 'result' final text)
-MAX_SELF_WAKE_CONTEXT_LEN = 2_048  # GH #122: short one-shot resume context for wake injection
-# A3: aggregate cap on the directed-prompt batch surfaced in one wake. Each prompt is bounded by
-# MAX_PAYLOAD_LEN, but an accumulated backlog concatenated into a single `claude -p` / tmux argv
-# could blow the OS arg limit → spawn fails → the same too-big batch retries forever. wake-scan
-# surfaces at most this many chars of prompts and tells the daemon to ack only through the last
-# INCLUDED one; the rest stay pending for the next wake (progress, no loss, no argv blowup).
-MAX_PROMPT_BATCH_CHARS = 24_000
+# Validation limits live with the request/response schemas in portal_backend.limits.
 # ISS-58: self-echo / notification events that must NEVER by themselves wake an agent. The C1
 # digest snapshot emits `digest_snapshotted` (a dashboard notification, not actionable work); when
 # it was delivered to the agent's OWN key it self-woke the agent in a ~60s loop (the wake spawns a
@@ -944,10 +962,6 @@ ORPHAN_LEASE_SECS = 1260.0
 # The frontend (terminal.js) discovers its URL here instead of assuming `location.host`. Default
 # is the bridge's localhost bind; override with ORCHA_TERMINAL_WS_URL for a non-default port/host.
 TERMINAL_WS_URL = os.environ.get("ORCHA_TERMINAL_WS_URL", "ws://127.0.0.1:8765")
-MAX_DOD_LEN      = 4_000
-MAX_FEEDBACK_LEN = 4_000
-MAX_PROTOCOL_FIELD_LEN = 4_000   # SPEC-4: per-field cap on a task protocol string
-
 # ISS-47: an answered request the requester never closed within a day is a dangling thread.
 STALE_ANSWERED_SECS = 24 * 3600
 
@@ -1727,151 +1741,6 @@ def _require_container_active(cur, cid, actor_agent_id=None):
                 f"container is '{status}' — agent actions are blocked until it is resumed",
             )
     return row
-
-
-# ---------- models ----------
-
-class ContainerCreate(BaseModel):
-    name: str = Field(..., max_length=MAX_NAME_LEN)
-    description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
-
-
-class ContainerCreateResponse(BaseModel):
-    container_id: str
-    root_task_id: str
-
-
-class ContainerReset(BaseModel):
-    # DESTRUCTIVE: human-gated + typed confirmation. `confirm` must equal the
-    # container's current name so a reset can't fire from a stray/replayed call.
-    actor_agent_id: str
-    confirm: str
-
-
-class ContainerStatusUpdate(BaseModel):
-    status: str = Field(..., description="active|paused|completed|cancelled|failed")
-    actor_agent_id: str = Field(..., description="UUID of the human agent performing the action (kind='human')")
-
-
-class LlmKeyUpdate(BaseModel):
-    """#294 Item 1: store a per-container Anthropic API key (PUT .../settings/llm-key).
-    HUMAN-AUTHORITY gated + audit-logged — writing a credential is a human action, mirroring
-    /status and /auto-wake (Orcha#30). The key is sealed by secret_box before it touches the
-    DB; the plaintext is never persisted and never returned."""
-    actor_agent_id: str = Field(..., description="UUID of the human agent performing the action (kind='human')")
-    api_key: str = Field(..., min_length=1, max_length=512, description="the Anthropic API key (plaintext, sealed server-side)")
-
-
-class LlmKeyActor(BaseModel):
-    """Actor-only body for DELETE .../settings/llm-key (human-authority gated)."""
-    actor_agent_id: str = Field(..., description="UUID of the human agent performing the action (kind='human')")
-
-
-class LlmKeyTest(BaseModel):
-    """#294 Item 1: server-side credential ping (POST .../settings/llm-key/test). HUMAN-AUTHORITY
-    gated. `api_key` is OPTIONAL — supply a candidate to test BEFORE saving (the setup flow), or
-    omit to test the currently-resolved key (env override > stored)."""
-    actor_agent_id: str = Field(..., description="UUID of the human agent performing the action (kind='human')")
-    api_key: Optional[str] = Field(default=None, max_length=512, description="candidate key to test; omit to test the stored/resolved key")
-
-
-class ModelSettingOverride(BaseModel):
-    """One per-use-case model override in a PUT .../settings/models body (SPEC-SETTINGS §3).
-    `provider`+`model` both present = override that use-case; a use-case OMITTED from the body
-    (or sent with both null) is reset to the shipped default. Validated against the #290 catalog
-    server-side (llm_util.is_catalog_choice) so a stubbed provider / bogus model can't be stored."""
-    key: str = Field(..., max_length=64, description="the registered use-case key (e.g. 'triage', 'onboarding')")
-    provider: Optional[str] = Field(default=None, max_length=64, description="provider id from the catalog; null = reset")
-    model: Optional[str] = Field(default=None, max_length=128, description="model id from the catalog; null = reset")
-
-
-class ModelSettingsUpdate(BaseModel):
-    """#294: replace the FULL set of per-container model overrides (SPEC-SETTINGS §2.2 — one PUT
-    writes the full overridden set). HUMAN-AUTHORITY gated + audit-logged, like /settings/llm-key
-    and /auto-wake — a model swap is a deliberate cost/quality decision. Any registered use-case
-    NOT in `use_cases` is reset to its shipped default."""
-    actor_agent_id: str = Field(..., description="UUID of the human agent performing the action (kind='human')")
-    use_cases: list[ModelSettingOverride] = Field(default_factory=list, description="the full set of overrides to persist")
-
-
-class ProposeDialogueTurn(BaseModel):
-    """One turn in the SPEC-292 turn-based clarify loop."""
-    role: Literal["assistant", "user"]
-    content: str = Field(..., max_length=MAX_PAYLOAD_LEN)
-
-
-class ProposeBody(BaseModel):
-    """SPEC-292 request body for POST /api/onboarding/propose."""
-    cid: str = Field(..., description="container id for the workspace being staffed")
-    goal: str = Field(..., max_length=MAX_PAYLOAD_LEN)
-    dialogue: list[ProposeDialogueTurn] = Field(default_factory=list)
-
-
-class InitialTask(BaseModel):
-    title: str = Field(..., max_length=MAX_NAME_LEN)
-    description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
-    definition_of_done: str = Field(..., max_length=MAX_DOD_LEN)
-    priority: int = 100
-
-
-class AgentCreate(BaseModel):
-    alias: str = Field(..., max_length=64)
-    role: str = Field(..., max_length=200)
-    # Orcha#30: humans don't carry a prompt. Optional now; the API rejects
-    # 'ai' kind without a prompt below.
-    prompt: Optional[str] = Field(
-        default=None,
-        description="System prompt that defines this agent (required for kind='ai'; omit for 'human')",
-        max_length=MAX_PROMPT_LEN,
-    )
-    kind: str = Field(default="ai", pattern="^(ai|human)$")
-    # D7: the LLM model this agent runs on. Curated static set (no live list API);
-    # the portal create-agent dropdown defaults to Opus 5. Defaulted server-side
-    # for kind='ai' when omitted; left NULL for humans (no LLM).
-    model: Optional[str] = Field(default=None, max_length=64)
-    initial_task: Optional[InitialTask] = None
-
-
-class AgentCreateResponse(BaseModel):
-    agent_id: str
-    alias: str
-    container_id: str
-    initial_task: Optional[dict] = None
-
-
-class ProtocolFields(BaseModel):
-    """SPEC-4: the per-task working agreement — four OPTIONAL free-text strings. `autonomy`
-    is FREE TEXT for now (NOT an L1/L2/L3 enum; that waits on the SPEC-1 autonomy design-call).
-    Used both as the create-time `protocol` block and (with actor_agent_id) as the PATCH body."""
-    review_chain: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
-    handoff_to: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
-    autonomy: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
-    notes: Optional[str] = Field(default=None, max_length=MAX_PROTOCOL_FIELD_LEN)
-
-
-class ProtocolUpdate(ProtocolFields):
-    """PATCH /api/tasks/{tid}/protocol body. PARTIAL update: only the keys explicitly sent are
-    merged into the existing protocol (omitted keys are preserved). Actor: human or dispatching
-    AI orchestrator (#327); editing `autonomy` stays human-only."""
-    actor_agent_id: str = Field(..., description="UUID of the actor (human or dispatching AI); autonomy edits stay human-only (#327)")
-
-
-class TaskCreateBody(BaseModel):
-    title: str = Field(..., max_length=MAX_NAME_LEN)
-    description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
-    definition_of_done: str = Field(..., max_length=MAX_DOD_LEN)
-    priority: int = 100
-    created_by_agent_id: Optional[str] = None
-    assignee_alias: Optional[str] = Field(default=None, max_length=64)
-    depends_on: list[str] = Field(default_factory=list)
-    # SPEC-4: optional per-task protocol set at create-time (Glass's New-Task form may include it).
-    protocol: Optional[ProtocolFields] = None
-    # #326 (B3): create the task HELD — status='not_ready' instead of ready/pending. A held task
-    # is design-gated (awaiting a brainstorm / upstream decision) so it is EXCLUDED from the
-    # ready-queue and NOT self-claimable via /orcha-next until a human flips it to ready
-    # (POST /api/tasks/{tid}/readiness). Overrides the ready/pending default; an explicitly
-    # ASSIGNED task is still claimed (in_progress) — you don't hold work you're handing to an agent.
-    not_ready: bool = False
 
 
 def _propose_sse(payload: dict) -> str:
