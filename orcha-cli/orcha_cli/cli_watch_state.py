@@ -57,4 +57,3 @@ def skip_managed_embodiment_hook(hook: str) -> bool:
         print(f"[orcha] {marker} — skipping interactive SessionStart hook '{hook}'")
         return True
     return False
-

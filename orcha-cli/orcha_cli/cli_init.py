@@ -226,5 +226,3 @@ def cmd_init(args: argparse.Namespace, services) -> None:
     print( "  3. Register your first AI agent:")
     print(f"       /orcha-register-agent <Alias> --role \"...\" --prompt \"...\" [--initial-task \"...\" --task-dod \"...\"]")
     print( "  4. Inspect anytime:  /orcha-status in Claude or $orcha-status in Codex")
-
-

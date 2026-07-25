@@ -89,4 +89,3 @@ def require_any_binding(cwd: pathlib.Path, alias_override: Optional[str], *, ver
     sys.exit(
         f"error: no agent binding found for `{verb}`. Set ORCHA_ALIAS or pass --alias."
     )
-

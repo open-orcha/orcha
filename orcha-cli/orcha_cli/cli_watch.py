@@ -194,4 +194,3 @@ def cmd_unwatch(_: argparse.Namespace) -> None:
             pid_path.unlink()
         except FileNotFoundError:
             pass
-
