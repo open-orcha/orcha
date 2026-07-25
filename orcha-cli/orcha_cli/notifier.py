@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import shutil
 import signal
 import subprocess
@@ -104,8 +103,11 @@ from .notifier_runtime import (
 )
 from . import notifier_headless as _headless
 from . import notifier_resident_spawn as _resident_spawn
+from . import notifier_run_feed as _run_feed
+from . import notifier_task_continuity as _task_continuity
 from . import notifier_wake_actions as _wake_actions
 from . import notifier_wake_decisions as _wake_decisions
+from . import notifier_worker_results as _worker_results
 from . import notifier_worktree_base as _worktree_base
 from . import notifier_worktree_stable as _worktree_stable
 
@@ -711,235 +713,74 @@ def _checkpoint_task_worktree(base_cwd, worktree, branch, task_id, run_id):
 
 
 def _codex_exit_status(log_path, returncode) -> str:
-    """GH#110: classify a CLEAN-exit Codex worker's terminal state from its `codex exec --json` log
-    (not the raw returncode alone). A Codex worker that dies on a 429 / rate_limit_event still
-    exits 0, so a returncode-only read wrongly logs it as a successful drain and advances the wake
-    cursor past unhandled work. Delegates to the existing tolerant classifiers (no new scanner):
-      * a rate-limit/backoff as the last meaningful signal → 'rate_limited';
-      * a terminal turn that FAILED (or a non-zero exit) → 'failed';
-      * otherwise → 'exited' (a normally-finished turn, or nothing terminal to say it failed).
-    Returns one of 'rate_limited' | 'failed' | 'exited'."""
+    """Compatibility facade for Codex worker result classification."""
     if _codex_tail_is_rate_limited(log_path):
         return "rate_limited"
-    rstatus = _codex_result_status(log_path)
-    if rstatus == "error":
+    result_status = _codex_result_status(log_path)
+    if result_status == "error":
         return "failed"
-    if rstatus is None and returncode not in (0, None):
-        return "failed"                      # exited non-zero with no clean terminal turn
+    if result_status is None and returncode not in (0, None):
+        return "failed"
     return "exited"
 
 
 def _codex_tail_is_rate_limited(log_path) -> bool:
-    """GH#110: is the LAST meaningful signal in a Codex log a rate-limit / 429 backoff (worker died
-    mid-cooldown)? Mirrors _codex_result_status's tail read but keys on _codex_is_rate_limit as the
-    terminal signal. Tolerant/fail-open parsing (codex unpinned on this host)."""
-    if not log_path:
-        return False
-    try:
-        with open(log_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            end = f.tell()
-            f.seek(max(0, end - 65536))
-            tail = f.read()
-    except OSError:
-        return False
-    last = None                              # 'rate_limit' | 'turn_end' | 'start' | 'end'
-    for raw in tail.split(b"\n"):
-        s = raw.strip()
-        if not s:
-            continue
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if _codex_is_rate_limit(obj):
-            last = "rate_limit"
-        elif _codex_is_turn_end(obj):
-            last = "turn_end"
-        else:
-            phase, _iid = _codex_event_phase(obj)
-            if phase in ("start", "end"):
-                last = phase
-    return last == "rate_limit"
+    """Compatibility facade for tail rate-limit detection."""
+    return _worker_results.codex_tail_is_rate_limited(log_path, sys.modules[__name__])
 
 
 def _parse_rate_limit_reset(log_path) -> float:
-    """GH#110: best-effort seconds-until-retry for a rate-limited Codex worker, parsed from the
-    `retry_after` field (or a 'retry after N s' message) of the last rate-limit event in the log.
-    Falls back to RATE_LIMIT_DEFAULT_BACKOFF_SECS when nothing is parseable (codex's exact 429 event
-    spelling is unpinned on this host). Clamped to a sane [5s, 1h] range."""
-    secs = None
-    if log_path:
-        try:
-            with open(log_path, "rb") as f:
-                f.seek(0, os.SEEK_END)
-                end = f.tell()
-                f.seek(max(0, end - 65536))
-                tail = f.read()
-        except OSError:
-            tail = b""
-        for raw in tail.split(b"\n"):
-            s = raw.strip()
-            if not s:
-                continue
-            try:
-                obj = json.loads(s)
-            except ValueError:
-                continue
-            if not isinstance(obj, dict) or not _codex_is_rate_limit(obj):
-                continue
-            msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
-            ra = obj.get("retry_after") or msg.get("retry_after")
-            if isinstance(ra, (int, float)) and ra > 0:
-                secs = float(ra)
-                continue
-            for field in (msg.get("message"), msg.get("error"), obj.get("error"), obj.get("message")):
-                if isinstance(field, str):
-                    m = re.search(r"retry[ _-]?after[^0-9]*([0-9]+(?:\.[0-9]+)?)", field.lower())
-                    if m:
-                        secs = float(m.group(1))
-    if not secs or secs <= 0:
-        secs = RATE_LIMIT_DEFAULT_BACKOFF_SECS
-    return max(5.0, min(secs, 3600.0))
+    """Compatibility facade for rate-limit retry delay parsing."""
+    return _worker_results.parse_rate_limit_reset(log_path, sys.modules[__name__])
 
 
 def _saved_ref(w, checkpoint_sha, diff) -> dict:
-    """GH#110: the durable pointer recorded on a preserved task worker — where its work lives so a
-    human (and the next wake) can find it. Additive; no UUIDs/SHAs leak into human-facing text.
-    `has_commits` reflects the BRANCH (not just this reap's checkpoint) so a worker that committed
-    on an earlier tick but left a clean tree now is still recorded as having committed work."""
-    branch = w.get("branch")
-    return {"branch": branch, "worktree": w.get("worktree"),
-            "checkpoint_sha": checkpoint_sha,
-            "has_commits": bool(checkpoint_sha) or _branch_commit_count(w.get("base_cwd"), branch) > 0,
-            "patch_captured": bool((diff or "").strip())}
+    """Compatibility facade for durable task-work pointers."""
+    return _task_continuity.saved_ref(w, checkpoint_sha, diff, sys.modules[__name__])
 
 
 def _saved_human_line(base_cwd, branch, sha) -> str:
-    """GH#110: the plain-language 'where the work is' line for a preserved task worker (no UUIDs,
-    no long SHAs — just the short checkpoint id). Distinguishes a checkpoint committed THIS reap,
-    work the worker committed EARLIER in the run (branch already has commits, nothing new to commit
-    now — PR #121 review note a: the old wording called this 'uncommitted', which was misleading),
-    and a purely-uncommitted preserved tree."""
-    if sha:
-        return f"work saved on branch {branch} (checkpoint {sha})"
-    if _branch_commit_count(base_cwd, branch) > 0:
-        return f"work saved on branch {branch} (committed on the branch, preserved)"
-    return f"work saved on branch {branch} (uncommitted, preserved)"
+    """Compatibility facade for plain-language saved-work messages."""
+    return _task_continuity.saved_human_line(
+        base_cwd, branch, sha, sys.modules[__name__]
+    )
 
 
 def _reclaim_task_worktree(base_cwd, worktree, branch) -> str:
-    """GH#110 §2c: safe-teardown for a TERMINAL task's durable worktree. Unlike the resident
-    _safe_teardown_worktree, 'dirty' here EXCLUDES the overlaid runtime config (_DIFF_EXCLUDES) —
-    _overlay_runtime_config copies in the TRACKED .claude/settings.json, so a plain dirty-check
-    would read EVERY task worktree as dirty and never reclaim one. Removes only when there is no
-    un-preserved WORKER work: committed work stays on the branch (kept by _teardown_worktree when
-    the branch has commits — which is exactly the open-PR case), and a genuinely dirty tree is
-    PRESERVED. Returns 'removed' | 'preserved-dirty' | 'noop'."""
-    if not worktree:
-        return "noop"
-    if _worktree_is_dirty(worktree, excludes=_DIFF_EXCLUDES):
-        return "preserved-dirty"
-    _teardown_worktree(base_cwd, worktree, branch)
-    return "removed"
+    """Compatibility facade for safe task-worktree reclamation."""
+    return _task_continuity.reclaim_task_worktree(
+        base_cwd, worktree, branch, sys.modules[__name__]
+    )
 
 
 def _record_task_saved_ref(api_base, w, saved_ref, human_line) -> None:
-    """GH#110: surface a preserved task worker's saved_ref on the task feed in PLAIN language (no
-    UUIDs/SHAs), so a non-engineer sees where the work was saved. Best-effort — a failed post is
-    swallowed (the run row already carries branch/worktree, so the ref isn't lost)."""
-    task_id = (w.get("respawn_ctx") or {}).get("task_id")
-    agent_id = w.get("agent_id")
-    if not (task_id and agent_id and human_line):
-        return
-    _post_json(f"{api_base}/api/tasks/{task_id}/messages",
-               {"author_agent_id": agent_id, "body": human_line})
+    """Compatibility facade for publishing task saved-work pointers."""
+    _task_continuity.record_task_saved_ref(
+        api_base, w, saved_ref, human_line, sys.modules[__name__]
+    )
 
 
 def _synthesize_task_digest(api_base, agent_id, task_id, saved_ref, run_started_ts, human_line) -> None:
-    """GH#110 §2f: after a meaningful task-worker finish, inject a continuity snapshot WITHOUT
-    relying on the agent voluntarily calling /orcha-snapshot — Codex `exec` has no SessionEnd hook,
-    so this is its ONLY digest write; for Claude it augments the hook. Never clobbers a NEWER
-    agent-written digest: skip if the stored digest is already newer than this run's start (the
-    agent composed a richer one during the run)."""
-    if not (agent_id and task_id):
-        return
-    existing = _get_json(f"{api_base}/api/agents/{agent_id}/digest")
-    dg = (existing or {}).get("digest")
-    if dg and run_started_ts and (dg.get("snapshot_ts") or 0) > run_started_ts:
-        return                               # a newer agent-written digest exists — don't clobber
-    branch = saved_ref.get("branch")
-    focus = (human_line or "work in progress on the current task")[:400]
-    _post_json(f"{api_base}/api/agents/{agent_id}/digest",
-               {"current_focus": focus,
-                "open_threads": [{"text": f"Resume task {task_id}: work is saved on branch "
-                                          f"{branch or '(none)'}; reuse that worktree/branch "
-                                          f"instead of starting fresh from origin/main."}]})
+    """Compatibility facade for task-worker continuity digests."""
+    _task_continuity.synthesize_task_digest(
+        api_base,
+        agent_id,
+        task_id,
+        saved_ref,
+        run_started_ts,
+        human_line,
+        sys.modules[__name__],
+    )
 
 
 def _is_stream_event_line(line: str) -> bool:
-    """ISS-#251: True for a `--include-partial-messages` `stream_event` partial-delta line.
-
-    These token/thinking deltas exist in the host log purely so the stall watchdog (reap_workers,
-    which measures progress by log growth) sees a heartbeat while a worker is mid-generation. They
-    must NOT be persisted to the DB line feed — at one line per token they would flood
-    worker_run_lines and the portal SSE. Fail soft: a non-JSON line is treated as NOT a partial
-    (kept), matching _pump_one's prior 'keep every non-blank line' behavior."""
-    try:
-        return json.loads(line).get("type") == "stream_event"
-    except (ValueError, AttributeError):
-        return False
+    """Compatibility facade for partial stream-event filtering."""
+    return _run_feed.is_stream_event_line(line)
 
 
 def _pump_one(api_base: str, aid: str, w: dict) -> None:
-    """ISS-39: stream a running worker's NEW stream-json lines into the DB.
-
-    The DAEMON reads its OWN host log (zero mount lag) and POSTs complete NDJSON lines to
-    `/api/runs/<run_id>/lines`; the portal's SSE endpoint then tails the worker_run_lines
-    TABLE instead of the bind-mounted file — whose growth the long-lived portal process sees
-    through the macOS Docker VirtioFS attribute cache with a 1-5s lag that dropped lines
-    mid-window ('seq 1 then stall'). Per-worker cursor: lines_offset (bytes consumed),
-    lines_buf (the unterminated trailing line), lines_seq (next seq to assign).
-
-    On a failed POST we DON'T advance the cursor, so the same bytes are retried next tick —
-    safe because the insert is idempotent on (run_id, seq)."""
-    lp = w.get("log_path")
-    run_id = w.get("run_id")
-    if not lp or not run_id:
-        return
-    offset = w.get("lines_offset", 0)
-    try:
-        with open(lp, "rb") as f:
-            f.seek(offset)
-            data = f.read()
-    except OSError:
-        return                       # log not created yet — try again next tick
-    if not data:
-        return
-    buf = w.get("lines_buf", b"") + data
-    *complete, tail = buf.split(b"\n")
-    if not complete:
-        # only a partial line so far — buffer it and advance past the bytes we've absorbed
-        w["lines_offset"] = offset + len(data)
-        w["lines_buf"] = tail
-        return
-    lines = [c.decode("utf-8", "replace").rstrip("\r") for c in complete]
-    lines = [ln for ln in lines if ln.strip()]
-    # ISS-#251: drop partial `stream_event` deltas from the DB feed (they stay in the host log for
-    # the stall watchdog's liveness check, but persisting one row per token would flood the feed).
-    lines = [ln for ln in lines if not _is_stream_event_line(ln)]
-    start_seq = w.get("lines_seq", 1)
-    if lines:
-        resp = _post_json(f"{api_base}/api/runs/{run_id}/lines",
-                          {"start_seq": start_seq, "lines": lines})
-        if resp is None:
-            return                   # POST failed — leave the cursor; retry same bytes next tick
-        w["lines_seq"] = start_seq + len(lines)
-    # advance only after a successful POST (or when the batch was all-blank)
-    w["lines_offset"] = offset + len(data)
-    w["lines_buf"] = tail
+    """Compatibility facade for durable worker run-feed streaming."""
+    _run_feed.pump_one(api_base, w, _post_json)
 
 
 def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict,
