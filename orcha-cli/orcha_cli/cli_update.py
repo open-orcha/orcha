@@ -1,13 +1,80 @@
 """Orchestrate the host CLI, project, notifier, and bridge update phases."""
+# ruff: noqa: BLE001, PLW1510
 
 from __future__ import annotations
 
+import importlib.resources as pkg_res
 import pathlib
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
+
+
+def source_root() -> pathlib.Path | None:
+    """Return the editable orcha-cli source root, if this is a source install."""
+    try:
+        package_dir = pathlib.Path(str(pkg_res.files("orcha_cli")))
+    except Exception:
+        return None
+    root = package_dir.parent
+    return root if (root / "pyproject.toml").exists() else None
+
+
+def brew_keg() -> str | None:
+    """Return the Homebrew formula name when the executable resolves into a keg."""
+    executable = shutil.which("orcha")
+    if not executable:
+        return None
+    parts = pathlib.Path(executable).resolve().parts
+    for index, part in enumerate(parts[:-1]):
+        if part == "Cellar":
+            return parts[index + 1]
+    return None
+
+
+def reinstall_cli(source: pathlib.Path) -> bool:
+    """Reinstall an editable host CLI with uv, falling back to pip."""
+    uv = shutil.which("uv")
+    command = (
+        [uv, "tool", "install", "--reinstall", "--editable", str(source)]
+        if uv
+        else [sys.executable, "-m", "pip", "install", "-e", str(source)]
+    )
+    print(f"[orcha] reinstalling host CLI from {source}\n        $ {' '.join(command)}")
+    try:
+        return subprocess.run(command).returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[orcha] warn: could not launch reinstall ({exc})", file=sys.stderr)
+        return False
+
+
+def upgrade_brew(keg: str) -> bool:
+    """Upgrade an unpinned Homebrew installation."""
+    if "@" in keg:
+        print(
+            f"[orcha] host CLI is pinned to versioned formula {keg} — skipping "
+            f"self-upgrade (to track releases again: brew uninstall {keg} && "
+            "brew install open-orcha/orcha/orcha)."
+        )
+        return False
+    brew = shutil.which("brew")
+    if not brew:
+        print(
+            "[orcha] warn: Homebrew install detected but `brew` is not on PATH; "
+            "fix your PATH (or reinstall Homebrew), then "
+            "`brew upgrade open-orcha/orcha/orcha`.",
+            file=sys.stderr,
+        )
+        return False
+    command = [brew, "upgrade", f"open-orcha/orcha/{keg}"]
+    print(f"[orcha] upgrading host CLI via Homebrew\n        $ {' '.join(command)}")
+    try:
+        return subprocess.run(command).returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[orcha] warn: could not launch brew ({exc})", file=sys.stderr)
+        return False
 
 
 def _rerun_updated_cli(args: Any) -> None:
@@ -22,8 +89,8 @@ def _rerun_updated_cli(args: Any) -> None:
 def _self_update(
     args: Any,
     *,
-    source_root: Callable[[], Optional[pathlib.Path]],
-    brew_keg: Callable[[], Optional[str]],
+    source_root: Callable[[], pathlib.Path | None],
+    brew_keg: Callable[[], str | None],
     reinstall_cli: Callable[[pathlib.Path], bool],
     brew_upgrade: Callable[[str], bool],
 ) -> None:
@@ -61,8 +128,8 @@ def _self_update(
 def update_command(
     args: Any,
     *,
-    source_root: Callable[[], Optional[pathlib.Path]],
-    brew_keg: Callable[[], Optional[str]],
+    source_root: Callable[[], pathlib.Path | None],
+    brew_keg: Callable[[], str | None],
     reinstall_cli: Callable[[pathlib.Path], bool],
     brew_upgrade: Callable[[str], bool],
     upgrade: Callable[[Any], None],
@@ -70,9 +137,10 @@ def update_command(
 ) -> None:
     """Apply an idempotent host and project update without changing project data."""
     cwd = pathlib.Path.cwd()
-    if not (cwd / ".orcha" / "docker-compose.yml").exists() or not (
-        cwd / ".claude" / "orcha.json"
-    ).exists():
+    if (
+        not (cwd / ".orcha" / "docker-compose.yml").exists()
+        or not (cwd / ".claude" / "orcha.json").exists()
+    ):
         sys.exit(
             "error: no .orcha/ + .claude/orcha.json here — run `orcha update` from an "
             "existing project directory (or `orcha init` to bootstrap a new one)."
