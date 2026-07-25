@@ -46,6 +46,7 @@ Compat:
     GET  /api/snapshot/{cid}                      alias for /api/containers/{cid}
     GET  /                                        read-only HTML dashboard
 """
+
 import asyncio
 import json
 import logging
@@ -57,17 +58,46 @@ import secrets  # GH #91/#90: mint per-process embodiment run tokens (secrets.to
 import threading
 import time
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import psycopg
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
-from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
+from portal_backend.database import DB, db_cursor, run_migrations
+from portal_backend.agent_status import (
+    bump_agent,
+    log_event,
+    recompute_agent_status,
+    set_agent_status,
+    touch_heartbeat as _touch_heartbeat,
+)
+from portal_backend.events import (
+    fetch_next_event as _fetch_next_event,
+    poke_path_forward as _poke_path_forward,
+    publish_event as _publish_event,
+    wait_for_event as _wait_for_event,
+)
+from portal_backend.guards import (
+    agent_participates_in_task as _agent_participates_in_task,
+    pick_human as _pick_human,
+    reject_if_retired as _reject_if_retired,
+    require_agent as _require_agent,
+    require_container as _require_container,
+    require_container_active as _require_container_active,
+    require_kind as _require_kind,
+    require_task as _require_task,
+    resolve_alias as _resolve_alias,
+    valid_uuid as _valid_uuid,
+)
 from portal_backend.limits import (
     MAX_DESC_LEN,
     MAX_DOD_LEN,
@@ -81,26 +111,59 @@ from portal_backend.limits import (
     MAX_TURN_LEN,
 )
 from portal_backend.schemas.agent_state import (
-    AgentModelUpdate, AgentReasoningEffortUpdate, AgentRetire, AgentUpdate,
-    AutoWakeUpdate, DecisionCreate, DigestSnapshot, NotificationsRead,
-    ReachabilityUpsert, SelfWakeSet,
+    AgentModelUpdate,
+    AgentReasoningEffortUpdate,
+    AgentRetire,
+    AgentUpdate,
+    AutoWakeUpdate,
+    DecisionCreate,
+    DigestSnapshot,
+    NotificationsRead,
+    ReachabilityUpsert,
+    SelfWakeSet,
 )
 from portal_backend.schemas.conversations import (
-    ConversationActor, ConversationSession, ConversationStart, TurnAppend,
+    ConversationActor,
+    ConversationSession,
+    ConversationStart,
+    TurnAppend,
 )
 from portal_backend.schemas.requests import (
-    AgentSuggestion, NudgeBody, RequestActorBody, RequestConvert, RequestCreate,
-    RequestRespond, SuggestionDecision, TaskRequestAccept, TaskRequestPayload,
-    TaskRequestReject, TriageCloseBody,
+    AgentSuggestion,
+    NudgeBody,
+    RequestActorBody,
+    RequestConvert,
+    RequestCreate,
+    RequestRespond,
+    SuggestionDecision,
+    TaskRequestAccept,
+    TaskRequestPayload,
+    TaskRequestReject,
+    TriageCloseBody,
 )
 from portal_backend.schemas.task_operations import (
-    AssignTask, TaskCancel, TaskDone, TaskMessage, TaskReadiness, TaskUnassign, TaskVerify,
+    AssignTask,
+    TaskCancel,
+    TaskDone,
+    TaskMessage,
+    TaskReadiness,
+    TaskUnassign,
+    TaskVerify,
 )
 from portal_backend.schemas.wakes import (
-    AutonomyUpdate, EmbodimentTokenMint, EventsAckHandled, PromptEvent, WakeAck, WakeClaim, WakesToggle,
+    AutonomyUpdate,
+    EmbodimentTokenMint,
+    EventsAckHandled,
+    PromptEvent,
+    WakeAck,
+    WakeClaim,
+    WakesToggle,
 )
 from portal_backend.schemas.worker_runs import (
-    WorkerRunFinish, WorkerRunLines, WorkerRunStart, WorkerRunStop,
+    WorkerRunFinish,
+    WorkerRunLines,
+    WorkerRunStart,
+    WorkerRunStop,
 )
 from portal_backend.schemas import (
     AgentCreate,
@@ -149,7 +212,6 @@ except ImportError:  # host daemon / pytest: import from the package on sys.path
     except ImportError:
         _digest_curate = None
 
-DB = os.environ["DATABASE_URL"]
 ONBOARDING_LOG = logging.getLogger("orcha.onboarding")
 KEYTEST_LOG = logging.getLogger("orcha.llm-key-test")
 PAIRING_TTL_SECONDS = 5 * 60
@@ -174,86 +236,6 @@ PAIRING_TOKEN_EXCHANGE_FOLLOWUP = {
 # target and a container writes one row per key (the old two-bucket fan-out), so
 # container SSE still observes agent-addressed events.
 
-
-def _publish_event(cur, container_id: Optional[str], target_agent_id: Optional[str],
-                   event_name: str, payload: dict) -> None:
-    """Persist an event to agent_events via the caller's OPEN cursor.
-
-    Must run inside the same transaction as the state change it announces — the
-    caller commits afterward, which is what makes the event atomic with its
-    cause. Writes one row per delivery key (agent key and/or container key).
-    """
-    ts = time.time()
-    body = json.dumps(payload)
-    keys: list[tuple[str, Optional[str]]] = []
-    if target_agent_id:
-        keys.append((str(target_agent_id), str(target_agent_id)))
-    if container_id:
-        keys.append((f"c:{container_id}", None))
-    for event_key, tgt in keys:
-        cur.execute(
-            """INSERT INTO agent_events
-                 (container_id, target_id, event_key, event_name, ts, payload)
-               VALUES (%s, %s, %s, %s, %s, %s::jsonb)""",
-            (container_id, tgt, event_key, event_name, ts, body),
-        )
-
-
-def _poke_path_forward(cur, container_id, recipient_id, from_agent_id, message) -> None:
-    """ISS-42 (B12, reject-loop): after a reject/cancel, give the affected agent an ACTIONABLE wake.
-
-    A plain `task_request_rejected` / `decision_made` event wakes the agent but carries NO surfaced
-    content — `build_wake_prompt` and the resident inbox drain only inject `prompt`/`task_message`
-    events into the agent's turn (`_collect_directed_messages`), and a rejected request never shows in
-    the `outbox?status=answered` drain. So the agent wakes, finds nothing actionable, and exits: the
-    reject/cancel reason AND the path forward never reach it — the dead-end this issue is about.
-
-    We piggyback the existing A3 `prompt` poke primitive (the documented keystone for B12): a directed
-    `prompt` event IS surfaced verbatim into the agent's wake/drain turn AND counts as pending work in
-    wake-scan, so the agent re-engages with the reason + concrete next steps in hand. Published on the
-    recipient's key only (a poke is point-to-point; the machine event already hit the container key)."""
-    _publish_event(cur, container_id, recipient_id, "prompt",
-                   {"message": message, "from_agent_id": from_agent_id})
-
-
-def _fetch_next_event(key: str, since_ts: float) -> Optional[dict]:
-    """First agent_events row for `key` strictly newer than since_ts, or None.
-
-    Opens its own short-lived connection (it runs off the async loop in a worker
-    thread). Reconstructs the same {event, ts, **payload} shape the in-process
-    buffer used to return, so callers are unchanged.
-    """
-    with db_cursor() as (_, cur):
-        cur.execute(
-            """SELECT event_name, ts, payload FROM agent_events
-               WHERE event_key = %s AND ts > %s
-               ORDER BY ts, id
-               LIMIT 1""",
-            (key, since_ts),
-        )
-        row = cur.fetchone()
-    if not row:
-        return None
-    return {"event": row["event_name"], "ts": row["ts"], **(row["payload"] or {})}
-
-
-async def _wait_for_event(key: str, since_ts: float, timeout_s: float,
-                          poll_interval_s: float = 0.5) -> Optional[dict]:
-    """Return the first agent_events row for `key` newer than since_ts, or None.
-
-    Polls the table every poll_interval_s in a worker thread (psycopg is sync, so
-    this keeps the event loop unblocked). At localhost scale (a few agents, ~1s
-    latency tolerance) a short poll is simpler and sturdier than LISTEN/NOTIFY,
-    and the (event_key, ts, id) index makes each probe a cheap range scan.
-    """
-    deadline = time.time() + timeout_s
-    while True:
-        evt = await asyncio.to_thread(_fetch_next_event, key, since_ts)
-        if evt is not None:
-            return evt
-        if time.time() >= deadline:
-            return None
-        await asyncio.sleep(poll_interval_s)
 
 # ---------- static HTML loader (review #7) ----------
 # Each dashboard page used to be a ~500-line triple-quoted constant in this
@@ -334,7 +316,11 @@ app = FastAPI(title="Orcha API", version="0.6.0")
 # runtime 500 (Starlette's lazy check_config on a missing dir). check_dir=False guards
 # the slim race where the dir vanishes after this check.
 if _STATIC_DIR.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR), check_dir=False), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_STATIC_DIR), check_dir=False),
+        name="assets",
+    )
 
 
 @app.middleware("http")
@@ -364,7 +350,14 @@ ALLOWED_CONTAINER_STATUSES = {"active", "paused", "completed", "cancelled", "fai
 # migrations/001_init.sql:111). Used to validate the optional ?status filter on the
 # paginated request list so callers can scope a census to one lifecycle state instead
 # of silently mixing in closed/answered rows.
-REQUEST_STATUSES = {"open", "accepted", "rejected", "answered", "converted_to_task", "closed"}
+REQUEST_STATUSES = {
+    "open",
+    "accepted",
+    "rejected",
+    "answered",
+    "converted_to_task",
+    "closed",
+}
 
 # D7: the curated model list the create-agent dropdown renders. There is no live
 # "list models" API from the CLI, so this is a maintained constant ({id, name}).
@@ -497,38 +490,67 @@ def _triage_hint_for(event_name, payload, *, full_answer=None):
         # write the daemon can do on the 'ack' substrate instead of a full embodiment. The `t2`
         # tag rides alongside `tier` (the suppress path ignores it); the graded-wake decider only
         # consults it when the cheap rules DON'T already suppress.
-        return {"tier": "llm", "event_name": event_name, "bare": False,
-                "request_id": payload.get("request_id"),
-                "text": (full_answer or payload.get("preview") or ""),
-                "t2": {"action": "ack_close", "request_id": payload.get("request_id")}}
+        return {
+            "tier": "llm",
+            "event_name": event_name,
+            "bare": False,
+            "request_id": payload.get("request_id"),
+            "text": (full_answer or payload.get("preview") or ""),
+            "t2": {"action": "ack_close", "request_id": payload.get("request_id")},
+        }
     if event_name == "request_closed":
         # a human force-close ROUTES its reason as a SEPARATE prompt event (pending would be >1),
         # so a lone request_closed is always bare. Nothing to auto-close (already closed).
-        return {"tier": "structural", "event_name": event_name, "bare": True,
-                "request_id": None, "text": ""}
+        return {
+            "tier": "structural",
+            "event_name": event_name,
+            "bare": True,
+            "request_id": None,
+            "text": "",
+        }
     if event_name == "task_verified":
         if payload.get("approved") is not True:
-            return None   # a REJECTED verify is a rework signal — always wake
+            return None  # a REJECTED verify is a rework signal — always wake
         feedback = (payload.get("feedback") or "").strip()
         if not feedback:
-            return {"tier": "structural", "event_name": event_name, "bare": True,
-                    "request_id": None, "text": ""}
+            return {
+                "tier": "structural",
+                "event_name": event_name,
+                "bare": True,
+                "request_id": None,
+                "text": "",
+            }
         # approved WITH a verifier note → triage the note (bareness rule), don't silently skip.
         # #307 T2: an APPROVAL's only routine next-hop is acknowledging the note on the task
         # thread — a cheap write, no full boot. Tag it so the graded-wake decider can route the
         # ack to the 'ack' substrate when it would otherwise spend a full embodiment.
-        return {"tier": "llm", "event_name": event_name, "bare": False,
-                "request_id": None, "text": feedback,
-                "t2": {"action": "ack_verify", "task_id": payload.get("task_id")}}
+        return {
+            "tier": "llm",
+            "event_name": event_name,
+            "bare": False,
+            "request_id": None,
+            "text": feedback,
+            "t2": {"action": "ack_verify", "task_id": payload.get("task_id")},
+        }
     if event_name == "agent_suggestion_decided":
         if payload.get("kind") != "refuse":
-            return None   # create/reassign → a new agent/target now owns it; requester should wake
+            return None  # create/reassign → a new agent/target now owns it; requester should wake
         reason = (payload.get("reason") or "").strip()
         if not reason:
-            return {"tier": "structural", "event_name": event_name, "bare": True,
-                    "request_id": None, "text": ""}
-        return {"tier": "llm", "event_name": event_name, "bare": False,
-                "request_id": None, "text": reason}
+            return {
+                "tier": "structural",
+                "event_name": event_name,
+                "bare": True,
+                "request_id": None,
+                "text": "",
+            }
+        return {
+            "tier": "llm",
+            "event_name": event_name,
+            "bare": False,
+            "request_id": None,
+            "text": reason,
+        }
     return None
 
 
@@ -551,14 +573,16 @@ def _triage_hint_for(event_name, payload, *, full_answer=None):
 #                Lower int = higher priority; gaps leave room for future rungs. The canonical drain
 #                order is `ORDER BY priority ASC, ts ASC` — DOCUMENTED here; the actual drain-then-park
 #                wake-boot BEHAVIOUR is the downstream D task, NOT wired in this keystone.
-_NOTIF_PRI_INTERRUPT   = 0    # a directed interrupt / nudge injected into my turn
-_NOTIF_PRI_OWN_WORK    = 10   # an approve / reject / decision on work or an ask that is MINE
-_NOTIF_PRI_HUMAN_CONVO = 20   # a human needs me / an escalation surfaced to the operator
-_NOTIF_PRI_TASK        = 30   # task assignment / readiness / thread message
-_NOTIF_PRI_REQUEST_IN  = 40   # a fresh incoming request from another agent
-_NOTIF_PRI_ANSWER      = 50   # a request of mine was answered
-_NOTIF_PRI_CLOSE       = 60   # a request of mine was closed / cancelled
-_NOTIF_PRI_UNKNOWN     = 90   # an event_name with no taxonomy entry (graceful degrade)
+_NOTIF_PRI_INTERRUPT = 0  # a directed interrupt / nudge injected into my turn
+_NOTIF_PRI_OWN_WORK = (
+    10  # an approve / reject / decision on work or an ask that is MINE
+)
+_NOTIF_PRI_HUMAN_CONVO = 20  # a human needs me / an escalation surfaced to the operator
+_NOTIF_PRI_TASK = 30  # task assignment / readiness / thread message
+_NOTIF_PRI_REQUEST_IN = 40  # a fresh incoming request from another agent
+_NOTIF_PRI_ANSWER = 50  # a request of mine was answered
+_NOTIF_PRI_CLOSE = 60  # a request of mine was closed / cancelled
+_NOTIF_PRI_UNKNOWN = 90  # an event_name with no taxonomy entry (graceful degrade)
 
 _NOTIF_PRIORITY_LADDER = [
     (_NOTIF_PRI_INTERRUPT, "interrupt"),
@@ -570,7 +594,9 @@ _NOTIF_PRIORITY_LADDER = [
     (_NOTIF_PRI_CLOSE, "close"),
     (_NOTIF_PRI_UNKNOWN, "unknown"),
 ]
-_NOTIF_PRIORITY_TO_RANK = {priority: i + 1 for i, (priority, _label) in enumerate(_NOTIF_PRIORITY_LADDER)}
+_NOTIF_PRIORITY_TO_RANK = {
+    priority: i + 1 for i, (priority, _label) in enumerate(_NOTIF_PRIORITY_LADDER)
+}
 _NOTIF_PRIORITY_TO_LABEL = dict(_NOTIF_PRIORITY_LADDER)
 _WAKE_NOTIFICATION_MANIFEST_LIMIT = 20
 
@@ -579,20 +605,104 @@ _WAKE_NOTIFICATION_MANIFEST_LIMIT = 20
 # here. `link_kind`/`link_field` name the entity the panel row deep-links to and the payload
 # field carrying its id.
 _NOTIF_TAXONOMY = {
-    "prompt":                   {"type": "directed",         "zone": "needs_you", "priority": _NOTIF_PRI_INTERRUPT,   "link_kind": None,       "link_field": None},
-    "task_verified":            {"type": "task_verified",    "zone": "earlier",   "priority": _NOTIF_PRI_OWN_WORK,    "link_kind": "task",     "link_field": "task_id"},
-    "task_request_rejected":    {"type": "agent_blocked",    "zone": "needs_you", "priority": _NOTIF_PRI_OWN_WORK,    "link_kind": "request",  "link_field": "request_id"},
-    "task_request_accepted":    {"type": "request_answered", "zone": "earlier",   "priority": _NOTIF_PRI_OWN_WORK,    "link_kind": "request",  "link_field": "request_id"},
-    "agent_suggestion_decided": {"type": "plan_decided",     "zone": "earlier",   "priority": _NOTIF_PRI_OWN_WORK,    "link_kind": "request",  "link_field": "request_id"},
-    "decision_made":            {"type": "plan_decided",     "zone": "earlier",   "priority": _NOTIF_PRI_OWN_WORK,    "link_kind": "decision", "link_field": "decision_id"},
-    "request_escalated":        {"type": "escalation",       "zone": "needs_you", "priority": _NOTIF_PRI_HUMAN_CONVO, "link_kind": "request",  "link_field": "request_id"},
-    "agent_suggested":          {"type": "agent_suggested",  "zone": "needs_you", "priority": _NOTIF_PRI_HUMAN_CONVO, "link_kind": "request",  "link_field": "request_id"},
-    "task_assigned":            {"type": "task_assigned",    "zone": "earlier",   "priority": _NOTIF_PRI_TASK,        "link_kind": "task",     "link_field": "task_id"},
-    "task_ready":               {"type": "task_ready",       "zone": "earlier",   "priority": _NOTIF_PRI_TASK,        "link_kind": "task",     "link_field": "task_id"},
-    "task_message":             {"type": "task_message",     "zone": "earlier",   "priority": _NOTIF_PRI_TASK,        "link_kind": "task",     "link_field": "task_id"},
-    "task_unassigned":          {"type": "task_unassigned",  "zone": "earlier",   "priority": _NOTIF_PRI_TASK,        "link_kind": "task",     "link_field": "task_id"},
-    "request_answered":         {"type": "request_answered", "zone": "earlier",   "priority": _NOTIF_PRI_ANSWER,      "link_kind": "request",  "link_field": "request_id"},
-    "request_closed":           {"type": "request_closed",   "zone": "earlier",   "priority": _NOTIF_PRI_CLOSE,       "link_kind": "request",  "link_field": "request_id"},
+    "prompt": {
+        "type": "directed",
+        "zone": "needs_you",
+        "priority": _NOTIF_PRI_INTERRUPT,
+        "link_kind": None,
+        "link_field": None,
+    },
+    "task_verified": {
+        "type": "task_verified",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_OWN_WORK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
+    "task_request_rejected": {
+        "type": "agent_blocked",
+        "zone": "needs_you",
+        "priority": _NOTIF_PRI_OWN_WORK,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
+    "task_request_accepted": {
+        "type": "request_answered",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_OWN_WORK,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
+    "agent_suggestion_decided": {
+        "type": "plan_decided",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_OWN_WORK,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
+    "decision_made": {
+        "type": "plan_decided",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_OWN_WORK,
+        "link_kind": "decision",
+        "link_field": "decision_id",
+    },
+    "request_escalated": {
+        "type": "escalation",
+        "zone": "needs_you",
+        "priority": _NOTIF_PRI_HUMAN_CONVO,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
+    "agent_suggested": {
+        "type": "agent_suggested",
+        "zone": "needs_you",
+        "priority": _NOTIF_PRI_HUMAN_CONVO,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
+    "task_assigned": {
+        "type": "task_assigned",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_TASK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
+    "task_ready": {
+        "type": "task_ready",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_TASK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
+    "task_message": {
+        "type": "task_message",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_TASK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
+    "task_unassigned": {
+        "type": "task_unassigned",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_TASK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
+    "request_answered": {
+        "type": "request_answered",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_ANSWER,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
+    "request_closed": {
+        "type": "request_closed",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_CLOSE,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
 }
 
 # event_names that must NEVER surface as an operator notification: the self-echo dashboard ping
@@ -627,19 +737,34 @@ def _classify_notification(event_name, payload, *, requester_is_human=False):
         # A fresh incoming request addressed to me. A HUMAN requester is a live-human-convo rung
         # (the operator is talking to me); an AGENT requester is the ordinary request-in rung.
         if requester_is_human:
-            spec = {"type": "escalation", "zone": "needs_you",
-                    "priority": _NOTIF_PRI_HUMAN_CONVO, "link_kind": "request", "link_field": "request_id"}
+            spec = {
+                "type": "escalation",
+                "zone": "needs_you",
+                "priority": _NOTIF_PRI_HUMAN_CONVO,
+                "link_kind": "request",
+                "link_field": "request_id",
+            }
         else:
-            spec = {"type": "request_created", "zone": "needs_you",
-                    "priority": _NOTIF_PRI_REQUEST_IN, "link_kind": "request", "link_field": "request_id"}
+            spec = {
+                "type": "request_created",
+                "zone": "needs_you",
+                "priority": _NOTIF_PRI_REQUEST_IN,
+                "link_kind": "request",
+                "link_field": "request_id",
+            }
     else:
         spec = _NOTIF_TAXONOMY.get(event_name)
         if spec is None:
             # graceful degrade (SPEC-3 presenceOf pattern): an unknown event_name still renders,
             # typed by its raw name, parked at the bottom of the EARLIER zone — a new event type
             # never breaks the panel.
-            spec = {"type": event_name, "zone": "earlier",
-                    "priority": _NOTIF_PRI_UNKNOWN, "link_kind": None, "link_field": None}
+            spec = {
+                "type": event_name,
+                "zone": "earlier",
+                "priority": _NOTIF_PRI_UNKNOWN,
+                "link_kind": None,
+                "link_field": None,
+            }
 
     deeplink = None
     if spec["link_kind"]:
@@ -665,15 +790,25 @@ def _classify_notification(event_name, payload, *, requester_is_human=False):
     # static taxonomy can't see it (request_created is one event_name for both info and task), so
     # derive it from the payload `type` the create-route stamps on the bus event. The wake manifest
     # surfaces this so build_wake_prompt can steer the worker into the work instead of deflecting it.
-    is_task_request = event_name == "request_created" and (payload.get("type") == "task")
+    is_task_request = event_name == "request_created" and (
+        payload.get("type") == "task"
+    )
 
-    return {"type": spec["type"], "zone": spec["zone"], "priority": spec["priority"],
-            "deeplink": deeplink, "actor_ref": actor_ref, "preview": preview,
-            "is_task_request": is_task_request}
+    return {
+        "type": spec["type"],
+        "zone": spec["zone"],
+        "priority": spec["priority"],
+        "deeplink": deeplink,
+        "actor_ref": actor_ref,
+        "preview": preview,
+        "is_task_request": is_task_request,
+    }
 
 
 def _notification_rank(priority: int) -> int:
-    return _NOTIF_PRIORITY_TO_RANK.get(priority, _NOTIF_PRIORITY_TO_RANK[_NOTIF_PRI_UNKNOWN])
+    return _NOTIF_PRIORITY_TO_RANK.get(
+        priority, _NOTIF_PRIORITY_TO_RANK[_NOTIF_PRI_UNKNOWN]
+    )
 
 
 def _notification_origin_order(actor_kind: Optional[str]) -> int:
@@ -744,7 +879,11 @@ def _is_cross_task_drain_row(bucket, task_id, context_task_id) -> bool:
     wake-manifest filter, so surfacing-via-message and surfacing-via-manifest can never disagree.
     A task-less task-scoped row (e.g. a 'task' request_created with no task_id yet) is NOT cross-task —
     any run may accept it."""
-    return bool(bucket in _DRAIN_TASK_SCOPED and task_id and str(task_id) != str(context_task_id))
+    return bool(
+        bucket in _DRAIN_TASK_SCOPED
+        and task_id
+        and str(task_id) != str(context_task_id)
+    )
 
 
 def _drain_task_status(cur, task_id) -> Optional[str]:
@@ -781,7 +920,10 @@ def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) 
                 rr = cur.fetchone()
                 rtype = rr["type"] if rr else None
         if rtype == "task":
-            return {"bucket": _DRAIN_NEW_WORK, "task_id": None}   # a TASK request → accept/reject seam
+            return {
+                "bucket": _DRAIN_NEW_WORK,
+                "task_id": None,
+            }  # a TASK request → accept/reject seam
         return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
     if event_name == "task_assigned":
         tid = payload.get("task_id")
@@ -790,25 +932,43 @@ def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) 
             return {"bucket": _DRAIN_NEW_WORK, "task_id": str(tid)}
         if st == "in_progress":
             return {"bucket": _DRAIN_DIRECTIVE, "task_id": str(tid)}
-        return {"bucket": _DRAIN_FYI, "task_id": None}   # pending/terminal/gone → informational
+        return {
+            "bucket": _DRAIN_FYI,
+            "task_id": None,
+        }  # pending/terminal/gone → informational
     if event_name == "task_ready":
         if target_id is None:
-            return {"bucket": _DRAIN_FYI, "task_id": None}   # container-wide availability ping
+            return {
+                "bucket": _DRAIN_FYI,
+                "task_id": None,
+            }  # container-wide availability ping
         tid = payload.get("task_id")
         st = _drain_task_status(cur, tid)
         if st in (None, "completed", "cancelled"):
             return {"bucket": _DRAIN_FYI, "task_id": None}
-        return {"bucket": _DRAIN_NEW_WORK, "task_id": str(tid)}   # assigned+targeted readiness → claim
+        return {
+            "bucket": _DRAIN_NEW_WORK,
+            "task_id": str(tid),
+        }  # assigned+targeted readiness → claim
     if event_name == "task_verified":
         if payload.get("approved") is False:
-            return {"bucket": _DRAIN_DIRECTIVE, "task_id": payload.get("task_id")}   # rework directive
+            return {
+                "bucket": _DRAIN_DIRECTIVE,
+                "task_id": payload.get("task_id"),
+            }  # rework directive
         return {"bucket": _DRAIN_FYI, "task_id": None}
     if event_name == "decision_made":
         st, sid = payload.get("subject_type"), payload.get("subject_id")
-        if (st == "plan_approval" and sid
-                and _drain_task_status(cur, sid) not in (None, "completed", "cancelled")):
+        if (
+            st == "plan_approval"
+            and sid
+            and _drain_task_status(cur, sid) not in (None, "completed", "cancelled")
+        ):
             return {"bucket": _DRAIN_TASK_BOUND, "task_id": str(sid)}
-        return {"bucket": _DRAIN_FYI, "task_id": None}   # task_close / request / checkpoint / dummy subject
+        return {
+            "bucket": _DRAIN_FYI,
+            "task_id": None,
+        }  # task_close / request / checkpoint / dummy subject
     # task_unassigned, status_changed, request_closed/escalated, task_request_*, agent_suggested/-decided,
     # and any unknown event_name (graceful degrade) → FYI: any awake run may ack it.
     return {"bucket": _DRAIN_FYI, "task_id": None}
@@ -825,7 +985,10 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
     the floor. That matches the wake_scan contract (a work ack advances past conversation turns; the
     conversation lane consumes them via its own conv_delivered_ts), and keeps the GH #138 safety net
     one-shot: an old chat turn is not re-injected into every later work wake once a work ack lands."""
-    cur.execute("SELECT COALESCE(delivered_ts, 0) AS d FROM agent_wake_state WHERE agent_id=%s", (aid,))
+    cur.execute(
+        "SELECT COALESCE(delivered_ts, 0) AS d FROM agent_wake_state WHERE agent_id=%s",
+        (aid,),
+    )
     row = cur.fetchone()
     delivered = (row["d"] if row else 0.0) or 0.0
     cur.execute(
@@ -833,19 +996,24 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
            WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id=%s AND a.event_id=e.id)""",
-        (aid, delivered, list(_WORK_NON_WAKING_EVENTS), aid))
+        (aid, delivered, list(_WORK_NON_WAKING_EVENTS), aid),
+    )
     min_unhandled = cur.fetchone()["m"]
     if min_unhandled is None:
         # nothing waking left unhandled → advance past EVERYTHING above the cursor (incl. trailing
         # non-waking / already-handled rows) so a later scan starts clean.
-        cur.execute("SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s",
-                    (aid, delivered))
+        cur.execute(
+            "SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s",
+            (aid, delivered),
+        )
         new_floor = cur.fetchone()["m"]
     else:
         # advance to the largest event ts strictly BELOW the oldest unhandled one — everything there is
         # acked or non-waking, safe to skip; the unhandled event still re-surfaces on the next scan.
-        cur.execute("SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s AND ts < %s",
-                    (aid, delivered, min_unhandled))
+        cur.execute(
+            "SELECT max(ts) AS m FROM agent_events WHERE event_key=%s AND ts > %s AND ts < %s",
+            (aid, delivered, min_unhandled),
+        )
         new_floor = cur.fetchone()["m"]
     if new_floor is None or new_floor <= delivered:
         return delivered
@@ -853,11 +1021,14 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
         """INSERT INTO agent_wake_state (agent_id, delivered_ts) VALUES (%s, %s)
            ON CONFLICT (agent_id) DO UPDATE SET
              delivered_ts = GREATEST(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)""",
-        (aid, new_floor))
+        (aid, new_floor),
+    )
     return new_floor
 
 
-def _ack_events_handled(cur, agent_id, event_name: str, link_field: str, link_value) -> None:
+def _ack_events_handled(
+    cur, agent_id, event_name: str, link_field: str, link_value
+) -> None:
     """GH #58: mark every pending agent_events row of `event_name` on `agent_id`'s key whose payload
     `link_field` == `link_value` as handled (the per-event ack), then advance the contiguous floor.
     Called at each NEW_WORK / DIRECTIVE resolution seam — the /next claim, /done, accept/reject-task,
@@ -870,12 +1041,18 @@ def _ack_events_handled(cur, agent_id, event_name: str, link_field: str, link_va
            SELECT %s, e.id FROM agent_events e
            WHERE e.event_key=%s AND e.event_name=%s AND e.payload->>%s = %s
            ON CONFLICT DO NOTHING""",
-        (str(agent_id), str(agent_id), event_name, link_field, str(link_value)))
+        (str(agent_id), str(agent_id), event_name, link_field, str(link_value)),
+    )
     _recompute_delivered_floor(cur, str(agent_id))
 
 
-def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
-                                *, limit: int = _WAKE_NOTIFICATION_MANIFEST_LIMIT) -> tuple[list[dict], bool]:
+def _wake_notification_manifest(
+    cur,
+    aid: str,
+    delivered_ts: float,
+    *,
+    limit: int = _WAKE_NOTIFICATION_MANIFEST_LIMIT,
+) -> tuple[list[dict], bool]:
     """Rank pending agent_events with the #247 notification registry for wake routing.
 
     This is the wake/boot consumer of the KEYSTONE registry: it reads the same bus rows that
@@ -903,7 +1080,9 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
                 ids.add(str(p[f]))
     people: dict[str, dict] = {}
     if ids:
-        cur.execute("SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),))
+        cur.execute(
+            "SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),)
+        )
         people = {str(a["id"]): a for a in cur.fetchall()}
 
     items = []
@@ -914,8 +1093,12 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
         requester_is_human = False
         if r["event_name"] == "request_created":
             fa = str(p["from_agent_id"]) if p.get("from_agent_id") else None
-            requester_is_human = bool(fa and (people.get(fa) or {}).get("kind") == "human")
-        n = _classify_notification(r["event_name"], p, requester_is_human=requester_is_human)
+            requester_is_human = bool(
+                fa and (people.get(fa) or {}).get("kind") == "human"
+            )
+        n = _classify_notification(
+            r["event_name"], p, requester_is_human=requester_is_human
+        )
         if n is None:
             continue
 
@@ -934,25 +1117,42 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
         priority = n["priority"]
         item = {
             "event_name": r["event_name"],
-            "type": n["type"], "zone": n["zone"],
-            "priority": priority, "rank": _notification_rank(priority),
+            "type": n["type"],
+            "zone": n["zone"],
+            "priority": priority,
+            "rank": _notification_rank(priority),
             "rank_label": _NOTIF_PRIORITY_TO_LABEL.get(priority, "unknown"),
-            "actor_ref": n["actor_ref"], "actor_alias": actor.get("alias"),
-            "actor_kind": actor.get("kind"), "deeplink": n["deeplink"],
-            "preview": n["preview"], "ts": r["ts"], "object_priority": None,
-            "is_task_request": n.get("is_task_request", False),  # #359: steer the wake prompt into the work
-            "drain_bucket": dc["bucket"], "drain_task_id": dc["task_id"],
+            "actor_ref": n["actor_ref"],
+            "actor_alias": actor.get("alias"),
+            "actor_kind": actor.get("kind"),
+            "deeplink": n["deeplink"],
+            "preview": n["preview"],
+            "ts": r["ts"],
+            "object_priority": None,
+            "is_task_request": n.get(
+                "is_task_request", False
+            ),  # #359: steer the wake prompt into the work
+            "drain_bucket": dc["bucket"],
+            "drain_task_id": dc["task_id"],
         }
         item["surface"] = _notification_surface(item)
         items.append(item)
 
     object_priorities: dict[tuple[str, str], int] = {}
     if task_ids:
-        cur.execute("SELECT id, priority FROM tasks WHERE id = ANY(%s)", (list(task_ids),))
-        object_priorities.update({("task", str(r["id"])): r["priority"] for r in cur.fetchall()})
+        cur.execute(
+            "SELECT id, priority FROM tasks WHERE id = ANY(%s)", (list(task_ids),)
+        )
+        object_priorities.update(
+            {("task", str(r["id"])): r["priority"] for r in cur.fetchall()}
+        )
     if request_ids:
-        cur.execute("SELECT id, priority FROM requests WHERE id = ANY(%s)", (list(request_ids),))
-        object_priorities.update({("request", str(r["id"])): r["priority"] for r in cur.fetchall()})
+        cur.execute(
+            "SELECT id, priority FROM requests WHERE id = ANY(%s)", (list(request_ids),)
+        )
+        object_priorities.update(
+            {("request", str(r["id"])): r["priority"] for r in cur.fetchall()}
+        )
 
     for item in items:
         deeplink = item.get("deeplink") or {}
@@ -960,7 +1160,11 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
         item["object_priority"] = object_priorities.get(key)
 
     def _sort_key(item):
-        object_priority = item["object_priority"] if item["object_priority"] is not None else 1_000_000
+        object_priority = (
+            item["object_priority"]
+            if item["object_priority"] is not None
+            else 1_000_000
+        )
         return (
             item["rank"],
             object_priority,
@@ -970,6 +1174,8 @@ def _wake_notification_manifest(cur, aid: str, delivered_ts: float,
 
     items.sort(key=_sort_key)
     return items[:limit], len(items) > limit
+
+
 # ISS-60(B): heartbeat-keyed orphan-lease reaper threshold. A single-flight lease whose agent
 # hasn't shown a liveness heartbeat in this long is treated as ORPHANED and force-released — a
 # TTL-independent backstop for a lease that outlives its embodiment (daemon restart /
@@ -1019,7 +1225,9 @@ def _annotate_request_ownership(rows, *, now=None):
             pending = None
         r["owner_id"] = str(owner) if owner else None
         r["pending_action"] = pending
-        r.setdefault("owner_alias", None)  # mixed views resolve it in SQL; single-side views leave None
+        r.setdefault(
+            "owner_alias", None
+        )  # mixed views resolve it in SQL; single-side views leave None
         stale = False
         if status == "open":
             exp = r.get("expires_at")
@@ -1067,6 +1275,7 @@ async def _too_long_or_invalid(request: Request, exc: RequestValidationError):
     # Not a length problem — preserve FastAPI's default 422 contract.
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
+
 # Note on agents.status enum: the schema lists 'blocked' as a possible value, but
 # nothing in the API actually transitions an agent into it. 'blocked' is reserved
 # for the Phase 4 case "this agent's only task is dep-blocked"; in the meantime
@@ -1075,40 +1284,36 @@ async def _too_long_or_invalid(request: Request, exc: RequestValidationError):
 # surprised by an enum value that never appears.
 
 
-# ---------- DB helpers ----------
-
-@contextmanager
-def db_cursor():
-    with psycopg.connect(DB, row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            yield conn, cur
-
-
 # ---------- R1: incremental migration runner (Phase 0.5) ----------
 # migrations/001_init.sql only runs via Postgres initdb on a FRESH volume, so there was
 # no way to add a table to a live DB (the manual psql replays + wipe-on-reinit pain).
 # This applies migrations/*.sql in lexical order, each in its own txn, idempotently
 # (tracked in schema_migrations), so `orcha up` (which restarts the portal -> startup
 # hook below) applies pending migrations to an EXISTING volume with NO wipe.
-MIGRATIONS_DIR = pathlib.Path(os.environ.get("MIGRATIONS_DIR", "/app/migrations"))
-_MIGRATION_LOCK_KEY = 4242421  # constant for pg_advisory_lock — serialize concurrent runs
-
 # ---------- #301: task-message file attachments (local files, no DB blobs) ----------
 # Bytes are written under a WRITABLE host bind-mount (per-task subdir); task_messages.attachments
 # (mig 025) stores ONLY path/metadata refs. Tests override main.ATTACHMENTS_DIR directly.
-ATTACHMENTS_DIR = pathlib.Path(os.environ.get("ORCHA_ATTACHMENTS_DIR", "/app/orcha-attachments"))
-MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024     # 10 MiB per file
+ATTACHMENTS_DIR = pathlib.Path(
+    os.environ.get("ORCHA_ATTACHMENTS_DIR", "/app/orcha-attachments")
+)
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MiB per file
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 MAX_EXTRACTED_TEXT_CHARS = 8_000
 # ext -> mime. ONLY these extensions are accepted on upload and served. SVG/HTML are deliberately
 # absent: they can carry inline script, and we never want a served attachment to run in the portal
 # origin (XSS). Raster images render inline; everything else downloads (see _ATTACHMENT_INLINE_EXT).
 _ATTACHMENT_TYPES = {
-    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-    "gif": "image/gif", "webp": "image/webp",
-    "pdf": "application/pdf", "txt": "text/plain; charset=utf-8",
-    "md": "text/markdown; charset=utf-8", "csv": "text/csv; charset=utf-8",
-    "log": "text/plain; charset=utf-8", "json": "application/json",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "pdf": "application/pdf",
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+    "csv": "text/csv; charset=utf-8",
+    "log": "text/plain; charset=utf-8",
+    "json": "application/json",
 }
 # Only raster images are served with Content-Disposition: inline (safe to render in-page). Every
 # other allowed type (incl. text/pdf) is served as an attachment → the browser downloads it rather
@@ -1145,7 +1350,7 @@ def _sanitize_attachment_name(name: str) -> str:
     the stored name is uuid-prefixed and re-validated — this is just the shown label."""
     base = os.path.basename(name or "").strip() or "file"
     base = re.sub(r"[^A-Za-z0-9._-]", "_", base)
-    base = base.lstrip(".") or "file"          # no leading dots (hidden / "..")
+    base = base.lstrip(".") or "file"  # no leading dots (hidden / "..")
     return base[:120]
 
 
@@ -1159,7 +1364,9 @@ def _attachment_kind(stored_name: str) -> str:
     return "image" if ext in _ATTACHMENT_INLINE_EXT else "file"
 
 
-def _attachment_text_cache_path(scope: str, owner_id: str, stored_name: str) -> Optional[pathlib.Path]:
+def _attachment_text_cache_path(
+    scope: str, owner_id: str, stored_name: str
+) -> Optional[pathlib.Path]:
     """Sidecar cache for upload-time OCR text.
 
     The cache lives OUTSIDE the served per-task/per-conversation directories so a metadata sidecar
@@ -1167,8 +1374,9 @@ def _attachment_text_cache_path(scope: str, owner_id: str, stored_name: str) -> 
     """
     if not stored_name or not _SAFE_STORED_NAME.match(stored_name):
         return None
-    return _contained_path(ATTACHMENTS_DIR / ".extracted-text", scope, owner_id,
-                           f"{stored_name}.json")
+    return _contained_path(
+        ATTACHMENTS_DIR / ".extracted-text", scope, owner_id, f"{stored_name}.json"
+    )
 
 
 def _read_cached_attachment_text(scope: str, owner_id: str, stored_name: str) -> str:
@@ -1183,7 +1391,9 @@ def _read_cached_attachment_text(scope: str, owner_id: str, stored_name: str) ->
     return str(text or "").strip()[:MAX_EXTRACTED_TEXT_CHARS]
 
 
-def _write_cached_attachment_text(scope: str, owner_id: str, stored_name: str, text: str) -> None:
+def _write_cached_attachment_text(
+    scope: str, owner_id: str, stored_name: str, text: str
+) -> None:
     clean = (text or "").strip()[:MAX_EXTRACTED_TEXT_CHARS]
     if not clean:
         return
@@ -1240,7 +1450,9 @@ def _provider_key_enc(cur, cid: str, provider: str) -> Optional[str]:
         return None
 
 
-def _effective_use_case_provider(model_override: Optional[dict], use_case_key: str) -> str:
+def _effective_use_case_provider(
+    model_override: Optional[dict], use_case_key: str
+) -> str:
     """The provider a use-case actually runs on: the human's per-container override if set, else
     the #290 shipped default for that use-case. Drives which provider's stored key the daemon needs."""
     if isinstance(model_override, dict) and model_override.get("provider"):
@@ -1252,8 +1464,14 @@ def _effective_use_case_provider(model_override: Optional[dict], use_case_key: s
     return llm_util.resolve_spec(use_case_key).provider
 
 
-def _attachment_extracted_text(scope: str, owner_id: str, stored_name: str,
-                               path: Optional[pathlib.Path], *, api_key: Optional[str] = None) -> str:
+def _attachment_extracted_text(
+    scope: str,
+    owner_id: str,
+    stored_name: str,
+    path: Optional[pathlib.Path],
+    *,
+    api_key: Optional[str] = None,
+) -> str:
     """Return cached OCR text for an image/PDF ref, computing it once from disk when possible.
 
     FAIL-OPEN: missing key, unsupported media, read errors, provider errors, or cache write errors
@@ -1285,7 +1503,9 @@ def _attachment_extracted_text(scope: str, owner_id: str, stored_name: str,
 # #301/#330 introduced these for task-thread messages; #338 reuses the EXACT same logic for
 # conversation turns. The core takes a base dir / url-prefix so a second scope (conversations)
 # is a thin wrapper, not a copy — there is one path-traversal gate, one ref shape, one validator.
-def _resolve_stored_in(base_dir: pathlib.Path, stored_name: str) -> Optional[pathlib.Path]:
+def _resolve_stored_in(
+    base_dir: pathlib.Path, stored_name: str
+) -> Optional[pathlib.Path]:
     """Map (base_dir, stored basename) → an on-disk path, or None if it's unsafe / missing.
     Defends against path traversal: the name must match _SAFE_STORED_NAME (no '/', no '..'),
     the normalized path must stay inside base_dir (_contained_path), and the file's parent
@@ -1303,8 +1523,14 @@ def _resolve_stored_in(base_dir: pathlib.Path, stored_name: str) -> Optional[pat
     return p
 
 
-def _attachment_ref_for(url_prefix: str, stored_name: str, display_name: str, size: int,
-                        *, extracted_text: str = "") -> dict:
+def _attachment_ref_for(
+    url_prefix: str,
+    stored_name: str,
+    display_name: str,
+    size: int,
+    *,
+    extracted_text: str = "",
+) -> dict:
     """Build the canonical ref stored in JSONB / returned to the client. content_type and kind
     are DERIVED server-side from the allowlisted extension — never trusted from input. url_prefix
     is the serve-route base for this scope (".../attachments"); the stored name is appended.
@@ -1323,8 +1549,13 @@ def _attachment_ref_for(url_prefix: str, stored_name: str, display_name: str, si
     return ref
 
 
-def _validate_refs_in(base_dir: pathlib.Path, ref_builder, refs: Optional[list],
-                      *, api_key: Optional[str] = None) -> list[dict]:
+def _validate_refs_in(
+    base_dir: pathlib.Path,
+    ref_builder,
+    refs: Optional[list],
+    *,
+    api_key: Optional[str] = None,
+) -> list[dict]:
     """Turn client-supplied attachment refs into canonical, disk-backed refs. Each input ref must
     name a stored file that ACTUALLY EXISTS under base_dir (i.e. was produced by a prior upload).
     Size/type are re-read from disk so the persisted JSONB can't be poisoned with fabricated
@@ -1333,7 +1564,9 @@ def _validate_refs_in(base_dir: pathlib.Path, ref_builder, refs: Optional[list],
     if not refs:
         return []
     if len(refs) > MAX_ATTACHMENTS_PER_MESSAGE:
-        raise HTTPException(400, f"too many attachments (max {MAX_ATTACHMENTS_PER_MESSAGE})")
+        raise HTTPException(
+            400, f"too many attachments (max {MAX_ATTACHMENTS_PER_MESSAGE})"
+        )
     out: list[dict] = []
     for ref in refs:
         if not isinstance(ref, dict):
@@ -1341,7 +1574,9 @@ def _validate_refs_in(base_dir: pathlib.Path, ref_builder, refs: Optional[list],
         stored = str(ref.get("id") or "")
         p = _resolve_stored_in(base_dir, stored)
         if p is None:
-            raise HTTPException(400, f"attachment not found on disk: {stored!r} (upload it first)")
+            raise HTTPException(
+                400, f"attachment not found on disk: {stored!r} (upload it first)"
+            )
         display = _sanitize_attachment_name(str(ref.get("name") or stored))
         out.append(ref_builder(stored, display, p.stat().st_size, p, api_key=api_key))
     return out
@@ -1359,22 +1594,39 @@ def _resolve_stored_attachment(tid: str, stored_name: str) -> Optional[pathlib.P
     return _resolve_stored_in(_task_attachments_dir(tid), stored_name)
 
 
-def _attachment_ref(tid: str, stored_name: str, display_name: str, size: int,
-                    path: Optional[pathlib.Path] = None, *, api_key: Optional[str] = None) -> dict:
+def _attachment_ref(
+    tid: str,
+    stored_name: str,
+    display_name: str,
+    size: int,
+    path: Optional[pathlib.Path] = None,
+    *,
+    api_key: Optional[str] = None,
+) -> dict:
     p = path or _resolve_stored_attachment(tid, stored_name)
-    extracted = _attachment_extracted_text("tasks", tid, stored_name, p, api_key=api_key)
+    extracted = _attachment_extracted_text(
+        "tasks", tid, stored_name, p, api_key=api_key
+    )
     return _attachment_ref_for(
-        f"/api/tasks/{tid}/attachments", stored_name, display_name, size,
-        extracted_text=extracted)
+        f"/api/tasks/{tid}/attachments",
+        stored_name,
+        display_name,
+        size,
+        extracted_text=extracted,
+    )
 
 
-def _validate_attachment_refs(tid: str, refs: Optional[list],
-                              *, api_key: Optional[str] = None) -> list[dict]:
+def _validate_attachment_refs(
+    tid: str, refs: Optional[list], *, api_key: Optional[str] = None
+) -> list[dict]:
     return _validate_refs_in(
         _task_attachments_dir(tid),
-        lambda stored, display, size, path, *, api_key=None:
-            _attachment_ref(tid, stored, display, size, path, api_key=api_key),
-        refs, api_key=api_key)
+        lambda stored, display, size, path, *, api_key=None: _attachment_ref(
+            tid, stored, display, size, path, api_key=api_key
+        ),
+        refs,
+        api_key=api_key,
+    )
 
 
 # --- conversation scope (#338) — mirror of the task scope, conversation-scoped dir + url -------
@@ -1387,28 +1639,45 @@ def _conversation_attachments_dir(conv_id: str) -> pathlib.Path:
     return d
 
 
-def _resolve_stored_conv_attachment(conv_id: str, stored_name: str) -> Optional[pathlib.Path]:
+def _resolve_stored_conv_attachment(
+    conv_id: str, stored_name: str
+) -> Optional[pathlib.Path]:
     return _resolve_stored_in(_conversation_attachments_dir(conv_id), stored_name)
 
 
-def _conv_attachment_ref(conv_id: str, stored_name: str, display_name: str, size: int,
-                         path: Optional[pathlib.Path] = None,
-                         *, api_key: Optional[str] = None) -> dict:
+def _conv_attachment_ref(
+    conv_id: str,
+    stored_name: str,
+    display_name: str,
+    size: int,
+    path: Optional[pathlib.Path] = None,
+    *,
+    api_key: Optional[str] = None,
+) -> dict:
     p = path or _resolve_stored_conv_attachment(conv_id, stored_name)
-    extracted = _attachment_extracted_text("conversations", conv_id, stored_name, p,
-                                           api_key=api_key)
+    extracted = _attachment_extracted_text(
+        "conversations", conv_id, stored_name, p, api_key=api_key
+    )
     return _attachment_ref_for(
-        f"/api/conversations/{conv_id}/attachments", stored_name, display_name, size,
-        extracted_text=extracted)
+        f"/api/conversations/{conv_id}/attachments",
+        stored_name,
+        display_name,
+        size,
+        extracted_text=extracted,
+    )
 
 
-def _validate_conv_attachment_refs(conv_id: str, refs: Optional[list],
-                                   *, api_key: Optional[str] = None) -> list[dict]:
+def _validate_conv_attachment_refs(
+    conv_id: str, refs: Optional[list], *, api_key: Optional[str] = None
+) -> list[dict]:
     return _validate_refs_in(
         _conversation_attachments_dir(conv_id),
-        lambda stored, display, size, path, *, api_key=None:
-            _conv_attachment_ref(conv_id, stored, display, size, path, api_key=api_key),
-        refs, api_key=api_key)
+        lambda stored, display, size, path, *, api_key=None: _conv_attachment_ref(
+            conv_id, stored, display, size, path, api_key=api_key
+        ),
+        refs,
+        api_key=api_key,
+    )
 
 
 def _render_attachment_feed_line(attachments: Optional[list]) -> str:
@@ -1430,57 +1699,13 @@ def _render_attachment_feed_line(attachments: Optional[list]) -> str:
         if text:
             detail += f"; auto-transcribed text: {text[:MAX_EXTRACTED_TEXT_CHARS]}"
         parts.append(detail)
-    return (f" — 📎 {len(atts)} attached file(s): " + "; ".join(parts)
-            + " — fetch each via GET on your Orcha API (e.g. curl), then read/view it with your "
-              "tools. Text-only runtimes should use any auto-transcribed text above for image/PDF "
-              "content.")
-
-
-def run_migrations(migrations_dir: Optional[pathlib.Path] = None) -> list[str]:
-    """Apply pending migrations/*.sql in lexical order; return the versions applied this run.
-
-    Idempotent: each version recorded in schema_migrations is skipped thereafter.
-    001_init.sql is a BASELINE — if unrecorded but the schema already exists (the
-    `containers` table is present: initdb ran 001 on a fresh volume, or this is a
-    pre-runner live DB), it's recorded WITHOUT re-running. A whole run is serialized by a
-    pg advisory lock. A failing migration rolls back and HALTS (later files are skipped).
-    """
-    mdir = migrations_dir or MIGRATIONS_DIR
-    files = sorted(mdir.glob("*.sql")) if mdir.is_dir() else []
-    applied: list[str] = []
-    with psycopg.connect(DB) as conn:
-        conn.execute("SELECT pg_advisory_lock(%s)", (_MIGRATION_LOCK_KEY,))
-        try:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations "
-                "(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
-            )
-            conn.commit()
-            done = {r[0] for r in conn.execute("SELECT version FROM schema_migrations").fetchall()}
-            core_exists = conn.execute(
-                "SELECT to_regclass('public.containers')"
-            ).fetchone()[0] is not None
-            for f in files:
-                version = f.name
-                if version in done:
-                    continue
-                baseline = (version == "001_init.sql" and core_exists)
-                try:
-                    if not baseline:
-                        conn.execute(f.read_text())  # multi-statement DDL, no params
-                    conn.execute(
-                        "INSERT INTO schema_migrations(version) VALUES (%s) ON CONFLICT DO NOTHING",
-                        (version,),
-                    )
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    raise RuntimeError(f"migration {version} failed (halting): {e}") from e
-                applied.append(("baseline:" if baseline else "") + version)
-        finally:
-            conn.execute("SELECT pg_advisory_unlock(%s)", (_MIGRATION_LOCK_KEY,))
-            conn.commit()
-    return applied
+    return (
+        f" — 📎 {len(atts)} attached file(s): "
+        + "; ".join(parts)
+        + " — fetch each via GET on your Orcha API (e.g. curl), then read/view it with your "
+        "tools. Text-only runtimes should use any auto-transcribed text above for image/PDF "
+        "content."
+    )
 
 
 def _startup_migrate() -> None:
@@ -1498,26 +1723,41 @@ def _startup_migrate() -> None:
         except Exception:
             time.sleep(0.5)
     else:
-        print("[migrate] DB not reachable at startup; skipping (will retry next boot)", flush=True)
+        print(
+            "[migrate] DB not reachable at startup; skipping (will retry next boot)",
+            flush=True,
+        )
         return
     try:
         applied = run_migrations()
-        print(f"[migrate] applied: {applied}" if applied else "[migrate] schema up to date", flush=True)
+        print(
+            f"[migrate] applied: {applied}"
+            if applied
+            else "[migrate] schema up to date",
+            flush=True,
+        )
     except Exception as e:
         # Review (Tim): HARD-FAIL by default — the running portal expects this migration's
         # schema, so serving a stale/half-migrated DB is worse than a loud boot failure
         # (raising aborts startup -> the container exits, surfacing the problem). Opt into
         # resilience with ORCHA_MIGRATE_ON_FAILURE=continue (log + serve current schema).
         if os.environ.get("ORCHA_MIGRATE_ON_FAILURE", "halt").lower() == "continue":
-            print(f"[migrate] ERROR (ORCHA_MIGRATE_ON_FAILURE=continue — serving current schema): {e}",
-                  flush=True)
+            print(
+                f"[migrate] ERROR (ORCHA_MIGRATE_ON_FAILURE=continue — serving current schema): {e}",
+                flush=True,
+            )
             return
-        print(f"[migrate] FATAL: {e} — aborting startup "
-              "(set ORCHA_MIGRATE_ON_FAILURE=continue to serve anyway)", flush=True)
+        print(
+            f"[migrate] FATAL: {e} — aborting startup "
+            "(set ORCHA_MIGRATE_ON_FAILURE=continue to serve anyway)",
+            flush=True,
+        )
         raise
 
 
-app.on_event("startup")(_startup_migrate)  # run pending migrations when the portal boots
+app.on_event("startup")(
+    _startup_migrate
+)  # run pending migrations when the portal boots
 
 
 @app.post("/api/admin/migrate", status_code=200)
@@ -1530,241 +1770,6 @@ def admin_migrate():
     return {"applied": applied, "count": len(applied)}
 
 
-def log_event(cur, container_id, actor_type, actor_id, entity_type, entity_id, event_type, detail=None):
-    cur.execute(
-        """INSERT INTO events
-             (container_id, actor_type, actor_id, entity_type, entity_id, event_type, detail)
-           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)""",
-        (container_id, actor_type, actor_id, entity_type, entity_id, event_type,
-         json.dumps(detail) if detail is not None else None),
-    )
-
-
-def bump_agent(cur, agent_id):
-    """Heartbeat + turn counter for an active agent."""
-    cur.execute(
-        "UPDATE agents SET last_heartbeat_at = now(), turns_used = turns_used + 1 "
-        "WHERE id = %s",
-        (agent_id,),
-    )
-
-
-def _touch_heartbeat(agent_id):
-    """ISS-50: mark an agent alive NOW — heartbeat ONLY (never turns_used; a /wait poll is not a
-    turn). Own short transaction so it can be called outside an existing cursor (e.g. right after
-    a long-poll returns).
-
-    GH #91/#90: also bump the WORK-lane heartbeat (work_last_heartbeat_at). A present /wait listener
-    is the agent's own live process, which handles its own events — so wake-scan's WORK-idle gate
-    (which now keys on work_last_heartbeat_at, not the agent-wide column) must see it and NOT spawn a
-    redundant headless worker (the ISS-50 suppression the lane split otherwise broke: a poll only
-    bumped the agent-wide heartbeat). A CONVERSATION renew stays lane-isolated (it never touches
-    work_last_heartbeat_at), so this does not re-block work on a live resident."""
-    with db_cursor() as (conn, cur):
-        cur.execute("UPDATE agents SET last_heartbeat_at = now() WHERE id = %s", (agent_id,))
-        cur.execute(
-            """INSERT INTO agent_wake_state (agent_id, work_last_heartbeat_at)
-               VALUES (%s, now())
-               ON CONFLICT (agent_id) DO UPDATE SET work_last_heartbeat_at = now()""",
-            (agent_id,))
-        conn.commit()
-
-
-def set_agent_status(cur, agent_id, status):
-    """Hard-set status. Most callers should use recompute_agent_status instead."""
-    cur.execute("UPDATE agents SET status=%s WHERE id=%s", (status, agent_id))
-
-
-def recompute_agent_status(cur, agent_id):
-    """Derive agent status from current activity. Single source of truth.
-
-    Priority order:
-        terminated → keep (never auto-flip from terminated)
-        awaiting_request → has at least one open OUTGOING request (waiting on an answer)
-        working          → has at least one agent_tasks row with assignment_status
-                           in (assigned, accepted, working) (active task)
-        idle             → none of the above
-
-    Call after every endpoint that changes agent_tasks or requests where this
-    agent is the requester or target.
-    """
-    cur.execute("SELECT status FROM agents WHERE id=%s", (agent_id,))
-    row = cur.fetchone()
-    if not row:
-        return
-    if row["status"] == "terminated":
-        return  # don't auto-revive
-
-    # any open outgoing request?
-    cur.execute(
-        "SELECT 1 FROM requests WHERE requester_id=%s AND status='open' LIMIT 1",
-        (agent_id,),
-    )
-    if cur.fetchone():
-        new_status = "awaiting_request"
-    else:
-        cur.execute(
-            "SELECT 1 FROM agent_tasks "
-            "WHERE agent_id=%s AND assignment_status IN ('assigned','accepted','working') LIMIT 1",
-            (agent_id,),
-        )
-        new_status = "working" if cur.fetchone() else "idle"
-
-    cur.execute("UPDATE agents SET status=%s WHERE id=%s", (new_status, agent_id))
-
-
-def _valid_uuid(s: str) -> bool:
-    try:
-        uuid.UUID(s)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-def _require_container(cur, cid):
-    cur.execute("SELECT id, status FROM containers WHERE id=%s", (cid,))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, f"container {cid} not found")
-    return row
-
-
-def _require_agent(cur, aid):
-    cur.execute("SELECT id, container_id, alias, turn_budget, turns_used FROM agents WHERE id=%s", (aid,))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, f"agent {aid} not found")
-    return row
-
-
-def _reject_if_retired(cur, agent_id):
-    """ISS-51: a retired (terminated_at set) agent is ineligible for work-creating /
-    work-claiming actions. Applied to the agent-acting mutation paths so a retired agent
-    can't claim `/next`, post to threads, create/answer requests, mark tasks done, etc.
-    No-op for a missing/None actor (other guards handle existence) and for live agents."""
-    if not agent_id or not _valid_uuid(agent_id):
-        return
-    cur.execute("SELECT terminated_at FROM agents WHERE id=%s", (agent_id,))
-    row = cur.fetchone()
-    if row and row["terminated_at"] is not None:
-        raise HTTPException(409, "agent is retired and cannot perform this action")
-
-
-def _require_task(cur, tid):
-    cur.execute("SELECT id, container_id, title, status, is_root FROM tasks WHERE id=%s", (tid,))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, f"task {tid} not found")
-    return row
-
-
-def _agent_participates_in_task(cur, cid, agent_id, tid) -> bool:
-    """GH #56 (Point 3, FLAG 2b): the LOOSER participant check used to validate an
-    agent-supplied originating_task_id. True iff `tid` is a real task in container `cid`
-    that `agent_id` works on — owns/assignee/collaborator (any agent_tasks row) OR is the
-    creator (tasks.created_by_agent_id). Deliberately NOT the strict exact-one-in-progress
-    rule, so a valid tag from an agent juggling several tasks isn't rejected."""
-    cur.execute(
-        """SELECT 1 FROM tasks t
-           WHERE t.id=%s AND t.container_id=%s
-             AND (t.created_by_agent_id=%s
-                  OR EXISTS (SELECT 1 FROM agent_tasks at
-                             WHERE at.task_id=t.id AND at.agent_id=%s))
-           LIMIT 1""",
-        (tid, cid, agent_id, agent_id),
-    )
-    return cur.fetchone() is not None
-
-
-def _resolve_alias(cur, cid, alias):
-    cur.execute("SELECT id FROM agents WHERE container_id=%s AND alias=%s", (cid, alias))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, f"no agent aliased '{alias}' in container {cid}")
-    return str(row["id"])
-
-
-def _pick_human(cur, cid):
-    """Orcha#30: pick the human agent to target for an escalation.
-
-    Strategy: most-recently-active human in the container (last_heartbeat_at
-    DESC, then created_at ASC as tiebreaker). If no human is registered we
-    raise 409 — every container is expected to have at least one human after
-    `orcha init`, but the API doesn't enforce that hard.
-    """
-    cur.execute(
-        """SELECT id FROM agents
-           WHERE container_id=%s AND kind='human' AND terminated_at IS NULL
-           ORDER BY COALESCE(last_heartbeat_at, created_at) DESC,
-                    created_at ASC
-           LIMIT 1""",
-        (cid,),
-    )
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(
-            409,
-            "no human agent is registered in this container. Run `orcha init --as <name>` "
-            "(if this is a fresh container) or `/orcha-register-human <name>` to add one.",
-        )
-    return str(row["id"])
-
-
-def _require_kind(cur, agent_id, allowed):
-    """Reject the action unless agent_id has kind in `allowed` (tuple).
-
-    KNOWN LIMITATION (#271 spoof vector V2): this checks the kind of the NAMED agent, not that
-    the caller actually IS that agent. There is no server-side caller auth — actor identity is
-    100% body-supplied and agent UUIDs are public — so an AI that supplies a known human's UUID
-    clears every `_require_kind(..., ("human",))` gate (verify/assign/protocol/retire/edit/decide,
-    + the #24 pause gate). Closing this fully requires capability tokens (per-agent secret resolved
-    from a header, not the body) — a cross-cutting design call, NOT this cooperative-hardening pass.
-    #271 closes only the no-auth-needed holes (the NULL-author-as-human post spoof, V1)."""
-    if not agent_id or not _valid_uuid(agent_id):
-        raise HTTPException(400, "actor_agent_id is required and must be a valid UUID")
-    cur.execute("SELECT kind FROM agents WHERE id=%s", (agent_id,))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, f"agent {agent_id} not found")
-    if row["kind"] not in allowed:
-        raise HTTPException(
-            403,
-            f"this action requires kind in {allowed}; agent {agent_id} is kind='{row['kind']}'",
-        )
-    return row
-
-
-def _require_container_active(cur, cid, actor_agent_id=None):
-    """GH #24: enforce /orcha-pause + /orcha-stop. A paused ('paused') or stopped
-    ('completed'/'cancelled'/'failed') container must reject mutating AGENT actions —
-    pause/stop were settable but decorative (wakes are status-gated, but a warm/headless
-    agent could still hit a mutating endpoint directly).
-
-    Blocks ONLY when the actor resolves to a real kind='ai' agent. Allowed even when not
-    active: reads (no guard added), kind='human' actors (the human stays authoritative —
-    can resume/verify/cancel/close), and unattributed human free-text posts (author None).
-    So dual-actor endpoints (close/cancel/convert) and human posts keep working while only
-    the AI actor is blocked. Agents always send their real id, so this catches the real
-    threat (an agent doing collaboration work on a paused/stopped container).
-
-    Raises 409 (not 403) so it reads as a transient container-state condition, not an
-    authorization failure — the same action succeeds once the container is resumed.
-    """
-    row = _require_container(cur, cid)
-    status = row["status"]
-    if status == "active":
-        return row
-    if actor_agent_id and _valid_uuid(actor_agent_id):
-        cur.execute("SELECT kind FROM agents WHERE id=%s", (actor_agent_id,))
-        arow = cur.fetchone()
-        if arow and arow["kind"] == "ai":
-            raise HTTPException(
-                409,
-                f"container is '{status}' — agent actions are blocked until it is resumed",
-            )
-    return row
-
-
 def _propose_sse(payload: dict) -> str:
     """House SSE frame format for SPEC-292's POST stream."""
     return f"data: {json.dumps(payload)}\n\n"
@@ -1772,7 +1777,9 @@ def _propose_sse(payload: dict) -> str:
 
 def _propose_error(code: str, message: str):
     """Terminal SPEC-292 error stream: exactly one error frame, then done."""
-    ONBOARDING_LOG.warning("POST /api/onboarding/propose SSE error code=%s message=%s", code, message)
+    ONBOARDING_LOG.warning(
+        "POST /api/onboarding/propose SSE error code=%s message=%s", code, message
+    )
     yield _propose_sse({"event": "error", "code": code, "message": message})
     yield _propose_sse({"event": "done"})
 
@@ -1830,7 +1837,10 @@ def _propose_roster_tool_schema() -> dict:
                             "name": {"type": "string"},
                             "role": {"type": "string"},
                             "charter": {"type": "string"},
-                            "model_hint": {"type": ["string", "null"], "enum": [*_MODEL_IDS, None]},
+                            "model_hint": {
+                                "type": ["string", "null"],
+                                "enum": [*_MODEL_IDS, None],
+                            },
                         },
                         "required": ["name", "role", "charter"],
                     },
@@ -1844,11 +1854,20 @@ def _propose_roster_tool_schema() -> dict:
                             "title": {"type": "string"},
                             "definition_of_done": {"type": "string"},
                             "assignee": {"type": ["string", "null"]},
-                            "depends_on": {"type": "array", "items": {"type": "string"}},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                             "protocol": protocol_schema,
                             "is_kickoff": {"type": "boolean"},
                         },
-                        "required": ["title", "definition_of_done", "assignee", "depends_on", "is_kickoff"],
+                        "required": [
+                            "title",
+                            "definition_of_done",
+                            "assignee",
+                            "depends_on",
+                            "is_kickoff",
+                        ],
                     },
                 },
             },
@@ -1861,8 +1880,8 @@ def _propose_system_prompt(*, force_roster: bool) -> str:
     clarify_rule = (
         "If the goal is too vague, call ask_clarifying_questions with 1-3 short questions. "
         "If the goal is workable, call propose_roster."
-        if not force_roster else
-        "Do not ask another clarifying question. Call propose_roster now using the available context."
+        if not force_roster
+        else "Do not ask another clarifying question. Call propose_roster now using the available context."
     )
     return (
         "You draft editable Orcha workspace rosters from a human's project goal. "
@@ -1899,8 +1918,11 @@ def _propose_roster_was_truncated(force_roster: bool, diag: dict) -> bool:
     # A forced tool call with started-but-incomplete or invalid JSON input is the
     # Anthropic streaming shape for an output-budget cut-off. Treat it as such
     # even if a provider/proxy omits stop_reason.
-    return bool(force_roster and diag.get("started") and (
-        not diag.get("completed") or diag.get("json_error")))
+    return bool(
+        force_roster
+        and diag.get("started")
+        and (not diag.get("completed") or diag.get("json_error"))
+    )
 
 
 def _clean_protocol(raw: Any) -> Optional[dict]:
@@ -1908,7 +1930,9 @@ def _clean_protocol(raw: Any) -> Optional[dict]:
         return None
     if not isinstance(raw, dict):
         raise ValueError("protocol must be an object or null")
-    cleaned = ProtocolFields(**{k: raw.get(k) for k in ("review_chain", "handoff_to", "autonomy", "notes")})
+    cleaned = ProtocolFields(
+        **{k: raw.get(k) for k in ("review_chain", "handoff_to", "autonomy", "notes")}
+    )
     data = cleaned.model_dump(exclude_none=True)
     return data or None
 
@@ -1922,7 +1946,7 @@ def _build_report_back(rid: str, dod: str) -> str:
     text = (
         f"REPORT BACK: when you've materially finished this task — i.e. "
         f"{dod.strip() or 'the requested work is complete'} — post your result to request {rid} "
-        f"(/orcha-respond {rid} \"...\") BEFORE moving on. Reporting back is a separate, "
+        f'(/orcha-respond {rid} "...") BEFORE moving on. Reporting back is a separate, '
         f"agent-judged step: it is NOT /orcha-done (which only sends this task to human "
         f"verification, and may still be pending after you report back)."
     )
@@ -1947,12 +1971,14 @@ def _normalize_roster_payload(raw: Any) -> dict:
             raise ValueError(f"duplicate agent name '{name}'")
         seen_names.add(name)
         hint = item.get("model_hint")
-        agents.append({
-            "name": name,
-            "role": role[:200],
-            "charter": charter[:MAX_PROMPT_LEN],
-            "model_hint": hint if hint in _MODEL_IDS else None,
-        })
+        agents.append(
+            {
+                "name": name,
+                "role": role[:200],
+                "charter": charter[:MAX_PROMPT_LEN],
+                "model_hint": hint if hint in _MODEL_IDS else None,
+            }
+        )
     if not agents:
         raise ValueError("at least one agent is required")
 
@@ -1968,7 +1994,11 @@ def _normalize_roster_payload(raw: Any) -> dict:
         if not title or not dod:
             raise ValueError("task title and definition_of_done are required")
         assignee = item.get("assignee")
-        assignee = str(assignee).strip() if assignee is not None and str(assignee).strip() else None
+        assignee = (
+            str(assignee).strip()
+            if assignee is not None and str(assignee).strip()
+            else None
+        )
         if assignee is not None and assignee not in seen_names:
             raise ValueError(f"task assignee '{assignee}' is not a proposed agent")
         deps = []
@@ -1983,14 +2013,16 @@ def _normalize_roster_payload(raw: Any) -> dict:
             tasks_by_assignee.setdefault(assignee, []).append(len(tasks))
             if is_kickoff:
                 kickoff_by_assignee.setdefault(assignee, []).append(len(tasks))
-        tasks.append({
-            "title": title[:MAX_NAME_LEN],
-            "definition_of_done": dod[:MAX_DOD_LEN],
-            "assignee": assignee,
-            "depends_on": deps,
-            "protocol": _clean_protocol(item.get("protocol")),
-            "is_kickoff": is_kickoff,
-        })
+        tasks.append(
+            {
+                "title": title[:MAX_NAME_LEN],
+                "definition_of_done": dod[:MAX_DOD_LEN],
+                "assignee": assignee,
+                "depends_on": deps,
+                "protocol": _clean_protocol(item.get("protocol")),
+                "is_kickoff": is_kickoff,
+            }
+        )
         seen_titles.add(title)
     if not tasks:
         raise ValueError("at least one task is required")
@@ -2009,46 +2041,11 @@ def _normalize_roster_payload(raw: Any) -> dict:
     }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ---- E3 conversation store (resident-session thread; docs/orcha-conversation-model.md) ----
 
 
-
-
-
-
-
-
-
-
-
-
 # ---------- containers ----------
+
 
 @app.post("/api/containers", response_model=ContainerCreateResponse, status_code=201)
 def create_container(body: ContainerCreate):
@@ -2066,7 +2063,7 @@ def create_container(body: ContainerCreate):
                 f"this stack already has a container ({existing['id']}, "
                 f"name='{existing['name']}', status='{existing['status']}'). "
                 f"Stack:db:container is 1:1:1 — to start a new container, "
-                f"run `orcha down -v && orcha init` to wipe the volume first."
+                f"run `orcha down -v && orcha init` to wipe the volume first.",
             )
         cur.execute(
             "INSERT INTO containers (name, description) VALUES (%s, %s) RETURNING id",
@@ -2079,15 +2076,35 @@ def create_container(body: ContainerCreate):
                   status, priority, is_root)
                VALUES (%s, %s, %s, %s, 'ready', 0, true)
                RETURNING id""",
-            (cid, body.name, body.description or body.name,
-             "Container objective met: all child tasks completed and verified."),
+            (
+                cid,
+                body.name,
+                body.description or body.name,
+                "Container objective met: all child tasks completed and verified.",
+            ),
         )
         root_id = str(cur.fetchone()["id"])
         cur.execute("UPDATE containers SET root_task_id=%s WHERE id=%s", (root_id, cid))
-        log_event(cur, cid, "human", None, "container", cid, "created",
-                  {"name": body.name, "root_task_id": root_id})
-        log_event(cur, cid, "human", None, "task", root_id, "created",
-                  {"title": body.name, "is_root": True})
+        log_event(
+            cur,
+            cid,
+            "human",
+            None,
+            "container",
+            cid,
+            "created",
+            {"name": body.name, "root_task_id": root_id},
+        )
+        log_event(
+            cur,
+            cid,
+            "human",
+            None,
+            "task",
+            root_id,
+            "created",
+            {"title": body.name, "is_root": True},
+        )
         conn.commit()
     return ContainerCreateResponse(container_id=cid, root_task_id=root_id)
 
@@ -2136,32 +2153,61 @@ def reset_container(cid: str, body: ContainerReset):
         # from their parents, but we delete them explicitly so the counts are complete.
         agents_of = "SELECT id FROM agents WHERE container_id=%s"
         tasks_of = "SELECT id FROM tasks WHERE container_id=%s"
-        _run("worker_run_lines",
-             f"DELETE FROM worker_run_lines WHERE run_id IN "
-             f"(SELECT run_id FROM worker_runs WHERE agent_id IN ({agents_of}))", (cid,))
-        _run("conversation_turns",
-             "DELETE FROM conversation_turns WHERE conversation_id IN "
-             "(SELECT id FROM conversations WHERE container_id=%s)", (cid,))
+        _run(
+            "worker_run_lines",
+            f"DELETE FROM worker_run_lines WHERE run_id IN "
+            f"(SELECT run_id FROM worker_runs WHERE agent_id IN ({agents_of}))",
+            (cid,),
+        )
+        _run(
+            "conversation_turns",
+            "DELETE FROM conversation_turns WHERE conversation_id IN "
+            "(SELECT id FROM conversations WHERE container_id=%s)",
+            (cid,),
+        )
         _run("conversations", "DELETE FROM conversations WHERE container_id=%s", (cid,))
-        _run("worker_runs",
-             f"DELETE FROM worker_runs WHERE agent_id IN ({agents_of})", (cid,))
+        _run(
+            "worker_runs",
+            f"DELETE FROM worker_runs WHERE agent_id IN ({agents_of})",
+            (cid,),
+        )
         _run("decisions", "DELETE FROM decisions WHERE container_id=%s", (cid,))
-        _run("agent_memory_digests",
-             "DELETE FROM agent_memory_digests WHERE container_id=%s", (cid,))
+        _run(
+            "agent_memory_digests",
+            "DELETE FROM agent_memory_digests WHERE container_id=%s",
+            (cid,),
+        )
         _run("requests", "DELETE FROM requests WHERE container_id=%s", (cid,))
-        _run("task_messages",
-             f"DELETE FROM task_messages WHERE task_id IN ({tasks_of})", (cid,))
-        _run("task_dependencies",
-             f"DELETE FROM task_dependencies WHERE task_id IN ({tasks_of})", (cid,))
-        _run("agent_tasks",
-             f"DELETE FROM agent_tasks WHERE task_id IN ({tasks_of})", (cid,))
-        _run("agent_reachability",
-             f"DELETE FROM agent_reachability WHERE agent_id IN ({agents_of})", (cid,))
-        _run("agent_wake_state",
-             f"DELETE FROM agent_wake_state WHERE agent_id IN ({agents_of})", (cid,))
-        _run("agent_events",
-             f"DELETE FROM agent_events WHERE container_id=%s OR target_id IN ({agents_of})",
-             (cid, cid))
+        _run(
+            "task_messages",
+            f"DELETE FROM task_messages WHERE task_id IN ({tasks_of})",
+            (cid,),
+        )
+        _run(
+            "task_dependencies",
+            f"DELETE FROM task_dependencies WHERE task_id IN ({tasks_of})",
+            (cid,),
+        )
+        _run(
+            "agent_tasks",
+            f"DELETE FROM agent_tasks WHERE task_id IN ({tasks_of})",
+            (cid,),
+        )
+        _run(
+            "agent_reachability",
+            f"DELETE FROM agent_reachability WHERE agent_id IN ({agents_of})",
+            (cid,),
+        )
+        _run(
+            "agent_wake_state",
+            f"DELETE FROM agent_wake_state WHERE agent_id IN ({agents_of})",
+            (cid,),
+        )
+        _run(
+            "agent_events",
+            f"DELETE FROM agent_events WHERE container_id=%s OR target_id IN ({agents_of})",
+            (cid, cid),
+        )
         _run("events", "DELETE FROM events WHERE container_id=%s", (cid,))
         _run("tasks", "DELETE FROM tasks WHERE container_id=%s", (cid,))
         _run("agents", "DELETE FROM agents WHERE container_id=%s", (cid,))
@@ -2173,14 +2219,26 @@ def reset_container(cid: str, body: ContainerReset):
                   status, priority, is_root)
                VALUES (%s, %s, %s, %s, 'ready', 0, true)
                RETURNING id""",
-            (cid, cont["name"], cont["name"],
-             "Container objective met: all child tasks completed and verified."),
+            (
+                cid,
+                cont["name"],
+                cont["name"],
+                "Container objective met: all child tasks completed and verified.",
+            ),
         )
         root_id = str(cur.fetchone()["id"])
         cur.execute("UPDATE containers SET root_task_id=%s WHERE id=%s", (root_id, cid))
         # actor_id has no FK (the actor agent was just deleted) — safe to record.
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "reset",
-                  {"deleted": deleted, "new_root_task_id": root_id})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "reset",
+            {"deleted": deleted, "new_root_task_id": root_id},
+        )
         conn.commit()
     return {"container_id": cid, "root_task_id": root_id, "deleted": deleted}
 
@@ -2250,7 +2308,9 @@ def _pairing_base_url(request: Request) -> tuple[Optional[str], Optional[dict]]:
 
     port = request.url.port
     scheme = request.url.scheme or "http"
-    default_port = (scheme == "http" and port in (None, 80)) or (scheme == "https" and port in (None, 443))
+    default_port = (scheme == "http" and port in (None, 80)) or (
+        scheme == "https" and port in (None, 443)
+    )
     authority = host if default_port else f"{host}:{port}"
     return f"{scheme}://{authority}", None
 
@@ -2280,7 +2340,9 @@ def _qr_svg(payload: dict) -> tuple[str, str]:
 
 
 @app.get("/api/containers/{cid}/pairing")
-def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[str] = Query(default=None)):
+def get_container_pairing(
+    cid: str, request: Request, human_agent_id: Optional[str] = Query(default=None)
+):
     """Return the portal-to-phone QR pairing payload.
 
     This implements the A1 pairing payload/UI contract. The returned token is short-lived and
@@ -2309,12 +2371,15 @@ def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[s
         humans = cur.fetchall()
 
     if not humans:
-        raise HTTPException(409, {
-            "reachable": False,
-            "reason": "no_human",
-            "title": "No human can pair this phone",
-            "message": "Add a human operator to this Orcha before pairing a phone.",
-        })
+        raise HTTPException(
+            409,
+            {
+                "reachable": False,
+                "reason": "no_human",
+                "title": "No human can pair this phone",
+                "message": "Add a human operator to this Orcha before pairing a phone.",
+            },
+        )
     if human_agent_id:
         human = next((h for h in humans if str(h["id"]) == str(human_agent_id)), None)
         if not human:
@@ -2322,14 +2387,21 @@ def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[s
     elif len(humans) == 1:
         human = humans[0]
     else:
-        raise HTTPException(400, {
-            "reason": "choose_human",
-            "message": "Choose which human to pair as, then request the pairing payload again.",
-            "humans": [{"id": str(h["id"]), "alias": h["alias"]} for h in humans],
-        })
+        raise HTTPException(
+            400,
+            {
+                "reason": "choose_human",
+                "message": "Choose which human to pair as, then request the pairing payload again.",
+                "humans": [{"id": str(h["id"]), "alias": h["alias"]} for h in humans],
+            },
+        )
 
     expires = datetime.now(timezone.utc).timestamp() + PAIRING_TTL_SECONDS
-    expires_at = datetime.fromtimestamp(expires, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    expires_at = (
+        datetime.fromtimestamp(expires, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     payload = {
         "v": 1,
         "kind": "orcha-pair",
@@ -2343,10 +2415,21 @@ def get_container_pairing(cid: str, request: Request, human_agent_id: Optional[s
         "expiresAt": expires_at,
         "tokenExchange": PAIRING_TOKEN_EXCHANGE_FOLLOWUP,
     }
-    qr_payload = {k: payload[k] for k in (
-        "v", "kind", "baseUrl", "containerId", "containerName", "humanAgentId",
-        "humanAgentAlias", "token", "shortCode", "expiresAt",
-    )}
+    qr_payload = {
+        k: payload[k]
+        for k in (
+            "v",
+            "kind",
+            "baseUrl",
+            "containerId",
+            "containerName",
+            "humanAgentId",
+            "humanAgentAlias",
+            "token",
+            "shortCode",
+            "expiresAt",
+        )
+    }
     qr_text, svg = _qr_svg(qr_payload)
     return {
         **payload,
@@ -2376,7 +2459,9 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                       max_auto_agents, max_tasks, execution_mode, wakes_enabled,
                       autonomy_level,
                       created_at, completed_at
-               FROM containers WHERE id=%s""", (cid,))
+               FROM containers WHERE id=%s""",
+            (cid,),
+        )
         c = cur.fetchone()
         if not c:
             raise HTTPException(404, f"container {cid} not found")
@@ -2519,15 +2604,23 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
 
         # ISS-68: TRIMMED, priority-ordered, capped task rows (same shape as GET
         # /api/containers/{cid}/tasks — message_summary + plan_message, NO full thread).
-        cur.execute(f"SELECT count(*) AS n FROM tasks t WHERE t.container_id = %s", (cid,))
+        cur.execute(
+            f"SELECT count(*) AS n FROM tasks t WHERE t.container_id = %s", (cid,)
+        )
         task_total = cur.fetchone()["n"]
-        task_order = ("ORDER BY CASE t.status WHEN 'needs_verification' THEN 0 "
-                      "WHEN 'in_progress' THEN 1 ELSE 2 END, t.priority, t.created_at")
-        cur.execute(_task_list_sql("t.container_id = %s", task_order), (cid, task_limit, 0))
+        task_order = (
+            "ORDER BY CASE t.status WHEN 'needs_verification' THEN 0 "
+            "WHEN 'in_progress' THEN 1 ELSE 2 END, t.priority, t.created_at"
+        )
+        cur.execute(
+            _task_list_sql("t.container_id = %s", task_order), (cid, task_limit, 0)
+        )
         tasks = cur.fetchall()
 
         # ISS-68: priority-ordered (open→answered→closed), capped request rows.
-        cur.execute("SELECT count(*) AS n FROM requests WHERE container_id = %s", (cid,))
+        cur.execute(
+            "SELECT count(*) AS n FROM requests WHERE container_id = %s", (cid,)
+        )
         request_total = cur.fetchone()["n"]
         cur.execute(
             """SELECT id, type, status, priority, requester_id, target_id,
@@ -2548,11 +2641,19 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
                FROM requests WHERE container_id=%s
                ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'answered' THEN 1 ELSE 2 END,
                         priority, created_at DESC, id
-               LIMIT %s OFFSET 0""", (cid, request_limit))
+               LIMIT %s OFFSET 0""",
+            (cid, request_limit),
+        )
         requests = _annotate_request_ownership(cur.fetchall())
 
-    return {"container": c, "agents": agents, "tasks": tasks, "requests": requests,
-            "task_total": task_total, "request_total": request_total}
+    return {
+        "container": c,
+        "agents": agents,
+        "tasks": tasks,
+        "requests": requests,
+        "task_total": task_total,
+        "request_total": request_total,
+    }
 
 
 def _quota_env(name: str) -> Optional[int]:
@@ -2684,8 +2785,13 @@ def container_token_usage(cid: str):
             (cid,),
         )
         per_agent = [
-            {"agent_id": str(r["agent_id"]), "alias": r["alias"], "runs": int(r["runs"]),
-             "total_tokens": int(r["total_tokens"]), "total_cost_usd": float(r["total_cost_usd"])}
+            {
+                "agent_id": str(r["agent_id"]),
+                "alias": r["alias"],
+                "runs": int(r["runs"]),
+                "total_tokens": int(r["total_tokens"]),
+                "total_cost_usd": float(r["total_cost_usd"]),
+            }
             for r in cur.fetchall()
         ]
 
@@ -2705,13 +2811,20 @@ def container_token_usage(cid: str):
     last_wake = None
     if lw:
         last_wake = {
-            "run_id": str(lw["run_id"]), "agent_alias": lw["alias"],
+            "run_id": str(lw["run_id"]),
+            "agent_alias": lw["alias"],
             "ended_at": lw["ended_at"].isoformat() if lw["ended_at"] else None,
             "total_tokens": int(lw["total_tokens"]),
-            "total_cost_usd": float(lw["total_cost_usd"]) if lw["total_cost_usd"] is not None else None,
+            "total_cost_usd": float(lw["total_cost_usd"])
+            if lw["total_cost_usd"] is not None
+            else None,
         }
-    return {"container_id": cid, "windows": windows, "per_agent": per_agent,
-            "last_wake": last_wake}
+    return {
+        "container_id": cid,
+        "windows": windows,
+        "per_agent": per_agent,
+        "last_wake": last_wake,
+    }
 
 
 # ISS-68 (#167): paginated, priority-ordered list endpoints for LAZY loading. The 3s snapshot
@@ -2719,6 +2832,7 @@ def container_token_usage(cid: str):
 # let the portal fetch the top-N rows (TRIMMED — no full thread) and "load more" on demand while
 # the poll still refreshes the loaded window. The conversation panel already pages via
 # /api/conversations/{conv_id}/turns; the per-task thread pages via GET messages?limit=&before=.
+
 
 def _task_list_sql(where: str, order: str) -> str:
     # Same card-facing fields as the snapshot's tasks[], MINUS the heavy `messages` json_agg:
@@ -2788,11 +2902,19 @@ def _validate_sort(sort: Optional[str], sort_dir: Optional[str]) -> None:
         raise HTTPException(400, "dir must be 'asc' or 'desc'")
 
 
-def _sort_clause(sort: Optional[str], sort_dir: Optional[str], *,
-                 bucket: str, time_col: str, prio_col: str, id_col: str, default: str) -> str:
-    if sort is None:                       # omitted → existing default ORDER BY, byte-identical
+def _sort_clause(
+    sort: Optional[str],
+    sort_dir: Optional[str],
+    *,
+    bucket: str,
+    time_col: str,
+    prio_col: str,
+    id_col: str,
+    default: str,
+) -> str:
+    if sort is None:  # omitted → existing default ORDER BY, byte-identical
         return default
-    if sort == "time":                     # default dir for time = DESC (newest first)
+    if sort == "time":  # default dir for time = DESC (newest first)
         d = "ASC" if sort_dir == "asc" else "DESC"
         return f"ORDER BY {bucket}, {time_col} {d}, {prio_col} ASC, {id_col}"
     # sort == "priority": default dir = ASC (lower number = higher priority, surfaced first)
@@ -2801,10 +2923,16 @@ def _sort_clause(sort: Optional[str], sort_dir: Optional[str], *,
 
 
 @app.get("/api/containers/{cid}/tasks")
-def list_container_tasks(cid: str, limit: int = 10, offset: int = 0, agent: Optional[str] = None,
-                         status: Optional[str] = None, unassigned: Optional[bool] = None,
-                         sort: Optional[str] = None,
-                         sort_dir: Optional[str] = Query(default=None, alias="dir")):
+def list_container_tasks(
+    cid: str,
+    limit: int = 10,
+    offset: int = 0,
+    agent: Optional[str] = None,
+    status: Optional[str] = None,
+    unassigned: Optional[bool] = None,
+    sort: Optional[str] = None,
+    sort_dir: Optional[str] = Query(default=None, alias="dir"),
+):
     """ISS-68: paginated TRIMMED task rows for lazy list loading. Default order per Kedar's
     spec: waiting (needs_verification) → in_progress → the rest, then priority, created_at.
     `agent` (uuid) scopes to that agent's assigned tasks (agent-detail current-tasks list).
@@ -2842,13 +2970,17 @@ def list_container_tasks(cid: str, limit: int = 10, offset: int = 0, agent: Opti
             # #326: the free DISPATCH POOL — no ACTIVE assignee (a 'done' history row doesn't count
             # as owned) AND not the root sentinel (is_root is never claimable via /orcha-next, so it
             # must not pollute the ready-queue read either — mirror the /next eligibility predicate).
-            where += (" AND t.is_root = false"
-                      " AND NOT EXISTS (SELECT 1 FROM agent_tasks at WHERE at.task_id = t.id "
-                      "AND at.assignment_status IN ('assigned','accepted','working'))")
+            where += (
+                " AND t.is_root = false"
+                " AND NOT EXISTS (SELECT 1 FROM agent_tasks at WHERE at.task_id = t.id "
+                "AND at.assignment_status IN ('assigned','accepted','working'))"
+            )
         cur.execute(f"SELECT count(*) AS n FROM tasks t WHERE {where}", tuple(params))
         total = cur.fetchone()["n"]
-        default_order = ("ORDER BY CASE t.status WHEN 'needs_verification' THEN 0 "
-                         "WHEN 'in_progress' THEN 1 ELSE 2 END, t.priority, t.created_at")
+        default_order = (
+            "ORDER BY CASE t.status WHEN 'needs_verification' THEN 0 "
+            "WHEN 'in_progress' THEN 1 ELSE 2 END, t.priority, t.created_at"
+        )
         if sort == "priority":
             # #326: the ready-queue ordering — strict priority (NO status bucket), oldest-first
             # FIFO tiebreak. The canonical queue read depends on this bucket-free ordering, so it
@@ -2858,19 +2990,30 @@ def list_container_tasks(cid: str, limit: int = 10, offset: int = 0, agent: Opti
         else:
             # ISS-331: `sort=time` re-orders the sortable key within the status bucket; omitted → default.
             order = _sort_clause(
-                sort, sort_dir,
+                sort,
+                sort_dir,
                 bucket="CASE t.status WHEN 'needs_verification' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END",
-                time_col="t.created_at", prio_col="t.priority", id_col="t.id", default=default_order)
+                time_col="t.created_at",
+                prio_col="t.priority",
+                id_col="t.id",
+                default=default_order,
+            )
         cur.execute(_task_list_sql(where, order), (*params, lim, off))
         tasks = cur.fetchall()
     return {"tasks": tasks, "total": total, "has_more": off + len(tasks) < total}
 
 
 @app.get("/api/containers/{cid}/requests")
-def list_container_requests(cid: str, limit: int = 15, offset: int = 0,
-                            agent: Optional[str] = None, direction: Optional[str] = None,
-                            status: Optional[str] = None, sort: Optional[str] = None,
-                            sort_dir: Optional[str] = Query(default=None, alias="dir")):
+def list_container_requests(
+    cid: str,
+    limit: int = 15,
+    offset: int = 0,
+    agent: Optional[str] = None,
+    direction: Optional[str] = None,
+    status: Optional[str] = None,
+    sort: Optional[str] = None,
+    sort_dir: Optional[str] = Query(default=None, alias="dir"),
+):
     """ISS-68: paginated request rows for lazy list loading. Status order per Kedar's spec:
     open → answered → closed, then priority, created_at DESC, id (id = stable tiebreaker so
     repeat calls / page boundaries return the SAME window — without it, rows tied on
@@ -2896,23 +3039,34 @@ def list_container_requests(cid: str, limit: int = 15, offset: int = 0,
         where = "container_id = %s"
         params: list[Any] = [cid]
         if agent and direction == "in":
-            where += " AND target_id = %s"; params.append(agent)
+            where += " AND target_id = %s"
+            params.append(agent)
         elif agent and direction == "out":
-            where += " AND requester_id = %s"; params.append(agent)
+            where += " AND requester_id = %s"
+            params.append(agent)
         elif agent:
-            where += " AND (target_id = %s OR requester_id = %s)"; params.extend([agent, agent])
+            where += " AND (target_id = %s OR requester_id = %s)"
+            params.extend([agent, agent])
         if status is not None:
-            where += " AND status = %s"; params.append(status)
+            where += " AND status = %s"
+            params.append(status)
         cur.execute(f"SELECT count(*) AS n FROM requests WHERE {where}", tuple(params))
         total = cur.fetchone()["n"]
         # ISS-331: default keeps open→answered→closed, priority, created_at DESC, id; an explicit
         # sort=priority|time + dir re-orders the sortable key within the (unchanged) status bucket.
-        default_order = ("ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'answered' THEN 1 ELSE 2 END, "
-                         "priority, created_at DESC, id")
+        default_order = (
+            "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'answered' THEN 1 ELSE 2 END, "
+            "priority, created_at DESC, id"
+        )
         order = _sort_clause(
-            sort, sort_dir,
+            sort,
+            sort_dir,
             bucket="CASE status WHEN 'open' THEN 0 WHEN 'answered' THEN 1 ELSE 2 END",
-            time_col="created_at", prio_col="priority", id_col="id", default=default_order)
+            time_col="created_at",
+            prio_col="priority",
+            id_col="id",
+            default=default_order,
+        )
         cur.execute(
             f"""SELECT id, type, status, priority, requester_id, target_id,
                        payload, response, rejection_reason, spawned_task_id,
@@ -2927,7 +3081,8 @@ def list_container_requests(cid: str, limit: int = 15, offset: int = 0,
                                                             WHEN 'answered' THEN requests.requester_id END)
                          AS owner_alias
                 FROM requests WHERE {where} {order} LIMIT %s OFFSET %s""",
-            (*params, lim, off))
+            (*params, lim, off),
+        )
         rows = _annotate_request_ownership(cur.fetchall())
     return {"requests": rows, "total": total, "has_more": off + len(rows) < total}
 
@@ -2952,7 +3107,9 @@ def set_container_status(cid: str, body: ContainerStatusUpdate):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if body.status not in ALLOWED_CONTAINER_STATUSES:
-        raise HTTPException(400, f"status must be one of {sorted(ALLOWED_CONTAINER_STATUSES)}")
+        raise HTTPException(
+            400, f"status must be one of {sorted(ALLOWED_CONTAINER_STATUSES)}"
+        )
     with db_cursor() as (conn, cur):
         _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         c = _require_container(cur, cid)
@@ -2961,9 +3118,19 @@ def set_container_status(cid: str, body: ContainerStatusUpdate):
         params = [body.status, cid]
         if body.status in ("completed", "cancelled", "failed"):
             completed_clause = ", completed_at = COALESCE(completed_at, now())"
-        cur.execute(f"UPDATE containers SET status=%s{completed_clause} WHERE id=%s", params)
-        log_event(cur, cid, "human", None, "container", cid, "status_changed",
-                  {"from": old, "to": body.status})
+        cur.execute(
+            f"UPDATE containers SET status=%s{completed_clause} WHERE id=%s", params
+        )
+        log_event(
+            cur,
+            cid,
+            "human",
+            None,
+            "container",
+            cid,
+            "status_changed",
+            {"from": old, "to": body.status},
+        )
         conn.commit()
     return {"container_id": cid, "status": body.status, "from": old}
 
@@ -2974,6 +3141,7 @@ def set_container_status(cid: str, body: ContainerStatusUpdate):
 # Read path (env override > stored > none) is secret_box.resolve_llm_key; triage call-site wiring
 # is downstream (#288/#290), deliberately not here. GET is open (returns only a masked hint, never
 # a secret); PUT/DELETE/test are HUMAN-AUTHORITY gated + audit-logged, like /status & /auto-wake.
+
 
 def _mask_llm_key(hint: Optional[str]) -> Optional[str]:
     """Render the last-4 hint as a masked display value, or None when no key is set."""
@@ -2990,14 +3158,24 @@ def get_container_llm_key(cid: str):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
-        row = _provider_stored_row(cur, cid, "anthropic")  # unified table (migration 027)
+        row = _provider_stored_row(
+            cur, cid, "anthropic"
+        )  # unified table (migration 027)
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
     if env_override:
-        return {"configured": True, "source": "env",
-                "masked": _mask_llm_key(secret_box.last4(env_override)), "set_at": None}
+        return {
+            "configured": True,
+            "source": "env",
+            "masked": _mask_llm_key(secret_box.last4(env_override)),
+            "set_at": None,
+        }
     if row and row["key_enc"]:
-        return {"configured": True, "source": "db",
-                "masked": _mask_llm_key(row["key_hint"]), "set_at": row["set_at"]}
+        return {
+            "configured": True,
+            "source": "db",
+            "masked": _mask_llm_key(row["key_hint"]),
+            "set_at": row["set_at"],
+        }
     return {"configured": False, "source": None, "masked": None, "set_at": None}
 
 
@@ -3012,7 +3190,9 @@ def put_container_llm_key(cid: str, body: LlmKeyUpdate):
     if not key:
         raise HTTPException(400, "api_key must not be blank")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))  # writing a credential is a human action
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # writing a credential is a human action
         _require_container(cur, cid)
         if not secret_box.master_key_present():
             raise HTTPException(
@@ -3030,8 +3210,16 @@ def put_container_llm_key(cid: str, body: LlmKeyUpdate):
             "key_enc=EXCLUDED.key_enc, key_hint=EXCLUDED.key_hint, set_at=now()",
             (cid, sealed, hint),
         )
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_set",
-                  {"provider": "anthropic", "hint": hint})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "llm_key_set",
+            {"provider": "anthropic", "hint": hint},
+        )
         conn.commit()
     return {"configured": True, "source": "db", "masked": _mask_llm_key(hint)}
 
@@ -3049,13 +3237,24 @@ def delete_container_llm_key(cid: str, body: LlmKeyActor):
             "DELETE FROM container_provider_keys WHERE container_id=%s AND provider='anthropic'",
             (cid,),
         )
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_cleared",
-                  {"provider": "anthropic"})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "llm_key_cleared",
+            {"provider": "anthropic"},
+        )
         conn.commit()
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
     if env_override:
-        return {"configured": True, "source": "env",
-                "masked": _mask_llm_key(secret_box.last4(env_override))}
+        return {
+            "configured": True,
+            "source": "env",
+            "masked": _mask_llm_key(secret_box.last4(env_override)),
+        }
     return {"configured": False, "source": None, "masked": None}
 
 
@@ -3066,10 +3265,14 @@ def _llm_error_public_detail(provider_label: str, e: Exception) -> str:
     to the server log at the call site."""
     m = re.match(r"HTTP (\d{3}) ", str(e))
     if m:
-        return (f"the {provider_label} API returned HTTP {int(m.group(1))} — "
-                "check the key (full error in the portal server log)")
-    return (f"could not reach the {provider_label} API — "
-            "check the key and network (full error in the portal server log)")
+        return (
+            f"the {provider_label} API returned HTTP {int(m.group(1))} — "
+            "check the key (full error in the portal server log)"
+        )
+    return (
+        f"could not reach the {provider_label} API — "
+        "check the key and network (full error in the portal server log)"
+    )
 
 
 @app.post("/api/containers/{cid}/settings/llm-key/test", status_code=200)
@@ -3086,20 +3289,29 @@ def test_container_llm_key(cid: str, body: LlmKeyTest):
         if body.api_key and body.api_key.strip():
             candidate: Optional[str] = body.api_key.strip()
         else:
-            candidate = _provider_api_key(cur, cid, "anthropic")  # unified table (migration 027)
+            candidate = _provider_api_key(
+                cur, cid, "anthropic"
+            )  # unified table (migration 027)
     if not candidate:
-        return {"ok": False,
-                "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset"}
+        return {
+            "ok": False,
+            "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset",
+        }
     try:  # same dual-context import as secret_box / llm_util
         import llm_util
     except ImportError:
         from orcha_cli import llm_util
-    spec = llm_util.ModelSpec(provider="anthropic", model=llm_util.MODEL_HAIKU,
-                              max_tokens=1, timeout_s=10.0)
+    spec = llm_util.ModelSpec(
+        provider="anthropic", model=llm_util.MODEL_HAIKU, max_tokens=1, timeout_s=10.0
+    )
     try:
         prov = llm_util.get_provider("anthropic")
-        prov.complete(spec=spec, system=None,
-                      messages=[{"role": "user", "content": "ping"}], api_key=candidate)
+        prov.complete(
+            spec=spec,
+            system=None,
+            messages=[{"role": "user", "content": "ping"}],
+            api_key=candidate,
+        )
         return {"ok": True, "detail": "key accepted by the Anthropic API"}
     except llm_util.LLMError as e:
         KEYTEST_LOG.warning("anthropic key test failed for container %s: %s", cid, e)
@@ -3113,14 +3325,21 @@ def test_container_llm_key(cid: str, body: LlmKeyTest):
 # column (the /settings/llm-key routes above remain), other providers in container_provider_keys.
 # Same discipline as /settings/llm-key: human-gated writes, never return plaintext, 503 w/o master key.
 
+
 def _available_provider(provider: str) -> Optional[dict]:
     """The catalog entry for `provider` if it's an AVAILABLE provider, else None."""
     try:
         import llm_util
     except ImportError:
         from orcha_cli import llm_util
-    return next((p for p in llm_util.PROVIDER_CATALOG
-                 if p["id"] == provider and p["available"]), None)
+    return next(
+        (
+            p
+            for p in llm_util.PROVIDER_CATALOG
+            if p["id"] == provider and p["available"]
+        ),
+        None,
+    )
 
 
 def _ping_provider_key(provider: str, candidate: str) -> dict:
@@ -3132,13 +3351,21 @@ def _ping_provider_key(provider: str, candidate: str) -> dict:
         from orcha_cli import llm_util
     p = _available_provider(provider)
     if not p or not p["models"]:
-        return {"ok": False, "detail": f"provider '{provider}' has no testable catalog model"}
-    spec = llm_util.ModelSpec(provider=provider, model=p["models"][0]["id"],
-                              max_tokens=1, timeout_s=10.0)
+        return {
+            "ok": False,
+            "detail": f"provider '{provider}' has no testable catalog model",
+        }
+    spec = llm_util.ModelSpec(
+        provider=provider, model=p["models"][0]["id"], max_tokens=1, timeout_s=10.0
+    )
     try:
         prov = llm_util.get_provider(provider)
-        prov.complete(spec=spec, system=None,
-                      messages=[{"role": "user", "content": "ping"}], api_key=candidate)
+        prov.complete(
+            spec=spec,
+            system=None,
+            messages=[{"role": "user", "content": "ping"}],
+            api_key=candidate,
+        )
         return {"ok": True, "detail": f"key accepted by the {p['name']} API"}
     except llm_util.LLMError as e:
         KEYTEST_LOG.warning("%s key test failed: %s", provider, e)
@@ -3165,13 +3392,26 @@ def list_container_provider_keys(cid: str):
                 continue
             row = _provider_stored_row(cur, cid, p["id"])
             if env_override:
-                entry = {"configured": True, "source": "env",
-                         "masked": _mask_llm_key(secret_box.last4(env_override)), "set_at": None}
+                entry = {
+                    "configured": True,
+                    "source": "env",
+                    "masked": _mask_llm_key(secret_box.last4(env_override)),
+                    "set_at": None,
+                }
             elif row:
-                entry = {"configured": True, "source": "db",
-                         "masked": _mask_llm_key(row["key_hint"]), "set_at": row["set_at"]}
+                entry = {
+                    "configured": True,
+                    "source": "db",
+                    "masked": _mask_llm_key(row["key_hint"]),
+                    "set_at": row["set_at"],
+                }
             else:
-                entry = {"configured": False, "source": None, "masked": None, "set_at": None}
+                entry = {
+                    "configured": False,
+                    "source": None,
+                    "masked": None,
+                    "set_at": None,
+                }
             entry.update({"provider": p["id"], "name": p["name"]})
             keys.append(entry)
     return {"keys": keys}
@@ -3207,10 +3447,23 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
             "key_enc=EXCLUDED.key_enc, key_hint=EXCLUDED.key_hint, set_at=now()",
             (cid, provider, sealed, hint),
         )
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_set",
-                  {"provider": provider, "hint": hint})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "llm_key_set",
+            {"provider": provider, "hint": hint},
+        )
         conn.commit()
-    return {"configured": True, "source": "db", "provider": provider, "masked": _mask_llm_key(hint)}
+    return {
+        "configured": True,
+        "source": "db",
+        "provider": provider,
+        "masked": _mask_llm_key(hint),
+    }
 
 
 @app.delete("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
@@ -3229,17 +3482,31 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
             "DELETE FROM container_provider_keys WHERE container_id=%s AND provider=%s",
             (cid, provider),
         )
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "llm_key_cleared",
-                  {"provider": provider})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "llm_key_cleared",
+            {"provider": provider},
+        )
         conn.commit()
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
     if env_override:
-        return {"configured": True, "source": "env", "provider": provider,
-                "masked": _mask_llm_key(secret_box.last4(env_override))}
+        return {
+            "configured": True,
+            "source": "env",
+            "provider": provider,
+            "masked": _mask_llm_key(secret_box.last4(env_override)),
+        }
     return {"configured": False, "source": None, "provider": provider, "masked": None}
 
 
-@app.post("/api/containers/{cid}/settings/provider-keys/{provider}/test", status_code=200)
+@app.post(
+    "/api/containers/{cid}/settings/provider-keys/{provider}/test", status_code=200
+)
 def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
     """Credential ping against `provider`'s API. HUMAN-AUTHORITY gated. With `api_key` -> test that
     candidate (pre-save); without -> test the currently-resolved key for this provider."""
@@ -3255,8 +3522,10 @@ def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
         else:
             candidate = _provider_api_key(cur, cid, provider)
     if not candidate:
-        return {"ok": False,
-                "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset"}
+        return {
+            "ok": False,
+            "detail": "no API key to test: none supplied, none stored, and ORCHA_LLM_API_KEY is unset",
+        }
     return _ping_provider_key(provider, candidate)
 
 
@@ -3267,6 +3536,7 @@ def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
 # a use-case with no row uses #290's hardcoded default (USE_CASE_DEFAULTS), so the store can be
 # empty, stale, or unreachable and the client still works. The wake-triage call-site CONSUMES
 # these via wake-scan's `triage_model` (resolved by _resolve_use_case_model below).
+
 
 def _resolve_use_case_model(cur, cid: str, use_case_key: str) -> Optional[dict]:
     """Return the stored {provider, model} override for (container, use_case), or None when unset.
@@ -3310,16 +3580,24 @@ def get_settings_models(cid: str):
             "SELECT use_case_key, provider, model FROM container_model_settings WHERE container_id=%s",
             (cid,),
         )
-        stored = {r["use_case_key"]: (r["provider"], r["model"]) for r in cur.fetchall()}
+        stored = {
+            r["use_case_key"]: (r["provider"], r["model"]) for r in cur.fetchall()
+        }
     use_cases = []
     for uc in llm_util.use_case_registry():
         ov = stored.get(uc["key"])
-        use_cases.append({
-            "key": uc["key"], "label": uc["label"], "purpose": uc["purpose"],
-            "default_provider": uc["default_provider"], "default_model": uc["default_model"],
-            "provider": ov[0] if ov else None, "model": ov[1] if ov else None,
-            "is_set": ov is not None,
-        })
+        use_cases.append(
+            {
+                "key": uc["key"],
+                "label": uc["label"],
+                "purpose": uc["purpose"],
+                "default_provider": uc["default_provider"],
+                "default_model": uc["default_model"],
+                "provider": ov[0] if ov else None,
+                "model": ov[1] if ov else None,
+                "is_set": ov is not None,
+            }
+        )
     return {"use_cases": use_cases}
 
 
@@ -3343,44 +3621,75 @@ def put_settings_models(cid: str, body: ModelSettingsUpdate):
         if ov.key not in registered:
             raise HTTPException(400, f"unknown use-case key '{ov.key}'")
         if not ov.provider or not ov.model:
-            raise HTTPException(400, f"use-case '{ov.key}': provider and model must both be set (or both null to reset)")
+            raise HTTPException(
+                400,
+                f"use-case '{ov.key}': provider and model must both be set (or both null to reset)",
+            )
         if not llm_util.is_catalog_choice(ov.provider, ov.model):
-            raise HTTPException(400, f"use-case '{ov.key}': '{ov.provider}/{ov.model}' is not a selectable catalog choice")
+            raise HTTPException(
+                400,
+                f"use-case '{ov.key}': '{ov.provider}/{ov.model}' is not a selectable catalog choice",
+            )
         to_set[ov.key] = (ov.provider, ov.model)
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))  # a cost/quality decision is a human action
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # a cost/quality decision is a human action
         _require_container(cur, cid)
         # Full-replace: drop the prior override set, then insert the validated new one. Any
         # registered key absent from `to_set` is therefore reset to its shipped default.
-        cur.execute("DELETE FROM container_model_settings WHERE container_id=%s", (cid,))
+        cur.execute(
+            "DELETE FROM container_model_settings WHERE container_id=%s", (cid,)
+        )
         for key, (provider, model) in to_set.items():
             cur.execute(
                 "INSERT INTO container_model_settings(container_id, use_case_key, provider, model) "
                 "VALUES (%s, %s, %s, %s)",
                 (cid, key, provider, model),
             )
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid, "model_settings_set",
-                  {"overrides": {k: {"provider": p, "model": m} for k, (p, m) in to_set.items()}})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "model_settings_set",
+            {
+                "overrides": {
+                    k: {"provider": p, "model": m} for k, (p, m) in to_set.items()
+                }
+            },
+        )
         conn.commit()
         # Re-read inside the txn so the returned list reflects exactly what was persisted.
         cur.execute(
             "SELECT use_case_key, provider, model FROM container_model_settings WHERE container_id=%s",
             (cid,),
         )
-        stored = {r["use_case_key"]: (r["provider"], r["model"]) for r in cur.fetchall()}
+        stored = {
+            r["use_case_key"]: (r["provider"], r["model"]) for r in cur.fetchall()
+        }
     use_cases = []
     for uc in llm_util.use_case_registry():
         ov = stored.get(uc["key"])
-        use_cases.append({
-            "key": uc["key"], "label": uc["label"], "purpose": uc["purpose"],
-            "default_provider": uc["default_provider"], "default_model": uc["default_model"],
-            "provider": ov[0] if ov else None, "model": ov[1] if ov else None,
-            "is_set": ov is not None,
-        })
+        use_cases.append(
+            {
+                "key": uc["key"],
+                "label": uc["label"],
+                "purpose": uc["purpose"],
+                "default_provider": uc["default_provider"],
+                "default_model": uc["default_model"],
+                "provider": ov[0] if ov else None,
+                "model": ov[1] if ov else None,
+                "is_set": ov is not None,
+            }
+        )
     return {"use_cases": use_cases}
 
 
 # ---------- onboarding: SPEC-292 streaming roster proposal ----------
+
 
 @app.post("/api/onboarding/propose", status_code=200)
 def propose_onboarding_roster(body: ProposeBody):
@@ -3396,7 +3705,9 @@ def propose_onboarding_roster(body: ProposeBody):
     goal = body.goal.strip()
     if not goal:
         return StreamingResponse(
-            _propose_error("invalid_goal", "Describe what you want this workspace to do first."),
+            _propose_error(
+                "invalid_goal", "Describe what you want this workspace to do first."
+            ),
             media_type="text/event-stream",
         )
 
@@ -3420,7 +3731,11 @@ def propose_onboarding_roster(body: ProposeBody):
         )
 
     force_roster = _propose_should_force_roster(body)
-    tools = [_propose_roster_tool_schema()] if force_roster else [_ASK_CLARIFY_TOOL, _propose_roster_tool_schema()]
+    tools = (
+        [_propose_roster_tool_schema()]
+        if force_roster
+        else [_ASK_CLARIFY_TOOL, _propose_roster_tool_schema()]
+    )
     tool_choice = {"type": "tool", "name": "propose_roster"} if force_roster else None
 
     def gen():
@@ -3463,15 +3778,26 @@ def propose_onboarding_roster(body: ProposeBody):
                     if delta:
                         yield _propose_sse({"event": "thinking", "delta": delta})
 
-            clarify = None if force_roster else llm_util.collect_tool_call(events, "ask_clarifying_questions")
+            clarify = (
+                None
+                if force_roster
+                else llm_util.collect_tool_call(events, "ask_clarifying_questions")
+            )
             if clarify:
                 questions = []
-                for i, q in enumerate((clarify.get("input") or {}).get("questions") or []):
+                for i, q in enumerate(
+                    (clarify.get("input") or {}).get("questions") or []
+                ):
                     if not isinstance(q, dict):
                         continue
                     prompt = str(q.get("prompt") or "").strip()
                     if prompt:
-                        questions.append({"id": str(q.get("id") or f"q{i + 1}"), "prompt": prompt[:300]})
+                        questions.append(
+                            {
+                                "id": str(q.get("id") or f"q{i + 1}"),
+                                "prompt": prompt[:300],
+                            }
+                        )
                     if len(questions) >= 3:
                         break
                 if questions:
@@ -3485,8 +3811,12 @@ def propose_onboarding_roster(body: ProposeBody):
                 ONBOARDING_LOG.warning(
                     "POST /api/onboarding/propose no roster force_roster=%s stop_reason=%s "
                     "output_tokens=%s tool_started=%s tool_completed=%s json_error=%s",
-                    force_roster, diag.get("stop_reason"), diag.get("output_tokens"),
-                    diag.get("started"), diag.get("completed"), diag.get("json_error"),
+                    force_roster,
+                    diag.get("stop_reason"),
+                    diag.get("output_tokens"),
+                    diag.get("started"),
+                    diag.get("completed"),
+                    diag.get("json_error"),
                 )
                 if _propose_roster_was_truncated(force_roster, diag):
                     yield from _propose_error(
@@ -3494,7 +3824,9 @@ def propose_onboarding_roster(body: ProposeBody):
                         "The roster proposal hit the model output limit before it finished. Narrow the first roster in the goal, then try again, or set it up by hand.",
                     )
                     return
-                yield from _propose_error("model_error", "The model did not return a roster proposal.")
+                yield from _propose_error(
+                    "model_error", "The model did not return a roster proposal."
+                )
                 return
             try:
                 payload = _normalize_roster_payload(roster.get("input"))
@@ -3507,13 +3839,18 @@ def propose_onboarding_roster(body: ProposeBody):
             yield from _propose_error("model_error", str(e))
         except llm_util.LLMError as e:
             msg = str(e)
-            code = "rate_limited" if "rate" in msg.lower() or "429" in msg else "model_error"
+            code = (
+                "rate_limited"
+                if "rate" in msg.lower() or "429" in msg
+                else "model_error"
+            )
             yield from _propose_error(code, msg[:300])
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ---------- agents ----------
+
 
 @app.post(
     "/api/containers/{cid}/agents",
@@ -3525,9 +3862,13 @@ def register_agent(cid: str, body: AgentCreate):
         raise HTTPException(400, "container_id is not a valid UUID")
     # Orcha#30: agents need a prompt; humans don't.
     if body.kind == "ai" and not (body.prompt and body.prompt.strip()):
-        raise HTTPException(400, "kind='ai' requires a non-empty `prompt` (the system prompt)")
+        raise HTTPException(
+            400, "kind='ai' requires a non-empty `prompt` (the system prompt)"
+        )
     if body.kind == "human" and body.initial_task is not None:
-        raise HTTPException(400, "humans don't get an initial_task — they pick work deliberately")
+        raise HTTPException(
+            400, "humans don't get an initial_task — they pick work deliberately"
+        )
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
 
@@ -3541,7 +3882,9 @@ def register_agent(cid: str, body: AgentCreate):
                 model = DEFAULT_MODEL
             elif model not in _MODEL_IDS:
                 raise HTTPException(
-                    400, f"model '{model}' is not a known model; choose one of {sorted(_MODEL_IDS)}")
+                    400,
+                    f"model '{model}' is not a known model; choose one of {sorted(_MODEL_IDS)}",
+                )
         try:
             cur.execute(
                 """INSERT INTO agents (container_id, alias, role, kind, system_prompt, model)
@@ -3549,10 +3892,20 @@ def register_agent(cid: str, body: AgentCreate):
                 (cid, body.alias, body.role, body.kind, body.prompt, model),
             )
         except psycopg.errors.UniqueViolation:
-            raise HTTPException(409, f"alias '{body.alias}' already registered in this container")
+            raise HTTPException(
+                409, f"alias '{body.alias}' already registered in this container"
+            )
         aid = str(cur.fetchone()["id"])
-        log_event(cur, cid, "human", None, "agent", aid, "created",
-                  {"alias": body.alias, "role": body.role, "kind": body.kind})
+        log_event(
+            cur,
+            cid,
+            "human",
+            None,
+            "agent",
+            aid,
+            "created",
+            {"alias": body.alias, "role": body.role, "kind": body.kind},
+        )
 
         initial = None
         if body.initial_task is not None:
@@ -3573,22 +3926,43 @@ def register_agent(cid: str, body: AgentCreate):
             )
             bump_agent(cur, aid)
             recompute_agent_status(cur, aid)
-            log_event(cur, cid, "human", None, "task", tid, "created",
-                      {"title": t.title, "assigned_to": body.alias})
-            log_event(cur, cid, "ai", aid, "task", tid, "claimed",
-                      {"via": "initial_task on register"})
+            log_event(
+                cur,
+                cid,
+                "human",
+                None,
+                "task",
+                tid,
+                "created",
+                {"title": t.title, "assigned_to": body.alias},
+            )
+            log_event(
+                cur,
+                cid,
+                "ai",
+                aid,
+                "task",
+                tid,
+                "claimed",
+                {"via": "initial_task on register"},
+            )
             initial = {"task_id": tid, "title": t.title, "status": "in_progress"}
 
         conn.commit()
 
     return AgentCreateResponse(
-        agent_id=aid, alias=body.alias, container_id=cid, initial_task=initial,
+        agent_id=aid,
+        alias=body.alias,
+        container_id=cid,
+        initial_task=initial,
     )
 
 
 @app.post("/api/agents/{aid}/next")
-def agent_next(aid: str,
-               x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+def agent_next(
+    aid: str,
+    x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
+):
     """Atomically claim the highest-priority READY task in this agent's container."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -3599,8 +3973,10 @@ def agent_next(aid: str,
         _require_work_lane(cur, aid, x_orcha_run_token)
         # Orcha#30: humans don't poll for tasks. They pick deliberately via UI / direct assignment.
         _require_kind(cur, aid, ("ai",))
-        _reject_if_retired(cur, aid)   # ISS-51 [P1]: a retired agent can't claim work
-        _require_container_active(cur, str(ag["container_id"]), aid)   # GH #24: no claiming work on a paused/stopped container
+        _reject_if_retired(cur, aid)  # ISS-51 [P1]: a retired agent can't claim work
+        _require_container_active(
+            cur, str(ag["container_id"]), aid
+        )  # GH #24: no claiming work on a paused/stopped container
         # GH #39: the turn_budget gate is removed — an assigned+ready task on an active
         # container is always claimable. turns_used stays as informational telemetry only.
         cid = str(ag["container_id"])
@@ -3663,10 +4039,17 @@ def agent_next(aid: str,
     # GH #33: carry the FULL task body on the claim payload — title AND description AND
     # definition_of_done — so the woken worker acts on the complete spec (multi-step DoD,
     # loops) instead of just the title/summary.
-    return {"task": {"id": tid, "title": t["title"], "description": t["description"],
-                     "definition_of_done": t["definition_of_done"],
-                     "priority": t["priority"], "protocol": t["protocol"]},
-            "autonomy_level": autonomy_level}
+    return {
+        "task": {
+            "id": tid,
+            "title": t["title"],
+            "description": t["description"],
+            "definition_of_done": t["definition_of_done"],
+            "priority": t["priority"],
+            "protocol": t["protocol"],
+        },
+        "autonomy_level": autonomy_level,
+    }
 
 
 @app.get("/api/agents/{aid}/inbox")
@@ -3683,6 +4066,7 @@ def agent_inbox(aid: str, since: Optional[str] = None):
     if since is not None:
         try:
             from datetime import datetime
+
             datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(400, "`since` must be an ISO-8601 timestamp")
@@ -3774,11 +4158,14 @@ def agent_outbox(aid: str, status: Optional[str] = None, include_closed: bool = 
 # ---------- #247 KEYSTONE: typed notification feed (classify-over-the-bus) ----------
 
 
-
 @app.get("/api/agents/{aid}/notifications")
-def agent_notifications(aid: str, zone: Optional[str] = None,
-                        limit: int = 50, before_ts: Optional[float] = None,
-                        before_id: Optional[int] = None):
+def agent_notifications(
+    aid: str,
+    zone: Optional[str] = None,
+    limit: int = 50,
+    before_ts: Optional[float] = None,
+    before_id: Optional[int] = None,
+):
     """#247 — the recipient's TYPED notification feed, classified over the durable bus.
 
     Reads this agent's agent_events rows (keyed on its id), classifies each at read time via
@@ -3808,7 +4195,10 @@ def agent_notifications(aid: str, zone: Optional[str] = None,
     fetch_cap = limit * 4
     with db_cursor() as (_, cur):
         _require_agent(cur, aid)
-        cur.execute("SELECT read_through_ts FROM agent_notification_state WHERE agent_id=%s", (aid,))
+        cur.execute(
+            "SELECT read_through_ts FROM agent_notification_state WHERE agent_id=%s",
+            (aid,),
+        )
         crow = cur.fetchone()
         read_through = crow["read_through_ts"] if crow else 0.0
         # Compound (ts, id) keyset. ORDER BY ts DESC, id DESC means a page boundary can fall
@@ -3843,35 +4233,50 @@ def agent_notifications(aid: str, zone: Optional[str] = None,
                     ids.add(str(p[f]))
         people: dict[str, dict] = {}
         if ids:
-            cur.execute("SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),))
+            cur.execute(
+                "SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),)
+            )
             people = {str(a["id"]): a for a in cur.fetchall()}
 
     out = []
     truncated = False
-    last_emitted = None   # raw row behind out[-1] — its (ts, id) is the next page's keyset cursor
+    last_emitted = (
+        None  # raw row behind out[-1] — its (ts, id) is the next page's keyset cursor
+    )
     for r in raw:
         p = r["payload"] or {}
         requester_is_human = False
         if r["event_name"] == "request_created":
             fa = str(p["from_agent_id"]) if p.get("from_agent_id") else None
-            requester_is_human = bool(fa and (people.get(fa) or {}).get("kind") == "human")
-        n = _classify_notification(r["event_name"], p, requester_is_human=requester_is_human)
+            requester_is_human = bool(
+                fa and (people.get(fa) or {}).get("kind") == "human"
+            )
+        n = _classify_notification(
+            r["event_name"], p, requester_is_human=requester_is_human
+        )
         if n is None:
             continue
         if zone is not None and n["zone"] != zone:
             continue
         actor = people.get(n["actor_ref"]) or {} if n["actor_ref"] else {}
-        out.append({
-            "event_name": r["event_name"],
-            "type": n["type"], "zone": n["zone"], "priority": n["priority"],
-            # actor_ref = the originating agent id; actor_alias/actor_kind are resolved read-time
-            # (Q2, no backfill). actor_kind ('human'|'agent') is the ORIGIN tiebreak the #247 wake
-            # ranker (SPEC-WAKE-BOOT) needs to break ties between equal-priority notifications.
-            "actor_ref": n["actor_ref"], "actor_alias": actor.get("alias"),
-            "actor_kind": actor.get("kind"),
-            "deeplink": n["deeplink"], "preview": n["preview"],
-            "ts": r["ts"], "read": r["ts"] <= read_through,
-        })
+        out.append(
+            {
+                "event_name": r["event_name"],
+                "type": n["type"],
+                "zone": n["zone"],
+                "priority": n["priority"],
+                # actor_ref = the originating agent id; actor_alias/actor_kind are resolved read-time
+                # (Q2, no backfill). actor_kind ('human'|'agent') is the ORIGIN tiebreak the #247 wake
+                # ranker (SPEC-WAKE-BOOT) needs to break ties between equal-priority notifications.
+                "actor_ref": n["actor_ref"],
+                "actor_alias": actor.get("alias"),
+                "actor_kind": actor.get("kind"),
+                "deeplink": n["deeplink"],
+                "preview": n["preview"],
+                "ts": r["ts"],
+                "read": r["ts"] <= read_through,
+            }
+        )
         last_emitted = r
         if len(out) >= limit:
             truncated = True
@@ -3891,8 +4296,12 @@ def agent_notifications(aid: str, zone: Optional[str] = None,
     else:
         next_before_ts = None
         next_before_id = None
-    return {"notifications": out, "read_through_ts": read_through,
-            "next_before_ts": next_before_ts, "next_before_id": next_before_id}
+    return {
+        "notifications": out,
+        "read_through_ts": read_through,
+        "next_before_ts": next_before_ts,
+        "next_before_id": next_before_id,
+    }
 
 
 @app.post("/api/agents/{aid}/notifications/read", status_code=200)
@@ -3912,7 +4321,10 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
         _require_agent(cur, aid)
         target = body.through_ts
         if target is None:
-            cur.execute("SELECT COALESCE(MAX(ts), 0) AS mx FROM agent_events WHERE event_key=%s", (aid,))
+            cur.execute(
+                "SELECT COALESCE(MAX(ts), 0) AS mx FROM agent_events WHERE event_key=%s",
+                (aid,),
+            )
             target = cur.fetchone()["mx"]
         cur.execute(
             """INSERT INTO agent_notification_state (agent_id, read_through_ts, updated_at)
@@ -3930,6 +4342,7 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
 
 
 # ---------- reachability (Epic A: wake & self-movement) ----------
+
 
 @app.post("/api/agents/{aid}/reachability", status_code=200)
 def set_reachability(aid: str, body: ReachabilityUpsert):
@@ -3960,8 +4373,13 @@ def set_reachability(aid: str, body: ReachabilityUpsert):
                  headless_flags = COALESCE(%(hf)s, agent_reachability.headless_flags),
                  updated_at     = now()
                RETURNING wake_enabled, tmux_target, headless_cwd, headless_flags, updated_at""",
-            {"aid": aid, "we": body.wake_enabled, "tt": body.tmux_target,
-             "hc": body.headless_cwd, "hf": body.headless_flags},
+            {
+                "aid": aid,
+                "we": body.wake_enabled,
+                "tt": body.tmux_target,
+                "hc": body.headless_cwd,
+                "hf": body.headless_flags,
+            },
         )
         row = cur.fetchone()
         conn.commit()
@@ -3980,12 +4398,16 @@ def retire_agent(aid: str, body: AgentRetire):
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))   # only a human may retire
+        _require_kind(cur, body.actor_agent_id, ("human",))  # only a human may retire
         ag = _require_agent(cur, aid)
         cur.execute("SELECT terminated_at FROM agents WHERE id=%s", (aid,))
         if cur.fetchone()["terminated_at"] is not None:
-            return {"agent_id": aid, "status": "terminated",
-                    "released_tasks": [], "already_retired": True}
+            return {
+                "agent_id": aid,
+                "status": "terminated",
+                "released_tasks": [],
+                "already_retired": True,
+            }
 
         # Tasks this agent is actively on (assigned/accepted/working).
         cur.execute(
@@ -4025,9 +4447,19 @@ def retire_agent(aid: str, body: AgentRetire):
 
         # Mark the agent retired.
         cur.execute(
-            "UPDATE agents SET terminated_at=now(), status='terminated' WHERE id=%s", (aid,))
-        log_event(cur, ag["container_id"], "human", body.actor_agent_id, "agent", aid,
-                  "agent_retired", {"released_tasks": released})
+            "UPDATE agents SET terminated_at=now(), status='terminated' WHERE id=%s",
+            (aid,),
+        )
+        log_event(
+            cur,
+            ag["container_id"],
+            "human",
+            body.actor_agent_id,
+            "agent",
+            aid,
+            "agent_retired",
+            {"released_tasks": released},
+        )
         conn.commit()
     return {"agent_id": aid, "status": "terminated", "released_tasks": released}
 
@@ -4043,7 +4475,9 @@ def set_agent_model(aid: str, body: AgentModelUpdate):
         raise HTTPException(400, "agent_id is not a valid UUID")
     if body.model not in _MODEL_IDS:
         raise HTTPException(
-            400, f"model '{body.model}' is not a known model; choose one of {sorted(_MODEL_IDS)}")
+            400,
+            f"model '{body.model}' is not a known model; choose one of {sorted(_MODEL_IDS)}",
+        )
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
         cur.execute("SELECT kind, model FROM agents WHERE id=%s", (aid,))
@@ -4051,7 +4485,9 @@ def set_agent_model(aid: str, body: AgentModelUpdate):
         if row["kind"] == "human":
             raise HTTPException(400, "humans carry no model")
         old_model = row["model"]
-        cur.execute("UPDATE agents SET model=%s WHERE id=%s RETURNING model", (body.model, aid))
+        cur.execute(
+            "UPDATE agents SET model=%s WHERE id=%s RETURNING model", (body.model, aid)
+        )
         new_model = cur.fetchone()["model"]
         # GAP B: a resident's WARM `claude --resume` re-attaches the pinned session, which has the
         # OLD model baked in — so a mid-conversation model switch would be a silent no-op until the
@@ -4064,11 +4500,24 @@ def set_agent_model(aid: str, body: AgentModelUpdate):
             cur.execute(
                 "UPDATE conversations SET session_id=NULL "
                 "WHERE agent_id=%s AND status='active' AND session_id IS NOT NULL "
-                "RETURNING id", (aid,))
+                "RETURNING id",
+                (aid,),
+            )
             cold_reset = [str(c["id"]) for c in cur.fetchall()]
-        log_event(cur, ag["container_id"], "human", None, "agent", aid, "model_changed",
-                  {"model": new_model, "previous_model": old_model,
-                   "cold_reset_conversations": cold_reset})
+        log_event(
+            cur,
+            ag["container_id"],
+            "human",
+            None,
+            "agent",
+            aid,
+            "model_changed",
+            {
+                "model": new_model,
+                "previous_model": old_model,
+                "cold_reset_conversations": cold_reset,
+            },
+        )
         conn.commit()
     return {"agent_id": aid, "model": new_model, "cold_reset_conversations": cold_reset}
 
@@ -4083,10 +4532,15 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate):
     baked into a warm session), so no cold reset is needed — the next worker spawn picks it up."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
-    if body.reasoning_effort is not None and body.reasoning_effort not in _REASONING_EFFORT_IDS:
+    if (
+        body.reasoning_effort is not None
+        and body.reasoning_effort not in _REASONING_EFFORT_IDS
+    ):
         raise HTTPException(
-            400, f"reasoning_effort '{body.reasoning_effort}' is not valid; "
-                 f"choose one of {sorted(_REASONING_EFFORT_IDS)}")
+            400,
+            f"reasoning_effort '{body.reasoning_effort}' is not valid; "
+            f"choose one of {sorted(_REASONING_EFFORT_IDS)}",
+        )
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
         cur.execute("SELECT kind, reasoning_effort FROM agents WHERE id=%s", (aid,))
@@ -4094,11 +4548,21 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate):
         if row["kind"] == "human":
             raise HTTPException(400, "humans carry no reasoning effort")
         old_effort = row["reasoning_effort"]
-        cur.execute("UPDATE agents SET reasoning_effort=%s WHERE id=%s RETURNING reasoning_effort",
-                    (body.reasoning_effort, aid))
+        cur.execute(
+            "UPDATE agents SET reasoning_effort=%s WHERE id=%s RETURNING reasoning_effort",
+            (body.reasoning_effort, aid),
+        )
         new_effort = cur.fetchone()["reasoning_effort"]
-        log_event(cur, ag["container_id"], "human", None, "agent", aid, "reasoning_effort_changed",
-                  {"reasoning_effort": new_effort, "previous_reasoning_effort": old_effort})
+        log_event(
+            cur,
+            ag["container_id"],
+            "human",
+            None,
+            "agent",
+            aid,
+            "reasoning_effort_changed",
+            {"reasoning_effort": new_effort, "previous_reasoning_effort": old_effort},
+        )
         conn.commit()
     return {"agent_id": aid, "reasoning_effort": new_effort}
 
@@ -4115,9 +4579,13 @@ def update_agent(aid: str, body: AgentUpdate):
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     if body.role is None and body.system_prompt is None and body.alias is None:
-        raise HTTPException(400, "no updatable field supplied (role / system_prompt / alias)")
+        raise HTTPException(
+            400, "no updatable field supplied (role / system_prompt / alias)"
+        )
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))   # only a human may edit an agent
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # only a human may edit an agent
         cur.execute("SELECT kind, container_id FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if not row:
@@ -4133,13 +4601,19 @@ def update_agent(aid: str, body: AgentUpdate):
 
         sets, params, changed = [], [], []
         if body.role is not None:
-            sets.append("role=%s"); params.append(body.role); changed.append("role")
+            sets.append("role=%s")
+            params.append(body.role)
+            changed.append("role")
         if body.system_prompt is not None:
-            sets.append("system_prompt=%s"); params.append(body.system_prompt); changed.append("system_prompt")
+            sets.append("system_prompt=%s")
+            params.append(body.system_prompt)
+            changed.append("system_prompt")
         if body.alias is not None:
             if not body.alias.strip():
                 raise HTTPException(400, "alias cannot be blank")
-            sets.append("alias=%s"); params.append(body.alias); changed.append("alias")
+            sets.append("alias=%s")
+            params.append(body.alias)
+            changed.append("alias")
         params.append(aid)
         try:
             cur.execute(
@@ -4148,16 +4622,28 @@ def update_agent(aid: str, body: AgentUpdate):
                 params,
             )
         except psycopg.errors.UniqueViolation:
-            raise HTTPException(409, f"alias '{body.alias}' already exists in this container")
+            raise HTTPException(
+                409, f"alias '{body.alias}' already exists in this container"
+            )
         updated = cur.fetchone()
-        log_event(cur, row["container_id"], "human", body.actor_agent_id, "agent", aid,
-                  "agent_updated", {"fields": changed})
+        log_event(
+            cur,
+            row["container_id"],
+            "human",
+            body.actor_agent_id,
+            "agent",
+            aid,
+            "agent_updated",
+            {"fields": changed},
+        )
         conn.commit()
     result = {"agent_id": aid, **updated}
     if body.alias is not None:
-        result["alias_rebind_note"] = ("alias changed — the local CLI binding "
-                                       ".claude/orcha-tabs/<oldalias>.json is now stale; "
-                                       "re-bind via /orcha-use or re-register")
+        result["alias_rebind_note"] = (
+            "alias changed — the local CLI binding "
+            ".claude/orcha-tabs/<oldalias>.json is now stale; "
+            "re-bind via /orcha-use or re-register"
+        )
     return result
 
 
@@ -4173,31 +4659,48 @@ def update_agent_auto_wake(aid: str, body: AutoWakeUpdate):
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30: wake policy is a human action
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # Orcha#30: wake policy is a human action
         cur.execute("SELECT kind, container_id FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"agent {aid} not found")
         if row["kind"] == "human":
-            raise HTTPException(400, "humans are not woken — auto-wake applies to kind='ai' agents")
+            raise HTTPException(
+                400, "humans are not woken — auto-wake applies to kind='ai' agents"
+            )
         cur.execute(
             "UPDATE agents SET auto_wake_interval_secs=%s WHERE id=%s "
             "RETURNING id, alias, auto_wake_interval_secs",
             (body.interval_secs, aid),
         )
         updated = cur.fetchone()
-        log_event(cur, str(row["container_id"]), "human", body.actor_agent_id, "agent", aid,
-                  "auto_wake_updated", {"interval_secs": body.interval_secs})
+        log_event(
+            cur,
+            str(row["container_id"]),
+            "human",
+            body.actor_agent_id,
+            "agent",
+            aid,
+            "auto_wake_updated",
+            {"interval_secs": body.interval_secs},
+        )
         conn.commit()
-    return {"agent_id": aid, "alias": updated["alias"],
-            "auto_wake_interval_secs": updated["auto_wake_interval_secs"],
-            "enabled": updated["auto_wake_interval_secs"] is not None}
+    return {
+        "agent_id": aid,
+        "alias": updated["alias"],
+        "auto_wake_interval_secs": updated["auto_wake_interval_secs"],
+        "enabled": updated["auto_wake_interval_secs"] is not None,
+    }
 
 
 @app.post("/api/agents/{aid}/self-wake", status_code=200)
 def schedule_agent_self_wake(
-        aid: str, body: SelfWakeSet,
-        x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+    aid: str,
+    body: SelfWakeSet,
+    x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
+):
     """GH #122: work-lane task worker schedules a one-shot wake for the task it is working."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -4220,7 +4723,9 @@ def schedule_agent_self_wake(
             resume_dt = resume_dt.astimezone(timezone.utc)
         delta = (resume_dt - now).total_seconds()
         if delta < 60:
-            raise HTTPException(422, "resume_at must be at least 60 seconds in the future")
+            raise HTTPException(
+                422, "resume_at must be at least 60 seconds in the future"
+            )
         if delta > 86_400:
             raise HTTPException(422, "resume_at must be within 24 hours")
     else:
@@ -4241,7 +4746,9 @@ def schedule_agent_self_wake(
         )
         if not cur.fetchone():
             raise HTTPException(
-                409, "self-wake can only be scheduled by an active assignee on an in-progress task")
+                409,
+                "self-wake can only be scheduled by an active assignee on an in-progress task",
+            )
         cur.execute(
             "SELECT id FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
             (aid, body.task_id),
@@ -4258,21 +4765,37 @@ def schedule_agent_self_wake(
             (aid, body.task_id, resume_dt, context),
         )
         row = cur.fetchone()
-        log_event(cur, ag["container_id"], "ai", aid, "task", body.task_id,
-                  "self_wake_scheduled",
-                  {"resume_at": row["resume_at"].isoformat(),
-                   "replaced_existing": replaced_existing})
+        log_event(
+            cur,
+            ag["container_id"],
+            "ai",
+            aid,
+            "task",
+            body.task_id,
+            "self_wake_scheduled",
+            {
+                "resume_at": row["resume_at"].isoformat(),
+                "replaced_existing": replaced_existing,
+            },
+        )
         conn.commit()
-    return {"self_wake_id": str(row["id"]), "agent_id": aid, "task_id": body.task_id,
-            "resume_at": row["resume_at"].isoformat(), "status": "scheduled",
-            "replaced_existing": replaced_existing}
+    return {
+        "self_wake_id": str(row["id"]),
+        "agent_id": aid,
+        "task_id": body.task_id,
+        "resume_at": row["resume_at"].isoformat(),
+        "status": "scheduled",
+        "replaced_existing": replaced_existing,
+    }
 
 
 @app.delete("/api/agents/{aid}/self-wake", status_code=200)
 def cancel_agent_self_wake(
-        aid: str, task_id: Optional[str] = Query(default=None),
-        all_tasks: bool = Query(default=False, alias="all"),
-        x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+    aid: str,
+    task_id: Optional[str] = Query(default=None),
+    all_tasks: bool = Query(default=False, alias="all"),
+    x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
+):
     """GH #122: cancel this agent's scheduled self-wake for one task, or all of them."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
@@ -4284,11 +4807,21 @@ def cancel_agent_self_wake(
         if all_tasks:
             cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s", (aid,))
         else:
-            cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
-                        (aid, task_id))
+            cur.execute(
+                "DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
+                (aid, task_id),
+            )
         deleted = cur.rowcount
-        log_event(cur, ag["container_id"], "ai", aid, "agent", aid,
-                  "self_wake_cancelled", {"task_id": task_id, "all": all_tasks, "deleted": deleted})
+        log_event(
+            cur,
+            ag["container_id"],
+            "ai",
+            aid,
+            "agent",
+            aid,
+            "self_wake_cancelled",
+            {"task_id": task_id, "all": all_tasks, "deleted": deleted},
+        )
         conn.commit()
     return {"agent_id": aid, "task_id": task_id, "deleted": deleted}
 
@@ -4310,16 +4843,24 @@ def get_reachability(aid: str):
         # No row recorded yet — wake is on by default, but no transport is known
         # (the agent hasn't registered a tmux pane / headless cwd), so it's
         # effectively unreachable until SessionStart records one.
-        return {"agent_id": aid, "wake_enabled": True, "tmux_target": None,
-                "headless_cwd": None, "headless_flags": None, "updated_at": None,
-                "recorded": False}
+        return {
+            "agent_id": aid,
+            "wake_enabled": True,
+            "tmux_target": None,
+            "headless_cwd": None,
+            "headless_flags": None,
+            "updated_at": None,
+            "recorded": False,
+        }
     return {"agent_id": aid, "recorded": True, **row}
 
 
 # ---------- conversation store (E3 persistence; docs/orcha-conversation-model.md) ----------
 
-_TURN_COLS = ("id, conversation_id, seq, role, author_agent_id, content, run_id, meta, "
-              "attachments, created_at")  # #338: attachments surfaced to read paths + feed-to-agent
+_TURN_COLS = (
+    "id, conversation_id, seq, role, author_agent_id, content, run_id, meta, "
+    "attachments, created_at"
+)  # #338: attachments surfaced to read paths + feed-to-agent
 
 
 @app.post("/api/agents/{aid}/conversations", status_code=201)
@@ -4331,7 +4872,9 @@ def start_conversation(aid: str, body: ConversationStart):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
-        _require_kind(cur, body.actor_agent_id, ("human",))   # a human opens the conversation
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # a human opens the conversation
         cur.execute("SELECT kind FROM agents WHERE id=%s", (aid,))
         if cur.fetchone()["kind"] != "ai":
             raise HTTPException(400, "conversations target an AI agent")
@@ -4347,10 +4890,21 @@ def start_conversation(aid: str, body: ConversationStart):
         )
         conv = cur.fetchone()
         if conv is None:
-            cur.execute("SELECT * FROM conversations WHERE agent_id=%s AND status='active'", (aid,))
+            cur.execute(
+                "SELECT * FROM conversations WHERE agent_id=%s AND status='active'",
+                (aid,),
+            )
             return {"conversation": cur.fetchone(), "created": False}
-        log_event(cur, str(ag["container_id"]), "human", body.actor_agent_id,
-                  "conversation", str(conv["id"]), "conversation_started", {"agent_id": aid})
+        log_event(
+            cur,
+            str(ag["container_id"]),
+            "human",
+            body.actor_agent_id,
+            "conversation",
+            str(conv["id"]),
+            "conversation_started",
+            {"agent_id": aid},
+        )
         conn.commit()
     return {"conversation": conv, "created": True}
 
@@ -4364,13 +4918,17 @@ def get_agent_conversation(aid: str, limit: int = 50):
     limit = max(1, min(limit, 500))
     with db_cursor() as (_, cur):
         _require_agent(cur, aid)
-        cur.execute("SELECT * FROM conversations WHERE agent_id=%s AND status='active'", (aid,))
+        cur.execute(
+            "SELECT * FROM conversations WHERE agent_id=%s AND status='active'", (aid,)
+        )
         conv = cur.fetchone()
         if not conv:
             return {"conversation": None, "turns": []}
         cur.execute(
             f"SELECT {_TURN_COLS} FROM conversation_turns WHERE conversation_id=%s "
-            "ORDER BY seq DESC LIMIT %s", (conv["id"], limit))
+            "ORDER BY seq DESC LIMIT %s",
+            (conv["id"], limit),
+        )
         turns = list(reversed(cur.fetchall()))
     return {"conversation": conv, "turns": turns}
 
@@ -4400,7 +4958,9 @@ def list_turns(conv_id: str, limit: int = 100, after_seq: int = 0):
             raise HTTPException(404, f"conversation {conv_id} not found")
         cur.execute(
             f"SELECT {_TURN_COLS} FROM conversation_turns WHERE conversation_id=%s AND seq>%s "
-            "ORDER BY seq LIMIT %s", (conv_id, after_seq, limit))
+            "ORDER BY seq LIMIT %s",
+            (conv_id, after_seq, limit),
+        )
         turns = cur.fetchall()
     return {"conversation_id": conv_id, "turns": turns}
 
@@ -4428,13 +4988,19 @@ def append_turn(conv_id: str, body: TurnAppend):
         # Integrity: agent turns come from the conversation's agent; human turns from a human.
         if body.role == "agent":
             if body.author_agent_id != str(conv["agent_id"]):
-                raise HTTPException(403, "an 'agent' turn must be authored by the conversation's agent")
+                raise HTTPException(
+                    403, "an 'agent' turn must be authored by the conversation's agent"
+                )
             # [P2 review] an agent turn is one-per-worker-run; require run_id and verify the
             # run belongs to THIS agent, else the wrong live stream (worker_run_lines) gets
             # attached to the turn.
             if not body.run_id:
-                raise HTTPException(400, "an 'agent' turn requires run_id (its worker_run)")
-            cur.execute("SELECT agent_id FROM worker_runs WHERE run_id=%s", (body.run_id,))
+                raise HTTPException(
+                    400, "an 'agent' turn requires run_id (its worker_run)"
+                )
+            cur.execute(
+                "SELECT agent_id FROM worker_runs WHERE run_id=%s", (body.run_id,)
+            )
             wr = cur.fetchone()
             if not wr:
                 raise HTTPException(404, f"worker_run {body.run_id} not found")
@@ -4450,27 +5016,50 @@ def append_turn(conv_id: str, body: TurnAppend):
         # #338: re-validate any staged attachment refs against THIS conversation's on-disk store
         # (re-deriving size/type) so the JSONB only ever holds real, this-conversation files.
         llm_key = _container_llm_key(cur, str(conv["container_id"]))
-        attachments = _validate_conv_attachment_refs(conv_id, body.attachments, api_key=llm_key)
+        attachments = _validate_conv_attachment_refs(
+            conv_id, body.attachments, api_key=llm_key
+        )
         cur.execute(
             "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM conversation_turns WHERE conversation_id=%s",
-            (conv_id,))
+            (conv_id,),
+        )
         seq = cur.fetchone()["n"]
         cur.execute(
             "INSERT INTO conversation_turns "
             "(conversation_id, seq, role, author_agent_id, content, run_id, meta, attachments) "
             f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_TURN_COLS}",
-            (conv_id, seq, body.role, body.author_agent_id, body.content,
-             body.run_id, json.dumps(body.meta or {}), json.dumps(attachments)))
+            (
+                conv_id,
+                seq,
+                body.role,
+                body.author_agent_id,
+                body.content,
+                body.run_id,
+                json.dumps(body.meta or {}),
+                json.dumps(attachments),
+            ),
+        )
         turn = cur.fetchone()
-        cur.execute("UPDATE conversations SET last_turn_at=now() WHERE id=%s", (conv_id,))
+        cur.execute(
+            "UPDATE conversations SET last_turn_at=now() WHERE id=%s", (conv_id,)
+        )
         if body.role == "human":
             # Persisted (seq assigned) BEFORE delivery — the E3 bridge to the resident. #338: carry
             # the validated attachment refs so the resident-feed (Forge → _send_user_turn) can hand
             # the agent the files alongside the text without a second fetch.
-            _publish_event(cur, str(conv["container_id"]), str(conv["agent_id"]),
-                           "conversation_turn",
-                           {"conversation_id": conv_id, "turn_id": str(turn["id"]),
-                            "seq": seq, "content": body.content, "attachments": attachments})
+            _publish_event(
+                cur,
+                str(conv["container_id"]),
+                str(conv["agent_id"]),
+                "conversation_turn",
+                {
+                    "conversation_id": conv_id,
+                    "turn_id": str(turn["id"]),
+                    "seq": seq,
+                    "content": body.content,
+                    "attachments": attachments,
+                },
+            )
         conn.commit()
     return {"turn": turn}
 
@@ -4485,9 +5074,11 @@ def set_conversation_session(conv_id: str, body: ConversationSession):
     if not _valid_uuid(conv_id) or not _valid_uuid(body.session_id):
         raise HTTPException(400, "conversation_id and session_id must be valid UUIDs")
     with db_cursor() as (conn, cur):
-        cur.execute("UPDATE conversations SET session_id=%s, session_pinned_at=now() "
-                    "WHERE id=%s RETURNING id, session_id",
-                    (body.session_id, conv_id))
+        cur.execute(
+            "UPDATE conversations SET session_id=%s, session_pinned_at=now() "
+            "WHERE id=%s RETURNING id, session_id",
+            (body.session_id, conv_id),
+        )
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"conversation {conv_id} not found")
@@ -4502,14 +5093,26 @@ def end_conversation(conv_id: str, body: ConversationActor):
     if not _valid_uuid(conv_id):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_agent(cur, body.actor_agent_id)   # actor must exist (human or the resident manager)
+        _require_agent(
+            cur, body.actor_agent_id
+        )  # actor must exist (human or the resident manager)
         cur.execute(
             "UPDATE conversations SET status='ended', ended_at=now() "
-            "WHERE id=%s AND status<>'ended' RETURNING id, container_id", (conv_id,))
+            "WHERE id=%s AND status<>'ended' RETURNING id, container_id",
+            (conv_id,),
+        )
         row = cur.fetchone()
         if row:
-            log_event(cur, str(row["container_id"]), "ai", body.actor_agent_id,
-                      "conversation", conv_id, "conversation_ended", {})
+            log_event(
+                cur,
+                str(row["container_id"]),
+                "ai",
+                body.actor_agent_id,
+                "conversation",
+                conv_id,
+                "conversation_ended",
+                {},
+            )
             conn.commit()
             return {"conversation_id": conv_id, "status": "ended"}
         cur.execute("SELECT 1 FROM conversations WHERE id=%s", (conv_id,))
@@ -4550,15 +5153,16 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
     ever crashes/never boots for it, this is the fallback that lets whatever DOES wake still see and
     answer the message, instead of a reply silently going unrecovered."""
     messages = []
-    wake_task_id = None                              # ISS-56: attribute the run to its task
-    ack_through_ts = max_ts                          # default: nothing truncated → ack all pending
+    wake_task_id = None  # ISS-56: attribute the run to its task
+    ack_through_ts = max_ts  # default: nothing truncated → ack all pending
     cur.execute(
         """SELECT wr.task_id FROM worker_runs wr
            JOIN agent_wake_state ws ON ws.agent_id = wr.agent_id
            WHERE wr.agent_id=%s AND wr.status='running' AND wr.lane='work'
              AND ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
            ORDER BY wr.started_at DESC LIMIT 1""",
-        (aid,))
+        (aid,),
+    )
     _live_row = cur.fetchone()
     live_task_id = _live_row["task_id"] if _live_row else None
     cur.execute(
@@ -4572,7 +5176,8 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id = %s AND a.event_id = e.id)
            ORDER BY e.ts, e.id""",
-        (aid, delivered_ts, aid))
+        (aid, delivered_ts, aid),
+    )
     budget = MAX_PROMPT_BATCH_CHARS
     included_ts = delivered_ts
     for r in cur.fetchall():
@@ -4586,15 +5191,20 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
             feed = ""
             ev_msg_id = pl.get("message_id")
             if ev_msg_id:
-                cur.execute("SELECT attachments FROM task_messages WHERE id=%s", (ev_msg_id,))
+                cur.execute(
+                    "SELECT attachments FROM task_messages WHERE id=%s", (ev_msg_id,)
+                )
                 mrow = cur.fetchone()
                 if mrow:
                     feed = _render_attachment_feed_line(mrow["attachments"])
             # Frame it with the task id so the agent knows WHICH thread to read + answer on; the full
             # body lives in task_messages (the preview is the hook).
-            m = (f"[task-thread message on task {ev_task_id}] {preview} "
-                 f"— READ that task's thread and RESPOND on it{feed}"
-                 if ev_task_id else f"{preview}{feed}")
+            m = (
+                f"[task-thread message on task {ev_task_id}] {preview} "
+                f"— READ that task's thread and RESPOND on it{feed}"
+                if ev_task_id
+                else f"{preview}{feed}"
+            )
         elif r["event_name"] == "task_assigned":
             # ISS-86 / #245 (Option C): a `task_assigned` event carries no inbox surface, so a woken
             # worker wouldn't know WHICH task it was assigned — and a create-and-assign task lands
@@ -4614,17 +5224,23 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
                 # surface (m stays None; the cursor still advances past it below, so it's acked away).
                 m = None
             elif tstatus == "in_progress":
-                m = (f"[new task assigned to you: {title} (task {ev_task_id})] "
-                     f"— it's already in_progress, so /orcha-next will NOT list it; READ its thread "
-                     f"(/api/tasks/{ev_task_id}/messages) and begin the work directly")
+                m = (
+                    f"[new task assigned to you: {title} (task {ev_task_id})] "
+                    f"— it's already in_progress, so /orcha-next will NOT list it; READ its thread "
+                    f"(/api/tasks/{ev_task_id}/messages) and begin the work directly"
+                )
             elif tstatus == "ready":
-                m = (f"[new task assigned to you: {title} (task {ev_task_id})] "
-                     f"— claim it with /orcha-next (or READ its thread "
-                     f"/api/tasks/{ev_task_id}/messages) and begin")
+                m = (
+                    f"[new task assigned to you: {title} (task {ev_task_id})] "
+                    f"— claim it with /orcha-next (or READ its thread "
+                    f"/api/tasks/{ev_task_id}/messages) and begin"
+                )
             else:  # pending (blocked on deps) or any other live state
-                m = (f"[new task assigned to you: {title} (task {ev_task_id})] "
-                     f"— it's '{tstatus}'; READ its thread (/api/tasks/{ev_task_id}/messages); "
-                     f"it may be waiting on dependencies before it's ready")
+                m = (
+                    f"[new task assigned to you: {title} (task {ev_task_id})] "
+                    f"— it's '{tstatus}'; READ its thread (/api/tasks/{ev_task_id}/messages); "
+                    f"it may be waiting on dependencies before it's ready"
+                )
             # GH #126: this agent already has a LIVE work-lane run on a DIFFERENT task — do not let
             # this assignment win wake_task_id (that would silently attribute Task B's work to Task
             # A's run) nor frame it as startable now. It must NOT be surfaced-and-acked here (an
@@ -4632,8 +5248,11 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
             # the same mechanism the batch-overflow branch below uses, so it (and anything after it,
             # to preserve delivery order) stays pending and is re-evaluated on every subsequent
             # wake/drain until the live run ends, at which point it flows through normally.
-            if (m is not None and live_task_id is not None
-                    and str(live_task_id) != str(ev_task_id)):
+            if (
+                m is not None
+                and live_task_id is not None
+                and str(live_task_id) != str(ev_task_id)
+            ):
                 ack_through_ts = included_ts
                 break
         elif r["event_name"] == "conversation_turn":
@@ -4641,8 +5260,12 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
             # wake_task_id, a chat reply must not misattribute a work run to some task).
             ev_task_id = None
             content = pl.get("content") or ""
-            m = (f"[unanswered chat message on this agent's conversation] {content} — the human is "
-                 f"still waiting on a reply; answer it directly." if content else None)
+            m = (
+                f"[unanswered chat message on this agent's conversation] {content} — the human is "
+                f"still waiting on a reply; answer it directly."
+                if content
+                else None
+            )
         else:
             ev_task_id = None
             m = pl.get("message")
@@ -4663,9 +5286,9 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
             messages.append({"text": m, "task_id": ev_task_id, "bucket": bucket})
             budget -= len(m)
             if ev_task_id:
-                wake_task_id = ev_task_id            # latest SURFACED task event wins (ISS-56;
-                                                     # task_message or task_assigned — ISS-86)
-        included_ts = r["ts"]                        # advance past included or blank messages
+                wake_task_id = ev_task_id  # latest SURFACED task event wins (ISS-56;
+                # task_message or task_assigned — ISS-86)
+        included_ts = r["ts"]  # advance past included or blank messages
     return messages, wake_task_id, ack_through_ts
 
 
@@ -4722,8 +5345,11 @@ def _resident_inbox_task_work_id(cur, aid: str, delivered_ts, max_ts):
     )
     for ev in cur.fetchall():
         pl = ev["payload"] or {}
-        tid = (pl.get("originating_task_id") if ev["event_name"] == "request_answered"
-               else pl.get("task_id"))
+        tid = (
+            pl.get("originating_task_id")
+            if ev["event_name"] == "request_answered"
+            else pl.get("task_id")
+        )
         if not tid or not _valid_uuid(tid):
             continue
         cur.execute(
@@ -4764,7 +5390,11 @@ def active_conversations(cid: str):
     fallback (which still wakes on conversation_turn when no resident is live)."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    excl = list(_NON_WAKING_EVENTS) + ["conversation_turn"] + list(_RESIDENT_DRAIN_AUDIT_EVENTS)
+    excl = (
+        list(_NON_WAKING_EVENTS)
+        + ["conversation_turn"]
+        + list(_RESIDENT_DRAIN_AUDIT_EVENTS)
+    )
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
         cur.execute(
@@ -4826,12 +5456,13 @@ def active_conversations(cid: str):
                ) t ON true
                WHERE cv.container_id = %s AND cv.status = 'active'
                ORDER BY cv.last_turn_at ASC NULLS FIRST""",
-            (excl, excl, cid))
+            (excl, excl, cid),
+        )
         convs = cur.fetchall()
         for r in convs:
             # last_turn_role is NULL only for a brand-new conversation with no turns yet.
             r["last_turn_seq"] = r["last_turn_seq"] or 0
-            r["pending_human"] = (r["last_turn_role"] == "human")
+            r["pending_human"] = r["last_turn_role"] == "human"
             r["pending_inbox"] = r["pending_inbox"] or 0
             # #266: is a clock-driven auto-wake due for this resident's agent? Identical interlocks to
             # wake_scan — opt-in (interval set) and the cadence has elapsed since the last wake of any
@@ -4842,8 +5473,8 @@ def active_conversations(cid: str):
             _auto_iv = r["auto_wake_interval_secs"]
             _ssw = r["_secs_since_woken"]
             r["auto_wake_due"] = bool(
-                _auto_iv is not None
-                and (_ssw is None or _ssw >= _auto_iv))
+                _auto_iv is not None and (_ssw is None or _ssw >= _auto_iv)
+            )
             r.pop("turns_used", None)
             r.pop("turn_budget", None)
             r.pop("_secs_since_woken", None)
@@ -4853,14 +5484,17 @@ def active_conversations(cid: str):
             # actually picks this up (a warm --resume keeps the old in-session model).
             r["model"] = resolve_model(r["model"])
             r["model_runtime"] = resolve_model_runtime(r["model"])
-            r["reasoning_effort"] = resolve_reasoning_effort(r["reasoning_effort"])  # GH #51
+            r["reasoning_effort"] = resolve_reasoning_effort(
+                r["reasoning_effort"]
+            )  # GH #51
             # ISS-74 (review fix): `prompt`/`task_message` events carry content with NO inbox surface —
             # they're delivered ONLY by injecting the text. So surface the bounded directed-message
             # batch (same semantics as wake_scan) and ACK ONLY THROUGH the last included one, so a
             # drain can never mark a directed message delivered without its content reaching the agent.
             if r["pending_inbox"]:
                 msgs, _tid, ack_ts = _collect_directed_messages(
-                    cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
+                    cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"]
+                )
                 # Resident drain injects every surfaced message's text (unchanged): a task-carrying row
                 # forces the daemon to YIELD the lease to a protocol-bound ephemeral, so the resident
                 # never silently owns cross-task work — no context filter needed here.
@@ -4874,16 +5508,21 @@ def active_conversations(cid: str):
                 # drainable (the answer is the sole/earliest queued event) inbox_ack_ts is None and the
                 # daemon skips the sidecar entirely, leaving the answer pending for the post-exit
                 # ephemeral wake. No actionable answer queued → unchanged (drain the whole backlog).
-                floor = _earliest_actionable_answer_ts(cur, str(r["agent_id"]), r["_delivered_ts"])
+                floor = _earliest_actionable_answer_ts(
+                    cur, str(r["agent_id"]), r["_delivered_ts"]
+                )
                 if floor is not None:
                     cur.execute(
                         """SELECT count(*) AS n, max(ts) AS mx FROM agent_events
                            WHERE event_key = %s AND ts > %s AND ts < %s
                              AND event_name <> ALL(%s)""",
-                        (str(r["agent_id"]), r["_delivered_ts"], floor, excl))
+                        (str(r["agent_id"]), r["_delivered_ts"], floor, excl),
+                    )
                     drow = cur.fetchone()
                     r["drainable_inbox"] = drow["n"] or 0
-                    safe = drow["mx"]   # newest drainable event ts strictly before the answer (or None)
+                    safe = drow[
+                        "mx"
+                    ]  # newest drainable event ts strictly before the answer (or None)
                     if safe is None:
                         r["inbox_ack_ts"] = None
                     elif ack_ts is None:
@@ -4893,7 +5532,8 @@ def active_conversations(cid: str):
                 else:
                     r["drainable_inbox"] = r["pending_inbox"]
                 r["inbox_wake_task_id"] = _resident_inbox_task_work_id(
-                    cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"])
+                    cur, str(r["agent_id"]), r["_delivered_ts"], r["_inbox_max_ts"]
+                )
             else:
                 r["inbox_messages"] = []
                 r["inbox_ack_ts"] = None
@@ -4918,8 +5558,12 @@ def active_conversations(cid: str):
                     (str(r["agent_id"]), r["_delivered_ts"], excl, str(r["agent_id"])),
                 )
                 for _row in cur.fetchall():
-                    _b = _drain_class(cur, _row["event_name"], _row["payload"],
-                                      target_id=_row["target_id"])["bucket"]
+                    _b = _drain_class(
+                        cur,
+                        _row["event_name"],
+                        _row["payload"],
+                        target_id=_row["target_id"],
+                    )["bucket"]
                     if _b in _DRAIN_RUN_ACKABLE:
                         drain_ackable_ids.append(_row["id"])
                     elif _b in (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE):
@@ -4941,7 +5585,10 @@ def get_persona(aid: str):
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        cur.execute("SELECT alias, role, kind, model, system_prompt FROM agents WHERE id=%s", (aid,))
+        cur.execute(
+            "SELECT alias, role, kind, model, system_prompt FROM agents WHERE id=%s",
+            (aid,),
+        )
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, f"agent {aid} not found")
@@ -4952,9 +5599,15 @@ def get_persona(aid: str):
     # (server-only), so it must arrive already-resolved. Humans carry no model → None (no --model).
     model = resolve_model(row["model"]) if row["kind"] != "human" else None
     model_runtime = resolve_model_runtime(model) if model else None
-    return {"agent_id": aid, "alias": row["alias"], "role": row["role"],
-            "kind": row["kind"], "model": model, "model_runtime": model_runtime,
-            "system_prompt": row["system_prompt"]}
+    return {
+        "agent_id": aid,
+        "alias": row["alias"],
+        "role": row["role"],
+        "kind": row["kind"],
+        "model": model,
+        "model_runtime": model_runtime,
+        "system_prompt": row["system_prompt"],
+    }
 
 
 @app.get("/api/agents/{aid}/protocol")
@@ -4993,11 +5646,18 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
         # GH #56: prefer the explicit originating-task link when supplied AND the agent participates
         # in it (so a wrong/foreign id can never serve someone else's protocol). Falls through to the
         # in_progress guess on a null/invalid/non-participating hint.
-        if task_id and _valid_uuid(task_id) and _agent_participates_in_task(
-                cur, str(agent["container_id"]), aid, task_id):
+        if (
+            task_id
+            and _valid_uuid(task_id)
+            and _agent_participates_in_task(
+                cur, str(agent["container_id"]), aid, task_id
+            )
+        ):
             cur.execute(
                 "SELECT id, title, description, definition_of_done, protocol "
-                "FROM tasks WHERE id=%s AND is_root=false", (task_id,))
+                "FROM tasks WHERE id=%s AND is_root=false",
+                (task_id,),
+            )
             row = cur.fetchone()
         if row is None:
             cur.execute(
@@ -5031,18 +5691,16 @@ def get_agent_protocol(aid: str, task_id: Optional[str] = None):
     if not row:
         return {"task_id": None, "protocol": None}
     # GH #33: body rides whenever a task resolves; protocol stays independent (null when unset).
-    result = {"task_id": str(row["id"]), "title": row["title"],
-              "description": row["description"], "definition_of_done": row["definition_of_done"],
-              "protocol": row["protocol"] or None}
+    result = {
+        "task_id": str(row["id"]),
+        "title": row["title"],
+        "description": row["description"],
+        "definition_of_done": row["definition_of_done"],
+        "protocol": row["protocol"] or None,
+    }
     if resume_context:
         result["resume_context"] = resume_context
     return result
-
-
-
-
-
-
 
 
 def _resolve_claim_lane(body) -> str:
@@ -5056,14 +5714,20 @@ def _resolve_claim_lane(body) -> str:
     lane = getattr(body, "lane", None)
     if lane:
         return lane
-    if getattr(body, "lease_kind", None) == "resident" or getattr(body, "kind", None) == "conversation":
+    if (
+        getattr(body, "lease_kind", None) == "resident"
+        or getattr(body, "kind", None) == "conversation"
+    ):
         return "conversation"
     return "work"
 
 
 @app.get("/api/containers/{cid}/wake-scan")
-def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
-              min_idle: float = Query(default=30.0, ge=0)):
+def wake_scan(
+    cid: str,
+    cooldown: float = Query(default=15.0, ge=0),
+    min_idle: float = Query(default=30.0, ge=0),
+):
     """Epic A: the notifier daemon's read-only scan — who needs an out-of-band wake.
 
     The wake DECISION lives here (server-side, single source of truth, testable via
@@ -5086,7 +5750,9 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
         c = _require_container(cur, cid)
         active = c["status"] == "active"
         # R2.4: global wake kill-switch — one surgical switch to stop ALL wakes.
-        cur.execute("SELECT wakes_enabled, autonomy_level FROM containers WHERE id=%s", (cid,))
+        cur.execute(
+            "SELECT wakes_enabled, autonomy_level FROM containers WHERE id=%s", (cid,)
+        )
         _wrow = cur.fetchone()
         wakes_enabled = bool(_wrow["wakes_enabled"])
         # #307 graded-wake T2: the container autonomy_level gates whether the daemon may
@@ -5108,8 +5774,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
         # #290 default). Ciphertext only — the daemon unseals it locally with the shared
         # ORCHA_SECRET_KEY, so a Settings-stored xAI key reaches the wake paths with no plaintext on
         # the wire. None when no key is stored (the daemon then falls back to its env keys).
-        triage_key_enc = _provider_key_enc(cur, cid, _effective_use_case_provider(triage_model, "triage"))
-        ack_key_enc = _provider_key_enc(cur, cid, _effective_use_case_provider(ack_model, "ack"))
+        triage_key_enc = _provider_key_enc(
+            cur, cid, _effective_use_case_provider(triage_model, "triage")
+        )
+        ack_key_enc = _provider_key_enc(
+            cur, cid, _effective_use_case_provider(ack_model, "ack")
+        )
         cur.execute(
             """SELECT a.id, a.alias, a.model, a.reasoning_effort, a.last_heartbeat_at,
                       a.turns_used, a.turn_budget,
@@ -5216,10 +5886,12 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # path), so the cursor is acked only THROUGH the last included one. Shared with the
             # resident inbox-drain path (ISS-74) via _collect_directed_messages — identical semantics.
             if pending:
-                directed_msgs, wake_task_id, ack_through_ts = _collect_directed_messages(
-                    cur, aid, a["delivered_ts"], max_ts)
+                directed_msgs, wake_task_id, ack_through_ts = (
+                    _collect_directed_messages(cur, aid, a["delivered_ts"], max_ts)
+                )
                 notifications, notifications_truncated = _wake_notification_manifest(
-                    cur, aid, a["delivered_ts"])
+                    cur, aid, a["delivered_ts"]
+                )
                 # GH #56 (Point 3 / FLAG 2a part b): if no directed-message task claimed the wake,
                 # attach it to the originating task of the newest pending answer. A `request_answered`
                 # event (the requester's own ask coming back) carries `originating_task_id` — the task
@@ -5253,7 +5925,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # has to spawn to act on the answer. Used below to EXEMPT it from the triage hint (no hint
             # → decide_wake_tier returns 'full' → spawn) and surfaced for the portal/debug + tests.
             actionable_answer_ts = (
-                _earliest_actionable_answer_ts(cur, aid, a["delivered_ts"]) if pending else None)
+                _earliest_actionable_answer_ts(cur, aid, a["delivered_ts"])
+                if pending
+                else None
+            )
             # Assigned-and-ready tasks = auto-start targets (deps cleared, awaiting
             # the owner to claim+begin). Root is excluded — only the human verifies it.
             # Order by priority, created_at so auto_start_task_ids[0] (what the notifier attributes
@@ -5275,7 +5950,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # tier/suppression deciders short-circuit to a full work wake.
             cur.execute(
                 "SELECT EXISTS (SELECT 1 FROM requests WHERE target_id=%s AND type='task' AND status='open') AS h",
-                (aid,))
+                (aid,),
+            )
             has_pending_task_request = bool(cur.fetchone()["h"])
 
             # GH #122: one-shot, per-task self-scheduled wakes. First remove rows that can never
@@ -5336,7 +6012,7 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # NULL => idle=true (never beat = no live work embodiment to be 'busy'). The agent-wide
             # idle_seconds (bumped by a conversation renew too) is kept for debug only and no longer
             # gates the work wake.
-            idle_seconds = a["idle_seconds"]           # agent-wide, debug/back-compat only
+            idle_seconds = a["idle_seconds"]  # agent-wide, debug/back-compat only
             work_idle_seconds = a["work_idle_seconds"]
             is_idle = (work_idle_seconds is None) or (work_idle_seconds >= min_idle)
 
@@ -5371,14 +6047,27 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                          AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                                           WHERE a.agent_id=%s AND a.event_id=e.id)
                        ORDER BY e.ts DESC, e.id DESC""",
-                    (aid, a["delivered_ts"], ack_through_ts, list(_NON_WAKING_EVENTS), aid),
+                    (
+                        aid,
+                        a["delivered_ts"],
+                        ack_through_ts,
+                        list(_NON_WAKING_EVENTS),
+                        aid,
+                    ),
                 )
                 for _row in cur.fetchall():
-                    _dc = _drain_class(cur, _row["event_name"], _row["payload"],
-                                       target_id=_row["target_id"])
-                    if (_dc["bucket"] in (_DRAIN_TASK_BOUND, _DRAIN_DIRECTIVE) and _dc["task_id"]
-                            and _drain_task_status(cur, _dc["task_id"])
-                                not in (None, "completed", "cancelled")):
+                    _dc = _drain_class(
+                        cur,
+                        _row["event_name"],
+                        _row["payload"],
+                        target_id=_row["target_id"],
+                    )
+                    if (
+                        _dc["bucket"] in (_DRAIN_TASK_BOUND, _DRAIN_DIRECTIVE)
+                        and _dc["task_id"]
+                        and _drain_task_status(cur, _dc["task_id"])
+                        not in (None, "completed", "cancelled")
+                    ):
                         context_task_id = str(_dc["task_id"])
                         break
             # GH #58 (R2 fix): now that the run-context task is known, surface ONLY the directed
@@ -5389,8 +6078,11 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # a message is surfaced iff this run either acks it (FYI/taskless/context task_bound) or
             # owns it (context new_work/directive) — surfacing and acking can never disagree.
             prompt_messages = [
-                d["text"] for d in directed_msgs
-                if not _is_cross_task_drain_row(d["bucket"], d["task_id"], context_task_id)
+                d["text"]
+                for d in directed_msgs
+                if not _is_cross_task_drain_row(
+                    d["bucket"], d["task_id"], context_task_id
+                )
             ]
             # GH #58 (R3 fix): the ranked wake manifest is rendered verbatim by build_wake_prompt as
             # "RANKED WAKE MANIFEST - drain in this order", so it must obey the SAME run-context rule as
@@ -5400,9 +6092,11 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # reaches the candidate dict. FYI / taskless rows and the context task's own rows stay; a
             # task-less 'task' request_created stays (any run may accept it → #359 is_task_request path).
             notifications = [
-                n for n in notifications
+                n
+                for n in notifications
                 if not _is_cross_task_drain_row(
-                    n.get("drain_bucket"), n.get("drain_task_id"), context_task_id)
+                    n.get("drain_bucket"), n.get("drain_task_id"), context_task_id
+                )
             ]
             handled_event_ids: list[int] = []
             if pending:
@@ -5413,16 +6107,30 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                          AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                                           WHERE a.agent_id=%s AND a.event_id=e.id)
                        ORDER BY e.ts, e.id""",
-                    (aid, a["delivered_ts"], ack_through_ts, list(_WORK_NON_WAKING_EVENTS), aid),
+                    (
+                        aid,
+                        a["delivered_ts"],
+                        ack_through_ts,
+                        list(_WORK_NON_WAKING_EVENTS),
+                        aid,
+                    ),
                 )
                 for _row in cur.fetchall():
-                    _dc = _drain_class(cur, _row["event_name"], _row["payload"],
-                                       target_id=_row["target_id"])
+                    _dc = _drain_class(
+                        cur,
+                        _row["event_name"],
+                        _row["payload"],
+                        target_id=_row["target_id"],
+                    )
                     _b = _dc["bucket"]
                     if _b in _DRAIN_RUN_ACKABLE:
                         handled_event_ids.append(_row["id"])
-                    elif (_b == _DRAIN_TASK_BOUND and _dc["task_id"] and context_task_id
-                          and str(_dc["task_id"]) == str(context_task_id)):
+                    elif (
+                        _b == _DRAIN_TASK_BOUND
+                        and _dc["task_id"]
+                        and context_task_id
+                        and str(_dc["task_id"]) == str(context_task_id)
+                    ):
                         handled_event_ids.append(_row["id"])
             # #266: clock-driven auto-wake — a recurring heartbeat poll, due when the interval has
             # elapsed since the last wake of ANY kind (last_woken_at, NULL=never => due immediately).
@@ -5436,25 +6144,40 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             secs_since_woken = a["secs_since_woken"]
             auto_wake_due = bool(
                 auto_interval is not None
-                and (secs_since_woken is None or secs_since_woken >= auto_interval))
-            has_work = (pending > 0 or len(auto_tasks) > 0 or auto_wake_due
-                        or has_pending_task_request or self_wake_due)
+                and (secs_since_woken is None or secs_since_woken >= auto_interval)
+            )
+            has_work = (
+                pending > 0
+                or len(auto_tasks) > 0
+                or auto_wake_due
+                or has_pending_task_request
+                or self_wake_due
+            )
             wake_enabled = a["wake_enabled"]
             in_cooldown = bool(a["in_cooldown"])
             # GH #91/#90: the existing lease/embodiment signals ARE the WORK lane now (they read the
             # work columns / lane='work'). should_wake gates on the WORK lane ONLY — a live
             # conversation resident (conv_lease_active / conv_embodiment_running) no longer suppresses
             # a work wake, because the two lanes are independent embodiments.
-            lease_active = bool(a["lease_active"])   # R2.4 / GH #91: WORK lease is live
-            lease_kind = a["lease_kind"]             # E1: 'ephemeral' | 'resident' | None
+            lease_active = bool(a["lease_active"])  # R2.4 / GH #91: WORK lease is live
+            lease_kind = a["lease_kind"]  # E1: 'ephemeral' | 'resident' | None
             # #247 B2: anything-live? is the real single-embodiment guard, not is-resident-due?.
             # A lapsed-lease WORK orphan whose worker_run is still 'running' must suppress the wake too.
-            embodiment_running = bool(a["embodiment_running"])  # GH #91: lane='work' running run
+            embodiment_running = bool(
+                a["embodiment_running"]
+            )  # GH #91: lane='work' running run
             conv_lease_active = bool(a["conv_lease_active"])
             conv_embodiment_running = bool(a["conv_embodiment_running"])
-            should_wake = bool(active and wakes_enabled and wake_enabled and has_work
-                               and is_idle and not in_cooldown and not lease_active
-                               and not embodiment_running)
+            should_wake = bool(
+                active
+                and wakes_enabled
+                and wake_enabled
+                and has_work
+                and is_idle
+                and not in_cooldown
+                and not lease_active
+                and not embodiment_running
+            )
 
             if not active:
                 reason = f"container {c['status']} — wakes suppressed"
@@ -5465,9 +6188,10 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             elif lease_active:
                 # §3b: a 'live' terminal embodiment suppresses ephemeral wakes the same way a
                 # resident does (single-embodiment); events stay pending and QUEUE until release.
-                reason = ({"resident": "a resident session is live (single-embodiment)",
-                           "live": "a live terminal session is held (single-embodiment) — events queue"}
-                          .get(lease_kind, "a worker is already live (single-flight lease held)"))
+                reason = {
+                    "resident": "a resident session is live (single-embodiment)",
+                    "live": "a live terminal session is held (single-embodiment) — events queue",
+                }.get(lease_kind, "a worker is already live (single-flight lease held)")
             elif embodiment_running:
                 # #247 B2: the lease lapsed (lease_active=false) but a worker_run is still 'running' —
                 # a daemon-kill orphan. Suppress the ephemeral wake so it never spawns alongside the
@@ -5485,7 +6209,8 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
                     top = notifications[0] if notifications else None
                     if top:
                         bits.append(
-                            f"{pending} event(s) (top=rank-{top['rank']} {top['type']}, latest={latest})")
+                            f"{pending} event(s) (top=rank-{top['rank']} {top['type']}, latest={latest})"
+                        )
                     else:
                         bits.append(f"{pending} event(s) (latest={latest})")
                 if auto_tasks:
@@ -5508,85 +6233,120 @@ def wake_scan(cid: str, cooldown: float = Query(default=15.0, ge=0),
             # never attach a suppression hint when one is pending (the notifier's suppression decider
             # also short-circuits to wake on has_pending_task_request; this is the server-side belt).
             triage_hint = None
-            if (should_wake and not has_pending_task_request and not self_wake_due
-                    and pending == 1 and not auto_tasks and not wake_task_id
-                    and not prompt_messages and latest
-                    and actionable_answer_ts is None):   # #72: never $0-suppress an unblocking answer
+            if (
+                should_wake
+                and not has_pending_task_request
+                and not self_wake_due
+                and pending == 1
+                and not auto_tasks
+                and not wake_task_id
+                and not prompt_messages
+                and latest
+                and actionable_answer_ts is None
+            ):  # #72: never $0-suppress an unblocking answer
                 full_answer = None
-                if latest == "request_answered" and (latest_payload or {}).get("request_id"):
-                    cur.execute("SELECT response FROM requests WHERE id=%s",
-                                ((latest_payload or {})["request_id"],))
+                if latest == "request_answered" and (latest_payload or {}).get(
+                    "request_id"
+                ):
+                    cur.execute(
+                        "SELECT response FROM requests WHERE id=%s",
+                        ((latest_payload or {})["request_id"],),
+                    )
                     _rr = cur.fetchone()
                     if _rr:
                         full_answer = _rr["response"]
-                triage_hint = _triage_hint_for(latest, latest_payload, full_answer=full_answer)
+                triage_hint = _triage_hint_for(
+                    latest, latest_payload, full_answer=full_answer
+                )
 
-            candidates.append({
-                "agent_id": aid, "alias": a["alias"], "should_wake": should_wake,
-                "reason": reason, "pending_events": pending, "latest_event": latest,
-                "prompt_messages": prompt_messages, "wake_task_id": wake_task_id,
-                "notifications": notifications, "notifications_truncated": notifications_truncated,
-                "max_event_ts": max_ts, "ack_through_ts": ack_through_ts,
-                # GH #58: the per-event handled-set the daemon posts to /events/ack-handled when this
-                # run COMPLETES (not at spawn — a spawn-then-crash marks nothing, so the events
-                # re-surface; no loss), plus the task this run's context is bound to.
-                "handled_event_ids": handled_event_ids, "context_task_id": context_task_id,
-                "auto_start_task_ids": auto_tasks,
-                # #266: surface the scheduled-wake verdict + the configured cadence so the notifier
-                # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
-                # can show why an idle agent is being woken on a clock.
-                "auto_wake_due": auto_wake_due, "auto_wake_interval_secs": auto_interval,
-                # GH #122: due one-shot task resume wake. self_wake_injected means this scan bound
-                # the self-wake to the same task_id the persona/protocol load will use.
-                "self_wake_due": self_wake_due,
-                "self_wake_context": self_wake_context,
-                "self_wake_task_id": self_wake_task_id,
-                "self_wake_injected": bool(self_wake_due and self_wake_task_id == wake_task_id),
-                # #288: the wake-suppression hint (None unless the sole pending signal is a single
-                # FYI/answer event). The notifier daemon makes the final call and fails open.
-                "triage_hint": triage_hint,
-                # #72: True when a pending answer/close unblocks this agent's own task work — such an
-                # answer is EXEMPT from #288/#307 suppression (triage_hint stays None) so a real worker
-                # spawns to act on it instead of a drain silently closing it.
-                "actionable_answer_pending": actionable_answer_ts is not None,
-                "wake_enabled": wake_enabled, "in_cooldown": in_cooldown,
-                "lease_active": lease_active, "lease_kind": lease_kind,
-                # #247 B2: the authoritative live-embodiment signal (a 'running' worker_run), exposed
-                # so the portal/debug can see an orphan suppressing a wake even after its lease lapsed.
-                # GH #91/#90: this is now the WORK-lane running signal (lane='work').
-                "embodiment_running": embodiment_running,
-                # GH #91/#90: the uncapped owed-task signal — the notifier folds it into has_task_request
-                # and its tier/suppression deciders short-circuit to a full WORK boot on it.
-                "has_pending_task_request": has_pending_task_request,
-                # GH #91/#90: lane-split debug fields (should_wake governs WORK only; these expose the
-                # coexisting conversation-lane state so the portal/debug can see both embodiments).
-                "conv_lease_active": conv_lease_active,
-                "conv_embodiment_running": conv_embodiment_running,
-                "work_idle_seconds": work_idle_seconds,
-                "idle_seconds": idle_seconds,
-                "tmux_target": a["tmux_target"], "headless_cwd": a["headless_cwd"],
-                "headless_flags": a["headless_flags"],
-                # GAP A: the model the daemon must spawn this worker with (`--model`). Resolved
-                # server-side so a retired limited-availability model (e.g. Fable 5 after 2026-06-22)
-                # auto-falls-back to the default and never reaches the spawn argv as an invalid id.
-                "model": resolve_model(a["model"]),
-                "model_runtime": resolve_model_runtime(a["model"]),
-                # GH #51: the per-agent reasoning effort the daemon passes to the worker spawn.
-                # NULL stays NULL (no explicit flag); unknown stale values fall back server-side.
-                "reasoning_effort": resolve_reasoning_effort(a["reasoning_effort"]),
-            })
-    return {"container_id": cid, "container_status": c["status"],
-            "active": active, "wakes_enabled": wakes_enabled,
-            # #307 graded-wake: the container autonomy gate for T2 cheap-act auto-completion
-            # ('full' => act; otherwise log-only + full boot). Advisory; the daemon fails open.
-            "autonomy_level": autonomy_level,
-            # #294: the configured 'triage' model for #288 wake-suppression (null = #290 default).
-            "triage_model": triage_model,
-            # The SEALED key blob for the triage/ack provider (ciphertext; null if none stored).
-            # The daemon unseals locally — Settings-stored provider keys reach the wake paths.
-            "triage_key_enc": triage_key_enc, "ack_key_enc": ack_key_enc,
-            # #307: the configured 'ack' model for T2 cheap-act (null = #290 default Haiku).
-            "ack_model": ack_model, "candidates": candidates}
+            candidates.append(
+                {
+                    "agent_id": aid,
+                    "alias": a["alias"],
+                    "should_wake": should_wake,
+                    "reason": reason,
+                    "pending_events": pending,
+                    "latest_event": latest,
+                    "prompt_messages": prompt_messages,
+                    "wake_task_id": wake_task_id,
+                    "notifications": notifications,
+                    "notifications_truncated": notifications_truncated,
+                    "max_event_ts": max_ts,
+                    "ack_through_ts": ack_through_ts,
+                    # GH #58: the per-event handled-set the daemon posts to /events/ack-handled when this
+                    # run COMPLETES (not at spawn — a spawn-then-crash marks nothing, so the events
+                    # re-surface; no loss), plus the task this run's context is bound to.
+                    "handled_event_ids": handled_event_ids,
+                    "context_task_id": context_task_id,
+                    "auto_start_task_ids": auto_tasks,
+                    # #266: surface the scheduled-wake verdict + the configured cadence so the notifier
+                    # can label the wake 'auto_wake' and build a heartbeat prompt, and the portal/debug
+                    # can show why an idle agent is being woken on a clock.
+                    "auto_wake_due": auto_wake_due,
+                    "auto_wake_interval_secs": auto_interval,
+                    # GH #122: due one-shot task resume wake. self_wake_injected means this scan bound
+                    # the self-wake to the same task_id the persona/protocol load will use.
+                    "self_wake_due": self_wake_due,
+                    "self_wake_context": self_wake_context,
+                    "self_wake_task_id": self_wake_task_id,
+                    "self_wake_injected": bool(
+                        self_wake_due and self_wake_task_id == wake_task_id
+                    ),
+                    # #288: the wake-suppression hint (None unless the sole pending signal is a single
+                    # FYI/answer event). The notifier daemon makes the final call and fails open.
+                    "triage_hint": triage_hint,
+                    # #72: True when a pending answer/close unblocks this agent's own task work — such an
+                    # answer is EXEMPT from #288/#307 suppression (triage_hint stays None) so a real worker
+                    # spawns to act on it instead of a drain silently closing it.
+                    "actionable_answer_pending": actionable_answer_ts is not None,
+                    "wake_enabled": wake_enabled,
+                    "in_cooldown": in_cooldown,
+                    "lease_active": lease_active,
+                    "lease_kind": lease_kind,
+                    # #247 B2: the authoritative live-embodiment signal (a 'running' worker_run), exposed
+                    # so the portal/debug can see an orphan suppressing a wake even after its lease lapsed.
+                    # GH #91/#90: this is now the WORK-lane running signal (lane='work').
+                    "embodiment_running": embodiment_running,
+                    # GH #91/#90: the uncapped owed-task signal — the notifier folds it into has_task_request
+                    # and its tier/suppression deciders short-circuit to a full WORK boot on it.
+                    "has_pending_task_request": has_pending_task_request,
+                    # GH #91/#90: lane-split debug fields (should_wake governs WORK only; these expose the
+                    # coexisting conversation-lane state so the portal/debug can see both embodiments).
+                    "conv_lease_active": conv_lease_active,
+                    "conv_embodiment_running": conv_embodiment_running,
+                    "work_idle_seconds": work_idle_seconds,
+                    "idle_seconds": idle_seconds,
+                    "tmux_target": a["tmux_target"],
+                    "headless_cwd": a["headless_cwd"],
+                    "headless_flags": a["headless_flags"],
+                    # GAP A: the model the daemon must spawn this worker with (`--model`). Resolved
+                    # server-side so a retired limited-availability model (e.g. Fable 5 after 2026-06-22)
+                    # auto-falls-back to the default and never reaches the spawn argv as an invalid id.
+                    "model": resolve_model(a["model"]),
+                    "model_runtime": resolve_model_runtime(a["model"]),
+                    # GH #51: the per-agent reasoning effort the daemon passes to the worker spawn.
+                    # NULL stays NULL (no explicit flag); unknown stale values fall back server-side.
+                    "reasoning_effort": resolve_reasoning_effort(a["reasoning_effort"]),
+                }
+            )
+    return {
+        "container_id": cid,
+        "container_status": c["status"],
+        "active": active,
+        "wakes_enabled": wakes_enabled,
+        # #307 graded-wake: the container autonomy gate for T2 cheap-act auto-completion
+        # ('full' => act; otherwise log-only + full boot). Advisory; the daemon fails open.
+        "autonomy_level": autonomy_level,
+        # #294: the configured 'triage' model for #288 wake-suppression (null = #290 default).
+        "triage_model": triage_model,
+        # The SEALED key blob for the triage/ack provider (ciphertext; null if none stored).
+        # The daemon unseals locally — Settings-stored provider keys reach the wake paths.
+        "triage_key_enc": triage_key_enc,
+        "ack_key_enc": ack_key_enc,
+        # #307: the configured 'ack' model for T2 cheap-act (null = #290 default Haiku).
+        "ack_model": ack_model,
+        "candidates": candidates,
+    }
 
 
 @app.post("/api/agents/{aid}/wake-ack", status_code=200)
@@ -5630,9 +6390,18 @@ def wake_ack(aid: str, body: WakeAck):
                    RETURNING conv_delivered_ts AS delivered_ts, conv_last_woken_at AS last_woken_at,
                              last_wake_kind, last_wake_event,
                              conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind""",
-                (aid, body.delivered_ts, body.stamp_woken, body.kind, body.event, body.stamp_woken,
-                 body.release_lease, body.release_lease,
-                 body.release_lease, body.release_lease),
+                (
+                    aid,
+                    body.delivered_ts,
+                    body.stamp_woken,
+                    body.kind,
+                    body.event,
+                    body.stamp_woken,
+                    body.release_lease,
+                    body.release_lease,
+                    body.release_lease,
+                    body.release_lease,
+                ),
             )
         else:
             cur.execute(
@@ -5666,14 +6435,27 @@ def wake_ack(aid: str, body: WakeAck):
                                                  ELSE agent_wake_state.preempt_for END
                    RETURNING delivered_ts, last_woken_at, last_wake_kind, last_wake_event,
                              wake_lease_until, lease_kind""",
-                (aid, body.delivered_ts, body.stamp_woken, body.kind, body.event, body.stamp_woken,
-                 body.release_lease, body.release_lease,
-                 body.release_lease, body.release_lease),
+                (
+                    aid,
+                    body.delivered_ts,
+                    body.stamp_woken,
+                    body.kind,
+                    body.event,
+                    body.stamp_woken,
+                    body.release_lease,
+                    body.release_lease,
+                    body.release_lease,
+                    body.release_lease,
+                ),
             )
         row = cur.fetchone()
         cleared_self_wake = False
-        if (lane == "work" and body.clear_self_wake
-                and body.self_wake_task_id and _valid_uuid(body.self_wake_task_id)):
+        if (
+            lane == "work"
+            and body.clear_self_wake
+            and body.self_wake_task_id
+            and _valid_uuid(body.self_wake_task_id)
+        ):
             cur.execute(
                 "DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
                 (aid, body.self_wake_task_id),
@@ -5692,26 +6474,54 @@ def wake_ack(aid: str, body: WakeAck):
                 """UPDATE worker_runs SET status='orphaned', ended_at=now()
                    WHERE agent_id=%s AND status='running' AND lane=%s
                    RETURNING run_id""",
-                (aid, lane))
+                (aid, lane),
+            )
             reconciled = [str(rr["run_id"]) for rr in cur.fetchall()]
             if reconciled:
                 # GH #91/#90: revoke the reconciled runs' tokens — the process is gone (orphaned) so
                 # its WORK-lane capability must not linger.
                 _revoke_tokens_for_runs(cur, reconciled)
-                log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
-                          "worker_runs_reconciled",
-                          {"reconciled": reconciled, "to_status": "orphaned",
-                           "trigger": "lease_release", "lane": lane})
-        log_event(cur, str(ag["container_id"]), "system", None, "agent", aid, "woken",
-                  {"kind": body.kind, "event": body.event, "delivered_ts": body.delivered_ts,
-                   "release_lease": body.release_lease, "lane": lane,
-                   "clear_self_wake": body.clear_self_wake,
-                   "self_wake_task_id": body.self_wake_task_id,
-                   "cleared_self_wake": cleared_self_wake})
+                log_event(
+                    cur,
+                    str(ag["container_id"]),
+                    "system",
+                    None,
+                    "agent",
+                    aid,
+                    "worker_runs_reconciled",
+                    {
+                        "reconciled": reconciled,
+                        "to_status": "orphaned",
+                        "trigger": "lease_release",
+                        "lane": lane,
+                    },
+                )
+        log_event(
+            cur,
+            str(ag["container_id"]),
+            "system",
+            None,
+            "agent",
+            aid,
+            "woken",
+            {
+                "kind": body.kind,
+                "event": body.event,
+                "delivered_ts": body.delivered_ts,
+                "release_lease": body.release_lease,
+                "lane": lane,
+                "clear_self_wake": body.clear_self_wake,
+                "self_wake_task_id": body.self_wake_task_id,
+                "cleared_self_wake": cleared_self_wake,
+            },
+        )
         conn.commit()
-    return {"agent_id": aid, "lane": lane, "cleared_self_wake": cleared_self_wake, **row}
-
-
+    return {
+        "agent_id": aid,
+        "lane": lane,
+        "cleared_self_wake": cleared_self_wake,
+        **row,
+    }
 
 
 @app.post("/api/agents/{aid}/events/ack-handled", status_code=200)
@@ -5736,8 +6546,16 @@ def events_ack_handled(aid: str, body: EventsAckHandled):
                 (aid, aid, ids),
             )
         new_floor = _recompute_delivered_floor(cur, aid)
-        log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
-                  "events_ack_handled", {"count": len(ids), "delivered_ts": new_floor})
+        log_event(
+            cur,
+            str(ag["container_id"]),
+            "system",
+            None,
+            "agent",
+            aid,
+            "events_ack_handled",
+            {"count": len(ids), "delivered_ts": new_floor},
+        )
         conn.commit()
     return {"agent_id": aid, "handled": len(ids), "delivered_ts": new_floor}
 
@@ -5761,23 +6579,36 @@ def wake_claim(aid: str, body: WakeClaim):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         ag = _require_agent(cur, aid)
-        cur.execute("SELECT status, wakes_enabled FROM containers WHERE id=%s",
-                    (ag["container_id"],))
+        cur.execute(
+            "SELECT status, wakes_enabled FROM containers WHERE id=%s",
+            (ag["container_id"],),
+        )
         c = cur.fetchone()
         if c["status"] != "active":
-            return {"agent_id": aid, "claimed": False,
-                    "reason": f"container {c['status']} — wakes suppressed"}
+            return {
+                "agent_id": aid,
+                "claimed": False,
+                "reason": f"container {c['status']} — wakes suppressed",
+            }
         if not c["wakes_enabled"]:
-            return {"agent_id": aid, "claimed": False,
-                    "reason": "global wake kill-switch is OFF (wakes_enabled=false)"}
+            return {
+                "agent_id": aid,
+                "claimed": False,
+                "reason": "global wake kill-switch is OFF (wakes_enabled=false)",
+            }
         # Per-agent opt-out: wake-scan honors agent_reachability.wake_enabled, but since
         # the claim is the actual spawn gate, it must re-check it too — otherwise a user
         # disabling wakes in the window between scan and claim would still get a worker.
-        cur.execute("SELECT wake_enabled FROM agent_reachability WHERE agent_id=%s", (aid,))
+        cur.execute(
+            "SELECT wake_enabled FROM agent_reachability WHERE agent_id=%s", (aid,)
+        )
         rr = cur.fetchone()
         if rr is not None and rr["wake_enabled"] is False:
-            return {"agent_id": aid, "claimed": False,
-                    "reason": "wake disabled for this agent (opt-out)"}
+            return {
+                "agent_id": aid,
+                "claimed": False,
+                "reason": "wake disabled for this agent (opt-out)",
+            }
         # GH #91/#90: resolve which lease SLOT to claim. The two lanes have independent slots on the
         # one agent_wake_state row, so a warm conversation resident and a work worker can be live for
         # the same agent at once — one lane's live lease never blocks the other's claim, and the
@@ -5839,10 +6670,16 @@ def wake_claim(aid: str, body: WakeClaim):
             # single-embodiment PER LANE). Read back the held kind from the lane's own columns.
             conn.rollback()
             if lane == "conversation":
-                cur.execute("SELECT conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind "
-                            "FROM agent_wake_state WHERE agent_id=%s", (aid,))
+                cur.execute(
+                    "SELECT conv_lease_until AS wake_lease_until, conv_lease_kind AS lease_kind "
+                    "FROM agent_wake_state WHERE agent_id=%s",
+                    (aid,),
+                )
             else:
-                cur.execute("SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s", (aid,))
+                cur.execute(
+                    "SELECT wake_lease_until, lease_kind FROM agent_wake_state WHERE agent_id=%s",
+                    (aid,),
+                )
             held = cur.fetchone()
             held_kind = held["lease_kind"] if held else None
             # ISS-69(b): a live-terminal claim (preempt=1) blocked by an IDLE warm RESIDENT records a
@@ -5852,29 +6689,78 @@ def wake_claim(aid: str, body: WakeClaim):
             # in separate slots). The preempt PATH stays but only fires on the work lane; a
             # conversation claim never reaches it (a resident holder is now in the conv slot, never
             # blocking a work claim). Kept-but-inert per Open Q3.
-            if lane == "work" and body.preempt and body.lease_kind == "live" and held_kind == "resident":
+            if (
+                lane == "work"
+                and body.preempt
+                and body.lease_kind == "live"
+                and held_kind == "resident"
+            ):
                 cur.execute(
                     """UPDATE agent_wake_state
                           SET preempt_requested_at = now(), preempt_for = %s
                         WHERE agent_id = %s AND lease_kind = 'resident'""",
-                    (body.lease_kind, aid))
-                log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
-                          "wake_preempt_requested", {"by": body.lease_kind, "holder": held_kind})
+                    (body.lease_kind, aid),
+                )
+                log_event(
+                    cur,
+                    str(ag["container_id"]),
+                    "system",
+                    None,
+                    "agent",
+                    aid,
+                    "wake_preempt_requested",
+                    {"by": body.lease_kind, "holder": held_kind},
+                )
                 conn.commit()
-                return {"agent_id": aid, "claimed": False, "reason": "yield_pending", "lane": lane,
-                        "lease_kind": held_kind, "preempt_requested": True,
-                        "wake_lease_until": held["wake_lease_until"].isoformat() if held and held["wake_lease_until"] else None}
-            reason = ({"resident": "a resident session is live (single-embodiment)",
-                       "live": "a live terminal session is held (single-embodiment)"}
-                      .get(held_kind, "a worker is already live (single-flight lease held)"))
-            return {"agent_id": aid, "claimed": False, "reason": reason, "lane": lane, "lease_kind": held_kind,
-                    "wake_lease_until": held["wake_lease_until"].isoformat() if held and held["wake_lease_until"] else None}
-        log_event(cur, str(ag["container_id"]), "system", None, "agent", aid, "wake_claimed",
-                  {"kind": body.kind, "event": body.event, "lease_ttl": body.lease_ttl,
-                   "lease_kind": body.lease_kind, "lane": lane})
+                return {
+                    "agent_id": aid,
+                    "claimed": False,
+                    "reason": "yield_pending",
+                    "lane": lane,
+                    "lease_kind": held_kind,
+                    "preempt_requested": True,
+                    "wake_lease_until": held["wake_lease_until"].isoformat()
+                    if held and held["wake_lease_until"]
+                    else None,
+                }
+            reason = {
+                "resident": "a resident session is live (single-embodiment)",
+                "live": "a live terminal session is held (single-embodiment)",
+            }.get(held_kind, "a worker is already live (single-flight lease held)")
+            return {
+                "agent_id": aid,
+                "claimed": False,
+                "reason": reason,
+                "lane": lane,
+                "lease_kind": held_kind,
+                "wake_lease_until": held["wake_lease_until"].isoformat()
+                if held and held["wake_lease_until"]
+                else None,
+            }
+        log_event(
+            cur,
+            str(ag["container_id"]),
+            "system",
+            None,
+            "agent",
+            aid,
+            "wake_claimed",
+            {
+                "kind": body.kind,
+                "event": body.event,
+                "lease_ttl": body.lease_ttl,
+                "lease_kind": body.lease_kind,
+                "lane": lane,
+            },
+        )
         conn.commit()
-    resp = {"agent_id": aid, "claimed": True, "lane": lane, "lease_kind": row["lease_kind"],
-            "wake_lease_until": row["wake_lease_until"].isoformat()}
+    resp = {
+        "agent_id": aid,
+        "claimed": True,
+        "lane": lane,
+        "lease_kind": row["lease_kind"],
+        "wake_lease_until": row["wake_lease_until"].isoformat(),
+    }
     # §3b live embodiment: the PTY bridge needs to know whether to COLD-boot (Vault injects
     # persona+digest+history into `orcha use`) or RESUME a pinned session. R1 is COLD-ONLY
     # (a fresh interactive session each open) — a PTY has no stream-json log to capture the
@@ -5936,10 +6822,18 @@ def wake_renew(aid: str, body: WakeClaim):
             # (portal-wide liveness), but the work-idle gate no longer reads it. A renew that races a
             # release/expiry returns None and does NOT bump either.
             if lane == "conversation":
-                cur.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() WHERE agent_id = %s", (aid,))
+                cur.execute(
+                    "UPDATE agent_wake_state SET conv_last_heartbeat_at = now() WHERE agent_id = %s",
+                    (aid,),
+                )
             else:
-                cur.execute("UPDATE agent_wake_state SET work_last_heartbeat_at = now() WHERE agent_id = %s", (aid,))
-            cur.execute("UPDATE agents SET last_heartbeat_at = now() WHERE id = %s", (aid,))
+                cur.execute(
+                    "UPDATE agent_wake_state SET work_last_heartbeat_at = now() WHERE agent_id = %s",
+                    (aid,),
+                )
+            cur.execute(
+                "UPDATE agents SET last_heartbeat_at = now() WHERE id = %s", (aid,)
+            )
         # #240/ISS-72: surface a pending human STOP on this SAME per-tick renew (zero new poll).
         # Single-flight ⇒ ≤1 running run per agent, so an agent-keyed renew carries a run-scoped
         # stop unambiguously. The daemon vets stop_run_id == the run IT tracks before killing
@@ -5961,21 +6855,36 @@ def wake_renew(aid: str, body: WakeClaim):
             stop = cur.fetchone()
         conn.commit()
     if row is None:
-        return {"agent_id": aid, "renewed": False, "lane": lane, "wake_lease_until": None, "lease_kind": None,
-                "preempt_requested": False, "stop_requested": False, "stop_run_id": None,
-                "stop_requested_by": None}
+        return {
+            "agent_id": aid,
+            "renewed": False,
+            "lane": lane,
+            "wake_lease_until": None,
+            "lease_kind": None,
+            "preempt_requested": False,
+            "stop_requested": False,
+            "stop_run_id": None,
+            "stop_requested_by": None,
+        }
     # ISS-69(b): surface a pending yield request on the heartbeat the daemon already sends every
     # tick, so service_residents can yield an idle resident WITHOUT a separate read loop.
-    return {"agent_id": aid, "renewed": True, "lane": lane, "lease_kind": row["lease_kind"],
-            "wake_lease_until": row["wake_lease_until"].isoformat(),
-            "preempt_requested": row["preempt_requested_at"] is not None,
-            "stop_requested": stop is not None,
-            "stop_run_id": str(stop["run_id"]) if stop else None,
-            "stop_requested_by": (stop["by_alias"] if stop else None)}
+    return {
+        "agent_id": aid,
+        "renewed": True,
+        "lane": lane,
+        "lease_kind": row["lease_kind"],
+        "wake_lease_until": row["wake_lease_until"].isoformat(),
+        "preempt_requested": row["preempt_requested_at"] is not None,
+        "stop_requested": stop is not None,
+        "stop_run_id": str(stop["run_id"]) if stop else None,
+        "stop_requested_by": (stop["by_alias"] if stop else None),
+    }
 
 
 @app.post("/api/containers/{cid}/reap-orphan-leases", status_code=200)
-def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE_SECS, ge=0)):
+def reap_orphan_leases(
+    cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE_SECS, ge=0)
+):
     """ISS-60(B): heartbeat-keyed orphan-lease reaper (defense-in-depth backstop for ISS-60).
 
     ISS-60 = an orphan resident lease blocks ALL wakes for an agent. The single-flight lease has
@@ -6015,7 +6924,16 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
 
-    def _reap_lane(cur, *, lease_col, kind_col, heartbeat_expr, claim_floor_expr, preempt_cols, run_lane):
+    def _reap_lane(
+        cur,
+        *,
+        lease_col,
+        kind_col,
+        heartbeat_expr,
+        claim_floor_expr,
+        preempt_cols,
+        run_lane,
+    ):
         """Reap one lane's orphan leases. Returns the pre-release reaped rows (agent_id/alias/
         lease_kind/idle_seconds) with reconciled_runs already revoked + logged per agent.
 
@@ -6026,8 +6944,10 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
         never-beat agent stays categorically excluded regardless of claim recency; its own
         short lease TTL is what handles that case, unchanged from before this fix."""
         floored_expr = f"GREATEST(({heartbeat_expr}), ({claim_floor_expr}))"
-        set_release = ", ".join([f"{lease_col} = NULL", f"{kind_col} = NULL"]
-                                + [f"{c} = NULL" for c in preempt_cols])
+        set_release = ", ".join(
+            [f"{lease_col} = NULL", f"{kind_col} = NULL"]
+            + [f"{c} = NULL" for c in preempt_cols]
+        )
         cur.execute(
             f"""WITH orphans AS (
                    SELECT w.agent_id, a.alias, w.{kind_col} AS lease_kind,
@@ -6061,19 +6981,32 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
                 """UPDATE worker_runs SET status='orphaned', ended_at=now()
                    WHERE agent_id::text = ANY(%s) AND status='running' AND lane=%s
                    RETURNING run_id, agent_id""",
-                (reaped_ids, run_lane))
+                (reaped_ids, run_lane),
+            )
             for rr in cur.fetchall():
-                runs_by_agent.setdefault(str(rr["agent_id"]), []).append(str(rr["run_id"]))
+                runs_by_agent.setdefault(str(rr["agent_id"]), []).append(
+                    str(rr["run_id"])
+                )
         # GH #91/#90: revoke the reconciled runs' tokens — the embodiment is gone.
         all_reconciled = [rid for rids in runs_by_agent.values() for rid in rids]
         _revoke_tokens_for_runs(cur, all_reconciled)
         for r in reaped:
-            log_event(cur, cid, "system", None, "agent", str(r["agent_id"]),
-                      "orphan_lease_reaped",
-                      {"lease_kind": r["lease_kind"], "lane": run_lane,
-                       "idle_seconds": round(float(r["idle_seconds"]), 1),
-                       "orphan_secs": orphan_secs,
-                       "reconciled_runs": runs_by_agent.get(str(r["agent_id"]), [])})
+            log_event(
+                cur,
+                cid,
+                "system",
+                None,
+                "agent",
+                str(r["agent_id"]),
+                "orphan_lease_reaped",
+                {
+                    "lease_kind": r["lease_kind"],
+                    "lane": run_lane,
+                    "idle_seconds": round(float(r["idle_seconds"]), 1),
+                    "orphan_secs": orphan_secs,
+                    "reconciled_runs": runs_by_agent.get(str(r["agent_id"]), []),
+                },
+            )
         return reaped
 
     with db_cursor() as (conn, cur):
@@ -6085,17 +7018,25 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
         # whose heartbeat column is still holding a value from BEFORE this claim, reads as idle for
         # however stale that old heartbeat is and gets false-reaped mid-boot.
         work_reaped = _reap_lane(
-            cur, lease_col="wake_lease_until", kind_col="lease_kind",
+            cur,
+            lease_col="wake_lease_until",
+            kind_col="lease_kind",
             heartbeat_expr="COALESCE(w.work_last_heartbeat_at, a.last_heartbeat_at)",
             claim_floor_expr="w.last_woken_at",
-            preempt_cols=("preempt_requested_at", "preempt_for"), run_lane="work")
+            preempt_cols=("preempt_requested_at", "preempt_for"),
+            run_lane="work",
+        )
         # CONVERSATION branch — keyed strictly on the lane's own heartbeat (no pre-030 legacy).
         # GH #138: same claim-time floor via conv_last_woken_at.
         conv_reaped = _reap_lane(
-            cur, lease_col="conv_lease_until", kind_col="conv_lease_kind",
+            cur,
+            lease_col="conv_lease_until",
+            kind_col="conv_lease_kind",
             heartbeat_expr="w.conv_last_heartbeat_at",
             claim_floor_expr="w.conv_last_woken_at",
-            preempt_cols=("conv_preempt_requested_at", "conv_preempt_for"), run_lane="conversation")
+            preempt_cols=("conv_preempt_requested_at", "conv_preempt_for"),
+            run_lane="conversation",
+        )
         # GH #91/#90: unbound-token backstop — a token minted for a spawn that NEVER created its run
         # (crash between mint and /runs) would otherwise linger valid forever with run_id NULL. Revoke
         # any unbound token older than 2 minutes (well beyond a normal mint->spawn->/runs window).
@@ -6107,15 +7048,23 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
             """UPDATE embodiment_tokens SET revoked_at=now()
                WHERE run_id IS NULL AND revoked_at IS NULL
                  AND kind <> 'resident'
-                 AND created_at < now() - interval '2 minutes'""")
+                 AND created_at < now() - interval '2 minutes'"""
+        )
         conn.commit()
     reaped = list(work_reaped) + list(conv_reaped)
-    return {"container_id": cid, "orphan_secs": orphan_secs,
-            "reaped": [{"agent_id": str(r["agent_id"]), "alias": r["alias"],
-                        "lease_kind": r["lease_kind"],
-                        "idle_seconds": round(float(r["idle_seconds"]), 1)} for r in reaped]}
-
-
+    return {
+        "container_id": cid,
+        "orphan_secs": orphan_secs,
+        "reaped": [
+            {
+                "agent_id": str(r["agent_id"]),
+                "alias": r["alias"],
+                "lease_kind": r["lease_kind"],
+                "idle_seconds": round(float(r["idle_seconds"]), 1),
+            }
+            for r in reaped
+        ],
+    }
 
 
 # #298: the autonomy SLIDER write body. `level` is the engine enum; `actor_agent_id` MUST be a
@@ -6123,8 +7072,6 @@ def reap_orphan_leases(cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE
 # auto-completes with no human verify), so it is a deliberate human authority action (stricter than
 # /wakes, which only logs the actor). The route validates `level` against the enum (400 otherwise).
 AUTONOMY_LEVELS = ("plan", "pr", "full")
-
-
 
 
 @app.post("/api/containers/{cid}/wakes", status_code=200)
@@ -6140,11 +7087,21 @@ def set_wakes_enabled(cid: str, body: WakesToggle):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
-        cur.execute("UPDATE containers SET wakes_enabled=%s WHERE id=%s RETURNING wakes_enabled",
-                    (body.enabled, cid))
+        cur.execute(
+            "UPDATE containers SET wakes_enabled=%s WHERE id=%s RETURNING wakes_enabled",
+            (body.enabled, cid),
+        )
         row = cur.fetchone()
-        log_event(cur, cid, "system", body.actor_agent_id, "container", cid,
-                  "wakes_toggled", {"enabled": body.enabled})
+        log_event(
+            cur,
+            cid,
+            "system",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "wakes_toggled",
+            {"enabled": body.enabled},
+        )
         conn.commit()
     return {"container_id": cid, "wakes_enabled": row["wakes_enabled"]}
 
@@ -6173,12 +7130,24 @@ def set_autonomy_level(cid: str, body: AutonomyUpdate):
         raise HTTPException(400, f"level must be one of {AUTONOMY_LEVELS}")
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
-        _require_kind(cur, body.actor_agent_id, ("human",))   # Orcha#30: a deliberate human action
-        cur.execute("UPDATE containers SET autonomy_level=%s WHERE id=%s RETURNING autonomy_level",
-                    (body.level, cid))
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # Orcha#30: a deliberate human action
+        cur.execute(
+            "UPDATE containers SET autonomy_level=%s WHERE id=%s RETURNING autonomy_level",
+            (body.level, cid),
+        )
         row = cur.fetchone()
-        log_event(cur, cid, "human", body.actor_agent_id, "container", cid,
-                  "autonomy_changed", {"level": body.level})
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "autonomy_changed",
+            {"level": body.level},
+        )
         conn.commit()
     return {"container_id": cid, "autonomy_level": row["autonomy_level"]}
 
@@ -6190,7 +7159,6 @@ def set_autonomy_level(cid: str, body: AutonomyUpdate):
 # process structurally CANNOT own/claim/complete a task — it can only DISPATCH one. The server
 # revokes a run's token on EVERY terminal transition it observes (finish / wake-ack orphan /
 # reap-orphan-leases / dead-pid sweep) so a revoked capability can never outlive its process.
-
 
 
 @app.post("/api/agents/{aid}/embodiment-tokens", status_code=201)
@@ -6206,7 +7174,8 @@ def mint_embodiment_token(aid: str, body: EmbodimentTokenMint):
         cur.execute(
             """INSERT INTO embodiment_tokens (run_token, agent_id, lane, kind)
                VALUES (%s, %s, %s, %s)""",
-            (tok, aid, body.lane, body.kind))
+            (tok, aid, body.lane, body.kind),
+        )
         conn.commit()
     return {"run_token": tok, "token_id": tok}
 
@@ -6220,7 +7189,8 @@ def revoke_embodiment_token(token: str):
         cur.execute(
             """UPDATE embodiment_tokens SET revoked_at=now()
                WHERE run_token=%s AND revoked_at IS NULL""",
-            (token,))
+            (token,),
+        )
         revoked = cur.rowcount > 0
         conn.commit()
     return {"revoked": bool(revoked)}
@@ -6235,10 +7205,14 @@ def _require_work_lane(cur, aid, token):
         raise HTTPException(403, "work-lane token required")
     cur.execute(
         "SELECT lane FROM embodiment_tokens WHERE run_token=%s AND agent_id=%s AND revoked_at IS NULL",
-        (token, aid))
+        (token, aid),
+    )
     row = cur.fetchone()
     if row is None or row["lane"] != "work":
-        raise HTTPException(403, "conversation lane cannot claim/work a task; create/assign a task and stop")
+        raise HTTPException(
+            403,
+            "conversation lane cannot claim/work a task; create/assign a task and stop",
+        )
 
 
 def _attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
@@ -6309,31 +7283,36 @@ def _revoke_tokens_for_runs(cur, run_ids):
     if run_ids:
         cur.execute(
             "UPDATE embodiment_tokens SET revoked_at=now() WHERE run_id = ANY(%s) AND revoked_at IS NULL",
-            (list(run_ids),))
+            (list(run_ids),),
+        )
 
 
 # ---------- A2: worker runs (persist + expose headless wake output) ----------
 
 
-
-
-
-
-
-
-
 def _run_row(r: dict) -> dict:
     return {
-        "run_id": str(r["run_id"]), "agent_id": str(r["agent_id"]),
+        "run_id": str(r["run_id"]),
+        "agent_id": str(r["agent_id"]),
         "task_id": str(r["task_id"]) if r["task_id"] else None,
-        "wake_kind": r["wake_kind"], "wake_event": r["wake_event"],
-        "status": r["status"], "exit_code": r["exit_code"], "log_path": r["log_path"],
-        "pid": r.get("pid"), "runtime": r.get("runtime"),
-        "conversation_id": str(r["conversation_id"]) if r.get("conversation_id") else None,
+        "wake_kind": r["wake_kind"],
+        "wake_event": r["wake_event"],
+        "status": r["status"],
+        "exit_code": r["exit_code"],
+        "log_path": r["log_path"],
+        "pid": r.get("pid"),
+        "runtime": r.get("runtime"),
+        "conversation_id": str(r["conversation_id"])
+        if r.get("conversation_id")
+        else None,
         "conversation_ack_ts": r.get("conversation_ack_ts"),
         "last_message_path": r.get("last_message_path"),
-        "worktree": r.get("worktree"), "branch": r.get("branch"), "base_cwd": r.get("base_cwd"),
-        "output": r["output"], "diff": r.get("diff"), "kill_reason": r.get("kill_reason"),
+        "worktree": r.get("worktree"),
+        "branch": r.get("branch"),
+        "base_cwd": r.get("base_cwd"),
+        "output": r["output"],
+        "diff": r.get("diff"),
+        "kill_reason": r.get("kill_reason"),
         "started_at": r["started_at"].isoformat() if r["started_at"] else None,
         "ended_at": r["ended_at"].isoformat() if r["ended_at"] else None,
     }
@@ -6374,9 +7353,11 @@ def _is_non_task_work(wake_kind, wake_event, conversation_id) -> bool:
     the conversation/live label) and (b) pollute /api/tasks/{tid}/runs with non-task work. This
     predicate flags exactly those runs so the lazy-attribution inference is skipped for them. An
     explicit task_id is always honored — this only gates the inference fallback, never an override."""
-    return (wake_event == "conversation_turn"
-            or wake_kind == "live"
-            or conversation_id is not None)
+    return (
+        wake_event == "conversation_turn"
+        or wake_kind == "live"
+        or conversation_id is not None
+    )
 
 
 @app.post("/api/agents/{aid}/runs", status_code=201)
@@ -6395,8 +7376,12 @@ def start_worker_run(aid: str, body: WorkerRunStart):
         task_id = body.task_id
         lazy_attributed = False
         if task_id is not None:
-            _require_task(cur, task_id)   # 404 on a valid-but-unknown task, not a 500 FK violation
-        elif not _is_non_task_work(body.wake_kind, body.wake_event, body.conversation_id):
+            _require_task(
+                cur, task_id
+            )  # 404 on a valid-but-unknown task, not a 500 FK violation
+        elif not _is_non_task_work(
+            body.wake_kind, body.wake_event, body.conversation_id
+        ):
             # GH #83: the wake path gave us no task link — lazily attribute the run to the
             # agent's current in_progress task so accept-task / checkpoint-respawn / any
             # task_id-less wake never leaves the worker run floating unattached. Skipped for
@@ -6404,10 +7389,15 @@ def start_worker_run(aid: str, body: WorkerRunStart):
             task_id = _infer_agent_active_task(cur, aid)
             lazy_attributed = task_id is not None
         if body.conversation_id is not None:
-            cur.execute("SELECT agent_id FROM conversations WHERE id=%s", (body.conversation_id,))
+            cur.execute(
+                "SELECT agent_id FROM conversations WHERE id=%s",
+                (body.conversation_id,),
+            )
             conv = cur.fetchone()
             if not conv:
-                raise HTTPException(404, f"conversation {body.conversation_id} not found")
+                raise HTTPException(
+                    404, f"conversation {body.conversation_id} not found"
+                )
             if str(conv["agent_id"]) != aid:
                 raise HTTPException(403, "conversation_id belongs to a different agent")
         cur.execute(
@@ -6417,9 +7407,22 @@ def start_worker_run(aid: str, body: WorkerRunStart):
                      worktree, branch, base_cwd, lane, status)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running')
                RETURNING *""",
-            (aid, task_id, body.wake_kind, body.wake_event, body.log_path,
-             body.pid, body.runtime, body.conversation_id, body.conversation_ack_ts,
-             body.last_message_path, body.worktree, body.branch, body.base_cwd, body.lane),
+            (
+                aid,
+                task_id,
+                body.wake_kind,
+                body.wake_event,
+                body.log_path,
+                body.pid,
+                body.runtime,
+                body.conversation_id,
+                body.conversation_ack_ts,
+                body.last_message_path,
+                body.worktree,
+                body.branch,
+                body.base_cwd,
+                body.lane,
+            ),
         )
         row = cur.fetchone()
         # GH #91/#90: bind the pre-minted token to this run (+pid) so the server can revoke it on any
@@ -6429,11 +7432,23 @@ def start_worker_run(aid: str, body: WorkerRunStart):
             cur.execute(
                 """UPDATE embodiment_tokens SET run_id=%s, pid=%s
                    WHERE run_token=%s AND revoked_at IS NULL""",
-                (row["run_id"], body.pid, body.token_id))
-        log_event(cur, str(ag["container_id"]), "system", None, "agent", aid,
-                  "worker_run_started",
-                  {"run_id": str(row["run_id"]), "wake_kind": body.wake_kind,
-                   "task_id": task_id, "lazy_attributed": lazy_attributed})
+                (row["run_id"], body.pid, body.token_id),
+            )
+        log_event(
+            cur,
+            str(ag["container_id"]),
+            "system",
+            None,
+            "agent",
+            aid,
+            "worker_run_started",
+            {
+                "run_id": str(row["run_id"]),
+                "wake_kind": body.wake_kind,
+                "task_id": task_id,
+                "lazy_attributed": lazy_attributed,
+            },
+        )
         conn.commit()
     return _run_row(row)
 
@@ -6449,8 +7464,10 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_agent(cur, aid)
-        q = ("SELECT run_id, pid, status, started_at FROM worker_runs "
-             "WHERE agent_id=%s AND wake_kind='resident'")
+        q = (
+            "SELECT run_id, pid, status, started_at FROM worker_runs "
+            "WHERE agent_id=%s AND wake_kind='resident'"
+        )
         params: list = [aid]
         if status is not None:
             q += " AND status=%s"
@@ -6458,10 +7475,18 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
         q += " ORDER BY started_at DESC"
         cur.execute(q, tuple(params))
         rows = cur.fetchall()
-    return {"agent_id": aid,
-            "runs": [{"run_id": str(r["run_id"]), "pid": r["pid"], "status": r["status"],
-                      "started_at": r["started_at"].isoformat() if r["started_at"] else None}
-                     for r in rows]}
+    return {
+        "agent_id": aid,
+        "runs": [
+            {
+                "run_id": str(r["run_id"]),
+                "pid": r["pid"],
+                "status": r["status"],
+                "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+            }
+            for r in rows
+        ],
+    }
 
 
 @app.get("/api/containers/{cid}/running-runs")
@@ -6490,14 +7515,24 @@ def list_container_running_runs(cid: str):
                 WHERE a.container_id = %s AND wr.status = 'running'
                   AND a.terminated_at IS NULL
                 ORDER BY wr.started_at DESC""",
-            (cid,))
+            (cid,),
+        )
         rows = cur.fetchall()
-    return {"container_id": cid,
-            "runs": [{"run_id": str(r["run_id"]), "agent_id": str(r["agent_id"]),
-                      "pid": r["pid"], "wake_kind": r["wake_kind"], "wake_event": r["wake_event"],
-                      "lane": r["lane"],
-                      "started_at": r["started_at"].isoformat() if r["started_at"] else None}
-                     for r in rows]}
+    return {
+        "container_id": cid,
+        "runs": [
+            {
+                "run_id": str(r["run_id"]),
+                "agent_id": str(r["agent_id"]),
+                "pid": r["pid"],
+                "wake_kind": r["wake_kind"],
+                "wake_event": r["wake_event"],
+                "lane": r["lane"],
+                "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+            }
+            for r in rows
+        ],
+    }
 
 
 @app.post("/api/runs/{run_id}/finish", status_code=200)
@@ -6513,11 +7548,15 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
     # is free TEXT with no CHECK constraint (same reason 'orphaned' needs no migration), so widening
     # the accepted set here is sufficient — no DB migration.
     if body.status not in ("exited", "killed", "rate_limited", "failed"):
-        raise HTTPException(422, "status must be 'exited', 'killed', 'rate_limited', or 'failed'")
+        raise HTTPException(
+            422, "status must be 'exited', 'killed', 'rate_limited', or 'failed'"
+        )
     with db_cursor() as (conn, cur):
         cur.execute(
             "SELECT run_id, agent_id, task_id, wake_kind, wake_event, conversation_id "
-            "FROM worker_runs WHERE run_id=%s", (run_id,))
+            "FROM worker_runs WHERE run_id=%s",
+            (run_id,),
+        )
         existing = cur.fetchone()
         if not existing:
             raise HTTPException(404, f"worker run {run_id} not found")
@@ -6526,11 +7565,16 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
         # on reap so the finished run still surfaces under its task. COALESCE so a run that was
         # already attributed (at spawn or a prior finish) is never overwritten. Skip the
         # inference for conversation/live runs — they are meant to stay NULL (see _is_non_task_work).
-        late_task_id = (_infer_agent_active_task(cur, str(existing["agent_id"]))
-                        if existing["task_id"] is None
-                        and not _is_non_task_work(existing["wake_kind"], existing["wake_event"],
-                                                  existing["conversation_id"])
-                        else None)
+        late_task_id = (
+            _infer_agent_active_task(cur, str(existing["agent_id"]))
+            if existing["task_id"] is None
+            and not _is_non_task_work(
+                existing["wake_kind"],
+                existing["wake_event"],
+                existing["conversation_id"],
+            )
+            else None
+        )
         cur.execute(
             """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
                       task_id=COALESCE(task_id, %s),
@@ -6542,18 +7586,31 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
                       total_cost_usd=COALESCE(%s, total_cost_usd),
                       ended_at=now()
                WHERE run_id=%s RETURNING agent_id, status, ended_at""",
-            (body.status, body.exit_code, body.output, late_task_id,
-             body.diff, body.kill_reason,
-             body.input_tokens, body.output_tokens, body.cache_read_input_tokens,
-             body.cache_creation_input_tokens, body.total_cost_usd, run_id),
+            (
+                body.status,
+                body.exit_code,
+                body.output,
+                late_task_id,
+                body.diff,
+                body.kill_reason,
+                body.input_tokens,
+                body.output_tokens,
+                body.cache_read_input_tokens,
+                body.cache_creation_input_tokens,
+                body.total_cost_usd,
+                run_id,
+            ),
         )
         row = cur.fetchone()
         # GH #91/#90: a run just went terminal (exited/killed) — revoke its bound token so the
         # capability can never outlive the process.
         _revoke_tokens_for_runs(cur, [run_id])
         conn.commit()
-    return {"run_id": run_id, "status": row["status"],
-            "ended_at": row["ended_at"].isoformat() if row["ended_at"] else None}
+    return {
+        "run_id": run_id,
+        "status": row["status"],
+        "ended_at": row["ended_at"].isoformat() if row["ended_at"] else None,
+    }
 
 
 @app.post("/api/runs/{run_id}/stop", status_code=200)
@@ -6569,19 +7626,32 @@ def stop_worker_run(run_id: str, body: WorkerRunStop):
     if not _valid_uuid(run_id):
         raise HTTPException(400, "run_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))   # only a human may stop a run
-        cur.execute("SELECT run_id, agent_id, status, stop_requested_at FROM worker_runs "
-                    "WHERE run_id=%s", (run_id,))
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # only a human may stop a run
+        cur.execute(
+            "SELECT run_id, agent_id, status, stop_requested_at FROM worker_runs "
+            "WHERE run_id=%s",
+            (run_id,),
+        )
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"worker run {run_id} not found")
         if row["status"] != "running":
             # Nothing live to signal; report the terminal state without erroring (idempotent).
-            return {"run_id": run_id, "stop_requested": False, "status": row["status"],
-                    "already_finished": True}
+            return {
+                "run_id": run_id,
+                "stop_requested": False,
+                "status": row["status"],
+                "already_finished": True,
+            }
         if row["stop_requested_at"] is not None:
-            return {"run_id": run_id, "stop_requested": True, "status": "running",
-                    "already_requested": True}
+            return {
+                "run_id": run_id,
+                "stop_requested": True,
+                "status": "running",
+                "already_requested": True,
+            }
         cur.execute(
             "UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s "
             "WHERE run_id=%s AND status='running' RETURNING agent_id",
@@ -6591,9 +7661,16 @@ def stop_worker_run(run_id: str, body: WorkerRunStop):
         cur.execute("SELECT container_id FROM agents WHERE id=%s", (row["agent_id"],))
         crow = cur.fetchone()
         if crow:
-            log_event(cur, str(crow["container_id"]), "human", body.actor_agent_id,
-                      "agent", str(row["agent_id"]), "worker_run_stop_requested",
-                      {"run_id": run_id})
+            log_event(
+                cur,
+                str(crow["container_id"]),
+                "human",
+                body.actor_agent_id,
+                "agent",
+                str(row["agent_id"]),
+                "worker_run_stop_requested",
+                {"run_id": run_id},
+            )
         conn.commit()
     return {"run_id": run_id, "stop_requested": bool(urow), "status": "running"}
 
@@ -6619,8 +7696,11 @@ def append_worker_run_lines(run_id: str, body: WorkerRunLines):
                 rows,
             )
         conn.commit()
-    return {"run_id": run_id, "accepted": len(rows),
-            "max_seq": (body.start_seq + len(rows) - 1) if rows else None}
+    return {
+        "run_id": run_id,
+        "accepted": len(rows),
+        "max_seq": (body.start_seq + len(rows) - 1) if rows else None,
+    }
 
 
 def _fetch_run_lines(run_id, after_seq, limit=500):
@@ -6634,8 +7714,11 @@ def _fetch_run_lines(run_id, after_seq, limit=500):
 
 
 @app.get("/api/agents/{aid}/runs")
-def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
-                    task_id: Optional[str] = Query(default=None)):
+def list_agent_runs(
+    aid: str,
+    limit: int = Query(default=20, ge=1, le=200),
+    task_id: Optional[str] = Query(default=None),
+):
     """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter.
 
     GH #144: the ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every task a run
@@ -6648,13 +7731,19 @@ def list_agent_runs(aid: str, limit: int = Query(default=20, ge=1, le=200),
         if task_id is not None:
             if not _valid_uuid(task_id):
                 raise HTTPException(400, "task_id is not a valid UUID")
-            cur.execute("""SELECT wr.* FROM worker_runs wr
+            cur.execute(
+                """SELECT wr.* FROM worker_runs wr
                            JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
                            WHERE wr.agent_id=%s AND wrt.task_id=%s
-                           ORDER BY wr.started_at DESC LIMIT %s""", (aid, task_id, limit))
+                           ORDER BY wr.started_at DESC LIMIT %s""",
+                (aid, task_id, limit),
+            )
         else:
-            cur.execute("""SELECT * FROM worker_runs WHERE agent_id=%s
-                           ORDER BY started_at DESC LIMIT %s""", (aid, limit))
+            cur.execute(
+                """SELECT * FROM worker_runs WHERE agent_id=%s
+                           ORDER BY started_at DESC LIMIT %s""",
+                (aid, limit),
+            )
         runs = [_run_row(r) for r in cur.fetchall()]
     return {"agent_id": aid, "runs": runs}
 
@@ -6670,10 +7759,13 @@ def list_task_runs(tid: str, limit: int = Query(default=20, ge=1, le=200)):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_task(cur, tid)
-        cur.execute("""SELECT wr.* FROM worker_runs wr
+        cur.execute(
+            """SELECT wr.* FROM worker_runs wr
                        JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
                        WHERE wrt.task_id=%s
-                       ORDER BY wr.started_at DESC LIMIT %s""", (tid, limit))
+                       ORDER BY wr.started_at DESC LIMIT %s""",
+            (tid, limit),
+        )
         runs = [_run_row(r) for r in cur.fetchall()]
     return {"task_id": tid, "runs": runs}
 
@@ -6706,15 +7798,19 @@ async def stream_worker_run(aid: str, run_id: str):
         raise HTTPException(400, "agent_id / run_id must be valid UUIDs")
     with db_cursor() as (_, cur):
         _require_agent(cur, aid)
-        cur.execute("SELECT status FROM worker_runs WHERE run_id=%s AND agent_id=%s",
-                    (run_id, aid))
+        cur.execute(
+            "SELECT status FROM worker_runs WHERE run_id=%s AND agent_id=%s",
+            (run_id, aid),
+        )
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, f"worker run {run_id} not found for this agent")
 
     async def gen():
         last_seq = 0
-        deadline = time.time() + 1800.0   # 30-min safety cap so the stream can't hang forever
+        deadline = (
+            time.time() + 1800.0
+        )  # 30-min safety cap so the stream can't hang forever
         yield ": stream open\n\n"
         while True:
             rows = await asyncio.to_thread(_fetch_run_lines, run_id, last_seq)
@@ -6722,7 +7818,7 @@ async def stream_worker_run(aid: str, run_id: str):
                 last_seq = r["seq"]
                 yield f"data: {json.dumps({'seq': r['seq'], 'line': r['line']})}\n\n"
             if rows:
-                continue              # drained a batch; immediately look for more
+                continue  # drained a batch; immediately look for more
             status = await asyncio.to_thread(_worker_run_status, run_id)
             if status is None or status != "running":
                 # The daemon flushes a run's FINAL lines before marking it done, so drain once
@@ -6743,13 +7839,16 @@ async def stream_worker_run(aid: str, run_id: str):
 
 # ---------- tasks ----------
 
+
 @app.post("/api/containers/{cid}/tasks", status_code=201)
 def create_task(cid: str, body: TaskCreateBody):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_container_active(cur, cid, body.created_by_agent_id)   # GH #24 (was _require_container)
-        _reject_if_retired(cur, body.created_by_agent_id)   # ISS-51 [P1]
+        _require_container_active(
+            cur, cid, body.created_by_agent_id
+        )  # GH #24 (was _require_container)
+        _reject_if_retired(cur, body.created_by_agent_id)  # ISS-51 [P1]
 
         for dep in body.depends_on:
             if not _valid_uuid(dep):
@@ -6759,8 +7858,10 @@ def create_task(cid: str, body: TaskCreateBody):
         if body.assignee_alias:
             assignee_id = _resolve_alias(cur, cid, body.assignee_alias)
 
-        initial_status = "pending" if body.depends_on else (
-            "in_progress" if assignee_id else "ready"
+        initial_status = (
+            "pending"
+            if body.depends_on
+            else ("in_progress" if assignee_id else "ready")
         )
         # #326 (B3): a HELD task is created 'not_ready' regardless of deps — it leaves the
         # ready-queue and is not self-claimable until a human releases it (POST .../readiness).
@@ -6784,8 +7885,16 @@ def create_task(cid: str, body: TaskCreateBody):
                    status, priority, created_by_agent_id, protocol, started_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, {started_clause})
                 RETURNING id""",
-            (cid, body.title, body.description, body.definition_of_done,
-             initial_status, body.priority, body.created_by_agent_id, protocol_json),
+            (
+                cid,
+                body.title,
+                body.description,
+                body.definition_of_done,
+                initial_status,
+                body.priority,
+                body.created_by_agent_id,
+                protocol_json,
+            ),
         )
         tid = str(cur.fetchone()["id"])
 
@@ -6808,17 +7917,38 @@ def create_task(cid: str, body: TaskCreateBody):
             # them to 'working' off the agent_tasks row. Mirrors the /assign path (main.py ~3302),
             # which already omits the bump for exactly this reason.
             recompute_agent_status(cur, assignee_id)
-            _publish_event(cur, cid, assignee_id, "task_assigned",
-                           {"task_id": tid, "title": body.title, "via": "direct assignment"})
+            _publish_event(
+                cur,
+                cid,
+                assignee_id,
+                "task_assigned",
+                {"task_id": tid, "title": body.title, "via": "direct assignment"},
+            )
 
         actor_type = "ai" if body.created_by_agent_id else "human"
-        log_event(cur, cid, actor_type, body.created_by_agent_id, "task", tid, "created",
-                  {"title": body.title, "status": initial_status,
-                   "assignee_alias": body.assignee_alias, "depends_on": body.depends_on})
+        log_event(
+            cur,
+            cid,
+            actor_type,
+            body.created_by_agent_id,
+            "task",
+            tid,
+            "created",
+            {
+                "title": body.title,
+                "status": initial_status,
+                "assignee_alias": body.assignee_alias,
+                "depends_on": body.depends_on,
+            },
+        )
         conn.commit()
 
-    return {"task_id": tid, "status": initial_status,
-            "assignee_alias": body.assignee_alias, "depends_on": body.depends_on}
+    return {
+        "task_id": tid,
+        "status": initial_status,
+        "assignee_alias": body.assignee_alias,
+        "depends_on": body.depends_on,
+    }
 
 
 @app.post("/api/tasks/{tid}/messages", status_code=201)
@@ -6829,8 +7959,10 @@ def post_message(tid: str, body: TaskMessage):
         raise HTTPException(400, "author_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
-        _reject_if_retired(cur, body.author_agent_id)   # ISS-51 [P1]
-        _require_container_active(cur, str(t["container_id"]), body.author_agent_id)   # GH #24 (human None-author posts still allowed)
+        _reject_if_retired(cur, body.author_agent_id)  # ISS-51 [P1]
+        _require_container_active(
+            cur, str(t["container_id"]), body.author_agent_id
+        )  # GH #24 (human None-author posts still allowed)
         # ISS-43: an attributed author must be a (non-retired) member of the task's CONTAINER,
         # but need NOT be an assignee. The original guard (assignee-only) was too strict for the
         # fleet's collaboration model — reviewers and coordinators routinely post on a dev's task
@@ -6847,7 +7979,10 @@ def post_message(tid: str, body: TaskMessage):
             )
             arow = cur.fetchone()
             if not arow:
-                raise HTTPException(403, "author agent isn't a member of this task's container — cannot post")
+                raise HTTPException(
+                    403,
+                    "author agent isn't a member of this task's container — cannot post",
+                )
             author_kind = arow["kind"]
         # #301: re-validate any staged attachment refs against disk (re-deriving size/type) so
         # the JSONB only ever holds real, this-task files — never client-fabricated paths.
@@ -6871,8 +8006,16 @@ def post_message(tid: str, body: TaskMessage):
         # supplies a known human's UUID still clears human gates — that needs capability tokens,
         # out of scope for this cooperative-hardening pass.
         actor_type = author_kind if author_kind else "system"
-        log_event(cur, t["container_id"], actor_type, body.author_agent_id,
-                  "task", tid, "message", {"message_id": mid, "preview": body.body[:120]})
+        log_event(
+            cur,
+            t["container_id"],
+            actor_type,
+            body.author_agent_id,
+            "task",
+            tid,
+            "message",
+            {"message_id": mid, "preview": body.body[:120]},
+        )
         # R2.2: a task-thread message is a wake trigger for the task's OTHER assignees.
         # Previously this emitted no agent_events, so a teammate's note silently stranded
         # until they happened to look. Publish a targeted `task_message` event to every
@@ -6881,18 +8024,30 @@ def post_message(tid: str, body: TaskMessage):
         for row in cur.fetchall():
             target = str(row["agent_id"])
             if target == body.author_agent_id:
-                continue   # don't wake yourself for your own message
-            _publish_event(cur, str(t["container_id"]), target, "task_message",
-                           {"task_id": tid, "message_id": mid,
-                            "from_agent_id": body.author_agent_id,
-                            "preview": body.body[:120]})
+                continue  # don't wake yourself for your own message
+            _publish_event(
+                cur,
+                str(t["container_id"]),
+                target,
+                "task_message",
+                {
+                    "task_id": tid,
+                    "message_id": mid,
+                    "from_agent_id": body.author_agent_id,
+                    "preview": body.body[:120],
+                },
+            )
         conn.commit()
     return {"message_id": mid, "task_id": tid}
 
 
 @app.get("/api/tasks/{tid}/messages")
-def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
-                      before_id: Optional[str] = None):
+def get_task_messages(
+    tid: str,
+    limit: int = 0,
+    before: Optional[str] = None,
+    before_id: Optional[str] = None,
+):
     """Orcha#32: read the task collaboration thread. Symmetric with the POST above.
 
     The thread was write-only — task_messages had no read path, so agents posted
@@ -6927,20 +8082,28 @@ def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
         raise HTTPException(400, "task_id is not a valid UUID")
     if before_id is not None and not _valid_uuid(before_id):
         raise HTTPException(400, "before_id is not a valid UUID")
-    cols = ("m.id AS message_id, m.author_id, ma.alias AS author_alias, "
-            "(m.author_id IS NOT NULL AND ma.kind = 'human') AS is_human, m.body, "
-            # #301: COALESCE so pre-migration rows surface [] (their column existed only
-            # after mig 025; the DEFAULT covers new rows but be explicit for the read path).
-            "COALESCE(m.attachments, '[]'::jsonb) AS attachments, m.created_at")
+    cols = (
+        "m.id AS message_id, m.author_id, ma.alias AS author_alias, "
+        "(m.author_id IS NOT NULL AND ma.kind = 'human') AS is_human, m.body, "
+        # #301: COALESCE so pre-migration rows surface [] (their column existed only
+        # after mig 025; the DEFAULT covers new rows but be explicit for the read path).
+        "COALESCE(m.attachments, '[]'::jsonb) AS attachments, m.created_at"
+    )
     with db_cursor() as (_, cur):
         _require_task(cur, tid)
         # GH #33: surface the FULL task body in a `task` header so a worker woken by a task-thread
         # message — told to "read the thread" — reads description + definition_of_done before acting,
         # not just the message preview and the title.
-        cur.execute("SELECT title, description, definition_of_done FROM tasks WHERE id=%s", (tid,))
+        cur.execute(
+            "SELECT title, description, definition_of_done FROM tasks WHERE id=%s",
+            (tid,),
+        )
         _t = cur.fetchone()
-        task_hdr = {"title": _t["title"], "description": _t["description"],
-                    "definition_of_done": _t["definition_of_done"]}
+        task_hdr = {
+            "title": _t["title"],
+            "description": _t["description"],
+            "definition_of_done": _t["definition_of_done"],
+        }
         if limit and limit > 0:
             lim = min(limit, 200)
             params: list[Any] = [tid]
@@ -6960,15 +8123,27 @@ def get_task_messages(tid: str, limit: int = 0, before: Optional[str] = None,
                    ORDER BY m.created_at DESC, m.id DESC LIMIT %s""",
                 (*params, lim + 1),
             )
-            rows = cur.fetchall()          # DESC (newest→oldest)
+            rows = cur.fetchall()  # DESC (newest→oldest)
             has_more = len(rows) > lim
             rows = rows[:lim]
-            oldest = rows[-1] if rows else None   # last in DESC = oldest in this page → next cursor
-            next_before = oldest["created_at"].isoformat() if (oldest and has_more) else None
-            next_before_id = str(oldest["message_id"]) if (oldest and has_more) else None
-            rows.reverse()   # ASC within the page (oldest→newest)
-            return {"task_id": tid, "task": task_hdr, "messages": rows, "has_more": has_more,
-                    "next_before": next_before, "next_before_id": next_before_id}
+            oldest = (
+                rows[-1] if rows else None
+            )  # last in DESC = oldest in this page → next cursor
+            next_before = (
+                oldest["created_at"].isoformat() if (oldest and has_more) else None
+            )
+            next_before_id = (
+                str(oldest["message_id"]) if (oldest and has_more) else None
+            )
+            rows.reverse()  # ASC within the page (oldest→newest)
+            return {
+                "task_id": tid,
+                "task": task_hdr,
+                "messages": rows,
+                "has_more": has_more,
+                "next_before": next_before,
+                "next_before_id": next_before_id,
+            }
         cur.execute(
             f"""SELECT {cols}
                FROM task_messages m LEFT JOIN agents ma ON ma.id = m.author_id
@@ -7002,7 +8177,9 @@ async def upload_attachment(tid: str, file: UploadFile = File(...)):
     display = _sanitize_attachment_name(file.filename or "file")
     if _attachment_ext(display) is None:
         raise HTTPException(
-            400, "unsupported file type — allowed: " + ", ".join(sorted(_ATTACHMENT_TYPES)))
+            400,
+            "unsupported file type — allowed: " + ", ".join(sorted(_ATTACHMENT_TYPES)),
+        )
     stored = uuid.uuid4().hex + "_" + display
     tdir = _task_attachments_dir(tid)
     try:
@@ -7024,7 +8201,9 @@ async def upload_attachment(tid: str, file: UploadFile = File(...)):
                     out.close()
                     dest.unlink(missing_ok=True)
                     raise HTTPException(
-                        413, f"file too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB)")
+                        413,
+                        f"file too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB)",
+                    )
                 out.write(chunk)
     except HTTPException:
         raise
@@ -7038,7 +8217,8 @@ async def upload_attachment(tid: str, file: UploadFile = File(...)):
     # sync vision/OCR call (describe_image, up to 45s); keep it off the single event loop
     # so notifier polls, SSE streams, and concurrent agent calls aren't stalled.
     return await asyncio.to_thread(
-        _attachment_ref, tid, stored, display, size, dest, api_key=llm_key)
+        _attachment_ref, tid, stored, display, size, dest, api_key=llm_key
+    )
 
 
 @app.get("/api/tasks/{tid}/attachments/{stored_name}")
@@ -7061,8 +8241,13 @@ def serve_attachment(tid: str, stored_name: str):
     display = stored_name.split("_", 1)[1] if "_" in stored_name else stored_name
     disposition = ("inline" if inline else "attachment") + f'; filename="{display}"'
     return FileResponse(
-        p, media_type=media,
-        headers={"Content-Disposition": disposition, "X-Content-Type-Options": "nosniff"})
+        p,
+        media_type=media,
+        headers={
+            "Content-Disposition": disposition,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.post("/api/conversations/{conv_id}/attachments", status_code=201)
@@ -7087,7 +8272,9 @@ async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(.
     display = _sanitize_attachment_name(file.filename or "file")
     if _attachment_ext(display) is None:
         raise HTTPException(
-            400, "unsupported file type — allowed: " + ", ".join(sorted(_ATTACHMENT_TYPES)))
+            400,
+            "unsupported file type — allowed: " + ", ".join(sorted(_ATTACHMENT_TYPES)),
+        )
     stored = uuid.uuid4().hex + "_" + display
     cdir = _conversation_attachments_dir(conv_id)
     try:
@@ -7109,7 +8296,9 @@ async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(.
                     out.close()
                     dest.unlink(missing_ok=True)
                     raise HTTPException(
-                        413, f"file too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB)")
+                        413,
+                        f"file too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB)",
+                    )
                 out.write(chunk)
     except HTTPException:
         raise
@@ -7122,7 +8311,8 @@ async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(.
     # Off-thread for the same reason as the task-upload route: a first-upload cache miss
     # can trigger a blocking sync vision/OCR call inside the ref builder.
     return await asyncio.to_thread(
-        _conv_attachment_ref, conv_id, stored, display, size, dest, api_key=llm_key)
+        _conv_attachment_ref, conv_id, stored, display, size, dest, api_key=llm_key
+    )
 
 
 @app.get("/api/conversations/{conv_id}/attachments/{stored_name}")
@@ -7141,8 +8331,13 @@ def serve_conversation_attachment(conv_id: str, stored_name: str):
     display = stored_name.split("_", 1)[1] if "_" in stored_name else stored_name
     disposition = ("inline" if inline else "attachment") + f'; filename="{display}"'
     return FileResponse(
-        p, media_type=media,
-        headers={"Content-Disposition": disposition, "X-Content-Type-Options": "nosniff"})
+        p,
+        media_type=media,
+        headers={
+            "Content-Disposition": disposition,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _backstop_stranded_request(cur, container_id, tid):
@@ -7160,30 +8355,58 @@ def _backstop_stranded_request(cur, container_id, tid):
     Returns the list of request ids it auto-answered (usually empty)."""
     cur.execute(
         """SELECT id, requester_id, originating_task_id, type FROM requests
-           WHERE spawned_task_id=%s AND status='accepted' FOR UPDATE""", (tid,))
+           WHERE spawned_task_id=%s AND status='accepted' FOR UPDATE""",
+        (tid,),
+    )
     stranded = cur.fetchall()
     fired = []
     for req in stranded:
         rid = str(req["id"])
-        note = (f"[auto-answered by the #56 backstop] the accepter's task {tid} reached a terminal "
-                f"state without an explicit report-back. See that task for the result/output.")
+        note = (
+            f"[auto-answered by the #56 backstop] the accepter's task {tid} reached a terminal "
+            f"state without an explicit report-back. See that task for the result/output."
+        )
         cur.execute(
             "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
-            (note, rid))
-        _publish_event(cur, str(container_id), str(req["requester_id"]), "request_answered",
-                       {"request_id": rid, "preview": note[:120],
-                        "originating_task_id": (str(req["originating_task_id"])
-                                                if req["originating_task_id"] else None),
-                        "backstop": True})
-        log_event(cur, container_id, "system", None, "request", rid, "auto_answered",
-                  {"reason": "backstop: accepter task reached terminal state while request "
-                             "still 'accepted' (no report-back)", "task_id": str(tid)})
+            (note, rid),
+        )
+        _publish_event(
+            cur,
+            str(container_id),
+            str(req["requester_id"]),
+            "request_answered",
+            {
+                "request_id": rid,
+                "preview": note[:120],
+                "originating_task_id": (
+                    str(req["originating_task_id"])
+                    if req["originating_task_id"]
+                    else None
+                ),
+                "backstop": True,
+            },
+        )
+        log_event(
+            cur,
+            container_id,
+            "system",
+            None,
+            "request",
+            rid,
+            "auto_answered",
+            {
+                "reason": "backstop: accepter task reached terminal state while request "
+                "still 'accepted' (no report-back)",
+                "task_id": str(tid),
+            },
+        )
         fired.append(rid)
     return fired
 
 
-def _recalibrate_agent_digest_on_close(cur, container_id, agent_id, task_id, task_title,
-                                       *, verification_pending):
+def _recalibrate_agent_digest_on_close(
+    cur, container_id, agent_id, task_id, task_title, *, verification_pending
+):
     """GH #35: when a task closes, prune the owning agent's LATEST memory digest so the next wake
     doesn't rehydrate the finished task's stale open threads / task-scoped decisions. Durable
     learnings are preserved; current focus is reset only when it pointed at the closed task; a
@@ -7198,7 +8421,9 @@ def _recalibrate_agent_digest_on_close(cur, container_id, agent_id, task_id, tas
     cur.execute(
         """SELECT current_focus, decisions, learnings, open_threads, audience
              FROM agent_memory_digests
-            WHERE agent_id=%s ORDER BY snapshot_ts DESC LIMIT 1""", (agent_id,))
+            WHERE agent_id=%s ORDER BY snapshot_ts DESC LIMIT 1""",
+        (agent_id,),
+    )
     row = cur.fetchone()
     if not row:
         return
@@ -7209,11 +8434,14 @@ def _recalibrate_agent_digest_on_close(cur, container_id, agent_id, task_id, tas
         "open_threads": row["open_threads"] or [],
     }
     recal = _digest_curate.recalibrate_digest(
-        inner, str(task_id), task_title or "", verification_pending=verification_pending)
+        inner, str(task_id), task_title or "", verification_pending=verification_pending
+    )
     # No-op guard: only persist a new snapshot if the recalibration actually changed something.
-    if (recal.get("open_threads") == inner["open_threads"]
-            and recal.get("decisions") == inner["decisions"]
-            and recal.get("current_focus") == inner["current_focus"]):
+    if (
+        recal.get("open_threads") == inner["open_threads"]
+        and recal.get("decisions") == inner["decisions"]
+        and recal.get("current_focus") == inner["current_focus"]
+    ):
         return
     ts = time.time()
     cur.execute(
@@ -7222,29 +8450,63 @@ def _recalibrate_agent_digest_on_close(cur, container_id, agent_id, task_id, tas
               decisions, learnings, open_threads, audience)
            VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
            RETURNING id""",
-        (str(container_id), agent_id, ts, recal.get("current_focus"),
-         json.dumps(recal.get("decisions") or []),
-         json.dumps(recal.get("learnings") or []),
-         json.dumps(recal.get("open_threads") or []),
-         row["audience"]))
+        (
+            str(container_id),
+            agent_id,
+            ts,
+            recal.get("current_focus"),
+            json.dumps(recal.get("decisions") or []),
+            json.dumps(recal.get("learnings") or []),
+            json.dumps(recal.get("open_threads") or []),
+            row["audience"],
+        ),
+    )
     did = cur.fetchone()["id"]
-    log_event(cur, container_id, "system", None, "agent", agent_id, "digest_snapshotted",
-              {"digest_id": did, "recalibrated": True, "task_id": str(task_id),
-               "reason": "task_closed"})
+    log_event(
+        cur,
+        container_id,
+        "system",
+        None,
+        "agent",
+        agent_id,
+        "digest_snapshotted",
+        {
+            "digest_id": did,
+            "recalibrated": True,
+            "task_id": str(task_id),
+            "reason": "task_closed",
+        },
+    )
     # ISS-58: container-scoped only (non-waking) — a snapshot is a dashboard notification, not work.
-    _publish_event(cur, str(container_id), None, "digest_snapshotted",
-                   {"digest_id": did, "snapshot_ts": ts, "agent_id": agent_id,
-                    "recalibrated": True})
+    _publish_event(
+        cur,
+        str(container_id),
+        None,
+        "digest_snapshotted",
+        {
+            "digest_id": did,
+            "snapshot_ts": ts,
+            "agent_id": agent_id,
+            "recalibrated": True,
+        },
+    )
 
 
-def _recalibrate_task_owners(cur, container_id, tid, task_title, *, verification_pending):
+def _recalibrate_task_owners(
+    cur, container_id, tid, task_title, *, verification_pending
+):
     """GH #35: recalibrate EVERY owning assignee's digest for a task that just closed. Owners come
     from agent_tasks (done/working rows both count — the assignment row survives completion)."""
     cur.execute("SELECT DISTINCT agent_id FROM agent_tasks WHERE task_id=%s", (tid,))
     for r in cur.fetchall():
         _recalibrate_agent_digest_on_close(
-            cur, container_id, str(r["agent_id"]), tid, task_title,
-            verification_pending=verification_pending)
+            cur,
+            container_id,
+            str(r["agent_id"]),
+            tid,
+            task_title,
+            verification_pending=verification_pending,
+        )
 
 
 def _complete_and_unblock(cur, container_id, tid):
@@ -7262,13 +8524,16 @@ def _complete_and_unblock(cur, container_id, tid):
     # approve branch). Usually a no-op (the request was already answered by the report-back).
     _backstop_stranded_request(cur, container_id, tid)
     cur.execute(
-        "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,))
+        "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,)
+    )
     cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
     # unblock downstream tasks whose deps are now all completed
     cur.execute(
         """SELECT DISTINCT td.task_id
            FROM task_dependencies td
-           WHERE td.depends_on_id = %s""", (tid,))
+           WHERE td.depends_on_id = %s""",
+        (tid,),
+    )
     downstream = [str(r["task_id"]) for r in cur.fetchall()]
     unblocked = []
     for dst in downstream:
@@ -7277,25 +8542,42 @@ def _complete_and_unblock(cur, container_id, tid):
                FROM task_dependencies td
                JOIN tasks dep ON dep.id = td.depends_on_id
                WHERE td.task_id=%s AND dep.status <> 'completed'
-               LIMIT 1""", (dst,))
+               LIMIT 1""",
+            (dst,),
+        )
         if not cur.fetchone():
             cur.execute(
-                "UPDATE tasks SET status='ready' WHERE id=%s AND status='pending'", (dst,))
+                "UPDATE tasks SET status='ready' WHERE id=%s AND status='pending'",
+                (dst,),
+            )
             if cur.rowcount:
                 unblocked.append(dst)
-                log_event(cur, container_id, "system", None,
-                          "task", dst, "status_changed",
-                          {"to": "ready", "reason": "deps satisfied"})
+                log_event(
+                    cur,
+                    container_id,
+                    "system",
+                    None,
+                    "task",
+                    dst,
+                    "status_changed",
+                    {"to": "ready", "reason": "deps satisfied"},
+                )
     for dst in unblocked:
         # Container-wide task_ready (dashboards / unassigned-pool pickup).
         _publish_event(cur, str(container_id), None, "task_ready", {"task_id": dst})
         # Epic A: a newly-ready ASSIGNED task ALSO gets a task_ready targeted at its assignee
         # so the daemon can wake its owner to auto-start it.
         cur.execute(
-            "SELECT DISTINCT agent_id FROM agent_tasks WHERE task_id=%s", (dst,))
+            "SELECT DISTINCT agent_id FROM agent_tasks WHERE task_id=%s", (dst,)
+        )
         for ar in cur.fetchall():
-            _publish_event(cur, str(container_id), str(ar["agent_id"]),
-                           "task_ready", {"task_id": dst, "assigned": True})
+            _publish_event(
+                cur,
+                str(container_id),
+                str(ar["agent_id"]),
+                "task_ready",
+                {"task_id": dst, "assigned": True},
+            )
 
     # Did this complete the root? If so, complete the container.
     cur.execute("SELECT is_root, container_id, title FROM tasks WHERE id=%s", (tid,))
@@ -7303,21 +8585,35 @@ def _complete_and_unblock(cur, container_id, tid):
     if tr["is_root"]:
         cur.execute(
             "UPDATE containers SET status='completed', completed_at=now() "
-            "WHERE id=%s AND status<>'completed'", (tr["container_id"],))
+            "WHERE id=%s AND status<>'completed'",
+            (tr["container_id"],),
+        )
         if cur.rowcount:
-            log_event(cur, tr["container_id"], "system", None,
-                      "container", tr["container_id"], "status_changed",
-                      {"to": "completed", "reason": "root task verified"})
+            log_event(
+                cur,
+                tr["container_id"],
+                "system",
+                None,
+                "container",
+                tr["container_id"],
+                "status_changed",
+                {"to": "completed", "reason": "root task verified"},
+            )
     # GH #35: this is the SHARED terminal-completion path (full-autonomy /done + human /verify
     # approve). Recalibrate each owner's digest so the next wake doesn't rehydrate this finished
     # task's stale open threads / decisions. Completion is terminal — verification is NOT pending.
-    _recalibrate_task_owners(cur, container_id, tid, tr["title"], verification_pending=False)
+    _recalibrate_task_owners(
+        cur, container_id, tid, tr["title"], verification_pending=False
+    )
     return unblocked
 
 
 @app.post("/api/tasks/{tid}/done", status_code=200)
-def mark_done(tid: str, body: TaskDone,
-              x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+def mark_done(
+    tid: str,
+    body: TaskDone,
+    x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
+):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     if not _valid_uuid(body.agent_id):
@@ -7327,20 +8623,23 @@ def mark_done(tid: str, body: TaskDone,
         # GH #91/#90: completing a task is WORK-lane only — gate on the ACTING agent (body.agent_id).
         # A conversation-lane embodiment cannot mark a task done (403).
         _require_work_lane(cur, body.agent_id, x_orcha_run_token)
-        _reject_if_retired(cur, body.agent_id)   # ISS-51 [P1]
-        _require_container_active(cur, str(t["container_id"]), body.agent_id)   # GH #24
+        _reject_if_retired(cur, body.agent_id)  # ISS-51 [P1]
+        _require_container_active(cur, str(t["container_id"]), body.agent_id)  # GH #24
         # Issue #11: root task is a sentinel for container completion — only
         # the human verifies it via /orcha-verify <root_tid>. An agent should
         # never be able to mark it done, even if assignment somehow happened.
         if t["is_root"]:
             raise HTTPException(
-                409, "this is the container's root task — agents cannot mark it done. "
-                "Only /orcha-verify by the human flips it to completed (and the container along with it)."
+                409,
+                "this is the container's root task — agents cannot mark it done. "
+                "Only /orcha-verify by the human flips it to completed (and the container along with it).",
             )
         # Item 4 (review): blocked tasks shouldn't flip done — blocked means
         # deps not satisfied, so completion would skip the dependency gate.
         if t["status"] != "in_progress":
-            raise HTTPException(409, f"task is '{t['status']}', not 'in_progress' — can't mark done")
+            raise HTTPException(
+                409, f"task is '{t['status']}', not 'in_progress' — can't mark done"
+            )
         # Item 3 (review): only an assignee can mark a task done. Without this
         # check anyone with the task UUID could flip the state.
         cur.execute(
@@ -7348,7 +8647,9 @@ def mark_done(tid: str, body: TaskDone,
             (body.agent_id, tid),
         )
         if not cur.fetchone():
-            raise HTTPException(403, "this agent isn't assigned to that task — cannot mark it done")
+            raise HTTPException(
+                403, "this agent isn't assigned to that task — cannot mark it done"
+            )
         # #298: the ONE engine-enforced autonomy gate. The container's autonomy_level decides the
         # terminal state of a /done:
         #   plan | pr -> needs_verification (a human verifies — today's behavior, the safe default)
@@ -7358,7 +8659,9 @@ def mark_done(tid: str, body: TaskDone,
         #               (downstream unblock + wakes + root→container). The free-text per-task
         #               protocol.autonomy is DELIBERATELY ignored here — an unvalidated string
         #               must never widen the hard gate; only this enum column can auto-complete.
-        cur.execute("SELECT autonomy_level FROM containers WHERE id=%s", (t["container_id"],))
+        cur.execute(
+            "SELECT autonomy_level FROM containers WHERE id=%s", (t["container_id"],)
+        )
         level = cur.fetchone()["autonomy_level"]
         result_json = json.dumps({"result": body.result, "by_agent_id": body.agent_id})
         cur.execute(
@@ -7371,17 +8674,34 @@ def mark_done(tid: str, body: TaskDone,
         _ack_events_handled(cur, body.agent_id, "task_assigned", "task_id", tid)
         _ack_events_handled(cur, body.agent_id, "task_verified", "task_id", tid)
         if level == "full":
-            cur.execute("UPDATE tasks SET result=%s::jsonb WHERE id=%s", (result_json, tid))
+            cur.execute(
+                "UPDATE tasks SET result=%s::jsonb WHERE id=%s", (result_json, tid)
+            )
             unblocked = _complete_and_unblock(cur, t["container_id"], tid)
             bump_agent(cur, body.agent_id)
             recompute_agent_status(cur, body.agent_id)
-            log_event(cur, t["container_id"], "ai", body.agent_id, "task", tid,
-                      "status_changed",
-                      {"to": "completed", "autonomy_level": "full",
-                       "auto_completed": True, "unblocked": unblocked})
+            log_event(
+                cur,
+                t["container_id"],
+                "ai",
+                body.agent_id,
+                "task",
+                tid,
+                "status_changed",
+                {
+                    "to": "completed",
+                    "autonomy_level": "full",
+                    "auto_completed": True,
+                    "unblocked": unblocked,
+                },
+            )
             conn.commit()
-            return {"task_id": tid, "status": "completed",
-                    "auto_completed": True, "unblocked": unblocked}
+            return {
+                "task_id": tid,
+                "status": "completed",
+                "auto_completed": True,
+                "unblocked": unblocked,
+            }
         cur.execute(
             "UPDATE tasks SET status='needs_verification', result=%s::jsonb WHERE id=%s",
             (result_json, tid),
@@ -7397,10 +8717,24 @@ def mark_done(tid: str, body: TaskDone,
         # GH #35: the active work is done (parked at needs_verification), so recalibrate the
         # owner's digest now — prune this task's stale open threads / decisions, but KEEP a thread
         # about the still-pending human verification (verification_pending=True; never self-certify).
-        _recalibrate_agent_digest_on_close(cur, t["container_id"], body.agent_id, tid, t["title"],
-                                           verification_pending=True)
-        log_event(cur, t["container_id"], "ai", body.agent_id, "task", tid,
-                  "status_changed", {"to": "needs_verification", "autonomy_level": level})
+        _recalibrate_agent_digest_on_close(
+            cur,
+            t["container_id"],
+            body.agent_id,
+            tid,
+            t["title"],
+            verification_pending=True,
+        )
+        log_event(
+            cur,
+            t["container_id"],
+            "ai",
+            body.agent_id,
+            "task",
+            tid,
+            "status_changed",
+            {"to": "needs_verification", "autonomy_level": level},
+        )
         conn.commit()
     return {"task_id": tid, "status": "needs_verification"}
 
@@ -7435,18 +8769,29 @@ def assign_task(tid: str, body: AssignTask):
         # internal inconsistency, not a real privilege boundary. Open the gate to AI, then apply
         # the SAME actor safeguards create_task enforces: no dispatch on a paused/stopped
         # container, none by a retired agent. (Both helpers pass a human actor straight through.)
-        actor = _require_kind(cur, body.actor_agent_id, ("human", "ai"))   # Orcha#30 + #327
-        _require_container_active(cur, cid, body.actor_agent_id)   # GH #24 (human actor passes through)
-        _reject_if_retired(cur, body.actor_agent_id)   # ISS-51
+        actor = _require_kind(
+            cur, body.actor_agent_id, ("human", "ai")
+        )  # Orcha#30 + #327
+        _require_container_active(
+            cur, cid, body.actor_agent_id
+        )  # GH #24 (human actor passes through)
+        _reject_if_retired(cur, body.actor_agent_id)  # ISS-51
         if t["is_root"]:
-            raise HTTPException(409, "the root task cannot be assigned — only the human verifies it")
+            raise HTTPException(
+                409, "the root task cannot be assigned — only the human verifies it"
+            )
         # Terminal states — including 'cancelled' (cancel_task sets it; verify_task refuses it).
         # Assignment must NOT resurrect a finished/cancelled task back to ready/pending. [review P1]
         if t["status"] in ("completed", "needs_verification", "cancelled"):
-            raise HTTPException(409, f"task is '{t['status']}' — cannot assign a finished/cancelled task")
+            raise HTTPException(
+                409,
+                f"task is '{t['status']}' — cannot assign a finished/cancelled task",
+            )
         # Assignee must be a live AI agent in this container (humans don't poll /next — Orcha#30).
-        cur.execute("SELECT kind, container_id, alias, terminated_at FROM agents WHERE id=%s",
-                    (body.agent_id,))
+        cur.execute(
+            "SELECT kind, container_id, alias, terminated_at FROM agents WHERE id=%s",
+            (body.agent_id,),
+        )
         a = cur.fetchone()
         if not a:
             raise HTTPException(404, f"agent {body.agent_id} not found")
@@ -7455,13 +8800,19 @@ def assign_task(tid: str, body: AssignTask):
         if a["terminated_at"] is not None:
             raise HTTPException(409, "agent is retired and cannot be assigned work")
         if a["kind"] != "ai":
-            raise HTTPException(409, f"can only assign tasks to AI agents; agent is kind='{a['kind']}'")
+            raise HTTPException(
+                409, f"can only assign tasks to AI agents; agent is kind='{a['kind']}'"
+            )
 
         # Is the target ALREADY an active assignee? (idempotency / don't disturb in-progress work)
-        cur.execute("SELECT assignment_status FROM agent_tasks WHERE task_id=%s AND agent_id=%s",
-                    (tid, body.agent_id))
+        cur.execute(
+            "SELECT assignment_status FROM agent_tasks WHERE task_id=%s AND agent_id=%s",
+            (tid, body.agent_id),
+        )
         ex = cur.fetchone()
-        target_active = bool(ex and ex["assignment_status"] in ("assigned", "accepted", "working"))
+        target_active = bool(
+            ex and ex["assignment_status"] in ("assigned", "accepted", "working")
+        )
 
         # Other ACTIVE assignees (the reassign gate).
         cur.execute(
@@ -7474,14 +8825,22 @@ def assign_task(tid: str, body: AssignTask):
         if target_active and not prior:
             # Already assigned to this agent and nobody else holds it → idempotent no-op.
             conn.commit()
-            return {"task_id": tid, "agent_id": body.agent_id, "alias": a["alias"],
-                    "status": t["status"], "assignment_status": ex["assignment_status"],
-                    "woke": False, "released_prior": None}
+            return {
+                "task_id": tid,
+                "agent_id": body.agent_id,
+                "alias": a["alias"],
+                "status": t["status"],
+                "assignment_status": ex["assignment_status"],
+                "woke": False,
+                "released_prior": None,
+            }
         released_prior = None
         if prior:
             if not body.reassign:
                 raise HTTPException(
-                    409, "task already has a different active assignee — pass reassign=true to reassign")
+                    409,
+                    "task already has a different active assignee — pass reassign=true to reassign",
+                )
             cur.execute(
                 """DELETE FROM agent_tasks
                    WHERE task_id=%s AND agent_id <> %s
@@ -7495,9 +8854,17 @@ def assign_task(tid: str, body: AssignTask):
             )
             for pid in prior:
                 recompute_agent_status(cur, pid)
-                _publish_event(cur, cid, pid, "task_unassigned",
-                               {"task_id": tid, "by_id": body.actor_agent_id,
-                                "by_kind": actor["kind"]})
+                _publish_event(
+                    cur,
+                    cid,
+                    pid,
+                    "task_unassigned",
+                    {
+                        "task_id": tid,
+                        "by_id": body.actor_agent_id,
+                        "by_kind": actor["kind"],
+                    },
+                )
             released_prior = prior
 
         # Ready vs pending is a function of dependency satisfaction (mirror the verify-unblock check).
@@ -7511,7 +8878,9 @@ def assign_task(tid: str, body: AssignTask):
         # (Re)assignment resets the task so the assignee claims it cleanly — started_at clears
         # until /orcha-next stamps it. NOT bumping the assignee's heartbeat: that would shrink
         # idle_seconds and make wake-scan think they're active, suppressing the very wake we want.
-        cur.execute("UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s", (new_status, tid))
+        cur.execute(
+            "UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s", (new_status, tid)
+        )
         cur.execute(
             """INSERT INTO agent_tasks (agent_id, task_id, assignment_status)
                VALUES (%s, %s, 'assigned')
@@ -7523,16 +8892,39 @@ def assign_task(tid: str, body: AssignTask):
         # the assignee (daemon). A pending task waits for the dep-unblock task_ready instead.
         woke = False
         if new_status == "ready":
-            _publish_event(cur, cid, body.agent_id, "task_assigned",
-                           {"task_id": tid, "title": t["title"], "via": "B5 direct assignment"})
+            _publish_event(
+                cur,
+                cid,
+                body.agent_id,
+                "task_assigned",
+                {"task_id": tid, "title": t["title"], "via": "B5 direct assignment"},
+            )
             woke = True
-        log_event(cur, cid, actor["kind"], body.actor_agent_id, "task", tid, "assigned",
-                  {"agent_id": body.agent_id, "alias": a["alias"], "status": new_status,
-                   "reassigned_from": released_prior})
+        log_event(
+            cur,
+            cid,
+            actor["kind"],
+            body.actor_agent_id,
+            "task",
+            tid,
+            "assigned",
+            {
+                "agent_id": body.agent_id,
+                "alias": a["alias"],
+                "status": new_status,
+                "reassigned_from": released_prior,
+            },
+        )
         conn.commit()
-    return {"task_id": tid, "agent_id": body.agent_id, "alias": a["alias"],
-            "status": new_status, "assignment_status": "assigned",
-            "woke": woke, "released_prior": released_prior}
+    return {
+        "task_id": tid,
+        "agent_id": body.agent_id,
+        "alias": a["alias"],
+        "status": new_status,
+        "assignment_status": "assigned",
+        "woke": woke,
+        "released_prior": released_prior,
+    }
 
 
 def _deps_unmet(cur, tid: str) -> bool:
@@ -7561,7 +8953,9 @@ def set_task_readiness(tid: str, body: TaskReadiness):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))   # Orcha#30 / #327: human-only flip
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # Orcha#30 / #327: human-only flip
         t = _require_task(cur, tid)
         cid = str(t["container_id"])
         if t["is_root"]:
@@ -7573,7 +8967,9 @@ def set_task_readiness(tid: str, body: TaskReadiness):
                 conn.commit()
                 return {"task_id": tid, "status": cur_status, "already": True}
             if cur_status != "not_ready":
-                raise HTTPException(409, f"task is '{cur_status}', not 'not_ready' — nothing to release")
+                raise HTTPException(
+                    409, f"task is '{cur_status}', not 'not_ready' — nothing to release"
+                )
             new_status = "pending" if _deps_unmet(cur, tid) else "ready"
         else:
             # HOLD -> not_ready. Idempotent if already held.
@@ -7582,11 +8978,23 @@ def set_task_readiness(tid: str, body: TaskReadiness):
                 return {"task_id": tid, "status": "not_ready", "already": True}
             if cur_status not in ("ready", "pending"):
                 raise HTTPException(
-                    409, f"task is '{cur_status}' — only a ready/pending task can be held as not_ready")
+                    409,
+                    f"task is '{cur_status}' — only a ready/pending task can be held as not_ready",
+                )
             new_status = "not_ready"
-        cur.execute("UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s", (new_status, tid))
-        log_event(cur, cid, "human", body.actor_agent_id, "task", tid, "readiness_set",
-                  {"from": cur_status, "to": new_status})
+        cur.execute(
+            "UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s", (new_status, tid)
+        )
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "task",
+            tid,
+            "readiness_set",
+            {"from": cur_status, "to": new_status},
+        )
         # Releasing an ASSIGNED held task makes it an auto-start target -> wake the assignee.
         if new_status == "ready":
             cur.execute(
@@ -7595,8 +9003,13 @@ def set_task_readiness(tid: str, body: TaskReadiness):
                 (tid,),
             )
             for r in cur.fetchall():
-                _publish_event(cur, cid, str(r["agent_id"]), "task_ready",
-                               {"task_id": tid, "title": t["title"], "via": "readiness release"})
+                _publish_event(
+                    cur,
+                    cid,
+                    str(r["agent_id"]),
+                    "task_ready",
+                    {"task_id": tid, "title": t["title"], "via": "readiness release"},
+                )
         conn.commit()
     return {"task_id": tid, "status": new_status, "already": False}
 
@@ -7613,13 +9026,20 @@ def unassign_task(tid: str, body: TaskUnassign):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))   # Orcha#30: dispatch reset is a human action
+        _require_kind(
+            cur, body.actor_agent_id, ("human",)
+        )  # Orcha#30: dispatch reset is a human action
         t = _require_task(cur, tid)
         cid = str(t["container_id"])
         if t["is_root"]:
-            raise HTTPException(409, "the root task cannot be unassigned — only the human verifies it")
+            raise HTTPException(
+                409, "the root task cannot be unassigned — only the human verifies it"
+            )
         if t["status"] in ("completed", "needs_verification", "cancelled"):
-            raise HTTPException(409, f"task is '{t['status']}' — cannot unassign a finished/cancelled task")
+            raise HTTPException(
+                409,
+                f"task is '{t['status']}' — cannot unassign a finished/cancelled task",
+            )
         cur.execute(
             """SELECT agent_id FROM agent_tasks
                WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')""",
@@ -7628,7 +9048,12 @@ def unassign_task(tid: str, body: TaskUnassign):
         active = [str(r["agent_id"]) for r in cur.fetchall()]
         if not active:
             conn.commit()
-            return {"task_id": tid, "status": t["status"], "released": [], "already": True}
+            return {
+                "task_id": tid,
+                "status": t["status"],
+                "released": [],
+                "already": True,
+            }
         cur.execute(
             """DELETE FROM agent_tasks
                WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')""",
@@ -7640,7 +9065,10 @@ def unassign_task(tid: str, body: TaskUnassign):
         new_status = t["status"]
         if t["status"] == "in_progress":
             new_status = "pending" if _deps_unmet(cur, tid) else "ready"
-            cur.execute("UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s", (new_status, tid))
+            cur.execute(
+                "UPDATE tasks SET status=%s, started_at=NULL WHERE id=%s",
+                (new_status, tid),
+            )
         for pid in active:
             recompute_agent_status(cur, pid)
             # GH #58: unassigning retracts this task from pid — resolve any outstanding NEW_WORK /
@@ -7649,10 +9077,23 @@ def unassign_task(tid: str, body: TaskUnassign):
             _ack_events_handled(cur, pid, "task_assigned", "task_id", tid)
             _ack_events_handled(cur, pid, "task_ready", "task_id", tid)
             _ack_events_handled(cur, pid, "task_verified", "task_id", tid)
-            _publish_event(cur, cid, pid, "task_unassigned",
-                           {"task_id": tid, "by_human_id": body.actor_agent_id})
-        log_event(cur, cid, "human", body.actor_agent_id, "task", tid, "unassigned",
-                  {"released": active, "status": new_status})
+            _publish_event(
+                cur,
+                cid,
+                pid,
+                "task_unassigned",
+                {"task_id": tid, "by_human_id": body.actor_agent_id},
+            )
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "task",
+            tid,
+            "unassigned",
+            {"released": active, "status": new_status},
+        )
         conn.commit()
     return {"task_id": tid, "status": new_status, "released": active, "already": False}
 
@@ -7668,10 +9109,14 @@ def update_task_protocol(tid: str, body: ProtocolUpdate):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        actor = _require_kind(cur, body.actor_agent_id, ("human", "ai"))  # Orcha#30 + #327
+        actor = _require_kind(
+            cur, body.actor_agent_id, ("human", "ai")
+        )  # Orcha#30 + #327
         t = _require_task(cur, tid)
-        _require_container_active(cur, str(t["container_id"]), body.actor_agent_id)   # GH #24
-        _reject_if_retired(cur, body.actor_agent_id)   # ISS-51
+        _require_container_active(
+            cur, str(t["container_id"]), body.actor_agent_id
+        )  # GH #24
+        _reject_if_retired(cur, body.actor_agent_id)  # ISS-51
 
         # Only the keys the caller actually sent (exclude_unset) — minus the actor — are applied.
         changed = body.model_dump(exclude_unset=True)
@@ -7681,16 +9126,30 @@ def update_task_protocol(tid: str, body: ProtocolUpdate):
         # #327: autonomy edits stay human-only — autonomy is the human's risk dial, so an AI
         # editing it would be self-granting privilege. AI may freely edit the coordination keys.
         if actor["kind"] != "human" and "autonomy" in changed:
-            raise HTTPException(403, "autonomy is the human's risk dial — only a human may edit it")
+            raise HTTPException(
+                403, "autonomy is the human's risk dial — only a human may edit it"
+            )
 
         cur.execute("SELECT protocol FROM tasks WHERE id=%s", (tid,))
         existing = cur.fetchone()["protocol"] or {}
-        merged = {**existing, **changed}    # partial merge; sent keys win, others preserved
+        merged = {
+            **existing,
+            **changed,
+        }  # partial merge; sent keys win, others preserved
 
-        cur.execute("UPDATE tasks SET protocol=%s::jsonb WHERE id=%s",
-                    (json.dumps(merged), tid))
-        log_event(cur, t["container_id"], actor["kind"], body.actor_agent_id, "task", tid,
-                  "protocol_updated", {"changed_keys": sorted(changed.keys())})
+        cur.execute(
+            "UPDATE tasks SET protocol=%s::jsonb WHERE id=%s", (json.dumps(merged), tid)
+        )
+        log_event(
+            cur,
+            t["container_id"],
+            actor["kind"],
+            body.actor_agent_id,
+            "task",
+            tid,
+            "protocol_updated",
+            {"changed_keys": sorted(changed.keys())},
+        )
         conn.commit()
     return {"task_id": tid, "protocol": merged}
 
@@ -7707,9 +9166,13 @@ def verify_task(tid: str, body: TaskVerify):
         # /verify it from any non-terminal status to declare the container
         # complete. Non-root tasks still go through the regular gate.
         if t["status"] in ("completed", "cancelled"):
-            raise HTTPException(409, f"task is already '{t['status']}'; nothing to verify")
+            raise HTTPException(
+                409, f"task is already '{t['status']}'; nothing to verify"
+            )
         if not t["is_root"] and t["status"] != "needs_verification":
-            raise HTTPException(409, f"task is '{t['status']}', not 'needs_verification'")
+            raise HTTPException(
+                409, f"task is '{t['status']}', not 'needs_verification'"
+            )
 
         if body.approve:
             # #298: completion mechanics (mark completed, unblock downstream, complete-root)
@@ -7729,19 +9192,34 @@ def verify_task(tid: str, body: TaskVerify):
                     "INSERT INTO task_messages (task_id, author_id, body) VALUES (%s, NULL, %s)",
                     (tid, f"[verification approved] {body.feedback}"),
                 )
-            log_event(cur, t["container_id"], "human", None, "task", tid, "verified",
-                      {"approved": True, "unblocked": unblocked,
-                       "feedback": body.feedback,
-                       "verifier_human_id": body.actor_agent_id})
+            log_event(
+                cur,
+                t["container_id"],
+                "human",
+                None,
+                "task",
+                tid,
+                "verified",
+                {
+                    "approved": True,
+                    "unblocked": unblocked,
+                    "feedback": body.feedback,
+                    "verifier_human_id": body.actor_agent_id,
+                },
+            )
             # Notify the assignees their work was approved + any newly-ready downstream
             cur.execute(
                 "SELECT DISTINCT agent_id FROM agent_tasks WHERE task_id=%s",
                 (tid,),
             )
             for r in cur.fetchall():
-                _publish_event(cur, str(t["container_id"]), str(r["agent_id"]),
-                               "task_verified",
-                               {"task_id": tid, "approved": True, "feedback": body.feedback})
+                _publish_event(
+                    cur,
+                    str(t["container_id"]),
+                    str(r["agent_id"]),
+                    "task_verified",
+                    {"task_id": tid, "approved": True, "feedback": body.feedback},
+                )
             # (downstream task_ready wakes + root→container completion are published inside
             # _complete_and_unblock above — shared with the full-autonomy /done path.)
             conn.commit()
@@ -7767,16 +9245,36 @@ def verify_task(tid: str, body: TaskVerify):
                     "INSERT INTO task_messages (task_id, author_id, body) VALUES (%s, NULL, %s)",
                     (tid, f"[verification rejected] {body.feedback}"),
                 )
-            log_event(cur, t["container_id"], "human", None, "task", tid, "verified",
-                      {"approved": False, "feedback": body.feedback,
-                       "reassigned_to_agent_ids": restored,
-                       "verifier_human_id": body.actor_agent_id})
+            log_event(
+                cur,
+                t["container_id"],
+                "human",
+                None,
+                "task",
+                tid,
+                "verified",
+                {
+                    "approved": False,
+                    "feedback": body.feedback,
+                    "reassigned_to_agent_ids": restored,
+                    "verifier_human_id": body.actor_agent_id,
+                },
+            )
             for aid in restored:
-                _publish_event(cur, str(t["container_id"]), aid, "task_verified",
-                               {"task_id": tid, "approved": False, "feedback": body.feedback})
+                _publish_event(
+                    cur,
+                    str(t["container_id"]),
+                    aid,
+                    "task_verified",
+                    {"task_id": tid, "approved": False, "feedback": body.feedback},
+                )
             conn.commit()
-            return {"task_id": tid, "status": "in_progress", "feedback": body.feedback,
-                    "restored_assignee_agent_ids": restored}
+            return {
+                "task_id": tid,
+                "status": "in_progress",
+                "feedback": body.feedback,
+                "restored_assignee_agent_ids": restored,
+            }
 
 
 @app.post("/api/tasks/{tid}/cancel", status_code=200)
@@ -7792,14 +9290,21 @@ def cancel_task(tid: str, body: TaskCancel):
         raise HTTPException(400, "actor_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
-        _require_container_active(cur, str(t["container_id"]), body.actor_agent_id)   # GH #24 (human may still cancel)
-        _reject_if_retired(cur, body.actor_agent_id)   # ISS-51 (#327: AI may now cancel — hold it to the same bar)
+        _require_container_active(
+            cur, str(t["container_id"]), body.actor_agent_id
+        )  # GH #24 (human may still cancel)
+        _reject_if_retired(
+            cur, body.actor_agent_id
+        )  # ISS-51 (#327: AI may now cancel — hold it to the same bar)
         # Review P2: the root sentinel task must never be cancelled. Cancelling it leaves the
         # container stuck 'active' AND wedges the "root verify completes the container" path
         # (verify rejects a cancelled task). Direct the human to cancel the container instead.
         if t["is_root"]:
-            raise HTTPException(409, "the root task can't be cancelled; cancel the container via "
-                                     "POST /api/containers/{cid}/status {\"status\":\"cancelled\"}")
+            raise HTTPException(
+                409,
+                "the root task can't be cancelled; cancel the container via "
+                'POST /api/containers/{cid}/status {"status":"cancelled"}',
+            )
         cur.execute("SELECT kind FROM agents WHERE id=%s", (body.actor_agent_id,))
         arow = cur.fetchone()
         if not arow:
@@ -7825,10 +9330,17 @@ def cancel_task(tid: str, body: TaskCancel):
         others = [a for a in assignees if a != body.actor_agent_id]
         forced = (not is_assignee) and len(others) > 0
         if forced and not reason:
-            raise HTTPException(422, {"error": "reason_required",
-                                      "detail": "a reason is required when cancelling another agent's task"})
+            raise HTTPException(
+                422,
+                {
+                    "error": "reason_required",
+                    "detail": "a reason is required when cancelling another agent's task",
+                },
+            )
         cur.execute(
-            "UPDATE tasks SET status='cancelled', completed_at=now() WHERE id=%s", (tid,))
+            "UPDATE tasks SET status='cancelled', completed_at=now() WHERE id=%s",
+            (tid,),
+        )
         cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
         # Review P2: clear the now-stale assignments so assignees don't stay 'working'.
         # recompute_agent_status counts assigned|accepted|working rows regardless of the
@@ -7836,9 +9348,19 @@ def cancel_task(tid: str, body: TaskCancel):
         # 'done' is the codebase's terminal assignment state (same value the verify/done path uses).
         cur.execute(
             "UPDATE agent_tasks SET assignment_status='done' "
-            "WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')", (tid,))
-        log_event(cur, t["container_id"], ("human" if is_human else "ai"), body.actor_agent_id,
-                  "task", tid, "cancelled", {"by_human": is_human, "forced": forced})
+            "WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')",
+            (tid,),
+        )
+        log_event(
+            cur,
+            t["container_id"],
+            ("human" if is_human else "ai"),
+            body.actor_agent_id,
+            "task",
+            tid,
+            "cancelled",
+            {"by_human": is_human, "forced": forced},
+        )
         for aid in assignees:
             bump_agent(cur, aid)
             recompute_agent_status(cur, aid)
@@ -7850,29 +9372,48 @@ def cancel_task(tid: str, body: TaskCancel):
         # Route the reason to each OWNING assignee that isn't the actor.
         if forced:
             for owner in others:
-                _route_close_reason(cur, t["container_id"], "task_close", tid, reason,
-                                    body.actor_agent_id, owner)
+                _route_close_reason(
+                    cur,
+                    t["container_id"],
+                    "task_close",
+                    tid,
+                    reason,
+                    body.actor_agent_id,
+                    owner,
+                )
                 # ISS-42 (B12): the routed decision wakes the owner but carries no surfaced content,
                 # so a cancelled owner would wake to nothing actionable (the dead-end). Poke them with
                 # the reason + closure so they re-engage knowing it's closed and what they can do next.
                 _poke_path_forward(
-                    cur, t["container_id"], owner, body.actor_agent_id,
-                    f"Your task \"{t['title']}\" (id {tid}) was cancelled by "
+                    cur,
+                    t["container_id"],
+                    owner,
+                    body.actor_agent_id,
+                    f'Your task "{t["title"]}" (id {tid}) was cancelled by '
                     f"{'a human' if is_human else 'the orchestrator'}: {reason}. It's "
                     f"closed — no further work is needed on it. If a follow-up is warranted, propose a "
-                    f"new task (/orcha-task-new) or raise it with your coordinator.")
+                    f"new task (/orcha-task-new) or raise it with your coordinator.",
+                )
             # ISS-48 (review P3): mirror the close into the task thread ONCE — _route_close_reason
             # runs per-owner (one decision row + decision_made each), but the thread message is
             # task-level, so a multi-assignee close must not stack identical [DECISION] rows.
-            _post_decision_to_thread(cur, "task_close", tid, "reject", reason, body.actor_agent_id)
+            _post_decision_to_thread(
+                cur, "task_close", tid, "reject", reason, body.actor_agent_id
+            )
         # GH #35: a cancelled task's work is closed for good — recalibrate each owner's digest so
         # its stale open threads / decisions don't rehydrate next wake. Not pending verification.
-        _recalibrate_task_owners(cur, t["container_id"], tid, t["title"], verification_pending=False)
+        _recalibrate_task_owners(
+            cur, t["container_id"], tid, t["title"], verification_pending=False
+        )
         conn.commit()
-    return {"task_id": tid, "status": "cancelled",
-            "forced": forced,                             # #327: forced over ANY other owner (human or AI)
-            "forced_by_human": forced and is_human,       # back-compat: precise "a human forced this"
-            "owners_poked": len(others) if forced else 0}
+    return {
+        "task_id": tid,
+        "status": "cancelled",
+        "forced": forced,  # #327: forced over ANY other owner (human or AI)
+        "forced_by_human": forced
+        and is_human,  # back-compat: precise "a human forced this"
+        "owners_poked": len(others) if forced else 0,
+    }
 
 
 @app.get("/api/tasks/{tid}/close-implications")
@@ -7896,39 +9437,66 @@ def close_implications(tid: str):
         cur.execute(
             """SELECT d.id, d.title, d.status
                FROM task_dependencies td JOIN tasks d ON d.id = td.task_id
-               WHERE td.depends_on_id = %s ORDER BY d.created_at""", (tid,))
+               WHERE td.depends_on_id = %s ORDER BY d.created_at""",
+            (tid,),
+        )
         downstream, would_unblock, still_blocked = [], 0, 0
         for d in cur.fetchall():
             did = str(d["id"])
             cur.execute(
                 """SELECT 1 FROM task_dependencies x JOIN tasks dep ON dep.id = x.depends_on_id
                    WHERE x.task_id = %s AND x.depends_on_id <> %s AND dep.status <> 'completed'
-                   LIMIT 1""", (did, tid))
+                   LIMIT 1""",
+                (did, tid),
+            )
             unblocks = cur.fetchone() is None and d["status"] == "pending"
             if unblocks:
                 would_unblock += 1
             elif d["status"] in ("pending", "blocked"):
                 still_blocked += 1
-            downstream.append({"task_id": did, "title": d["title"],
-                               "status": d["status"], "would_unblock": unblocks})
+            downstream.append(
+                {
+                    "task_id": did,
+                    "title": d["title"],
+                    "status": d["status"],
+                    "would_unblock": unblocks,
+                }
+            )
 
         # 2) agents actively working it
         cur.execute(
             """SELECT a.id, a.alias, at.assignment_status
                FROM agent_tasks at JOIN agents a ON a.id = at.agent_id
                WHERE at.task_id = %s AND at.assignment_status IN ('assigned','accepted','working')
-               ORDER BY a.alias""", (tid,))
-        in_flight = [{"agent_id": str(r["id"]), "alias": r["alias"],
-                      "assignment_status": r["assignment_status"]} for r in cur.fetchall()]
+               ORDER BY a.alias""",
+            (tid,),
+        )
+        in_flight = [
+            {
+                "agent_id": str(r["id"]),
+                "alias": r["alias"],
+                "assignment_status": r["assignment_status"],
+            }
+            for r in cur.fetchall()
+        ]
 
         # 3) provenance: the request (if any) that spawned this task
         cur.execute(
             """SELECT r.id, r.status, ra.alias AS requester_alias
                FROM requests r LEFT JOIN agents ra ON ra.id = r.requester_id
-               WHERE r.spawned_task_id = %s LIMIT 1""", (tid,))
+               WHERE r.spawned_task_id = %s LIMIT 1""",
+            (tid,),
+        )
         sr = cur.fetchone()
-        spawned_from = ({"request_id": str(sr["id"]), "requester_alias": sr["requester_alias"],
-                         "status": sr["status"]} if sr else None)
+        spawned_from = (
+            {
+                "request_id": str(sr["id"]),
+                "requester_alias": sr["requester_alias"],
+                "status": sr["status"],
+            }
+            if sr
+            else None
+        )
 
         # 4) still-open requests this task's assignees have in flight (orphan risk)
         cur.execute(
@@ -7938,13 +9506,25 @@ def close_implications(tid: str):
                LEFT JOIN agents ta ON ta.id = r.target_id
                WHERE r.status IN ('open','answered')
                  AND r.requester_id IN (SELECT agent_id FROM agent_tasks WHERE task_id = %s)
-               ORDER BY r.created_at""", (tid,))
-        open_reqs = [{"request_id": str(r["id"]), "status": r["status"],
-                      "requester_alias": r["requester_alias"], "target_alias": r["target_alias"],
-                      "preview": (r["payload"] or "")[:120]} for r in cur.fetchall()]
+               ORDER BY r.created_at""",
+            (tid,),
+        )
+        open_reqs = [
+            {
+                "request_id": str(r["id"]),
+                "status": r["status"],
+                "requester_alias": r["requester_alias"],
+                "target_alias": r["target_alias"],
+                "preview": (r["payload"] or "")[:120],
+            }
+            for r in cur.fetchall()
+        ]
 
     return {
-        "task_id": tid, "title": t["title"], "status": t["status"], "is_root": t["is_root"],
+        "task_id": tid,
+        "title": t["title"],
+        "status": t["status"],
+        "is_root": t["is_root"],
         "downstream_tasks": downstream,
         "in_flight_agents": in_flight,
         "spawned_from_request": spawned_from,
@@ -7972,22 +9552,63 @@ def close_implications(tid: str):
 #
 # Curated WORK_VERBS only (do NOT expand speculatively). Multi-word forms ("sign off",
 # "sign-off") are matched separately below.
-WORK_VERBS = frozenset({
-    "review", "approve", "implement", "write", "code", "build", "fix",
-    "document", "draft", "create", "refactor", "test", "add",
-})
+WORK_VERBS = frozenset(
+    {
+        "review",
+        "approve",
+        "implement",
+        "write",
+        "code",
+        "build",
+        "fix",
+        "document",
+        "draft",
+        "create",
+        "refactor",
+        "test",
+        "add",
+    }
+)
 # Leading question words / auxiliaries — if the payload OPENS with one of these it is a
 # genuine question (interrogative), never promote even if a work verb appears later
 # ("which file do I review?" stays info).
-_QUESTION_LEADERS = frozenset({
-    "which", "what", "who", "whom", "whose", "when", "where", "why", "how",
-    "is", "are", "was", "were", "do", "does", "did", "can", "could",
-    "should", "would", "will", "shall", "may", "might", "am", "has", "have",
-})
+_QUESTION_LEADERS = frozenset(
+    {
+        "which",
+        "what",
+        "who",
+        "whom",
+        "whose",
+        "when",
+        "where",
+        "why",
+        "how",
+        "is",
+        "are",
+        "was",
+        "were",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+        "shall",
+        "may",
+        "might",
+        "am",
+        "has",
+        "have",
+    }
+)
 # Imperative lead-ins that may precede the work verb ("please review ...", "can you go
 # review ...") — we skip past these to find the verb in imperative position. "can"/"could"
 # are deliberately NOT here: they lead a question ("can you review?" → interrogative).
-_IMPERATIVE_LEADINS = frozenset({"please", "kindly", "pls", "plz", "go", "now", "then", "you", "to"})
+_IMPERATIVE_LEADINS = frozenset(
+    {"please", "kindly", "pls", "plz", "go", "now", "then", "you", "to"}
+)
 # Underscore MUST stay in the word charset: a code identifier like "test_wake_single_flight"
 # or "include_closed" is one token, not the bare verb "test"/"closed" it would otherwise
 # fragment into (GH#71 round-1 blocker 1).
@@ -7998,9 +9619,21 @@ _WORD_RE = re.compile(r"[a-z][a-z_\-']*")
 # past-tense/participle word ("failed", "dropped", "attached") is the same signal, checked
 # separately below — underscore-joined identifiers are exempted so "include_closed" (which
 # ends in "ed") is never mistaken for one (GH#71 round-1 blocker 2).
-_DECLARATIVE_MARKERS = frozenset({
-    "is", "are", "was", "were", "be", "been", "being", "has", "have", "had", "of",
-})
+_DECLARATIVE_MARKERS = frozenset(
+    {
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "has",
+        "have",
+        "had",
+        "of",
+    }
+)
 
 
 def _is_declarative_tail(words: "list[str]") -> bool:
@@ -8056,7 +9689,7 @@ def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
         idx += 1
     if idx + 1 < len(norm_words):
         if norm_words[idx] == "sign" and norm_words[idx + 1] == "off":
-            if _is_declarative_tail(norm_words[idx + 2:]):
+            if _is_declarative_tail(norm_words[idx + 2 :]):
                 return ("info", None)
             return ("task", "sign off")
 
@@ -8066,28 +9699,10 @@ def classify_request_type(payload: str) -> "tuple[str, Optional[str]]":
     while pos < len(words) and words[pos] in _IMPERATIVE_LEADINS:
         pos += 1
     if pos < len(words) and words[pos] in WORK_VERBS:
-        if _is_declarative_tail(words[pos + 1:]):
+        if _is_declarative_tail(words[pos + 1 :]):
             return ("info", None)
         return ("task", words[pos])
     return ("info", None)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @app.post("/api/containers/{cid}/requests", status_code=201)
@@ -8098,16 +9713,22 @@ def create_request(cid: str, body: RequestCreate):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
 
     with db_cursor() as (conn, cur):
-        _require_container_active(cur, cid, body.requester_agent_id)   # GH #24 (was _require_container)
+        _require_container_active(
+            cur, cid, body.requester_agent_id
+        )  # GH #24 (was _require_container)
         req_ag = _require_agent(cur, body.requester_agent_id)
-        _reject_if_retired(cur, body.requester_agent_id)   # ISS-51 [P1]
+        _reject_if_retired(cur, body.requester_agent_id)  # ISS-51 [P1]
         if str(req_ag["container_id"]) != cid:
-            raise HTTPException(400, "requester_agent_id belongs to a different container")
+            raise HTTPException(
+                400, "requester_agent_id belongs to a different container"
+            )
 
         target_id: Optional[str] = None
         target_alias: Optional[str] = None
         if body.target_agent_id and body.target_alias:
-            raise HTTPException(400, "specify target_agent_id OR target_alias, not both")
+            raise HTTPException(
+                400, "specify target_agent_id OR target_alias, not both"
+            )
         if body.target_agent_id:
             if not _valid_uuid(body.target_agent_id):
                 raise HTTPException(400, "target_agent_id is not a valid UUID")
@@ -8137,13 +9758,18 @@ def create_request(cid: str, body: RequestCreate):
             )
             parent = cur.fetchone()
             if not parent:
-                raise HTTPException(404, f"parent request {body.parent_request_id} not found")
+                raise HTTPException(
+                    404, f"parent request {body.parent_request_id} not found"
+                )
             if str(parent["container_id"]) != cid:
-                raise HTTPException(400, "parent request belongs to a different container")
+                raise HTTPException(
+                    400, "parent request belongs to a different container"
+                )
             # parent should ideally be open or answered — closed parents make the chain meaningless
             if parent["status"] in ("closed", "rejected"):
                 raise HTTPException(
-                    409, f"parent request is '{parent['status']}' — no point chaining off a finished request"
+                    409,
+                    f"parent request is '{parent['status']}' — no point chaining off a finished request",
                 )
             parent_request_id = body.parent_request_id
             chain_depth = (parent["chain_depth"] or 0) + 1
@@ -8157,7 +9783,9 @@ def create_request(cid: str, body: RequestCreate):
         if body.originating_task_id is not None:
             if not _valid_uuid(body.originating_task_id):
                 raise HTTPException(400, "originating_task_id is not a valid UUID")
-            if not _agent_participates_in_task(cur, cid, body.requester_agent_id, body.originating_task_id):
+            if not _agent_participates_in_task(
+                cur, cid, body.requester_agent_id, body.originating_task_id
+            ):
                 raise HTTPException(
                     400,
                     "originating_task_id must be a task in this container that the requester "
@@ -8182,7 +9810,9 @@ def create_request(cid: str, body: RequestCreate):
                 effective_type = "task"
                 promoted_verb = matched_verb
                 first_line = body.payload.strip().splitlines()[0].strip()
-                synth_title = (first_line[:MAX_NAME_LEN] if first_line else "(promoted request)")
+                synth_title = (
+                    first_line[:MAX_NAME_LEN] if first_line else "(promoted request)"
+                )
                 effective_task = TaskRequestPayload(
                     title=synth_title,
                     definition_of_done=body.payload[:MAX_DOD_LEN],
@@ -8195,7 +9825,10 @@ def create_request(cid: str, body: RequestCreate):
         detail: Optional[dict] = None
         if effective_type == "task":
             if effective_task is None:
-                raise HTTPException(400, "type='task' requires a `task` object (title, definition_of_done, priority)")
+                raise HTTPException(
+                    400,
+                    "type='task' requires a `task` object (title, definition_of_done, priority)",
+                )
             detail = {
                 "title": effective_task.title,
                 "description": effective_task.description,
@@ -8223,25 +9856,55 @@ def create_request(cid: str, body: RequestCreate):
                VALUES (%s, %s, %s, %s, %s, 'open', %s,
                        now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s)
                RETURNING id, expires_at""",
-            (cid, effective_type, body.requester_agent_id, target_id, body.priority,
-             body.payload, str(body.expires_minutes), parent_request_id, chain_depth,
-             json.dumps(detail) if detail is not None else None,
-             originating_task_id),
+            (
+                cid,
+                effective_type,
+                body.requester_agent_id,
+                target_id,
+                body.priority,
+                body.payload,
+                str(body.expires_minutes),
+                parent_request_id,
+                chain_depth,
+                json.dumps(detail) if detail is not None else None,
+                originating_task_id,
+            ),
         )
         row = cur.fetchone()
         rid = str(row["id"])
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)  # → awaiting_request
-        log_event(cur, cid, "ai", body.requester_agent_id, "request", rid, "created",
-                  {"type": effective_type, "target_alias": target_alias,
-                   "priority": body.priority, "preview": body.payload[:120],
-                   "parent_request_id": parent_request_id, "chain_depth": chain_depth,
-                   "task_title": detail["title"] if detail else None,
-                   "promoted_from_info": promoted_verb is not None})  # GH #71
-        _publish_event(cur, cid, target_id, "request_created", {
-            "request_id": rid, "type": effective_type, "from_agent_id": body.requester_agent_id,
-            "preview": body.payload[:120]
-        })
+        log_event(
+            cur,
+            cid,
+            "ai",
+            body.requester_agent_id,
+            "request",
+            rid,
+            "created",
+            {
+                "type": effective_type,
+                "target_alias": target_alias,
+                "priority": body.priority,
+                "preview": body.payload[:120],
+                "parent_request_id": parent_request_id,
+                "chain_depth": chain_depth,
+                "task_title": detail["title"] if detail else None,
+                "promoted_from_info": promoted_verb is not None,
+            },
+        )  # GH #71
+        _publish_event(
+            cur,
+            cid,
+            target_id,
+            "request_created",
+            {
+                "request_id": rid,
+                "type": effective_type,
+                "from_agent_id": body.requester_agent_id,
+                "preview": body.payload[:120],
+            },
+        )
         conn.commit()
 
     return {
@@ -8268,7 +9931,10 @@ def _require_request(cur, rid, for_update=False):
         """SELECT id, container_id, type, status, requester_id, target_id,
                   payload, response, expires_at, parent_request_id, chain_depth,
                   detail, spawned_task_id, rejection_reason, originating_task_id
-           FROM requests WHERE id=%s""" + (" FOR UPDATE" if for_update else ""), (rid,))
+           FROM requests WHERE id=%s"""
+        + (" FOR UPDATE" if for_update else ""),
+        (rid,),
+    )
     r = cur.fetchone()
     if not r:
         raise HTTPException(404, f"request {rid} not found")
@@ -8287,10 +9953,14 @@ def get_request(rid: str):
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        r = _require_request(cur, rid)   # 404 if missing
-        return {"request_id": str(r["id"]), "type": r["type"], "status": r["status"],
-                "requester_id": str(r["requester_id"]) if r["requester_id"] else None,
-                "target_id": str(r["target_id"]) if r["target_id"] else None}
+        r = _require_request(cur, rid)  # 404 if missing
+        return {
+            "request_id": str(r["id"]),
+            "type": r["type"],
+            "status": r["status"],
+            "requester_id": str(r["requester_id"]) if r["requester_id"] else None,
+            "target_id": str(r["target_id"]) if r["target_id"] else None,
+        }
 
 
 @app.post("/api/requests/{rid}/respond", status_code=200)
@@ -8300,9 +9970,13 @@ def respond_request(rid: str, body: RequestRespond):
     if not _valid_uuid(body.responder_agent_id):
         raise HTTPException(400, "responder_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize overlapping retries
-        _reject_if_retired(cur, body.responder_agent_id)   # ISS-51 [P1]
-        _require_container_active(cur, str(r["container_id"]), body.responder_agent_id)   # GH #24
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize overlapping retries
+        _reject_if_retired(cur, body.responder_agent_id)  # ISS-51 [P1]
+        _require_container_active(
+            cur, str(r["container_id"]), body.responder_agent_id
+        )  # GH #24
         # Orcha#30: target_id is never null now (humans are agents with rows).
         # Only the target — agent or human — may answer. Check actor FIRST so a wrong
         # actor always gets 403, regardless of the request's current status.
@@ -8313,14 +9987,22 @@ def respond_request(rid: str, body: RequestRespond):
         # after a dropped response is a safe no-op. Other terminal states (closed,
         # accepted) are genuine illegal transitions and still 409.
         if r["status"] == "answered":
-            return {"request_id": rid, "status": "answered", "already_answered": True,
-                    "response": r["response"], "unblocks_parent": None}
+            return {
+                "request_id": rid,
+                "status": "answered",
+                "already_answered": True,
+                "response": r["response"],
+                "unblocks_parent": None,
+            }
         # GH #56 (Point 4): `accepted` is now a WAYPOINT, not a dead end. The accepter
         # (still the target) may post its real result to flip accepted → answered, which
         # fires the answer notification so the requester wakes on its originating_task_id.
         # The requester — not the accepter — later flips answered → closed (close_request).
         if r["status"] not in ("open", "accepted"):
-            raise HTTPException(409, f"request is '{r['status']}', not 'open'/'accepted' — cannot respond")
+            raise HTTPException(
+                409,
+                f"request is '{r['status']}', not 'open'/'accepted' — cannot respond",
+            )
         cur.execute(
             "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
             (body.response, rid),
@@ -8329,11 +10011,22 @@ def respond_request(rid: str, body: RequestRespond):
         recompute_agent_status(cur, body.responder_agent_id)  # just acted
         # The requester might also need recomputation if this answered their only open ask
         recompute_agent_status(cur, str(r["requester_id"]))
-        log_event(cur, r["container_id"], "ai", body.responder_agent_id,
-                  "request", rid, "answered",
-                  {"preview": body.response[:120],
-                   "parent_request_id": str(r["parent_request_id"]) if r["parent_request_id"] else None,
-                   "chain_depth": r["chain_depth"]})
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.responder_agent_id,
+            "request",
+            rid,
+            "answered",
+            {
+                "preview": body.response[:120],
+                "parent_request_id": str(r["parent_request_id"])
+                if r["parent_request_id"]
+                else None,
+                "chain_depth": r["chain_depth"],
+            },
+        )
 
         # If this answered request had a parent, surface it in the response so the requester
         # (who is the target of the parent) knows their parent task is now unblocked. The
@@ -8359,14 +10052,26 @@ def respond_request(rid: str, body: RequestRespond):
         # requester's wake attaches to the task it asked on behalf of (wake-scan reads this →
         # the run is stamped against that task → activity surfaces on the task thread, and the
         # protocol loaded is that task's). Null for conversation/taskless asks (unchanged path).
-        _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "request_answered",
-                       {"request_id": rid, "preview": body.response[:120],
-                        "originating_task_id": str(r["originating_task_id"]) if r["originating_task_id"] else None})
+        _publish_event(
+            cur,
+            str(r["container_id"]),
+            str(r["requester_id"]),
+            "request_answered",
+            {
+                "request_id": rid,
+                "preview": body.response[:120],
+                "originating_task_id": str(r["originating_task_id"])
+                if r["originating_task_id"]
+                else None,
+            },
+        )
         conn.commit()
     return {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
 
 
-def _post_decision_to_thread(cur, subject_type, subject_id, decision, reason, actor_agent_id):
+def _post_decision_to_thread(
+    cur, subject_type, subject_id, decision, reason, actor_agent_id
+):
     """ISS-48: mirror a human-authority decision into the collaboration THREAD the target
     agent actually reads.
 
@@ -8388,7 +10093,7 @@ def _post_decision_to_thread(cur, subject_type, subject_id, decision, reason, ac
     cur.execute("SELECT container_id FROM tasks WHERE id=%s", (str(subject_id),))
     trow = cur.fetchone()
     if not trow:
-        return None                       # subject isn't a task → no thread (request/checkpoint/…)
+        return None  # subject isn't a task → no thread (request/checkpoint/…)
     cur.execute("SELECT alias FROM agents WHERE id=%s", (actor_agent_id,))
     arow = cur.fetchone()
     who = (arow["alias"] if arow else None) or "a human"
@@ -8401,15 +10106,27 @@ def _post_decision_to_thread(cur, subject_type, subject_id, decision, reason, ac
         (str(subject_id), actor_agent_id, body),
     )
     mid = str(cur.fetchone()["id"])
-    log_event(cur, trow["container_id"], "human", actor_agent_id, "task", str(subject_id),
-              "decision_message",
-              {"message_id": mid, "decision": decision, "subject_type": subject_type,
-               "preview": body[:120]})
+    log_event(
+        cur,
+        trow["container_id"],
+        "human",
+        actor_agent_id,
+        "task",
+        str(subject_id),
+        "decision_message",
+        {
+            "message_id": mid,
+            "decision": decision,
+            "subject_type": subject_type,
+            "preview": body[:120],
+        },
+    )
     return mid
 
 
-def _route_close_reason(cur, container_id, subject_type, subject_id, reason,
-                        actor_agent_id, target_agent_id):
+def _route_close_reason(
+    cur, container_id, subject_type, subject_id, reason, actor_agent_id, target_agent_id
+):
     """B7/B0: persist a human's close/cancel REASON as a decision and route it to the
     OWNING agent so it learns WHY its item was force-closed on its next wake. Reuses the
     B0 `decisions` table + `decision_made` event verbatim; a force-close is modelled as
@@ -8419,14 +10136,30 @@ def _route_close_reason(cur, container_id, subject_type, subject_id, reason,
              (container_id, subject_type, subject_id, decision, reason, actor_agent_id, target_agent_id)
            VALUES (%s, %s, %s, 'reject', %s, %s, %s)
            RETURNING id""",
-        (container_id, subject_type, str(subject_id), reason, actor_agent_id, target_agent_id),
+        (
+            container_id,
+            subject_type,
+            str(subject_id),
+            reason,
+            actor_agent_id,
+            target_agent_id,
+        ),
     )
     did = str(cur.fetchone()["id"])
     if target_agent_id:
-        _publish_event(cur, str(container_id) if container_id else None, str(target_agent_id),
-                       "decision_made",
-                       {"decision_id": did, "subject_type": subject_type,
-                        "subject_id": str(subject_id), "decision": "reject", "reason": reason})
+        _publish_event(
+            cur,
+            str(container_id) if container_id else None,
+            str(target_agent_id),
+            "decision_made",
+            {
+                "decision_id": did,
+                "subject_type": subject_type,
+                "subject_id": str(subject_id),
+                "decision": "reject",
+                "reason": reason,
+            },
+        )
     # NB: the task-thread mirror (ISS-48) is posted ONCE by the caller, not here — this helper
     # runs once PER owning assignee, so posting inside it duplicated the thread message on a
     # multi-assignee close (review P3).
@@ -8440,8 +10173,12 @@ def close_request(rid: str, body: RequestActorBody):
     if not _valid_uuid(body.requester_agent_id):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize overlapping retries
-        _require_container_active(cur, str(r["container_id"]), body.requester_agent_id)   # GH #24 (human may still close)
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize overlapping retries
+        _require_container_active(
+            cur, str(r["container_id"]), body.requester_agent_id
+        )  # GH #24 (human may still close)
         # B7 (ISS-23): the actor may be the requester (owner) OR ANY human — the human is the
         # authoritative party and can abandon a stale request regardless of owner. Non-humans
         # stay owner-only and get a 403, regardless of status.
@@ -8459,34 +10196,63 @@ def close_request(rid: str, body: RequestActorBody):
         # Non-humans keep the answered-only rule; a human may force-close from any non-closed
         # status (authoritative abandon).
         if not is_human and r["status"] != "answered":
-            raise HTTPException(409, f"request is '{r['status']}', not 'answered' — cannot close")
+            raise HTTPException(
+                409, f"request is '{r['status']}', not 'answered' — cannot close"
+            )
         # B7.2: a human closing a request they do NOT own must give a reason — it's routed to
         # the owner so it learns why (the API enforces this, not only the UI).
         reason = (body.reason or "").strip()
         forced = is_human and not is_owner
         if forced and not reason:
-            raise HTTPException(422, {"error": "reason_required",
-                                      "detail": "a reason is required when a human closes another agent's request"})
-        cur.execute("UPDATE requests SET status='closed', closed_at=now() WHERE id=%s", (rid,))
+            raise HTTPException(
+                422,
+                {
+                    "error": "reason_required",
+                    "detail": "a reason is required when a human closes another agent's request",
+                },
+            )
+        cur.execute(
+            "UPDATE requests SET status='closed', closed_at=now() WHERE id=%s", (rid,)
+        )
         # Recompute the OWNER (requester) — its waiting_on changed.
         bump_agent(cur, str(r["requester_id"]))
         recompute_agent_status(cur, str(r["requester_id"]))
-        log_event(cur, r["container_id"], ("human" if is_human else "ai"), body.requester_agent_id,
-                  "request", rid, "closed", {"by_human": is_human, "forced": forced})
+        log_event(
+            cur,
+            r["container_id"],
+            ("human" if is_human else "ai"),
+            body.requester_agent_id,
+            "request",
+            rid,
+            "closed",
+            {"by_human": is_human, "forced": forced},
+        )
         if r["target_id"]:
-            _publish_event(cur, str(r["container_id"]), str(r["target_id"]), "request_closed",
-                           {"request_id": rid})
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                str(r["target_id"]),
+                "request_closed",
+                {"request_id": rid},
+            )
             # GH #58: a TASK request closed before the target accepted/rejected would otherwise pin the
             # target's cursor on its NEW_WORK request_created (no accept/reject seam ever ran). Closing
             # terminally resolves it.
-            _ack_events_handled(cur, str(r["target_id"]), "request_created", "request_id", rid)
+            _ack_events_handled(
+                cur, str(r["target_id"]), "request_created", "request_id", rid
+            )
         if forced:
-            _route_close_reason(cur, r["container_id"], "request_close", rid, reason,
-                                body.requester_agent_id, str(r["requester_id"]))
+            _route_close_reason(
+                cur,
+                r["container_id"],
+                "request_close",
+                rid,
+                reason,
+                body.requester_agent_id,
+                str(r["requester_id"]),
+            )
         conn.commit()
     return {"request_id": rid, "status": "closed", "forced_by_human": forced}
-
-
 
 
 def _task_request_context_block(detail) -> str:
@@ -8551,10 +10317,14 @@ def nudge_request(rid: str, body: NudgeBody):
     if not _valid_uuid(body.actor_agent_id):
         raise HTTPException(400, "actor_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid)   # SELECT-only (no FOR UPDATE): a nudge never mutates the request
+        r = _require_request(
+            cur, rid
+        )  # SELECT-only (no FOR UPDATE): a nudge never mutates the request
         _require_container_active(cur, str(r["container_id"]), body.actor_agent_id)
         # Human-only: a nudge is an operator wake action.
-        cur.execute("SELECT kind, alias FROM agents WHERE id=%s", (body.actor_agent_id,))
+        cur.execute(
+            "SELECT kind, alias FROM agents WHERE id=%s", (body.actor_agent_id,)
+        )
         arow = cur.fetchone()
         if not arow:
             raise HTTPException(404, f"agent {body.actor_agent_id} not found")
@@ -8569,8 +10339,11 @@ def nudge_request(rid: str, body: NudgeBody):
             recipient_id, role = r["requester_id"], "requester"
         elif status == "accepted":
             # The next action moved from the request to the spawned task — nudge the task.
-            raise HTTPException(409, "this request was accepted and became a task — "
-                                     "nudge the task, not the request")
+            raise HTTPException(
+                409,
+                "this request was accepted and became a task — "
+                "nudge the task, not the request",
+            )
         else:  # rejected, converted_to_task, closed — terminal, nothing to nudge
             raise HTTPException(409, f"nothing to nudge: request is '{status}'")
         # No distinct AI to wake: the next action sits with a human (escalated-to-human, a
@@ -8581,49 +10354,81 @@ def nudge_request(rid: str, body: NudgeBody):
             cur.execute("SELECT kind FROM agents WHERE id=%s", (recipient_id,))
             rrow = cur.fetchone()
             recipient_is_human = bool(rrow) and rrow["kind"] == "human"
-        if not recipient_id or recipient_is_human or recipient_id == body.actor_agent_id:
-            return {"request_id": rid, "status": status, "nudged": False,
-                    "nudged_role": role, "nudged_agent_id": None,
-                    "reason": "a human owns the next action — nothing to wake"}
+        if (
+            not recipient_id
+            or recipient_is_human
+            or recipient_id == body.actor_agent_id
+        ):
+            return {
+                "request_id": rid,
+                "status": status,
+                "nudged": False,
+                "nudged_role": role,
+                "nudged_agent_id": None,
+                "reason": "a human owns the next action — nothing to wake",
+            }
         # Wake-framed, state-appropriate directed prompt naming the nudger + rid8 + a 1-line preview.
         # Task-aware: an OPEN *task* request is accepted/rejected (NOT answered), and the poke carries
         # the full task ask (title / description / definition of done / protocol) so the woken agent
         # can decide even though the original request_created event was consumed on first drain.
         short_rid = rid[:8]
         is_task = r["type"] == "task"
-        payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][:120]
+        payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][
+            :120
+        ]
         if role == "target":
             if is_task:
-                message = (f'{actor_alias} nudged you about an OPEN task request you have not picked up '
-                           f'yet. Request {short_rid}. Please accept it (/orcha-accept-task) or reject it '
-                           f'(/orcha-reject-task).' + _task_request_context_block(r["detail"]))
+                message = (
+                    f"{actor_alias} nudged you about an OPEN task request you have not picked up "
+                    f"yet. Request {short_rid}. Please accept it (/orcha-accept-task) or reject it "
+                    f"(/orcha-reject-task)." + _task_request_context_block(r["detail"])
+                )
             else:
-                message = (f'{actor_alias} nudged you about an OPEN request you still owe an answer on. '
-                           f'Request {short_rid}: "{payload_preview}". Please respond to it (/orcha-respond).')
+                message = (
+                    f"{actor_alias} nudged you about an OPEN request you still owe an answer on. "
+                    f'Request {short_rid}: "{payload_preview}". Please respond to it (/orcha-respond).'
+                )
         else:  # requester, on an answered request
             if is_task:
                 detail = r["detail"] if isinstance(r["detail"], dict) else {}
                 title = (detail.get("title") or "").strip()
                 what = f' ("{title[:120]}")' if title else ""
-                message = (f'{actor_alias} nudged you: a task request you sent{what} has been ANSWERED '
-                           f'and is waiting on you to act on the result or close it (/orcha-close). '
-                           f'Request {short_rid}.')
+                message = (
+                    f"{actor_alias} nudged you: a task request you sent{what} has been ANSWERED "
+                    f"and is waiting on you to act on the result or close it (/orcha-close). "
+                    f"Request {short_rid}."
+                )
             else:
-                message = (f'{actor_alias} nudged you: a request you sent has been ANSWERED and is waiting '
-                           f'on you to act on the answer or close it. '
-                           f'Request {short_rid}: "{payload_preview}".')
+                message = (
+                    f"{actor_alias} nudged you: a request you sent has been ANSWERED and is waiting "
+                    f"on you to act on the answer or close it. "
+                    f'Request {short_rid}: "{payload_preview}".'
+                )
         note = (body.note or "").strip()
         if note:
-            message += f' Note from {actor_alias}: {note}'
-        _poke_path_forward(cur, str(r["container_id"]), recipient_id, body.actor_agent_id, message)
+            message += f" Note from {actor_alias}: {note}"
+        _poke_path_forward(
+            cur, str(r["container_id"]), recipient_id, body.actor_agent_id, message
+        )
         # Audit only — NO status UPDATE, NO turn bump (an external poke, like triage-close).
-        log_event(cur, r["container_id"], "human", body.actor_agent_id,
-                  "request", rid, "nudged", {"by_human": True, "role": role})
+        log_event(
+            cur,
+            r["container_id"],
+            "human",
+            body.actor_agent_id,
+            "request",
+            rid,
+            "nudged",
+            {"by_human": True, "role": role},
+        )
         conn.commit()
-    return {"request_id": rid, "status": status, "nudged": True,
-            "nudged_role": role, "nudged_agent_id": recipient_id}
-
-
+    return {
+        "request_id": rid,
+        "status": status,
+        "nudged": True,
+        "nudged_role": role,
+        "nudged_agent_id": recipient_id,
+    }
 
 
 @app.post("/api/requests/{rid}/triage-close", status_code=200)
@@ -8648,22 +10453,36 @@ def triage_close_request(rid: str, body: TriageCloseBody):
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize against a concurrent close
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize against a concurrent close
         if r["status"] == "closed":
             return {"request_id": rid, "status": "closed", "already_closed": True}
         if r["status"] != "answered":
-            raise HTTPException(409, f"request is '{r['status']}', not 'answered' — triage-close only "
-                                     f"closes a pure-ack answered request")
+            raise HTTPException(
+                409,
+                f"request is '{r['status']}', not 'answered' — triage-close only "
+                f"closes a pure-ack answered request",
+            )
         triage_reason = (body.triage_reason or "").strip()[:500]
-        cur.execute("UPDATE requests SET status='closed', closed_at=now() WHERE id=%s", (rid,))
+        cur.execute(
+            "UPDATE requests SET status='closed', closed_at=now() WHERE id=%s", (rid,)
+        )
         # the requester's waiting_on changed — recompute its status, but DON'T bump_agent: this is a
         # system cleanup, not an action by the requester (must not inflate its turns_used/budget).
         recompute_agent_status(cur, str(r["requester_id"]))
         stamp = {"auto": True, "reason": "triage_skip", "triage_reason": triage_reason}
-        log_event(cur, r["container_id"], "system", None, "request", rid, "closed", stamp)
+        log_event(
+            cur, r["container_id"], "system", None, "request", rid, "closed", stamp
+        )
         if r["target_id"]:
-            _publish_event(cur, str(r["container_id"]), str(r["target_id"]), "request_closed",
-                           {"request_id": rid, **stamp})
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                str(r["target_id"]),
+                "request_closed",
+                {"request_id": rid, **stamp},
+            )
         conn.commit()
     return {"request_id": rid, "status": "closed", "auto": True}
 
@@ -8676,8 +10495,12 @@ def escalate_request(rid: str, body: RequestActorBody):
     if not _valid_uuid(body.requester_agent_id):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize all request-state mutations
-        _require_container_active(cur, str(r["container_id"]), body.requester_agent_id)   # GH #24
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize all request-state mutations
+        _require_container_active(
+            cur, str(r["container_id"]), body.requester_agent_id
+        )  # GH #24
         if r["status"] not in ("open", "answered"):
             raise HTTPException(409, f"request is '{r['status']}' — cannot escalate")
         if str(r["requester_id"]) != body.requester_agent_id:
@@ -8689,46 +10512,89 @@ def escalate_request(rid: str, body: RequestActorBody):
         )
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)
-        log_event(cur, r["container_id"], "ai", body.requester_agent_id,
-                  "request", rid, "escalated",
-                  {"reason": body.reason, "from_status": r["status"], "to_human_id": human_id})
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.requester_agent_id,
+            "request",
+            rid,
+            "escalated",
+            {
+                "reason": body.reason,
+                "from_status": r["status"],
+                "to_human_id": human_id,
+            },
+        )
         # Notify the human directly + the container channel for any dashboards.
-        _publish_event(cur, str(r["container_id"]), human_id, "request_created",
-                       {"request_id": rid, "type": r["type"],
-                        "from_agent_id": body.requester_agent_id,
-                        "preview": (r["payload"] or "")[:120],
-                        "via": "escalated"})
-        _publish_event(cur, str(r["container_id"]), None, "request_escalated",
-                       {"request_id": rid, "reason": body.reason, "to_human_id": human_id})
+        _publish_event(
+            cur,
+            str(r["container_id"]),
+            human_id,
+            "request_created",
+            {
+                "request_id": rid,
+                "type": r["type"],
+                "from_agent_id": body.requester_agent_id,
+                "preview": (r["payload"] or "")[:120],
+                "via": "escalated",
+            },
+        )
+        _publish_event(
+            cur,
+            str(r["container_id"]),
+            None,
+            "request_escalated",
+            {"request_id": rid, "reason": body.reason, "to_human_id": human_id},
+        )
         # GH #58: escalation re-routes this request to a human; if it was a TASK request the original
         # agent target never accept/rejected, resolve its NEW_WORK request_created so it doesn't pin.
         if r["target_id"]:
-            _ack_events_handled(cur, str(r["target_id"]), "request_created", "request_id", rid)
+            _ack_events_handled(
+                cur, str(r["target_id"]), "request_created", "request_id", rid
+            )
         conn.commit()
-    return {"request_id": rid, "status": "open", "target_id": human_id, "escalated": True}
+    return {
+        "request_id": rid,
+        "status": "open",
+        "target_id": human_id,
+        "escalated": True,
+    }
 
 
 # ---------- Phase 3 / Orcha#5: task requests + agent-suggestion ----------
 
+
 @app.post("/api/requests/{rid}/accept-task", status_code=200)
-def accept_task_request(rid: str, body: TaskRequestAccept,
-                        x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token")):
+def accept_task_request(
+    rid: str,
+    body: TaskRequestAccept,
+    x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
+):
     """Target accepts a task request → creates the task, assigns it, marks request 'accepted'."""
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
     if not _valid_uuid(body.responder_agent_id):
         raise HTTPException(400, "responder_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize overlapping retries
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize overlapping retries
         # GH #91/#90: accepting a task request creates an agent_tasks 'working' row — that is moving a
         # task INTO working, which is WORK-lane only. Gate on the ACCEPTING agent (the target /
         # responder). A conversation-lane embodiment can DISPATCH a task (create/assign a request) but
         # cannot accept one into its own working set (403).
         _require_work_lane(cur, body.responder_agent_id, x_orcha_run_token)
-        _reject_if_retired(cur, body.responder_agent_id)   # ISS-51 [P1]: retired can't take on work
-        _require_container_active(cur, str(r["container_id"]), body.responder_agent_id)   # GH #24
+        _reject_if_retired(
+            cur, body.responder_agent_id
+        )  # ISS-51 [P1]: retired can't take on work
+        _require_container_active(
+            cur, str(r["container_id"]), body.responder_agent_id
+        )  # GH #24
         if r["type"] != "task":
-            raise HTTPException(409, f"request type is '{r['type']}', not 'task' — cannot accept-task")
+            raise HTTPException(
+                409, f"request type is '{r['type']}', not 'task' — cannot accept-task"
+            )
         # Check actor first so a non-target always gets 403, regardless of status.
         if str(r["target_id"]) != body.responder_agent_id:
             raise HTTPException(403, "only the target agent may accept")
@@ -8740,21 +10606,34 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
         # session sees — returning the old instruction-less shape would let it miss report-back and
         # fall through to the Point 5 backstop. Rebuild it deterministically from the request detail.
         if r["status"] == "accepted":
-            _retry_dod = ((r["detail"] or {}).get("definition_of_done") or "")
+            _retry_dod = (r["detail"] or {}).get("definition_of_done") or ""
             if r["spawned_task_id"]:
-                _attribute_token_run_to_task(cur, body.responder_agent_id, x_orcha_run_token,
-                                             str(r["spawned_task_id"]))
+                _attribute_token_run_to_task(
+                    cur,
+                    body.responder_agent_id,
+                    x_orcha_run_token,
+                    str(r["spawned_task_id"]),
+                )
                 conn.commit()
-            return {"request_id": rid, "status": "accepted",
-                    "spawned_task_id": str(r["spawned_task_id"]) if r["spawned_task_id"] else None,
-                    "report_back": _build_report_back(rid, _retry_dod),
-                    "report_back_request_id": rid,
-                    "already_accepted": True}
+            return {
+                "request_id": rid,
+                "status": "accepted",
+                "spawned_task_id": str(r["spawned_task_id"])
+                if r["spawned_task_id"]
+                else None,
+                "report_back": _build_report_back(rid, _retry_dod),
+                "report_back_request_id": rid,
+                "already_accepted": True,
+            }
         if r["status"] != "open":
-            raise HTTPException(409, f"request is '{r['status']}', not 'open' — cannot accept")
+            raise HTTPException(
+                409, f"request is '{r['status']}', not 'open' — cannot accept"
+            )
         task = r["detail"] or {}
         if "title" not in task or "definition_of_done" not in task:
-            raise HTTPException(500, "request detail is malformed; cannot synthesize a task")
+            raise HTTPException(
+                500, "request detail is malformed; cannot synthesize a task"
+            )
         # GH #55: if the request carried a protocol, populate it on the spawned task so the
         # accepter reads its loop rules on the very wake this accept triggers (no follow-up PATCH).
         # GH #56 (Point 4.4/4.5): also auto-inject a report-back instruction into protocol.notes —
@@ -8775,7 +10654,9 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
         if existing_notes:
             sep = "\n\n"
             room = MAX_PROTOCOL_FIELD_LEN - len(report_back) - len(sep)
-            merged_notes = report_back + sep + existing_notes[:room] if room > 0 else report_back
+            merged_notes = (
+                report_back + sep + existing_notes[:room] if room > 0 else report_back
+            )
         else:
             merged_notes = report_back
         cleaned_proto["notes"] = merged_notes
@@ -8787,9 +10668,15 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
                   status, priority, created_by_agent_id, protocol, started_at)
                VALUES (%s, %s, %s, %s, 'in_progress', %s, %s, %s::jsonb, now())
                RETURNING id""",
-            (str(r["container_id"]), task["title"], task.get("description"),
-             task["definition_of_done"], task.get("priority", 100),
-             str(r["requester_id"]), protocol_json),
+            (
+                str(r["container_id"]),
+                task["title"],
+                task.get("description"),
+                task["definition_of_done"],
+                task.get("priority", 100),
+                str(r["requester_id"]),
+                protocol_json,
+            ),
         )
         tid = str(cur.fetchone()["id"])
         cur.execute(
@@ -8804,20 +10691,38 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
         bump_agent(cur, body.responder_agent_id)
         recompute_agent_status(cur, body.responder_agent_id)
         recompute_agent_status(cur, str(r["requester_id"]))
-        log_event(cur, r["container_id"], "ai", body.responder_agent_id,
-                  "request", rid, "accepted",
-                  {"spawned_task_id": tid, "note": body.note})
-        log_event(cur, r["container_id"], "ai", body.responder_agent_id,
-                  "task", tid, "created",
-                  {"title": task["title"], "via": "task-request accept"})
-        _attribute_token_run_to_task(cur, body.responder_agent_id, x_orcha_run_token, tid)
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.responder_agent_id,
+            "request",
+            rid,
+            "accepted",
+            {"spawned_task_id": tid, "note": body.note},
+        )
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.responder_agent_id,
+            "task",
+            tid,
+            "created",
+            {"title": task["title"], "via": "task-request accept"},
+        )
+        _attribute_token_run_to_task(
+            cur, body.responder_agent_id, x_orcha_run_token, tid
+        )
         # GH #56 (Point 6): accept must NOT wake the requester — only the real ANSWER (at material
         # completion) wakes them. The accept stays in the audit feed via log_event above, but we no
         # longer publish a wake-worthy `task_request_accepted` event toward the requester (it was
         # classified as a `request_answered` notification — a premature receipt). Accept is silent now.
         # GH #58: accepting CONSUMES the target's NEW_WORK request_created notification (the accept IS
         # the handling; the spawned task drives the work) so it stops re-waking the responder.
-        _ack_events_handled(cur, body.responder_agent_id, "request_created", "request_id", rid)
+        _ack_events_handled(
+            cur, body.responder_agent_id, "request_created", "request_id", rid
+        )
         conn.commit()
     # GH #56 (review P1): the same worker session that accepts a task-request keeps working it
     # WITHOUT reloading the spawned task's protocol, so the report-back note buried in
@@ -8825,8 +10730,13 @@ def accept_task_request(rid: str, body: TaskRequestAccept,
     # and the Point 5 backstop becomes the normal route. Echo the instruction in the accept
     # RESPONSE so /orcha-accept-task can surface it immediately, in the same session, before the
     # agent starts the work.
-    return {"request_id": rid, "status": "accepted", "spawned_task_id": tid,
-            "report_back": report_back, "report_back_request_id": rid}
+    return {
+        "request_id": rid,
+        "status": "accepted",
+        "spawned_task_id": tid,
+        "report_back": report_back,
+        "report_back_request_id": rid,
+    }
 
 
 @app.post("/api/requests/{rid}/reject-task", status_code=200)
@@ -8837,12 +10747,20 @@ def reject_task_request(rid: str, body: TaskRequestReject):
     if not _valid_uuid(body.responder_agent_id):
         raise HTTPException(400, "responder_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize all request-state mutations
-        _require_container_active(cur, str(r["container_id"]), body.responder_agent_id)   # GH #24
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize all request-state mutations
+        _require_container_active(
+            cur, str(r["container_id"]), body.responder_agent_id
+        )  # GH #24
         if r["type"] != "task":
-            raise HTTPException(409, f"request type is '{r['type']}', not 'task' — cannot reject-task")
+            raise HTTPException(
+                409, f"request type is '{r['type']}', not 'task' — cannot reject-task"
+            )
         if r["status"] != "open":
-            raise HTTPException(409, f"request is '{r['status']}', not 'open' — cannot reject")
+            raise HTTPException(
+                409, f"request is '{r['status']}', not 'open' — cannot reject"
+            )
         if r["target_id"] is None or str(r["target_id"]) != body.responder_agent_id:
             raise HTTPException(403, "only the target agent may reject")
         cur.execute(
@@ -8852,24 +10770,48 @@ def reject_task_request(rid: str, body: TaskRequestReject):
         bump_agent(cur, body.responder_agent_id)
         recompute_agent_status(cur, body.responder_agent_id)
         recompute_agent_status(cur, str(r["requester_id"]))
-        log_event(cur, r["container_id"], "ai", body.responder_agent_id,
-                  "request", rid, "rejected", {"reason": body.reason})
-        _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "task_request_rejected",
-                       {"request_id": rid, "reason": body.reason})
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.responder_agent_id,
+            "request",
+            rid,
+            "rejected",
+            {"reason": body.reason},
+        )
+        _publish_event(
+            cur,
+            str(r["container_id"]),
+            str(r["requester_id"]),
+            "task_request_rejected",
+            {"request_id": rid, "reason": body.reason},
+        )
         # ISS-42 (B12): don't strand the requester at a dead-end. The machine event above wakes them
         # but carries no surfaced content; poke them with the reason + the three concrete paths forward
         # (re-ask, suggest a different agent, escalate to a human) so the rejection becomes actionable.
         reason_txt = (body.reason or "").strip() or "(no reason given)"
         _poke_path_forward(
-            cur, str(r["container_id"]), str(r["requester_id"]), body.responder_agent_id,
+            cur,
+            str(r["container_id"]),
+            str(r["requester_id"]),
+            body.responder_agent_id,
             f"Your task request (id {rid}) was rejected: {reason_txt}. You're not stuck — pick a path "
             f"forward: re-ask another agent (/orcha-ask --task), propose a new agent for it "
-            f"(/orcha-suggest-agent {rid}), or escalate to a human (/orcha-escalate {rid}).")
+            f"(/orcha-suggest-agent {rid}), or escalate to a human (/orcha-escalate {rid}).",
+        )
         # GH #58: rejecting CONSUMES the target's NEW_WORK request_created notification so it stops
         # re-waking the responder (the work is now back with the requester to re-route).
-        _ack_events_handled(cur, body.responder_agent_id, "request_created", "request_id", rid)
+        _ack_events_handled(
+            cur, body.responder_agent_id, "request_created", "request_id", rid
+        )
         conn.commit()
-    return {"request_id": rid, "status": "rejected", "reason": body.reason, "requester_poked": True}
+    return {
+        "request_id": rid,
+        "status": "rejected",
+        "reason": body.reason,
+        "requester_poked": True,
+    }
 
 
 @app.post("/api/requests/{rid}/suggest-agent", status_code=200)
@@ -8885,10 +10827,16 @@ def suggest_agent(rid: str, body: AgentSuggestion):
     if not _valid_uuid(body.requester_agent_id):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize all request-state mutations
-        _require_container_active(cur, str(r["container_id"]), body.requester_agent_id)   # GH #24
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize all request-state mutations
+        _require_container_active(
+            cur, str(r["container_id"]), body.requester_agent_id
+        )  # GH #24
         if r["status"] not in ("open", "answered", "rejected"):
-            raise HTTPException(409, f"request is '{r['status']}' — cannot escalate-with-suggestion")
+            raise HTTPException(
+                409, f"request is '{r['status']}' — cannot escalate-with-suggestion"
+            )
         if str(r["requester_id"]) != body.requester_agent_id:
             raise HTTPException(403, "only the requester may suggest an agent")
         # Merge the suggestion into the request's `detail`, alongside any existing task payload.
@@ -8908,18 +10856,37 @@ def suggest_agent(rid: str, body: AgentSuggestion):
         )
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)
-        log_event(cur, r["container_id"], "ai", body.requester_agent_id,
-                  "request", rid, "agent_suggested",
-                  {"proposed_alias": body.proposed_alias,
-                   "proposed_role": body.proposed_role,
-                   "rationale": body.rationale[:120],
-                   "to_human_id": human_id})
-        _publish_event(cur, str(r["container_id"]), human_id, "agent_suggested",
-                       {"request_id": rid, "proposed_alias": body.proposed_alias,
-                        "from_agent_id": body.requester_agent_id})
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.requester_agent_id,
+            "request",
+            rid,
+            "agent_suggested",
+            {
+                "proposed_alias": body.proposed_alias,
+                "proposed_role": body.proposed_role,
+                "rationale": body.rationale[:120],
+                "to_human_id": human_id,
+            },
+        )
+        _publish_event(
+            cur,
+            str(r["container_id"]),
+            human_id,
+            "agent_suggested",
+            {
+                "request_id": rid,
+                "proposed_alias": body.proposed_alias,
+                "from_agent_id": body.requester_agent_id,
+            },
+        )
         conn.commit()
     return {
-        "request_id": rid, "status": "open", "target_id": None,
+        "request_id": rid,
+        "status": "open",
+        "target_id": None,
         "suggestion": {
             "proposed_alias": body.proposed_alias,
             "proposed_role": body.proposed_role,
@@ -8940,14 +10907,18 @@ def decide_suggestion(rid: str, body: SuggestionDecision):
         raise HTTPException(400, "request_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize all request-state mutations
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize all request-state mutations
         # Orcha#30: detect a pending suggestion by detail.proposed_alias, not by null target.
         # The request now lives in the targeted human's inbox until resolved.
         detail = r["detail"] or {}
         if "proposed_alias" not in detail:
             raise HTTPException(409, "request has no agent-suggestion to decide on")
         if r["status"] != "open":
-            raise HTTPException(409, f"suggestion is '{r['status']}', not 'open' — already decided")
+            raise HTTPException(
+                409, f"suggestion is '{r['status']}', not 'open' — already decided"
+            )
 
         if body.kind == "create":
             # Cap check: containers.max_auto_agents = max TOTAL agents (post-PR#6 reinterpretation).
@@ -8973,50 +10944,143 @@ def decide_suggestion(rid: str, body: SuggestionDecision):
                          (container_id, alias, role, system_prompt, is_auto_created, parent_agent_id, turn_budget)
                        VALUES (%s, %s, %s, %s, true, %s, COALESCE(%s, 50))
                        RETURNING id""",
-                    (str(r["container_id"]), detail["proposed_alias"], detail["proposed_role"],
-                     detail["proposed_prompt"], str(r["requester_id"]), body.turn_budget),
+                    (
+                        str(r["container_id"]),
+                        detail["proposed_alias"],
+                        detail["proposed_role"],
+                        detail["proposed_prompt"],
+                        str(r["requester_id"]),
+                        body.turn_budget,
+                    ),
                 )
             except psycopg.errors.UniqueViolation:
-                raise HTTPException(409, f"alias '{detail['proposed_alias']}' already exists in this container")
+                raise HTTPException(
+                    409,
+                    f"alias '{detail['proposed_alias']}' already exists in this container",
+                )
             new_aid = str(cur.fetchone()["id"])
             # Now target the request at the new agent so they can /accept-task it.
             cur.execute(
                 "UPDATE requests SET target_id=%s, status='open' WHERE id=%s",
                 (new_aid, rid),
             )
-            log_event(cur, r["container_id"], "human", None, "agent", new_aid, "created",
-                      {"alias": detail["proposed_alias"], "via": "suggestion accepted",
-                       "from_request_id": rid, "verifier_human_id": body.actor_agent_id})
-            log_event(cur, r["container_id"], "human", None, "request", rid, "suggestion_decided",
-                      {"kind": "create", "new_agent_id": new_aid,
-                       "verifier_human_id": body.actor_agent_id})
-            _publish_event(cur, str(r["container_id"]), new_aid, "request_created",
-                           {"request_id": rid, "type": r["type"], "from_agent_id": str(r["requester_id"]),
-                            "preview": r["payload"][:120], "via": "human created new agent"})
-            _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "agent_suggestion_decided",
-                           {"request_id": rid, "kind": "create", "new_alias": detail["proposed_alias"]})
+            log_event(
+                cur,
+                r["container_id"],
+                "human",
+                None,
+                "agent",
+                new_aid,
+                "created",
+                {
+                    "alias": detail["proposed_alias"],
+                    "via": "suggestion accepted",
+                    "from_request_id": rid,
+                    "verifier_human_id": body.actor_agent_id,
+                },
+            )
+            log_event(
+                cur,
+                r["container_id"],
+                "human",
+                None,
+                "request",
+                rid,
+                "suggestion_decided",
+                {
+                    "kind": "create",
+                    "new_agent_id": new_aid,
+                    "verifier_human_id": body.actor_agent_id,
+                },
+            )
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                new_aid,
+                "request_created",
+                {
+                    "request_id": rid,
+                    "type": r["type"],
+                    "from_agent_id": str(r["requester_id"]),
+                    "preview": r["payload"][:120],
+                    "via": "human created new agent",
+                },
+            )
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                str(r["requester_id"]),
+                "agent_suggestion_decided",
+                {
+                    "request_id": rid,
+                    "kind": "create",
+                    "new_alias": detail["proposed_alias"],
+                },
+            )
             conn.commit()
-            return {"request_id": rid, "kind": "create", "new_agent_id": new_aid,
-                    "new_alias": detail["proposed_alias"], "status": "open"}
+            return {
+                "request_id": rid,
+                "kind": "create",
+                "new_agent_id": new_aid,
+                "new_alias": detail["proposed_alias"],
+                "status": "open",
+            }
 
         elif body.kind == "reassign":
             if not body.target_alias:
                 raise HTTPException(400, "reassign requires target_alias")
-            new_target_id = _resolve_alias(cur, str(r["container_id"]), body.target_alias)
+            new_target_id = _resolve_alias(
+                cur, str(r["container_id"]), body.target_alias
+            )
             cur.execute(
                 "UPDATE requests SET target_id=%s, status='open' WHERE id=%s",
                 (new_target_id, rid),
             )
-            log_event(cur, r["container_id"], "human", None, "request", rid, "suggestion_decided",
-                      {"kind": "reassign", "to_alias": body.target_alias,
-                       "verifier_human_id": body.actor_agent_id})
-            _publish_event(cur, str(r["container_id"]), new_target_id, "request_created",
-                           {"request_id": rid, "type": r["type"], "from_agent_id": str(r["requester_id"]),
-                            "preview": r["payload"][:120], "via": "human reassigned"})
-            _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "agent_suggestion_decided",
-                           {"request_id": rid, "kind": "reassign", "target_alias": body.target_alias})
+            log_event(
+                cur,
+                r["container_id"],
+                "human",
+                None,
+                "request",
+                rid,
+                "suggestion_decided",
+                {
+                    "kind": "reassign",
+                    "to_alias": body.target_alias,
+                    "verifier_human_id": body.actor_agent_id,
+                },
+            )
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                new_target_id,
+                "request_created",
+                {
+                    "request_id": rid,
+                    "type": r["type"],
+                    "from_agent_id": str(r["requester_id"]),
+                    "preview": r["payload"][:120],
+                    "via": "human reassigned",
+                },
+            )
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                str(r["requester_id"]),
+                "agent_suggestion_decided",
+                {
+                    "request_id": rid,
+                    "kind": "reassign",
+                    "target_alias": body.target_alias,
+                },
+            )
             conn.commit()
-            return {"request_id": rid, "kind": "reassign", "target_alias": body.target_alias, "status": "open"}
+            return {
+                "request_id": rid,
+                "kind": "reassign",
+                "target_alias": body.target_alias,
+                "status": "open",
+            }
 
         else:  # refuse
             cur.execute(
@@ -9024,13 +11088,34 @@ def decide_suggestion(rid: str, body: SuggestionDecision):
                 (body.reason or "refused by human", rid),
             )
             recompute_agent_status(cur, str(r["requester_id"]))
-            log_event(cur, r["container_id"], "human", None, "request", rid, "suggestion_decided",
-                      {"kind": "refuse", "reason": body.reason,
-                       "verifier_human_id": body.actor_agent_id})
-            _publish_event(cur, str(r["container_id"]), str(r["requester_id"]), "agent_suggestion_decided",
-                           {"request_id": rid, "kind": "refuse", "reason": body.reason})
+            log_event(
+                cur,
+                r["container_id"],
+                "human",
+                None,
+                "request",
+                rid,
+                "suggestion_decided",
+                {
+                    "kind": "refuse",
+                    "reason": body.reason,
+                    "verifier_human_id": body.actor_agent_id,
+                },
+            )
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                str(r["requester_id"]),
+                "agent_suggestion_decided",
+                {"request_id": rid, "kind": "refuse", "reason": body.reason},
+            )
             conn.commit()
-            return {"request_id": rid, "kind": "refuse", "status": "closed", "reason": body.reason}
+            return {
+                "request_id": rid,
+                "kind": "refuse",
+                "status": "closed",
+                "reason": body.reason,
+            }
 
 
 @app.post("/api/requests/{rid}/convert-to-task", status_code=200)
@@ -9045,17 +11130,27 @@ def convert_to_task(rid: str, body: RequestConvert):
     if not _valid_uuid(body.requester_agent_id):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        r = _require_request(cur, rid, for_update=True)   # lock: serialize all request-state mutations
-        _require_container_active(cur, str(r["container_id"]), body.requester_agent_id)   # GH #24 (human may still convert)
+        r = _require_request(
+            cur, rid, for_update=True
+        )  # lock: serialize all request-state mutations
+        _require_container_active(
+            cur, str(r["container_id"]), body.requester_agent_id
+        )  # GH #24 (human may still convert)
         if r["status"] != "answered":
-            raise HTTPException(409, f"request is '{r['status']}', not 'answered' — cannot convert")
+            raise HTTPException(
+                409, f"request is '{r['status']}', not 'answered' — cannot convert"
+            )
         if str(r["requester_id"]) != body.requester_agent_id:
             raise HTTPException(403, "only the requester may convert")
         if r["type"] != "info":
-            raise HTTPException(409, f"only info requests can be converted (this is '{r['type']}')")
+            raise HTTPException(
+                409, f"only info requests can be converted (this is '{r['type']}')"
+            )
         assignee_id: Optional[str] = None
         if body.assignee_alias:
-            assignee_id = _resolve_alias(cur, str(r["container_id"]), body.assignee_alias)
+            assignee_id = _resolve_alias(
+                cur, str(r["container_id"]), body.assignee_alias
+            )
         initial_status = "in_progress" if assignee_id else "ready"
         started_clause = "now()" if assignee_id else "NULL"
         cur.execute(
@@ -9064,9 +11159,15 @@ def convert_to_task(rid: str, body: RequestConvert):
                    status, priority, created_by_agent_id, started_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, {started_clause})
                 RETURNING id""",
-            (str(r["container_id"]), body.title,
-             f"Converted from request {rid[:8]}…", body.definition_of_done,
-             initial_status, body.priority, body.requester_agent_id),
+            (
+                str(r["container_id"]),
+                body.title,
+                f"Converted from request {rid[:8]}…",
+                body.definition_of_done,
+                initial_status,
+                body.priority,
+                body.requester_agent_id,
+            ),
         )
         tid = str(cur.fetchone()["id"])
         if assignee_id:
@@ -9084,26 +11185,59 @@ def convert_to_task(rid: str, body: RequestConvert):
         )
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)
-        log_event(cur, r["container_id"], "ai", body.requester_agent_id,
-                  "request", rid, "converted_to_task",
-                  {"spawned_task_id": tid, "title": body.title,
-                   "assignee_alias": body.assignee_alias})
-        log_event(cur, r["container_id"], "ai", body.requester_agent_id,
-                  "task", tid, "created",
-                  {"title": body.title, "via": "info-request conversion"})
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.requester_agent_id,
+            "request",
+            rid,
+            "converted_to_task",
+            {
+                "spawned_task_id": tid,
+                "title": body.title,
+                "assignee_alias": body.assignee_alias,
+            },
+        )
+        log_event(
+            cur,
+            r["container_id"],
+            "ai",
+            body.requester_agent_id,
+            "task",
+            tid,
+            "created",
+            {"title": body.title, "via": "info-request conversion"},
+        )
         if assignee_id:
-            _publish_event(cur, str(r["container_id"]), assignee_id, "task_assigned",
-                           {"task_id": tid, "title": body.title, "via": "converted from info request"})
+            _publish_event(
+                cur,
+                str(r["container_id"]),
+                assignee_id,
+                "task_assigned",
+                {
+                    "task_id": tid,
+                    "title": body.title,
+                    "via": "converted from info request",
+                },
+            )
         # GH #58: converting terminally resolves the original request — if the target still had a
         # pending request_created for it, ack it so it stops re-surfacing (mirrors close/escalate).
         if r["target_id"]:
-            _ack_events_handled(cur, str(r["target_id"]), "request_created", "request_id", rid)
+            _ack_events_handled(
+                cur, str(r["target_id"]), "request_created", "request_id", rid
+            )
         conn.commit()
-    return {"request_id": rid, "status": "converted_to_task", "spawned_task_id": tid,
-            "assignee_alias": body.assignee_alias}
+    return {
+        "request_id": rid,
+        "status": "converted_to_task",
+        "spawned_task_id": tid,
+        "assignee_alias": body.assignee_alias,
+    }
 
 
 # ---------- A3: prompt-event (wake an agent with a directed message) ----------
+
 
 @app.post("/api/agents/{aid}/prompt", status_code=201)
 def prompt_agent(aid: str, body: PromptEvent):
@@ -9122,13 +11256,22 @@ def prompt_agent(aid: str, body: PromptEvent):
         ag = _require_agent(cur, aid)
         payload = {"message": body.message, "from_agent_id": body.from_agent_id}
         _publish_event(cur, str(ag["container_id"]), aid, "prompt", payload)
-        log_event(cur, str(ag["container_id"]), "agent", body.from_agent_id, "agent", aid,
-                  "prompt_sent", {"chars": len(body.message)})
+        log_event(
+            cur,
+            str(ag["container_id"]),
+            "agent",
+            body.from_agent_id,
+            "agent",
+            aid,
+            "prompt_sent",
+            {"chars": len(body.message)},
+        )
         conn.commit()
     return {"agent_id": aid, "event": "prompt", "delivered": True}
 
 
 # ---------- SSE + long-poll subscribers (Orcha#5: addresses #3 polling cost) ----------
+
 
 def _assigned_ready_task(cur, aid: str) -> Optional[str]:
     """#23: the first task this agent could auto-start RIGHT NOW — assigned to it, status
@@ -9181,15 +11324,19 @@ def _agent_claim_blocked(cur, aid: str) -> bool:
     row = cur.fetchone()
     if row is None:
         return True
-    if row["container_status"] != "active":      # _require_container_active → 409
+    if row["container_status"] != "active":  # _require_container_active → 409
         return True
-    if row["terminated_at"] is not None:         # _reject_if_retired → 409
+    if row["terminated_at"] is not None:  # _reject_if_retired → 409
         return True
     return False
 
 
 @app.get("/api/agents/{aid}/wait")
-async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: float = Query(default=30.0, ge=1, le=120)):
+async def agent_wait(
+    aid: str,
+    since_ts: float = Query(default=0.0),
+    timeout: float = Query(default=30.0, ge=1, le=120),
+):
     """Long-poll for the next event addressed to this agent.
 
     Returns `{event, ts, ...}` or `{event: 'timeout'}` after `timeout` seconds.
@@ -9213,7 +11360,8 @@ async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: fl
             """INSERT INTO agent_wake_state (agent_id, work_last_heartbeat_at)
                VALUES (%s, now())
                ON CONFLICT (agent_id) DO UPDATE SET work_last_heartbeat_at = now()""",
-            (aid,))
+            (aid,),
+        )
         # #23 [P0]: BEFORE blocking, settle the edge/level gap. _wait_for_event is EDGE-triggered
         # (returns only agent_events with ts > since_ts), so a task assigned+readied while this
         # listener wasn't subscribed — its task_ready/task_assigned event already <= since_ts, or
@@ -9243,7 +11391,12 @@ async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: fl
         # it, so that real event is still > since_ts and gets delivered next poll — the synthetic
         # never masks a real one. The synthetic self-clears once the listener claims via /orcha-next
         # (status flips to in_progress → the next probe finds nothing ready), so it can't spin.
-        return {"event": "task_ready", "ts": since_ts, "task_id": ready_tid, "assigned": True}
+        return {
+            "event": "task_ready",
+            "ts": since_ts,
+            "task_id": ready_tid,
+            "assigned": True,
+        }
     evt = await _wait_for_event(aid, since_ts, timeout)
     # ISS-50 review P1: the entry write alone is stale by the time a long poll returns — /wait can
     # block up to 120s. An event that lands near the end is delivered to a LIVE listener, but its
@@ -9259,9 +11412,18 @@ async def agent_wait(aid: str, since_ts: float = Query(default=0.0), timeout: fl
         with db_cursor() as (_, cur):
             # Gate (PR#274): same claimability gate as the entry probe — suppress the synthetic
             # when /next would refuse the claim (paused/stopped container or exhausted budget).
-            ready_tid = None if _agent_claim_blocked(cur, aid) else _assigned_ready_task(cur, aid)
+            ready_tid = (
+                None
+                if _agent_claim_blocked(cur, aid)
+                else _assigned_ready_task(cur, aid)
+            )
         if ready_tid is not None:
-            return {"event": "task_ready", "ts": since_ts, "task_id": ready_tid, "assigned": True}
+            return {
+                "event": "task_ready",
+                "ts": since_ts,
+                "task_id": ready_tid,
+                "assigned": True,
+            }
         return {"event": "timeout", "ts": time.time()}
     return evt
 
@@ -9343,17 +11505,39 @@ def sweep_expired(cid: str, actor_agent_id: str = Query(...)):
                 "UPDATE requests SET target_id=%s WHERE id=%s",
                 (human_id, r["id"]),
             )
-            log_event(cur, cid, "system", None, "request", str(r["id"]), "escalated",
-                      {"reason": "expires_at passed (sweep)", "to_human_id": human_id})
-            _publish_event(cur, cid, human_id, "request_created",
-                           {"request_id": str(r["id"]), "via": "expires_at sweep"})
-            _publish_event(cur, cid, None, "request_escalated",
-                           {"request_id": str(r["id"]), "reason": "expires_at passed (sweep)"})
+            log_event(
+                cur,
+                cid,
+                "system",
+                None,
+                "request",
+                str(r["id"]),
+                "escalated",
+                {"reason": "expires_at passed (sweep)", "to_human_id": human_id},
+            )
+            _publish_event(
+                cur,
+                cid,
+                human_id,
+                "request_created",
+                {"request_id": str(r["id"]), "via": "expires_at sweep"},
+            )
+            _publish_event(
+                cur,
+                cid,
+                None,
+                "request_escalated",
+                {"request_id": str(r["id"]), "reason": "expires_at passed (sweep)"},
+            )
         conn.commit()
-    return {"escalated_count": len(expired), "request_ids": [str(r["id"]) for r in expired]}
+    return {
+        "escalated_count": len(expired),
+        "request_ids": [str(r["id"]) for r in expired],
+    }
 
 
 # ---------- agent memory digest (Epic C / D3 + D4) ----------
+
 
 @app.post("/api/agents/{aid}/digest", status_code=201)
 def post_digest(aid: str, body: DigestSnapshot):
@@ -9368,12 +11552,24 @@ def post_digest(aid: str, body: DigestSnapshot):
     # #287 Tier-0 compaction: collapse exact-duplicate + empty entries before storing. Pure
     # (removes only provably-redundant bytes), so it never edits the agent's reasoning — the
     # honesty boundary is intact. Degrades to the raw lists if the curator copy is absent.
-    decisions, learnings, open_threads = body.decisions, body.learnings, body.open_threads
+    decisions, learnings, open_threads = (
+        body.decisions,
+        body.learnings,
+        body.open_threads,
+    )
     if _digest_curate is not None:
         clean = _digest_curate.dedup_digest(
-            {"decisions": decisions, "learnings": learnings, "open_threads": open_threads})
+            {
+                "decisions": decisions,
+                "learnings": learnings,
+                "open_threads": open_threads,
+            }
+        )
         decisions, learnings, open_threads = (
-            clean["decisions"], clean["learnings"], clean["open_threads"])
+            clean["decisions"],
+            clean["learnings"],
+            clean["open_threads"],
+        )
     with db_cursor() as (conn, cur):
         a = _require_agent(cur, aid)
         cid = str(a["container_id"])
@@ -9384,19 +11580,39 @@ def post_digest(aid: str, body: DigestSnapshot):
                   decisions, learnings, open_threads, audience)
                VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
                RETURNING id""",
-            (cid, aid, ts, body.current_focus,
-             json.dumps(decisions), json.dumps(learnings),
-             json.dumps(open_threads), body.audience),
+            (
+                cid,
+                aid,
+                ts,
+                body.current_focus,
+                json.dumps(decisions),
+                json.dumps(learnings),
+                json.dumps(open_threads),
+                body.audience,
+            ),
         )
         did = cur.fetchone()["id"]
-        log_event(cur, cid, "ai", aid, "agent", aid, "digest_snapshotted",
-                  {"digest_id": did, "current_focus": body.current_focus})
+        log_event(
+            cur,
+            cid,
+            "ai",
+            aid,
+            "agent",
+            aid,
+            "digest_snapshotted",
+            {"digest_id": did, "current_focus": body.current_focus},
+        )
         # ISS-58: publish CONTAINER-scoped only (target_agent_id=None), NOT to the agent's own key.
         # A snapshot is a dashboard notification, not work — delivering it to the agent's inbox made
         # wake-scan count it as pending and re-wake the agent, which snapshots again on exit → a
         # ~60s runaway. agent_id rides in the payload so dashboards still attribute it.
-        _publish_event(cur, cid, None, "digest_snapshotted",
-                       {"digest_id": did, "snapshot_ts": ts, "agent_id": aid})
+        _publish_event(
+            cur,
+            cid,
+            None,
+            "digest_snapshotted",
+            {"digest_id": did, "snapshot_ts": ts, "agent_id": aid},
+        )
         conn.commit()
     return {"digest_id": did, "agent_id": aid, "snapshot_ts": ts}
 
@@ -9435,7 +11651,9 @@ def rehydrate(aid: str):
         cur.execute(
             """SELECT id, container_id, alias, role, kind, status,
                       turns_used, turn_budget
-               FROM agents WHERE id=%s""", (aid,))
+               FROM agents WHERE id=%s""",
+            (aid,),
+        )
         a = cur.fetchone()
         if not a:
             raise HTTPException(404, f"agent {aid} not found")
@@ -9496,6 +11714,7 @@ def rehydrate(aid: str):
 
 
 # ---------- backwards-compat + dashboard ----------
+
 
 @app.get("/api/snapshot/{cid}")
 def snapshot(cid: str):
@@ -9583,26 +11802,38 @@ def tasks_page():
 # to the target agent so it sees *why* on its next wake (not just yes/no). B3
 # (requests) and B4 (verify + checkpoint) reuse this without a new contract.
 
+
 @app.post("/api/decisions", status_code=201)
 def create_decision(body: DecisionCreate):
     reason = (body.reason or "").strip()
     # Server-side invariant (NOT only the UI): reject requires a reason.
     if body.decision == "reject" and not reason:
-        raise HTTPException(422, {"error": "reason_required",
-                                  "detail": "a reason is required when decision is 'reject'"})
+        raise HTTPException(
+            422,
+            {
+                "error": "reason_required",
+                "detail": "a reason is required when decision is 'reject'",
+            },
+        )
     if body.target_agent_id is not None and not _valid_uuid(body.target_agent_id):
         raise HTTPException(400, "target_agent_id is not a valid UUID")
 
     with db_cursor() as (conn, cur):
         # Only a human decides. _require_kind also validates the UUID + existence.
         _require_kind(cur, body.actor_agent_id, ("human",))
-        cur.execute("SELECT container_id FROM agents WHERE id=%s", (body.actor_agent_id,))
+        cur.execute(
+            "SELECT container_id FROM agents WHERE id=%s", (body.actor_agent_id,)
+        )
         target_container = cur.fetchone()["container_id"]
         if body.target_agent_id is not None:
-            cur.execute("SELECT container_id FROM agents WHERE id=%s", (body.target_agent_id,))
+            cur.execute(
+                "SELECT container_id FROM agents WHERE id=%s", (body.target_agent_id,)
+            )
             trow = cur.fetchone()
             if not trow:
-                raise HTTPException(404, f"target agent {body.target_agent_id} not found")
+                raise HTTPException(
+                    404, f"target agent {body.target_agent_id} not found"
+                )
             target_container = trow["container_id"]
 
         cur.execute(
@@ -9611,8 +11842,15 @@ def create_decision(body: DecisionCreate):
                   actor_agent_id, target_agent_id)
                VALUES (%s, %s, %s, %s, %s, %s, %s)
                RETURNING id, created_at""",
-            (target_container, body.subject_type, body.subject_id, body.decision,
-             (reason or None), body.actor_agent_id, body.target_agent_id),
+            (
+                target_container,
+                body.subject_type,
+                body.subject_id,
+                body.decision,
+                (reason or None),
+                body.actor_agent_id,
+                body.target_agent_id,
+            ),
         )
         row = cur.fetchone()
         decision_id = str(row["id"])
@@ -9624,25 +11862,35 @@ def create_decision(body: DecisionCreate):
                 str(target_container) if target_container else None,
                 str(body.target_agent_id),
                 "decision_made",
-                {"decision_id": decision_id,
-                 "subject_type": body.subject_type,
-                 "subject_id": body.subject_id,
-                 "decision": body.decision,
-                 "reason": (reason or None)},
+                {
+                    "decision_id": decision_id,
+                    "subject_type": body.subject_type,
+                    "subject_id": body.subject_id,
+                    "decision": body.decision,
+                    "reason": (reason or None),
+                },
             )
         # ISS-48: a decision_made event wakes the agent, but the agent's source of truth is the
         # task THREAD — so also post an attributed decision message there. Without it an approved
         # plan-first agent re-reads the thread, sees no approval, and re-plans forever.
-        _post_decision_to_thread(cur, body.subject_type, body.subject_id,
-                                  body.decision, (reason or None), body.actor_agent_id)
+        _post_decision_to_thread(
+            cur,
+            body.subject_type,
+            body.subject_id,
+            body.decision,
+            (reason or None),
+            body.actor_agent_id,
+        )
 
-    return {"decision_id": decision_id,
-            "decision": body.decision,
-            "reason": (reason or None),
-            "subject_type": body.subject_type,
-            "subject_id": body.subject_id,
-            "target_agent_id": body.target_agent_id,
-            "created_at": row["created_at"].isoformat()}
+    return {
+        "decision_id": decision_id,
+        "decision": body.decision,
+        "reason": (reason or None),
+        "subject_type": body.subject_type,
+        "subject_id": body.subject_id,
+        "target_agent_id": body.target_agent_id,
+        "created_at": row["created_at"].isoformat(),
+    }
 
 
 @app.get("/api/decisions/{did}")
@@ -9653,7 +11901,9 @@ def get_decision(did: str):
         cur.execute(
             """SELECT id, container_id, subject_type, subject_id, decision, reason,
                       actor_agent_id, target_agent_id, created_at
-               FROM decisions WHERE id=%s""", (did,))
+               FROM decisions WHERE id=%s""",
+            (did,),
+        )
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"decision {did} not found")
@@ -9665,6 +11915,8 @@ def get_decision(did: str):
             "decision": row["decision"],
             "reason": row["reason"],
             "actor_agent_id": str(row["actor_agent_id"]),
-            "target_agent_id": str(row["target_agent_id"]) if row["target_agent_id"] else None,
+            "target_agent_id": str(row["target_agent_id"])
+            if row["target_agent_id"]
+            else None,
             "created_at": row["created_at"].isoformat(),
         }
