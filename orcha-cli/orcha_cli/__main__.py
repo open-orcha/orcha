@@ -35,7 +35,10 @@ from orcha_cli import cli_bindings as _cli_bindings
 from orcha_cli import cli_project_commands as _cli_project_commands
 from orcha_cli import cli_connect as _cli_connect
 from orcha_cli import cli_init as _cli_init
+from orcha_cli import cli_hooks as _cli_hooks
 from orcha_cli import cli_lifecycle as _cli_lifecycle
+from orcha_cli import cli_rehydrate as _cli_rehydrate
+from orcha_cli import cli_session_hooks as _cli_session_hooks
 from orcha_cli import cli_stacks as _cli_stacks
 from orcha_cli import cli_transcript as _cli_transcript
 from orcha_cli import cli_watch as _cli_watch
@@ -475,253 +478,28 @@ def cmd_unwatch(args: argparse.Namespace) -> None:
 
 
 def _detect_tmux_target() -> Optional[str]:
-    """This session's tmux pane "session:window.pane", or None if not under tmux.
-
-    Optional — most Orcha users run plain Claude Code CLI (no tmux) and rely on the
-    headless wake transport. Only populated when tmux is installed AND we're inside a
-    session, enabling the live-pane send-keys transport.
-    """
-    if not shutil.which("tmux") or not os.environ.get("TMUX"):
-        return None
-    try:
-        out = subprocess.run(
-            ["tmux", "display-message", "-p", "#{session_name}:#{window_index}.#{pane_index}"],
-            capture_output=True, text=True, timeout=3,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return (out.stdout.strip() or None) if out.returncode == 0 else None
+    """Return this session's tmux pane through the focused hook module."""
+    return _cli_hooks.detect_tmux_target()
 
 
 def cmd_reachability(args: argparse.Namespace) -> None:
-    """Epic A: record THIS session's bound-agent reachability so the notifier can wake it.
-
-    Posts headless_cwd (this project dir, where `claude -p` wakes spawn) plus the tmux
-    pane if we happen to be under tmux. Run at SessionStart (hook, registered by init)
-    and right after `/orcha-register-agent`, so every agent is wakeable with zero manual
-    steps — `orcha init` is all a user runs. Silent no-op when this isn't an Orcha
-    project, there's no resolvable AI binding, or the binding is a human (humans aren't
-    woken). Must never break the session it runs in.
-    """
-    if _skip_managed_embodiment_hook("reachability"):   # ISS-21: a worker is already reachable; no per-wake re-record
-        return
-    cwd = pathlib.Path.cwd()
-    cfg = cwd / ".claude" / "orcha.json"
-    if not cfg.exists():
-        return
-    try:
-        api_base = json.loads(cfg.read_text()).get("api_base_url")
-    except Exception:
-        return
-    if not api_base:
-        return
-    binding = _resolve_any_binding(cwd, args.alias)
-    if not binding or binding.get("kind") == "human":
-        return
-    aid = binding.get("agent_id")
-    if not aid:
-        return
-    body = {"headless_cwd": str(cwd)}
-    tgt = _detect_tmux_target()
-    if tgt:
-        body["tmux_target"] = tgt
-    try:
-        _post_json(f"{api_base}/api/agents/{aid}/reachability", body)
-    except Exception:
-        return  # a recording failure must never break the session
-    if not args.quiet:
-        extra = f", tmux={tgt}" if tgt else ""
-        print(f"[orcha] reachability recorded for {binding.get('alias')} "
-              f"(headless_cwd={cwd}{extra}) — daemon can now wake it")
+    """Record the current session's wake transport without breaking startup."""
+    _cli_hooks.record_reachability(args, sys.modules[__name__])
 
 
 def _write_hook_config(claude_dir: pathlib.Path) -> bool:
-    """Orcha#33: register the three notification hooks in .claude/settings.json.
-
-    - SessionStart  → `orcha watch --detach` (spawns the per-session poller)
-    - SessionEnd    → `orcha unwatch`        (SIGTERMs the poller)
-    - SessionEnd    → `orcha snapshot`       (C1: headless worker writes its
-                                              continuity digest before exiting)
-    - SessionEnd    → `orcha task-claim-guard` (GH #152: audits the session's last
-                                              reply for a task-creation claim that
-                                              never persisted, hard-fails loudly)
-    - PostToolUse   → `orcha poll-inbox`     (drains the watcher's queue into
-                                              Claude's next-turn context)
-    - PreToolUse    → `orcha conv-guard`     (GH #91/#90: blocks the task-claim/
-                                              mutation path for a conversation
-                                              embodiment; no-op otherwise)
-
-    Each entry is added independently and idempotently — re-running this with
-    a partially-present config will fill in whatever's missing without touching
-    existing entries. SessionStart/SessionEnd don't take a `matcher` field.
-
-    Returns True if any entry was added, False if all three were already wired
-    or the file is structurally too unusual to safely merge.
-    """
-    settings_path = claude_dir / "settings.json"
-
-    settings: dict = {}
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text())
-            if not isinstance(settings, dict):
-                settings = {}
-        except Exception:
-            # Corrupted JSON — refuse to clobber the user's file.
-            return False
-
-    hooks_block = settings.setdefault("hooks", {})
-    if not isinstance(hooks_block, dict):
-        return False
-
-    def _ensure(event: str, command: str, matcher: Optional[str]) -> bool:
-        """Add a hook for `event` if no entry with the same command exists yet."""
-        entries = hooks_block.setdefault(event, [])
-        if not isinstance(entries, list):
-            return False
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            for h in entry.get("hooks", []) or []:
-                if isinstance(h, dict) and h.get("command") == command:
-                    return False
-        new_entry: dict = {"hooks": [{"type": "command", "command": command}]}
-        if matcher is not None:
-            new_entry["matcher"] = matcher
-        entries.append(new_entry)
-        return True
-
-    added_any = False
-    added_any |= _ensure("PostToolUse",  "orcha poll-inbox",   matcher="*")
-    # GH #91/#90: PreToolUse conversation-lane backstop. A no-op unless ORCHA_CONVERSATION_WORKER=1,
-    # so interactive human tabs / task ephemerals / live terminals are unaffected; for a conversation
-    # embodiment it denies the task-claim/mutation path (/orcha-next, /orcha-accept-task, /orcha-done,
-    # Edit/Write/NotebookEdit) while leaving dispatch + conversation-reply allowed.
-    added_any |= _ensure("PreToolUse",   "orcha conv-guard",   matcher="*")
-    added_any |= _ensure("SessionStart", "orcha watch --detach", matcher=None)
-    # Epic C: a SECOND SessionStart entry, alongside watch — prints the rehydrate
-    # brief. Independent + idempotent: the two entries don't clobber each other.
-    added_any |= _ensure("SessionStart", "orcha rehydrate",     matcher=None)
-    added_any |= _ensure("SessionEnd",   "orcha unwatch",       matcher=None)
-    # Epic C / C1: digest write-on-exit. A SECOND SessionEnd entry, alongside
-    # unwatch — a woken headless worker snapshots its continuity digest before it
-    # exits. `orcha snapshot` is an internal no-op unless ORCHA_HEADLESS_WORKER=1,
-    # so interactive human tabs (which author via /orcha-snapshot) are unaffected.
-    added_any |= _ensure("SessionEnd",   "orcha snapshot",      matcher=None)
-    # GH #152: audit the session's last reply for a task-creation claim ("I created/
-    # started task <id>") that never actually persisted, and hard-fail loudly on a
-    # mismatch (digest override + thread flag / human escalation) instead of letting a
-    # hallucinated tool result stand as a silent success narrative. Independent of
-    # `orcha snapshot` — a THIRD SessionEnd entry, not gated to headless workers (the
-    # claim can happen in any embodiment).
-    added_any |= _ensure("SessionEnd",   "orcha task-claim-guard", matcher=None)
-    # Epic A: wake daemon comes up with the workspace (idempotent singleton), so an
-    # idle agent gets woken out-of-band without anyone hand-starting a daemon.
-    added_any |= _ensure("SessionStart", "orcha notifier --ensure", matcher=None)
-    # S3 §3b: the host-side live-terminal bridge comes up the same way (idempotent singleton),
-    # so the embedded terminal can connect without anyone hand-starting it.
-    added_any |= _ensure("SessionStart", "orcha terminal-bridge --ensure", matcher=None)
-    # Epic A: record this session's bound-agent reachability (headless_cwd / tmux pane)
-    # so the daemon knows HOW to wake it — every agent wakeable with zero manual steps.
-    added_any |= _ensure("SessionStart", "orcha reachability --quiet", matcher=None)
-
-    if added_any:
-        claude_dir.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-    return added_any
+    """Install managed hooks while preserving existing settings entries."""
+    return _cli_hooks.write_hook_config(claude_dir)
 
 
 def cmd_enable_hook(_: argparse.Namespace) -> None:
-    """Orcha#33: opt an existing folder into the PostToolUse poll-inbox hook."""
-    cwd = pathlib.Path.cwd()
-    claude_dir = cwd / ".claude"
-    if not (claude_dir / "orcha.json").exists():
-        sys.exit(
-            "error: no .claude/orcha.json in CWD. Run `orcha init` (or `orcha connect`) "
-            "first so the hook has somewhere to poll."
-        )
-    added = _write_hook_config(claude_dir)
-    if added:
-        print(f"[orcha] ✓ PostToolUse hook registered in {claude_dir / 'settings.json'}")
-        print("        Working agents in this folder will now check inbox between tool calls.")
-    else:
-        print(f"[orcha] hook already present in {claude_dir / 'settings.json'} (no change)")
+    """Enable managed hooks in an existing connected workspace."""
+    _cli_hooks.enable_hooks(sys.modules[__name__])
 
 
 def cmd_poll_inbox(args: argparse.Namespace) -> None:
-    """Orcha#33: PostToolUse hook — surface items the background watcher queued.
-
-    This is a CHEAP file read, not an API call. The actual polling happens in
-    `orcha watch` (spawned by SessionStart, killed by SessionEnd). The hook
-    just drains the watcher's queue on every tool-call boundary so the agent
-    sees pending work in its next-turn context.
-
-    Silent no-op when there's no `.claude/orcha.json`, no resolvable binding,
-    the binding's kind='human', or the queue is empty. Must NEVER break the
-    Claude session it runs inside.
-    """
-    cwd = pathlib.Path.cwd()
-    if not (cwd / ".claude" / "orcha.json").exists():
-        return
-
-    binding = _resolve_any_binding(cwd, args.alias)
-    if not binding or binding.get("kind") == "human":
-        return
-    alias = binding.get("alias")
-    if not alias:
-        return
-
-    state = _read_watch_state(cwd, alias)
-    queued = state.get("queued") or []
-    if not queued:
-        return
-
-    # Drain the queue atomically: we've taken ownership of these items; the
-    # next watcher cycle won't re-queue them because their ids are in seen_ids.
-    state["queued"] = []
-    try:
-        _atomic_write_json(_watch_state_path(cwd, alias), state)
-    except Exception:
-        # If we can't clear the queue, abandon surfacing — better to print the
-        # same items next turn than to lose them, and better to lose nothing
-        # than to flood Claude with repeats.
-        return
-
-    n = len(queued)
-    print(f"[orcha] 🔔 {n} new item{'s' if n != 1 else ''} for {alias} (from background watcher):")
-    incoming = [q for q in queued if q.get("channel") == "inbox"]
-    answered = [q for q in queued if q.get("channel") == "outbox-answered"]
-
-    for q in incoming[:5]:
-        rid_short = (q.get("id") or "")[:8]
-        prio = q.get("priority", "?")
-        kind = q.get("type", "info")
-        sender = q.get("from") or "?"
-        preview = (q.get("preview") or "").replace("\n", " ").strip()
-        if len(preview) > 100:
-            preview = preview[:97] + "..."
-        chain = ""
-        depth = q.get("chain_depth") or 0
-        if depth:
-            chain = f" chain-depth={depth}"
-        print(f"  ← {kind} {rid_short} from {sender} (p={prio}){chain}: \"{preview}\"")
-    if len(incoming) > 5:
-        print(f"  ← ...and {len(incoming) - 5} more incoming")
-
-    for q in answered[:5]:
-        rid_short = (q.get("id") or "")[:8]
-        target = q.get("to") or "?"
-        ans = (q.get("answer_preview") or "").replace("\n", " ").strip()
-        if len(ans) > 100:
-            ans = ans[:97] + "..."
-        print(f"  → answer to your ask {rid_short} ({target}): \"{ans}\"")
-    if len(answered) > 5:
-        print(f"  → ...and {len(answered) - 5} more answered outgoing")
-
-    print(
-        f"Handle at the next step boundary: `/orcha-inbox --alias {alias}` "
-        f"for full thread, or `/orcha-outbox --alias {alias}` for answered asks."
-    )
+    """Surface events queued by the background watcher."""
+    _cli_session_hooks.poll_inbox(args, sys.modules[__name__])
 
 
 # GH #91/#90: the task-claim/mutation surface a CONVERSATION embodiment must NOT touch. Keyed by the
@@ -730,172 +508,35 @@ def cmd_poll_inbox(args: argparse.Namespace) -> None:
 # task itself; that's the WORK lane's job. This is the SECONDARY floor — the server's _require_work_lane
 # gate (a conversation token can't pass) is the PRIMARY one; this hook just gives the model a clean,
 # early deny instead of letting it burn a turn on a call the server would 403.
-_CONV_BLOCKED_SLASH = ("orcha-next", "orcha-accept-task", "orcha-done", "orcha-self-wake")
+_CONV_BLOCKED_SLASH = _cli_session_hooks.CONV_BLOCKED_SLASH
 # File-mutating tools a conversation responder shouldn't reach for (it dispatches code work to a task,
 # it doesn't do the edits itself). Dispatch + read + conversation-reply tools stay allowed.
-_CONV_BLOCKED_TOOLS = ("Edit", "Write", "NotebookEdit")
+_CONV_BLOCKED_TOOLS = _cli_session_hooks.CONV_BLOCKED_TOOLS
 # PR R5: the ONE file surface a conversation embodiment must keep — its persistent Claude Code
 # file-memory (~/.claude/projects/<project>/memory/...). A warm resident that can't write memory
 # silently stops persisting what it learns across sessions; memory writes are self-bookkeeping,
 # not the "code work" the lane guard exists to farm out.
-_CONV_MEMORY_DIR_RE = re.compile(r"/\.claude/projects/[^/]+/memory/")
+_CONV_MEMORY_DIR_RE = _cli_session_hooks.CONV_MEMORY_DIR_RE
 
 
 def _conv_is_memory_write(tool_input: dict) -> bool:
-    """True when a blocked file tool is targeting the agent's file-memory directory."""
-    path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
-    return bool(_CONV_MEMORY_DIR_RE.search(path.replace("\\", "/")))
+    """Return whether a write targets the conversation agent's own memory."""
+    return _cli_session_hooks.is_memory_write(tool_input)
 
 
 def cmd_conv_guard(_: argparse.Namespace) -> None:
-    """PreToolUse backstop (GH #91/#90): when ORCHA_CONVERSATION_WORKER=1, block the task-claim /
-    task-mutation path so a conversation embodiment stays a responder — it DISPATCHES work (create/
-    assign a task, reply/post to the conversation) but never claims or advances a task itself.
-
-    PreToolUse hooks receive {tool_name, tool_input, ...} on stdin and can veto a call by emitting a
-    `hookSpecificOutput.permissionDecision: "deny"`. We deny two things when the marker is set:
-      - the task-lifecycle SLASH skills (/orcha-next, /orcha-accept-task begin-work, /orcha-done), and
-      - the file-mutating tools (Edit/Write/NotebookEdit) — a responder farms code edits out to a task.
-    Everything else (task create/assign dispatch, conversation reply/post, all reads) is ALLOWED.
-
-    Secondary to the server's _require_work_lane gate (the primary floor a conversation token can't
-    pass). Must NEVER raise — a broken hook must not wedge the session, so any error → allow (exit 0)."""
-    # Only a genuine conversation embodiment is gated. Task ephemerals / the drain sidecar / a human /
-    # a live terminal never set this marker → the guard is a no-op for them.
-    if os.environ.get("ORCHA_CONVERSATION_WORKER") != "1":
-        return
-    payload = _read_hook_stdin()
-    tool_name = payload.get("tool_name") or ""
-    tool_input = payload.get("tool_input") or {}
-    if not isinstance(tool_input, dict):
-        tool_input = {}
-
-    blocked_reason = None
-    if tool_name in _CONV_BLOCKED_TOOLS and not _conv_is_memory_write(tool_input):
-        blocked_reason = (
-            f"{tool_name} is blocked for a conversation embodiment. You are the conversation "
-            "responder: dispatch code work to an assigned task (with a clear title/DoD/protocol) "
-            "instead of editing files inline. (Writes to your own memory directory are allowed.)"
-        )
-    elif tool_name == "SlashCommand":
-        # SlashCommand passes the invoked command as tool_input.command, e.g. "/orcha-next --alias x".
-        cmd = str(tool_input.get("command") or "").lstrip("/").strip()
-        first = cmd.split()[0] if cmd else ""
-        if first in _CONV_BLOCKED_SLASH:
-            blocked_reason = (
-                f"/{first} is a WORK-lane task action, blocked for a conversation embodiment. "
-                "You dispatch work (create/assign a task, reply inline) — you do not claim or "
-                "advance tasks yourself. Create an assigned task and reply with the task link."
-            )
-
-    if blocked_reason is None:
-        return                                          # allowed — say nothing, exit 0
-    # Deny cleanly via the PreToolUse hook JSON contract.
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": blocked_reason,
-        }
-    }))
+    """Deny work-lane mutations from a conversation embodiment."""
+    _cli_session_hooks.conversation_guard(sys.modules[__name__])
 
 
 def _fmt_rehydrate_brief(b: dict) -> str:
-    """Render the 'where we left off' brief from GET /api/agents/{aid}/rehydrate.
-
-    Plain text on stdout — the SessionStart hook injects stdout into Claude's
-    next-turn context (same channel as poll-inbox). Deliberately carries NO
-    Claude Code file-memory: that loads via its own parallel injector. This brief
-    is ONLY the agent's work/reasoning state (Epic C ownership boundary).
-    """
-    ident = b.get("identity") or {}
-    alias = ident.get("alias", "?")
-    role = ident.get("role", "?")
-    lines = [
-        f"[orcha] ⏪ Rehydrated session — you are {alias} ({role}).",
-        f"        agent_id {ident.get('id', '?')} · status {ident.get('status', '?')} "
-        f"· turns {ident.get('turns_used', '?')}/{ident.get('turn_budget', '?')}",
-    ]
-
-    tasks = b.get("tasks") or []
-    if tasks:
-        lines.append(f"  Your live tasks ({len(tasks)}):")
-        for t in tasks[:6]:
-            lines.append(f"    • [{t.get('status')}] {t.get('title')}  (id {str(t.get('id'))[:8]})")
-            last = t.get("last_message")
-            if last:
-                lines.append(f"        last note: {last[:140]}")
-
-    inbox = b.get("inbox") or []
-    if inbox:
-        lines.append(f"  Inbox — open requests to answer ({len(inbox)}):")
-        for i in inbox[:6]:
-            lines.append(f"    ← {i.get('requester_alias')}: {(i.get('payload') or '')[:120]}  (id {str(i.get('id'))[:8]})")
-
-    outbox = b.get("outbox") or []
-    if outbox:
-        lines.append(f"  Your asks now answered ({len(outbox)}):")
-        for o in outbox[:6]:
-            lines.append(f"    → {o.get('target_alias')}: {(o.get('response') or '')[:120]}  (id {str(o.get('id'))[:8]})")
-
-    digest = b.get("digest")
-    if digest:
-        lines.append("  Memory digest (your prior reasoning; re-check external state before trusting it):")
-        lines.append("    Treat PR/issue/task/request status, review state, and who-owes-what as pointers")
-        lines.append("    to verify live before acting or deciding there is nothing to do.")
-        if digest.get("current_focus"):
-            lines.append(f"    focus: {digest['current_focus']}")
-        for label in ("decisions", "learnings", "open_threads"):
-            items = digest.get(label) or []
-            if items:
-                lines.append(f"    {label}:")
-                for it in items[:5]:
-                    txt = it.get("text") if isinstance(it, dict) else str(it)
-                    lines.append(f"      - {txt}")
-    else:
-        lines.append("  Memory digest: none yet — run /orcha-snapshot to capture your reasoning.")
-
-    lines.append(f"  Resume: handle inbox first if any, else /orcha-next --alias {alias} "
-                 f"(or /loop /orcha-listen --alias {alias}).")
-    return "\n".join(lines)
+    """Render the session-start continuity response."""
+    return _cli_rehydrate.format_brief(b)
 
 
 def cmd_rehydrate(args: argparse.Namespace) -> None:
-    """Epic C / D2 + D4: SessionStart 'where we left off' brief.
-
-    Detects the stack (.claude/orcha.json), rebinds the alias from the binding
-    file / $ORCHA_ALIAS (same resolver `orcha watch` uses), fetches the rehydrate
-    brief and prints it to stdout so SessionStart injects it into Claude's
-    context — no command typed by the user.
-
-    Silent no-op (like watch/poll-inbox) when there's no config, no resolvable
-    binding, or the stack is unreachable. MUST NEVER raise: a hook that breaks an
-    unrelated Claude session is worse than one that stays quiet.
-    """
-    if _skip_managed_embodiment_hook("rehydrate"):   # ISS-21: notifier already injects persona+digest via --append-system-prompt
-        return
-    try:
-        cwd = pathlib.Path.cwd()
-        config_path = cwd / ".claude" / "orcha.json"
-        if not config_path.exists():
-            return
-        config = json.loads(config_path.read_text())
-        api_base = config.get("api_base_url")
-        if not api_base:
-            return
-        binding = _resolve_any_binding(cwd, args.alias)
-        if not binding:
-            return
-        agent_id = binding.get("agent_id")
-        if not agent_id:
-            return
-        brief = _get_json(f"{api_base}/api/agents/{agent_id}/rehydrate", timeout=4.0)
-        if not brief:
-            return
-        print(_fmt_rehydrate_brief(brief))
-    except Exception:
-        # Never let a SessionStart hook break the session.
-        return
+    """Print the session-start continuity brief when available."""
+    _cli_rehydrate.rehydrate(args, sys.modules[__name__])
 
 
 def _live_boot_prefix(
