@@ -20,7 +20,7 @@ STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 
 
 def _inline_js(html: str) -> str:
-    return "\n".join(re.findall(r"<script>(.*?)</script>", html, re.S))
+    return "\n".join(re.findall(r"<script>(.*?)</script>", html, re.S | re.I))
 
 
 def test_o4_assign_surface_wired_into_task_detail():
