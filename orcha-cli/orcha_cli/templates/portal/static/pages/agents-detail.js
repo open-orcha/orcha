@@ -1,5 +1,6 @@
 /* Agents page controller: agent detail cards, gate callouts, persona, digest, and request summaries. */
 function renderDetailMain(force) {
+  const a = AgeO.agentByAlias(sel);
   if (!a) { AgeO.patch(Age$("detailMain"), '<div class="card pad"><div class="none">Agent not found.</div></div>', force); return; }
   const mine = agentTasks(a.alias).sort(AgeO.sortComparator("agent-tasks", taskSortAcc()));
   const current = mine.filter((t) => t.status === "in_progress" || t.status === "needs_verification");

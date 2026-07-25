@@ -155,6 +155,3 @@ function embodBadge(a, liveSet) {
   if (!kind || kind === "idle") return "";
   return `<span class="rlive ${kind}" title="${AgeO.esc(EMBOD_TITLE[kind] || "")}"><span class="d"></span>${EMBOD_LBL[kind] || kind}</span>`;
 }
-
-/* ---------- detail (snapshot sections — re-rendered every 3s tick) ---------- */
-  const a = AgeO.agentByAlias(sel);

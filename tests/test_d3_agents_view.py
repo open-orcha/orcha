@@ -17,6 +17,7 @@ Folded in per dispatch:
 The visual is verified live; the automatable surface is the wiring + the gate logic.
 """
 import pathlib
+import re
 import pytest
 from portal_source import page_source
 
@@ -38,6 +39,20 @@ async def test_agents_serves_and_wires_the_foundation(client):
     assert "OrchaData.start(render, 3000)" in page_source("agents.html"), "agents doesn't boot the live adapter on the 3s cadence"
     for el in ('id="roster"', 'id="detailMain"', 'id="runsWrap"'):
         assert el in html, f"agents missing section {el}"
+
+
+async def test_agent_detail_resolves_selection_inside_render(client):
+    """Regression (#191 split): renderDetailMain must resolve the selected agent from the live
+    snapshot on EVERY render. A file-scope `const a` runs once at script load — before any
+    snapshot has arrived — so `a` stays undefined and the detail panel renders the
+    'Agent not found.' fallback forever."""
+    detail = (STATIC / "pages" / "agents-detail.js").read_text()
+    body = detail.split("function renderDetailMain", 1)[1]
+    assert "agentByAlias(sel)" in body.split("Agent not found")[0], \
+        "renderDetailMain must re-resolve the selected agent before the not-found fallback"
+    state = (STATIC / "pages" / "agents-state.js").read_text()
+    assert not re.search(r"^\s*const a\b", state, re.M), \
+        "agents-state.js must not pin the selected agent at file scope"
 
 
 # ---------- static guards ----------

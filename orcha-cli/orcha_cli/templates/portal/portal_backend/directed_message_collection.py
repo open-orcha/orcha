@@ -29,13 +29,23 @@ def collect_directed_messages(
     live_row = cur.fetchone()
     live_task_id = live_row["task_id"] if live_row else None
     cur.execute(
+        # conversation_turn is only a crash-recovery SAFETY NET here (GH #138): the conversation
+        # lane consumes turns via its OWN cursor (agent_wake_state.conv_delivered_ts — advanced
+        # only after a conversation-lane run actually serviced the turn), never via per-event
+        # acks or the work cursor. A turn at or below conv_delivered_ts was therefore already
+        # answered on the conversation lane and must NOT be re-injected into a work wake as
+        # "unanswered" (the worker would re-answer it and eclipse the wake's real reason). Turns
+        # ABOVE conv_delivered_ts — the resident crashed / never booted — still surface.
         """SELECT e.ts, e.event_name, e.payload FROM agent_events e
            WHERE e.event_key = %s AND e.ts > %s
              AND e.event_name IN ('prompt', 'task_message', 'task_assigned', 'conversation_turn')
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id = %s AND a.event_id = e.id)
+             AND NOT (e.event_name = 'conversation_turn'
+                      AND e.ts <= COALESCE((SELECT ws.conv_delivered_ts FROM agent_wake_state ws
+                                             WHERE ws.agent_id = %s), 0))
            ORDER BY e.ts, e.id""",
-        (aid, delivered_ts, aid),
+        (aid, delivered_ts, aid, aid),
     )
     budget = max_chars
     included_ts = delivered_ts

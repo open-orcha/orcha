@@ -245,6 +245,33 @@ async def test_conversation_turn_alone_does_not_wake_work_lane(client, container
 
 
 @pytest.mark.asyncio
+async def test_conversation_turn_consumed_by_conv_lane_never_rides_a_work_wake(
+        client, container, make_agent, db):
+    """A chat turn the CONVERSATION lane already serviced (conv_delivered_ts >= its ts) must NOT
+    be re-injected into a later work wake as "unanswered" — the GH #138 safety net is only for
+    turns the conversation lane never consumed. Regression: an answered chat question rode along
+    a request_answered work wake and the worker re-answered it instead of the wake's real work."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
+                ts=1000.0, payload={"conversation_id": "c1", "content": "already answered chat"})
+    # the conversation lane consumed the turn: its ack advanced conv_delivered_ts to the turn's ts
+    r = await client.post(f"/api/agents/{aid}/wake-ack",
+                          json={"kind": "ephemeral", "event": "conversation_turn",
+                                "lane": "conversation", "delivered_ts": 1000.0})
+    assert r.status_code == 200, r.text
+    # an unrelated WORK wake fires later
+    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    assert r.status_code == 201, r.text
+
+    _, cand = await _scan(client, container["id"], aid)
+    assert cand["should_wake"] is True
+    assert "re-check the failing test" in cand["prompt_messages"]
+    assert not any("already answered chat" in m for m in cand["prompt_messages"]), \
+        f"consumed conversation_turn re-injected into a work wake: {cand['prompt_messages']}"
+
+
+@pytest.mark.asyncio
 async def test_prompt_records_sender_and_validates(client, container, make_agent):
     a = await make_agent("A")
     b = await make_agent("B")
