@@ -147,6 +147,7 @@ from portal_backend.drain_classification import (
     _drain_task_status,
     _is_cross_task_drain_row,
 )
+from portal_backend.directed_message_collection import collect_directed_messages
 from portal_backend.guards import (
     agent_participates_in_task as _agent_participates_in_task,
     pick_human as _pick_human,
@@ -222,6 +223,10 @@ from portal_backend.static_pages import (
     serve_page as _serve,
 )
 from portal_backend.wake_manifest import _wake_notification_manifest
+from portal_backend.wake_event_queries import (
+    earliest_actionable_answer_ts,
+    resident_inbox_task_work_id,
+)
 from portal_backend.schemas.agent_state import (
     AgentModelUpdate,
     AgentReasoningEffortUpdate,
@@ -1673,248 +1678,28 @@ from portal_backend.conversation_write_routes import (
 
 
 def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
-    """Surface the DIRECTED messages (`prompt` / `task_message` / `task_assigned`) pending for an
-    agent past its wake cursor, oldest-first, bounded by MAX_PROMPT_BATCH_CHARS. Returns (messages,
-    wake_task_id, ack_through_ts). `messages` is a list of dicts {"text", "task_id", "bucket"} — the
-    bucket/task let the ephemeral wake_scan path filter to only the rows THIS run will handle once its
-    run-context task is known; callers that want the raw text take m["text"].
-
-    These event kinds carry content with NO inbox surface — they are delivered ONLY by injecting
-    the text into the agent's turn (there is no 'prompt inbox' to read). So the cursor must NOT be
-    acked past an un-surfaced one: `ack_through_ts` is the last INCLUDED event's ts, defaulting to
-    `max_ts` when nothing is truncated (then everything is safe to ack). If the batch overflows, the
-    later messages stay pending and arrive on the next wake/drain (forward progress, no loss).
-
-    Shared by wake_scan (ephemeral wakes) and active_conversations (ISS-74 resident inbox drain) so
-    BOTH paths deliver directed messages identically — a resident drain can never mark a directed
-    event delivered without its content reaching the agent. (A `task_assigned` whose task is already
-    completed/cancelled by wake time surfaces nothing but is still acked — see the branch below.)
-
-    GH #126: a `task_assigned` for a DIFFERENT task than the one this agent has a LIVE work-lane run
-    on must not be framed as "begin directly" nor win wake_task_id — otherwise the new task's work
-    gets silently recorded under the live run's task. `live_task_id` is that in-flight task, if any.
-
-    GH #138: `conversation_turn` is included as a SAFETY NET, not a primary delivery path — the
-    resident already answers it via the pending_human/turn-feed mechanism (active_conversations
-    excludes conversation_turn from its own `pending_inbox` count precisely so this function is never
-    even called for a resident whose only pending work IS a chat turn — no double-handling). This
-    only has effect for a WORK-lane wake_scan candidate that woke for an unrelated reason (a
-    conversation_turn alone never counts toward `pending` there either — _WORK_NON_WAKING_EVENTS) but
-    happens to also have an unanswered chat message sitting on the CONVERSATION lane: if the resident
-    ever crashes/never boots for it, this is the fallback that lets whatever DOES wake still see and
-    answer the message, instead of a reply silently going unrecovered."""
-    messages = []
-    wake_task_id = None  # ISS-56: attribute the run to its task
-    ack_through_ts = max_ts  # default: nothing truncated → ack all pending
-    cur.execute(
-        """SELECT wr.task_id FROM worker_runs wr
-           JOIN agent_wake_state ws ON ws.agent_id = wr.agent_id
-           WHERE wr.agent_id=%s AND wr.status='running' AND wr.lane='work'
-             AND ws.wake_lease_until IS NOT NULL AND ws.wake_lease_until > now()
-           ORDER BY wr.started_at DESC LIMIT 1""",
-        (aid,),
+    """Compatibility seam for bounded directed-message collection."""
+    return collect_directed_messages(
+        cur,
+        aid,
+        delivered_ts,
+        max_ts,
+        max_chars=MAX_PROMPT_BATCH_CHARS,
+        render_attachment_feed_line=_render_attachment_feed_line,
+        drain_class=_drain_class,
     )
-    _live_row = cur.fetchone()
-    live_task_id = _live_row["task_id"] if _live_row else None
-    cur.execute(
-        # GH #58: delivered_ts only advances to the CONTIGUOUS floor — a row already recorded in
-        # agent_event_acks can sit ABOVE delivered_ts while an earlier still-unhandled row blocks the
-        # floor from reaching it. NOT EXISTS keeps that already-acked row from being re-surfaced/
-        # re-delivered on a later wake before the floor catches up to it.
-        """SELECT e.ts, e.event_name, e.payload FROM agent_events e
-           WHERE e.event_key = %s AND e.ts > %s
-             AND e.event_name IN ('prompt', 'task_message', 'task_assigned', 'conversation_turn')
-             AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
-                              WHERE a.agent_id = %s AND a.event_id = e.id)
-           ORDER BY e.ts, e.id""",
-        (aid, delivered_ts, aid),
-    )
-    budget = MAX_PROMPT_BATCH_CHARS
-    included_ts = delivered_ts
-    for r in cur.fetchall():
-        pl = r["payload"] or {}
-        if r["event_name"] == "task_message":
-            ev_task_id = pl.get("task_id")
-            preview = pl.get("preview") or ""
-            # #338 feed-to-agent: if the posted message carried attachments, name them + their serve
-            # paths inline so the agent OPENS the files (not just reads the text). The full refs live
-            # on the task_messages row; fetch this specific message's attachments by id.
-            feed = ""
-            ev_msg_id = pl.get("message_id")
-            if ev_msg_id:
-                cur.execute(
-                    "SELECT attachments FROM task_messages WHERE id=%s", (ev_msg_id,)
-                )
-                mrow = cur.fetchone()
-                if mrow:
-                    feed = _render_attachment_feed_line(mrow["attachments"])
-            # Frame it with the task id so the agent knows WHICH thread to read + answer on; the full
-            # body lives in task_messages (the preview is the hook).
-            m = (
-                f"[task-thread message on task {ev_task_id}] {preview} "
-                f"— READ that task's thread and RESPOND on it{feed}"
-                if ev_task_id
-                else f"{preview}{feed}"
-            )
-        elif r["event_name"] == "task_assigned":
-            # ISS-86 / #245 (Option C): a `task_assigned` event carries no inbox surface, so a woken
-            # worker wouldn't know WHICH task it was assigned — and a create-and-assign task lands
-            # `in_progress`, so it is NOT a `ready` auto-start target /orcha-next would list. Surface
-            # it as a directed message framed by the task's CURRENT status so the directive is right
-            # for both seams (create-and-assign → in_progress; /assign → ready).
-            ev_task_id = pl.get("task_id")
-            title = pl.get("title") or "(untitled)"
-            if ev_task_id:
-                cur.execute("SELECT status FROM tasks WHERE id=%s", (ev_task_id,))
-                trow = cur.fetchone()
-                tstatus = trow["status"] if trow else None
-            else:
-                tstatus = None
-            if not ev_task_id or tstatus in (None, "completed", "cancelled"):
-                # No id, or the task was finished/cancelled before this wake → nothing actionable to
-                # surface (m stays None; the cursor still advances past it below, so it's acked away).
-                m = None
-            elif tstatus == "in_progress":
-                m = (
-                    f"[new task assigned to you: {title} (task {ev_task_id})] "
-                    f"— it's already in_progress, so /orcha-next will NOT list it; READ its thread "
-                    f"(/api/tasks/{ev_task_id}/messages) and begin the work directly"
-                )
-            elif tstatus == "ready":
-                m = (
-                    f"[new task assigned to you: {title} (task {ev_task_id})] "
-                    f"— claim it with /orcha-next (or READ its thread "
-                    f"/api/tasks/{ev_task_id}/messages) and begin"
-                )
-            else:  # pending (blocked on deps) or any other live state
-                m = (
-                    f"[new task assigned to you: {title} (task {ev_task_id})] "
-                    f"— it's '{tstatus}'; READ its thread (/api/tasks/{ev_task_id}/messages); "
-                    f"it may be waiting on dependencies before it's ready"
-                )
-            # GH #126: this agent already has a LIVE work-lane run on a DIFFERENT task — do not let
-            # this assignment win wake_task_id (that would silently attribute Task B's work to Task
-            # A's run) nor frame it as startable now. It must NOT be surfaced-and-acked here (an
-            # acked event is gone for good) — instead defer the ack cursor to just BEFORE this event,
-            # the same mechanism the batch-overflow branch below uses, so it (and anything after it,
-            # to preserve delivery order) stays pending and is re-evaluated on every subsequent
-            # wake/drain until the live run ends, at which point it flows through normally.
-            if (
-                m is not None
-                and live_task_id is not None
-                and str(live_task_id) != str(ev_task_id)
-            ):
-                ack_through_ts = included_ts
-                break
-        elif r["event_name"] == "conversation_turn":
-            # GH #138 safety net: not task-scoped (ev_task_id stays None — must never win
-            # wake_task_id, a chat reply must not misattribute a work run to some task).
-            ev_task_id = None
-            content = pl.get("content") or ""
-            m = (
-                f"[unanswered chat message on this agent's conversation] {content} — the human is "
-                f"still waiting on a reply; answer it directly."
-                if content
-                else None
-            )
-        else:
-            ev_task_id = None
-            m = pl.get("message")
-        if m and messages and len(m) > budget:
-            # including this would overflow the batch → stop; ack only through the last included
-            # event, leaving this message (and later ones) pending for the next wake/drain.
-            ack_through_ts = included_ts
-            break
-        if m:
-            # GH #58 (R2 fix): carry each surfaced message's drain bucket + task binding so wake_scan
-            # can drop the ones THIS run won't handle (a cross-task task_bound/new_work/directive row
-            # is left for that task's own ephemeral — never injected into the current run's prompt,
-            # which would tell a task-B worker to act on task A). Classified by the SAME _drain_class
-            # that builds handled_event_ids, so surfacing and acking can never disagree. The resident
-            # drain path ignores these and injects every message's text (it yields the lease to a
-            # protocol-bound ephemeral whenever a task-carrying row is present).
-            bucket = _drain_class(cur, r["event_name"], pl)["bucket"]
-            messages.append({"text": m, "task_id": ev_task_id, "bucket": bucket})
-            budget -= len(m)
-            if ev_task_id:
-                wake_task_id = ev_task_id  # latest SURFACED task event wins (ISS-56;
-                # task_message or task_assigned — ISS-86)
-        included_ts = r["ts"]  # advance past included or blank messages
-    return messages, wake_task_id, ack_through_ts
 
 
-# #72: an ANSWER event that unblocks the recipient's OWN task work must NEVER be drained away by a
-# short-lived / sidecar body that is forbidden from doing task work — otherwise, once that body exits,
-# no fresh worker ever spawns and the loop goes silent on a green light (the bug is timing-dependent:
-# it only strikes when a body happened to be alive when the answer arrived). A drain turn may ack
-# pure housekeeping events, but it must PARK the wake cursor BEFORE such an "actionable" answer so the
-# event stays pending and the existing post-exit wake gate spawns a real task worker. This is the one
-# shared predicate; both wake_scan (#288/#307 suppression exemption) and active_conversations (resident
-# drain-sidecar cursor park) consult it.
 def _earliest_actionable_answer_ts(cur, aid: str, delivered_ts):
-    """Return the ts of the EARLIEST pending answer/close event (ts > ``delivered_ts``) that unblocks
-    THIS agent's task work, or ``None`` when there is none.
-
-    Actionable (Code Reviewer #72 Q2) = a ``request_answered`` / ``request_closed`` event where
-    EITHER the request is a ``task`` request and this agent is its original REQUESTER (the one
-    unblocked — not the answerer), OR the event carries an ``originating_task_id`` (a sufficient
-    OR-signal: the answer's wake is meant to resume a specific task). Pure-ack notifications and plain
-    ``info`` answers are housekeeping-drainable and yield ``None``."""
-    cur.execute(
-        """SELECT min(e.ts) AS floor_ts
-             FROM agent_events e
-             LEFT JOIN requests r
-               ON r.id::text = NULLIF(e.payload->>'request_id', '')
-            WHERE e.event_key = %s AND e.ts > %s
-              AND e.event_name IN ('request_answered', 'request_closed')
-              AND ( (r.type = 'task' AND r.requester_id::text = %s)
-                    OR (e.payload->>'originating_task_id') IS NOT NULL )""",
-        (aid, delivered_ts, aid),
-    )
-    row = cur.fetchone()
-    return row["floor_ts"] if row else None
+    """Compatibility seam for actionable pending-answer lookup."""
+    return earliest_actionable_answer_ts(cur, aid, delivered_ts)
 
 
 def _resident_inbox_task_work_id(cur, aid: str, delivered_ts, max_ts):
-    """Return the newest pending task-work id a warm resident must leave for the WORK lane.
-
-    This is deliberately narrower than wake_scan's `wake_task_id`: only task-linked events for an
-    in-progress task this agent actively owns should bypass the resident drain sidecar. New ready
-    assignments and open task requests are still drain-safe for the sidecar prompt, whose job is to
-    avoid starting a second task embodiment from a warm chat session.
-    """
-    if max_ts is None:
-        return None
-    cur.execute(
-        """SELECT event_name, payload FROM agent_events
-           WHERE event_key = %s AND ts > %s AND ts <= %s
-             AND (event_name IN ('task_message', 'task_assigned')
-                  OR (event_name='request_answered'
-                      AND payload->>'originating_task_id' IS NOT NULL))
-           ORDER BY ts DESC, id DESC""",
-        (aid, delivered_ts, max_ts),
+    """Compatibility seam for resident work-lane event lookup."""
+    return resident_inbox_task_work_id(
+        cur, aid, delivered_ts, max_ts, valid_uuid=_valid_uuid
     )
-    for ev in cur.fetchall():
-        pl = ev["payload"] or {}
-        tid = (
-            pl.get("originating_task_id")
-            if ev["event_name"] == "request_answered"
-            else pl.get("task_id")
-        )
-        if not tid or not _valid_uuid(tid):
-            continue
-        cur.execute(
-            """SELECT 1 FROM tasks t
-               JOIN agent_tasks at ON at.task_id = t.id
-               WHERE t.id = %s AND at.agent_id = %s
-                 AND t.status = 'in_progress' AND t.is_root = false
-                 AND at.assignment_status IN ('assigned','accepted','working')
-               LIMIT 1""",
-            (tid, aid),
-        )
-        if cur.fetchone():
-            return tid
-    return None
 
 
 @app.get("/api/containers/{cid}/active-conversations")
