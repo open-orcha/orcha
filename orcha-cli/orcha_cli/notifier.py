@@ -67,6 +67,7 @@ from .notifier_codex_result import _codex_result_status
 from . import notifier_conversation as _conversation
 from . import notifier_codex_conversation as _codex_conversation
 from . import notifier_boot_context as _boot_context
+from . import notifier_checkpoint as _checkpoint
 from . import notifier_command as _notifier_command
 from . import notifier_daemon_control as _daemon_control
 from . import notifier_daemon_registry as _daemon_registry
@@ -788,154 +789,15 @@ def _pump_one(api_base: str, aid: str, w: dict) -> None:
 
 def _checkpoint_and_respawn(api_base: str, aid: str, w: dict, live_workers: dict,
                             quiet: bool) -> None:
-    """ISS-76 (#194) — checkpoint-and-respawn a still-progressing worker that crossed the soft
-    hard cap (HARD_CAP_MIN_SECS). It is a long task, not a runaway, so don't SIGKILL it mid-work:
-
-      1. GRACEFULLY stop it (SIGTERM → grace window) so claude's SessionEnd hook writes the C1
-         continuity digest before the process dies; capture its git diff + finish the run as
-         `exited` (the work succeeded so far — not `killed`).
-      2. KEEP the worktree (no teardown) — the respawn reuses it, so committed + uncommitted work
-         carries over.
-      3. Spawn a FRESH worker on that same worktree with a freshly-rebuilt persona (now carrying
-         the just-written digest) so it resumes with continuity but a clean context window, and
-         RESET its cap/progress trackers (respawns += 1).
-
-    The single-flight lease is HELD throughout (wake-renew each tick keeps it; the success ack
-    below is non-releasing), so no second worker can claim the agent during the swap. Bounded by
-    HARD_CAP_RESPAWN_MAX in reap_workers — past that a task that still won't finish is a runaway."""
-    proc = w["proc"]
-    ctx = w.get("respawn_ctx") or {}
-    base_cwd = w.get("base_cwd")
-    worktree = w.get("worktree")
-    branch = w.get("branch")
-    n = w.get("respawns", 0) + 1
-    cap = w.get("cap", HARD_CAP_MIN_SECS)
-
-    # 1) graceful checkpoint — SessionEnd (C1 digest) runs before the process is forced down.
-    _kill_worker(proc, graceful=True)
-    diff = _capture_diff(worktree)
-    _finish_run(api_base, w.get("run_id"), "exited", 0, w.get("log_path"), diff)
-
-    # GH #126: don't trust the in-memory ctx["task_id"] snapshot captured at original spawn -- if
-    # the server's record for this agent's just-finished run has since diverged (e.g. the agent was
-    # reassigned to a different task mid-run), blindly carrying ctx.task_id forward would respawn
-    # the worker still claiming the OLD task while the server's truth says otherwise. Re-fetch the
-    # just-finished run's task_id from the server and use that; fail open to ctx.get("task_id")
-    # only if the fetch itself fails OR the finished run isn't found, never on a mismatch.
-    #
-    # `/runs` is newest-run-first across BOTH lanes (work + conversation) -- NOT "the run that just
-    # finished". A conversation-lane run started after this checkpoint's work run (e.g. the human
-    # chatted with the agent mid-task) would sort first and could carry a different (often null)
-    # task_id, so we must match this checkpoint's own run_id explicitly rather than take runs[0].
-    finished_run_id = w.get("run_id")
-    _server_runs = _get_json(f"{api_base}/api/agents/{aid}/runs?limit=20")
-    respawn_task_id = ctx.get("task_id")
-    if _server_runs and _server_runs.get("runs"):
-        for _run in _server_runs["runs"]:
-            if _run.get("run_id") == finished_run_id:
-                respawn_task_id = _run.get("task_id")
-                break
-
-    # GH #91/#90: the OLD process is dead — revoke its work token, then mint a FRESH work token for
-    # the respawned process. Exactly one live token per live process. Revoke-old first (idempotent):
-    old_tok = w.get("run_token")
-    _revoke_or_defer(api_base, old_tok)
-    new_tok = _mint_embodiment_token(api_base, aid, "work", "headless")
-
-    # 2) respawn AS the agent with the freshest digest, on the SAME worktree. #285: force_fresh
-    # bypasses the persona/digest cache — step 1 just wrote a NEW continuity digest (C1) for this
-    # agent, so a cached (pre-checkpoint) digest here would respawn it with stale continuity.
-    persona = _build_persona(api_base, aid, force_fresh=True)
-    run_cwd = worktree or base_cwd
-    log_path = None
-    if base_cwd:
-        log_path = (pathlib.Path(base_cwd) / ".claude" / ".orcha-wakes"
-                    / f"{ctx.get('alias', 'agent')}-{int(time.time())}.log")
-    sent, _cmd, newproc = spawn_headless(run_cwd, ctx.get("prompt", ""), ctx.get("flags"), False,
-                                         alias=ctx.get("alias"), system_prompt=persona,
-                                         model=ctx.get("model"),
-                                         reasoning_effort=ctx.get("reasoning_effort"),
-                                         runtime=ctx.get("model_runtime"),
-                                         log_path=log_path, run_token=new_tok)
-    if not (sent and newproc is not None):
-        # Respawn failed to spawn — release the lease so the agent isn't stranded. GH#110 (PR #121
-        # review, BLOCKER 1): a DURABLE task worktree must be PRESERVED here, NOT force-removed —
-        # the graceful checkpoint above already snapshotted the work, so tearing it down would
-        # discard exactly the uncommitted build we exist to keep (Andrew's scenario, on the
-        # long-build path most likely to cross the cap). Checkpoint-commit + record the saved ref
-        # + synthesize the continuity digest (the clean-exit success shape); only a disposable
-        # ephemeral worktree is torn down. The cursor stays WITHHELD (no delivered_ts) so a later
-        # wake retries from the preserved state.
-        # GH #91/#90: revoke the just-minted new token explicitly (nothing will ever carry it), then
-        # store it so _retire_headless revokes whatever is tracked (idempotent) as it pops.
-        _revoke_or_defer(api_base, new_tok)
-        is_task_wt = bool(w.get("task_worktree"))
-        if is_task_wt:
-            t_id = ctx.get("task_id")
-            sha = _checkpoint_task_worktree(base_cwd, worktree, branch, t_id, w.get("run_id"))
-            if sha or (diff or "").strip():
-                saved = _saved_ref(w, sha, diff)
-                human = _saved_human_line(base_cwd, branch, sha)
-                _record_task_saved_ref(api_base, w, saved, human)
-                _synthesize_task_digest(api_base, aid, t_id, saved, w.get("started_ts"), human)
-        else:
-            _teardown_worktree(base_cwd, worktree, branch)
-        _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-                   {"kind": "worker_checkpoint_respawn_failed", "release_lease": True,
-                    "lane": w.get("lane", "work")})
-        w["run_token"] = new_tok
-        _retire_headless(api_base, live_workers, aid)
-        if not quiet:
-            print(f"[notifier] checkpoint-respawn for {aid} FAILED to spawn a fresh worker — "
-                  f"{'task worktree preserved' if is_task_wt else 'worktree torn down'} + "
-                  f"lease released")
-        return
-
-    # GH #91/#90: a respawned worker continues on ITS OWN lane (stamped at first spawn; today
-    # always 'work' — tick ephemerals are work-lane by construction, PR R5); carry the minted
-    # token_id so the server binds embodiment_tokens.run_id to this run (durable EOL backstop).
-    run = _post_json(f"{api_base}/api/agents/{aid}/runs",
-                     {"wake_kind": "ephemeral", "wake_event": "checkpoint_respawn",
-                      "task_id": respawn_task_id,
-                      "log_path": str(log_path) if log_path else None,
-                      "pid": newproc.pid, "runtime": ctx.get("model_runtime"),
-                      "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
-                      "lane": w.get("lane", "work"), "token_id": new_tok})
-    now = time.time()
-    live_workers[aid] = {
-        "proc": newproc,
-        "hard_deadline": now + cap,
-        "last_size": 0, "last_progress_ts": now,
-        "run_id": (run or {}).get("run_id"), "log_path": log_path,
-        "worktree": worktree, "branch": branch, "base_cwd": base_cwd,
-        # GH#110 (PR #121 review, BLOCKER 1): a checkpoint-respawned TASK worker MUST stay a task
-        # worker across the swap. Without these keys the reaper reads task_worktree=False on the
-        # respawned worker's clean exit and _teardown_worktree FORCE-REMOVES the durable task
-        # worktree (Andrew's data-loss scenario), skips the checkpoint/saved_ref/digest, and drops
-        # the bounded-release cursor (wake_ack_ts) — so a respawned worker that later hits
-        # FAILED_DRAIN_MAX would release on delivered_ts=None (no advance) and never stop
-        # re-waking. Carry them through (wake_task_id also keeps the GH#36 no-op-kill re-assert
-        # correctly DISABLED for a task worker across the swap).
-        "task_worktree": bool(w.get("task_worktree")),
-        "wake_ack_ts": w.get("wake_ack_ts"),
-        "wake_task_id": w.get("wake_task_id"),
-        "started_ts": w.get("started_ts"),
-        "agent_id": w.get("agent_id") or aid,
-        "lines_offset": 0, "lines_seq": 1, "lines_buf": b"",
-        # GH #58: the original wake's handled-set rides the respawn so the FINAL clean exit acks it
-        # (the checkpoint-respawn finishes the old run but the wake's work is still in flight).
-        "handled_event_ids": ctx.get("handled_event_ids") or w.get("handled_event_ids") or [],
-        "cap": cap, "respawns": n, "respawn_ctx": ctx, "lane": w.get("lane", "work"),
-        "run_token": new_tok}   # GH #91/#90: track the fresh work token for teardown revoke
-    # Non-releasing ack: keep the single-flight lease (the new worker continues under it) but
-    # record the checkpoint for portal/event visibility + refresh the cooldown debounce.
-    _post_json(f"{api_base}/api/agents/{aid}/wake-ack",
-               {"kind": "worker_checkpoint_respawn", "release_lease": False,
-                "lane": w.get("lane", "work")})
-    if not quiet:
-        print(f"[notifier] worker for {aid} (pid {proc.pid}) crossed the soft hard-cap while "
-              f"still progressing — checkpointed (C1 digest) + respawned (pid {newproc.pid}, "
-              f"respawn {n}/{HARD_CAP_RESPAWN_MAX}) on the same worktree")
+    """Compatibility facade for graceful long-worker rollover."""
+    _checkpoint.checkpoint_and_respawn(
+        api_base,
+        aid,
+        w,
+        live_workers,
+        quiet,
+        sys.modules[__name__],
+    )
 
 
 def _drain_task_failure(api_base: str, w: dict, aid: str, task_id, status: str,
