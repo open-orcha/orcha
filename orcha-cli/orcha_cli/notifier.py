@@ -92,12 +92,15 @@ from .notifier_runtime import (
     ORCHA_CODEX_EXEC,
     RUNTIME_CLAUDE,
     RUNTIME_CODEX,
+    _CODEX_EFFORT,
     _CODEX_EXEC_FALLBACKS,
     _codex_prompt,
     _normalize_runtime,
     _runtime_executable,
     _runtime_extra_flags,
 )
+from . import notifier_headless as _headless
+from . import notifier_resident_spawn as _resident_spawn
 from . import notifier_wake_actions as _wake_actions
 from . import notifier_wake_decisions as _wake_decisions
 from . import notifier_worktree_base as _worktree_base
@@ -349,174 +352,15 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
                    last_message_path: Optional[pathlib.Path] = None,
                    run_token: Optional[str] = None,
                    conversation: bool = False) -> tuple[bool, str, object]:
-    """Fire-and-forget a one-shot coding-agent worker in `cwd`, booted AS `alias`.
-
-    Claude models spawn `claude -p "<prompt>"`; Codex models spawn `codex exec "<prompt>"`.
-    `system_prompt` (the agent's persona + digest, from _build_persona) is injected via
-    Claude's `--append-system-prompt`, or prepended to the Codex exec prompt. `ORCHA_ALIAS=<alias>`
-    in the env makes its work-skills/hooks resolve to that agent.
-    #286: a Codex `resume_session_id` re-attaches the prior on-disk rollout via
-    `codex exec resume <session_id>` so the conversation context (persona+digest+history,
-    already in the rollout) is NOT re-injected — only the new turn(s) ride in `prompt`.
-    Ignored for Claude (its warm path is the resident stdin session, spawn_resident).
-    `log_path` (R2.4) captures the worker's stdout/stderr to a per-wake file so a
-    misbehaving worker is diagnosable — the old DEVNULL made the runaway invisible.
-    Returns (spawned, command-repr, proc) — proc is the Popen handle (None unless a
-    process was started); the daemon tracks it and poll()s it to release the
-    single-flight lease the moment it exits (poll reaps the zombie; a pid + kill(pid,0)
-    check cannot, since a zombie still reports alive).
-    """
-    runtime = _normalize_runtime(runtime)
-    extra = _runtime_extra_flags(runtime, flags)
-    executable = _resolve_runtime_executable(runtime) or _runtime_executable(runtime)
-    if runtime == RUNTIME_CODEX:
-        # Codex's automation surface is `codex exec`; --json gives the same tailable JSONL
-        # property the portal expects from Claude stream-json logs. There is no system-prompt
-        # flag, so the agent persona/digest rides at the top of the initial instruction.
-        # #286: `codex exec resume <session_id> <prompt>` re-attaches the prior rollout —
-        # the conversation context is restored from disk, so `prompt` carries ONLY the new
-        # turn(s) and `system_prompt` is NOT re-injected (the rollout already holds it). The
-        # `resume <session_id>` token pair sits right after `exec`; the shared flags
-        # (--json/--model/--output-last-message) are accepted on the resume subcommand too.
-        argv = [executable, "exec"]
-        if resume_session_id:
-            argv += ["resume", resume_session_id]
-        argv += ["--json", "--dangerously-bypass-approvals-and-sandbox",
-                 "--skip-git-repo-check"]
-        if model:
-            argv += ["--model", model]
-        # GH #51: Codex takes reasoning effort as a config override. It has no 'xhigh' tier, so
-        # map it to its top 'high'; the others pass through.
-        if reasoning_effort:
-            argv += ["-c", f"model_reasoning_effort={_CODEX_EFFORT.get(reasoning_effort, reasoning_effort)}"]
-        if last_message_path:
-            argv += ["--output-last-message", str(last_message_path)]
-        argv.extend(extra)
-        # On resume the rollout already holds persona+digest+history → pass the bare prompt
-        # (no persona prefix); on a cold exec keep prepending persona/digest as before.
-        argv.append(prompt if resume_session_id else _codex_prompt(prompt, system_prompt))
-    else:
-        # A1/ISS-17: stream-json + verbose so the per-wake log fills with newline-delimited
-        # JSON events (each message, tool call, result) LIVE during the run — tailable. Plain
-        # `claude -p` emits only an end-of-run text blob (often empty on a hang), so we could
-        # never see what a worker was doing. --output-format stream-json requires --verbose.
-        # ISS-#251: --include-partial-messages emits `stream_event` token/thinking deltas DURING
-        # a turn's generation. Without it `claude -p` writes a complete assistant message only
-        # when the turn FINISHES, so a worker thinking/generating for >stall_secs (e.g. reasoning
-        # over a large tool_result before its next tool_use) goes log-silent and the stall
-        # watchdog SIGKILLs it mid-work (reap_workers measures progress by log growth). The deltas
-        # give the watchdog a genuine liveness heartbeat — a truly silent/dead worker still trips
-        # the 120s stall — while _pump_one filters them out of the DB feed so the portal/SSE is
-        # unchanged. The resident path already passes this flag (see spawn_resident).
-        argv = [executable, "-p", prompt, "--output-format", "stream-json",
-                "--include-partial-messages", "--verbose"]
-        # GAP A (#136/ISS-58): boot the worker on the agent's selected model. wake-scan resolves a
-        # retired/limited-availability id (e.g. Fable 5 after 2026-06-22) to the default server-side,
-        # so by here `model` is always a currently-spawnable id (or None → claude's own default).
-        if model:
-            argv += ["--model", model]
-        # GH #51: per-agent reasoning effort. wake-scan preserves NULL as "omit the flag" and
-        # resolves stale unknown choices to a valid `claude --effort` level.
-        if reasoning_effort:
-            argv += ["--effort", reasoning_effort]
-        if system_prompt:
-            argv += ["--append-system-prompt", system_prompt]
-        # A daemon-spawned worker has NO tty to answer permission prompts, so it must run
-        # non-interactively or it hangs forever on the first tool (the orcha skills curl the
-        # API via Bash). Default to bypassing permission checks — this is a LOCAL, trusted
-        # daemon spawning a registered agent, and the human still gates real outcomes via
-        # /orcha-verify. A headless_flags that already sets a permission mode wins (no dup).
-        if not any(f.startswith("--permission-mode") or f == "--dangerously-skip-permissions"
-                   for f in extra):
-            argv.append("--dangerously-skip-permissions")
-        argv.extend(extra)
-    persona_note = (
-        " --append-system-prompt <persona+digest>"
-        if system_prompt and runtime == RUNTIME_CLAUDE else ""
+    """Compatibility facade for launching one-shot coding-agent workers."""
+    return _headless.spawn_headless(
+        cwd, prompt, flags, dry_run, alias=alias, system_prompt=system_prompt,
+        model=model, reasoning_effort=reasoning_effort, runtime=runtime,
+        resume_session_id=resume_session_id, log_path=log_path,
+        last_message_path=last_message_path, run_token=run_token,
+        conversation=conversation, services=sys.modules[__name__],
     )
-    if system_prompt and runtime == RUNTIME_CODEX:
-        persona_note = " <prompt includes persona+digest>"
-    model_note = f" --model {model}" if model else ""
-    if reasoning_effort:
-        model_note += (f" --effort {reasoning_effort}" if runtime == RUNTIME_CLAUDE
-                       else f" -c model_reasoning_effort={_CODEX_EFFORT.get(reasoning_effort, reasoning_effort)}")
-    perm_note = ""
-    if runtime == RUNTIME_CODEX:
-        perm_note = " --dangerously-bypass-approvals-and-sandbox"
-    elif not any(f.startswith("--permission-mode") or f == "--dangerously-skip-permissions"
-                 for f in extra):
-        perm_note = " --dangerously-skip-permissions"
-    log_note = f" >{log_path}" if log_path else ""
-    last_note = f" --output-last-message {last_message_path}" if last_message_path else ""
-    if runtime == RUNTIME_CODEX:
-        resume_note = f" resume {resume_session_id}" if resume_session_id else ""
-        # On resume the persona/history live in the restored rollout, not in the prompt.
-        codex_persona_note = "" if resume_session_id else persona_note
-        repr_ = (f"(cd {cwd} && ORCHA_ALIAS={alias or '?'} ORCHA_HEADLESS_WORKER=1 "
-                 f"codex exec{resume_note} --json{perm_note} --skip-git-repo-check"
-                 f"{model_note}{last_note}{codex_persona_note}"
-                 f"{(' ' + ' '.join(extra)) if extra else ''}{log_note})")
-    else:
-        repr_ = (f"(cd {cwd} && ORCHA_ALIAS={alias or '?'} ORCHA_HEADLESS_WORKER=1 claude -p <prompt> "
-                 f"--output-format stream-json --include-partial-messages --verbose"
-                 f"{model_note}{persona_note}{perm_note}{(' ' + flags) if flags else ''}{log_note})")
-    if dry_run:
-        return False, repr_, None
-    if (not _resolve_runtime_executable(runtime)
-            or not cwd or not pathlib.Path(cwd).is_dir()):
-        return False, repr_, None
-    env = dict(os.environ)
-    if alias:
-        env["ORCHA_ALIAS"] = alias
-    # GH #91/#90: the process-scoped embodiment token — the work-lane capability the gated skills
-    # (orcha-next/accept-task/done/release) present as X-Orcha-Run-Token. Minted BEFORE this spawn so
-    # it is valid in the DB before the worker's first gated call; injected beside ORCHA_ALIAS. None →
-    # the mint failed and the worker runs token-less (degraded: gated endpoints 403), never blocked.
-    if run_token:
-        env["ORCHA_RUN_TOKEN"] = run_token
-    # GH #91/#90: mark GENUINE conversation embodiments only (spawn_headless is shared by task
-    # ephemerals + the drain sidecar + the Codex conversation worker). The PreToolUse backstop keys
-    # on this to block the task-claim/mutation path while allowing dispatch; task ephemerals and the
-    # sidecar must NOT set it.
-    if conversation:
-        env["ORCHA_CONVERSATION_WORKER"] = "1"
-    else:
-        # env is a copy of the daemon's OWN environment, which is not assumed clean: if the
-        # daemon itself was ever started from a shell/worktree with this set (e.g. inherited
-        # from a resident agent session), it would otherwise silently ride along into every
-        # work-lane worker and wrongly trip the conv-guard hook on that worker's Edit/Write.
-        env.pop("ORCHA_CONVERSATION_WORKER", None)
-    env["ORCHA_AGENT_RUNTIME"] = runtime
-    # ISS-21: mark this as a headless wake worker so the interactive SessionStart hooks
-    # (watch/rehydrate/notifier --ensure/reachability) short-circuit to a no-op. Without
-    # this the worker runs `orcha watch --detach`, whose per-session poller never returns,
-    # and the worker wedges before draining its inbox — completing zero work.
-    env["ORCHA_HEADLESS_WORKER"] = "1"
-    out = subprocess.DEVNULL
-    if log_path is not None:
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            out = open(log_path, "ab")
-        except OSError:
-            out = subprocess.DEVNULL
-    try:
-        proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out,
-                         stderr=subprocess.STDOUT if out is not subprocess.DEVNULL else subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL, start_new_session=True)
-        # Return the Popen handle (not just the pid): the daemon must poll()/reap it to
-        # detect exit. An exited child is a ZOMBIE until its parent reaps it, and
-        # os.kill(pid, 0) reports a zombie as alive — so pid-only liveness never frees
-        # the lease. proc.poll() reaps the zombie and returns its exit code.
-        return True, repr_, proc
-    except (OSError, subprocess.SubprocessError):
-        return False, repr_, None
-    finally:
-        # The child inherited its own dup of the fd; close the parent's copy.
-        if out is not subprocess.DEVNULL:
-            try:
-                out.close()
-            except OSError:
-                pass
+
 
 
 def select_transport(cand: dict) -> str:
@@ -565,96 +409,15 @@ def spawn_resident(cwd: str, *, system_prompt: Optional[str] = None,
                    run_token: Optional[str] = None,
                    conversation: bool = False,
                    dry_run: bool = False) -> tuple[bool, str, object]:
-    """Boot a RESIDENT conversation session: `claude -p --input-format stream-json` with an
-    OPEN stdin pipe, booted AS `alias`. Unlike the ephemeral headless worker (one-shot, stdin
-    DEVNULL, prompt as argv), the resident reads successive user turns from stdin and stays warm
-    across them in ONE claude session (E2 proved multi-turn warm context). It emits one
-    stream-json `result` per turn; the manager (per the conversation-store contract) writes each
-    human turn to stdin and captures the matching result as the agent's reply.
+    """Compatibility facade for launching warm conversation workers."""
+    return _resident_spawn.spawn_resident(
+        cwd, system_prompt=system_prompt, log_path=log_path,
+        resume_session_id=resume_session_id, alias=alias, flags=flags,
+        model=model, reasoning_effort=reasoning_effort, runtime=runtime,
+        run_token=run_token, conversation=conversation, dry_run=dry_run,
+        services=sys.modules[__name__],
+    )
 
-    COLD boot: pass `system_prompt` (persona+digest, plus V1 history prefix the manager appends)
-    via --append-system-prompt. WARM restart: pass `resume_session_id` → --resume the pinned
-    claude session (history already in-session; the manager injects NO history prefix then, to
-    avoid double-injection — see the Vault E3 seam). Returns (spawned, repr, proc); proc.stdin
-    is the live pipe the manager feeds with _send_user_turn."""
-    runtime = _normalize_runtime(runtime)
-    if runtime != RUNTIME_CLAUDE:
-        repr_ = (f"(cd {cwd} && ORCHA_ALIAS={alias or '?'} codex resident "
-                 f"[unsupported: no stdin stream-json protocol])")
-        return False, repr_, None
-
-    executable = _resolve_runtime_executable(RUNTIME_CLAUDE) or "claude"
-    argv = [executable, "-p", "--input-format", "stream-json",
-            "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
-    if resume_session_id:
-        argv += ["--resume", resume_session_id]
-    # GAP A/B: spawn on the agent's selected model (resolved server-side). A WARM --resume keeps
-    # whatever model the pinned session booted with, so a model change forces a COLD boot upstream
-    # (set_agent_model clears session_id) — by which point this `--model` takes effect on cold.
-    if model:
-        argv += ["--model", model]
-    if reasoning_effort:                                   # GH #51
-        argv += ["--effort", reasoning_effort]
-    if system_prompt:
-        argv += ["--append-system-prompt", system_prompt]
-    extra = flags.split() if flags else []
-    if not any(f.startswith("--permission-mode") or f == "--dangerously-skip-permissions"
-               for f in extra):
-        argv.append("--dangerously-skip-permissions")     # no tty to answer prompts (as headless)
-    argv.extend(extra)
-    mode = f"--resume {resume_session_id}" if resume_session_id else "cold"
-    model_note = f" --model {model}" if model else ""
-    if reasoning_effort:
-        model_note += f" --effort {reasoning_effort}"
-    repr_ = (f"(cd {cwd} && ORCHA_ALIAS={alias or '?'} ORCHA_HEADLESS_WORKER=1 claude -p "
-             f"--input-format stream-json --output-format stream-json --include-partial-messages "
-             f"--verbose [{mode}]{model_note}"
-             f"{' --append-system-prompt <persona+digest+history>' if system_prompt else ''}"
-             f"{(' ' + flags) if flags else ''}{f' >{log_path}' if log_path else ''})")
-    if dry_run:
-        return False, repr_, None
-    if (not _resolve_runtime_executable(RUNTIME_CLAUDE)
-            or not cwd or not pathlib.Path(cwd).is_dir()):
-        return False, repr_, None
-    env = dict(os.environ)
-    if alias:
-        env["ORCHA_ALIAS"] = alias
-    # GH #91/#90: the process-scoped embodiment token (see spawn_headless). A resident is a
-    # CONVERSATION-lane embodiment, so its token is minted in the conversation lane; the gated
-    # work-lane endpoints then 403 it, which is the desired constraint (it must dispatch, not work).
-    if run_token:
-        env["ORCHA_RUN_TOKEN"] = run_token
-    # GH #91/#90: the resident IS a genuine conversation embodiment → mark it for the PreToolUse
-    # backstop that blocks inline task work while allowing dispatch.
-    if conversation:
-        env["ORCHA_CONVERSATION_WORKER"] = "1"
-    else:
-        # env is a copy of the daemon's OWN environment, which is not assumed clean (see
-        # spawn_headless) — clear any inherited flag so a work-lane resident is never
-        # mislabeled as a conversation embodiment.
-        env.pop("ORCHA_CONVERSATION_WORKER", None)
-    env["ORCHA_HEADLESS_WORKER"] = "1"      # ISS-21: short-circuit interactive SessionStart hooks
-    out = subprocess.DEVNULL
-    if log_path is not None:
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            out = open(log_path, "ab")
-        except OSError:
-            out = subprocess.DEVNULL
-    try:
-        proc = subprocess.Popen(
-            argv, cwd=cwd, env=env, stdout=out,
-            stderr=subprocess.STDOUT if out is not subprocess.DEVNULL else subprocess.DEVNULL,
-            stdin=subprocess.PIPE, start_new_session=True)   # OPEN stdin — the warm input channel
-        return True, repr_, proc
-    except (OSError, subprocess.SubprocessError):
-        return False, repr_, None
-    finally:
-        if out is not subprocess.DEVNULL:
-            try:
-                out.close()
-            except OSError:
-                pass
 
 
 # ---------- GH #91/#90: embodiment-token lifecycle (mint before spawn, revoke on teardown) ----------
