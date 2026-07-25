@@ -65,7 +65,9 @@ from .notifier_codex_events import (
 )
 from .notifier_codex_result import _codex_result_status
 from . import notifier_conversation as _conversation
+from . import notifier_boot_context as _boot_context
 from . import notifier_embodiment as _embodiment
+from . import notifier_persona_cache as _persona_cache
 from .notifier_process import _capture_run_output, _kill_worker, _usage_from_log
 from .notifier_session_io import (
     _extract_codex_session_id,
@@ -133,33 +135,8 @@ except ImportError:
 
 
 def _cold_boot_history(turns) -> str:
-    """The cold-boot conversation-history block.
-
-    Curation LAYERS ON TOP of the mechanical ``_format_history`` formatter — it is NOT a parallel
-    path. The mechanical block is the SINGLE fallback seam: it is injected into ``curate_history``
-    as ``mechanical=`` (so curation's own fail-open routes through the same formatter tests patch)
-    AND is what we degrade to if curation is absent or returns nothing.
-
-    Contract:
-      * ``_format_history`` ABSENT (None) → NO history block at all, even if curation is present
-        (unchanged absent-formatter contract — curation is an enhancement of the formatter, not a
-        replacement for it).
-      * ABSOLUTE fail-open — this never lets history assembly raise into the spawn path.
-    """
-    if _format_history is None:
-        return ""   # formatter absent → history injection disabled (unchanged contract)
-
-    def _mech(t):
-        return _format_history(t) or ""
-
-    if _curate_history is not None:
-        try:
-            block = _curate_history(turns, mechanical=_mech)
-            if block:
-                return block
-        except Exception:
-            pass  # belt-and-suspenders: curate_history is already total, but never block a boot
-    return _mech(turns)
+    """Compatibility facade for fail-open cold-boot history curation."""
+    return _boot_context.cold_boot_history(turns, sys.modules[__name__])
 
 # #288 wake-suppression: the #290 universal LLM client provides triage_wake() (Haiku, fail-open).
 # Imported as a module global so tests can monkeypatch it; bound to None if unavailable so the
@@ -189,67 +166,30 @@ except ImportError:
 
 
 def _load_master_key_from_env_file() -> None:
-    """Make ORCHA_SECRET_KEY available to the daemon so it can unseal wake-path provider keys.
-
-    The CLI persists the master key to <project>/.orcha/.env (see __main__._ensure_secret_key), but
-    `orcha up` brings the daemon up without exporting it (only Compose reads that file). So if it's
-    not already in the env, read it from .orcha/.env relative to the daemon's cwd (the project root
-    ensure_daemon spawns it in). Best-effort: any failure leaves the daemon on its env keys."""
-    if os.environ.get("ORCHA_SECRET_KEY"):
-        return
-    try:
-        env_file = pathlib.Path.cwd() / ".orcha" / ".env"
-        if not env_file.is_file():
-            return
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("ORCHA_SECRET_KEY="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val:
-                    os.environ["ORCHA_SECRET_KEY"] = val
-                return
-    except Exception:
-        return
+    """Compatibility facade for loading the daemon's persisted master key."""
+    _boot_context.load_master_key()
 
 
 def _unseal_scan_key(scan: Optional[dict], field: str) -> Optional[str]:
-    """Unseal a wake-scan's sealed provider-key blob (`triage_key_enc` / `ack_key_enc`) into a
-    usable plaintext key, or None. Env override (ORCHA_LLM_API_KEY) still wins via resolve_llm_key.
-    Fails SOFT to None (→ the call falls back to env keys / fails open) on any decrypt error."""
-    blob = (scan or {}).get(field)
-    if _secret_box is None:
-        return None
-    try:
-        return _secret_box.resolve_llm_key(blob)
-    except Exception:
-        return None
+    """Compatibility facade for a sealed wake-scan provider key."""
+    return _boot_context.unseal_scan_key(
+        scan, field, sys.modules[__name__]
+    )
 
 
 def _triage_wake(event_text: str, *, config: Optional[dict] = None, api_key: Optional[str] = None) -> dict:
-    """#288 Tier-1 hook — delegate to the #290 universal client. FAIL-OPEN to wake if the module
-    is somehow unavailable (cannot suppress on infra error); triage_wake itself also fails open.
-
-    #294: `config` is the {"triage": {provider, model}} override resolved server-side and carried
-    on the wake-scan response, so an operator can tune WHICH model triages (cost vs. accuracy).
-    None ⇒ #290's shipped default (Haiku). The override is advisory: llm_util.resolve_spec falls
-    back to the default on any missing/partial config.
-
-    `api_key` is the unsealed per-provider key from the wake-scan (see _unseal_scan_key) so a
-    Settings-stored key (e.g. xAI) is used; None ⇒ llm_util's own env fallback applies."""
-    if _llm_util is None:
-        return {"wake": True, "reason": "llm_util unavailable — fail-open"}
-    return _llm_util.triage_wake(event_text, config=config, api_key=api_key)
+    """Compatibility facade for fail-open universal-client triage."""
+    return _boot_context.triage_wake(
+        event_text,
+        config=config,
+        api_key=api_key,
+        services=sys.modules[__name__],
+    )
 
 
 def _triage_config_from_scan(scan: dict) -> Optional[dict]:
-    """#294: map a wake-scan response's per-container `triage_model` into the {use_case: {...}}
-    config shape llm_util.resolve_spec expects. Returns None when no override is configured (the
-    common case) so triage_wake uses #290's shipped default. A malformed/empty triage_model also
-    yields None — the override is advisory and must never crash the triage path."""
-    tm = (scan or {}).get("triage_model")
-    if isinstance(tm, dict) and (tm.get("provider") or tm.get("model")):
-        return {"triage": tm}
-    return None
+    """Compatibility facade for wake-scan triage model configuration."""
+    return _boot_context.triage_config(scan)
 
 
 def decide_wake_suppression(cand, *, triage_fn=_triage_wake):
@@ -372,71 +312,30 @@ def _clear_persona_cache() -> None:
 
 def _persona_and_digest(api_base: str, agent_id: str,
                         *, force_fresh: bool = False) -> tuple[Optional[dict], Optional[dict]]:
-    """#285: return (persona, curated_digest) for an agent, served from the per-agent cache when a
-    fresh-enough entry exists; otherwise fetch + curate and (re)populate the cache.
-
-    force_fresh=True (the checkpoint/respawn path) bypasses the cache on read AND overwrites it on
-    the fresh fetch, so a just-written continuity digest is served immediately — never stale.
-
-    A transient fetch failure (either _get_json returns None) is NOT cached: pinning a missing
-    persona/digest for the whole TTL would suppress real continuity on every wake in that window.
-    A legitimately empty digest is the dict {"digest": null} (truthy), so this still caches the
-    common no-snapshot-yet agent.
-    """
-    now = time.monotonic()
-    if not force_fresh:
-        cached = _PERSONA_CACHE.get(agent_id)
-        if cached is not None and now < cached[0]:
-            return cached[1], cached[2]
-    persona = _get_json(f"{api_base}/api/agents/{agent_id}/persona")
-    digest = _get_json(f"{api_base}/api/agents/{agent_id}/digest")
-    if _digest_curate is not None:
-        digest = _digest_curate.curate_injected_digest(
-            digest, summarizer=_digest_curate.llm_summarizer)
-    if persona is not None and digest is not None:
-        _PERSONA_CACHE[agent_id] = (now + _PERSONA_CACHE_TTL_SECS, persona, digest)
-    return persona, digest
+    """Compatibility facade for cached persona and digest retrieval."""
+    return _persona_cache.persona_and_digest(
+        api_base,
+        agent_id,
+        force_fresh=force_fresh,
+        services=sys.modules[__name__],
+    )
 
 
 def _build_persona(api_base: str, agent_id: str, *, task_id: Optional[str] = None,
                    force_fresh: bool = False, lane: str = "work",
                    self_wake: Optional[dict] = None,
                    return_resume_rendered: bool = False):
-    """Fetch the agent's persona + latest digest + active-task protocol and format them for
-    injection.
-
-    GH #56 (Point 3 / FLAG 2a part d): `task_id` is the originating-task hint for this wake (the
-    wake-scan candidate's `wake_task_id` — set from a request_answered event's originating_task_id).
-    Passed through to the protocol GET so the RULES loaded are that task's, not a guess at the
-    agent's "one in_progress task" (which serves the wrong protocol when several are in progress).
-    None → the endpoint falls back to the in_progress guess (unchanged behaviour).
-
-    #285: persona + the (#287-)curated digest are served from a short-TTL per-agent cache
-    (_persona_and_digest) so close-together wakes don't re-GET + re-curate unchanged inputs.
-    `force_fresh=True` (the checkpoint/respawn path) bypasses that cache so a freshly written
-    continuity digest is never served stale.
-
-    #287: the latest digest is CURATED for the boot copy only (dedup + clip + recency cap +
-    byte ceiling, older tail folded into one LLM/breadcrumb summary) so a long-lived agent's
-    per-wake injection cost stays bounded. The stored DB row is left full + verbatim — curation
-    is a transport concern, not an edit to the agent's record (Epic C honesty boundary).
-
-    #326 (A1): the protocol (RULES) is fetched fresh on EVERY wake — never cached — so a human
-    edit applies on the next wake, independent of the (agent-authored, compressed) digest."""
-    persona, digest = _persona_and_digest(api_base, agent_id, force_fresh=force_fresh)
-    proto_url = f"{api_base}/api/agents/{agent_id}/protocol"
-    if task_id:
-        proto_url += f"?task_id={task_id}"
-    protocol = _get_json(proto_url)
-    render_resume = bool(self_wake and self_wake.get("injected")
-                         and task_id and task_id == self_wake.get("task_id"))
-    resume_rendered = bool(render_resume and protocol and protocol.get("resume_context"))
-    # GH #91/#90: thread the lane through so a conversation-lane boot gets the dispatch directive.
-    formatted = format_persona(persona, digest, protocol, lane=lane,
-                               render_resume=render_resume)
-    if return_resume_rendered:
-        return formatted, resume_rendered
-    return formatted
+    """Compatibility facade for persona, digest, and fresh protocol rendering."""
+    return _persona_cache.build_persona(
+        api_base,
+        agent_id,
+        task_id=task_id,
+        force_fresh=force_fresh,
+        lane=lane,
+        self_wake=self_wake,
+        return_resume_rendered=return_resume_rendered,
+        services=sys.modules[__name__],
+    )
 
 
 def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool,
