@@ -31,12 +31,15 @@ from orcha_cli.cli_env import (  # dotenv-file primitives
     _append_env_file, _read_env_file_value, _tighten_env_file)
 from orcha_cli.cli_http import _get_json, _post_json, _wait_for_portal  # tiny urllib JSON helpers
 from orcha_cli import cli_project_setup as _project_setup
+from orcha_cli import cli_bindings as _cli_bindings
 from orcha_cli import cli_project_commands as _cli_project_commands
 from orcha_cli import cli_connect as _cli_connect
 from orcha_cli import cli_init as _cli_init
 from orcha_cli import cli_lifecycle as _cli_lifecycle
 from orcha_cli import cli_stacks as _cli_stacks
 from orcha_cli import cli_transcript as _cli_transcript
+from orcha_cli import cli_watch as _cli_watch
+from orcha_cli import cli_watch_state as _cli_watch_state
 
 
 PKG_ROOT = pkg_res.files("orcha_cli")
@@ -421,331 +424,54 @@ def _parse_host_port(ports_str: str, container_port: str) -> Optional[str]:
 
 
 def _resolve_human_agent_id(cwd: pathlib.Path) -> str:
-    """Find the acting human's agent_id for human-only CLI calls (pause/resume/stop).
-
-    Order matches the skills' 4-step resolution, minus the AskUserQuestion fallback
-    (the CLI is non-interactive):
-      1. $ORCHA_ALIAS → .claude/orcha-tabs/<alias>.json
-      2. Single binding file in .claude/orcha-tabs/ if exactly one exists
-    Anything else → exit with a clear message.
-    """
-    tabs_dir = cwd / ".claude" / "orcha-tabs"
-
-    env_alias = (os.environ.get("ORCHA_ALIAS") or "").strip()
-    if env_alias:
-        f = tabs_dir / f"{env_alias}.json"
-        if not f.exists():
-            sys.exit(
-                f"error: $ORCHA_ALIAS='{env_alias}' but {f} doesn't exist. "
-                f"Register first via `orcha init --as {env_alias}` or `/orcha-register-human {env_alias}`."
-            )
-        return json.loads(f.read_text())["agent_id"]
-
-    if tabs_dir.exists():
-        bindings = sorted(tabs_dir.glob("*.json"))
-        if len(bindings) == 1:
-            return json.loads(bindings[0].read_text())["agent_id"]
-        if len(bindings) > 1:
-            names = ", ".join(b.stem for b in bindings)
-            sys.exit(
-                f"error: multiple bindings in {tabs_dir} ({names}). "
-                f"Set ORCHA_ALIAS=<name> in your shell to pick which human is acting."
-            )
-
-    sys.exit(
-        "error: no human binding found. Run `orcha init --as <YourName>` first, "
-        "or set $ORCHA_ALIAS to a registered human alias."
-    )
+    """Resolve the acting human through the focused binding module."""
+    return _cli_bindings.resolve_human_agent_id(cwd)
 
 
-def _resolve_any_binding(cwd: pathlib.Path, alias_override: Optional[str] = None) -> Optional[dict]:
-    """Find ANY binding (ai or human) for hook-friendly polling.
-
-    Returns the binding dict {alias, agent_id, container_id, kind?} or None.
-    Order: explicit alias arg → $ORCHA_ALIAS → single binding. **Never raises.**
-    A hook running in a session that isn't an Orcha project must be a silent
-    no-op; raising would break unrelated Claude work.
-    """
-    tabs_dir = cwd / ".claude" / "orcha-tabs"
-    if not tabs_dir.exists():
-        return None
-
-    pick = (alias_override or os.environ.get("ORCHA_ALIAS") or "").strip()
-    if pick:
-        f = tabs_dir / f"{pick}.json"
-        if not f.exists():
-            return None
-        try:
-            return json.loads(f.read_text())
-        except Exception:
-            return None
-
-    bindings = sorted(tabs_dir.glob("*.json"))
-    if len(bindings) != 1:
-        return None
-    try:
-        return json.loads(bindings[0].read_text())
-    except Exception:
-        return None
+def _resolve_any_binding(
+    cwd: pathlib.Path, alias_override: Optional[str] = None
+) -> Optional[dict]:
+    """Resolve any local agent binding without raising."""
+    return _cli_bindings.resolve_any_binding(cwd, alias_override)
 
 
-def _require_any_binding(cwd: pathlib.Path, alias_override: Optional[str], *, verb: str) -> dict:
-    binding = _resolve_any_binding(cwd, alias_override)
-    if binding and binding.get("agent_id"):
-        return binding
-    pick = (alias_override or os.environ.get("ORCHA_ALIAS") or "").strip()
-    if pick:
-        sys.exit(
-            f"error: no binding for alias '{pick}' in .claude/orcha-tabs/. "
-            f"Register first, or set ORCHA_ALIAS to the agent running `{verb}`."
-        )
-    sys.exit(
-        f"error: no agent binding found for `{verb}`. Set ORCHA_ALIAS or pass --alias."
+def _require_any_binding(
+    cwd: pathlib.Path, alias_override: Optional[str], *, verb: str
+) -> dict:
+    """Require a binding while preserving the compatibility patch seam."""
+    return _cli_bindings.require_any_binding(
+        cwd, alias_override, verb=verb, services=sys.modules[__name__]
     )
 
 
 def _watch_state_path(cwd: pathlib.Path, alias: str) -> pathlib.Path:
-    return cwd / ".claude" / f".orcha-watch-state-{alias}.json"
+    return _cli_watch_state.watch_state_path(cwd, alias)
 
 
 def _watch_pid_path(cwd: pathlib.Path, alias: str) -> pathlib.Path:
-    return cwd / ".claude" / f".orcha-watch-{alias}.pid"
+    return _cli_watch_state.watch_pid_path(cwd, alias)
 
 
 def _read_watch_state(cwd: pathlib.Path, alias: str) -> dict:
-    """Returns {seen_ids: list[str], queued: list[dict]}; defaults if file is absent/corrupt."""
-    p = _watch_state_path(cwd, alias)
-    if not p.exists():
-        return {"seen_ids": [], "queued": []}
-    try:
-        data = json.loads(p.read_text())
-        if not isinstance(data, dict):
-            return {"seen_ids": [], "queued": []}
-        data.setdefault("seen_ids", [])
-        data.setdefault("queued", [])
-        return data
-    except Exception:
-        return {"seen_ids": [], "queued": []}
+    return _cli_watch_state.read_watch_state(cwd, alias, sys.modules[__name__])
 
 
 def _atomic_write_json(path: pathlib.Path, data: dict) -> None:
-    """Write JSON atomically — write to a sibling tmp file, then rename."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data) + "\n")
-    tmp.replace(path)
+    _cli_watch_state.atomic_write_json(path, data)
 
 
 def _skip_managed_embodiment_hook(hook: str) -> bool:
-    """ISS-21 + R1/S3: the interactive SessionStart hooks must NOT run inside an Orcha-managed
-    embodiment — a headless wake worker (ORCHA_HEADLESS_WORKER, set by the notifier on every
-    worker it spawns) OR an S3 live terminal session (ORCHA_LIVE, set by the PTY bridge).
-
-    Both boot AS the agent with persona+digest+history already injected at spawn
-    (`--append-system-prompt`, or in-session on a warm `--resume`). Re-running `rehydrate`
-    would DOUBLE-inject that brief — and re-inject on a warm resume, breaking R1's cache-safe
-    "no re-injection" contract. `watch` would wedge a one-shot worker / add poller noise to a
-    live session, and `reachability` / `notifier --ensure` are the daemon's job, not the
-    embodiment's. Interactive human tabs (neither flag) are unaffected.
-
-    ORCHA_LIVE is only READ here, never unset, so cmd_snapshot's SessionEnd gate still fires.
-    Returns True if we no-op."""
-    marker = ("headless worker" if os.environ.get("ORCHA_HEADLESS_WORKER")
-              else "live terminal session" if os.environ.get("ORCHA_LIVE") else None)
-    if marker:
-        print(f"[orcha] {marker} — skipping interactive SessionStart hook '{hook}'")
-        return True
-    return False
+    return _cli_watch_state.skip_managed_embodiment_hook(hook)
 
 
 def cmd_watch(args: argparse.Namespace) -> None:
-    """Orcha#33: per-session background watcher (polls every 10s by default).
-
-    Polls `/api/agents/<aid>/inbox` + `/api/agents/<aid>/outbox?status=answered`
-    for the bound AI agent. Items whose request_id isn't in `seen_ids` get
-    queued for the next PostToolUse hook fire (which is just a file read —
-    no API call from inside Claude's reasoning loop).
-
-    Process model:
-      • `--detach`: fork, parent returns immediately (so SessionStart can finish);
-        child runs the loop. macOS/Linux only.
-      • Exits when the parent Claude process dies (PID watch). Belt: also exits
-        on SIGTERM from `orcha unwatch`.
-
-    Silent no-op for: no .claude/orcha.json, no resolvable binding, kind='human'
-    (humans don't get the automated nag), an existing live watcher for this alias.
-    """
-    if _skip_managed_embodiment_hook("watch"):   # ISS-21: the poller would wedge a one-shot worker
-        return
-    import signal
-    import time
-
-    cwd = pathlib.Path.cwd()
-    config_path = cwd / ".claude" / "orcha.json"
-    if not config_path.exists():
-        return
-    try:
-        config = json.loads(config_path.read_text())
-        api_base = config.get("api_base_url")
-        if not api_base:
-            return
-    except Exception:
-        return
-
-    binding = _resolve_any_binding(cwd, args.alias)
-    if not binding or binding.get("kind") == "human":
-        return
-    agent_id = binding.get("agent_id")
-    alias = binding.get("alias")
-    if not agent_id or not alias:
-        return
-
-    pid_path = _watch_pid_path(cwd, alias)
-    # If a live watcher is already running for this alias, this is a no-op.
-    if pid_path.exists():
-        try:
-            old_pid = int(pid_path.read_text().strip())
-            os.kill(old_pid, 0)
-            return  # already running
-        except (ValueError, ProcessLookupError, PermissionError):
-            try:
-                pid_path.unlink()
-            except FileNotFoundError:
-                pass
-
-    parent_pid = os.getppid()
-
-    if args.detach:
-        # Fork; parent returns so the hook command completes promptly.
-        try:
-            pid = os.fork()
-        except OSError:
-            # No fork on this platform — fall through and run inline.
-            pid = 0
-        if pid > 0:
-            return
-        # Child: detach from controlling terminal so the loop survives session end
-        # gracefully (we still rely on parent_pid watch to actually exit).
-        try:
-            os.setsid()
-        except OSError:
-            pass
-
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(str(os.getpid()))
-
-    stop_requested = False
-
-    def _handle_term(signum, frame):
-        nonlocal stop_requested
-        stop_requested = True
-
-    signal.signal(signal.SIGTERM, _handle_term)
-    signal.signal(signal.SIGINT, _handle_term)
-
-    inbox_url = f"{api_base}/api/agents/{agent_id}/inbox"
-    outbox_url = f"{api_base}/api/agents/{agent_id}/outbox?status=answered"
-    try:
-        while not stop_requested:
-            # Exit cleanly when Claude (the parent) is gone — keeps stale watchers
-            # from accumulating across `claude` invocations in the same folder.
-            try:
-                os.kill(parent_pid, 0)
-            except ProcessLookupError:
-                break
-
-            inbox = _get_json(inbox_url, timeout=3.0) or {}
-            outbox = _get_json(outbox_url, timeout=3.0) or {}
-
-            state = _read_watch_state(cwd, alias)
-            seen = set(state["seen_ids"])
-            queued = state["queued"]
-            had_new = False
-
-            for r in inbox.get("open_requests") or []:
-                rid = r.get("id")
-                if rid and rid not in seen:
-                    queued.append({
-                        "channel": "inbox",
-                        "id": rid,
-                        "type": r.get("type", "info"),
-                        "priority": r.get("priority"),
-                        "from": r.get("requester_alias"),
-                        "preview": (r.get("payload") or "")[:160],
-                        "chain_depth": r.get("chain_depth") or 0,
-                        "created_at": r.get("created_at"),
-                    })
-                    seen.add(rid)
-                    had_new = True
-
-            for r in outbox.get("outgoing_requests") or outbox.get("requests") or []:
-                rid = r.get("id")
-                if rid and rid not in seen:
-                    queued.append({
-                        "channel": "outbox-answered",
-                        "id": rid,
-                        "type": r.get("type", "info"),
-                        "to": r.get("target_alias"),
-                        "preview": (r.get("payload") or "")[:160],
-                        "answer_preview": (r.get("response") or "")[:160],
-                        "responded_at": r.get("responded_at"),
-                    })
-                    seen.add(rid)
-                    had_new = True
-
-            if had_new:
-                _atomic_write_json(_watch_state_path(cwd, alias), {
-                    "seen_ids": sorted(seen),
-                    "queued": queued,
-                })
-
-            # Sleep in short slices so SIGTERM is responsive.
-            slept = 0.0
-            while slept < args.interval and not stop_requested:
-                time.sleep(min(0.5, args.interval - slept))
-                slept += 0.5
-                try:
-                    os.kill(parent_pid, 0)
-                except ProcessLookupError:
-                    stop_requested = True
-                    break
-    finally:
-        try:
-            current = int(pid_path.read_text().strip())
-            if current == os.getpid():
-                pid_path.unlink()
-        except (FileNotFoundError, ValueError, PermissionError):
-            pass
+    """Run the background watcher through its focused workflow module."""
+    _cli_watch.cmd_watch(args, sys.modules[__name__])
 
 
-def cmd_unwatch(_: argparse.Namespace) -> None:
-    """Orcha#33: SessionEnd partner — SIGTERM the watcher(s) in this folder.
-
-    Targets the per-alias PID files written by `orcha watch`. Silent no-op if
-    no PID file exists or the pid is stale.
-    """
-    import signal
-    cwd = pathlib.Path.cwd()
-    claude_dir = cwd / ".claude"
-    if not claude_dir.exists():
-        return
-    for pid_path in claude_dir.glob(".orcha-watch-*.pid"):
-        try:
-            pid = int(pid_path.read_text().strip())
-        except (ValueError, OSError):
-            try:
-                pid_path.unlink()
-            except FileNotFoundError:
-                pass
-            continue
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            pid_path.unlink()
-        except FileNotFoundError:
-            pass
+def cmd_unwatch(args: argparse.Namespace) -> None:
+    """Stop background watchers through their focused workflow module."""
+    _cli_watch.cmd_unwatch(args)
 
 
 def _detect_tmux_target() -> Optional[str]:
