@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -64,6 +65,7 @@ from .notifier_codex_events import (
 )
 from .notifier_codex_result import _codex_result_status
 from . import notifier_conversation as _conversation
+from . import notifier_codex_conversation as _codex_conversation
 from . import notifier_boot_context as _boot_context
 from . import notifier_command as _notifier_command
 from . import notifier_daemon_control as _daemon_control
@@ -2140,19 +2142,10 @@ def _resident_runtime(r: dict) -> str:
 
 
 def _maybe_pin_codex_session(api_base: str, conv_id: str, r: dict) -> Optional[str]:
-    """#286: capture the Codex session id from this turn's log and pin it on the conversation so
-    the NEXT turn can `codex exec resume <session_id>` instead of re-injecting the full history.
-
-    No-ops when there is nothing new to pin — a cold worker that emitted no parseable id, or a
-    resume worker that kept the same session (already pinned). Reuses the existing
-    POST /conversations/{id}/session endpoint (shared with the Claude resident; the column is a
-    UUID, and recent Codex session ids are UUIDs). A non-UUID id makes the endpoint 400 → _post_json
-    returns None → we simply stay on the cold path next turn (the #286 fail-open contract)."""
-    sid = _extract_codex_session_id(r.get("log_path"))
-    if not sid or sid == r.get("resume_session_id"):
-        return None
-    res = _post_json(f"{api_base}/api/conversations/{conv_id}/session", {"session_id": sid})
-    return sid if res is not None else None
+    """Compatibility facade for persisting a Codex conversation session."""
+    return _codex_conversation.maybe_pin_session(
+        api_base, conv_id, r, sys.modules[__name__]
+    )
 
 
 def _finish_codex_conversation(api_base: str, conv_id: str, r: dict, *,
@@ -2160,112 +2153,39 @@ def _finish_codex_conversation(api_base: str, conv_id: str, r: dict, *,
                                ack_kind: str = "codex_conversation_released",
                                post_reply: bool = True,
                                teardown_worktree: bool = False) -> bool:
-    diff = _capture_diff(r.get("worktree"))
-    posted = False
-    real_text = _conversation_reply_text(r.get("log_path"), r.get("last_message_path")) \
-        if post_reply else None
-    text = real_text
-    if post_reply:
-        # #286 resume fail-open: a `codex exec resume` worker that produced NO reply (bad session
-        # id / unresumable rollout / wrong flag spelling) must NOT post the misleading "no reply"
-        # sentinel. Flag the conversation so the NEXT turn re-runs COLD with full history — the
-        # pending human turn stays unanswered (posted stays False → delivered_ts None) and is
-        # re-spawned cold. Never a broken turn; bounded to one cold retry.
-        if not text and r.get("resume_session_id"):
-            _CODEX_RESUME_FAILED.add(conv_id)
-        elif not text and status == "exited":
-            text = ("Codex completed without producing a final conversation reply. "
-                    f"See worker run {r.get('current_run_id')} for details.")
-        if text:
-            posted = _post_conversation_reply(
-                api_base, conv_id, r, text,
-                {"runtime": "codex", "exit_code": exit_code},
-            )
-    # A GENUINE reply (not the sentinel) means the rollout is valid → capture its session id for
-    # the next turn's resume, and clear any prior resume-failed flag (resume is healthy again).
-    if real_text and posted:
-        _maybe_pin_codex_session(api_base, conv_id, r)
-        _CODEX_RESUME_FAILED.discard(conv_id)
-    _finish_run(api_base, r.get("current_run_id"), status, exit_code, r.get("log_path"), diff)
-    if teardown_worktree:
-        _safe_teardown_worktree(r.get("base_cwd"), r.get("worktree"), r.get("branch"))
-    delivered_ts = r.get("conversation_ack_ts") if posted else None
-    _post_json(f"{api_base}/api/agents/{r['agent_id']}/wake-ack",
-               _conversation_ack_body(ack_kind, delivered_ts=delivered_ts, release_lease=True))
-    return posted
+    """Compatibility facade for finalizing one-shot Codex conversation turns."""
+    return _codex_conversation.finish(
+        api_base,
+        conv_id,
+        r,
+        sys.modules[__name__],
+        status=status,
+        exit_code=exit_code,
+        ack_kind=ack_kind,
+        post_reply=post_reply,
+        teardown_worktree=teardown_worktree,
+    )
 
 
 def _codex_run_state(conv: dict, run: dict, *, base_cwd: Optional[str] = None) -> dict:
-    log_path = _as_path(run.get("log_path"))
-    try:
-        last_size = os.path.getsize(log_path) if log_path else 0
-    except OSError:
-        last_size = 0
-    return {
-        "runtime": RUNTIME_CODEX, "proc": _ExternalProcess(run["pid"]),
-        "agent_id": conv["agent_id"], "conversation_id": conv["conversation_id"],
-        "alias": conv.get("agent_alias"),
-        "log_path": log_path, "last_message_path": _as_path(run.get("last_message_path")),
-        "worktree": run.get("worktree"), "branch": run.get("branch"),
-        "base_cwd": run.get("base_cwd") or base_cwd,
-        "serviced_seq": conv.get("last_turn_seq", 0),
-        "current_run_id": run["run_id"], "run_id": run["run_id"],
-        "conversation_ack_ts": (run.get("conversation_ack_ts")
-                                if run.get("conversation_ack_ts") is not None
-                                else conv.get("conversation_ack_ts")),
-        "hard_deadline": time.time() + HARD_CAP_MIN_SECS,
-        "last_size": last_size, "last_progress_ts": time.time(),
-        "lines_offset": 0, "lines_buf": b"", "lines_seq": 1,
-        "last_activity_ts": time.time(),
-    }
+    """Compatibility facade for restoring durable Codex run state."""
+    return _codex_conversation.run_state(
+        conv, run, sys.modules[__name__], base_cwd=base_cwd
+    )
 
 
 def reconcile_codex_conversation_runs(api_base: str, cid: str, live_residents: dict, *,
                                       quiet: bool = False,
                                       base_cwd: Optional[str] = None) -> None:
-    """Recover Codex one-shot conversation workers after a notifier restart.
-
-    Codex conversation replies are not resident stdin sessions. The durable worker_run row
-    carries the host pid plus the --output-last-message sidecar path, so a fresh daemon can
-    either reattach to a still-running process or recover the completed reply from disk.
-    """
-    scan = _get_json(f"{api_base}/api/containers/{cid}/active-conversations") or {}
-    for conv in scan.get("conversations", []):
-        if _normalize_runtime(conv.get("model_runtime")) != RUNTIME_CODEX:
-            continue
-        conv_id = conv.get("conversation_id")
-        aid = conv.get("agent_id")
-        if not conv_id or not aid:
-            continue
-        runs = (_get_json(f"{api_base}/api/agents/{aid}/runs?limit=200") or {}).get("runs", [])
-        for run in runs:
-            if (run.get("status") != "running"
-                    or _normalize_runtime(run.get("runtime")) != RUNTIME_CODEX
-                    or run.get("wake_event") != "conversation_turn"
-                    or run.get("conversation_id") != conv_id):
-                continue
-            pid = run.get("pid")
-            if pid and _pid_alive(pid):
-                if live_residents.get(conv_id) is None:
-                    live_residents[conv_id] = _codex_run_state(conv, run, base_cwd=base_cwd)
-                    if not quiet:
-                        print(f"[notifier] reattached Codex conversation worker for "
-                              f"{conv.get('agent_alias')} (pid {pid}, run {run.get('run_id')})")
-                continue
-            state = _codex_run_state({**conv, "last_turn_seq": conv.get("last_turn_seq", 0)},
-                                     {**run, "pid": pid or -1}, base_cwd=base_cwd)
-            text = _conversation_reply_text(state.get("log_path"), state.get("last_message_path"))
-            status = "exited" if text else "killed"
-            exit_code = 0 if text else -1
-            _finish_codex_conversation(
-                api_base, conv_id, state, status=status, exit_code=exit_code,
-                ack_kind="codex_conversation_orphan_recovered",
-                post_reply=True, teardown_worktree=True,
-            )
-            if not quiet:
-                outcome = "recovered reply" if text else "finished without reply"
-                print(f"[notifier] reconciled orphan Codex conversation run {run.get('run_id')} "
-                      f"for {conv.get('agent_alias')} ({outcome})")
+    """Compatibility facade for recovering Codex conversation workers."""
+    _codex_conversation.reconcile(
+        api_base,
+        cid,
+        live_residents,
+        sys.modules[__name__],
+        quiet=quiet,
+        base_cwd=base_cwd,
+    )
 
 
 def _close_resident(api_base: str, r: dict, reason: str = "idle", teardown_worktree: bool = False,
