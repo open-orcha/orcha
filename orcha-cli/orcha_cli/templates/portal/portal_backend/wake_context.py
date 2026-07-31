@@ -74,7 +74,7 @@ def filter_context_content(
     return prompts, filtered_notifications
 
 
-def handled_event_ids(
+def handled_event_id_sets(
     cur,
     aid: str,
     delivered_ts,
@@ -88,9 +88,14 @@ def handled_event_ids(
     task_bound_bucket: str,
     directive_bucket: str,
 ):
-    """Return events this task-bound run may safely acknowledge on completion."""
+    """Return completion-safe and delivery-safe event ids for this run.
+
+    A same-task DIRECTIVE is completion-safe only: a clean reaped worker may acknowledge it, but
+    fire-and-forget and live-terminal transports cannot infer success from delivery. All other
+    run-ackable rows remain delivery-safe for the non-reaped compatibility paths.
+    """
     if not pending:
-        return []
+        return [], []
     cur.execute(
         """SELECT e.id, e.event_name, e.payload, e.target_id
            FROM agent_events e
@@ -104,6 +109,7 @@ def handled_event_ids(
         (aid, delivered_ts, ack_through_ts, list(non_waking_events), aid),
     )
     handled = []
+    delivery_handled = []
     for row in cur.fetchall():
         classification = drain_class(
             cur,
@@ -113,11 +119,16 @@ def handled_event_ids(
         )
         bucket = classification["bucket"]
         task_id = classification["task_id"]
-        if bucket in run_ackable_buckets or (
-            bucket in (task_bound_bucket, directive_bucket)
-            and task_id
+        same_task = bool(
+            task_id
             and context_task_id
             and str(task_id) == str(context_task_id)
+        )
+        if bucket in run_ackable_buckets or (
+            bucket == task_bound_bucket and same_task
         ):
             handled.append(row["id"])
-    return handled
+            delivery_handled.append(row["id"])
+        elif bucket == directive_bucket and same_task:
+            handled.append(row["id"])
+    return handled, delivery_handled

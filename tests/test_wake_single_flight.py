@@ -2249,14 +2249,15 @@ def test_silent_worker_with_no_deltas_still_stall_killed(monkeypatch, tmp_path):
     assert ack["kind"] == "worker_stalled_killed"
 
 
-# ---------- GH #58 (review fix): non-reaped deliveries ack the per-event handled-set ----------
+# ---------- GH #58 (review fix): non-reaped deliveries ack only delivery-safe events ----------
 #
 # A reaped ephemeral worker (tracked in live_workers) defers its ack to reap_workers, which posts
 # the handled-set to /events/ack-handled (contiguous floor) on a CLEAN exit. The non-reaped paths
 # (`--once` with no reaper, and tmux sends) used to BLANKET high-water delivered_ts to ack_through_ts
 # (|| max_event_ts) at spawn — skipping past rows wake_scan deliberately left UN-handled (a cross-task
-# task_bound, a NEW_WORK / DIRECTIVE). That is the exact skipped-notification class GH #58 removes, so
-# they now post the SAME handled-set to /events/ack-handled and never high-water the cursor at spawn.
+# task_bound, a NEW_WORK / DIRECTIVE). They must post only the delivery-safe subset and never
+# high-water the cursor at spawn. In particular, a task DIRECTIVE stays pending until a confirmed
+# clean completion or a terminal task seam; merely delivering it cannot prove the run succeeded.
 
 def _drain_cand(**over):
     """A candidate carrying a backlog whose handled-set is a STRICT SUBSET of pending (the bug
@@ -2265,14 +2266,15 @@ def _drain_cand(**over):
          "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
          "pending_events": 3, "auto_start_task_ids": [], "reason": "wake",
          "latest_event": "request_answered", "max_event_ts": 9.0, "ack_through_ts": 9.0,
-         "handled_event_ids": [11, 12], "headless_flags": None}
+         "handled_event_ids": [11, 12], "delivery_handled_event_ids": [11],
+         "headless_flags": None}
     c.update(over)
     return c
 
 
-def test_tmux_delivery_acks_handled_set_not_high_water(monkeypatch):
-    """A tmux send is non-reaped: it must post the per-event handled-set to /events/ack-handled and
-    leave delivered_ts None — never blanket high-water past the unhandled rows."""
+def test_tmux_delivery_keeps_directive_pending(monkeypatch):
+    """A live-terminal send is non-reaped. It may acknowledge delivery-safe id 11, but must keep
+    directive id 12 pending because a later failed or rate-limited run still needs to retry it."""
     cand = _drain_cand(tmux_target="sess:0.0")
     monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
     monkeypatch.setattr(notifier, "select_transport", lambda c: "tmux")
@@ -2283,7 +2285,7 @@ def test_tmux_delivery_acks_handled_set_not_high_water(monkeypatch):
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
 
     ack_handled = next(b for u, b in posts if u.endswith("/events/ack-handled"))
-    assert ack_handled["event_ids"] == [11, 12]            # per-event handled-set, NOT a blanket jump
+    assert ack_handled["event_ids"] == [11]
     wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert wake_ack["delivered_ts"] is None                # cursor NOT high-watered at spawn
     assert wake_ack["kind"] == "tmux"
@@ -2291,9 +2293,9 @@ def test_tmux_delivery_acks_handled_set_not_high_water(monkeypatch):
     assert all(b.get("delivered_ts") != 9.0 for u, b in posts if u.endswith("/wake-ack"))
 
 
-def test_once_ephemeral_acks_handled_set_not_high_water(monkeypatch):
-    """`orcha notifier --once` (live_workers is None → no reaper) is non-reaped: same contract as
-    tmux — post the handled-set, never high-water delivered_ts."""
+def test_once_ephemeral_delivery_keeps_directive_pending(monkeypatch):
+    """`orcha notifier --once` has no reaper, so delivery may acknowledge id 11 but cannot consume
+    directive id 12 before the fire-and-forget worker's outcome is known."""
     cand = _drain_cand()
     monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
@@ -2312,7 +2314,7 @@ def test_once_ephemeral_acks_handled_set_not_high_water(monkeypatch):
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
 
     ack_handled = next(b for u, b in posts if u.endswith("/events/ack-handled"))
-    assert ack_handled["event_ids"] == [11, 12]
+    assert ack_handled["event_ids"] == [11]
     wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert wake_ack["delivered_ts"] is None
     assert all(b.get("delivered_ts") != 9.0 for u, b in posts if u.endswith("/wake-ack"))

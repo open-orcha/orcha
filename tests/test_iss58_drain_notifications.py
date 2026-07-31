@@ -261,6 +261,7 @@ async def test_in_progress_assignment_drains_once_then_new_task_message_rearms_w
     first = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert first["context_task_id"] == task["id"]
     assert assign_id in set(first["handled_event_ids"])
+    assert assign_id not in set(first["delivery_handled_event_ids"])
 
     # This is the same acknowledgement the daemon posts only after a clean worker exit.
     ack = await client.post(
@@ -553,6 +554,7 @@ async def test_sole_rejected_verify_grounds_the_run(
     assert any(str(n.get("drain_task_id")) == str(a["id"]) for n in cand["notifications"])
     assert str(a["id"]) in notifier.build_wake_prompt(cand)
     assert verified_ev in set(cand["handled_event_ids"])           # clean same-task run consumes it
+    assert verified_ev not in set(cand["delivery_handled_event_ids"])  # delivery alone cannot
 
 
 async def test_sole_plan_decision_grounds_the_run(
@@ -575,6 +577,7 @@ async def test_sole_plan_decision_grounds_the_run(
     assert any(str(n.get("drain_task_id")) == str(a["id"]) for n in cand["notifications"])
     assert str(a["id"]) in notifier.build_wake_prompt(cand)
     assert plan_ev in set(cand["handled_event_ids"])              # TASK_BOUND == context → drains here
+    assert plan_ev in set(cand["delivery_handled_event_ids"])     # not a success-only DIRECTIVE
 
 
 # =========== active-conversations — an already-acked row above the floor is not pending ===========

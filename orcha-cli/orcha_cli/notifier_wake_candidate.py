@@ -95,10 +95,18 @@ def _ack_delivery(
         and candidate["agent_id"] in live_workers
     )
     if sent and not ephemeral_reaped and candidate.get("pending_events"):
+        # A live-terminal send and `notifier --once` have no completion reaper. A same-task
+        # DIRECTIVE is therefore absent from this delivery-safe subset and remains pending until
+        # /done or another confirmed completion seam. Older servers do not expose the subset, so
+        # retain their existing handled-set behavior as a compatibility fallback.
+        delivery_ids = candidate.get(
+            "delivery_handled_event_ids",
+            candidate.get("handled_event_ids") or [],
+        )
         services._post_json(
             f"{api_base}/api/agents/{candidate['agent_id']}"
             "/events/ack-handled",
-            {"event_ids": candidate.get("handled_event_ids") or []},
+            {"event_ids": delivery_ids},
         )
     release_lease = kind == "ephemeral" and not sent
     ack_kind = (

@@ -122,10 +122,13 @@ class WakeClaim(BaseModel):
 
 
 class EventsAckHandled(BaseModel):
-    """GH #58: the per-event handled-set a finished drain run marks. The daemon posts the ids the run
-    actually handled (FYI + taskless + its context-task's task_bound rows) so they stop re-waking,
-    while events it could NOT handle (a cross-task task_bound, a NEW_WORK/DIRECTIVE) stay pending for
-    the right run/seam."""
+    """GH #58: acknowledge only the event ids a delivery or finished run may safely consume.
+
+    Wake-scan exposes `delivery_handled_event_ids` for non-reaped delivery and
+    `handled_event_ids` for confirmed clean completion. The completion set may additionally contain
+    a same-task DIRECTIVE; delivery alone never consumes that directive. Cross-task and NEW_WORK
+    rows stay pending for their owning run or claim/terminal seam.
+    """
 
     event_ids: list[int] = Field(default_factory=list)
 
