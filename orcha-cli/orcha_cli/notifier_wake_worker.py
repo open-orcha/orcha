@@ -17,9 +17,12 @@ def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
     code_wake = (
         bool(auto_tasks)
         or bool(candidate.get("wake_task_id"))
+        or bool(candidate.get("context_task_id"))
         or not single_noncode
     )
-    task_id = auto_tasks[0] if auto_tasks else candidate.get("wake_task_id")
+    task_id = candidate.get("context_task_id") or (
+        auto_tasks[0] if auto_tasks else candidate.get("wake_task_id")
+    )
     worktree = branch = None
     task_worktree = False
     if code_wake and headless_cwd and not dry_run and live_workers is not None:
@@ -88,9 +91,10 @@ def _worker_state(
         "cap": cap,
         "respawns": 0,
         "wake_event": event,
-        "wake_task_id": (
-            auto_tasks[0] if auto_tasks else candidate.get("wake_task_id")
-        ),
+        # The server may ground a sole assignment/rework directive through
+        # context_task_id even when wake_task_id is empty. Preserve that task
+        # identity so every failure path withholds the directive for retry.
+        "wake_task_id": run_task_id,
         "wake_ack_ts": wake_ack_ts,
         "handled_event_ids": handled,
         "respawn_ctx": respawn,

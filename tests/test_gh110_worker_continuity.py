@@ -139,6 +139,86 @@ def test_codex_rate_limit_clean_exit_preserved_and_cursor_withheld(tmp_path, mon
     assert hold.get("agent-X") and hold["agent-X"] > time.time()     # rate-limit hold-down armed
 
 
+def test_context_only_rework_rate_limit_keeps_directive_pending(tmp_path, monkeypatch):
+    """A rejected-verification directive can be the only pending event. The server grounds that
+    run with context_task_id while wake_task_id remains empty. It must still get a task worktree and
+    the task failure path, or a Codex 429 that exits zero will acknowledge the rejection forever."""
+    work = _make_repo(tmp_path)
+    aid = "00000000-0000-0000-0000-000000000001"
+    tid = "rework-task"
+    directive_id = 314
+    candidate = {
+        "agent_id": aid,
+        "alias": "Andrew",
+        "should_wake": True,
+        "headless_cwd": str(work),
+        "tmux_target": None,
+        "pending_events": 1,
+        "auto_start_task_ids": [],
+        "wake_task_id": None,
+        "context_task_id": tid,
+        "handled_event_ids": [directive_id],
+        "reason": "rework requested",
+        "latest_event": "task_verified",
+        "max_event_ts": 42.0,
+        "ack_through_ts": 42.0,
+        "headless_flags": None,
+        "model_runtime": notifier.RUNTIME_CODEX,
+    }
+    scan = {"active": True, "candidates": [candidate]}
+    posts = []
+
+    monkeypatch.setattr(notifier, "_get_json", lambda *a, **k: scan)
+    monkeypatch.setattr(
+        notifier,
+        "_post_json",
+        lambda url, body, **k: posts.append((url, body))
+        or ({"claimed": True} if "wake-claim" in url else
+            {"run_id": "RUN-REWORK"} if url.endswith("/runs") else {}),
+    )
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(
+        notifier,
+        "spawn_headless",
+        lambda *a, **k: (True, "codex exec", _ExitedProc(pid=777)),
+    )
+
+    live = {}
+    notifier.tick(
+        "http://x",
+        "container",
+        dry_run=False,
+        cooldown=0,
+        min_idle=0,
+        quiet=True,
+        live_workers=live,
+    )
+    worker = live[aid]
+    assert worker["task_worktree"] is True
+    assert worker["respawn_ctx"]["task_id"] == tid
+    assert worker["wake_task_id"] == tid
+    assert worker["handled_event_ids"] == [directive_id]
+
+    posts.clear()
+    worker["log_path"] = str(_rate_limit_log(tmp_path, "rework-rate-limit.log"))
+    fd, hold = {}, {}
+    notifier.reap_workers(
+        "http://x",
+        live,
+        quiet=True,
+        failed_drains=fd,
+        agent_hold_until=hold,
+    )
+
+    finish = next(body for url, body in posts if "/finish" in url)
+    assert finish["status"] == "rate_limited"
+    assert not any(url.endswith("/events/ack-handled") for url, _ in posts)
+    wake_ack = next(body for url, body in posts if url.endswith("/wake-ack"))
+    assert "delivered_ts" not in wake_ack
+    assert fd[(aid, tid)] == 1
+
+
 # ---------- test 6b: /finish endpoint accepts the new terminal statuses (contract) ----------
 
 @pytest.mark.asyncio
