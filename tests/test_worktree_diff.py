@@ -152,6 +152,40 @@ def test_provision_live_worktree_noop_outside_git_repo(tmp_path):
     assert wt is None and branch is None                             # caller falls back to shared cwd
 
 
+def test_reused_resident_conversation_worktree_refreshes_orcha_skills(tmp_path):
+    """A pre-fix conversation worktree gains local Orcha recipes when it is reused."""
+    work = _make_repo(tmp_path)
+    (work / ".claude").mkdir()
+    (work / ".claude" / "orcha.json").write_text(
+        '{"api_base_url":"http://localhost:8001"}'
+    )
+    wt1, branch1 = notifier._provision_resident_worktree(
+        str(work), "conversation-1"
+    )
+    worker = pathlib.Path(wt1)
+    assert not (worker / ".claude" / "commands").exists()
+    assert not (worker / ".agents" / "skills").exists()
+
+    command = work / ".claude" / "commands" / "orcha-task-new.md"
+    command.parent.mkdir(parents=True)
+    command.write_text("installed local Claude recipe")
+    skill = work / ".agents" / "skills" / "orcha-task-new" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("installed local Codex recipe")
+
+    wt2, branch2 = notifier._provision_resident_worktree(
+        str(work), "conversation-1"
+    )
+
+    assert (wt2, branch2) == (wt1, branch1)
+    assert (worker / ".claude" / "commands" / "orcha-task-new.md").read_text() == (
+        "installed local Claude recipe"
+    )
+    assert (
+        worker / ".agents" / "skills" / "orcha-task-new" / "SKILL.md"
+    ).read_text() == "installed local Codex recipe"
+
+
 def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch):
     """Heuristic: a wake with an assigned/ready task (auto_start) gets a worktree;
     a pure event wake does not."""

@@ -1,6 +1,8 @@
 import argparse
 import json
 
+import pytest
+
 from orcha_cli import __main__ as cli
 
 
@@ -32,13 +34,14 @@ def test_conversation_guard_blocks_nonmemory_write(monkeypatch, capsys):
     assert "conversation embodiment" in hook["permissionDecisionReason"]
 
 
+@pytest.mark.parametrize("tool_name", ["Agent", "Task"])
 def test_conversation_guard_blocks_internal_agent_thread_as_task_fallback(
-    monkeypatch, capsys
+    monkeypatch, capsys, tool_name
 ):
     """An internal Agent/Task tool is not a user-visible Orcha handoff."""
     monkeypatch.setenv("ORCHA_CONVERSATION_WORKER", "1")
     monkeypatch.setattr(cli, "_read_hook_stdin", lambda: {
-        "tool_name": "Agent",
+        "tool_name": tool_name,
         "tool_input": {"description": "implement the fix"},
     })
 
