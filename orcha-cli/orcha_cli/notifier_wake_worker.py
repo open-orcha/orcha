@@ -55,7 +55,6 @@ def _worker_state(
 ):
     """Build the daemon-owned state used by progress and completion reapers."""
     now = time.time()
-    auto_tasks = candidate.get("auto_start_task_ids") or []
     handled = candidate.get("handled_event_ids") or []
     wake_ack_ts = candidate.get("ack_through_ts")
     if wake_ack_ts is None:
