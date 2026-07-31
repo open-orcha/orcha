@@ -29,3 +29,17 @@ def test_codex_skill_body_strips_claude_frontmatter_and_maps_claude_tools():
     assert "argument-hint:" not in skill_text
     assert "User arguments: `$ARGUMENTS`" in skill_text
     assert "ask the user a concise clarifying question directly" in skill_text
+
+
+def test_task_creation_skill_is_local_first_and_requires_readback():
+    command = (cli.PKG_TEMPLATES / "skills" / "orcha-task-new.md").read_text()
+    skill = cli._codex_skill_body("orcha-task-new", command)
+
+    assert "remains usable even when the runtime does not advertise" in skill
+    assert ".claude/orcha.json" in skill
+    assert "Never use Chrome/browser discovery" in skill
+    assert "/api/containers/<cid>?task_limit=1000" in skill
+    assert "verify_body.container.id" in skill
+    assert "verify_body.tasks" in skill
+    assert "do not retry the POST" in skill
+    assert "/tasks?task=<task_id>" in skill

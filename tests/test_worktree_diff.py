@@ -367,6 +367,64 @@ def test_task_worktree_reattaches_to_branch_across_wakes(tmp_path):
     assert (pathlib.Path(wt2) / "wip.txt").read_text() == "prior wake work\n"   # prior state, not origin/main
 
 
+def test_runtime_overlay_carries_local_api_config_and_orcha_skills(tmp_path):
+    """Ignored local skills must remain discoverable inside isolated worker worktrees."""
+    base = tmp_path / "base"
+    worktree = tmp_path / "worker"
+    (base / ".claude" / "commands").mkdir(parents=True)
+    (base / ".claude" / "orcha-tabs").mkdir()
+    (base / ".agents" / "skills" / "orcha-task-new").mkdir(parents=True)
+    (base / ".agents" / "skills" / "private-helper").mkdir()
+    (base / ".claude" / "orcha.json").write_text(
+        '{"api_base_url":"http://localhost:8001","current_container_id":"local"}'
+    )
+    (base / ".claude" / "orcha-tabs" / "Agent.json").write_text(
+        '{"agent_id":"local-agent"}'
+    )
+    (base / ".claude" / "commands" / "orcha-task-new.md").write_text("local recipe")
+    (base / ".claude" / "commands" / "private.md").write_text("do not copy")
+    (base / ".agents" / "skills" / "orcha-task-new" / "SKILL.md").write_text(
+        "local Codex recipe"
+    )
+    (base / ".agents" / "skills" / "private-helper" / "SKILL.md").write_text(
+        "do not copy"
+    )
+
+    notifier._overlay_runtime_config(base, worktree)
+
+    assert "http://localhost:8001" in (
+        worktree / ".claude" / "orcha.json"
+    ).read_text()
+    assert (worktree / ".claude" / "orcha-tabs" / "Agent.json").exists()
+    assert (worktree / ".claude" / "commands" / "orcha-task-new.md").exists()
+    assert (
+        worktree / ".agents" / "skills" / "orcha-task-new" / "SKILL.md"
+    ).exists()
+    assert not (worktree / ".claude" / "commands" / "private.md").exists()
+    assert not (worktree / ".agents" / "skills" / "private-helper").exists()
+
+
+def test_reused_task_worktree_refreshes_missing_local_skills(tmp_path):
+    """A durable worktree created before the overlay fix heals on its next wake."""
+    work = _make_repo(tmp_path)
+    (work / ".claude").mkdir()
+    (work / ".claude" / "orcha.json").write_text(
+        '{"api_base_url":"http://localhost:8001"}'
+    )
+    wt1, branch1 = notifier._provision_task_worktree(str(work), "Agent", "old-task")
+    assert not (pathlib.Path(wt1) / ".agents" / "skills").exists()
+
+    skill = work / ".agents" / "skills" / "orcha-task-new" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("installed after the first wake")
+    wt2, branch2 = notifier._provision_task_worktree(str(work), "Agent", "old-task")
+
+    assert (wt2, branch2) == (wt1, branch1)
+    assert (
+        pathlib.Path(wt2) / ".agents" / "skills" / "orcha-task-new" / "SKILL.md"
+    ).read_text() == "installed after the first wake"
+
+
 def test_checkpoint_excludes_settings_json_and_skips_when_clean(tmp_path):
     """GH#110 R2: the overlaid runtime config (notably the TRACKED .claude/settings.json) must NEVER
     land on the durable task branch a PR is cut from. A worktree whose ONLY churn is settings.json

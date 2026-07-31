@@ -96,6 +96,20 @@ resident-session resource caps + per-conversation budget.
    `--permission-prompt-tool` / `canUseTool`; **clarifying questions** via an ask-human tool that
    blocks on a GUI answer; MCP OAuth handled by the web portal.
 
+### 5.1 Local-first handoff and browser boundary
+
+Conversation workers create background work only in the Orcha project configured by the current
+workspace. A runtime's named-tool list is not authoritative: Orcha commands may be installed as
+local skill/API recipes. The worker first reads `.claude/orcha.json`, its alias binding, and the
+workspace `orcha-task-new` skill. Isolated worker worktrees receive those ignored local files through
+the runtime overlay, including both Claude commands and Codex skills.
+
+Internal model sub-agent threads are execution details, not Orcha tasks or task requests, and must
+never be presented as visible task-board work. Chrome, browser controls, and unrelated open tabs are
+not service-discovery mechanisms and are never a fallback for task creation unless the human
+explicitly names that browser surface. If the configured local API cannot be reached or the created
+task cannot be read back from it, the worker stops and asks; it does not mutate a hosted substitute.
+
 ### 5.2 Warm-zone backlog drain — resident vs. ephemeral (GH #58)
 
 While a resident holds the single-embodiment lease, the server's wake gate suppresses every ephemeral

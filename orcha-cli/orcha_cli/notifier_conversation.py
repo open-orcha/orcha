@@ -6,6 +6,8 @@ import pathlib
 from collections.abc import Callable
 from typing import Optional
 
+from .notifier_handoff_policy import LOCAL_HANDOFF_TURN_REMINDER
+
 
 DISPATCH_DIRECTIVE = (
     "Decide whether the human's ask is QUICK or REAL WORK. QUICK (a question, brainstorm, status, a "
@@ -19,7 +21,8 @@ DISPATCH_DIRECTIVE = (
     "live context from this conversation, do only the tiny resident-only slice first and include its "
     "result in the initial task description or protocol notes before assignment, so the worker "
     "inherits it and does not redo it; unrelated tasks keep the normal fresh handoff path. Do not "
-    "call `/orcha-listen`."
+    "call `/orcha-listen`.\n"
+    f"{LOCAL_HANDOFF_TURN_REMINDER}"
 )
 
 

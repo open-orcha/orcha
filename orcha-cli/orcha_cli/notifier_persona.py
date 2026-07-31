@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from .notifier_handoff_policy import (
+    LOCAL_HANDOFF_GUARDRAIL,
+    LOCAL_HANDOFF_TURN_REMINDER,
+)
 from .notifier_protocol import _render_protocol, _render_resume_context, _render_task_body
 
 # #325: the standing plain-language rule for every message an agent sends a HUMAN. Orcha is
@@ -66,7 +70,8 @@ CONVERSATION_LANE_DIRECTIVE = (
     "You may decide up front (the ask is obviously long) OR mid-flight — if a quick reply is turning "
     "into a long investigation, hand it off at that point rather than grinding it out inline. Only "
     "genuinely long work becomes a task; pure questions, brainstorming, and status stay inline.\n"
-    f"{_SELF_REFERENTIAL_HANDOFF_RULE}"
+    f"{_SELF_REFERENTIAL_HANDOFF_RULE}\n"
+    f"{LOCAL_HANDOFF_GUARDRAIL}"
 )
 
 # GH #91/#90: a short, STABLE per-turn reminder prepended to each warm conversation turn's content.
@@ -78,7 +83,8 @@ _CONVERSATION_TURN_REMINDER = (
     "tests, PR) or more than ~3-4 min, create an assigned task with a protocol and reply with a "
     "one-line ack + the task link instead of doing it now. For a self-referential task that overlaps "
     "your live context, first do only the tiny context-only slice and put that result in the task's "
-    "initial task description/notes before assignment, so the spawned worker does not redo it."
+    "initial task description/notes before assignment, so the spawned worker does not redo it.\n"
+    f"{LOCAL_HANDOFF_TURN_REMINDER}"
 )
 
 

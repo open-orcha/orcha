@@ -8,6 +8,12 @@ You are executing `/orcha-task-new`.
 
 User arguments: `$ARGUMENTS`
 
+This is a workspace-local API recipe, so it remains usable even when the runtime does not advertise
+a named task-creation tool. The source of truth is `.claude/orcha.json` plus the acting alias binding,
+not a hosted page found through browser tabs. Never use Chrome/browser discovery as a fallback for
+this command. If the local configuration or API is unavailable, stop and ask the human; do not create
+the task in another Orcha instance.
+
 ## Steps
 
 1. **Parse `$ARGUMENTS`**:
@@ -57,10 +63,29 @@ User arguments: `$ARGUMENTS`
 
    **On any non-2xx `$http_code` — including ones not enumerated below — this is a HARD STOP, not a warning:** do not report a `task_id`, do not say the task was created, do not proceed to step 6. Print `$body` verbatim (the real server error) and stop. GH #152: a SessionEnd audit independently cross-checks any "task X created" claim you make against the live DB and hard-fails loudly on a mismatch — but the first line of defense is simply never making that claim when the POST didn't actually 2xx.
 
-6. **Report** to the user, briefly (only after a confirmed 2xx):
+6. **Verify the task through the same configured local API before reporting success or a link.**
+   Parse `task_id` from the successful response body, then read the configured container back:
+   ```bash
+   task_id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])' <<<"$body")
+   verify_resp=$(curl -sS -w '\n%{http_code}' \
+     "<api_base_url>/api/containers/<cid>?task_limit=1000")
+   verify_code=$(tail -n1 <<<"$verify_resp")
+   verify_body=$(sed '$d' <<<"$verify_resp")
+   ```
+   Continue only when `verify_code` is 2xx, `verify_body.container.id` equals `<cid>`, and the returned
+   `verify_body.tasks` contains `task_id`. This read-back proves the task is visible in the configured
+   local Orcha container. The canonical local task link is
+   `<api_base_url>/tasks?task=<task_id>`.
+
+   If verification fails, **do not retry the POST** (that could create a duplicate), do not claim
+   success, and do not return a link. Say that the local API may have created task `<task_id>` but its
+   visibility could not be verified, surface the verification error, and ask the human to check.
+
+7. **Report** to the user, briefly (only after a confirmed 2xx POST and successful read-back):
    - task_id, status (pending / ready / in_progress)
    - assignee_alias (or "(unassigned)")
    - depends_on (count, if any)
+   - the verified local task link: `<api_base_url>/tasks?task=<task_id>`
 
 ## Missing required arguments
 

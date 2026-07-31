@@ -19,6 +19,7 @@ def _stable_worktree(base_cwd, key, kind: str, services: Any):
     branch = f"orcha/{kind}-{slug}"
     worktree = base / ".orcha-worktrees" / f"{kind}-{slug}"
     if worktree.exists():
+        services._overlay_runtime_config(base, worktree)
         return str(worktree), branch
     services._run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
     return_code, _ = services._run_git(
@@ -66,6 +67,7 @@ def provision_task(base_cwd, alias, task_id, services: Any):
             ["-C", str(worktree), "rev-parse", "--git-dir"], cwd=base_cwd
         )
         if return_code == 0:
+            services._overlay_runtime_config(base, worktree)
             return str(worktree), branch
     services._run_git(["worktree", "prune"], cwd=base_cwd)
     local_code, _ = services._run_git(

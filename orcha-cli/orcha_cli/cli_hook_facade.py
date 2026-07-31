@@ -16,11 +16,13 @@ from . import (
 
 _CONV_BLOCKED_SLASH = cli_session_hooks.CONV_BLOCKED_SLASH
 _CONV_BLOCKED_TOOLS = cli_session_hooks.CONV_BLOCKED_TOOLS
+_CONV_INTERNAL_AGENT_TOOLS = cli_session_hooks.CONV_INTERNAL_AGENT_TOOLS
 _CONV_MEMORY_DIR_RE = cli_session_hooks.CONV_MEMORY_DIR_RE
 
 __all__ = [
     "_CONV_BLOCKED_SLASH",
     "_CONV_BLOCKED_TOOLS",
+    "_CONV_INTERNAL_AGENT_TOOLS",
     "_CONV_MEMORY_DIR_RE",
     "_atomic_write_json",
     "_conv_is_memory_write",

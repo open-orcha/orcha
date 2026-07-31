@@ -15,6 +15,7 @@ CONV_BLOCKED_SLASH = (
     "orcha-self-wake",
 )
 CONV_BLOCKED_TOOLS = ("Edit", "Write", "NotebookEdit")
+CONV_INTERNAL_AGENT_TOOLS = ("Agent", "Task")
 CONV_MEMORY_DIR_RE = re.compile(r"/\.claude/projects/[^/]+/memory/")
 
 
@@ -102,7 +103,13 @@ def conversation_guard(services) -> None:
     if not isinstance(tool_input, dict):
         tool_input = {}
     reason = None
-    if tool_name in services._CONV_BLOCKED_TOOLS and not services._conv_is_memory_write(
+    if tool_name in services._CONV_INTERNAL_AGENT_TOOLS:
+        reason = (
+            f"{tool_name} creates an internal sub-agent thread, not a visible Orcha task or "
+            "task request. A conversation embodiment must hand off real work through the local "
+            "Orcha task skill/API and verify the task there before returning a link."
+        )
+    elif tool_name in services._CONV_BLOCKED_TOOLS and not services._conv_is_memory_write(
         tool_input
     ):
         reason = (

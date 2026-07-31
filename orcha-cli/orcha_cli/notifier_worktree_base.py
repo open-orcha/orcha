@@ -66,7 +66,7 @@ def ensure_exclude(base_cwd, services: Any) -> None:
 
 
 def overlay_runtime_config(base: pathlib.Path, worktree: pathlib.Path) -> None:
-    """Copy ignored connection, binding, and hook files into a fresh worktree."""
+    """Copy ignored connection, binding, hook, and Orcha skill files into a worktree."""
     destination = worktree / ".claude"
     destination.mkdir(parents=True, exist_ok=True)
     for name in ("orcha.json", "settings.json"):
@@ -85,6 +85,35 @@ def overlay_runtime_config(base: pathlib.Path, worktree: pathlib.Path) -> None:
                     shutil.copy2(source, destination / "orcha-tabs" / source.name)
                 except OSError:
                     pass
+
+    # Project-installed Orcha commands/skills are intentionally ignored by Git. A fresh Git
+    # worktree therefore cannot discover the local task API unless the runtime overlay carries
+    # those files alongside orcha.json. Copy only Orcha-owned entries; unrelated local skills and
+    # commands remain private to the base checkout.
+    commands = base / ".claude" / "commands"
+    if commands.is_dir():
+        command_destination = destination / "commands"
+        command_destination.mkdir(parents=True, exist_ok=True)
+        for source in commands.glob("orcha-*.md"):
+            try:
+                shutil.copy2(source, command_destination / source.name)
+            except OSError:
+                pass
+    skills = base / ".agents" / "skills"
+    if skills.is_dir():
+        skill_destination = worktree / ".agents" / "skills"
+        skill_destination.mkdir(parents=True, exist_ok=True)
+        for source in skills.glob("orcha-*"):
+            if not source.is_dir():
+                continue
+            try:
+                shutil.copytree(
+                    source,
+                    skill_destination / source.name,
+                    dirs_exist_ok=True,
+                )
+            except OSError:
+                pass
 
 
 def seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
