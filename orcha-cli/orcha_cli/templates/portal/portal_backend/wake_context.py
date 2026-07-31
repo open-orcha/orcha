@@ -86,6 +86,7 @@ def handled_event_ids(
     drain_class: Callable[..., dict],
     run_ackable_buckets: Collection[str],
     task_bound_bucket: str,
+    directive_bucket: str,
 ):
     """Return events this task-bound run may safely acknowledge on completion."""
     if not pending:
@@ -113,7 +114,7 @@ def handled_event_ids(
         bucket = classification["bucket"]
         task_id = classification["task_id"]
         if bucket in run_ackable_buckets or (
-            bucket == task_bound_bucket
+            bucket in (task_bound_bucket, directive_bucket)
             and task_id
             and context_task_id
             and str(task_id) == str(context_task_id)

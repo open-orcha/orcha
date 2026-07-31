@@ -15,6 +15,8 @@ Coverage:
 - NEW_WORK (a `ready` task_assigned) is consumed at the /next claim, not by a drain.
 - the two R5-required cross-run cases: a REJECTED verify (DIRECTIVE) and a plan-approval
   decision_made (TASK_BOUND) are never FYI-acked by an unrelated run.
+- an in-progress assignment/rework DIRECTIVE is consumed by its first clean same-task run, so the
+  same event does not wake an idle agent forever; failed or unrelated runs still leave it pending.
 """
 import json
 
@@ -245,6 +247,45 @@ async def test_drain_all_same_task_plus_fyi_in_one_run(
     assert assign_id not in handled
 
 
+async def test_in_progress_assignment_drains_once_then_new_task_message_rearms_wake(
+        client, container, make_agent, make_task, db):
+    """Regression: a create-and-assign task starts in_progress and emits a DIRECTIVE. Its first
+    clean same-task run must consume that assignment event even if the task remains in_progress;
+    otherwise the idle gate starts another no-op run every cycle until /done. A genuinely new
+    task message must still wake the agent after the assignment has been consumed."""
+    x = await make_agent("x", "eng")
+    human = await make_agent("kedar", "lead", kind="human")
+    task = await make_task("long-running task", "done", assignee_alias="x")
+    assign_id = _event_id(db, x["agent_id"], "task_assigned", task_id=task["id"])
+
+    first = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert first["context_task_id"] == task["id"]
+    assert assign_id in set(first["handled_event_ids"])
+
+    # This is the same acknowledgement the daemon posts only after a clean worker exit.
+    ack = await client.post(
+        f"/api/agents/{x['agent_id']}/events/ack-handled",
+        json={"event_ids": first["handled_event_ids"]},
+    )
+    assert ack.status_code == 200, ack.text
+    quiet = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert quiet["pending_events"] == 0
+    assert quiet["should_wake"] is False
+    assert db.execute("SELECT status FROM tasks WHERE id=%s", (task["id"],))[0]["status"] \
+        == "in_progress"
+
+    posted = await client.post(
+        f"/api/tasks/{task['id']}/messages",
+        json={"author_agent_id": human["agent_id"], "body": "new direction"},
+    )
+    assert posted.status_code == 201, posted.text
+    rearmed = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert rearmed["should_wake"] is True
+    assert rearmed["pending_events"] == 1
+    assert rearmed["latest_event"] == "task_message"
+    assert any("new direction" in text for text in rearmed["prompt_messages"])
+
+
 # ===================== wake-scan — cross-task LEFT UNHANDLED, then re-binds =====================
 
 async def test_cross_task_left_unhandled_then_rebinds(
@@ -394,11 +435,11 @@ async def test_request_created_acked_when_closed_before_accept(
 
 # ===================== R5 cross-run: REJECTED verify is never FYI-acked =====================
 
-async def test_rejected_verify_left_unhandled_until_clean_completion(
+async def test_rejected_verify_left_unhandled_by_other_task_then_consumed_by_own_run(
         client, container, make_agent, make_task, db, work_headers):
     """R5 GAP A: a REJECTED verify is a rework START-DIRECTIVE for the restored assignee, NOT an FYI.
     A run bound to a DIFFERENT task must NOT mark it handled (that would clear the rework wake before
-    the assignee sees it). It stops re-surfacing only at the assignee's CLEAN completion (/done)."""
+    the assignee sees it). A clean run bound to the reworked task consumes it once."""
     x = await make_agent("x", "eng")
     human = await make_agent("kedar", "lead", kind="human")
     a = await make_task("task A", "done", assignee_alias="x")     # in_progress, x working
@@ -418,15 +459,25 @@ async def test_rejected_verify_left_unhandled_until_clean_completion(
                       json={"actor_agent_id": human["agent_id"], "agent_id": x["agent_id"]})
     cand = _cand(await _scan(client, container["id"]), x["agent_id"])
     assert cand["context_task_id"] == b["id"]
-    assert verified_ev not in set(cand["handled_event_ids"])      # DIRECTIVE → never run-acked
+    assert verified_ev not in set(cand["handled_event_ids"])      # unrelated run cannot ack it
 
-    # the rework directive resolves only when x cleanly completes A again
-    await client.post(f"/api/tasks/{a['id']}/done",
-                      json={"agent_id": x["agent_id"], "result": "edge case fixed"},
-                      headers=await work_headers(x["agent_id"]))
+    # Claiming B removes the competing ready context; the next wake binds to reworked A and its
+    # clean run can consume the directive even before A reaches /done.
+    claimed = await client.post(
+        f"/api/agents/{x['agent_id']}/next",
+        headers=await work_headers(x["agent_id"]),
+    )
+    assert claimed.status_code == 200 and claimed.json()["task"]["id"] == b["id"]
+    own_run = _cand(await _scan(client, container["id"]), x["agent_id"])
+    assert own_run["context_task_id"] == a["id"]
+    assert verified_ev in set(own_run["handled_event_ids"])
+    await client.post(
+        f"/api/agents/{x['agent_id']}/events/ack-handled",
+        json={"event_ids": own_run["handled_event_ids"]},
+    )
     acked = {r["event_id"] for r in db.execute(
         "SELECT event_id FROM agent_event_acks WHERE agent_id=%s", (x["agent_id"],))}
-    assert verified_ev in acked                                   # cleared at the /done seam
+    assert verified_ev in acked                                   # cleared by A's clean run
 
 
 # ===================== R5 cross-run: plan-approval decision is never FYI-acked =====================
@@ -481,8 +532,8 @@ async def test_sole_rejected_verify_grounds_the_run(
     message, so context_task_id would be None and the cross-task filter would drop the very row that
     woke us — leaving a worker awake with no task, no protocol, no surfaced directive. The fix derives
     the run context from that lone task-scoped directive: context binds to A, and A's rework row is
-    surfaced in the manifest AND the rendered wake prompt (but still NOT run-acked — it's a DIRECTIVE,
-    cleared only at A's clean /done)."""
+    surfaced in the manifest AND the rendered wake prompt. Its clean same-task run can then consume
+    the directive without waiting for A to reach /done."""
     x = await make_agent("x", "eng")
     human = await make_agent("kedar", "lead", kind="human")
     a = await make_task("task A", "done", assignee_alias="x")      # in_progress, x working
@@ -501,7 +552,7 @@ async def test_sole_rejected_verify_grounds_the_run(
     # the rework row survives the run-context filter and reaches the rendered 'drain in this order'
     assert any(str(n.get("drain_task_id")) == str(a["id"]) for n in cand["notifications"])
     assert str(a["id"]) in notifier.build_wake_prompt(cand)
-    assert verified_ev not in set(cand["handled_event_ids"])       # DIRECTIVE → never run-acked
+    assert verified_ev in set(cand["handled_event_ids"])           # clean same-task run consumes it
 
 
 async def test_sole_plan_decision_grounds_the_run(

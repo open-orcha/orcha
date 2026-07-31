@@ -107,6 +107,7 @@ def build_wake_candidate(
         drain_class=_drain_class,
         run_ackable_buckets=_DRAIN_RUN_ACKABLE,
         task_bound_bucket=_DRAIN_TASK_BOUND,
+        directive_bucket=_DRAIN_DIRECTIVE,
     )
 
     auto_interval = agent["auto_wake_interval_secs"]

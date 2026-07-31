@@ -133,6 +133,7 @@ def test_codex_rate_limit_clean_exit_preserved_and_cursor_withheld(tmp_path, mon
     assert "delivered_ts" not in ack                                 # cursor NOT advanced
     assert ack["release_lease"] is True                              # lease freed so a later wake retries
     # DoD(3): a rate-limited drain must NOT ack/close pending notifications
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)
     assert not any("triage-close" in u for u, _ in posts)
     assert fd[("agent-X", "rl-task")] == 1                           # one failed drain counted
     assert hold.get("agent-X") and hold["agent-X"] > time.time()     # rate-limit hold-down armed
