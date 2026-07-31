@@ -43,7 +43,10 @@ def handle_terminal_result(
             worker.get("log_path"), proc.returncode
         )
     lane = worker.get("lane", "work")
-    if worker.get("task_worktree") and drain_status in ("rate_limited", "failed"):
+    is_task_bound = bool(
+        worker.get("task_bound", bool(worker.get("task_worktree")))
+    )
+    if is_task_bound and drain_status in ("rate_limited", "failed"):
         services._drain_task_failure(
             api_base,
             worker,

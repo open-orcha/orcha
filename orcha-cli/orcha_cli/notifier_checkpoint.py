@@ -92,6 +92,9 @@ def checkpoint_and_respawn(
         "worktree": worktree,
         "branch": branch,
         "base_cwd": base_cwd,
+        "task_bound": bool(
+            worker.get("task_bound", bool(worker.get("task_worktree")))
+        ),
         "task_worktree": bool(worker.get("task_worktree")),
         "wake_ack_ts": worker.get("wake_ack_ts"),
         "wake_task_id": worker.get("wake_task_id"),

@@ -55,6 +55,7 @@ def _worker_state(
 ):
     """Build the daemon-owned state used by progress and completion reapers."""
     now = time.time()
+    task_bound = run_task_id is not None
     handled = candidate.get("handled_event_ids") or []
     wake_ack_ts = candidate.get("ack_through_ts")
     if wake_ack_ts is None:
@@ -67,6 +68,7 @@ def _worker_state(
         "reasoning_effort": candidate.get("reasoning_effort"),
         "model_runtime": candidate.get("model_runtime"),
         "task_id": run_task_id,
+        "task_bound": task_bound,
         "task_worktree": task_worktree,
         "handled_event_ids": handled,
         "event": event,
@@ -81,6 +83,10 @@ def _worker_state(
         "worktree": worktree,
         "branch": branch,
         "base_cwd": candidate.get("headless_cwd"),
+        # Task failure/retry semantics must not depend on whether durable
+        # task-worktree provisioning succeeded. A generic fallback is still a
+        # task-bound run and must never acknowledge directives after failure.
+        "task_bound": task_bound,
         "task_worktree": task_worktree,
         "started_ts": now,
         "agent_id": candidate["agent_id"],

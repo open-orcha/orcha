@@ -139,10 +139,17 @@ def test_codex_rate_limit_clean_exit_preserved_and_cursor_withheld(tmp_path, mon
     assert hold.get("agent-X") and hold["agent-X"] > time.time()     # rate-limit hold-down armed
 
 
-def test_context_only_rework_rate_limit_keeps_directive_pending(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "task_workspace_available",
+    [True, False],
+    ids=["protected-task-workspace", "generic-workspace-fallback"],
+)
+def test_context_only_rework_rate_limit_keeps_directive_pending(
+        tmp_path, monkeypatch, task_workspace_available):
     """A rejected-verification directive can be the only pending event. The server grounds that
-    run with context_task_id while wake_task_id remains empty. It must still get a task worktree and
-    the task failure path, or a Codex 429 that exits zero will acknowledge the rejection forever."""
+    run with context_task_id while wake_task_id remains empty. It must still get the task failure
+    path even if task-worktree provisioning falls back to a generic workspace, or a Codex 429 that
+    exits zero will acknowledge the rejection forever."""
     work = _make_repo(tmp_path)
     aid = "00000000-0000-0000-0000-000000000001"
     tid = "rework-task"
@@ -178,6 +185,12 @@ def test_context_only_rework_rate_limit_keeps_directive_pending(tmp_path, monkey
     )
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    if not task_workspace_available:
+        monkeypatch.setattr(
+            notifier,
+            "_provision_task_worktree",
+            lambda *a, **k: (None, None),
+        )
     monkeypatch.setattr(
         notifier,
         "spawn_headless",
@@ -195,7 +208,9 @@ def test_context_only_rework_rate_limit_keeps_directive_pending(tmp_path, monkey
         live_workers=live,
     )
     worker = live[aid]
-    assert worker["task_worktree"] is True
+    assert worker["worktree"] is not None
+    assert worker["task_worktree"] is task_workspace_available
+    assert worker["task_bound"] is True
     assert worker["respawn_ctx"]["task_id"] == tid
     assert worker["wake_task_id"] == tid
     assert worker["handled_event_ids"] == [directive_id]

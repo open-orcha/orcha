@@ -57,9 +57,10 @@ def handle_exited(
     status = "exited"
     if runtime == services.RUNTIME_CODEX:
         status = services._codex_exit_status(worker.get("log_path"), proc.returncode)
-    is_task = bool(worker.get("task_worktree"))
+    is_task_worktree = bool(worker.get("task_worktree"))
+    is_task_bound = bool(worker.get("task_bound", is_task_worktree))
     task_id = (worker.get("respawn_ctx") or {}).get("task_id")
-    if is_task and status in ("rate_limited", "failed"):
+    if is_task_bound and status in ("rate_limited", "failed"):
         services._drain_task_failure(
             api_base,
             worker,
@@ -86,7 +87,7 @@ def handle_exited(
         worker.get("log_path"),
         diff,
     )
-    if is_task:
+    if is_task_worktree:
         _save_task_result(api_base, aid, worker, diff, failed_drains, services)
         _release_worker(api_base, aid, worker, lane, "released", services, task=True)
     else:
@@ -101,7 +102,11 @@ def handle_exited(
         )
     services._retire_headless(api_base, live_workers, aid)
     if not quiet:
-        disposition = "task worktree preserved" if is_task else "worktree torn down"
+        disposition = (
+            "task worktree preserved"
+            if is_task_worktree
+            else "worktree torn down"
+        )
         print(
             f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
             f"exited ({status}) — {disposition}, lease released"
