@@ -87,7 +87,14 @@ function wireAttach() {
   renderTray();
 }
 
+/* Dup-send root cause #1: send() had NO in-flight guard and only cleared the input after
+   the POST resolved — a second Enter (or held-key repeat, or a "did it go through?" click
+   while the portal is slow/restarting) re-read the same text and POSTed the same turn
+   again. Everything now funnels through ONE guarded path: `sending` makes the second
+   activation a no-op, the button is down with a spinner, and the composer is cleared
+   optimistically (restored on failure — nothing is ever silently lost). */
 function send() {
+  if (sending) return;   // in flight: Enter/click/key-repeat are no-ops until it settles
   const inp = document.getElementById("convInput");
   const v = (inp.value || "").trim();
   const done = staged.filter((s) => s.status === "done");
@@ -98,21 +105,94 @@ function send() {
   if (!h) { O().toast("Pick an acting human (top-right) first.", "danger"); return; }
   closeSlash();
   const atts = done.map((s) => ({ id: s.ref.id, name: s.ref.name }));
+  // Round-2 fix (blocker #1): a FAILED pendingLocal is never overwritten. If the user typed
+  // something new while a failed bubble+Retry was still showing, stash it in failedSends —
+  // its own bubble keeps rendering with its own Retry — instead of letting the new send's
+  // submitTurn() below clobber the only copy of the earlier message.
+  if (pendingLocal && pendingLocal.status === "failed") { failedSends.push(pendingLocal); pendingLocal = null; }
+  // optimistic: clear the composer NOW (ISS-64 draft included) and paint a pending bubble;
+  // the text + staged refs live on pendingLocal until the server owns the turn.
+  inp.value = ""; autosize(inp); saveDraft("");
+  const keepStaged = staged; staged = []; renderTray();
+  submitTurn(v, atts, keepStaged, h);
+}
+// the ONE place a turn is POSTed (fresh sends and Retry both land here).
+function submitTurn(v, atts, keepStaged, h) {
+  sending = true; setSendBusy(true);
+  pendingLocal = { content: v, atts, keepStaged, authorId: h.id, at: Date.now(), status: "sending", err: null };
+  renderList();
   const tok = mountTok;   // a remount mid-send must not retarget another agent's conversation
+  const fail = (msg) => { if (tok === mountTok) failSend(msg); };
   ensureConv(tok).then((res) => {
-    if (tok !== mountTok) return;   // remounted for another agent → abandon this send
-    if (!res.ok) { O().toast("Couldn't open conversation (" + (res.status || "") + ")", "danger"); return; }
+    if (tok !== mountTok || res.stale) return;   // remounted for another agent → abandon this send
+    if (!res.ok) return fail(res.noHuman ? "Pick an acting human (top-right) first."
+                                         : "Couldn't open conversation (" + (res.status || "") + ")");
     return postJSON("/api/conversations/" + encodeURIComponent(convId) + "/turns",
       { role: "human", author_agent_id: h.id, content: v, attachments: atts.length ? atts : undefined })
       .then((r) => {
         if (tok !== mountTok) return;   // remounted before the turn landed → don't paint a stale panel
-        if (!r.ok) { O().toast("Send failed (" + r.status + ")", "danger"); return; }
-        inp.value = ""; autosize(inp); saveDraft("");   // ISS-64: drop the persisted draft once sent
-        staged = []; renderTray();                      // #337: clear the staging tray once sent
-        O().toast("Sent — " + (O().agentById(agentId) || {}).alias + " will reply.", "ok");
-        awaiting = true; renderList(); poll();   // show the "thinking…" indicator until the reply lands
+        if (!r.ok) return fail("Send failed (" + r.status + ")");
+        return r.json().catch(() => ({})).then((d) => {
+          if (tok !== mountTok) return;
+          settleSend(d && d.turn);
+        });
       });
-  });
+  }).catch(() => fail("Couldn't reach the portal — it may be restarting."));
+}
+// success: the server owns the turn. Reconcile the optimistic bubble with the durable row
+// the POST returned (append by turn id; the poll's id/seq dedupe drops the copy IT fetches),
+// then raise the honest awaiting-reply indicator.
+function settleSend(t) {
+  sending = false; setSendBusy(false); applyLock();   // minor #3: re-lock if a terminal paired mid-send
+  if (t && !turns.some((x) => String(x.id) === String(t.id))) {
+    turns.push(t);
+    if (typeof t.seq === "number" && t.seq > lastSeq) lastSeq = t.seq;
+  }
+  pendingLocal = null;
+  cacheConv();
+  awaiting = true; renderList(); poll();   // show the "thinking…" indicator until the reply lands
+}
+// failure: nothing is lost and nothing auto-repeats — the composer gets the text back
+// (only if the user hasn't typed something new), the staged refs return to the tray, and
+// the pending bubble flips to an inline danger note with an explicit Retry.
+function failSend(msg) {
+  sending = false; setSendBusy(false); applyLock();   // minor #3: re-lock if a terminal paired mid-send
+  if (!pendingLocal) return;   // a poll already reconciled this turn (it DID land server-side)
+  pendingLocal.status = "failed"; pendingLocal.err = msg;
+  const inp = document.getElementById("convInput");
+  if (inp && !(inp.value || "").trim()) { inp.value = pendingLocal.content; autosize(inp); saveDraft(inp.value); }
+  if (!staged.length && pendingLocal.keepStaged && pendingLocal.keepStaged.length) { staged = pendingLocal.keepStaged; renderTray(); }
+  renderList();
+}
+// Retry on a failed bubble: re-submit EXACTLY that failed content through the same guarded
+// path. `at` (the stage timestamp) identifies WHICH failed bubble — the live pendingLocal or
+// one stashed in failedSends by a later send() (blocker #1) — since either can carry a Retry.
+// The failure-restored composer text is taken back out first (when still untouched) so a
+// follow-up Enter can't double it.
+function retrySend(at) {
+  if (sending) return;
+  let p = null;
+  if (pendingLocal && pendingLocal.status === "failed" && (at == null || pendingLocal.at === at)) {
+    p = pendingLocal; pendingLocal = null;
+  } else if (at != null) {
+    const idx = failedSends.findIndex((f) => f.at === at);
+    if (idx >= 0) p = failedSends.splice(idx, 1)[0];
+  }
+  if (!p) return;
+  const h = O().actingHuman();
+  if (!h) { O().toast("Pick an acting human (top-right) first.", "danger"); return; }
+  const inp = document.getElementById("convInput");
+  if (inp && (inp.value || "").trim() === p.content) { inp.value = ""; autosize(inp); saveDraft(""); }
+  if (staged === p.keepStaged) { staged = []; renderTray(); }
+  submitTurn(p.content, p.atts, p.keepStaged, h);
+}
+// Send button in-flight affordance: down + spinner while the POST runs (applyLock keeps
+// it down across presence repaints via the `sending` flag).
+function setSendBusy(busy) {
+  const b = document.getElementById("convSend"); if (!b) return;
+  b.disabled = !!busy;
+  if (b.classList) b.classList[busy ? "add" : "remove"]("busy");
+  b.innerHTML = busy ? '<span class="spin"></span>Sending' : O().icon("arrow", "") + "Send";
 }
 function autosize(inp) { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 160) + "px"; }
 function onInput(inp) {

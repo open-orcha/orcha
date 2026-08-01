@@ -163,9 +163,19 @@ window.OrchaData = (function () {
   // initial load + 3s poll; render() repaints the page (use Orcha.patch so the
   // re-render never jumps scroll or clobbers a text selection — ISS-46).
   function start(render, ms) {
+    // A restarting portal 502s the poll for a few ticks. The FIRST consecutive failure
+    // retries silently (a transient blip self-heals on the next tick), and a persistent
+    // outage toasts ONCE — never a fresh "Load error → 502" per 3s tick spraying over
+    // the page. A successful refresh re-arms both.
+    let failStreak = 0, errToasted = false;
     const tick = () => refresh()
-      .then(() => { if (render) render(); })
-      .catch((e) => { if (window.Orcha) window.Orcha.toast("Load error: " + e.message, "danger"); });
+      .then(() => { failStreak = 0; errToasted = false; if (render) render(); })
+      .catch((e) => {
+        failStreak += 1;
+        if (failStreak < 2 || errToasted) return;   // silent first retry; one toast per outage
+        errToasted = true;
+        if (window.Orcha) window.Orcha.toast("Load error: " + e.message, "danger");
+      });
     tick();
     if (typeof setInterval !== "undefined") setInterval(tick, ms || 3000);
     // D6: live-push. Subscribe to the container event stream so escalations / decisions /
