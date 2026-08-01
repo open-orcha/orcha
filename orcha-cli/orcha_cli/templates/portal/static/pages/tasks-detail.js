@@ -18,7 +18,7 @@ function renderDetail(force) {
     </div>
     ${t.description ? `<div class="field" style="margin-top:16px;padding-top:15px;border-top:1px solid var(--border)"><div class="lbl">Description</div><div class="tx">${TasO.esc(t.description)}</div></div>` : ""}
     <div class="field" style="margin-top:14px"><div class="lbl">Definition of done</div><div class="dod">${TasO.esc(t.definition_of_done || "—")}</div></div>
-    ${t.result ? `<div class="field" style="margin-top:14px"><div class="lbl">Result</div><div class="tx">${TasO.linkify(t.result)}</div></div>` : ""}
+    ${t.result ? `<div class="field" style="margin-top:14px"><div class="lbl">Result</div><div class="tx md">${TasO.mdText(t.result)}</div></div>` : ""}
   </div>`;
 
   /* the human-authority gate — plan-approval (B10) OR verify (Epic B), never a dead-end */
@@ -105,7 +105,7 @@ function gateSurface(t) {
       <span class="acting-note">${humanAvatar()}${actorName() ? "acting as " + TasO.esc(actorName()) + " · " : ""}logged to the audit trail</span></div>
     <div class="gb">
       <div class="field"><div class="lbl">${TasO.icon("dot", "")}${isPlan ? "Proposed plan — full text" : "Result claimed by " + TasO.esc(who(t))}</div>
-        <div class="tx" style="white-space:pre-wrap;max-height:300px;overflow-y:auto">${TasO.linkify(isPlan ? (pm.body || "") : (t.result || "—"))}</div></div>
+        <div class="tx md" style="max-height:300px;overflow-y:auto">${TasO.mdText(isPlan ? (pm.body || "") : (t.result || "—"))}</div></div>
       <div class="field" style="margin-top:14px"><div class="lbl">${TasO.icon("check", "")}Definition of done</div>
         <div class="dod">${TasO.esc(t.definition_of_done || "—")}</div></div>
       <div class="actions">
@@ -153,14 +153,14 @@ function protocolSurface(t) {
       : key === "handoff_to"
         ? `${TasO.esc(p.handoff_to || "—")}${p.handoff_to ? ` <span class="muted" style="font-weight:450">— return here first</span>` : ""}`
         : key === "notes"
-          ? TasO.linkify(p.notes || "—")
+          ? TasO.mdText(p.notes || "—")
           : TasO.esc(p[key] || "—");
     // #55: all four fields are drag-expandable <textarea>s (resize: vertical via the
     // .prow textarea CSS) — a multi-line review_chain/handoff_to/autonomy is common, not
     // just Notes. saveProtocol() reads .value off [data-pfield], so input vs textarea is moot.
     const input = `<textarea data-pfield="${key}">${TasO.esc(d[key] || "")}</textarea>`;
     return `<div class="prow"><span class="k">${label}</span>
-      <span class="v${isNotes ? " notes" : ""}">${display}</span>
+      <span class="v${isNotes ? " notes md" : ""}">${display}</span>
       <div class="edit">${input}</div></div>`;
   };
   return `<div class="${cls}" id="proto-${TasO.esc(t.id)}" data-task="${TasO.esc(t.id)}">
@@ -231,7 +231,7 @@ function msgRow(m) {
     <div class="body">
       <div class="mh"><span class="nm">${sys ? "system" : TasO.esc(m.from)}</span>
         ${a && !sys ? TasO.kindBadge(a.kind) : ""}<span class="when">${m.at ? TasO.relTime(m.at) : ""}</span></div>
-      <div class="bubble">${TasO.linkify(m.body)}</div>
+      <div class="bubble md">${TasO.mdText(m.body)}</div>
       ${atts}
     </div></div>`;
 }

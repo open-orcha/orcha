@@ -54,8 +54,8 @@ def test_home_uses_patch_and_served_route_deeplinks():
     assert "/verify" in html, "task verify not wired"
     assert "O.actingHuman()" in html, "actions don't resolve the acting human"
     # review P1: the plan card shows the FULL plan body (scrollable), not a truncated summary.
-    # ISS-44: rendered via linkify() (esc-first + clickable URLs), still the whole body.
-    assert "O.linkify(planText(t))" in html, "plan card must show the full plan, not a truncated summary"
+    # feat/chat-markdown: rendered via mdText() (esc-first block markdown), still the whole body.
+    assert "O.mdText(planText(t))" in html, "plan card must show the full plan, not a truncated summary"
     assert "O.trunc(planText(t)" not in html, "plan body must not be truncated before approval"
     # review P2: one-shot — acted cards are suppressed immediately + not re-submittable
     assert "const d2Acted = new Set()" in html, "no one-shot per-task acted cache"

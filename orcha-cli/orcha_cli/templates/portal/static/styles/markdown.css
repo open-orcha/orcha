@@ -1,0 +1,59 @@
+/* Shared markdown rendering (Orcha.mdText output) — token-driven, chat-scale.
+   Opt-in via the `md` class on any authored-text container: conversation turns
+   (.turn .tx), task thread bubbles (.msg .bubble), plan bodies (.aq .ctx, gate .tx),
+   request payload/answer, protocol notes. mdText emits BLOCK html (paragraphs, <br>),
+   so md containers must not also preserve raw newlines — the explicit selectors below
+   out-rank each surface's own pre-wrap rule. Every colour comes from tokens.css, so
+   dark / light / skins all follow automatically. */
+.md,
+.turn .tx.md,
+.msg .bubble.md,
+.aq .ctx.md,
+.payload.md,
+.answer.md,
+.prow .v.notes.md { white-space: normal; overflow-wrap: break-word; }
+
+.md .md-p { margin: 0 0 7px; }
+.md .md-p:last-child { margin-bottom: 0; }
+.md strong { font-weight: 700; }
+.md em { font-style: italic; }
+
+/* headings at CHAT scale — a step above body text, never page-title scale */
+.md h1, .md h2, .md h3, .md h4 { margin: 11px 0 5px; font-weight: 700; line-height: 1.35;
+  letter-spacing: -.01em; color: var(--text); }
+.md h1:first-child, .md h2:first-child, .md h3:first-child, .md h4:first-child { margin-top: 2px; }
+.md h1 { font-size: 15.5px; }
+.md h2 { font-size: 14.5px; }
+.md h3 { font-size: 13.5px; }
+.md h4 { font-size: 13px; color: var(--text-2); }
+
+/* code — house mono + tokens; blocks scroll horizontally and cap their height */
+.md .md-code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
+  padding: 1px 5px; border-radius: 5px; background: var(--bg); border: 1px solid var(--border); }
+.md .md-pre { margin: 7px 0; padding: 9px 11px; border-radius: 9px; background: var(--bg);
+  border: 1px solid var(--border); max-height: 320px; overflow: auto; white-space: pre; }
+.md .md-pre code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; display: block; }
+
+/* lists — real (nested) ul/ol */
+.md ul, .md ol { margin: 4px 0 7px; padding-left: 21px; }
+.md ul:last-child, .md ol:last-child { margin-bottom: 0; }
+.md li { margin: 2px 0; }
+.md ul ul, .md ul ol, .md ol ul, .md ol ol { margin: 2px 0; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li::marker { color: var(--muted); }
+
+/* blockquote + horizontal rule — quiet, structural */
+.md .md-quote { margin: 7px 0; padding: 3px 0 3px 12px; border-left: 3px solid var(--border-2);
+  color: var(--muted); }
+.md .md-quote .md-p { margin-bottom: 4px; }
+.md .md-quote .md-p:last-child { margin-bottom: 0; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 11px 0; }
+
+/* GFM pipe tables — scroll inside their own box, never widen the bubble */
+.md .md-table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block;
+  overflow-x: auto; max-width: 100%; }
+.md .md-table th, .md .md-table td { border: 1px solid var(--border); padding: 5px 10px;
+  text-align: left; vertical-align: top; }
+.md .md-table th { background: var(--surface-2); font-weight: 650; }
+.md .md-table tr:nth-child(even) td { background: color-mix(in oklab, var(--surface-2) 45%, transparent); }

@@ -75,6 +75,7 @@ def style_source(name: str = "styles.css") -> str:
         "styles/components.css",
         "styles/overlays.css",
         "styles/conversation.css",
+        "styles/markdown.css",
         "styles/responsive.css",
         "styles.css",
     ]

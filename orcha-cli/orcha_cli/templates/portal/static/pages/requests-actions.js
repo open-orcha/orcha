@@ -26,9 +26,9 @@ function renderDetail(force) {
   html += chainView(r);
 
   html += `<div class="card pad" style="margin-bottom:18px">
-    <div class="field" style="margin-bottom:18px"><div class="lbl">${ReqO.icon("dot", "")}Payload</div><div class="payload">${ReqO.linkify(r.payload)}</div></div>
-    ${r.response ? `<div class="field" style="margin-bottom:18px"><div class="lbl" style="color:var(--ok)">${ReqO.icon("check", "")}Answer · from ${ReqO.esc(partyLabel(r.to))}</div><div class="answer">${ReqO.linkify(r.response)}</div></div>` : ""}
-    ${r.rejection_reason ? `<div class="field" style="margin-bottom:18px"><div class="lbl" style="color:var(--danger)">${ReqO.icon("x", "")}Rejected — reason</div><div class="answer rej">${ReqO.linkify(r.rejection_reason)}</div></div>` : ""}
+    <div class="field" style="margin-bottom:18px"><div class="lbl">${ReqO.icon("dot", "")}Payload</div><div class="payload md">${ReqO.mdText(r.payload)}</div></div>
+    ${r.response ? `<div class="field" style="margin-bottom:18px"><div class="lbl" style="color:var(--ok)">${ReqO.icon("check", "")}Answer · from ${ReqO.esc(partyLabel(r.to))}</div><div class="answer md">${ReqO.mdText(r.response)}</div></div>` : ""}
+    ${r.rejection_reason ? `<div class="field" style="margin-bottom:18px"><div class="lbl" style="color:var(--danger)">${ReqO.icon("x", "")}Rejected — reason</div><div class="answer rej md">${ReqO.mdText(r.rejection_reason)}</div></div>` : ""}
     <div class="field"><div class="lbl">${ReqO.icon("shield", "")}Your move</div>${actionsFor(r)}</div>
   </div>`;
 

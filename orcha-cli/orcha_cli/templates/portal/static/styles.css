@@ -4,5 +4,6 @@
 @import url("/assets/styles/components.css");
 @import url("/assets/styles/overlays.css");
 @import url("/assets/styles/conversation.css");
+@import url("/assets/styles/markdown.css");
 @import url("/assets/styles/responsive.css");
 /* Legacy test/read markers: [data-theme] prefers-color-scheme --accent --amber --ok --warn --danger --violet .s-working .s-attn .s-done .s-idle */

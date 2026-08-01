@@ -111,14 +111,15 @@ def test_tasks_page_mounts_plan_approval_on_in_progress():
 
 def test_plan_card_shows_full_plan_scrollable():
     """Static guard (ISS-32): an approval gate must show the WHOLE plan — the full thread
-    message body (no hard truncation) in a scrollable, pre-wrapped region."""
+    message body (no hard truncation) in a scrollable markdown region."""
     html = page_source("tasks.html")
     gate = html[html.index("function gateSurface"):html.index("function who", html.index("function gateSurface"))]
-    # ISS-44: the full body is now rendered via linkify() (esc-first + clickable URLs), not
-    # bare esc() — still the WHOLE body, no truncation.
-    assert "TasO.linkify(isPlan ? (pm.body" in gate, "plan card should render the full message body"
+    # feat/chat-markdown: the full body renders via mdText() (esc-first block markdown +
+    # clickable URLs), not bare esc() — still the WHOLE body, no truncation.
+    assert "TasO.mdText(isPlan ? (pm.body" in gate, "plan card should render the full message body"
     assert "O.trunc(pm.body" not in gate and "slice(0," not in gate, "plan body must not be hard-truncated"
-    assert "max-height:300px;overflow-y:auto" in gate and "white-space:pre-wrap" in gate, "plan region not scrollable/pre-wrapped"
+    # md output is block html — the region scrolls, and the md class supplies wrapping
+    assert "max-height:300px;overflow-y:auto" in gate and 'class="tx md"' in gate, "plan region not scrollable md"
 
 
 def test_plan_card_is_one_shot_per_session():

@@ -78,7 +78,7 @@ function renderQueue() {
       <span class="type">${HomO.icon("shield", "")}Plan approval</span>
       <div class="ttl">${HomO.esc(t.title)}</div>
       <div class="who">${HomO.agentLink(who)}<span>·</span><span class="tag model">${HomO.esc(a.model || "—")}</span></div>
-      <div class="ctx"><span class="lbl">Proposed plan — full text</span>${HomO.linkify(planText(t))}</div>
+      <div class="ctx md"><span class="lbl">Proposed plan — full text</span>${HomO.mdText(planText(t))}</div>
       <div class="acts" data-kind="plan" data-task="${HomO.esc(t.id)}" data-author="${HomO.esc((HomO.agentByAlias(who) || {}).id || "")}">
         <button class="btn sm approve" data-act="approve">${HomO.icon("shield", "")}Approve plan</button>
         <button class="btn sm danger" data-act="reject">Reject…</button>

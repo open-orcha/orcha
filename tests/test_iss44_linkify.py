@@ -20,24 +20,25 @@ STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
 def test_linkify_is_applied_to_authored_text_surfaces():
     app = script_source("app.js")
     assert "const linkify =" in app and "linkify," in app, "linkify not defined/exported"
-    # the authored full-text surfaces switched from esc() to linkify()
+    # the authored full-text surfaces render via mdText (feat/chat-markdown) — a superset
+    # of linkify: same esc-first + http(s)-only autolink invariant, plus block markdown.
     reqs = page_source("requests.html")
-    assert reqs.count("O.linkify(") >= 3, "request payload/response/reason not linkified"
+    assert reqs.count("O.mdText(") >= 3, "request payload/response/reason not md-rendered"
     tasks = page_source("tasks.html")
-    assert "O.linkify(m.body)" in tasks, "task thread message not linkified"
-    assert "O.linkify(isPlan" in tasks, "plan body / result not linkified (verification gate)"
-    # BOTH task-result surfaces must linkify: the verification-gate result AND the normal
-    # task-detail Result block — and neither may regress back to bare esc().
-    assert "O.linkify(t.result)" in tasks, "normal task-detail Result not linkified"
+    assert "O.mdText(m.body)" in tasks, "task thread message not md-rendered"
+    assert "O.mdText(isPlan" in tasks, "plan body / result not md-rendered (verification gate)"
+    # BOTH task-result surfaces must render markdown: the verification-gate result AND the
+    # normal task-detail Result block — and neither may regress back to bare esc().
+    assert "O.mdText(t.result)" in tasks, "normal task-detail Result not md-rendered"
     assert "O.esc(t.result)" not in tasks, "a task-result surface regressed to bare esc()"
     conv = script_source("conversation.js")
-    # conversation turns now render via mdText (rich markdown), which still linkifies URLs —
+    # conversation turns render via mdText (rich markdown), which still linkifies URLs —
     # so authored-link coverage is preserved (see test_rich_conversation_markdown for the link case).
     assert "O().mdText(t.content" in conv, "conversation turn content not rendered (mdText)"
     home = page_source("home.html")
-    # the dashboard plan-approval card renders the FULL plan body → linkify (the last
+    # the dashboard plan-approval card renders the FULL plan body → mdText (the last
     # full-text authored surface; "URLs clickable everywhere").
-    assert "O.linkify(planText(t))" in home, "home dashboard plan-text not linkified"
+    assert "O.mdText(planText(t))" in home, "home dashboard plan-text not md-rendered"
     # ...but the activity-feed row text MUST stay esc(): the whole row is wrapped in an
     # <a class="act"> link, so linkifying it would nest <a> inside <a> (invalid HTML).
     assert "O.esc(e.text)" in home, "activity-feed text must stay esc() (it's inside a row anchor)"

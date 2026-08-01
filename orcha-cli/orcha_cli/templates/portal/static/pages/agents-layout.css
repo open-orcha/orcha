@@ -72,21 +72,7 @@
   .turn .tx { font-size: 13.5px; line-height: 1.55; padding: 9px 13px; border-radius: 13px; white-space: pre-wrap;
     background: var(--surface-2); border: 1px solid var(--border); }
   .turn.human .tx { background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 26%, var(--border)); }
-  /* rich markdown rendering for conversation messages (Orcha.mdText) */
-  .tx.md strong { font-weight: 700; }
-  .tx.md em { font-style: italic; }
-  .tx.md .md-code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 5px; border-radius: 5px;
-    background: var(--bg); border: 1px solid var(--border); }
-  .tx.md .md-pre { margin: 7px 0; padding: 9px 11px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
-    overflow: auto; white-space: pre; }
-  .tx.md .md-pre code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
-  .tx.md .md-h { display: block; font-weight: 700; margin: 3px 0; }
-  .tx.md .md-li { display: block; padding-left: 15px; position: relative; }
-  .tx.md .md-li::before { content: "•"; position: absolute; left: 3px; color: var(--muted); }
-  .tx.md .md-table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; overflow-x: auto; max-width: 100%; }
-  .tx.md .md-table th, .tx.md .md-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; vertical-align: top; }
-  .tx.md .md-table th { background: var(--surface-2); font-weight: 650; }
-  .tx.md .md-table tr:nth-child(even) td { background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
+  /* rich markdown rendering for conversation messages: shared styles/markdown.css (.md) */
   .turn details { margin-top: 6px; } .turn .work-sum { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
   .turn .log { margin-top: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); max-height: 240px; overflow: auto; }
   .conv-thinking { display: inline-flex; gap: 5px; align-items: center; padding: 11px 14px; border-radius: 13px;
