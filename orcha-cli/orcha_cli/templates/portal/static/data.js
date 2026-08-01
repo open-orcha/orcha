@@ -162,7 +162,20 @@ window.OrchaData = (function () {
 
   // initial load + 3s poll; render() repaints the page (use Orcha.patch so the
   // re-render never jumps scroll or clobbers a text selection — ISS-46).
+  // Round-2 fix (finding #1): a prerendered document runs this SAME script. Before this
+  // guard, prerendering ANY portal page opened a real EventSource + started the 3s poll
+  // for a page the user might never visit — on a plain-HTTP/1.1 portal, Chrome's
+  // 6-connections-per-origin cap means a couple of hovered prerenders could starve the
+  // VISIBLE page's own poll/stream with no error surfaced (refresh() just queues forever).
+  // `document.prerendering` + the one-shot `prerenderingchange` listener are the platform's
+  // own API for exactly this: defer all network activity until the document is actually
+  // shown, at which point it behaves exactly as before. Browsers without the Prerendering
+  // API never set `document.prerendering`, so this is a no-op there (unchanged behavior).
   function start(render, ms) {
+    if (typeof document !== "undefined" && document.prerendering) {
+      document.addEventListener("prerenderingchange", () => start(render, ms), { once: true });
+      return;
+    }
     const tick = () => refresh()
       .then(() => { if (render) render(); })
       .catch((e) => { if (window.Orcha) window.Orcha.toast("Load error: " + e.message, "danger"); });

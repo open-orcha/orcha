@@ -173,3 +173,19 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 *::-webkit-scrollbar { width: 9px; height: 9px; }
 *::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
 *::-webkit-scrollbar-thumb:hover { background: var(--idle); background-clip: content-box; }
+
+/* ---- seamless nav: cross-document view transitions ---------------------- *
+ * The portal is an MPA — every sidebar/tab click is a real navigation. In
+ * Chromium 126+ this opt-in turns same-origin navigations between pages that
+ * both load this stylesheet into a fast root cross-fade instead of a hard
+ * swap; combined with speculation-rules prerender the target is usually
+ * already rendered, so nav reads as instant. Engines without @view-transition
+ * ignore the whole block (plain — now flash-free — loads). */
+@view-transition { navigation: auto; }
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: 120ms; }
+/* Reduced motion: no cross-fade — an instant swap, exactly the pre-existing
+   behavior (navigation: none skips the transition entirely). */
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+}

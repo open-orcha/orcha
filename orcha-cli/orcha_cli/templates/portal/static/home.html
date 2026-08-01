@@ -4,17 +4,58 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orcha · Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- pre-paint: theme attrs + inline bg/fg on <html> so the FIRST painted frame is
+     already themed, even before any stylesheet arrives (kills the white nav flash;
+     must stay ABOVE every <link rel="stylesheet">). The hardcoded colors mirror
+     --bg/--text in styles/tokens.css (classic) and the Swiss skin token block;
+     the inline override is cleared once real CSS is live (DOMContentLoaded) so
+     theme switching keeps sole ownership of the canvas color.
+     Round-2 review finding #2: a prerendered document runs this script ONCE, at parse
+     time — possibly minutes before the user ever sees it. If theme/skin/sidebar changed
+     in the meantime (another tab; localStorage is shared across every document of the
+     origin, including a not-yet-visible prerender), the activated page used to keep
+     showing the stale pick with no re-sync until a reload. `stamp()` re-runs the
+     attribute half (not the one-shot inline-bg first-paint half, which must stay
+     one-shot or a later real theme toggle's CSS var change would lose to a stale
+     inline style nothing else ever clears) on the platform's own `prerenderingchange`
+     event. -->
+<script>(function(){var d=document.documentElement;function stamp(){try{var t=localStorage.getItem('orcha:theme')||'auto',s=localStorage.getItem('orcha:skin'),b=localStorage.getItem('orcha:sidebar');d.setAttribute('data-theme',t);if(s&&s!=='classic')d.setAttribute('data-skin',s);else d.removeAttribute('data-skin');if(b==='collapsed')d.setAttribute('data-sidebar','collapsed');else d.removeAttribute('data-sidebar');return{t:t,s:s};}catch(e){d.setAttribute('data-theme','auto');return{t:'auto',s:null};}}try{var picked=stamp();var L=picked.t==='light'||(picked.t!=='dark'&&window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches),W=picked.s==='swiss';d.style.backgroundColor=W?(L?'#f3f3f0':'#0e0e10'):(L?'#f3f6fa':'#0a0d12');d.style.color=W?(L?'#16161a':'#f2f2ee'):(L?'#0e1722':'#e8edf6');document.addEventListener('DOMContentLoaded',function(){d.style.backgroundColor='';d.style.color='';});if(document.prerendering)document.addEventListener('prerenderingchange',stamp,{once:true});}catch(e){d.setAttribute('data-theme','auto');}})();</script>
+<link rel="preload" href="/assets/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/styles/fonts.css">
 <link rel="stylesheet" href="/assets/styles/tokens.css">
 <link rel="stylesheet" href="/assets/styles/shell.css">
 <link rel="stylesheet" href="/assets/styles/components.css">
 <link rel="stylesheet" href="/assets/styles/overlays.css">
 <link rel="stylesheet" href="/assets/styles/conversation.css">
 <link rel="stylesheet" href="/assets/styles/responsive.css">
-<script>(function(){try{var d=document.documentElement,t=localStorage.getItem('orcha:theme')||'auto',s=localStorage.getItem('orcha:skin'),b=localStorage.getItem('orcha:sidebar');d.setAttribute('data-theme',t);if(s&&s!=='classic')d.setAttribute('data-skin',s);if(b==='collapsed')d.setAttribute('data-sidebar','collapsed');}catch(e){document.documentElement.setAttribute('data-theme','auto');}})();</script>
 <link rel="stylesheet" href="/assets/pages/home.css">
+<!-- seamless nav (Chromium 121+): prerender same-origin link targets when the user
+     hovers / presses a link ("moderate" eagerness), so the next page is already
+     fetched, styled and scripted at click time. Document-rule ("where") form
+     because in-container nav links can carry a ?cid= query string — URL-list
+     rules can't template queries, while href_matches "/*" leaves search params
+     wildcarded. Excluded: /api/* and /assets/* (not navigable pages); /onboarding*
+     (round-2 fix, finding #3 — boot() there is NOT read-only: it can advance
+     persisted wizard/demo-flag state in localStorage before the user ever clicks,
+     see modules/onboarding-boot.js). Every OTHER portal page GET is side-effect-free
+     client-side, so prerendering it is still safe (data.js/app-run-stream.js gate
+     their own network effects on document.prerendering — see data.js, app-shell.js).
+     Non-Chromium engines ignore this block entirely. -->
+<script type="speculationrules">
+{
+  "prerender": [{
+    "where": {
+      "and": [
+        { "href_matches": "/*" },
+        { "not": { "href_matches": "/api/*" } },
+        { "not": { "href_matches": "/assets/*" } },
+        { "not": { "href_matches": "/onboarding*" } }
+      ]
+    },
+    "eagerness": "moderate"
+  }]
+}
+</script>
 </head>
 <body>
 <div class="app">

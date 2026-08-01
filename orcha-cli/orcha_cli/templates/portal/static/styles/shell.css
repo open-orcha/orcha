@@ -192,6 +192,14 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 .aut.dimmed { opacity: .6; transition: opacity .15s; }
 .aut.dimmed:hover, .aut.dimmed:focus-within { opacity: 1; }
 
+/* Round-2 fix (finding #4): the PRIMED topbar (app-shell.js primeShell(), before the real
+   snapshot-backed mountShell() render lands) — the data-bearing regions get no click
+   handler yet, so make that visibly true instead of a control that silently swallows the
+   click. Scoped to the specific regions, NOT the whole .topbar: #themeBtn (outside all of
+   these) is wired by primeShell() itself and must stay fully clickable. */
+.topbar.priming .search, .topbar.priming #attnPill, .topbar.priming .ctl-wrap,
+.topbar.priming #pairPhoneBtn { pointer-events: none; opacity: .55; }
+
 /* paused-state reinforcement on the whole topbar + persistent micro-banner */
 .topbar.paused { border-top: 2px solid var(--danger); }
 .pausebar { display: none; align-items: center; gap: 8px; padding: 7px 26px; font-size: 12px; font-weight: 650;

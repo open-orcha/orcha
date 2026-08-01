@@ -1,6 +1,16 @@
 /* Onboarding flow module: URL reconciliation, model loading, snapshot start, and helper export. */
 /* ---- boot: resolve cid once, load models, then live-render on snapshot - */
+// Round-2 fix (finding #3): boot() is NOT read-only — it can advance S.step to
+// "create-agent" and flip the dev-only demo flag, then persist both via save(). A
+// speculation-rules prerender of /onboarding?new=1 used to run this at HOVER time (the
+// speculation-rules exclusion above is the primary fix), well before the user ever
+// clicks. Belt-and-suspenders: even if some future rule/engine prerenders this page
+// anyway, don't let a prerendered document mutate state a LIVE document later reads —
+// localStorage is shared across every document of the origin. `document.prerendering`
+// is undefined on browsers without the Prerendering API, so the guard degrades to "never
+// skip" there (unchanged behavior).
 function boot() {
+  if (typeof document !== "undefined" && document.prerendering) return;
   // "+ New agent" deep-link (?new=1 or ?step=create-agent): once an operator exists, jump
   // straight to the create form so adding ANOTHER agent doesn't replay welcome/fork.
   const q = new URLSearchParams(location.search);
@@ -39,8 +49,12 @@ function boot() {
 // wizard is a form flow, so rebuilding it every 3s jumps the scroll + clobbers inputs
 // (O-series bug). OrchaData keeps window.ORCHA fresh, so each step reads current data when
 // it's navigated; user actions (go/buttons) drive the renders.
+// `booted` only latches once boot() actually RUNS (not once it's merely called) — boot()
+// itself no-ops while document.prerendering is true, and a prerendered document CAN still
+// activate into the visible tab later (Chrome swaps it in on click), at which point boot()
+// must still be free to run for real on the next snapshot tick.
 let booted = false;
-window.OrchaData.start(() => { if (!booted) { booted = true; boot(); } }, 3000);
+window.OrchaData.start(() => { if (!booted) { if (typeof document !== "undefined" && document.prerendering) return; booted = true; boot(); } }, 3000);
 
 // expose the pure step-machine helpers for node tests
 window.OrchaOnboarding = { railKeyFor, resumeStep, reconcileGhost, reconcileDemoFlag, CONCIERGE_TEMPLATE, RAIL,
