@@ -79,6 +79,10 @@
           </div>
         </div>
 
+        <!-- SEAM B (#212): host for downstream-registered settings tabs. Core leaves it empty;
+             with no extensions it stays empty (no card renders) → byte-identical settings page. -->
+        <div id="extSettingsTabs"></div>
+
       </div>
     </div>
   </div>
@@ -96,6 +100,8 @@
 <script src="/assets/modules/app-run-classify.js"></script>
 <script src="/assets/modules/app-run-stream.js"></script>
 <script src="/assets/modules/app-sort.js"></script>
+<!-- SEAM B (#212): the extension registry MUST be defined before page/consume-site code runs. -->
+<script src="/assets/modules/app-extensions.js"></script>
 <script src="/assets/app.js"></script>
 <script src="/assets/data.js"></script>
 <script src="/assets/modules/settings-key-state.js"></script>
@@ -104,5 +110,8 @@
 <script src="/assets/modules/settings-provider-keys.js"></script>
 <script src="/assets/modules/settings-appearance.js"></script>
 <script src="/assets/settings.js"></script>
+<!-- SEAM B (#212): optional downstream extensions, loaded AFTER this page's own scripts.
+     Core ships an empty stub so the request never 404s; a 404 is tolerated regardless. -->
+<script src="/assets/extensions/index.js" defer></script>
 </body>
 </html>

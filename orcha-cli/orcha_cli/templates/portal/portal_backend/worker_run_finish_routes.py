@@ -1,9 +1,10 @@
 """Finish, stop, and append streamed output to worker runs."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_kind, valid_uuid
 from portal_backend.schemas.worker_runs import (
@@ -85,7 +86,7 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
 
 
 @app.post("/api/runs/{run_id}/stop", status_code=200)
-def stop_worker_run(run_id: str, body: WorkerRunStop):
+def stop_worker_run(run_id: str, body: WorkerRunStop, request: Request):
     """#240 + #171/ISS-72: a human requests a graceful STOP of a RUNNING worker run / resident
     turn. The API runs in Docker and cannot signal host PIDs, so it only RECORDS the intent on
     the run row; the host notifier reads it back on its next per-tick wake-renew (zero new poll)
@@ -129,6 +130,19 @@ def stop_worker_run(run_id: str, body: WorkerRunStop):
         cur.execute("SELECT container_id FROM agents WHERE id=%s", (row["agent_id"],))
         container = cur.fetchone()
         if container:
+            # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+            # The run's container is only known here (from the run's agent), so the
+            # authorize lane runs at this point — after the existing human-kind gate.
+            resolved_actor = resolve_actor(
+                cur, request, str(container["container_id"]), body.actor_agent_id
+            )
+            authorize(
+                cur,
+                request,
+                resolved_actor,
+                "container_control",
+                str(container["container_id"]),
+            )
             log_event(
                 cur,
                 str(container["container_id"]),

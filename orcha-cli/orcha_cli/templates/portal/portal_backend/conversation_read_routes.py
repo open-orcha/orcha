@@ -1,9 +1,10 @@
 """Conversation creation and history-reading routes."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent as _require_agent
 from portal_backend.guards import require_kind as _require_kind
@@ -17,7 +18,7 @@ TURN_COLUMNS = (
 
 
 @app.post("/api/agents/{aid}/conversations", status_code=201)
-def start_conversation(aid: str, body: ConversationStart):
+def start_conversation(aid: str, body: ConversationStart, request: Request):
     """Get-or-create the ACTIVE conversation with an AI agent (a human opens it). At most
     ONE active conversation per agent (the one-embodiment invariant). Idempotent — returns
     the existing active conversation if one is open."""
@@ -26,6 +27,13 @@ def start_conversation(aid: str, body: ConversationStart):
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
         _require_kind(cur, body.actor_agent_id, ("human",))
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(agent["container_id"]), body.actor_agent_id
+        )
+        authorize(
+            cur, request, resolved_actor, "start_conversation", str(agent["container_id"])
+        )
         cur.execute("SELECT kind FROM agents WHERE id=%s", (aid,))
         if cur.fetchone()["kind"] != "ai":
             raise HTTPException(400, "conversations target an AI agent")

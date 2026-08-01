@@ -1,8 +1,9 @@
 """Persist human decisions and route their rationale to affected work."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.decision_routing import _post_decision_to_thread
 from portal_backend.events import publish_event
@@ -11,7 +12,7 @@ from portal_backend.schemas.agent_state import DecisionCreate
 
 
 @app.post("/api/decisions", status_code=201)
-def create_decision(body: DecisionCreate):
+def create_decision(body: DecisionCreate, request: Request):
     reason = (body.reason or "").strip()
     if body.decision == "reject" and not reason:
         raise HTTPException(
@@ -29,6 +30,11 @@ def create_decision(body: DecisionCreate):
             "SELECT container_id FROM agents WHERE id=%s", (body.actor_agent_id,)
         )
         container_id = cur.fetchone()["container_id"]
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(container_id), body.actor_agent_id
+        )
+        authorize(cur, request, resolved_actor, "make_decision", str(container_id))
         if body.target_agent_id is not None:
             cur.execute(
                 "SELECT container_id FROM agents WHERE id=%s",

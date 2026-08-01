@@ -1,16 +1,17 @@
 """Manage an agent's human-controlled recurring wake policy."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_kind, valid_uuid
 from portal_backend.schemas.agent_state import AutoWakeUpdate
 
 
 @app.patch("/api/agents/{aid}/auto-wake", status_code=200)
-def update_agent_auto_wake(aid: str, body: AutoWakeUpdate):
+def update_agent_auto_wake(aid: str, body: AutoWakeUpdate, request: Request):
     """#266: set or clear an agent's clock-driven AUTO-WAKE interval. HUMAN-AUTHORITY gated +
     audit-logged, mirroring /verify and the protocol PATCH (Orcha#30): only a kind='human' actor
     may change wake policy. `interval_secs` is explicit (int>=60 to enable, null to disable) — the
@@ -26,6 +27,11 @@ def update_agent_auto_wake(aid: str, body: AutoWakeUpdate):
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"agent {aid} not found")
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(row["container_id"]), body.actor_agent_id
+        )
+        authorize(cur, request, resolved_actor, "update_agent", str(row["container_id"]))
         if row["kind"] == "human":
             raise HTTPException(
                 400, "humans are not woken — auto-wake applies to kind='ai' agents"

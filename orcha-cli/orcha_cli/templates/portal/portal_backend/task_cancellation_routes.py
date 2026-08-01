@@ -1,9 +1,10 @@
 """Cancel non-root tasks and notify displaced owners."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.decision_routing import (
     _post_decision_to_thread,
@@ -22,7 +23,7 @@ from portal_backend.task_completion_support import _recalibrate_task_owners
 
 
 @app.post("/api/tasks/{tid}/cancel", status_code=200)
-def cancel_task(tid: str, body: TaskCancel):
+def cancel_task(tid: str, body: TaskCancel, request: Request):
     """B7 (ISS-23) + #327: force-close a task. A human OR a dispatching AI orchestrator may cancel
     ANY non-root task. Cancelling a task owned by SOMEONE ELSE is "forced" — kind-agnostic now: the
     actor (human or AI) MUST give a reason, which is routed to each displaced owner via the B0
@@ -34,6 +35,11 @@ def cancel_task(tid: str, body: TaskCancel):
         raise HTTPException(400, "actor_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(t["container_id"]), body.actor_agent_id
+        )
+        authorize(cur, request, resolved_actor, "cancel_task", str(t["container_id"]))
         _require_container_active(
             cur, str(t["container_id"]), body.actor_agent_id
         )  # GH #24 (human may still cancel)

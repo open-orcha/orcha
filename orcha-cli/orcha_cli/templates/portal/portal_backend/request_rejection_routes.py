@@ -2,10 +2,11 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import poke_path_forward as _poke_path_forward
@@ -21,7 +22,7 @@ from portal_backend.schemas.requests import AgentSuggestion, TaskRequestReject
 
 
 @app.post("/api/requests/{rid}/reject-task", status_code=200)
-def reject_task_request(rid: str, body: TaskRequestReject):
+def reject_task_request(rid: str, body: TaskRequestReject, request: Request):
     """Target rejects a task request with a reason; requester can then re-ask, suggest agent, or escalate."""
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
@@ -31,6 +32,9 @@ def reject_task_request(rid: str, body: TaskRequestReject):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize all request-state mutations
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, str(r["container_id"]), body.responder_agent_id)
+        authorize(cur, request, resolved_actor, "respond_request", str(r["container_id"]))
         _require_container_active(
             cur, str(r["container_id"]), body.responder_agent_id
         )  # GH #24
@@ -96,7 +100,7 @@ def reject_task_request(rid: str, body: TaskRequestReject):
 
 
 @app.post("/api/requests/{rid}/suggest-agent", status_code=200)
-def suggest_agent(rid: str, body: AgentSuggestion):
+def suggest_agent(rid: str, body: AgentSuggestion, request: Request):
     """Requester escalates with a structured proposal: 'please create a new agent X with role Y'.
 
     The request stays status='open' (target=null) so it appears in the human's escalations queue
@@ -111,6 +115,9 @@ def suggest_agent(rid: str, body: AgentSuggestion):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize all request-state mutations
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, str(r["container_id"]), body.requester_agent_id)
+        authorize(cur, request, resolved_actor, "suggest_agent", str(r["container_id"]))
         _require_container_active(
             cur, str(r["container_id"]), body.requester_agent_id
         )  # GH #24

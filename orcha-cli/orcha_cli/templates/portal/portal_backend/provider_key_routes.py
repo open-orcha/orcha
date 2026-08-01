@@ -4,10 +4,11 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import (
     require_container as _require_container,
@@ -134,7 +135,9 @@ def list_container_provider_keys(cid: str):
 
 
 @app.put("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
-def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
+def put_container_provider_key(
+    cid: str, provider: str, body: LlmKeyUpdate, request: Request
+):
     """Seal + store the key for one provider. HUMAN-AUTHORITY gated + audit-logged. Anthropic
     writes its legacy column; other providers upsert container_provider_keys. 503 w/o ORCHA_SECRET_KEY."""
     if not _valid_uuid(cid):
@@ -145,6 +148,9 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
     if not key:
         raise HTTPException(400, "api_key must not be blank")
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "update_settings", cid)
         _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
         if not secret_box.master_key_present():
@@ -183,7 +189,9 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
 
 
 @app.delete("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
-def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
+def delete_container_provider_key(
+    cid: str, provider: str, body: LlmKeyActor, request: Request
+):
     """Remove one provider's stored key (resolution falls back to env override, else none).
     HUMAN-AUTHORITY gated + audit-logged."""
     if not _valid_uuid(cid):
@@ -191,6 +199,9 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
     if not _available_provider(provider):
         raise HTTPException(400, f"'{provider}' is not an available catalog provider")
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "update_settings", cid)
         _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
         # Unified table (migration 027) — clear the row for any provider, Anthropic included.
@@ -223,7 +234,9 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
 @app.post(
     "/api/containers/{cid}/settings/provider-keys/{provider}/test", status_code=200
 )
-def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
+def test_container_provider_key(
+    cid: str, provider: str, body: LlmKeyTest, request: Request
+):
     """Credential ping against `provider`'s API. HUMAN-AUTHORITY gated. With `api_key` -> test that
     candidate (pre-save); without -> test the currently-resolved key for this provider."""
     if not _valid_uuid(cid):
@@ -231,6 +244,9 @@ def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
     if not _available_provider(provider):
         raise HTTPException(400, f"'{provider}' is not an available catalog provider")
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "update_settings", cid)
         _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
         if body.api_key and body.api_key.strip():

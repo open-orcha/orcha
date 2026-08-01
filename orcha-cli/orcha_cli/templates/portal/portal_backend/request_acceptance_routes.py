@@ -3,10 +3,11 @@
 import json
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import publish_event as _publish_event
@@ -35,6 +36,7 @@ def configure_compatibility(attribute_token_run_to_task_getter):
 def accept_task_request(
     rid: str,
     body: TaskRequestAccept,
+    request: Request,
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
 ):
     """Target accepts a task request → creates the task, assigns it, marks request 'accepted'."""
@@ -46,6 +48,9 @@ def accept_task_request(
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize overlapping retries
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, str(r["container_id"]), body.responder_agent_id)
+        authorize(cur, request, resolved_actor, "respond_request", str(r["container_id"]))
         # GH #91/#90: accepting a task request creates an agent_tasks 'working' row — that is moving a
         # task INTO working, which is WORK-lane only. Gate on the ACCEPTING agent (the target /
         # responder). A conversation-lane embodiment can DISPATCH a task (create/assign a request) but

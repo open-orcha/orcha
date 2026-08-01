@@ -42,6 +42,14 @@ function mountShell(page, opts) {
     { key: "settings", href: "/settings", ico: "sliders", label: "Settings" },
   ];
 
+  // SEAM B (#212): fold in downstream-registered nav items AFTER the core entries.
+  // Absent extensions → _consume returns [] → this loop is a no-op and the nav renders
+  // byte-identically. Each item keeps the same shape core uses (key/href/label), so the
+  // existing map() below renders extension items with zero special-casing.
+  (window.OrchaExt ? window.OrchaExt._consume("nav") : []).forEach((x) => {
+    if (x && x.id && x.label && x.href) nv.push({ key: "ext:" + x.id, href: x.href, ico: "dot", label: x.label });
+  });
+
   const sidebar = document.getElementById("sidebar");
   if (sidebar) {
     const sbT0 = sidebarCollapsed() ? "Expand sidebar" : "Collapse sidebar";

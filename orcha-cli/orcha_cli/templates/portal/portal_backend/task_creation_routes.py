@@ -2,10 +2,11 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import (
@@ -18,10 +19,15 @@ from portal_backend.schemas import TaskCreateBody
 
 
 @app.post("/api/containers/{cid}/tasks", status_code=201)
-def create_task(cid: str, body: TaskCreateBody):
+def create_task(cid: str, body: TaskCreateBody, request: Request):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): pluggable caller resolution + authorization. Defaults are
+        # no-ops (resolve → the body-supplied id; authorize → permit), so this is a
+        # zero-behavior-change insertion; a downstream provider overrides both.
+        resolved_actor = resolve_actor(cur, request, cid, body.created_by_agent_id)
+        authorize(cur, request, resolved_actor, "create_task", cid)
         _require_container_active(
             cur, cid, body.created_by_agent_id
         )  # GH #24 (was _require_container)

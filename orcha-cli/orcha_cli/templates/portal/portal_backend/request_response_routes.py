@@ -1,9 +1,10 @@
 """Read requests and record target responses."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import (
@@ -38,7 +39,7 @@ def get_request(rid: str):
 
 
 @app.post("/api/requests/{rid}/respond", status_code=200)
-def respond_request(rid: str, body: RequestRespond):
+def respond_request(rid: str, body: RequestRespond, request: Request):
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
     if not _valid_uuid(body.responder_agent_id):
@@ -47,6 +48,9 @@ def respond_request(rid: str, body: RequestRespond):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize overlapping retries
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, str(r["container_id"]), body.responder_agent_id)
+        authorize(cur, request, resolved_actor, "respond_request", str(r["container_id"]))
         _reject_if_retired(cur, body.responder_agent_id)  # ISS-51 [P1]
         _require_container_active(
             cur, str(r["container_id"]), body.responder_agent_id

@@ -1,9 +1,10 @@
 """Create, reset, and list the single container owned by an Orcha stack."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_kind, valid_uuid
 from portal_backend.schemas import (
@@ -80,7 +81,7 @@ def create_container(body: ContainerCreate):
 
 
 @app.post("/api/containers/{cid}/reset", status_code=200)
-def reset_container(cid: str, body: ContainerReset):
+def reset_container(cid: str, body: ContainerReset, request: Request):
     """Wipe ALL data in this (1:1:1) container — agents, tasks, requests, decisions,
     conversations, worker runs, memory digests, events — and recreate a single empty
     root task. The `containers` row itself is KEPT (so `current_container_id` and the
@@ -98,6 +99,9 @@ def reset_container(cid: str, body: ContainerReset):
     if not valid_uuid(cid):
         raise HTTPException(404, "container not found")
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "container_control", cid)
         cur.execute("SELECT id, name FROM containers WHERE id=%s", (cid,))
         cont = cur.fetchone()
         if not cont:

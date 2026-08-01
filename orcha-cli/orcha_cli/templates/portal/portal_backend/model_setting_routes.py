@@ -2,10 +2,11 @@
 
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import (
     require_container as _require_container,
@@ -96,7 +97,7 @@ def get_settings_models(cid: str):
 
 
 @app.put("/api/containers/{cid}/settings/models", status_code=200)
-def put_settings_models(cid: str, body: ModelSettingsUpdate):
+def put_settings_models(cid: str, body: ModelSettingsUpdate, request: Request):
     """Replace the FULL set of per-container model overrides (SPEC-SETTINGS §2.2). HUMAN-AUTHORITY
     gated + audit-logged — a model swap is a deliberate cost/quality decision, mirroring
     /settings/llm-key and /auto-wake. Semantics:
@@ -126,6 +127,9 @@ def put_settings_models(cid: str, body: ModelSettingsUpdate):
             )
         to_set[ov.key] = (ov.provider, ov.model)
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "update_settings", cid)
         _require_kind(
             cur, body.actor_agent_id, ("human",)
         )  # a cost/quality decision is a human action

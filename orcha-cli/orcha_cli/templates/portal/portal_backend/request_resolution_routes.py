@@ -1,9 +1,10 @@
 """Auto-close pure acknowledgements or escalate requests to the human operator."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import publish_event as _publish_event
@@ -74,7 +75,7 @@ def triage_close_request(rid: str, body: TriageCloseBody):
 
 
 @app.post("/api/requests/{rid}/escalate", status_code=200)
-def escalate_request(rid: str, body: RequestActorBody):
+def escalate_request(rid: str, body: RequestActorBody, request: Request):
     """Requester re-targets the request at a human (Orcha#30: target stays set; just becomes the human's id)."""
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
@@ -84,6 +85,9 @@ def escalate_request(rid: str, body: RequestActorBody):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize all request-state mutations
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, str(r["container_id"]), body.requester_agent_id)
+        authorize(cur, request, resolved_actor, "escalate_request", str(r["container_id"]))
         _require_container_active(
             cur, str(r["container_id"]), body.requester_agent_id
         )  # GH #24

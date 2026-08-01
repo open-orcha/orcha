@@ -1,9 +1,10 @@
 """Catalog and lifecycle routes for portal containers."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import (
     require_container as _require_container,
@@ -41,7 +42,7 @@ def list_reasoning_efforts():
 
 
 @app.post("/api/containers/{cid}/status", status_code=200)
-def set_container_status(cid: str, body: ContainerStatusUpdate):
+def set_container_status(cid: str, body: ContainerStatusUpdate, request: Request):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if body.status not in ALLOWED_CONTAINER_STATUSES:
@@ -49,6 +50,9 @@ def set_container_status(cid: str, body: ContainerStatusUpdate):
             400, f"status must be one of {sorted(ALLOWED_CONTAINER_STATUSES)}"
         )
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "container_control", cid)
         _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         c = _require_container(cur, cid)
         old = c["status"]

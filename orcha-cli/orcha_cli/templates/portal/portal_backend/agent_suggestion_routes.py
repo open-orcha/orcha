@@ -1,10 +1,11 @@
 """Resolve a proposed agent by creating, reassigning, or refusing it."""
 
 import psycopg
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import (
@@ -17,7 +18,7 @@ from portal_backend.schemas.requests import SuggestionDecision
 
 
 @app.post("/api/agent-suggestions/{rid}/decide", status_code=200)
-def decide_suggestion(rid: str, body: SuggestionDecision):
+def decide_suggestion(rid: str, body: SuggestionDecision, request: Request):
     """Human resolves an agent suggestion.
 
     kind='create': spawns the proposed agent, then accepts the underlying task request for them.
@@ -31,6 +32,11 @@ def decide_suggestion(rid: str, body: SuggestionDecision):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize all request-state mutations
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(r["container_id"]), body.actor_agent_id
+        )
+        authorize(cur, request, resolved_actor, "make_decision", str(r["container_id"]))
         # Orcha#30: detect a pending suggestion by detail.proposed_alias, not by null target.
         # The request now lives in the targeted human's inbox until resolved.
         detail = r["detail"] or {}

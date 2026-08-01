@@ -49,6 +49,8 @@
 <script src="/assets/modules/app-run-classify.js"></script>
 <script src="/assets/modules/app-run-stream.js"></script>
 <script src="/assets/modules/app-sort.js"></script>
+<!-- SEAM B (#212): the extension registry MUST be defined before page/consume-site code runs. -->
+<script src="/assets/modules/app-extensions.js"></script>
 <script src="/assets/app.js"></script>
 <script src="/assets/data.js"></script>
 <script src="/assets/modules/conversation-state.js"></script>
@@ -145,5 +147,8 @@ window.OrchaData.start(function () { renderCompatDetail(); });
      .rrow .rlive.ephemeral; .conv-lock:not([hidden]) + .conv-composer;
      OrchaTerm.liveAgentIds(); .rrow .rlive
 -->
+<!-- SEAM B (#212): optional downstream extensions, loaded AFTER this page's own scripts.
+     Core ships an empty stub so the request never 404s; a 404 is tolerated regardless. -->
+<script src="/assets/extensions/index.js" defer></script>
 </body>
 </html>

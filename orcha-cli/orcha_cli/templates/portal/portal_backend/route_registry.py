@@ -15,6 +15,7 @@ from portal_backend import (
     agent_task_claim_routes,
     agent_wake_policy_routes,
     attachment_routes,
+    capability_routes,
     container_control_routes,
     container_event_routes,
     container_lifecycle,

@@ -190,6 +190,34 @@ so context compaction is a non-issue for workers; the digest is the deliberate, 
   run's `/runs/{run_id}/stream` and classify the stream into a typed taxonomy
   (`agents.html:401`, `tasks.html:911`; consumes Forge's PR #58).
 
+### Portal extension convention (SEAM B / #212)
+
+The portal exposes a tiny, append-only extension registry so a downstream distribution can add
+surface **without forking** the core static files. Core defines `window.OrchaExt`
+(`static/modules/app-extensions.js`, loaded on every page **before** the page scripts). A
+downstream ships ONE optional file — `static/extensions/index.js` — that calls the registrars:
+
+```js
+window.OrchaExt.registerNavItem({ id, label, href, order });        // sidebar nav (app-shell.js)
+window.OrchaExt.registerSettingsTab({ id, label, render(el) });     // /settings extra card (settings.js)
+window.OrchaExt.registerTaskDetailSection({ id, order, render(el, task) }); // task detail, BELOW Definition of done (pages/tasks-detail.js)
+```
+
+Core render sites read the registry back through `OrchaExt._consume(kind)` (kinds: `nav`,
+`settingsTab`, `taskDetailSection`) and fold the registrations into their own markup.
+
+- **THE ONE RULE — extensions must NEVER patch core files.** An extension adds surface ONLY
+  through `window.OrchaExt`. It must not edit, monkey-patch, or reach into any core module, page
+  script, or DOM that core owns. If a needed hook is missing, the fix is a new registrar in core,
+  not a patch from the extension side — patching a core file defeats the seam and breaks clean
+  upgrades.
+- **Absent extensions = byte-identical render.** Core ships `extensions/index.js` as an empty,
+  comment-only stub so `/assets/extensions/index.js` never 404s (zero CSP / log noise); the loader
+  tolerates a 404 regardless. With nothing registered, every `_consume(kind)` returns `[]` and each
+  consume site renders exactly as it did before this seam existed.
+- Every page loads `extensions/index.js` **after** its own scripts (`<script … defer>` before
+  `</body>`). Guard: `tests/portal/extensions_convention.test.js`.
+
 > ⚠️ **ISS-39 (nuance):** the live tail showing "seq 1 then stall" is **macOS Docker VirtioFS
 > per-mount attr-cache lag (1–5s)**, *not* a generator bug — it won't occur on Linux prod. The
 > robust fix is to have the daemon push lines into a `worker_run_lines` table and have SSE tail

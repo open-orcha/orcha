@@ -18,6 +18,7 @@ function renderDetail(force) {
     </div>
     ${t.description ? `<div class="field" style="margin-top:16px;padding-top:15px;border-top:1px solid var(--border)"><div class="lbl">Description</div><div class="tx">${TasO.esc(t.description)}</div></div>` : ""}
     <div class="field" style="margin-top:14px"><div class="lbl">Definition of done</div><div class="dod">${TasO.esc(t.definition_of_done || "—")}</div></div>
+    ${extSectionHosts(t)}
     ${t.result ? `<div class="field" style="margin-top:14px"><div class="lbl">Result</div><div class="tx">${TasO.linkify(t.result)}</div></div>` : ""}
   </div>`;
 
@@ -79,7 +80,29 @@ function renderDetail(force) {
 
   // only (re)wire when patch actually replaced the DOM — a deferred/unchanged repaint
   // keeps the existing nodes + listeners, so re-wiring would stack duplicate handlers.
-  if (TasO.patch(Tas$("detailMain"), html, force)) wire(t);
+  if (TasO.patch(Tas$("detailMain"), html, force)) { wire(t); renderExtSections(t); }
+}
+
+/* SEAM B (#212): downstream-registered task-detail sections, rendered BELOW Definition of done.
+   extSectionHosts(t) emits one empty host node per registered section into the detail HTML;
+   renderExtSections(t) runs each section's render(el, task) into its host AFTER patch swaps the
+   DOM (same post-patch discipline as wire()). Absent extensions → _consume returns [] → no hosts
+   emitted and nothing rendered → the task-detail card is byte-identical to before this seam. */
+function extSections() {
+  return window.OrchaExt ? window.OrchaExt._consume("taskDetailSection") : [];
+}
+function extSectionHosts(t) {
+  return extSections()
+    .filter((s) => s && s.id && typeof s.render === "function")
+    .map((s) => `<div class="ext-task-section" data-ext-section="${TasO.esc(s.id)}" style="margin-top:14px"></div>`)
+    .join("");
+}
+function renderExtSections(t) {
+  extSections().forEach((s) => {
+    if (!s || !s.id || typeof s.render !== "function") return;
+    const host = Tas$("detailMain").querySelector('[data-ext-section="' + (window.CSS && CSS.escape ? CSS.escape(s.id) : s.id) + '"]');
+    if (host) { try { s.render(host, t); } catch (e) {} }
+  });
 }
 
 /* ---------- gate (plan-approval + verify), gated on plan_decision (ISS-41) ---------- */

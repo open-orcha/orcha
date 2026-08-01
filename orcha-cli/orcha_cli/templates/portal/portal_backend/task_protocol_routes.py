@@ -2,10 +2,11 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import (
     reject_if_retired as _reject_if_retired,
@@ -18,7 +19,7 @@ from portal_backend.schemas import ProtocolUpdate
 
 
 @app.patch("/api/tasks/{tid}/protocol", status_code=200)
-def update_task_protocol(tid: str, body: ProtocolUpdate):
+def update_task_protocol(tid: str, body: ProtocolUpdate, request: Request):
     """SPEC-4: set/clear the per-task working agreement (review_chain, handoff_to, autonomy,
     notes). Audit-logged. Actor: a human OR a dispatching AI orchestrator (#327) — an AI may
     edit review_chain/handoff_to/notes (the coordination dials), but `autonomy` STAYS human-only:
@@ -32,6 +33,11 @@ def update_task_protocol(tid: str, body: ProtocolUpdate):
             cur, body.actor_agent_id, ("human", "ai")
         )  # Orcha#30 + #327
         t = _require_task(cur, tid)
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(t["container_id"]), body.actor_agent_id
+        )
+        authorize(cur, request, resolved_actor, "edit_protocol", str(t["container_id"]))
         _require_container_active(
             cur, str(t["container_id"]), body.actor_agent_id
         )  # GH #24

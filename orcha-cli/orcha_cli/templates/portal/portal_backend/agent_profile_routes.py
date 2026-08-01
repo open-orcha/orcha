@@ -1,17 +1,18 @@
 """Retire agents and edit their human-controlled profile fields."""
 
 import psycopg
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, require_kind, valid_uuid
 from portal_backend.schemas.agent_state import AgentRetire, AgentUpdate
 
 
 @app.post("/api/agents/{aid}/retire", status_code=200)
-def retire_agent(aid: str, body: AgentRetire):
+def retire_agent(aid: str, body: AgentRetire, request: Request):
     """ISS-51: retire an agent — human-authority gated. Sets agents.terminated_at +
     status='terminated' so the container roster (which now filters terminated_at IS
     NULL) stops listing it. Any task this agent was actively working is RELEASED back
@@ -24,6 +25,13 @@ def retire_agent(aid: str, body: AgentRetire):
     with db_cursor() as (conn, cur):
         require_kind(cur, body.actor_agent_id, ("human",))
         agent = require_agent(cur, aid)
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(agent["container_id"]), body.actor_agent_id
+        )
+        authorize(
+            cur, request, resolved_actor, "update_agent", str(agent["container_id"])
+        )
         cur.execute("SELECT terminated_at FROM agents WHERE id=%s", (aid,))
         if cur.fetchone()["terminated_at"] is not None:
             return {
@@ -82,7 +90,7 @@ def retire_agent(aid: str, body: AgentRetire):
 
 
 @app.patch("/api/agents/{aid}", status_code=200)
-def update_agent(aid: str, body: AgentUpdate):
+def update_agent(aid: str, body: AgentUpdate, request: Request):
     """Edit an agent's role / system_prompt / alias (onboarding + re-profiles; no such
     route existed — personas were edited via raw DB). HUMAN-authority gated. PARTIAL:
     only the supplied fields change. Editing a HUMAN's system_prompt is rejected (humans
@@ -102,6 +110,11 @@ def update_agent(aid: str, body: AgentUpdate):
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"agent {aid} not found")
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(
+            cur, request, str(row["container_id"]), body.actor_agent_id
+        )
+        authorize(cur, request, resolved_actor, "update_agent", str(row["container_id"]))
         if body.system_prompt is not None:
             if row["kind"] == "human":
                 raise HTTPException(400, "humans carry no system_prompt")

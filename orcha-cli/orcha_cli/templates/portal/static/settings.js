@@ -211,10 +211,34 @@
     const button = $("settingsPairPhone");
     if (button) button.addEventListener("click", () => O.openPairingModal());
   }
+  // SEAM B (#212): render downstream-registered settings tabs into #extSettingsTabs. With no
+  // extensions, _consume returns [] → the host stays empty → the settings page is byte-identical.
+  // Each tab gets a core-styled card; its render(el) paints into the card body. Rendered once
+  // (guarded by a flag) so a re-mount on the 5s poll can't double-render or re-run render().
+  let extTabsDone = false;
+  function renderExtTabs() {
+    if (extTabsDone) return;
+    const host = $("extSettingsTabs");
+    if (!host) return;
+    const tabs = window.OrchaExt ? window.OrchaExt._consume("settingsTab") : [];
+    if (!tabs.length) return;
+    extTabsDone = true;
+    tabs.forEach((tab) => {
+      if (!tab || !tab.id || typeof tab.render !== "function") return;
+      const card = document.createElement("div");
+      card.className = "card set-card";
+      card.dataset.extTab = tab.id;
+      card.innerHTML = '<div class="card-h"><h2>' + O.esc(tab.label || tab.id) + "</h2></div>"
+        + '<div class="card-b"></div>';
+      host.appendChild(card);
+      try { tab.render(card.querySelector(".card-b")); } catch (e) {}
+    });
+  }
   window.OrchaData.start(() => {
     if (window.ORCHA && window.ORCHA.container) {
       O.mountShell("settings", { title: "Settings", ctx: window.ORCHA.container.name });
       renderPairingCard();
+      renderExtTabs();
     }
   });
   (async function init() {

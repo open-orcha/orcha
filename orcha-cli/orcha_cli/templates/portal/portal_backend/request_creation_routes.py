@@ -3,10 +3,11 @@
 import json
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import (
@@ -24,13 +25,16 @@ from portal_backend.schemas.requests import RequestCreate, TaskRequestPayload
 
 
 @app.post("/api/containers/{cid}/requests", status_code=201)
-def create_request(cid: str, body: RequestCreate):
+def create_request(cid: str, body: RequestCreate, request: Request):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if not _valid_uuid(body.requester_agent_id):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
 
     with db_cursor() as (conn, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.requester_agent_id)
+        authorize(cur, request, resolved_actor, "create_request", cid)
         _require_container_active(
             cur, cid, body.requester_agent_id
         )  # GH #24 (was _require_container)

@@ -2,10 +2,11 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.attachment_references import (
     validate_conv_attachment_refs as _validate_conv_attachment_refs,
 )
@@ -136,13 +137,26 @@ def set_conversation_session(conv_id: str, body: ConversationSession):
 
 
 @app.post("/api/conversations/{conv_id}/end", status_code=200)
-def end_conversation(conv_id: str, body: ConversationActor):
+def end_conversation(conv_id: str, body: ConversationActor, request: Request):
     """Mark a conversation ended (human closes it, or the idle reaper on session end).
     Idempotent. Frees the agent's single active-conversation slot."""
     if not _valid_uuid(conv_id):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_agent(cur, body.actor_agent_id)
+        actor_agent = _require_agent(cur, body.actor_agent_id)
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable. The
+        # conversation's container isn't known until the conditional UPDATE below, so
+        # authorize against the acting agent's container (its correct authority scope).
+        resolved_actor = resolve_actor(
+            cur, request, str(actor_agent["container_id"]), body.actor_agent_id
+        )
+        authorize(
+            cur,
+            request,
+            resolved_actor,
+            "end_conversation",
+            str(actor_agent["container_id"]),
+        )
         cur.execute(
             "UPDATE conversations SET status='ended', ended_at=now() "
             "WHERE id=%s AND status<>'ended' RETURNING id, container_id",

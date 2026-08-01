@@ -4,11 +4,12 @@ import json
 import time
 from typing import Optional
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event, wait_for_event
 from portal_backend.guards import (
@@ -42,11 +43,15 @@ async def container_events(cid: str, since_ts: float = Query(default=0.0)):
 
 
 @app.post("/api/containers/{cid}/sweep", status_code=200)
-def sweep_expired(cid: str, actor_agent_id: str = Query(...)):
+def sweep_expired(cid: str, request: Request, actor_agent_id: str = Query(...)):
     """Escalate any open requests past expires_at — re-targets at a human (Orcha#30)."""
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (connection, cur):
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable. The
+        # acting caller id arrives as a query param here, not a body field.
+        resolved_actor = resolve_actor(cur, request, cid, actor_agent_id)
+        authorize(cur, request, resolved_actor, "container_control", cid)
         require_kind(cur, actor_agent_id, ("human",))
         require_container(cur, cid)
         cur.execute(

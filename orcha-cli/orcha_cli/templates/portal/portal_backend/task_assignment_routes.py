@@ -1,9 +1,10 @@
 """Assign or reassign an existing task and wake its owner."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import publish_event as _publish_event
@@ -18,7 +19,7 @@ from portal_backend.schemas.task_operations import AssignTask
 
 
 @app.post("/api/tasks/{tid}/assign", status_code=200)
-def assign_task(tid: str, body: AssignTask):
+def assign_task(tid: str, body: AssignTask, request: Request):
     """B5: assign an EXISTING task to an agent and wake them — unblocks O4 (assign-from-detail).
 
     Actor: a human OR a dispatching AI orchestrator (#327 — matches create_task, which already
@@ -41,6 +42,9 @@ def assign_task(tid: str, body: AssignTask):
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
         cid = str(t["container_id"])
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, cid, body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "assign_task", cid)
         # #327: the AI orchestrator may dispatch (assign/reassign) an EXISTING task. This is the
         # SAME state change create_task already lets any kind='ai' make at create-time (its
         # `assignee_alias` is not human-gated), so locking assign-existing behind a human was an

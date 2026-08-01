@@ -1,9 +1,10 @@
 """Nudge request owners with full task context when action is overdue."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event
 from portal_backend.application import app
+from portal_backend.auth_provider import authorize, resolve_actor
 from portal_backend.database import db_cursor
 from portal_backend.events import poke_path_forward as _poke_path_forward
 from portal_backend.events import publish_event as _publish_event
@@ -49,7 +50,7 @@ def _task_request_context_block(detail) -> str:
 
 
 @app.post("/api/requests/{rid}/nudge", status_code=200)
-def nudge_request(rid: str, body: NudgeBody):
+def nudge_request(rid: str, body: NudgeBody, request: Request):
     """#60: a STANDALONE wake-up for whoever owns the NEXT ACTION on a request — fully
     DECOUPLED from close. It NEVER changes the request's state (the handler does a SELECT
     only, never an UPDATE), so state invariance holds on every branch. The recipient is
@@ -81,6 +82,9 @@ def nudge_request(rid: str, body: NudgeBody):
         r = require_request(
             cur, rid
         )  # SELECT-only (no FOR UPDATE): a nudge never mutates the request
+        # SEAM A (#211): default no-op resolve/authorize; downstream overridable.
+        resolved_actor = resolve_actor(cur, request, str(r["container_id"]), body.actor_agent_id)
+        authorize(cur, request, resolved_actor, "nudge_request", str(r["container_id"]))
         _require_container_active(cur, str(r["container_id"]), body.actor_agent_id)
         # Human-only: a nudge is an operator wake action.
         cur.execute(
