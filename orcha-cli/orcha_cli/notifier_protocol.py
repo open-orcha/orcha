@@ -18,17 +18,18 @@ def _render_protocol(protocol: Optional[dict]) -> Optional[str]:
     # GH #56 (Point 2): review_chain / handoff_to / notes are BINDING — render them as imperatives
     # the agent must ACT on (route the review per the chain; hand the finished work to the named
     # agent), not as passive labels it merely reads. `autonomy` stays ADVISORY: the real completion
-    # gate is the container autonomy setting, so we mark it as such to kill the ambiguity (an
-    # unvalidated free-text string must never read as a binding gate). Genuine server-side
-    # enforcement (e.g. blocking /orcha-done until the chain is satisfied) is out of scope for this
-    # pass and deliberately not implied.
+    # gate is your EFFECTIVE autonomy level (container setting, or your per-agent override), so we
+    # mark it as such to kill the ambiguity (an unvalidated free-text string must never read as a
+    # binding gate). Genuine server-side enforcement (e.g. blocking /orcha-done until the chain is
+    # satisfied) is out of scope for this pass and deliberately not implied.
     for label, key in (
             ("Review chain (BINDING — route reviews/sign-off through exactly this chain, in order)",
              "review_chain"),
             ("Hand off to (BINDING — when your part is materially done, hand the work to this agent "
              "via an Orcha request)", "handoff_to"),
-            ("Autonomy (ADVISORY ONLY — the real gate is the container autonomy setting; never "
-             "self-certify, stop at needs_verification for a human)", "autonomy"),
+            ("Autonomy (ADVISORY ONLY — the real gate is your effective autonomy level (container "
+             "setting, or your per-agent override); never self-certify, stop at needs_verification "
+             "for a human)", "autonomy"),
             ("Notes (BINDING instructions)", "notes")):
         v = p.get(key)
         if v:

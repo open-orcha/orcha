@@ -56,8 +56,12 @@ def _scan_context(scan, agent_hold_until, services):
         "triage": triage,
         "ack_config": services._ack_config_from_scan(scan),
         "ack_key": services._unseal_scan_key(scan, "ack_key_enc"),
+        # Since mig 034 the T2 ACTING gate is per-candidate in the candidate processor
+        # (candidate.effective_autonomy, falling back to this scan-wide `autonomy_level` for
+        # pre-034 portals). N1 (round-1 review): the former scan-wide `t2_enabled` boolean was
+        # written here and read by NO consumer (the processor keys off effective_autonomy), so it
+        # is dropped — `autonomy_level` above is the one scan-wide fallback the processor uses.
         "autonomy_level": scan.get("autonomy_level"),
-        "t2_enabled": scan.get("autonomy_level") == "full",
         "hold_now": time.time(),
         "agent_hold_until": agent_hold_until,
     }

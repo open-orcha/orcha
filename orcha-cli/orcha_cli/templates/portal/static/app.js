@@ -95,10 +95,14 @@ if (typeof D === "undefined") {
       if (seg) seg.onclick = () => F_confirmWakes(paused);
     }
     if (aut) {
+      const enforced = !!(F_D.container && F_D.container.autonomy_enforced);
       aut.classList.toggle("locked", !canAct); aut.classList.toggle("dimmed", paused);
       aut.innerHTML = [["plan", "warn", "Plan-only"], ["pr", "info", "Build to PR"], ["full", "accent", "Full"]]
-        .map((x) => `<span class="seg lvl ${x[1]}${level === x[0] ? " on" : ""}" data-level="${x[0]}">${x[2]}</span>`).join("");
-      aut.querySelectorAll(".seg").forEach((seg) => { seg.onclick = () => F_confirmLevel(seg.dataset.level); });
+        .map((x) => `<span class="seg lvl ${x[1]}${level === x[0] ? " on" : ""}" data-level="${x[0]}">${x[2]}</span>`).join("")
+        + `<span class="seg lock${enforced ? " on" : ""}" data-enforce="1">${enforced ? "🔒 Enforced" : "Enforce"}</span>`;
+      aut.querySelectorAll(".seg").forEach((seg) => {
+        seg.onclick = seg.dataset.enforce ? () => F_confirmEnforce() : () => F_confirmLevel(seg.dataset.level);
+      });
     }
     const top = document.getElementById("topbar"), bar = document.getElementById("pausebar"), resume = document.getElementById("resumeBtn");
     if (top && top.classList) top.classList.toggle("paused", paused);
@@ -196,6 +200,31 @@ if (typeof D === "undefined") {
     }).then((r) => { if (!r.ok) throw new Error("request failed"); return r.json(); })
       .then((data) => { container[field] = data[field]; F_paintAutonomy(); })
       .catch(() => { container[field] = previous; F_paintAutonomy(); });
+  }
+  /* mig 034: container-wide "enforce for all agents" switch — POSTs through the SAME /autonomy
+     endpoint (optional autonomy_enforced beside the unchanged level); optimistic + revert. */
+  function F_confirmEnforce() {
+    if (!F_actingHuman()) return;
+    const on = !!(F_D.container && F_D.container.autonomy_enforced);
+    F_modal({
+      title: on ? "Stop enforcing the container level?" : "Enforce autonomy for all agents?",
+      desc: on ? "Per-agent autonomy overrides apply again." : "Every per-agent autonomy override is IGNORED while enforced.",
+      onPrimary: () => F_setEnforce(!on),
+    });
+  }
+  function F_setEnforce(value) {
+    const who = F_actingHuman(), container = F_D.container;
+    if (!who || !container) return;
+    const previous = !!container.autonomy_enforced;
+    container.autonomy_enforced = value; F_paintAutonomy();
+    /* F1: PARTIAL update — autonomy_enforced ONLY, no level (a lock flip must never re-assert a
+       possibly-stale cached level, which could silently widen the container). */
+    fetch(`/api/containers/${encodeURIComponent(container.id)}/autonomy`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autonomy_enforced: value, actor_agent_id: who.id }),
+    }).then((r) => { if (!r.ok) throw new Error("request failed"); return r.json(); })
+      .then((data) => { container.autonomy_level = data.autonomy_level; container.autonomy_enforced = data.autonomy_enforced; F_paintAutonomy(); })
+      .catch(() => { container.autonomy_enforced = previous; F_paintAutonomy(); });
   }
   const F_stopRequested = new Set();
   function F_runCard(run) {

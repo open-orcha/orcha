@@ -132,6 +132,7 @@ function renderRoster() {
     ags.map((a) => `<button class="rrow ${a.alias === sel ? "sel" : ""}" data-alias="${AgeO.esc(a.alias)}">
       ${AgeO.avatar(a.alias, a.kind, "")}
       <span class="grow"><span class="nm">${AgeO.esc(a.alias)}</span><span class="rl">${AgeO.esc(a.role)}</span></span>
+      ${ovrBadge(a)}
       ${embodBadge(a, liveSet)}
       ${AgeO.glyph(AgeO.statusClass(a.status))}
     </button>`).join(""));
@@ -154,4 +155,17 @@ function embodBadge(a, liveSet) {
   const kind = (liveSet.indexOf(a.id) >= 0) ? "live" : AgeO.leaseOf(a);
   if (!kind || kind === "idle") return "";
   return `<span class="rlive ${kind}" title="${AgeO.esc(EMBOD_TITLE[kind] || "")}"><span class="d"></span>${EMBOD_LBL[kind] || kind}</span>`;
+}
+// mig 034: surface an active per-agent autonomy override in the roster so a differently-leveled
+// agent is never invisible. While the container ENFORCES its level the override is ignored
+// server-side — render the badge with a lock glyph (and say so) rather than hiding it, so the
+// human still sees the parked override that will resume when enforcement lifts.
+function ovrBadge(a) {
+  if (a.kind === "human" || !a.autonomy_override) return "";
+  const c = (AgeD() && AgeD().container) || {};
+  const enforced = !!c.autonomy_enforced;
+  const title = enforced
+    ? "Override '" + a.autonomy_override + "' is IGNORED — the container enforces '" + (c.autonomy_level || "plan") + "' for all agents"
+    : "Per-agent autonomy override: acts at '" + a.autonomy_override + "' (container is '" + (c.autonomy_level || "plan") + "')";
+  return `<span class="rovr${enforced ? " enforced" : ""}" title="${AgeO.esc(title)}">${enforced ? "🔒 " : ""}${AgeO.esc(a.autonomy_override)}</span>`;
 }

@@ -44,6 +44,14 @@ def _grade_ephemeral(api_base, candidate, event, context, quiet, services):
         )
     if tier != "act":
         return None
+    # mig 034 (per-agent autonomy overrides): the T2 cheap-act gate is keyed off THIS
+    # candidate's EFFECTIVE autonomy level (server-computed via the shared
+    # portal_backend/autonomy.py rule and carried on the wake-scan candidate), not the
+    # scan-wide container level — an agent overridden to 'full' gets cheap-acts even in a
+    # 'plan' container, and an agent narrowed to 'plan' never cheap-acts in a 'full' one.
+    # A pre-034 portal omits the field → fall back to the scan-wide container level
+    # (yesterday's behavior, unchanged).
+    effective_level = candidate.get("effective_autonomy") or context["autonomy_level"]
     acted = (
         services._apply_wake_act(
             api_base,
@@ -54,12 +62,10 @@ def _grade_ephemeral(api_base, candidate, event, context, quiet, services):
             ack_config=context["ack_config"],
             ack_api_key=context["ack_key"],
         )
-        if context["t2_enabled"]
+        if effective_level == "full"
         else False
     )
-    services._log_graded_wake(
-        verdict, context["autonomy_level"], acted
-    )
+    services._log_graded_wake(verdict, effective_level, acted)
     if not acted:
         return None
     if not quiet:

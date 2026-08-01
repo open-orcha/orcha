@@ -184,6 +184,15 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 .aut .seg.lvl.on.warn   { color: var(--warn);   background: var(--warn-soft);   border-color: var(--warn-line); }
 .aut .seg.lvl.on.info   { color: var(--info);   background: var(--info-soft);   border-color: var(--info-line); }
 .aut .seg.lvl.on.accent { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+/* mig 034: the "Enforce for all agents" lock chip beside the levels. Lit = every per-agent
+   autonomy override is ignored (the container level governs everyone) — danger tone so an
+   active lock is unmistakable; unlit stays muted like an inactive level. N3 (round-1 review):
+   a full pill like every other chip in this control. The prior `border-radius: 0 999px 999px 0`
+   + `margin-left: 3px` was meant to read as FUSED to the Full pill, but the container's own
+   `gap: 3px` plus that extra margin left it floating 6px away with one flat side — breaking the
+   pill grammar. A left divider still separates the orthogonal enforce control from the levels. */
+.aut .seg.lock { border-left: 1px solid var(--border); }
+.aut .seg.lock.on { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
 /* read-only when no acting human */
 .aut.locked .seg { cursor: not-allowed; }
 /* GH #148: Autonomy is de-emphasized while the notifier is Paused ("applies when running"),

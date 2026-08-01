@@ -6,6 +6,7 @@ def list_wake_agents(cur, cid: str, cooldown: float):
     cur.execute(
         """SELECT a.id, a.alias, a.model, a.reasoning_effort, a.last_heartbeat_at,
                   a.turns_used, a.turn_budget, a.auto_wake_interval_secs,
+                  a.autonomy_override,
                   COALESCE(r.wake_enabled, true) AS wake_enabled,
                   r.tmux_target, r.headless_cwd, r.headless_flags,
                   COALESCE(w.delivered_ts, 0) AS delivered_ts,

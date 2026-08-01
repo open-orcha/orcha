@@ -27,6 +27,13 @@
   .rrow .rlive .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
   .rrow .rlive.resident { color: #b794f6; background: rgba(183,148,246,.12); border-color: rgba(183,148,246,.3); }
   .rrow .rlive.ephemeral { color: #e6a23c; background: rgba(230,162,60,.12); border-color: rgba(230,162,60,.3); }
+  /* mig 034: per-agent autonomy override badge — same pill grammar as .rlive. Accent while the
+     override applies; muted + struck + lock glyph while the container enforces (override ignored). */
+  .rrow .rovr { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; align-self: center;
+    font-size: 10px; font-weight: 700; color: var(--accent); background: var(--accent-soft);
+    border: 1px solid var(--accent-line); border-radius: 999px; padding: 2px 7px; }
+  .rrow .rovr.enforced { color: var(--faint); background: transparent; border-color: var(--border);
+    text-decoration: line-through; text-decoration-thickness: 1px; }
 
   /* detail header */
   .ahead { display: flex; align-items: center; gap: 16px; }

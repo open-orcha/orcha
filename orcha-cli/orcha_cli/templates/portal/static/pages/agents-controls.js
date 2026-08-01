@@ -33,6 +33,35 @@ function onAwakeClick(ev) {
     AgeO.toast("Auto-wake change failed: " + e.message, "danger"); });
 }
 
+/* ---------- per-agent autonomy override (mig 034: PATCH /api/agents/{id}) ----------
+   Mirrors onAwakeClick: human-gated, optimistic + revert, reconciled by the next snapshot.
+   "Inherit" PATCHes an EXPLICIT null (clear-to-inherit) — the backend distinguishes
+   null-supplied (clear) from omitted (unchanged) via model_fields_set. */
+function onAutOvrClick(ev) {
+  const b = ev.target.closest("[data-ovr]"); if (!b || b.disabled) return;
+  const seg = b.closest("#autOvrSeg"); const aid = seg && seg.dataset.agent;
+  const h = AgeO.actingHuman();
+  if (!aid || !h) { AgeO.toast("Pick an acting human first.", "danger"); return; }
+  const ovr = b.dataset.ovr === "null" ? null : b.dataset.ovr;
+  const a = AgeO.agentById(aid); if (!a) return;
+  const prev = a.autonomy_override != null ? a.autonomy_override : null;
+  const prevEff = a.effective_autonomy;
+  if (ovr === prev) return;                      // no-op (re-click of the active chip)
+  a.autonomy_override = ovr;                     // optimistic; reconciled by the next snapshot
+  a.effective_autonomy = effectiveAutonomyOf({ autonomy_override: ovr });   // same shared rule
+  renderDetailMain(true);
+  fetch("/api/agents/" + encodeURIComponent(aid), {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ actor_agent_id: h.id, autonomy_override: ovr }),
+  }).then((r) => {
+    if (!r.ok) { a.autonomy_override = prev; a.effective_autonomy = prevEff; renderDetailMain(true);   // revert on failure
+      AgeO.toast("Autonomy override change failed (" + r.status + ")", "danger"); return; }
+    AgeO.toast(ovr == null ? "Autonomy · inherits the container level" : ("Autonomy override → " + autLevelName(ovr)), "ok");
+    renderRoster();   // the roster override badge tracks this immediately
+  }).catch((e) => { a.autonomy_override = prev; a.effective_autonomy = prevEff; renderDetailMain(true);
+    AgeO.toast("Autonomy override change failed: " + e.message, "danger"); });
+}
+
 /* ---------- model control (POST /api/agents/{id}/model) ---------- */
 function onModelRuntimeClick(ev) {
   const b = ev.target.closest("[data-runtime]"); if (!b || b.disabled) return;

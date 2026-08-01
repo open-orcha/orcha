@@ -366,6 +366,44 @@ def test_tick_t2_log_only_under_default_autonomy(monkeypatch, capsys):
     assert rec["autonomy_level"] == "plan" and rec["action"] == "ack_verify"
 
 
+def test_tick_t2_acts_on_per_agent_effective_full_in_plan_container(monkeypatch):
+    """mig 034 (per-agent autonomy overrides): the T2 gate is keyed off the CANDIDATE's
+    server-computed `effective_autonomy`, not the scan-wide container level. Container at
+    'plan' (T2 historically closed) + a candidate overridden to effective 'full' -> the
+    cheap-act FIRES for that candidate, no spawn. MUTATION: key the gate off
+    context['t2_enabled'] / scan autonomy_level again -> no act, a spawn happens -> RED."""
+    cand = _ephemeral_t2_cand()
+    cand["effective_autonomy"] = "full"          # server-computed via portal_backend/autonomy.py
+    cand["autonomy_override"] = "full"
+    scan = {"active": True, "autonomy_level": "plan", "ack_model": None,
+            "candidates": [cand]}
+    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"})
+    out = notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+    assert spawns == []                                                  # NO full embodiment
+    assert any(u.endswith("/api/tasks/t-7/messages") for u, _ in posts)  # cheap-act write went out
+    assert out["woke"][0]["suppressed"] == "act"
+
+
+def test_tick_t2_closed_for_per_agent_effective_plan_in_full_container(monkeypatch, capsys):
+    """mig 034 (the narrowing direction): container at 'full' (T2 historically open) but the
+    candidate is narrowed to effective 'plan' (override, or container-enforced recompute) -> the
+    cheap-act NEVER fires for that candidate; a full boot happens, and the #284 graded_wake record
+    logs the EFFECTIVE level that gated ('plan', not the container 'full'). MUTATION: ignore the
+    per-candidate field (scan-wide gate only) -> a narrowed agent gets auto-acted -> RED."""
+    cand = _ephemeral_t2_cand()
+    cand["effective_autonomy"] = "plan"
+    cand["autonomy_override"] = "plan"
+    scan = {"active": True, "autonomy_level": "full", "ack_model": None,
+            "candidates": [cand]}
+    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"})
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+    assert len(spawns) == 1                                              # full boot DID happen
+    assert not any("/api/tasks/t-7/messages" in u for u, _ in posts)     # cheap-act did NOT fire
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "graded_wake" in ln)
+    rec = json.loads(line.split("graded_wake", 1)[1])
+    assert rec["autonomy_level"] == "plan" and rec["acted"] is False     # the level that GATED
+
+
 def test_tick_t2_escalates_to_full_boot_when_model_declines(monkeypatch):
     """FAIL-SAFE: autonomy='full' but the cheap model judges the handoff non-routine (ack=False) ->
     full boot, no dropped work. The cheapest-SUFFICIENT contract: cheap when sufficient, escalate

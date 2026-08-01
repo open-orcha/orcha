@@ -46,10 +46,13 @@ def wake_scan(
     with db_cursor() as (_, cur):
         container = require_container(cur, cid)
         cur.execute(
-            "SELECT wakes_enabled, autonomy_level FROM containers WHERE id=%s", (cid,)
+            "SELECT wakes_enabled, autonomy_level, autonomy_enforced "
+            "FROM containers WHERE id=%s",
+            (cid,),
         )
         settings = cur.fetchone()
         wakes_enabled = bool(settings["wakes_enabled"])
+        autonomy_enforced = bool(settings["autonomy_enforced"])
         triage_model = _resolve_use_case_model(cur, cid, "triage")
         ack_model = _resolve_use_case_model(cur, cid, "ack")
         triage_key_enc = provider_key_enc(
@@ -75,6 +78,8 @@ def wake_scan(
                 valid_uuid=valid_uuid,
                 resolve_model=_compatibility["resolve_model"],
                 resolve_model_runtime=_compatibility["resolve_model_runtime"],
+                container_autonomy_level=settings["autonomy_level"],
+                container_autonomy_enforced=autonomy_enforced,
             )
             for agent in list_wake_agents(cur, cid, cooldown)
         ]
@@ -84,6 +89,7 @@ def wake_scan(
         "active": container["status"] == "active",
         "wakes_enabled": wakes_enabled,
         "autonomy_level": settings["autonomy_level"],
+        "autonomy_enforced": autonomy_enforced,
         "triage_model": triage_model,
         "triage_key_enc": triage_key_enc,
         "ack_key_enc": ack_key_enc,

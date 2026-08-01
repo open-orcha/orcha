@@ -36,14 +36,22 @@ class AgentReasoningEffortUpdate(BaseModel):
 
 
 class AgentUpdate(BaseModel):
-    """Agent-update: edit an agent's role / system_prompt / alias (onboarding +
-    re-profiles). Human-authority gated. All fields optional except the actor — a
-    PARTIAL update: omit a field to leave it unchanged."""
+    """Agent-update: edit an agent's role / system_prompt / alias / autonomy_override
+    (onboarding + re-profiles). Human-authority gated. All fields optional except the actor — a
+    PARTIAL update: omit a field to leave it unchanged.
+
+    mig 034: `autonomy_override` is nullable-and-meaningful — supplying null CLEARS the override
+    (inherit the container level), while OMITTING it leaves the current override untouched. The
+    route distinguishes the two via `model_fields_set` (not the None value), since None is a real
+    target here. The Literal makes a bad enum value a 422 BEFORE the route body runs — an
+    unvalidated string must never reach the hard completion gate. Humans carry no override
+    (rejected in the route)."""
 
     actor_agent_id: str
     role: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN)
     system_prompt: Optional[str] = Field(default=None, max_length=MAX_PROMPT_LEN)
     alias: Optional[str] = Field(default=None, max_length=64)
+    autonomy_override: Optional[Literal["plan", "pr", "full"]] = Field(default=None)
 
 
 class AutoWakeUpdate(BaseModel):

@@ -56,7 +56,9 @@ function renderDetailMain(force) {
         <div class="ctrl"><div class="grow"><div class="lbl">Wake</div><div class="desc">Daemon may wake this agent on pending work</div></div>
           <span class="wakebadge ${a.wake_enabled?'on':'off'}"><span class="d"></span>${a.wake_enabled?"Enabled":"Disabled"}</span></div>
         <div class="ctrl"><div class="grow"><div class="lbl">Auto-wake</div><div class="desc">Clock-driven heartbeat — wake on a fixed cadence even with no pending work</div></div>
-          <div class="seg" id="awakeSeg" data-agent="${AgeO.esc(a.id)}" aria-label="Auto-wake interval">${awakePresets(a.auto_wake_interval_secs).map((p)=>`<button type="button" class="${p.secs===(a.auto_wake_interval_secs!=null?a.auto_wake_interval_secs:null)?'on':''}" data-awake="${p.secs==null?'null':p.secs}" aria-pressed="${p.secs===(a.auto_wake_interval_secs!=null?a.auto_wake_interval_secs:null)?'true':'false'}" ${AgeO.actingHuman()?"":"disabled"}>${AgeO.esc(p.label)}</button>`).join("")}</div></div>`}
+          <div class="seg" id="awakeSeg" data-agent="${AgeO.esc(a.id)}" aria-label="Auto-wake interval">${awakePresets(a.auto_wake_interval_secs).map((p)=>`<button type="button" class="${p.secs===(a.auto_wake_interval_secs!=null?a.auto_wake_interval_secs:null)?'on':''}" data-awake="${p.secs==null?'null':p.secs}" aria-pressed="${p.secs===(a.auto_wake_interval_secs!=null?a.auto_wake_interval_secs:null)?'true':'false'}" ${AgeO.actingHuman()?"":"disabled"}>${AgeO.esc(p.label)}</button>`).join("")}</div></div>
+        <div class="ctrl"><div class="grow"><div class="lbl">Autonomy</div><div class="desc">${autOvrDesc(a)}</div></div>
+          <div class="seg" id="autOvrSeg" data-agent="${AgeO.esc(a.id)}" aria-label="Per-agent autonomy override">${AUT_OVERRIDES.map((o)=>`<button type="button" class="${(a.autonomy_override||null)===o.id?'on':''}" data-ovr="${o.id==null?'null':AgeO.esc(o.id)}" aria-pressed="${(a.autonomy_override||null)===o.id?'true':'false'}" ${ovrChipEnabled(o) ? "" : "disabled"}>${AgeO.esc(o.name)}</button>`).join("")}</div></div>`}
       </div>
     </div>
   </div>`;
@@ -104,6 +106,8 @@ function renderDetailMain(force) {
   if (effortSeg) effortSeg.addEventListener("click", onEffortClick);
   const awakeSeg = Age$("awakeSeg");
   if (awakeSeg) awakeSeg.addEventListener("click", onAwakeClick);
+  const ovrSeg = Age$("autOvrSeg");
+  if (ovrSeg) ovrSeg.addEventListener("click", onAutOvrClick);
   // wire persona Expand
   const px = Age$("personaExpandBtn");
   if (px) px.addEventListener("click", () => togglePersona(a));
@@ -236,3 +240,55 @@ const AWAKE_PRESETS = [
   { secs: 900, label: "15m" },
   { secs: 3600, label: "1h" },
 ];
+
+/* ---------- per-agent autonomy override (mig 034: PATCH /api/agents/{id}) ----------
+   Inherit (null) = the container level governs; a level chip grants THIS agent a different
+   engine level WITHOUT moving the container slider. HUMAN-AUTHORITY gated (same PATCH lane
+   as role + persona edits). While the container ENFORCES its level (autonomy_enforced), every
+   override is ignored server-side — the chips render disabled with an honest "enforced"
+   note so the live state is never misread. The desc always names the EFFECTIVE level (the
+   snapshot's server-computed effective_autonomy — the one shared rule the completion gate
+   uses), so what the human reads here is exactly what the engine will do. */
+const AUT_OVERRIDES = [
+  { id: null, name: "Inherit" },
+  { id: "plan", name: "Plan-only" },
+  { id: "pr", name: "Build to PR" },
+  { id: "full", name: "Full" },
+];
+function autLevelName(level) {
+  return ((AUT_OVERRIDES.find((o) => o.id === level) || {}).name) || level || "Plan-only";
+}
+function containerEnforced() {
+  const c = AgeD() && AgeD().container;
+  return !!(c && c.autonomy_enforced);
+}
+// F3(b): while the container ENFORCES its level, every override is ignored server-side — so setting
+// a NEW override is pointless (chips disabled). But the operator must still be able to CLEAR a stale
+// override, else a "full" grant is stuck until enforcement lifts (and it silently resumes then).
+// Keep the "Inherit" chip (o.id == null) clickable while enforced; disable the rest. When not
+// enforced, all chips follow the usual acting-human gate.
+function ovrChipEnabled(o) {
+  if (!AgeO.actingHuman()) return false;
+  if (containerEnforced()) return o.id == null;   // only Inherit (clear) stays live while enforced
+  return true;
+}
+function effectiveAutonomyOf(a) {
+  // Prefer the server-computed field (single shared rule); degrade to the same rule computed
+  // client-side for a pre-034 snapshot that omits it.
+  if (a.effective_autonomy) return a.effective_autonomy;
+  const c = (AgeD() && AgeD().container) || {};
+  const containerLevel = c.autonomy_level || "plan";
+  return containerEnforced() ? containerLevel : (a.autonomy_override || containerLevel);
+}
+function autOvrDesc(a) {
+  const eff = "Effective: " + autLevelName(effectiveAutonomyOf(a));
+  if (containerEnforced()) {
+    // F3(b): when a parked override exists under enforcement, tell the operator they can still
+    // clear it (Inherit stays live) — so a stale "full" grant is never stuck until enforcement lifts.
+    const parked = a.autonomy_override
+      ? " — 🔒 container enforces its level for all agents (override '" + autLevelName(a.autonomy_override) + "' parked & ignored; Inherit to clear it)"
+      : " — 🔒 container enforces its level for all agents (override ignored)";
+    return eff + parked;
+  }
+  return eff + (a.autonomy_override ? " — per-agent override" : " — inherits the container level");
+}

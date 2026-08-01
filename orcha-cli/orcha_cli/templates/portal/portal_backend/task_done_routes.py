@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.autonomy import effective_autonomy
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import publish_event as _publish_event
@@ -80,19 +81,50 @@ def mark_done(
             raise HTTPException(
                 403, "this agent isn't assigned to that task — cannot mark it done"
             )
-        # #298: the ONE engine-enforced autonomy gate. The container's autonomy_level decides the
-        # terminal state of a /done:
+        # #298 + mig 034: the ONE engine-enforced autonomy gate, now computed as the EFFECTIVE
+        # level for the ACTING agent (body.agent_id — the agent marking done), not the bare
+        # container level. effective_autonomy() is the single shared rule EVERY consumer routes
+        # through: container level if the container ENFORCES it for everyone, else the agent's
+        # per-agent override, else the container level (NULL override = inherit). It decides the
+        # terminal state of THIS agent's /done:
         #   plan | pr -> needs_verification (a human verifies — today's behavior, the safe default)
         #   full      -> the task AUTO-COMPLETES (no human in the loop) via the SAME
         #               _complete_and_unblock path /verify's approve branch uses, so a
         #               full-autonomy completion is indistinguishable from a verified one
-        #               (downstream unblock + wakes + root→container). The free-text per-task
-        #               protocol.autonomy is DELIBERATELY ignored here — an unvalidated string
-        #               must never widen the hard gate; only this enum column can auto-complete.
+        #               (downstream unblock + wakes + root→container). An agent with override='full'
+        #               auto-completes while a sibling at container 'plan' still parks — and an
+        #               enforced container flips both back to the container level. The free-text
+        #               per-task protocol.autonomy is DELIBERATELY ignored here — an unvalidated
+        #               string must never widen the hard gate; only these enum columns can.
         cur.execute(
-            "SELECT autonomy_level FROM containers WHERE id=%s", (t["container_id"],)
+            "SELECT autonomy_level, autonomy_enforced FROM containers WHERE id=%s",
+            (t["container_id"],),
         )
-        level = cur.fetchone()["autonomy_level"]
+        c = cur.fetchone()
+        cur.execute(
+            "SELECT autonomy_override FROM agents WHERE id=%s", (body.agent_id,)
+        )
+        acting = cur.fetchone()
+        acting_override = acting["autonomy_override"] if acting else None
+        level = effective_autonomy(
+            c["autonomy_level"],
+            c["autonomy_enforced"],
+            acting_override,
+        )
+        # F4 (round-1 review): the audit row for a /done must record the FULL autonomy picture, not a
+        # single ambiguous key. Before this, the auto-complete branch hardcoded autonomy_level:'full'
+        # even when an OVERRIDE (not the slider) drove it, so a reviewer reading the trail concluded
+        # the container slider was wide open when it may have sat at 'plan'. Log the container level,
+        # the enforce flag, the resolved EFFECTIVE level that actually gated, and this agent's raw
+        # override — so "who auto-completed under what, and was it the slider or an override?" is
+        # answerable from one event. `autonomy_level` keeps its historical CONTAINER meaning (not the
+        # effective level) so the key never silently changes what it names across event rows.
+        _autonomy_audit = {
+            "autonomy_level": c["autonomy_level"],
+            "autonomy_enforced": c["autonomy_enforced"],
+            "effective_autonomy": level,
+            "autonomy_override": acting_override,
+        }
         result_json = json.dumps({"result": body.result, "by_agent_id": body.agent_id})
         cur.execute(
             "UPDATE agent_tasks SET assignment_status='done' WHERE agent_id=%s AND task_id=%s",
@@ -120,9 +152,9 @@ def mark_done(
                 "status_changed",
                 {
                     "to": "completed",
-                    "autonomy_level": "full",
                     "auto_completed": True,
                     "unblocked": unblocked,
+                    **_autonomy_audit,
                 },
             )
             conn.commit()
@@ -163,7 +195,7 @@ def mark_done(
             "task",
             tid,
             "status_changed",
-            {"to": "needs_verification", "autonomy_level": level},
+            {"to": "needs_verification", **_autonomy_audit},
         )
         conn.commit()
     return {"task_id": tid, "status": "needs_verification"}
