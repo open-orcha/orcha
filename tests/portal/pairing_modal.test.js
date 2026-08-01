@@ -1,8 +1,13 @@
 /* ============================================================================
    Mobile pairing portal wiring.
 
-   Dependency-free: loads the real app.js in a small DOM harness and verifies the
-   shared shell exposes the Pair phone control and modal entry point.
+   PART A  fallback shell (app.js standalone): Pair phone control + modal entry.
+   PART B  branded QR card + the expiry chip overflow fix, driven through the
+           REAL modules/app-pairing.js: the server-styled code sits in a
+           tokens-only card (orca mark + wordmark + scan caption + URL line),
+           and the sentence-length expiry chip wraps inside its border.
+
+   Dependency-free: loads the real sources in a small DOM harness.
 
    Run: node tests/portal/pairing_modal.test.js
    ========================================================================== */
@@ -10,18 +15,14 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const APP_JS = path.join(
+const STATIC = path.join(
   __dirname, "..", "..",
-  "orcha-cli", "orcha_cli", "templates", "portal", "static", "app.js"
+  "orcha-cli", "orcha_cli", "templates", "portal", "static"
 );
-const SETTINGS_HTML = path.join(
-  __dirname, "..", "..",
-  "orcha-cli", "orcha_cli", "templates", "portal", "static", "settings.html"
-);
-const SETTINGS_JS = path.join(
-  __dirname, "..", "..",
-  "orcha-cli", "orcha_cli", "templates", "portal", "static", "settings.js"
-);
+const read = (...p) => fs.readFileSync(path.join(STATIC, ...p), "utf8");
+const APP_JS = path.join(STATIC, "app.js");
+const SETTINGS_HTML = path.join(STATIC, "settings.html");
+const SETTINGS_JS = path.join(STATIC, "settings.js");
 const SRC = fs.readFileSync(APP_JS, "utf8");
 
 let failures = 0;
@@ -29,6 +30,7 @@ function assert(cond, msg) {
   if (cond) console.log("  ✓ " + msg);
   else { failures++; console.error("  ✗ " + msg); }
 }
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function makeNode(id) {
   const n = {
@@ -53,6 +55,7 @@ function makeNode(id) {
   return n;
 }
 
+/* ---------------- PART A — fallback shell (app.js standalone) ------------ */
 function makeSandbox() {
   const reg = {};
   ["sidebar", "topbar", "autTop", "attnPill", "themeBtn"].forEach((id) => { reg[id] = makeNode(id); });
@@ -94,8 +97,8 @@ function makeSandbox() {
   return { Orcha: sandbox.window.Orcha, reg };
 }
 
-function run() {
-  console.log("pairing_modal.test.js\n");
+function fallbackTests() {
+  console.log("PART A — fallback shell (app.js standalone)\n");
 
   const s = makeSandbox();
   s.Orcha.applySnapshot({
@@ -119,7 +122,114 @@ function run() {
   const settingsJs = fs.readFileSync(SETTINGS_JS, "utf8");
   assert(/id="pairingCard"/.test(settingsHtml), "Settings page has a phone pairing card host");
   assert(/settingsPairPhone/.test(settingsJs) && /openPairingModal/.test(settingsJs), "Settings card opens the same pairing modal");
+}
 
+/* ---------------- real-module harness ------------------------------------ */
+function moduleSandbox(opts) {
+  opts = opts || {};
+  const reg = {};
+  const fetches = [];
+  const payload = Object.assign({
+    v: 1, kind: "orcha-pair", baseUrl: "http://192.168.1.24:8001",
+    containerId: "c1", containerName: "openorcha",
+    humanAgentId: "h1", humanAgentAlias: "Kedar",
+    token: "t", shortCode: "ABCD-1234", expiresAt: "2099-01-01T00:00:00Z",
+    qrSvg: '<svg data-qr="1"></svg>',
+  }, opts.payload || {});
+  const document = {
+    documentElement: { setAttribute() {}, getAttribute: () => null },
+    body: makeNode("body"),
+    addEventListener() {},
+    createElement() {
+      const el = makeNode("");
+      Object.defineProperty(el, "id", {
+        get() { return el._id || ""; },
+        set(v) { el._id = v; reg[v] = el; },
+      });
+      return el;
+    },
+    // lazily materialize ids so the module's nested renders (pairBody,
+    // pairCountText) land on inspectable nodes
+    getElementById: (id) => reg[id] || (reg[id] = makeNode(id)),
+  };
+  const sandbox = {
+    window: {}, document, console, encodeURIComponent, Date,
+    localStorage: { getItem: () => null, setItem() {} },
+    setInterval: () => 1, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
+    fetch: (url) => {
+      fetches.push(String(url));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
+    },
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(`
+    var D = { container: { id: "c1", name: "openorcha" } };
+    var __humans = ${JSON.stringify(opts.humans || [{ id: "h1", alias: "Kedar", kind: "human" }])};
+    function humans() { return __humans; }
+    function actingHuman() { return __humans[0] || null; }
+    function aliasFor() { return null; }
+    function esc(s) { return s == null ? "" : String(s); }
+    function icon() { return "<svg></svg>"; }
+    function orcaSVG() { return "<svg data-orca></svg>"; }
+    function toast() {}
+  `, sandbox);
+  vm.runInContext(read("modules", "app-pairing.js"), sandbox, { filename: "app-pairing.js" });
+  return { sandbox, reg, fetches };
+}
+
+/* ---------------- PART B — branded card + expiry chip overflow fix ------- */
+async function brandAndOverflowTests() {
+  console.log("\nPART B — branded QR card + expiry chip (overflow fix)\n");
+  const s = moduleSandbox();
+  vm.runInContext("openPairingModal()", s.sandbox);
+  await flush(); await flush();
+  const body = s.reg.pairBody._html;
+
+  assert(/class="pair-card"/.test(body), "the QR sits inside the branded card");
+  assert(/pair-wordmark">Orcha</.test(body) && /data-orca/.test(body),
+    "…with the orca mark + Orcha wordmark");
+  assert(/pair-scanline">Scan with the Orcha app</.test(body),
+    "…and the scan caption inside the card");
+  assert(/data-qr="1"/.test(body), "the server-styled QR SVG is embedded as-is");
+  assert(/pair-url mono">http:\/\/192\.168\.1\.24:8001</.test(body),
+    "the URL line is kept beneath the code");
+  assert(/Kedar \(human\)/.test(body), "the 'Pairing as' line keeps the roster alias text");
+
+  assert(/class="pill s-warn pair-expiry" id="pairCountdown"/.test(body),
+    "the expiry chip carries the pair-expiry wrap class");
+  assert(/<span id="pairCountText">/.test(body),
+    "the countdown ticks into a span (the glyph survives re-ticks)");
+  assert(/regenerates automatically/.test(s.reg.pairCountText.textContent),
+    "the countdown text renders into the chip");
+
+  const overlays = read("styles", "overlays.css");
+  const expiry = (overlays.match(/\.pair-expiry \{[^}]*\}/) || [""])[0];
+  assert(/white-space: normal/.test(expiry) && /max-width: 100%/.test(expiry),
+    "overlays.css lets the sentence-length chip WRAP inside its border (.pill is nowrap)");
+  assert(/\.pair-card \{/.test(overlays) && /\.pair-wordmark \{/.test(overlays)
+    && /\.pair-scanline \{/.test(overlays), "the branded card is styled with tokens");
+
+  // conversation.css loads AFTER overlays.css, so any pairing rules that the
+  // #191 file-split left duplicated there would WIN. While that severed
+  // fragment exists it must stay in lockstep with the card layout; once the
+  // split repair removes it, the narrow-viewport rule lives in overlays.css.
+  const conv = read("styles", "conversation.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const convMedia = (conv.match(/@media[^{]*\{[\s\S]*?\n\}/) || [""])[0];
+  if (/\.pair-/.test(convMedia)) {
+    assert(/\.pair-card \{ width: min\(296px/.test(convMedia),
+      "conversation.css's severed pairing media fragment is in lockstep with the card");
+    assert(!/\.pair-qr \{/.test(convMedia),
+      "…and carries no stale .pair-qr sizing that would fight the card on mobile");
+  }
+  assert(/\.pair-card \{ width: min\(296px/.test(overlays + "\n" + conv),
+    "the narrow-viewport card rule exists in the loaded sheets");
+}
+
+async function run() {
+  console.log("pairing_modal.test.js\n");
+  fallbackTests();
+  await brandAndOverflowTests();
   console.log("\n" + (failures === 0 ? "ALL PASSED" : failures + " FAILED"));
   process.exit(failures === 0 ? 0 : 1);
 }

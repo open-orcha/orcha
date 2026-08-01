@@ -138,15 +138,28 @@
 .pair-select select { min-width: 180px; background: var(--surface-3); color: var(--text); border: 1px solid var(--border-2);
   border-radius: 8px; font: inherit; font-size: 13px; padding: 7px 10px; outline: none; }
 .pair-select select:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-.pair-grid { display: grid; grid-template-columns: 304px minmax(0, 1fr); gap: 22px; align-items: center; }
-.pair-qr-wrap { min-width: 0; }
-.pair-qr { width: 304px; height: 304px; display: grid; place-items: center; background: #fff; border-radius: 12px;
-  border: 1px solid var(--border-2); box-shadow: var(--shadow-sm); overflow: hidden; }
-.pair-qr svg { width: 280px; height: 280px; display: block; }
-.pair-url { margin-top: 10px; color: var(--accent); font-size: 12.5px; text-align: center; word-break: break-all; }
+.pair-grid { display: grid; grid-template-columns: minmax(0, 296px) minmax(0, 1fr); gap: 22px; align-items: center; }
+/* the branded QR card: wordmark + code + caption + URL, tokens only so
+   light/dark/Swiss all follow. The QR SVG bakes its own light tile + quiet
+   zone — dark modules on light in every theme; the card never inverts it. */
+.pair-card { display: flex; flex-direction: column; align-items: center; gap: 9px; min-width: 0;
+  padding: 14px 14px 12px; border-radius: 14px; background: var(--surface-2);
+  border: 1px solid var(--border-2); box-shadow: var(--shadow-sm); }
+.pair-brand { display: flex; align-items: center; gap: 7px; }
+.pair-brand svg { width: 19px; height: 19px; display: block; }
+.pair-wordmark { color: var(--text); font-size: 13px; font-weight: 760; letter-spacing: -.01em; }
+.pair-qr { width: 100%; max-width: 248px; aspect-ratio: 1; }
+.pair-qr svg { width: 100%; height: 100%; display: block; }
+.pair-scanline { color: var(--muted); font-size: 12px; font-weight: 620; }
+.pair-url { color: var(--accent); font-size: 12px; text-align: center; word-break: break-all; }
 .pair-meta { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
 .pair-label { color: var(--faint); font-size: 10.5px; font-weight: 740; letter-spacing: .08em; text-transform: uppercase; }
 .pair-value { color: var(--text); font-size: 13.5px; font-weight: 620; margin-top: 3px; }
+/* the expiry chip carries a sentence — wrap inside the border instead of
+   overflowing it (the .pill base is nowrap/line-height:1 for short statuses) */
+.pair-expiry { white-space: normal; line-height: 1.45; align-items: flex-start;
+  text-align: left; max-width: 100%; align-self: flex-start; }
+.pair-expiry .gl { margin-top: 2px; }
 .pair-code { display: inline-flex; align-self: flex-start; margin-top: 4px; padding: 6px 9px; border-radius: 8px;
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); font-size: 13px; letter-spacing: .08em; }
 .pair-foot { color: var(--faint); font-size: 11.5px; line-height: 1.5; }
@@ -166,6 +179,5 @@
 .pair-remedy code { white-space: normal; word-break: break-word; }
 @media (max-width: 720px) {
   .pair-grid { grid-template-columns: 1fr; }
-  .pair-qr { width: min(304px, 100%); height: auto; aspect-ratio: 1; margin: 0 auto; }
-  .pair-url { text-align: left; }
+  .pair-card { width: min(296px, 100%); margin: 0 auto; }
 }

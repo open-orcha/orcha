@@ -70,21 +70,106 @@ def short_pairing_code() -> str:
     return raw[:4] + "-" + raw[4:]
 
 
+# ---- branded QR ------------------------------------------------------------
+# The QR is drawn as a hand-assembled SVG from the raw module matrix (qrcode lib,
+# EC level H) instead of the stock square-pixel image factory:
+#   - dot-style data modules + rounded finder frames (the modern, branded look);
+#   - a 4-module quiet zone baked into the viewBox over an always-LIGHT tile —
+#     dark modules on light stay fixed in every theme, scanners need the contrast;
+#   - the orca glyph (same artwork as static/favicon.svg) embedded on a rounded
+#     dark tile in the centre. EC=H recovers up to 30% damage; the knockout is
+#     capped well below that (~8% of the module area, see QR_EMBED_FRACTION).
+# Pure string assembly on qrcode's matrix — no Pillow/StyledPilImage dependency,
+# and SVG stays crisp at any rendered size.
+QR_DARK = "#06171c"    # module ink — the brand dark, matches the favicon tile
+QR_LIGHT = "#ffffff"   # the light tile behind the code (never theme-inverted)
+QR_QUIET_MODULES = 4   # quiet zone, in modules, on every side
+QR_EMBED_FRACTION = 0.28  # centre knockout side as a fraction of the module count
+
+
+def _qr_finder_frame(x: float, y: float) -> str:
+    """One 7x7 finder pattern as rounded concentric squares (dark/light/dark)."""
+    return (
+        f'<rect x="{x}" y="{y}" width="7" height="7" rx="2.33" fill="{QR_DARK}"/>'
+        f'<rect x="{x + 1}" y="{y + 1}" width="5" height="5" rx="1.67" fill="{QR_LIGHT}"/>'
+        f'<rect x="{x + 2}" y="{y + 2}" width="3" height="3" rx="1" fill="{QR_DARK}"/>'
+    )
+
+
+def _qr_orca_tile(x: float, y: float, size: float) -> str:
+    """The favicon orca on its rounded dark tile, scaled into the centre knockout."""
+    s = size / 100.0
+    return (
+        f'<g transform="translate({x:.2f},{y:.2f}) scale({s:.4f})" aria-hidden="true">'
+        f'<rect width="100" height="100" rx="22" fill="{QR_DARK}"/>'
+        '<path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 '
+        'C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/>'
+        '<g stroke="#06171c" stroke-width="2.4" stroke-linecap="round">'
+        '<line x1="49" y1="38" x2="40" y2="62"/><line x1="49" y1="38" x2="56" y2="62"/>'
+        '<line x1="49" y1="38" x2="50" y2="74"/></g>'
+        '<g fill="#06171c"><circle cx="39" cy="64" r="4"/><circle cx="57" cy="64" r="4"/>'
+        '<circle cx="50" cy="76" r="4"/></g>'
+        '<circle cx="49" cy="35" r="6" fill="#1fc7cd"/>'
+        '<path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" '
+        'stroke-width="5" stroke-linecap="round" fill="none"/>'
+        "</g>"
+    )
+
+
 def qr_svg(payload: dict) -> tuple[str, str]:
     import qrcode
-    import qrcode.image.svg
 
     qr_text = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     qr = qrcode.QRCode(
         version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=10,
-        border=4,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        border=0,  # the quiet zone is drawn by hand in viewBox units below
     )
     qr.add_data(qr_text)
     qr.make(fit=True)
-    img = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
-    return qr_text, img.to_string(encoding="unicode")
+    matrix = qr.get_matrix()
+    n = len(matrix)
+    quiet = QR_QUIET_MODULES
+    total = n + 2 * quiet
+
+    # Centre knockout for the embedded glyph: an odd module count so it sits
+    # symmetrically, ~8% of the code's area — far inside EC-H's 30% budget.
+    knockout = max(9, int(n * QR_EMBED_FRACTION))
+    knockout += 0 if knockout % 2 else 1
+    k0 = (n - knockout) // 2
+    k1 = k0 + knockout
+
+    def in_finder(cx: int, cy: int) -> bool:
+        return (
+            (cx < 7 and cy < 7)
+            or (cx >= n - 7 and cy < 7)
+            or (cx < 7 and cy >= n - 7)
+        )
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {total} {total}" '
+        'shape-rendering="geometricPrecision">',
+        # the light tile: baked in so contrast never depends on page CSS/theme
+        f'<rect width="{total}" height="{total}" rx="6" fill="{QR_LIGHT}"/>',
+        _qr_finder_frame(quiet, quiet),
+        _qr_finder_frame(quiet + n - 7, quiet),
+        _qr_finder_frame(quiet, quiet + n - 7),
+    ]
+    dots = []
+    for y in range(n):
+        for x in range(n):
+            if not matrix[y][x] or in_finder(x, y):
+                continue
+            if k0 <= x < k1 and k0 <= y < k1:
+                continue  # the glyph knockout — recovered by EC-H
+            dots.append(
+                f'<circle cx="{quiet + x + 0.5}" cy="{quiet + y + 0.5}" r="0.46"/>'
+            )
+    parts.append(f'<g fill="{QR_DARK}">{"".join(dots)}</g>')
+    # the orca tile, inset one module inside the knockout for a light margin ring
+    parts.append(_qr_orca_tile(quiet + k0 + 1, quiet + k0 + 1, knockout - 2))
+    parts.append("</svg>")
+    return qr_text, "".join(parts)
 
 
 @app.get("/api/containers/{cid}/pairing")

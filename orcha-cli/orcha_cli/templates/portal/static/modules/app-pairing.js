@@ -121,7 +121,9 @@ function countdownText(ms) {
 function startPairingCountdown(data, humanId) {
   clearPairingTimer();
   const exp = Date.parse(data.expiresAt || "");
-  const el = document.getElementById("pairCountdown");
+  // tick into the INNER span so the clock glyph survives re-ticks (the pill's
+  // icon used to be wiped by the first textContent write).
+  const el = document.getElementById("pairCountText");
   if (!exp || !el) return;
   const tick = () => {
     const left = exp - Date.now();
@@ -141,8 +143,10 @@ function renderPairingPayload(data, humanId) {
   if (!host) return;
   const human = data.humanAgentAlias || aliasFor(data.humanAgentId) || "selected human";
   host.innerHTML = `<div class="pair-grid">
-    <div class="pair-qr-wrap">
-      <div class="pair-qr" aria-label="Orcha phone pairing QR code">${data.qrSvg || ""}</div>
+    <div class="pair-card">
+      <div class="pair-brand">${orcaSVG()}<span class="pair-wordmark">Orcha</span></div>
+      <div class="pair-qr" role="img" aria-label="Orcha phone pairing QR code">${data.qrSvg || ""}</div>
+      <div class="pair-scanline">Scan with the Orcha app</div>
       <div class="pair-url mono">${esc(data.baseUrl || "")}</div>
     </div>
     <div class="pair-meta">
@@ -154,7 +158,7 @@ function renderPairingPayload(data, humanId) {
         <div class="pair-label">Manual code</div>
         <div class="pair-code mono">${esc(data.shortCode || "")}</div>
       </div>
-      <div class="pill s-warn" id="pairCountdown">${icon("clock", "gl")}expires soon</div>
+      <div class="pill s-warn pair-expiry" id="pairCountdown">${icon("clock", "gl")}<span id="pairCountText">expires soon</span></div>
       <div class="pair-foot">Your phone talks directly to this computer on your network. Nothing goes through the cloud.</div>
     </div>
   </div>`;
