@@ -1,4 +1,10 @@
 /* Tasks page styles: route-specific task list, protocol, thread, and attachment controls. */
+  /* open-orcha#210 F1: no shared sheet defines a bare .tx rule (only scoped ones like
+     .log .ln .tx / .turn .tx), so the Description and Result field text on this page fell
+     back to white-space:normal and every newline + indentation run collapsed to one space.
+     The verification-gate claimed-result block already carries this inline; give the plain
+     Description/Result fields the same treatment via one shared rule. */
+  .field .tx { white-space: pre-wrap; word-break: break-word; }
   /* task list (left, sticky) — gate / thread / reason styles come from the shared system */
   .tlist-card { padding: 9px; }
   .tlist-card .rh { padding: 9px 9px 4px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;

@@ -1,4 +1,33 @@
 /* Tasks page controller: task detail, gate surface, protocol, assignment, and message rows. */
+
+/* open-orcha#209: tasks.result is JSONB, but /done (TaskDone.result) takes a
+   required plain string — the server is the one that turns it into an object:
+   task_done_routes.py wraps every completion in {"result": <text>, "by_agent_id":
+   <uuid>} before writing tasks.result, and the list query hands that envelope
+   back raw. These render sites string-interpolated it as-is — the verifying
+   human saw literally "[object Object]" at the verification gate. Normalize
+   every shape to text: strings pass through; the known {result, by_agent_id}
+   envelope unwraps explicitly (even when result is blank, so a blank result
+   still falls through to the caller's "—" instead of dumping the envelope);
+   any other object with a conventional text field yields that field; anything
+   else becomes readable pretty-printed JSON (escaped by the caller's
+   linkify/esc as usual). */
+function resultText(r) {
+  if (r == null) return "";
+  if (typeof r === "string") return r;
+  if (typeof r === "object") {
+    // the ONE shape /done actually produces: unwrap it explicitly, blank or not,
+    // so a blank agent result renders as "—" (via the caller's fallback) instead
+    // of leaking the envelope — including the agent's UUID — onto the gate.
+    if (typeof r.result === "string" && "by_agent_id" in r) return r.result;
+    for (const k of ["result", "summary", "text", "message"]) {
+      if (typeof r[k] === "string" && r[k].trim()) return r[k];
+    }
+    try { return JSON.stringify(r, null, 2); } catch (e) { return String(r); }
+  }
+  return String(r);
+}
+
 function renderDetail(force) {
   const t = (TasD().tasks || []).find((x) => x.id === sel);
   if (!t) { TasO.patch(Tas$("detailMain"), '<div class="card pad"><div class="none">Task not found.</div></div>', force); return; }
@@ -18,7 +47,7 @@ function renderDetail(force) {
     </div>
     ${t.description ? `<div class="field" style="margin-top:16px;padding-top:15px;border-top:1px solid var(--border)"><div class="lbl">Description</div><div class="tx">${TasO.esc(t.description)}</div></div>` : ""}
     <div class="field" style="margin-top:14px"><div class="lbl">Definition of done</div><div class="dod">${TasO.esc(t.definition_of_done || "—")}</div></div>
-    ${t.result ? `<div class="field" style="margin-top:14px"><div class="lbl">Result</div><div class="tx">${TasO.linkify(t.result)}</div></div>` : ""}
+    ${t.result ? `<div class="field" style="margin-top:14px"><div class="lbl">Result</div><div class="tx">${TasO.linkify(resultText(t.result))}</div></div>` : ""}
   </div>`;
 
   /* the human-authority gate — plan-approval (B10) OR verify (Epic B), never a dead-end */
@@ -105,7 +134,7 @@ function gateSurface(t) {
       <span class="acting-note">${humanAvatar()}${actorName() ? "acting as " + TasO.esc(actorName()) + " · " : ""}logged to the audit trail</span></div>
     <div class="gb">
       <div class="field"><div class="lbl">${TasO.icon("dot", "")}${isPlan ? "Proposed plan — full text" : "Result claimed by " + TasO.esc(who(t))}</div>
-        <div class="tx" style="white-space:pre-wrap;max-height:300px;overflow-y:auto">${TasO.linkify(isPlan ? (pm.body || "") : (t.result || "—"))}</div></div>
+        <div class="tx" style="white-space:pre-wrap;max-height:300px;overflow-y:auto">${TasO.linkify(isPlan ? (pm.body || "") : (resultText(t.result) || "—"))}</div></div>
       <div class="field" style="margin-top:14px"><div class="lbl">${TasO.icon("check", "")}Definition of done</div>
         <div class="dod">${TasO.esc(t.definition_of_done || "—")}</div></div>
       <div class="actions">
