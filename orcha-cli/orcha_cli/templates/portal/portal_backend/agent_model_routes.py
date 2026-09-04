@@ -9,6 +9,7 @@ from portal_backend.guards import require_agent as _require_agent
 from portal_backend.identity_routes import enforce_grant as _enforce_grant
 from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.guards import valid_uuid as _valid_uuid
+from portal_backend.model_policy import DEFAULT_MODEL
 from portal_backend.schemas.agent_state import (
     AgentModelUpdate,
     AgentReasoningEffortUpdate,
@@ -125,7 +126,13 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate, reque
         row = cur.fetchone()
         if row["kind"] == "human":
             raise HTTPException(400, "humans carry no reasoning effort")
-        supported = _reasoning_effort_ids_by_model().get(row["model"], set())
+        # A persisted model may have retired since the agent was created. The rest of
+        # Orcha resolves that stale value to DEFAULT_MODEL, so effort validation must
+        # use the same fallback as the picker and worker-launch paths.
+        resolved_model = (
+            row["model"] if row["model"] in _model_ids() else DEFAULT_MODEL
+        )
+        supported = _reasoning_effort_ids_by_model().get(resolved_model, set())
         if (
             body.reasoning_effort is not None
             and body.reasoning_effort not in supported

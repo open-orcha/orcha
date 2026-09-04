@@ -123,6 +123,24 @@ async def test_effort_validation_is_model_specific(client, make_agent):
     assert "choose one of []" in rejected.text
 
 
+async def test_effort_validation_uses_default_for_retired_model(
+    client, container, make_agent, db
+):
+    a = await make_agent("RetiredModelEffort", "eng")
+    aid = a["agent_id"]
+    db.execute("UPDATE agents SET model='retired-model' WHERE id=%s", (aid,))
+
+    changed = await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "high"}
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json() == {"agent_id": aid, "reasoning_effort": "high"}
+    assert (
+        await _effort_in_payload(client, container["id"], "RetiredModelEffort")
+        == "high"
+    )
+
+
 async def test_model_change_clears_an_incompatible_effort(client, container, make_agent):
     a = await make_agent("ResetEffort", "eng")
     aid = a["agent_id"]
