@@ -3,7 +3,7 @@
 POST /api/agents/{aid}/reasoning-effort {reasoning_effort} persists agents.reasoning_effort;
 it flows through the container read payload and the wake-scan candidate, where the daemon
 passes it to the worker — `claude --effort <level>` (or Codex `model_reasoning_effort`).
-Validation is curated (low|medium|high|xhigh); humans carry no effort. An unknown/NULL value
+Validation is curated per model; humans carry no effort. An unknown/NULL value
 is not the same thing: NULL preserves the runtime default by omitting the argv, while unknown
 stale data resolves to the server default rather than reaching the argv.
 """
@@ -86,8 +86,74 @@ async def test_list_efforts_endpoint(client):
     assert r.status_code == 200, r.text
     body = r.json()
     ids = {e["id"] for e in body["efforts"]}
-    assert ids == {"low", "medium", "high", "xhigh"}
+    assert ids == {"low", "medium", "high", "xhigh", "max", "ultra"}
     assert body["default"] == "medium"
+
+
+async def test_effort_validation_is_model_specific(client, make_agent):
+    a = await make_agent("ModelEffort", "eng")
+    aid = a["agent_id"]
+
+    assert (await client.post(
+        f"/api/agents/{aid}/model", json={"model": "gpt-6-astra"}
+    )).status_code == 200
+    assert (await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "max"}
+    )).status_code == 200
+    rejected = await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "ultra"}
+    )
+    assert rejected.status_code == 400
+    assert "not valid for model 'gpt-6-astra'" in rejected.text
+
+    assert (await client.post(
+        f"/api/agents/{aid}/model", json={"model": "gpt-5.6-sol"}
+    )).status_code == 200
+    assert (await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "ultra"}
+    )).status_code == 200
+
+    assert (await client.post(
+        f"/api/agents/{aid}/model", json={"model": "claude-haiku-4-5-20251001"}
+    )).status_code == 200
+    rejected = await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "low"}
+    )
+    assert rejected.status_code == 400
+    assert "choose one of []" in rejected.text
+
+
+async def test_effort_validation_uses_default_for_retired_model(
+    client, container, make_agent, db
+):
+    a = await make_agent("RetiredModelEffort", "eng")
+    aid = a["agent_id"]
+    db.execute("UPDATE agents SET model='retired-model' WHERE id=%s", (aid,))
+
+    changed = await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "high"}
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json() == {"agent_id": aid, "reasoning_effort": "high"}
+    assert (
+        await _effort_in_payload(client, container["id"], "RetiredModelEffort")
+        == "high"
+    )
+
+
+async def test_model_change_clears_an_incompatible_effort(client, container, make_agent):
+    a = await make_agent("ResetEffort", "eng")
+    aid = a["agent_id"]
+    assert (await client.post(
+        f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "max"}
+    )).status_code == 200
+
+    changed = await client.post(
+        f"/api/agents/{aid}/model", json={"model": "gpt-5.5"}
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["reasoning_effort"] is None
+    assert await _effort_in_payload(client, container["id"], "ResetEffort") is None
 
 
 # ---------- resolver fallback (the spawn seam) ----------
@@ -97,6 +163,9 @@ def test_resolve_reasoning_effort_falls_back(monkeypatch):
     assert main.resolve_reasoning_effort("xhigh") == "xhigh"
     assert main.resolve_reasoning_effort(None) is None
     assert main.resolve_reasoning_effort("bogus") == main.DEFAULT_REASONING_EFFORT
+    assert main.resolve_reasoning_effort("max", "gpt-6-astra") == "max"
+    assert main.resolve_reasoning_effort("ultra", "gpt-6-astra") == main.DEFAULT_REASONING_EFFORT
+    assert main.resolve_reasoning_effort("low", "claude-haiku-4-5-20251001") is None
 
 
 # ---------- daemon candidates carry the explicit effort only when one is set ----------
@@ -155,13 +224,15 @@ def test_spawn_headless_claude_appends_effort_flag():
 
 
 def test_spawn_headless_codex_maps_effort_to_config():
-    # Codex has no 'xhigh' tier → folded to 'high'
     _, repr_, _ = notifier.spawn_headless("/proj", "do it", None, True,
                                           alias="A", reasoning_effort="xhigh", runtime="codex")
-    assert "-c model_reasoning_effort=high" in repr_
+    assert "-c model_reasoning_effort=xhigh" in repr_
     _, repr_lo, _ = notifier.spawn_headless("/proj", "do it", None, True,
                                             alias="A", reasoning_effort="low", runtime="codex")
     assert "-c model_reasoning_effort=low" in repr_lo
+    _, repr_max, _ = notifier.spawn_headless("/proj", "do it", None, True,
+                                             alias="A", reasoning_effort="max", runtime="codex")
+    assert "-c model_reasoning_effort=max" in repr_max
 
 
 def test_spawn_headless_no_effort_no_flag():

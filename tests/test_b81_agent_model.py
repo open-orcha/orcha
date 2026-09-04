@@ -71,33 +71,39 @@ async def test_model_changed_event_emitted(client, container, make_agent, db):
     assert rows and rows[0]["detail"]["model"] == "claude-haiku-4-5-20251001"
 
 
-# ---------- Fable 5 (limited-availability) + graceful fallback ----------
+# ---------- curated Claude/Codex models + graceful fallback ----------
 
 @pytest.mark.asyncio
-async def test_fable5_listed_and_selectable(client, container, make_agent):
-    """Fable 5 is in the curated list (offered through 2026-06-22) and settable per-agent."""
+async def test_new_models_listed_with_efforts_and_selectable(client, container, make_agent):
     r = await client.get("/api/models")
     models = r.json()["models"]
     ids = {m["id"] for m in models}
-    assert "claude-fable-5" in ids
+    assert {"claude-fable-5-1", "gpt-6-astra"} <= ids
     assert "gpt-5.5" in ids and "gpt-5.3-codex-spark" in ids
     assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} <= ids
     assert "gpt-5.6" not in ids
     assert "gpt-5.6-tera" not in ids
     by_id = {m["id"]: m for m in models}
-    assert by_id["claude-fable-5"]["runtime"] == "claude"
-    assert by_id["gpt-5.5"]["runtime"] == "codex"
-    assert by_id["gpt-5.6-terra"] == {
-        "id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "runtime": "codex",
+    assert by_id["claude-fable-5-1"] == {
+        "id": "claude-fable-5-1",
+        "name": "Fable 5.1",
+        "runtime": "claude",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
     }
+    assert by_id["gpt-6-astra"]["runtime"] == "codex"
+    assert by_id["gpt-6-astra"]["reasoning_efforts"] == [
+        "low", "medium", "high", "xhigh", "max",
+    ]
+    assert by_id["gpt-5.5"]["runtime"] == "codex"
+    assert by_id["gpt-5.6-terra"]["reasoning_efforts"][-2:] == ["max", "ultra"]
     assert by_id["gpt-5.6-luna"]["runtime"] == "codex"
     a = await make_agent("Faby", "eng")
-    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5"})
+    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5-1"})
     assert r.status_code == 200, r.text
-    assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5"
-    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "gpt-5.6-luna"})
+    assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5-1"
+    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "gpt-6-astra"})
     assert r.status_code == 200, r.text
-    assert await _agent_model_in_payload(client, container["id"], "Faby") == "gpt-5.6-luna"
+    assert await _agent_model_in_payload(client, container["id"], "Faby") == "gpt-6-astra"
 
 
 def test_resolve_model_falls_back_when_retired(monkeypatch):

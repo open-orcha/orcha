@@ -1,4 +1,4 @@
--- GH #51: per-agent reasoning effort (low|medium|high|xhigh), carried through to the worker
+-- GH #51: per-agent reasoning effort, validated against the selected model and carried to the worker
 -- spawn (`claude --effort <level>`, or Codex `model_reasoning_effort`). NULL = use the server
 -- default (medium) at spawn; humans stay NULL. Like agents.model, it's a free-text column —
 -- the curated AVAILABLE_REASONING_EFFORTS list in the portal is the source of truth, and an

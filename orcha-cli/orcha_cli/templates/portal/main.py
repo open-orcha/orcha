@@ -50,6 +50,7 @@ from portal_backend.model_policy import (
     DEFAULT_REASONING_EFFORT,
     MODELS_BY_ID as _MODELS_BY_ID,
     MODEL_IDS as _MODEL_IDS,
+    REASONING_EFFORT_IDS_BY_MODEL as _REASONING_EFFORT_IDS_BY_MODEL,
     REASONING_EFFORT_IDS as _REASONING_EFFORT_IDS,
     resolve_reasoning_effort,
 )
@@ -208,7 +209,11 @@ app.on_event("startup")(_startup_migrate)
 app.on_event("startup")(_start_local_index_warmer)
 _configure_active_conversations(lambda: _MODEL_IDS)
 agent_registration_routes.configure_model_ids(lambda: _MODEL_IDS)
-agent_model_routes.configure_catalogs(lambda: _MODEL_IDS, lambda: _REASONING_EFFORT_IDS)
+agent_model_routes.configure_catalogs(
+    lambda: _MODEL_IDS,
+    lambda: _REASONING_EFFORT_IDS,
+    lambda: _REASONING_EFFORT_IDS_BY_MODEL,
+)
 persona_protocol_routes.configure_model_resolution(
     lambda model: resolve_model(model),
     lambda model: resolve_model_runtime(model),

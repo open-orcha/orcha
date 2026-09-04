@@ -159,7 +159,7 @@ def active_conversations(cid: str):
             r["model"] = _resolve_model(r["model"], _supported_models())
             r["model_runtime"] = _resolve_model_runtime(r["model"], _supported_models())
             r["reasoning_effort"] = resolve_reasoning_effort(
-                r["reasoning_effort"]
+                r["reasoning_effort"], r["model"]
             )  # GH #51
             if r["pending_inbox"]:
                 msgs, _tid, ack_ts = collect_directed_messages(

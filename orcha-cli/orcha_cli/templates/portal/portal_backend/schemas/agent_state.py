@@ -30,7 +30,7 @@ class AgentModelUpdate(BaseModel):
 
 class AgentReasoningEffortUpdate(BaseModel):
     """GH #51: change the reasoning effort an agent's worker runs at. Must be one of the
-    curated levels (AVAILABLE_REASONING_EFFORTS), or null to use the runtime default."""
+    levels supported by its selected model, or null to use the runtime default."""
 
     reasoning_effort: Optional[str] = Field(..., max_length=16)
 
