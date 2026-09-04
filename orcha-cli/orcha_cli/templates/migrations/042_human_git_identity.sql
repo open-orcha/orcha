@@ -1,0 +1,11 @@
+-- 042: human git identity — the email half of PR/commit attribution.
+--   agents.git_email — the human's PREFERRED git author email, used in the
+--     `Co-authored-by: <alias> <email>` trailer when an agent opens a PR on a
+--     task this human triggered (docs/agent-prs.md). Optional: when NULL the
+--     trailer falls back to `<github_login>@users.noreply.github.com` (GitHub
+--     still links the commit to their account), and when github_login is also
+--     NULL the trailer is skipped while the PR-body attribution line remains.
+--   github_login already exists (036_collab.sql) — the verified OAuth handle;
+--     it doubles as the @mention in the PR body's attribution blockquote.
+-- Nullable, no backfill needed: existing rows simply have no stated email yet.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS git_email TEXT;

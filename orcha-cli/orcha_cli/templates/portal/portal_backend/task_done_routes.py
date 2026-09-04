@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.autonomy import effective_autonomy
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import publish_event as _publish_event
@@ -16,7 +17,11 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.push_outbox import push_task_verify as _push_task_verify
 from portal_backend.schemas.task_operations import TaskDone
+from portal_backend.slack_notify import (
+    notify_task_needs_verification as _slack_notify_needs_verification,
+)
 from portal_backend.worker_auth import require_work_lane as _require_work_lane
 
 _complete_and_unblock_getter = None
@@ -80,19 +85,37 @@ def mark_done(
             raise HTTPException(
                 403, "this agent isn't assigned to that task — cannot mark it done"
             )
-        # #298: the ONE engine-enforced autonomy gate. The container's autonomy_level decides the
-        # terminal state of a /done:
+        # #298 + mig 043: the ONE engine-enforced autonomy gate, now computed as the EFFECTIVE
+        # level for the ACTING agent (body.agent_id — the agent marking done; on this WORK-lane
+        # route the acting identity is exactly the one _require_work_lane above verified a
+        # work-token for, so the override lookup can never key off a spoofed sibling), not the
+        # bare container level. effective_autonomy() is the single shared rule EVERY consumer
+        # routes through: container level if the container ENFORCES it for everyone, else the
+        # agent's per-agent override, else the container level (NULL override = inherit). It
+        # decides the terminal state of THIS agent's /done:
         #   plan | pr -> needs_verification (a human verifies — today's behavior, the safe default)
         #   full      -> the task AUTO-COMPLETES (no human in the loop) via the SAME
         #               _complete_and_unblock path /verify's approve branch uses, so a
         #               full-autonomy completion is indistinguishable from a verified one
-        #               (downstream unblock + wakes + root→container). The free-text per-task
-        #               protocol.autonomy is DELIBERATELY ignored here — an unvalidated string
-        #               must never widen the hard gate; only this enum column can auto-complete.
+        #               (downstream unblock + wakes + root→container). An agent with override='full'
+        #               auto-completes while a sibling at container 'plan' still parks — and an
+        #               enforced container flips both back to the container level. The free-text
+        #               per-task protocol.autonomy is DELIBERATELY ignored here — an unvalidated
+        #               string must never widen the hard gate; only these enum columns can.
         cur.execute(
-            "SELECT autonomy_level FROM containers WHERE id=%s", (t["container_id"],)
+            "SELECT autonomy_level, autonomy_enforced FROM containers WHERE id=%s",
+            (t["container_id"],),
         )
-        level = cur.fetchone()["autonomy_level"]
+        c = cur.fetchone()
+        cur.execute(
+            "SELECT autonomy_override FROM agents WHERE id=%s", (body.agent_id,)
+        )
+        acting = cur.fetchone()
+        level = effective_autonomy(
+            c["autonomy_level"],
+            c["autonomy_enforced"],
+            acting["autonomy_override"] if acting else None,
+        )
         result_json = json.dumps({"result": body.result, "by_agent_id": body.agent_id})
         cur.execute(
             "UPDATE agent_tasks SET assignment_status='done' WHERE agent_id=%s AND task_id=%s",
@@ -166,4 +189,11 @@ def mark_done(
             {"to": "needs_verification", "autonomy_level": level},
         )
         conn.commit()
+    # Push pipeline (mig 041): the task just became a needs-you item. AFTER the
+    # commit, best-effort — the hook never raises and never touches this txn.
+    _push_task_verify(str(t["container_id"]), tid)
+    # Slack seam (mig 044): if this container has a slack_webhook_url, ping it with a
+    # compact Block Kit "Verify in Orcha" message. Same after-commit, non-fatal contract
+    # as the push hook — a POST failure (or no webhook) never breaks the transition.
+    _slack_notify_needs_verification(str(t["container_id"]), tid)
     return {"task_id": tid, "status": "needs_verification"}

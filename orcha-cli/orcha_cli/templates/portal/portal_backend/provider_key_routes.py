@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -25,6 +25,9 @@ from portal_backend.provider_keys import (
 from portal_backend.provider_keys import (
     provider_stored_row as _provider_stored_row,
 )
+from portal_backend.identity_routes import enforce_grant as _enforce_grant
+from portal_backend.identity_routes import require_member_read as _require_member_read
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas import LlmKeyActor, LlmKeyTest, LlmKeyUpdate
 
 try:
@@ -89,7 +92,7 @@ def _ping_provider_key(provider: str, candidate: str) -> dict:
 
 
 @app.get("/api/containers/{cid}/settings/provider-keys", status_code=200)
-def list_container_provider_keys(cid: str):
+def list_container_provider_keys(cid: str, request: Request):
     """One key-status entry per AVAILABLE catalog provider, for the SETTINGS key cards. NEVER
     returns a secret — only a masked 'sk-...1234' hint + source (env override shadows stored).
     Read-only/open, like GET /settings/providers."""
@@ -103,6 +106,8 @@ def list_container_provider_keys(cid: str):
     keys = []
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
+        # Access model: reads are project-isolated (trusted non-member 403).
+        _require_member_read(cur, request, cid)
         for p in llm_util.PROVIDER_CATALOG:
             if not p["available"]:
                 continue
@@ -134,7 +139,7 @@ def list_container_provider_keys(cid: str):
 
 
 @app.put("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
-def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
+def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate, request: Request):
     """Seal + store the key for one provider. HUMAN-AUTHORITY gated + audit-logged. Anthropic
     writes its legacy column; other providers upsert container_provider_keys. 503 w/o ORCHA_SECRET_KEY."""
     if not _valid_uuid(cid):
@@ -145,8 +150,12 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
     if not key:
         raise HTTPException(400, "api_key must not be blank")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: credentials are owner-or-manage_keys (trusted lane).
+        _enforce_grant(cur, request, cid, "manage_keys")
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
+        _require_kind(cur, body.actor_agent_id, ("human",))
         if not secret_box.master_key_present():
             raise HTTPException(
                 503,
@@ -183,7 +192,7 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate):
 
 
 @app.delete("/api/containers/{cid}/settings/provider-keys/{provider}", status_code=200)
-def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
+def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor, request: Request):
     """Remove one provider's stored key (resolution falls back to env override, else none).
     HUMAN-AUTHORITY gated + audit-logged."""
     if not _valid_uuid(cid):
@@ -191,8 +200,12 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
     if not _available_provider(provider):
         raise HTTPException(400, f"'{provider}' is not an available catalog provider")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: credentials are owner-or-manage_keys (trusted lane).
+        _enforce_grant(cur, request, cid, "manage_keys")
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
+        _require_kind(cur, body.actor_agent_id, ("human",))
         # Unified table (migration 027) — clear the row for any provider, Anthropic included.
         cur.execute(
             "DELETE FROM container_provider_keys WHERE container_id=%s AND provider=%s",
@@ -223,7 +236,7 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor):
 @app.post(
     "/api/containers/{cid}/settings/provider-keys/{provider}/test", status_code=200
 )
-def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
+def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest, request: Request):
     """Credential ping against `provider`'s API. HUMAN-AUTHORITY gated. With `api_key` -> test that
     candidate (pre-save); without -> test the currently-resolved key for this provider."""
     if not _valid_uuid(cid):
@@ -231,8 +244,12 @@ def test_container_provider_key(cid: str, provider: str, body: LlmKeyTest):
     if not _available_provider(provider):
         raise HTTPException(400, f"'{provider}' is not an available catalog provider")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))
         _require_container(cur, cid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: credentials are owner-or-manage_keys (trusted lane).
+        _enforce_grant(cur, request, cid, "manage_keys")
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
+        _require_kind(cur, body.actor_agent_id, ("human",))
         if body.api_key and body.api_key.strip():
             candidate: Optional[str] = body.api_key.strip()
         else:

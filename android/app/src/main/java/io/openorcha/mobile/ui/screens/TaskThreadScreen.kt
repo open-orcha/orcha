@@ -20,13 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -109,7 +103,7 @@ fun TaskThreadScreen(
         if (last >= 0 && (imeVisible || state.taskMessages.isNotEmpty())) listState.animateScrollToItem(last)
     }
     Scaffold(
-        containerColor = p.bg,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -119,8 +113,8 @@ fun TaskThreadScreen(
                         Text(task?.title ?: "", style = MaterialTheme.typography.bodyMedium, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
-                actions = { IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh") } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
+                actions = { IconButton(onClick = onRefresh) { Icon(OrchaIcons.Refresh, "Refresh") } },
             )
         },
     ) { padding ->
@@ -197,7 +191,7 @@ fun TaskThreadScreen(
                         containerColor = p.accent, contentColor = p.accentInk,
                         disabledContainerColor = p.accent.copy(alpha = 0.4f), disabledContentColor = p.accentInk,
                     ),
-                ) { Icon(Icons.AutoMirrored.Rounded.Send, "Send") }
+                ) { Icon(OrchaIcons.Send, "Send") }
             }
         }
     }

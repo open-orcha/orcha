@@ -157,9 +157,12 @@ fun ConnChip(state: String, modifier: Modifier = Modifier) {
     val p = Orcha.palette
     val (color, word) = when (state.lowercase()) {
         "live", "active" -> p.ok to "live"
-        "polling" -> p.warn to "polling"
+        // iOS Kit.swift parity: polling IS the good state — a reachable
+        // workspace reads green "connected", not amber "polling".
+        "polling" -> p.ok to "connected"
         "paused" -> p.warn to "paused"
         "unreachable", "off" -> p.danger to "unreachable"
+        "signin" -> p.warn to "sign in"
         else -> p.idle to state.lowercase()
     }
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

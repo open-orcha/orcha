@@ -11,7 +11,8 @@ class WorkerRunStart(BaseModel):
     """Notifier records a spawned worker (status=running)."""
 
     wake_kind: str = Field(
-        default="ephemeral", description="transport: ephemeral | tmux | resident | live"
+        default="ephemeral",
+        description="transport: ephemeral | tmux | resident | live | sandbox",
     )
     wake_event: Optional[str] = Field(default=None, max_length=MAX_NAME_LEN)
     task_id: Optional[str] = Field(
@@ -58,6 +59,14 @@ class WorkerRunStart(BaseModel):
     # turnover — the server can revoke a run's token on any terminal transition it observes.
     token_id: Optional[str] = Field(
         default=None, description="the run_token to bind to this run, if any"
+    )
+    # Remote-runner §3.3c: a sandbox wake stamps its docker container name so a restarted daemon
+    # re-adopts live runs by label instead of orphaning them, and metering can attribute container
+    # runtime to the run row. NULL for every host-spawned (non-sandbox) run.
+    sandbox_container_id: Optional[str] = Field(
+        default=None,
+        max_length=MAX_NAME_LEN,
+        description="docker container name of a sandbox wake (orcha-run-<hex12>), if any",
     )
 
 

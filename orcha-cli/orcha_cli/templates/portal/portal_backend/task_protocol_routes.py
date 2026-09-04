@@ -2,7 +2,7 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -14,11 +14,12 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas import ProtocolUpdate
 
 
 @app.patch("/api/tasks/{tid}/protocol", status_code=200)
-def update_task_protocol(tid: str, body: ProtocolUpdate):
+def update_task_protocol(tid: str, body: ProtocolUpdate, request: Request):
     """SPEC-4: set/clear the per-task working agreement (review_chain, handoff_to, autonomy,
     notes). Audit-logged. Actor: a human OR a dispatching AI orchestrator (#327) — an AI may
     edit review_chain/handoff_to/notes (the coordination dials), but `autonomy` STAYS human-only:
@@ -28,10 +29,14 @@ def update_task_protocol(tid: str, body: ProtocolUpdate):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
+        t = _require_task(cur, tid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(
+            cur, request, str(t["container_id"]), body.actor_agent_id
+        )
         actor = _require_kind(
             cur, body.actor_agent_id, ("human", "ai")
         )  # Orcha#30 + #327
-        t = _require_task(cur, tid)
         _require_container_active(
             cur, str(t["container_id"]), body.actor_agent_id
         )  # GH #24

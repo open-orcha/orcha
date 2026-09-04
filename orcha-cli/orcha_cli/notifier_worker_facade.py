@@ -164,17 +164,23 @@ def reap_orphan_leases(api_base: str, cid: str, quiet: bool) -> None:
     _orphan_cleanup.reap_orphan_leases(api_base, cid, quiet, _compat())
 
 
+def live_sandbox_shield(live_workers: dict, live_residents: dict) -> frozenset:
+    return _orphan_cleanup.live_sandbox_shield(live_workers, live_residents)
+
+
 def reap_orphaned_runs(
     api_base: str,
     cid: str,
     live_pids=frozenset(),
     *,
+    live_sandbox=frozenset(),
     quiet: bool = True,
 ) -> int:
     return _orphan_cleanup.reap_orphaned_runs(
         api_base,
         cid,
         live_pids,
+        live_sandbox=live_sandbox,
         quiet=quiet,
         services=_compat(),
     )

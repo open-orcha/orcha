@@ -122,6 +122,15 @@
 .modal .mh p { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
 .modal .mb { padding: 14px 20px 4px; }
 .modal .mf { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px 18px; }
+/* labeled fields in a modal body (New project) */
+.modal .mb .np-f { display: block; margin-bottom: 12px; }
+.modal .mb .np-f span { display: block; margin-bottom: 5px; color: var(--faint); font-size: 10.5px;
+  font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.modal .mb .np-f input, .modal .mb .np-f textarea { width: 100%; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 9px; color: var(--text); font: inherit;
+  font-size: 13px; padding: 9px 11px; outline: none; }
+.modal .mb .np-f textarea { min-height: 64px; resize: vertical; }
+.modal .mb .np-f input:focus, .modal .mb .np-f textarea:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
 
 /* mobile pairing modal */
 .pair-modal { width: min(640px, 100%); }
@@ -138,15 +147,30 @@
 .pair-select select { min-width: 180px; background: var(--surface-3); color: var(--text); border: 1px solid var(--border-2);
   border-radius: 8px; font: inherit; font-size: 13px; padding: 7px 10px; outline: none; }
 .pair-select select:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-.pair-grid { display: grid; grid-template-columns: 304px minmax(0, 1fr); gap: 22px; align-items: center; }
-.pair-qr-wrap { min-width: 0; }
-.pair-qr { width: 304px; height: 304px; display: grid; place-items: center; background: #fff; border-radius: 12px;
-  border: 1px solid var(--border-2); box-shadow: var(--shadow-sm); overflow: hidden; }
-.pair-qr svg { width: 280px; height: 280px; display: block; }
-.pair-url { margin-top: 10px; color: var(--accent); font-size: 12.5px; text-align: center; word-break: break-all; }
+.pair-grid { display: grid; grid-template-columns: minmax(0, 296px) minmax(0, 1fr); gap: 22px; align-items: center; }
+/* the branded QR card: wordmark + code + caption + URL, tokens only so
+   light/dark/Swiss all follow. The QR SVG bakes its own light tile + quiet
+   zone — dark modules on light in every theme; the card never inverts it. */
+.pair-card { display: flex; flex-direction: column; align-items: center; gap: 9px; min-width: 0;
+  padding: 14px 14px 12px; border-radius: 14px; background: var(--surface-2);
+  border: 1px solid var(--border-2); box-shadow: var(--shadow-sm); }
+.pair-brand { display: flex; align-items: center; gap: 7px; }
+.pair-brand svg { width: 19px; height: 19px; display: block; }
+.pair-wordmark { color: var(--text); font-size: 13px; font-weight: 760; letter-spacing: -.01em; }
+.pair-qr { width: 100%; max-width: 248px; aspect-ratio: 1; }
+.pair-qr svg { width: 100%; height: 100%; display: block; }
+.pair-scanline { color: var(--muted); font-size: 12px; font-weight: 620; }
+.pair-url { color: var(--accent); font-size: 12px; text-align: center; word-break: break-all; }
 .pair-meta { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
 .pair-label { color: var(--faint); font-size: 10.5px; font-weight: 740; letter-spacing: .08em; text-transform: uppercase; }
 .pair-value { color: var(--text); font-size: 13.5px; font-weight: 620; margin-top: 3px; }
+/* identity-correct pairing: the "Pairing as" chip mirrors the topbar acting chip */
+.pair-identity { display: inline-flex; align-items: center; gap: 8px; }
+/* the expiry chip carries a sentence — wrap inside the border instead of
+   overflowing it (the .pill base is nowrap/line-height:1 for short statuses) */
+.pair-expiry { white-space: normal; line-height: 1.45; align-items: flex-start;
+  text-align: left; max-width: 100%; align-self: flex-start; }
+.pair-expiry .gl { margin-top: 2px; }
 .pair-code { display: inline-flex; align-self: flex-start; margin-top: 4px; padding: 6px 9px; border-radius: 8px;
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); font-size: 13px; letter-spacing: .08em; }
 .pair-foot { color: var(--faint); font-size: 11.5px; line-height: 1.5; }
@@ -168,4 +192,24 @@
   .pair-grid { grid-template-columns: 1fr; }
   .pair-qr { width: min(304px, 100%); height: auto; aspect-ratio: 1; margin: 0 auto; }
   .pair-url { text-align: left; }
+  .pair-card { width: min(296px, 100%); margin: 0 auto; }
 }
+
+/* GitHub connect-repo modal — same skeleton as the pairing modal (pair-head/-content),
+   with a selectable repo list. Tokens only; light/dark + Swiss all follow. */
+.gh-modal { width: min(600px, 100%); }
+.gh-badge { width: 42px; height: 42px; border-radius: 12px; flex: none; display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--border-2); color: var(--text); }
+.gh-badge svg { width: 24px; height: 24px; display: block; }
+.gh-list { display: flex; flex-direction: column; gap: 4px; max-height: 342px; overflow: auto; }
+.gh-repo-row { width: 100%; text-align: left; background: transparent; font: inherit; color: inherit; }
+.gh-repo-row .gh-row-mark { width: 15px; height: 15px; flex: none; color: var(--muted); }
+.gh-repo-row.sel .gh-row-mark { color: var(--accent); }
+.gh-repo-row .t1.mono { font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
+.gh-repo-row .gh-ck { color: var(--accent); flex: none; }
+.tag.gh-private { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
+  color: var(--warn); border-color: var(--warn-line); background: var(--warn-soft); }
+.gh-detail { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  color: var(--muted); }
+.gh-unbind { display: flex; justify-content: flex-end; padding-top: 12px; margin-top: 12px;
+  border-top: 1px solid var(--border); }

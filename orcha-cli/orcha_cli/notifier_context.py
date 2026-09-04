@@ -14,6 +14,9 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+# Remote-runner spec §3.2–3.4: sandbox wake execution. Imported as a module so
+# tests can monkeypatch `_sandbox.preflight` etc. (attribute lookup at call time).
+from . import sandbox as _sandbox
 from . import notifier_command as _notifier_command
 from . import notifier_conversation as _conversation
 from . import notifier_daemon_control as _daemon_control
@@ -44,6 +47,8 @@ from .notifier_host import (
 from .notifier_persona import (
     CONVERSATION_LANE_DIRECTIVE,
     HUMAN_COMMS_GUARDRAIL,
+    MULTI_HUMAN_STEERING,
+    REPO_WORKFLOW_GUIDANCE,
     _wrap_conversation_turn,
     format_persona,
 )
@@ -85,6 +90,7 @@ from .notifier_session_io import (
     _extract_codex_session_id,
     _extract_session_id,
     _result_after,
+    _resume_error_in_log,
     _send_user_turn,
 )
 from .notifier_wake_prompts import (

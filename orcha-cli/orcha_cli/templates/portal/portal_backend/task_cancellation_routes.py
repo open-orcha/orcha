@@ -1,6 +1,6 @@
 """Cancel non-root tasks and notify displaced owners."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
@@ -17,12 +17,13 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas.task_operations import TaskCancel
 from portal_backend.task_completion_support import _recalibrate_task_owners
 
 
 @app.post("/api/tasks/{tid}/cancel", status_code=200)
-def cancel_task(tid: str, body: TaskCancel):
+def cancel_task(tid: str, body: TaskCancel, request: Request):
     """B7 (ISS-23) + #327: force-close a task. A human OR a dispatching AI orchestrator may cancel
     ANY non-root task. Cancelling a task owned by SOMEONE ELSE is "forced" — kind-agnostic now: the
     actor (human or AI) MUST give a reason, which is routed to each displaced owner via the B0
@@ -34,6 +35,10 @@ def cancel_task(tid: str, body: TaskCancel):
         raise HTTPException(400, "actor_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(
+            cur, request, str(t["container_id"]), body.actor_agent_id
+        )
         _require_container_active(
             cur, str(t["container_id"]), body.actor_agent_id
         )  # GH #24 (human may still cancel)

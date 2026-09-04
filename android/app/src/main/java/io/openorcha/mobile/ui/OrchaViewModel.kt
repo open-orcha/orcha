@@ -41,12 +41,17 @@ internal class OrchaViewModel(application: Application) : AndroidViewModel(appli
     RunAndConversationActions,
     TaskAndRequestHumanActions,
     AgentAndWorkspaceHumanActions,
+    ChatSendActions,
+    GitHubHubActions,
+    DeviceAuthActions,
     OrchaViewModelSupport {
     override val store = ContainerStore(application)
     override val api = OrchaApiClient()
     override val json = Json { ignoreUnknownKeys = true }
     override var pollingJob: Job? = null
     override var runStreamJob: Job? = null
+    override var replyWatchJob: Job? = null
+    override val deviceAuthSession = DeviceAuthSession()
 
     override val _uiState = MutableStateFlow(
         OrchaUiState(
@@ -56,11 +61,16 @@ internal class OrchaViewModel(application: Application) : AndroidViewModel(appli
                     store.loadThemeMode().replaceFirstChar { it.uppercase() },
                 )
             }.getOrDefault(io.openorcha.mobile.ui.theme.ThemeMode.Auto),
+            skinMode = io.openorcha.mobile.ui.theme.SkinMode.fromStorageValue(store.loadSkinMode()),
         ),
     )
     val uiState: StateFlow<OrchaUiState> = _uiState
 
     init {
+        // Device-token auth: re-seed the in-memory bearer registry every stored
+        // container's token rides on -- the Ktor request seam in
+        // `OrchaHttpClient.kt` has nothing else to consult after a process restart.
+        io.openorcha.mobile.data.BearerTokens.seed(_uiState.value.containers)
         val first = _uiState.value.containers.firstOrNull()
         if (first != null) openContainer(first.id) else probeContainers()
     }

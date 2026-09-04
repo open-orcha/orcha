@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.WorkspaceTab
@@ -43,7 +44,16 @@ internal fun RowScope.WorkspaceNavItem(
                 Icon(icon, label)
             }
         },
-        label = { Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp)) },
+        // iOS parity: the system tab bar sets labels light and untracked (~10pt medium) —
+        // the W700 +0.5-tracking labelSmall kicker style read as the wrong font here.
+        label = {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp,
+                ),
+            )
+        },
         colors = NavigationBarItemDefaults.colors(
             selectedIconColor = Orcha.palette.accent,
             selectedTextColor = Orcha.palette.text,

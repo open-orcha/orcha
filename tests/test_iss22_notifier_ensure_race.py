@@ -138,7 +138,8 @@ def test_daemon_running_clears_stale_pidfile(monkeypatch, tmp_path):
 def test_daemon_running_keeps_live_pidfile(monkeypatch, tmp_path):
     """A live daemon's pid is returned and its pidfile preserved."""
     pidf = _write_pidfile(tmp_path, _LIVE_PID)
-    monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: True)
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: True)  # serving lane (ISS-22 r3)
     assert notifier.daemon_running(tmp_path) == _LIVE_PID
     assert pidf.exists()
 
@@ -292,7 +293,8 @@ def test_daemon_running_for_container_clears_stale_global_claim(monkeypatch, tmp
 def test_daemon_running_for_container_keeps_live_global_claim(monkeypatch, tmp_path):
     """A live daemon's global claim is returned as (pid, cwd) and the file preserved."""
     gp = _write_global_pidfile(monkeypatch, tmp_path, "CID-1", _LIVE_PID, cwd_line="/work/tree")
-    monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: True)
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: True)  # serving lane (ISS-22 r3)
     assert notifier.daemon_running_for_container("CID-1") == (_LIVE_PID, "/work/tree")
     assert gp.exists(), "a live global claim must be preserved"
 

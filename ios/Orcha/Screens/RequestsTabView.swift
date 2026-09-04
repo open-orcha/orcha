@@ -10,7 +10,10 @@ struct RequestsTabView: View {
     @Environment(\.palette) private var p
     let groups: RequestGroups
 
-    @State private var showDone = false
+    /// Persisted (not @State) so the pick survives tab switches, and auto-expanded
+    /// when Done is the ONLY populated group — otherwise the screen renders blank
+    /// with a lone collapsed "Done" header every time you navigate here.
+    @AppStorage("orcha_requests_show_done") private var showDone = false
     @State private var lens: MobileUx.RequestLens = .yours
     @State private var sortKey: MobileUx.RequestSortKey = .time
     @State private var ascending = false                 // web default: time desc (newest first)
@@ -69,13 +72,23 @@ struct RequestsTabView: View {
         group("Waiting on others", groups.waitingOnOthers)
         group("Answered — act on it", groups.answeredActOnIt)
         if !groups.done.isEmpty {
+            let doneOnly = groups.needsYourAnswer.isEmpty && groups.waitingOnOthers.isEmpty &&
+                groups.answeredActOnIt.isEmpty
             HStack {
                 SectionH(title: "Done", count: "\(groups.done.count)")
                 Button(showDone ? "hide" : "show") { showDone.toggle() }
-                    .font(.system(size: 11, weight: .bold))
+                    .font(p.uiFont(11, .bold))
                     .foregroundStyle(p.accent)
             }
-            if showDone { rows(groups.done) }
+            .onAppear { if doneOnly { showDone = true } }
+            if showDone {
+                rows(groups.done)
+            } else if doneOnly {
+                OrchaCard {
+                    Text("Nothing needs you — your \(groups.done.count) request\(groups.done.count == 1 ? " is" : "s are") all done. Tap “show” to see them.")
+                        .foregroundStyle(p.muted)
+                }
+            }
         }
         if groups.needsYourAnswer.isEmpty && groups.waitingOnOthers.isEmpty &&
             groups.answeredActOnIt.isEmpty && groups.done.isEmpty {
@@ -129,7 +142,7 @@ struct RequestsTabView: View {
         if list.count > visible.count {
             Button("Load more · \(visible.count) of \(list.count)") { shown += Self.REQS_PAGE }
                 .buttonStyle(.plain)
-                .font(.system(size: 13, weight: .bold))
+                .font(p.uiFont(13, .bold))
                 .foregroundStyle(p.accent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -146,7 +159,7 @@ struct RequestsTabView: View {
                 ascending.toggle()
             } label: {
                 Image(systemName: ascending ? "arrow.up" : "arrow.down")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(p.uiFont(12, .bold))
                     .foregroundStyle(p.accent)
             }
             .buttonStyle(.plain)
@@ -161,7 +174,7 @@ struct RequestsTabView: View {
             ascending = key == .time ? false : true   // reset to the key's natural default (web)
         } label: {
             Text(label)
-                .font(.system(size: 12, weight: .bold))
+                .font(p.uiFont(12, .bold))
                 .foregroundStyle(sortKey == key ? p.accent : p.muted)
         }
         .buttonStyle(.plain)
@@ -198,21 +211,27 @@ struct RequestRowCard: View {
         let toLabel = toIsYou ? "you" : (targetAlias ?? "agent")
         OrchaCard {
             HStack(spacing: 8) {
-                AgentAvatar(alias: requesterAlias ?? fromLabel, human: request.requesterId == humanId, size: 30)
+                AgentAvatar(
+                    alias: requesterAlias ?? fromLabel,
+                    human: request.requesterId == humanId,
+                    githubLogin: MobileUx.humanLogin(alias: requesterAlias, in: agents),
+                    size: 30
+                )
                 Text("→")
                     .foregroundStyle(p.faint)
                 AgentAvatar(
                     alias: request.targetId == nil ? "H" : (targetAlias ?? "A"),
                     human: toIsYou,
+                    githubLogin: MobileUx.humanLogin(alias: targetAlias, in: agents),
                     size: 30
                 )
                 Text("\(fromLabel) → \(toLabel)")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(p.uiFont(15, .semibold))
                     .foregroundStyle(p.text)
                     .lineLimit(1)
             }
             Text(request.payload)
-                .font(.system(size: 13))
+                .font(p.uiFont(13))
                 .foregroundStyle(p.muted)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)

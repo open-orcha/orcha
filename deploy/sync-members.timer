@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync portal members to OAuth allowlist every 2 minutes
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

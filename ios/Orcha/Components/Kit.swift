@@ -1,7 +1,5 @@
 import SwiftUI
 
-// Responsibility: Core Orcha cards, section headings, metadata tags, and buttons.
-
 // The Orcha mobile component kit — one view per row of the component inventory
 // (doc 12), pixel values from mockups/mobile.css. Screens never restyle these.
 
@@ -18,8 +16,8 @@ struct OrchaCard<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(container ?? p.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(borderColor ?? p.border, lineWidth: 1))
+        .background(container ?? p.surface, in: RoundedRectangle(cornerRadius: p.radiusCard))
+        .overlay(RoundedRectangle(cornerRadius: p.radiusCard).strokeBorder(borderColor ?? p.border, lineWidth: 1))
     }
 }
 
@@ -32,12 +30,12 @@ struct SectionH: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
+                .font(p.uiFont(11, .bold))
                 .tracking(0.8)
                 .foregroundStyle(p.muted)
             if let count {
                 Text(count)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(p.uiFont(11, .semibold))
                     .foregroundStyle(p.faint)
             }
             Spacer()
@@ -61,7 +59,7 @@ struct MetaTag: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: p.radiusTag)
                     .strokeBorder((tint ?? p.border2).opacity(tint == nil ? 1 : 0.4), lineWidth: 1)
             )
             .lineLimit(1)
@@ -93,30 +91,380 @@ struct KitButton: View {
     }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: small ? 13 : 15, weight: .semibold))
-                }
-                Text(title)
-                    .font(.system(size: small ? 13 : 15, weight: .bold))
+        let label = HStack(spacing: 8) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: small ? 13 : 15, weight: .semibold))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, small ? 8 : 12)
-            .padding(.horizontal, small ? 14 : 18)
+            Text(title)
+                .font(p.uiFont(small ? 13 : 15, .bold))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(colors.fg)
-        .background(colors.fill, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            if let line = colors.line {
-                RoundedRectangle(cornerRadius: 12).strokeBorder(line, lineWidth: 1)
-            }
-        }
-        .opacity(enabled ? 1 : 0.45)
-        .disabled(!enabled)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, small ? 8 : 12)
+        .padding(.horizontal, small ? 14 : 18)
+        // .plain buttons hit-test only opaque content, and the fill lives outside
+        // the Button (KitButtonSurface) — without this, only the title text was
+        // tappable across the whole app.
+        .contentShape(RoundedRectangle(cornerRadius: p.radiusButton))
+
+        Button(action: action) { label }
+            .buttonStyle(.plain)
+            .foregroundStyle(colors.fg)
+            .modifier(KitButtonSurface(role: role, colors: colors, radius: p.radiusButton))
+            .opacity(enabled ? 1 : 0.45)
+            .disabled(!enabled)
     }
 }
 
-/// `.avatar` — square agent tile / round human dot with the initial.
+/// The button surface: primary actions get interactive Liquid Glass on iOS 26
+/// (tinted with the palette accent so both skins keep their identity); tonal /
+/// neutral roles and earlier OSes keep the flat token fill with the line border.
+private struct KitButtonSurface: ViewModifier {
+    let role: KitButtonRole
+    let colors: (fill: Color, fg: Color, line: Color?)
+    let radius: CGFloat
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), role == .primary {
+            content.glassEffect(.regular.tint(colors.fill).interactive(), in: .rect(cornerRadius: radius))
+        } else {
+            content
+                .background(colors.fill, in: RoundedRectangle(cornerRadius: radius))
+                .overlay {
+                    if let line = colors.line {
+                        RoundedRectangle(cornerRadius: radius).strokeBorder(line, lineWidth: 1)
+                    }
+                }
+        }
+    }
+}
+
+/// `.avatar` — square agent tile / round human dot with the initial. Collab v1:
+/// a human with a `githubLogin` renders their real GitHub avatar over the letter
+/// tile (web `ghAvatar` parity) — the tile stays visible while loading and when
+/// the image fails (offline / no avatar), so the fallback is structural.
+struct AgentAvatar: View {
+    @Environment(\.palette) private var p
+    let alias: String
+    var human = false
+    var githubLogin: String? = nil
+    var size: CGFloat = 40
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: human ? size / 2 : size * 12 / 40)
+        Text(alias.prefix(1).uppercased())
+            .font(p.uiFont(size * 15 / 40, .heavy))
+            .foregroundStyle(human ? p.violet : p.accent)
+            .frame(width: size, height: size)
+            .background(human ? p.violetSoft : p.accentSoft, in: shape)
+            .overlay {
+                if human, let url = MobileUx.githubAvatarURL(githubLogin) {
+                    AsyncImage(url: url) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color.clear   // letter tile shows through until (unless) the face loads
+                    }
+                    .frame(width: size, height: size)
+                    .clipShape(shape)
+                }
+            }
+            .overlay(shape.strokeBorder(human ? p.violetLine : p.accentLine, lineWidth: 1))
+            .accessibilityLabel(githubLogin ?? alias)
+    }
+}
+
+/// `.brandmark` — the orca glyph on the radial brand tile (foundations §5).
+struct BrandMark: View {
+    var size: CGFloat = 34
+
+    var body: some View {
+        OrcaGlyph()
+            .frame(width: size * 0.7, height: size * 0.7)
+            .frame(width: size, height: size)
+            .background(
+                RadialGradient(
+                    colors: [Color(hex: 0x0E2D33), Color(hex: 0x06171C)],
+                    center: .init(x: 0.5, y: 0.3), startRadius: 0, endRadius: size * 1.2
+                ),
+                in: RoundedRectangle(cornerRadius: size * 10 / 34)
+            )
+            .accessibilityLabel("Orcha")
+    }
+}
+
+/// The orca/orchestration glyph from desktop/resources/icon.svg (native 0..100 space).
+struct OrcaGlyph: View {
+    var body: some View {
+        Canvas { context, canvasSize in
+            let s = min(canvasSize.width, canvasSize.height) / 100
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }
+
+            var body = Path()
+            body.move(to: pt(27, 83))
+            body.addCurve(to: pt(45.5, 22.5), control1: pt(28, 55), control2: pt(33, 32))
+            body.addCurve(to: pt(60, 27), control1: pt(51.5, 18), control2: pt(57.5, 19.5))
+            body.addCurve(to: pt(73, 83), control1: pt(64.5, 46), control2: pt(70.5, 67))
+            body.closeSubpath()
+            context.fill(body, with: .color(Color(hex: 0xF3FBFB)))
+
+            var strings = Path()
+            strings.move(to: pt(49, 38)); strings.addLine(to: pt(40, 62))
+            strings.move(to: pt(49, 38)); strings.addLine(to: pt(56, 62))
+            strings.move(to: pt(49, 38)); strings.addLine(to: pt(50, 74))
+            context.stroke(strings, with: .color(Color(hex: 0x06171C)), style: StrokeStyle(lineWidth: 2.4 * s, lineCap: .round))
+
+            for (cx, cy) in [(39.0, 64.0), (57.0, 64.0), (50.0, 76.0)] {
+                let dot = Path(ellipseIn: CGRect(x: (cx - 4) * s, y: (cy - 4) * s, width: 8 * s, height: 8 * s))
+                context.fill(dot, with: .color(Color(hex: 0x06171C)))
+            }
+            let head = Path(ellipseIn: CGRect(x: 43 * s, y: 29 * s, width: 12 * s, height: 12 * s))
+            context.fill(head, with: .color(Color(hex: 0x1FC7CD)))
+
+            var wave = Path()
+            wave.move(to: pt(13, 86))
+            wave.addCurve(to: pt(50, 82.5), control1: pt(28, 82), control2: pt(38, 82))
+            wave.addCurve(to: pt(87, 86), control1: pt(62, 82), control2: pt(72, 82))
+            context.stroke(wave, with: .color(Color(hex: 0x1FC7CD)), style: StrokeStyle(lineWidth: 5 * s, lineCap: .round))
+        }
+    }
+}
+
+/// `.stat` — KPI tile: 20/800 colored numeral + 10.5/700 uppercase key.
+struct StatTile: View {
+    @Environment(\.palette) private var p
+    let value: String
+    let label: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(p.uiFont(20, .heavy))
+                .foregroundStyle(tint)
+            Text(label.uppercased())
+                .font(p.uiFont(10.5, .bold))
+                .tracking(0.5)
+                .foregroundStyle(p.muted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(p.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+enum BannerKind {
+    case warn, danger, info
+}
+
+/// `.banner` — inline tinted alert row, optional trailing action.
+struct Banner: View {
+    @Environment(\.palette) private var p
+    let kind: BannerKind
+    let text: String
+    var action: String?
+    var onAction: (() -> Void)?
+
+    private var tint: StatusTint {
+        switch kind {
+        case .warn: p.tint("warn")
+        case .danger: p.tint("danger")
+        case .info: p.tint("info")
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(text)
+                .font(p.uiFont(13, .semibold))
+                .foregroundStyle(tint.color)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let action, let onAction {
+                Button(action) { onAction() }
+                    .buttonStyle(.plain)
+                    .font(p.uiFont(13, .bold))
+                    .foregroundStyle(tint.color)
+                    .underline()
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .background(tint.soft, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(tint.line, lineWidth: 1))
+    }
+}
+
+/// `.conn` — connection indicator: pulsing dot + word. `compact` drops the word
+/// (toolbar use, where "polling" truncated to "p…" and squeezed the nav title);
+/// VoiceOver keeps the full state either way.
+struct ConnChip: View {
+    @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let state: String
+    var compact = false
+
+    var body: some View {
+        let (color, word): (Color, String) = switch state.lowercased() {
+        case "live", "active": (p.ok, "live")
+        // A successful probe = healthy; "polling" is the refresh MECHANISM,
+        // not a degraded state (SSE remains the listed follow-up) — render it
+        // as the good state so reachable workspaces read green "connected".
+        case "polling": (p.ok, "connected")
+        case "paused": (p.warn, "paused")
+        case "unreachable", "off": (p.danger, "unreachable")
+        default: (p.idle, state.lowercased())
+        }
+        HStack(spacing: 6) {
+            PulseDot(color: color, animated: !reduceMotion && ["live", "active", "polling"].contains(state.lowercased()))
+            if !compact {
+                Text(word)
+                    .font(p.uiFont(11, .bold))
+                    .tracking(0.2)
+                    .foregroundStyle(color)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Connection: \(word)")
+    }
+}
+
+/// `.skel` — shimmer-ish loading block.
+struct SkeletonBlock: View {
+    @Environment(\.palette) private var p
+    let height: CGFloat
+    @State private var dim = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(p.surface2)
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border, lineWidth: 1))
+            .frame(height: height)
+            .opacity(dim ? 0.55 : 1)
+            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
+    }
+}
+
+/// `.state` — 72pt glyph tile · 17/750 title · 13.5 sub · actions.
+struct StateLayout<Glyph: View, Actions: View>: View {
+    @Environment(\.palette) private var p
+    let title: String
+    var sub: String?
+    var danger = false
+    @ViewBuilder let glyph: Glyph
+    @ViewBuilder let actions: Actions
+
+    var body: some View {
+        VStack(spacing: 12) {
+            glyph
+                .frame(width: 72, height: 72)
+                .background(danger ? p.dangerSoft : p.surface2, in: RoundedRectangle(cornerRadius: 22))
+                .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(danger ? p.dangerLine : p.border, lineWidth: 1))
+            Text(title)
+                .font(p.uiFont(17, .bold))
+                .multilineTextAlignment(.center)
+            if let sub {
+                Text(sub)
+                    .font(p.uiFont(13.5))
+                    .foregroundStyle(p.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 290)
+            }
+            actions
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 36)
+    }
+}
+
+/// `.kv` — key/value detail row.
+struct KVRow: View {
+    @Environment(\.palette) private var p
+    let key: String
+    let value: String
+    var mono = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(key)
+                .font(p.uiFont(13.5))
+                .foregroundStyle(p.muted)
+            Spacer()
+            Text(value)
+                .font(mono ? .system(size: 12, design: .monospaced) : .system(size: 13.5))
+                .foregroundStyle(p.text)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Per-type tint for a run-feed row — a 1:1 mirror of Android `feedTint` (Kit.kt).
+private func feedTint(_ type: String, _ p: Palette) -> Color {
+    switch type {
+    case "boot": p.faint
+    case "think": p.muted
+    case "tool": p.accent
+    case "result": p.text2
+    case "subagent": p.info
+    case "decision": p.violet
+    case "error": p.danger
+    case "done": p.ok
+    default: p.text // narrate
+    }
+}
+
+/// One classified run-feed row (flow 06): uppercase label tag + body text; narration
+/// reads as plain prose, everything else is label-tinted; `detail` starts collapsed and
+/// expands on tap (the web's <details> affordance). 1:1 with Android `FeedRow`.
+struct FeedRow: View {
+    @Environment(\.palette) private var p
+    let row: RunFeedRow
+    @State private var expanded = false
+
+    private var hasDetail: Bool {
+        !(row.detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        let tint = feedTint(row.type, p)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(row.label.uppercased())
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(tint)
+                if hasDetail {
+                    Text(expanded ? "▾" : "▸")
+                        .font(p.uiFont(10))
+                        .foregroundStyle(p.faint)
+                }
+            }
+            if !row.text.isEmpty {
+                // Narration is prose → the skin's display face (Space Grotesk on
+                // Swiss); everything else stays mono like the portal's log.
+                Text(row.text)
+                    .font(row.type == "narrate" ? p.uiFont(14) : .system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(row.type == "narrate" ? p.text : tint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if expanded, let detail = row.detail, hasDetail {
+                Text(detail)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(p.muted)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(p.surface2, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture { if hasDetail { expanded.toggle() } }
+    }
+}

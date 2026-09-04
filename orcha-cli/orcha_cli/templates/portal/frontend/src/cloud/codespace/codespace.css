@@ -1,0 +1,518 @@
+/* Code Space (/code) — full-page three-pane surface: directory tree + search
+   | code viewer | thread rail. Token-driven only (var(--surface-2/-3/--border/
+   ...)) so classic/swiss/minimal/gold all read correctly. Reuses browse.css's
+   .rb-* tree/content idioms via the shared BrowseTree/CodeViewer pieces
+   refactored out of RepoBrowser.tsx — this file only adds Code-Space-specific
+   chrome: the full-bleed page shell, the gutter affordances, the thread rail,
+   the composer, Live panel patch cards, and the Learn tab. */
+
+/* ---- full-bleed page shell -------------------------------------------------
+   The Shell's <main class="content"> carries a max-width + vertical padding
+   for every other page; Code Space is the one full-viewport exception (GH
+   complaint: "the embedded browser is cramped"). :has() targets the shell's
+   own wrapper so no other page is affected. Height comes from the ancestor
+   flex chain (min-height:0 all the way down) rather than a hardcoded topbar
+   offset, since this repo doesn't own the vendored shell.css that sizes
+   .app/.content — 100dvh with min-height:0 propagation is the safe fallback
+   that still fills the viewport under any ancestor flex/grid the vendored
+   shell uses. */
+.content:has(.cs-shell) {
+  max-width: none;
+  width: 100%;
+  padding-left: 0;
+  padding-right: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cs-shell { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100dvh;
+  max-height: 100dvh; padding: 0 16px 16px; gap: 10px; box-sizing: border-box; }
+.cs-head { flex: none; display: flex; align-items: center; gap: 10px; padding-top: 12px; position: relative; z-index: 20; }
+.cs-head h1 { font-size: 15px; margin: 0; }
+.cs-head .muted { font-size: 12px; }
+
+/* ---- Phase 3: workspace symbol search (header affordance) ------------------ */
+.cs-symsearch { position: relative; width: 340px; max-width: 100%; }
+.cs-symsearch-box { display: flex; align-items: center; }
+.cs-symsearch-in { width: 100%; background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 12.5px; }
+.cs-symsearch-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); outline: none; }
+.cs-symsearch-panel { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: 360px;
+  overflow: auto; background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 6px; z-index: 30; }
+.cs-symsearch-group { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.cs-symsearch-group-path { font-size: 11px; color: var(--faint); padding: 4px 6px 2px; }
+.cs-symsearch-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.cs-symsearch-row:hover { background: var(--hover); }
+.cs-symsearch-name { font-size: 12.5px; color: var(--text); }
+.cs-symsearch-line { font-size: 11px; }
+.cs-symsearch-note { font-size: 11px; padding: 6px 8px; }
+
+/* ---- Phase 3: outline rail (per-kind grouping, house kind-tag pill style) -- */
+.cs-outline { display: flex; flex-direction: column; gap: 10px; }
+.cs-outline-group { display: flex; flex-direction: column; gap: 3px; }
+.cs-outline-group-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--faint); padding: 2px 0; }
+.cs-outline-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.cs-outline-row:hover { background: var(--hover); }
+.cs-outline-name { font-size: 12.5px; color: var(--text); }
+.cs-outline-line { font-size: 11px; }
+
+/* per-kind kind-tag colors (extends the thread .kind-tag idiom to symbol kinds) */
+.kind-tag.cs-symkind-function { background: var(--accent-soft); color: var(--accent); }
+.kind-tag.cs-symkind-class { background: var(--violet-soft, var(--accent-soft)); color: var(--violet); }
+.kind-tag.cs-symkind-interface { background: var(--diff-add-soft, var(--accent-soft)); color: var(--diff-add); }
+.kind-tag.cs-symkind-type { background: var(--surface-3); color: var(--muted); }
+.kind-tag.cs-symkind-const { background: var(--accent-soft); color: var(--accent); }
+.kind-tag.cs-symkind-var { background: var(--surface-3); color: var(--muted); }
+
+/* identifier-click affordance (Phase 3 best-effort v1: workspace symbol
+   search prefill, never "go to definition") */
+.cs-ident-tok { cursor: pointer; border-radius: 3px; }
+.cs-ident-tok:hover { background: var(--accent-soft); text-decoration: underline dotted; }
+
+.cs-body { flex: 1; min-height: 0; display: flex; gap: 0; border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; background: var(--surface); }
+
+/* ---- left: tree + search (reuses .rb-side/.rb-tree-scroll/.dfv-* verbatim) - */
+.cs-tree-pane { min-width: 160px; flex: none;
+  display: flex; flex-direction: column; border-right: 1px solid var(--border);
+  background: var(--surface-2); overflow: hidden; }
+
+/* Item 4 — deep nesting truncates names under the fixed-width pane (user
+   screenshot); rather than ellipsizing, let the tree pane scroll horizontally
+   so every row stays fully readable at min-content width. Scoped strictly to
+   Code Space's OWN tree instance (.cs-tree-pane .rb-tree-scroll/.dfv-*) —
+   RepoBrowser's embedded-browser tree lives under .rb-side, a sibling
+   selector this never reaches, and FilesChanged's standalone .dfv tree
+   (diff-view file list) isn't nested under .cs-tree-pane either, so both stay
+   on their original wrap/ellipsis behavior unchanged. */
+.cs-tree-pane .rb-tree-scroll { overflow-x: auto; overflow-y: auto; }
+.cs-tree-pane .dfv-tree { min-width: max-content; }
+.cs-tree-pane .dfv-r { width: max-content; min-width: 100%; }
+.cs-tree-pane .dfv-r .dfv-nm { overflow: visible; text-overflow: clip; white-space: pre; }
+
+/* per-file thread count badge, optional, appended after a tree row's name */
+.cs-tree-badge { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700;
+  color: var(--accent); background: var(--accent-soft); border-radius: 999px;
+  padding: 0 6px; min-width: 16px; text-align: center; }
+
+/* ---- middle: code viewer, full-height independently scrollable ------------ */
+.cs-code-pane { flex: 1; min-width: 320px; display: flex; flex-direction: column; overflow: hidden; background: var(--surface); }
+.cs-code-scroll { flex: 1; overflow: auto; }
+
+/* ---- Panel improvements item 1: resizable pane dividers -------------------
+   6px hit area (comfortable pointer target without visually widening the
+   1px border look), col-resize cursor, a subtle highlight on hover/drag
+   done via a ::after inset bar so the divider's own box stays hairline-thin
+   at rest. touch-action:none stops the browser's own scroll/pan gesture
+   from fighting the drag on trackpad/touch input. Text selection: the
+   divider itself is user-select:none (it's a drag handle, not text), but
+   deliberately does NOT touch the code pane's own selection behavior — no
+   global preventDefault is installed anywhere, so selecting code text while
+   NOT dragging a divider keeps working exactly as before. */
+.cs-divider { flex: none; width: 6px; margin: 0 -3px; position: relative; z-index: 5;
+  cursor: col-resize; touch-action: none; -webkit-user-select: none; user-select: none; }
+.cs-divider::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; right: 2px;
+  border-radius: 2px; background: transparent; transition: background .12s; }
+.cs-divider:hover::after, .cs-divider.dragging::after { background: var(--accent-line); }
+
+/* gutter affordance: hovering a line reveals a "+" thread button; a line with
+   an existing thread shows a persistent dot instead. */
+.cs-line { display: flex; position: relative; }
+.cs-line:hover { background: var(--hover); }
+.cs-line.selected { background: var(--accent-soft); }
+.cs-gutter { flex: none; width: 4.5ch; text-align: right; padding-right: 8px; color: var(--faint);
+  -webkit-user-select: none; user-select: none; position: relative; cursor: pointer; }
+.cs-gutter:hover .cs-gutter-add { opacity: 1; }
+.cs-gutter-add { position: absolute; left: -18px; top: 0; opacity: 0; transition: opacity .1s;
+  color: var(--accent); font-weight: 700; }
+.cs-gutter-dot { display: inline-block; width: 6px; height: 6px; border-radius: 999px;
+  background: var(--accent); margin-right: 4px; vertical-align: middle; }
+.cs-line-text { flex: 1; min-width: 0; white-space: pre; padding-right: 12px; }
+
+/* ---- Item 1: markdown Raw|Rendered toggle + rendered pane ------------------- */
+/* .cs-discuss-doc-btn (item 2) precedes .cs-view-toggle in the DOM when
+   present — the auto margin lives on whichever of the two is FIRST so the
+   pair pushes right as a unit either way (Rendered mode: both; Raw mode:
+   just the toggle, this rule still applies to it directly). */
+.cs-discuss-doc-btn, .cs-view-toggle { margin-left: auto; }
+.cs-discuss-doc-btn + .cs-view-toggle { margin-left: 0; }
+.cs-view-toggle { flex: none; display: flex; gap: 4px; }
+.cs-view-toggle-btn { border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; cursor: pointer; }
+.cs-view-toggle-btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.cs-discuss-doc-btn { flex: none; border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+  font: inherit; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; cursor: pointer; }
+
+.cs-md-rendered { padding: 16px 20px; font-size: 13.5px; line-height: 1.6; }
+/* Item 2 — each rendered heading (mdText's flat <span class="md-h">) is a
+   click-to-discuss affordance: a hover highlight plus a small chip glyph
+   revealed to its left (mirrors .cs-gutter-add's hover-reveal idiom), never
+   shifting layout since the chip is absolutely positioned outside the
+   heading's own box. */
+.cs-md-rendered .md-h { position: relative; display: inline-block; cursor: pointer; border-radius: 4px;
+  padding: 0 2px; margin: 0 -2px; }
+.cs-md-rendered .md-h:hover { background: var(--hover); }
+.cs-md-rendered .md-h::before { content: "💬"; position: absolute; left: -20px; top: 0; opacity: 0;
+  transition: opacity .1s; font-size: 12px; }
+.cs-md-rendered .md-h:hover::before { opacity: 0.7; }
+
+/* ---- right: thread rail ----------------------------------------------------- */
+.cs-rail { min-width: 240px; flex: none;
+  display: flex; flex-direction: column; border-left: 1px solid var(--border);
+  background: var(--surface-2); overflow: hidden; }
+.cs-rail-tabs { flex: none; display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
+.cs-rail-tab { flex: 1; border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 12px; font-weight: 600; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.cs-rail-tab.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.cs-rail-body { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+
+/* thread list chips (per-file thread rail) */
+.cs-thread-chip { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); cursor: pointer; }
+.cs-thread-chip:hover { border-color: var(--accent-line); }
+.cs-thread-chip .row1 { display: flex; align-items: center; gap: 6px; }
+.cs-thread-chip .anchor { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--faint); }
+.cs-thread-chip .kind-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  padding: 1px 6px; border-radius: 999px; }
+.cs-thread-chip .kind-tag.question { background: var(--accent-soft); color: var(--accent); }
+.cs-thread-chip .kind-tag.why { background: var(--violet-soft, var(--accent-soft)); color: var(--violet); }
+.cs-thread-chip .kind-tag.teach { background: var(--diff-add-soft, var(--accent-soft)); color: var(--diff-add); }
+.cs-thread-chip .kind-tag.note { background: var(--surface-3); color: var(--muted); }
+.cs-thread-chip .grow { flex: 1; }
+.cs-thread-chip .status-tag { font-size: 10.5px; color: var(--muted); }
+.cs-thread-chip .body-preview { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.cs-thread-chip .outdated-chip { font-size: 10.5px; color: var(--warn); display: flex; align-items: center; gap: 4px; }
+
+/* ---- Item 3: Recent quick-jump ----------------------------------------------- */
+.cs-recent-link { align-self: flex-start; background: none; border: none; color: var(--accent);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 0 8px; }
+.cs-recent-link:hover { text-decoration: underline; }
+.cs-recent-list { display: flex; flex-direction: column; gap: 4px; }
+.cs-recent-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; background: var(--surface); }
+.cs-recent-row:hover { border-color: var(--accent-line); }
+.cs-recent-glyph { flex: none; width: 18px; text-align: center; font-size: 12px; color: var(--accent); }
+.cs-recent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cs-recent-loc { font-size: 11px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-recent-snippet { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-recent-time { flex: none; font-size: 10.5px; color: var(--faint); }
+/* richer rows (nav build item 2): kind pill + author, under the snippet */
+.cs-recent-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.cs-recent-meta .kind-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  padding: 1px 6px; border-radius: 999px; }
+.cs-recent-meta .kind-tag.question { background: var(--accent-soft); color: var(--accent); }
+.cs-recent-meta .kind-tag.why { background: var(--violet-soft, var(--accent-soft)); color: var(--violet); }
+.cs-recent-meta .kind-tag.teach { background: var(--diff-add-soft, var(--accent-soft)); color: var(--diff-add); }
+.cs-recent-meta .kind-tag.note { background: var(--surface-3); color: var(--muted); }
+.cs-recent-author { font-size: 10.5px; color: var(--faint); }
+
+/* ---- composer (kind templates + @agent picker) ------------------------------ */
+.cs-composer { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); }
+.cs-composer-anchor { font-size: 11.5px; color: var(--muted); font-family: "JetBrains Mono", monospace; }
+.cs-templates { display: flex; flex-wrap: wrap; gap: 6px; }
+.cs-template-btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 9px; border-radius: 999px; cursor: pointer; }
+.cs-template-btn:hover { border-color: var(--accent-line); color: var(--text); }
+.cs-template-btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.cs-composer-body { width: 100%; min-height: 64px; resize: vertical; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 7px; color: var(--text); font: inherit; font-size: 13px;
+  padding: 8px 10px; outline: none; }
+.cs-composer-body:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.cs-composer-row { display: flex; align-items: center; gap: 8px; }
+.cs-agent-select { flex: 1; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 12.5px; }
+.cs-raise-hand-caption { font-size: 11.5px; color: var(--muted); font-style: italic; }
+.cs-routing-hint { font-size: 11.5px; color: var(--muted); }
+.cs-no-agent-warn {
+  display: flex; align-items: center; gap: 10px; justify-content: space-between;
+  font-size: 12px; line-height: 1.45; color: var(--warn);
+  background: var(--warn-soft); border: 1px solid var(--warn-line);
+  border-radius: 9px; padding: 8px 10px;
+}
+.cs-no-agent-warn b { font-weight: 650; }
+.cs-no-agent-warn .btn { flex: none; }
+
+/* ---- thread view (messages + reply + resolve) ------------------------------- */
+.cs-thread-view { display: flex; flex-direction: column; gap: 10px; }
+.cs-thread-back { align-self: flex-start; background: none; border: none; color: var(--accent); font: inherit;
+  font-size: 12.5px; cursor: pointer; padding: 0; }
+.cs-thread-head { display: flex; flex-direction: column; gap: 4px; }
+.cs-message { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  /* Panel improvements item 2 — pending->settled softens via an opacity
+     transition rather than a hard class-swap flash; the optimistic bubble
+     fades to full opacity the instant `pending` is removed (reconcile()
+     in ThreadView.tsx swaps the class in the same render the real row
+     lands). */
+  transition: opacity .18s ease-out; }
+.cs-message.human { border-color: var(--accent-line); }
+.cs-message.pending { opacity: 0.6; }
+
+/* Chat-feel mount animation — ~180ms ease-out slide-up+fade, CSS-only so it
+   plays exactly once per bubble's mount (stable `key={m.id}` means an
+   already-on-screen message never remounts/replays this). Respects
+   prefers-reduced-motion: users who've asked for less motion get an
+   instant, static appearance instead. */
+@keyframes cs-message-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.cs-message-mount { animation: cs-message-in .18s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .cs-message-mount { animation: none; }
+}
+.cs-message-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); }
+.cs-message-body { font-size: 13px; color: var(--text); white-space: pre-wrap; }
+.cs-request-chip { align-self: flex-start; font-size: 11px; color: var(--accent); text-decoration: none;
+  background: var(--accent-soft); border-radius: 999px; padding: 2px 8px; }
+.cs-request-chip:hover { text-decoration: underline; }
+.cs-reply-row { display: flex; flex-direction: column; gap: 6px; }
+.cs-reply-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ---- Live panel (Phase 2) ---------------------------------------------------- */
+.cs-live-runs { display: flex; flex-direction: column; gap: 6px; }
+.cs-live-run-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: 7px; cursor: pointer; background: var(--surface); }
+.cs-live-run-row:hover { border-color: var(--accent-line); }
+.cs-live-run-row.on { border-color: var(--accent-line); background: var(--accent-soft); }
+.cs-live-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--diff-add); flex: none; }
+.cs-patch-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.cs-patch-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px;
+  background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.cs-patch-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: "JetBrains Mono", monospace; color: var(--text-2); }
+.cs-patch-lines { font-family: "JetBrains Mono", monospace; font-size: 12px; max-height: 220px; overflow: auto; }
+.cs-patch-lines .dl { padding: 0 10px; white-space: pre; }
+.cs-raise-hand-btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  font: inherit; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  opacity: 0; transition: opacity .1s; }
+.cs-patch-lines .cs-patch-line-row:hover .cs-raise-hand-btn { opacity: 1; }
+.cs-patch-line-row { display: flex; align-items: center; gap: 6px; }
+.cs-patch-line-row .dl { flex: 1; }
+
+/* ---- Learn tab (Phase 4) ----------------------------------------------------- */
+.cs-learn-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.cs-learn-filter-btn { border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 999px; cursor: pointer; }
+.cs-learn-filter-btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.cs-learn-group { display: flex; flex-direction: column; gap: 4px; }
+.cs-learn-group-path { font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--faint);
+  padding: 2px 0; }
+
+/* breadcrumb-click tree pulse (CodeSpacePage.tsx's pulseTreeRow) */
+@keyframes cs-tree-row-pulse { 0%, 100% { background: transparent; } 30% { background: var(--accent-soft); } }
+.cs-tree-row-pulse { animation: cs-tree-row-pulse 0.9s ease-out; }
+
+/* ---- breadcrumb path nav (nav build item 3 — Breadcrumbs.tsx) ------------- */
+.cs-breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 0; font-size: 12px; min-width: 0; }
+.cs-crumb-group { display: flex; align-items: center; min-width: 0; }
+.cs-crumb-sep { color: var(--faint); padding: 0 3px; flex: none; }
+.cs-crumb { background: none; border: none; padding: 1px 2px; font: inherit; color: var(--muted); cursor: pointer;
+  border-radius: 4px; }
+.cs-crumb:hover:not(.cs-crumb-file) { color: var(--accent); text-decoration: underline; }
+.cs-crumb-file { color: var(--text); font-weight: 600; cursor: default; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 32ch; }
+.cs-crumb-root { color: var(--faint); }
+
+/* ---- header "Recent files" dropdown (nav build item 3) -------------------- */
+.cs-recentfiles-dd { position: relative; flex: none; }
+.cs-recentfiles-btn { border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit;
+  font-size: 11.5px; font-weight: 600; padding: 5px 10px; border-radius: 7px; cursor: pointer; }
+.cs-recentfiles-btn:hover { border-color: var(--accent-line); color: var(--text); }
+.cs-recentfiles-panel { position: absolute; top: calc(100% + 6px); right: 0; width: 300px; max-height: 320px;
+  overflow: auto; background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 6px; z-index: 30; display: flex; flex-direction: column; gap: 3px; }
+.cs-recentfiles-row { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.cs-recentfiles-row:hover { background: var(--hover); }
+.cs-recentfiles-path { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cs-recentfiles-time { flex: none; font-size: 10.5px; color: var(--faint); }
+
+/* ---- content-pane landing state (no file open — CodeSpaceLanding.tsx) ----- */
+.cs-landing { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; max-width: 720px; }
+.cs-landing-card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+  padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cs-landing-card-head { display: flex; align-items: center; }
+.cs-landing-card-head .t1 { font-size: 13px; font-weight: 700; }
+.cs-landing-actions { display: flex; flex-direction: column; gap: 6px; }
+.cs-landing-action { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit;
+  font-size: 12.5px; font-weight: 600; padding: 8px 10px; border-radius: 8px; cursor: pointer; text-align: left; }
+.cs-landing-action:hover { border-color: var(--accent-line); }
+.cs-landing-action .muted { font-size: 11px; font-weight: 500; }
+.cs-landing-files { display: flex; flex-direction: column; gap: 4px; }
+.cs-landing-file-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--surface); }
+.cs-landing-file-row:hover { border-color: var(--accent-line); }
+.cs-landing-file-path { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cs-landing-file-time { flex: none; font-size: 10.5px; }
+
+/* ---- pane-scoped error boundary fallback (ErrorBoundary.tsx) --------------- */
+.cs-pane-crash { display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 16px; height: 100%; box-sizing: border-box; }
+.cs-pane-crash-msg { font-size: 12.5px; color: var(--muted); }
+
+/* ---- Changes tab (working-tree, local run addendum) ------------------------ */
+.cs-rail-tab { position: relative; }
+.cs-rail-tab-badge { margin-left: 5px; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; font-size: 10px; font-weight: 700;
+  background: var(--warn-soft); color: var(--warn); vertical-align: middle; }
+.cs-changes { display: flex; flex-direction: column; gap: 8px; }
+.cs-changes-summary { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 600;
+  color: var(--text-2); padding: 2px 2px 6px; border-bottom: 1px solid var(--border); }
+.cs-changes-summary .a { color: var(--diff-add); }
+.cs-changes-summary .d { color: var(--diff-del); }
+.cs-changes-list { display: flex; flex-direction: column; gap: 4px; }
+.cs-changes-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--surface); }
+.cs-changes-row:hover { border-color: var(--accent-line); }
+.cs-changes-row.on { background: var(--accent-soft); border-color: var(--accent-line); }
+.cs-changes-row .a { color: var(--diff-add); font-size: 11px; }
+.cs-changes-row .d { color: var(--diff-del); font-size: 11px; }
+.cs-changes-path { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; min-width: 0; }
+.cs-changes-badge { flex: none; font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 700;
+  padding: 1px 5px; border-radius: 5px; }
+.cs-changes-badge.M { color: var(--warn); background: var(--warn-soft); }
+.cs-changes-badge.A { color: var(--ok); background: var(--ok-soft); }
+.cs-changes-badge.D { color: var(--danger); background: var(--danger-soft); }
+.cs-changes-badge.R { color: var(--info); background: var(--info-soft); }
+.cs-changes-badge.u { color: var(--muted); background: var(--surface-2); }
+.cs-wt-bin { font-size: 11px; }
+
+/* ---- working-tree diff pane (center pane, WorktreeDiffPane.tsx) ------------ */
+.cs-worktree-diff { display: flex; flex-direction: column; height: 100%; }
+.cs-worktree-banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); background: var(--warn-soft); }
+.cs-worktree-banner-label { font-size: 12px; font-weight: 700; color: var(--warn); flex: none; }
+.cs-worktree-path { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; min-width: 0; }
+.cs-worktree-head-link { flex: none; border: 1px solid var(--border); background: var(--surface);
+  color: var(--accent); font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 9px;
+  border-radius: 6px; cursor: pointer; }
+.cs-worktree-head-link:hover { border-color: var(--accent-line); }
+
+/* ---- History popover (HistoryPanel.tsx, file header) ------------------------ */
+.cs-history-anchor { position: relative; flex: none; }
+.cs-history-btn { border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+.cs-history-btn:hover, .cs-history-btn[aria-expanded="true"] { border-color: var(--accent-line); color: var(--accent); }
+.cs-history-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: 320px;
+  max-height: 360px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); overflow: hidden; }
+.cs-history-head { flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; color: var(--text-2); }
+.cs-history-close { border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1;
+  cursor: pointer; padding: 0 2px; }
+.cs-history-close:hover { color: var(--text); }
+.cs-history-list { overflow: auto; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
+.cs-history-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.cs-history-row:hover { background: var(--surface-2); }
+.cs-history-sha { flex: none; font-size: 10.5px; }
+.cs-history-summary { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; min-width: 0; }
+.cs-history-time { flex: none; font-size: 10.5px; }
+
+/* ---- Edit toggle (file header) + EditorPane (CM6 wrapper) ------------------ */
+.cs-edit-toggle-btn { position: relative; flex: none; border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); font: inherit; font-size: 13px; line-height: 1; padding: 4px 9px; border-radius: 6px;
+  cursor: pointer; }
+.cs-edit-toggle-btn:hover { border-color: var(--accent-line); color: var(--accent); }
+.cs-edit-toggle-btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.cs-edit-dirty-dot { position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--warn); border: 1px solid var(--surface); }
+
+.cs-editor-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.cs-editor-host { flex: 1; min-height: 0; overflow: auto; }
+.cs-editor-host .cm-editor { height: 100%; }
+.cs-editor-banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.cs-editor-banner-drift { background: var(--warn-soft); color: var(--warn); }
+.cs-editor-banner-error { background: var(--danger-soft); color: var(--danger); }
+.cs-editor-banner-btn { flex: none; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-2); font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 9px;
+  border-radius: 6px; cursor: pointer; }
+.cs-editor-banner-btn:hover { border-color: var(--accent-line); color: var(--accent); }
+
+/* ---- Drafts bar + Propose panel (DraftsBar.tsx, GitHub-bound editing) ------ */
+.cs-drafts-bar { flex: none; display: flex; flex-direction: column; gap: 0;
+  border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.cs-drafts-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap; }
+.cs-drafts-count { flex: none; font-size: 11.5px; font-weight: 700; color: var(--text-2); }
+.cs-drafts-paths { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cs-drafts-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 4px 2px 10px; max-width: 100%; }
+.cs-drafts-chip.stale { border-color: var(--warn); }
+.cs-drafts-chip-path { border: 0; background: transparent; color: var(--text); font: inherit; font-size: 11.5px;
+  font-family: "JetBrains Mono", monospace; cursor: pointer; padding: 2px 0; max-width: 260px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.cs-drafts-chip-path:hover { color: var(--accent); }
+.cs-drafts-reload-btn { flex: none; border: 1px solid var(--warn); background: var(--warn-soft); color: var(--warn);
+  font: inherit; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; cursor: pointer; }
+.cs-drafts-reload-btn:disabled { opacity: .6; cursor: default; }
+.cs-drafts-discard-btn { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 12px;
+  line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 50%; }
+.cs-drafts-discard-btn:hover { color: var(--danger); background: var(--danger-soft); }
+.cs-propose-open-btn { flex: none; border: 1px solid var(--accent-line); background: var(--accent-soft);
+  color: var(--accent); font: inherit; font-size: 11.5px; font-weight: 700; padding: 5px 11px; border-radius: 999px;
+  cursor: pointer; }
+.cs-propose-open-btn:hover { filter: brightness(1.05); }
+
+.cs-propose-panel { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px;
+  border-top: 1px solid var(--border); }
+.cs-propose-message { width: 100%; background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 7px 9px; font: inherit; font-size: 12.5px; resize: vertical; min-height: 72px; }
+.cs-propose-message:focus { border-color: var(--accent-line); box-shadow: var(--ring); outline: none; }
+.cs-propose-actions { display: flex; align-items: center; gap: 8px; }
+.cs-propose-send-btn { flex: none; border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+  font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px; border-radius: 7px; cursor: pointer; }
+.cs-propose-send-btn:disabled { opacity: .5; cursor: default; }
+.cs-propose-cancel-btn { flex: none; border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+.cs-propose-cancel-btn:hover { border-color: var(--accent-line); color: var(--accent); }
+.cs-propose-notice { font-size: 12.5px; padding: 8px 10px; border-radius: 7px; display: flex; align-items: center;
+  gap: 10px; flex-wrap: wrap; }
+.cs-propose-notice-ok { background: var(--ok-soft); color: var(--ok); }
+.cs-propose-notice-warn { background: var(--warn-soft); color: var(--warn); }
+.cs-propose-notice-error { background: var(--danger-soft); color: var(--danger); }
+.cs-propose-hub-link { font-weight: 600; }
+
+/* ---- Changes tab: commit + push UI (ChangesTab.tsx) ------------------------ */
+.cs-changes-commit { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 9px;
+  border-top: 1px solid var(--border); }
+.cs-commit-msg { width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12.5px; resize: none; }
+.cs-commit-msg:focus { border-color: var(--accent-line); box-shadow: var(--ring); outline: none; }
+.cs-commit-row { display: flex; align-items: center; gap: 8px; }
+.cs-commit-btn { flex: none; border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+  font: inherit; font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+.cs-commit-btn:disabled { opacity: .5; cursor: default; }
+.cs-changes-row-check { flex: none; margin: 0; }
+.cs-branch-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+  border-bottom: 1px solid var(--border); font-size: 12px; }
+.cs-branch-name { font-family: "JetBrains Mono", monospace; color: var(--text-2); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cs-branch-ahead { flex: none; color: var(--info); background: var(--info-soft); border-radius: 999px;
+  padding: 1px 8px; font-size: 11px; font-weight: 600; }
+.cs-branch-push-btn { flex: none; border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+.cs-branch-push-btn:hover { border-color: var(--accent-line); color: var(--accent); }
+.cs-branch-push-btn:disabled { opacity: .5; cursor: default; }
+
+@media (max-width: 1100px) {
+  .cs-tree-pane { width: 220px; }
+  .cs-rail { width: 300px; }
+}
+@media (max-width: 860px) {
+  .content:has(.cs-shell) { height: auto; overflow: visible; }
+  .cs-body { flex-direction: column; }
+  .cs-tree-pane, .cs-rail { width: 100%; max-width: none; max-height: 280px; border: 0; border-bottom: 1px solid var(--border); }
+  .cs-code-pane { max-height: 480px; }
+}

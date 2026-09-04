@@ -1,0 +1,9 @@
+[Unit]
+Description=Drain the Orcha push outbox every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

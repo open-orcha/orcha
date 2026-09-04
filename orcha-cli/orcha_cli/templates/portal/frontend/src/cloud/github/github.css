@@ -1,0 +1,328 @@
+/* GitHub hub page styles: Conductor-style issue/PR list — tabs, filter chips,
+   search, rows (number/title/repo/reviewers/checks/merge/updated/Start), the
+   assignee dropdown, and the connect/error empty states. Token-driven only
+   (var(--surface-2/-3/--border/...)) so classic, swiss, minimal, and gold all
+   read correctly — no hex literals anywhere in this file. */
+.gh-wrap { display: flex; flex-direction: column; gap: 14px; max-width: 1180px; margin: 0 auto; }
+
+.gh-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.gh-head .grow { flex: 1; }
+
+/* ---- tabs (Issues / Pull requests) --------------------------------------
+   #ghTabs reuses the shared .aut/.seg pill idiom (styles/shell.css), but that
+   file's .seg.on rules are all scoped to specific modifier classes (.run/
+   .paused/.lvl/.lock) the tabs never carry, so bare .seg.on was inert here —
+   the active tab read identically to the inactive one. Mirror the Open/Mine
+   filter chip's own .on treatment (below) so the two toggles share one idiom. */
+#ghTabs.aut .seg.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.gh-search-in { min-width: 220px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 9px; padding: 8px 12px; font: inherit; font-size: 13px; outline: none; }
+.gh-search-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.gh-search-in::placeholder { color: var(--faint); }
+
+/* Scoped to .gh-wrap in the React bundle: Vite CSS imports are global, and the
+   Requests page carries its own (different) .filters rules in a mounted <style>
+   block — scoping keeps this page's chip sizing from ever leaking there. */
+.gh-wrap .filters { display: flex; gap: 5px; flex-wrap: wrap; }
+.gh-wrap .filters button { border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font: inherit;
+  font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 999px; cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+.gh-wrap .filters button:hover { color: var(--text); }
+.gh-wrap .filters button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+
+/* ---- PR-list server-backed filter bar (monorepo-scale repos) ------------
+   Author input (+ datalist) and the Assigned-to-me/My-reviews involvement
+   chips, rendered as a second row under the Open/Mine/Needs-review chips —
+   pulls tab only. The involvement chips reuse .tag's compact chip sizing
+   (like .tag.gh-unassigned) rather than the .filters button pill idiom,
+   since they carry their own disabled/tooltip state. */
+.gh-pulls-filterbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: -4px; }
+.gh-author-in { min-width: 160px; padding: 6px 10px; font-size: 12px; }
+.tag.gh-involve-chip { cursor: pointer; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+  transition: color .12s, border-color .12s, background .12s; }
+.tag.gh-involve-chip:hover:not(:disabled) { color: var(--text); }
+.tag.gh-involve-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.tag.gh-involve-chip:disabled { cursor: not-allowed; opacity: 0.5; }
+
+/* ---- "Load more" pagination footer (server-backed filter path) ---------- */
+.gh-loadmore { font-weight: 600; }
+.gh-loadmore-done { text-align: center; }
+
+.ghlist-card { padding: 6px; }
+/* detail route: the mount drops the list card's chrome (border/background/6px
+   padding) — the detail view builds its OWN cards (subtab body, rail cards),
+   so wrapping the whole thing in a second outer card read as double-boxed. */
+.ghlist-card.gh-detail-mode { padding: 0; border: 0; background: transparent; border-radius: 0; box-shadow: none; }
+
+/* ---- row grid ----------------------------------------------------------
+   kind-icon | num | title/meta (grow) | [checks] [merge] (pulls only, via
+   natural flow) | updated | actions. Issues rows simply omit the checks/
+   merge chips — the flex layout on .ghrow absorbs the gap so both row kinds
+   share one rule. Tight two-line row (title line; meta line with chips),
+   padding/gap sized off the tasks list's .trow (pages/tasks.css) so the
+   two lists read as one density system rather than GitHub hub feeling
+   oversized next to it. */
+.ghrow { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 11px;
+  border-bottom: 1px solid var(--border); }
+.ghrow:last-child { border-bottom: 0; }
+.ghrow:hover { background: var(--hover); }
+/* row-kind glyph (issue dot-circle / PR arrow), matching .gh-kind-ico's
+   siblings — open-issue green; PR green normally, grey when draft (a draft
+   PR isn't "ready," so it shouldn't read with the same active-green weight). */
+.gh-kind-ico { width: 15px; height: 15px; flex: none; color: var(--ok); }
+.gh-kind-ico.pull.draft { color: var(--faint); }
+.gh-num { color: var(--faint); font-size: 12px; flex: 0 0 auto; min-width: 40px; }
+.gh-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.gh-title { font-weight: 620; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; display: flex; align-items: center; gap: 7px; }
+.gh-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11px; color: var(--faint); }
+.gh-branch { color: var(--muted); }
+.gh-assignee { display: inline-flex; align-items: center; gap: 5px; }
+/* "Unassigned": a small muted inline chip (same size class as the label/repo
+   chips), not the shared empty-state .none block (styles/components.css) —
+   that class carries a 22px-padded dashed box meant for full-panel empty
+   states, which made a one-word inline label read as an oversized dashed
+   placeholder box. .tag.gh-unassigned borrows .tag's compact chip sizing
+   with a subtle dashed border, so it carries no more visual weight than the
+   label chips beside it. */
+.tag.gh-unassigned { border-style: dashed; color: var(--faint); font-weight: 500; }
+.gh-reviewers { display: inline-flex; align-items: center; gap: 3px; }
+.gh-reviewers .av { margin-right: -6px; border: 2px solid var(--surface); }
+/* the empty-reviewers "—" state: same box-model-free inline treatment as the
+   Unassigned chip's note above — named `.empty`, NEVER `.none`, so it can't
+   collide with the global `.none` empty-state block (styles/components.css,
+   a 22px-padded dashed panel meant for full-panel empty states). A bare
+   `.gh-reviewers.none` rule that only sets `color` does NOT stop that global
+   rule's border/padding/border-radius from applying to the same element —
+   CSS classes are additive — so the em-dash used to render as an oversized
+   dashed box instead of a quiet inline placeholder (the founder-reported
+   regression this fix addresses, alongside the matching checks-chip case
+   below). */
+.gh-reviewers.empty { color: var(--faint); }
+.gh-more { color: var(--faint); font-size: 10.5px; margin-left: 8px; }
+.gh-updated { color: var(--faint); font-size: 11px; flex: 0 0 auto; white-space: nowrap; min-width: 60px; text-align: right; }
+.gh-actions { flex: 0 0 auto; }
+
+.tag.gh-label { color: var(--text-2); }
+.tag.gh-draft { color: var(--muted); border-color: var(--border-2); }
+.tag.gh-repo { color: var(--muted); font-size: 10.5px; }
+
+/* ---- checks + merge chips ----------------------------------------------
+   n passed green / n failing red / n pending amber, per the checks rollup.
+   `.zero` (an honest all-zero/no-checks rollup) and `.loading` (checks:null —
+   not fetched yet, the progressive-fill placeholder) are named to NEVER
+   collide with the global `.none` empty-state block — see the matching note
+   on `.gh-reviewers.empty` above; same bug, same fix, same reasoning. */
+.tag.gh-checks.pass { color: var(--ok); border-color: var(--ok-line); background: var(--ok-soft); }
+.tag.gh-checks.fail { color: var(--danger); border-color: var(--danger-line); background: var(--danger-soft); }
+.tag.gh-checks.pend { color: var(--warn); border-color: var(--warn-line); background: var(--warn-soft); }
+.tag.gh-checks.zero { color: var(--faint); }
+.tag.gh-checks.loading { color: var(--faint); font-style: italic; }
+.tag.gh-merge.ok { color: var(--ok); border-color: var(--ok-line); background: var(--ok-soft); }
+.tag.gh-merge { color: var(--text-2); }
+
+/* ---- Start split button -------------------------------------------------
+   [Start ->][v] — two buttons sharing one pill silhouette so they read as
+   one control (house idiom: .btn.approve carries the color, the divider is
+   a hairline border between the two halves). */
+.gh-start-split { display: inline-flex; align-items: stretch; }
+.gh-start-split .btn { border-radius: 0; }
+.gh-start-split .gh-start { border-radius: 8px 0 0 8px; padding-right: 10px; }
+.gh-start-split .gh-start-dd { border-radius: 0 8px 8px 0; padding: 6px 8px; border-left: 1px solid var(--border); filter: brightness(0.94); }
+.gh-start-split .gh-start-dd svg { width: 12px; height: 12px; }
+
+/* ---- assignee dropdown: expertise-based SUGGESTED section ---------------
+   The Assign-to dropdown (.pmenu.float, shell.css) gets a compact "Suggested"
+   sub-section on top when github-state.js's suggestAgents() finds a signal
+   match: its own .pm-head.plain label (reusing that class verbatim, same
+   uppercase/letter-spaced treatment as the dropdown's outer "Assign to"
+   head), the matched-agent row(s) with a reason chip, then "All agents" with
+   the remaining roster (omitted entirely when every agent already landed in
+   Suggested — github-state.js's agentRosterHtml, not a CSS concern). No
+   separate hairline rule here: .pm-head already carries its own
+   border-bottom (shell.css's shared .pmenu .pm-head rule) which reads as the
+   section divider for free — a second explicit divider line stacked right
+   above that border-bottom would just be two lines doing one job.
+   .gh-suggested-row reuses .pm-row untouched (no extra rule needed — the
+   reason text rides the SAME .t2 sub-label style .pm-row already gives a
+   second <span>, e.g. the project switcher's account sub-line) so a
+   suggested row and a plain row are visually one family, not two competing
+   row styles. */
+.pmenu .pm-head.gh-suggest-head { margin-top: 2px; }
+
+/* already-started state: the task-id chip a Start click swaps into */
+.gh-task-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  padding: 6px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); }
+.gh-task-chip:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.gh-already { color: var(--faint); font-weight: 500; font-size: 10.5px; }
+
+/* ---- empty / error states ------------------------------------------------
+   repo not connected -> friendly card with a Dashboard link; rate-limited ->
+   quiet retry note; generic error -> honest status + detail. */
+.gh-empty.card-empty { text-align: center; padding: 40px 24px; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; }
+.gh-empty .t1 { font-size: 15px; font-weight: 680; }
+.gh-empty p { color: var(--muted); font-size: 13px; max-width: 420px; margin: 0; }
+
+@media (max-width: 720px) {
+  .ghrow { flex-wrap: wrap; }
+  .gh-main { flex: 1 1 100%; order: 1; }
+  .gh-num { order: 0; }
+  .gh-updated { order: 2; min-width: 0; text-align: left; }
+  .gh-actions { order: 3; margin-left: auto; }
+  .ghhead-row { display: none; }
+}
+
+/* ---- column header row (wide viewports) --------------------------------
+   ID | TITLE/CONTEXT | REVIEWERS | CHECKS | MERGE | UPDATED, matching the
+   .ghrow grid columns exactly so header labels sit above their cells. Hidden
+   below the same breakpoint .ghrow itself wraps at (rows lose their fixed
+   columns there, so a fixed-column header stops making sense). */
+.ghhead-row { display: flex; align-items: center; gap: 10px; padding: 4px 10px 8px;
+  font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+.ghh-ico { width: 15px; flex: none; }
+.ghh-num { flex: 0 0 auto; min-width: 40px; }
+.ghh-main { min-width: 0; }
+.ghh-reviewers, .ghh-checks, .ghh-merge { flex: 0 0 auto; min-width: 74px; }
+.ghh-updated { flex: 0 0 auto; min-width: 60px; text-align: right; }
+.ghh-actions { flex: 0 0 auto; width: 96px; }
+.gh-reviewers-col, .gh-checks-col, .gh-merge-col { flex: 0 0 auto; min-width: 74px; }
+
+/* clickable rows: whole row navigates to the detail view; Start / the
+   assignee-dropdown toggle stopPropagation at the wiring layer (github-boot.js)
+   so those clicks never also navigate. */
+.ghrow[data-gh-open] { cursor: pointer; }
+.ghrow[data-gh-open]:hover .gh-title { color: var(--accent); }
+
+/* ---- label chips (standout colors) --------------------------------------
+   Background/text/border are set INLINE per-label (labelChipHtml, pages/
+   github-state.js) off the repo's own GitHub label color — this base rule
+   only sets the chip's shape/sizing so the color values stay token-free here
+   (the static-structure test asserts github.css itself carries no hex/rgba
+   literals; per-label color is data, not a skin choice, so it lives in the
+   rendered style attribute instead of a CSS custom property table). */
+.tag.gh-label { font-weight: 650; }
+
+/* ---- breadcrumb ---------------------------------------------------------- */
+.gh-crumb { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+.gh-crumb-back { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-weight: 600; }
+.gh-crumb-back:hover { color: var(--accent); }
+.gh-crumb-ico { width: 13px; height: 13px; transform: rotate(180deg); }
+.gh-crumb-sep { color: var(--faint); }
+.gh-crumb-repo { color: var(--text-2); }
+.gh-crumb-num { color: var(--text-2); font-weight: 650; }
+
+/* ---- detail layout: main column + right rail on wide viewports ---------- */
+.gh-detail-layout { display: grid; grid-template-columns: minmax(0,1fr) 260px; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .gh-detail-layout { grid-template-columns: 1fr; } }
+
+.gh-detail-head { margin-bottom: 14px; }
+.gh-detail-title { font-size: 19px; font-weight: 680; line-height: 1.3; margin: 0 0 10px; }
+.gh-detail-num { color: var(--faint); font-weight: 500; font-size: 15px; }
+.gh-detail-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.gh-detail-updated { color: var(--faint); font-size: 12px; }
+.gh-state-pill { text-transform: none; }
+
+.gh-branch-chips { display: inline-flex; align-items: center; gap: 6px; }
+.tag.gh-branch-tag { color: var(--text-2); }
+.gh-branch-arrow { width: 12px; height: 12px; color: var(--faint); display: inline-flex; }
+
+.gh-detail-actions { display: flex; align-items: center; gap: 8px; }
+.btn.gh-open-ext { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---- PR "Fix" info popover trigger + body --------------------------------
+   .iconbtn.sm: a compact size variant of the shared shell.css .iconbtn (that
+   base rule is sized for the topbar's 36px theme toggle — too large sitting
+   inline beside the detail actions row's sm buttons), sized to match the
+   row's other sm controls. .gh-fix-info-pop reuses shell.css's .pmenu.float
+   idiom verbatim (own class only for host targeting in github-boot.js, not
+   its own visual rules) so every skin/theme token it needs comes for free —
+   see shell.css's .pmenu.float definition. */
+.iconbtn.sm { width: 26px; height: 26px; border-radius: 7px; }
+.iconbtn.sm svg { width: 14px; height: 14px; }
+.gh-fix-info-list { list-style: none; margin: 0; padding: 2px 4px 4px; display: flex; flex-direction: column; gap: 6px; }
+.gh-fix-info-list li { font-size: 12.5px; color: var(--text-2); line-height: 1.4; padding-left: 14px; position: relative; }
+.gh-fix-info-list li::before { content: ""; position: absolute; left: 2px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.gh-fix-info-pop p { margin: 2px 4px 4px; font-size: 12.5px; }
+
+/* ---- subtabs (Conversation / Checks / Files changed) --------------------
+   reuses the .aut/.seg pill idiom (same active-state fix as #ghTabs). */
+.gh-subtabs { margin-bottom: 12px; }
+.gh-subtabs.aut .seg.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.gh-subtab-body { padding: 16px 18px; }
+.gh-conversation-body:empty::before { content: "No description provided."; color: var(--faint); font-style: italic; }
+
+/* ---- checks tab: per-run rows -------------------------------------------- */
+.gh-runs { display: flex; flex-direction: column; gap: 2px; }
+.gh-run-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.gh-run-row:last-child { border-bottom: 0; }
+.gh-run-glyph { width: 16px; height: 16px; flex: none; display: inline-flex; }
+.gh-run-glyph.pass { color: var(--ok); }
+.gh-run-glyph.fail { color: var(--danger); }
+.gh-run-glyph.pend { color: var(--warn); }
+.gh-run-name { font-weight: 560; }
+.gh-run-state { color: var(--muted); font-size: 11.5px; text-transform: capitalize; }
+.gh-run-link { display: inline-flex; color: var(--faint); }
+.gh-run-link:hover { color: var(--accent); }
+.gh-run-link .gl { width: 13px; height: 13px; }
+
+/* ---- files tab: collapsible changed-file sections -------------------------
+   Each file is a native <details>/<summary> (the same collapsible idiom the
+   task run-stream's "code diff" and work-log sections use — modules/
+   app-run-stream.js, modules/conversation-render.js — free keyboard/click
+   toggle behavior, no bespoke JS wiring). .gh-file-row is the <details>
+   element itself; .gh-file-sum (the <summary>, browser-default-styled
+   otherwise) carries the row layout the old flat .gh-file-row rule used to —
+   status chip / filename / +adds -dels / chevron. The chevron rotates via
+   the native [open] state, same rotation idiom shell.css's collapsed-sidebar
+   toggle uses for its own chevron. */
+.gh-files { display: flex; flex-direction: column; gap: 2px; }
+.gh-file-row { border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.gh-file-row:last-child { border-bottom: 0; }
+.gh-file-sum { display: flex; align-items: center; gap: 10px; padding: 7px 4px; cursor: pointer; list-style: none; }
+.gh-file-sum::-webkit-details-marker { display: none; }
+.gh-file-row:hover > .gh-file-sum { background: var(--hover); border-radius: 6px; }
+.gh-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-file-diff { flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.gh-file-diff .add { color: var(--ok); }
+.gh-file-diff .del { color: var(--danger); margin-left: 4px; }
+.tag.gh-file-status.add { color: var(--ok); border-color: var(--ok-line); background: var(--ok-soft); }
+.tag.gh-file-status.del { color: var(--danger); border-color: var(--danger-line); background: var(--danger-soft); }
+.tag.gh-file-status.mod { color: var(--text-2); }
+.gh-file-chev { flex: none; width: 13px; height: 13px; display: inline-flex; color: var(--faint); transform: rotate(-90deg); transition: transform .12s; }
+.gh-file-row[open] > .gh-file-sum .gh-file-chev { transform: rotate(0deg); }
+.gh-file-body { padding: 2px 4px 10px; }
+.gh-file-body .diff { max-height: 480px; margin: 0; }
+.gh-file-omitted { padding: 10px 12px; font-size: 12.5px; }
+.gh-file-omitted a { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; }
+.gh-files-more { padding: 8px 4px 0; font-size: 11.5px; }
+.gh-files-more a { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; }
+
+/* ---- right rail: status / assignees / reviewers / checks summary -------- */
+.gh-rail { display: flex; flex-direction: column; gap: 12px; }
+.gh-rail-card { padding: 12px 14px; }
+.gh-rail-h { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+.gh-people { display: flex; flex-direction: column; gap: 8px; }
+.gh-person { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 560; }
+.gh-checks-summary { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 600; }
+.gh-cs-row { display: inline-flex; align-items: center; gap: 6px; }
+.gh-cs-row.pass { color: var(--ok); }
+.gh-cs-row.fail { color: var(--danger); }
+.gh-cs-row.pend { color: var(--warn); }
+.gh-cs-row .gl { width: 13px; height: 13px; }
+
+/* ---- issue detail: comments thread --------------------------------------- */
+.gh-comment { display: flex; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.gh-comment:last-child { border-bottom: 0; }
+.gh-comment-body { flex: 1; min-width: 0; }
+.gh-comment-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.gh-comment-author { font-weight: 650; font-size: 12.5px; }
+.gh-comment-when { color: var(--faint); font-size: 11px; }
+.gh-comment-text { font-size: 13px; }
+
+@media (max-width: 720px) {
+  .gh-detail-title { font-size: 17px; }
+}
+
+/* GitHub bodies are real multi-paragraph Markdown — without pre-wrap every
+   newline collapsed and issues/PRs rendered as one unbroken wall of text. */
+.gh-conversation-body, .gh-comment-text { white-space: pre-wrap; }

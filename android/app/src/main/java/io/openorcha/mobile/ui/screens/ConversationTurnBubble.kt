@@ -19,11 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -86,6 +81,61 @@ import io.openorcha.mobile.ui.theme.Orcha
    Flow 09 — Agent detail (header, Now, Controls, persona, runs) + pickers.
    Flow 10 — Converse (honest presence, bubbles, composer, end confirm).
    ============================================================================= */
+
+/**
+ * Chat send-UX (iOS `ChatSendFlow` parity) — the composer's optimistic pending
+ * bubble (sending / tap-to-retry / cleared-by-echo), the awaiting-reply indicator,
+ * and the "no reply yet" overdue note. Rendered as `LazyListScope` items so they
+ * slot in right after the loaded turns, before the composer.
+ */
+internal fun androidx.compose.foundation.lazy.LazyListScope.chatSendFlowItems(
+    sendFlow: io.openorcha.mobile.domain.ChatSendFlow,
+    agentAlias: String?,
+    onRetry: () -> Unit,
+) {
+    if (sendFlow.showsPendingBubble) {
+        item(key = "pending-turn") {
+            val p = Orcha.palette
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
+                Bubble(BubbleKind.Mine, sendFlow.content)
+                when {
+                    sendFlow.isFailed -> Text(
+                        "Not sent · Tap to retry",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = p.danger,
+                        modifier = Modifier.padding(top = 2.dp).clickable(onClick = onRetry),
+                    )
+                    sendFlow.isSending -> Text(
+                        "Sending…",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = p.muted,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    else -> Unit
+                }
+            }
+        }
+    }
+    if (sendFlow.showsAwaitingReply) {
+        item(key = "awaiting-reply") {
+            Text(
+                if (sendFlow.isFirstTurn) "Waking ${agentAlias ?: "the agent"} — a cold start can take a minute…" else "${agentAlias ?: "The agent"} is replying…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Orcha.palette.muted,
+                modifier = Modifier.alpha(pulseAlpha()),
+            )
+        }
+    }
+    if (sendFlow.showsOverdueNote) {
+        item(key = "reply-overdue") {
+            Text(
+                "No reply yet — pull to refresh.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Orcha.palette.muted,
+            )
+        }
+    }
+}
 
 @Composable
 internal fun TurnBubble(

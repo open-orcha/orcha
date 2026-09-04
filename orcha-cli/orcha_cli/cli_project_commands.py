@@ -110,6 +110,22 @@ def cmd_upgrade(args: argparse.Namespace, services) -> None:
     db_port, api_port = cfg.get("db_port"), cfg.get("api_port")
     if not db_port or not api_port:
         sys.exit("error: db_port/api_port missing from .claude/orcha.json; re-init instead.")
+    # Downgrade guard: the migration chain is a monotonic stamp present on BOTH sides
+    # (packaged templates + the stack's .orcha/migrations copy). An outdated CLI whose
+    # tip is BELOW the stack's would re-copy older templates over a newer portal — a
+    # silent downgrade (vanilla shell at /, 404 feature routes) that looks like "the
+    # upgrade did nothing". Refuse before any writes; --allow-downgrade overrides for
+    # deliberate rollbacks.
+    cli_tip = services._migration_tip(services.PKG_TEMPLATES / "migrations")
+    stack_tip = services._migration_tip(orcha_dir / "migrations")
+    if cli_tip < stack_tip and not getattr(args, "allow_downgrade", False):
+        sys.exit(
+            f"error: this project is on a NEWER Orcha than your CLI "
+            f"(project migrations reach {stack_tip:03d}, this CLI ships {cli_tip:03d}).\n"
+            "Upgrading now would DOWNGRADE the portal. Update the orcha CLI first "
+            "(e.g. `uv tool upgrade orcha-cli` / `brew upgrade orcha`), then re-run "
+            "`orcha upgrade` — or pass --allow-downgrade to roll back deliberately."
+        )
     # ISS-84/#235: backfill the per-project bridge_port for projects created before this field
     # existed. Pick a free port (8765 scan-start so the first project keeps the familiar port),
     # persist it to orcha.json, and re-render it into the compose env below — keeping the

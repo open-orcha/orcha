@@ -152,39 +152,62 @@ override fun cancelRunStream() {
 fun openConversation(agentId: String) {
     val agent = _uiState.value.snapshot?.agents?.firstOrNull { it.id == agentId } ?: return
     cancelRunStream()
-    _uiState.update { it.copy(route = AppRoute.Conversation, selectedAgent = agent, conversation = null, turns = emptyList(), error = null) }
+    cancelReplyWatch()
+    _uiState.update {
+        it.copy(
+            route = AppRoute.Conversation, selectedAgent = agent, conversation = null,
+            turns = emptyList(), sendFlow = io.openorcha.mobile.domain.ChatSendFlow(), error = null,
+        )
+    }
     refreshConversation()
 }
 
 override fun refreshConversation() {
+    scope.launch { refreshConversationInternal(quiet = false) }
+}
+
+/** Chat send-UX: the reply watch's poll — transient errors stay silent (no banner flash)
+ *  through the cold-start window a slow first wake can take. */
+override suspend fun refreshConversationQuiet(agentId: String) {
+    refreshConversationInternal(quiet = true)
+}
+
+/**
+ * Issue 4 (web conversation.js poll): once mounted, refresh via an after_seq DELTA
+ * append instead of re-fetching + replacing the whole transcript. Every successful
+ * turns update runs through `sendFlow.observe` (chat send-UX: echo/reply dedupe).
+ */
+private suspend fun refreshConversationInternal(quiet: Boolean) {
     val selected = _uiState.value.selectedContainer ?: return
     val agent = _uiState.value.selectedAgent ?: return
-    scope.launch {
-        // issue 4 (web conversation.js poll): once mounted, refresh via an after_seq
-        // DELTA append instead of re-fetching + replacing the whole transcript.
-        val conversation = _uiState.value.conversation
-        val lastSeq = _uiState.value.turns.lastOrNull()?.seq ?: 0
-        if (conversation != null && lastSeq > 0) {
-            runCatching { api.getConversationTurns(selected.baseUrl, conversation.id, afterSeq = lastSeq) }
-                .onSuccess { response ->
-                    if (response.turns.isNotEmpty()) {
-                        _uiState.update { st -> st.copy(turns = Paging.appendTurns(st.turns, response.turns), error = null) }
+    val conversation = _uiState.value.conversation
+    val lastSeq = _uiState.value.turns.lastOrNull()?.seq ?: 0
+    if (conversation != null && lastSeq > 0) {
+        runCatching { api.getConversationTurns(selected.baseUrl, conversation.id, afterSeq = lastSeq) }
+            .onSuccess { response ->
+                if (response.turns.isNotEmpty()) {
+                    _uiState.update { st ->
+                        val turns = Paging.appendTurns(st.turns, response.turns)
+                        st.copy(turns = turns, sendFlow = st.sendFlow.observe(turns, st.selectedContainer?.humanAgentId), error = null)
                     }
                 }
-                .onFailure { err ->
-                    _uiState.update { it.copy(error = friendlyConnectionError(err)) }
-                }
-            return@launch
-        }
-        // initial mount fetch (web parity: one ?limit=80 load)
-        _uiState.update { it.copy(loading = true, error = null) }
-        runCatching { api.getConversation(selected.baseUrl, agent.id) }
-            .onSuccess { response ->
-                _uiState.update { it.copy(conversation = response.conversation, turns = response.turns, loading = false) }
-            }.onFailure { err ->
-                _uiState.update { it.copy(loading = false, error = friendlyConnectionError(err)) }
             }
+            .onFailure { err -> if (!quiet) _uiState.update { it.copy(error = friendlyConnectionError(err)) } }
+        return
     }
+    // initial mount fetch (web parity: one ?limit=80 load)
+    if (!quiet) _uiState.update { it.copy(loading = true, error = null) }
+    runCatching { api.getConversation(selected.baseUrl, agent.id) }
+        .onSuccess { response ->
+            _uiState.update {
+                it.copy(
+                    conversation = response.conversation, turns = response.turns, loading = false,
+                    sendFlow = it.sendFlow.observe(response.turns, it.selectedContainer?.humanAgentId),
+                )
+            }
+        }.onFailure { err ->
+            _uiState.update { it.copy(loading = false, error = if (quiet) it.error else friendlyConnectionError(err)) }
+        }
 }
 
 }

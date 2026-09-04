@@ -145,6 +145,12 @@ class AutonomyUpdate(BaseModel):
     actor_agent_id: str = Field(
         ..., description="UUID of the human (kind='human') moving the slider"
     )
+    autonomy_enforced: Optional[bool] = Field(
+        default=None,
+        description="mig 043: when set, flip the container-wide 'enforce for all agents' switch — "
+        "true IGNORES every per-agent autonomy_override (the container level governs everyone), "
+        "false re-honors overrides. Omit to leave the switch unchanged (partial update).",
+    )
 
 
 class EmbodimentTokenMint(BaseModel):

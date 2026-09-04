@@ -10,6 +10,8 @@ from . import notifier_command as _command
 from . import notifier_daemon_control as _control
 from . import notifier_daemon_registry as _registry
 
+HEARTBEAT_STALE_SECS = _registry.HEARTBEAT_STALE_SECS
+
 
 def _compat():
     return sys.modules["orcha_cli.notifier"]
@@ -33,6 +35,24 @@ def _ps_inspect(pid: int) -> Optional[tuple]:
 
 def _daemon_pid_live(pid: int, cid: Optional[str] = None) -> bool:
     return _registry.daemon_pid_live(pid, cid, services=_compat())
+
+
+def _hb_path(cwd: pathlib.Path) -> pathlib.Path:
+    return _registry.hb_path(cwd)
+
+
+def _write_heartbeat(cwd: pathlib.Path) -> None:
+    _registry.write_heartbeat(cwd, services=_compat())
+
+
+def _heartbeat_verdict(cwd: pathlib.Path, pid: int):
+    return _registry.heartbeat_verdict(cwd, pid, services=_compat())
+
+
+def _daemon_pid_healthy(
+    pid: int, cid: Optional[str], cwd: Optional[pathlib.Path]
+) -> bool:
+    return _registry.daemon_pid_healthy(pid, cid, cwd, services=_compat())
 
 
 def daemon_running(cwd: pathlib.Path) -> Optional[int]:

@@ -10,17 +10,50 @@ from portal_backend.limits import MAX_DESC_LEN, MAX_NAME_LEN, MAX_PAYLOAD_LEN
 class ContainerCreate(BaseModel):
     name: str = Field(..., max_length=MAX_NAME_LEN)
     description: Optional[str] = Field(default=None, max_length=MAX_DESC_LEN)
+    # Multi-project (mig 037): the portal's "New project" flow passes additional=true to
+    # create ANOTHER container in this stack (seeding its founding human owner). Without
+    # it the historical `orcha init` 1:1:1 contract holds: a second create is a 409.
+    additional: bool = Field(
+        default=False,
+        description="create an additional project even when one already exists "
+        "(portal multi-project); omitted/false keeps the 1:1:1 init contract",
+    )
 
 
 class ContainerCreateResponse(BaseModel):
     container_id: str
     root_task_id: str
+    # Multi-project additions (additive — CLI callers read container_id only).
+    name: Optional[str] = None
+    # The seeded founding human (additional=true only); null on the init path,
+    # where the CLI registers the human itself via POST .../agents.
+    human_agent_id: Optional[str] = None
 
 
 class ContainerReset(BaseModel):
     # DESTRUCTIVE: `confirm` must equal the current container name.
     actor_agent_id: str
     confirm: str
+
+
+class ContainerGithubBinding(BaseModel):
+    """PUT /api/containers/{cid}/github — bind the container to a code source.
+
+    `repo` is either the plain owner/name of a repository the GitHub App/PAT can
+    reach (the portal's Connect-repo modal offers exactly that list), OR the literal
+    sentinel `"local"` — Addendum 2's "this project's own working tree" binding,
+    served by `portal_backend.local_git` instead of the GitHub API (the route layer
+    additionally requires `local_git.available()` before accepting it — this schema
+    only enforces SHAPE, not availability). null unbinds. The pattern accepts
+    exactly one owner segment + one name segment, or the bare word "local".
+    """
+
+    repo: Optional[str] = Field(
+        default=None,
+        pattern=r"^(local|[\w.-]+/[\w.-]+)$",
+        max_length=MAX_NAME_LEN,
+        description="GitHub repo as owner/name, or the sentinel 'local'; null = unbind",
+    )
 
 
 class ContainerStatusUpdate(BaseModel):
@@ -71,6 +104,50 @@ class LlmKeyTest(BaseModel):
         default=None,
         max_length=512,
         description="candidate key to test; omit to test the stored/resolved key",
+    )
+
+
+class GithubPatUpdate(BaseModel):
+    """Orcha Cloud local run gap #1: store a per-container GitHub personal access token
+    (PUT .../settings/github-pat). HUMAN-AUTHORITY gated + audit-logged — writing a
+    credential is a human action, mirroring /settings/llm-key. The token is sealed by
+    secret_box before it touches the DB; the plaintext is never persisted and never
+    returned."""
+
+    actor_agent_id: str = Field(
+        ...,
+        description="UUID of the human agent performing the action (kind='human')",
+    )
+    token: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="the GitHub personal access token (plaintext, sealed server-side)",
+    )
+
+
+class GithubPatActor(BaseModel):
+    """Actor-only body for DELETE .../settings/github-pat (human-authority gated)."""
+
+    actor_agent_id: str = Field(
+        ...,
+        description="UUID of the human agent performing the action (kind='human')",
+    )
+
+
+class GithubPatTest(BaseModel):
+    """Server-side credential ping (POST .../settings/github-pat/test). HUMAN-AUTHORITY
+    gated. `token` is OPTIONAL — supply a candidate to test BEFORE saving (the setup
+    flow), or omit to test the currently-resolved token (env override > stored)."""
+
+    actor_agent_id: str = Field(
+        ...,
+        description="UUID of the human agent performing the action (kind='human')",
+    )
+    token: Optional[str] = Field(
+        default=None,
+        max_length=512,
+        description="candidate token to test; omit to test the stored/resolved token",
     )
 
 

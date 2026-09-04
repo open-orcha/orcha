@@ -38,6 +38,35 @@ the `gh`/`git` rows are what you, the agent, honor from this file:
 A task's `protocol.autonomy` (free text, surfaced on `/next`) is an **advisory** per-task hint for
 the loose `gh`/`git` rules only — it can never widen the hard completion gate.
 
+## PR human-attribution (agent-opened PRs)
+
+An Orcha agent opens PRs authenticated as the GitHub App, so the PR **author** shows the bot — but
+the author line then hides the human who TRIGGERED the work. Every agent-opened PR MUST additionally
+attribute that human (docs/agent-prs.md). Fetch the requester from
+`GET /api/agents/<agent_id>/protocol?task_id=<task_id>` → `requested_by {alias, github_login, git_email}`.
+Two pieces, both required:
+
+1. **Highlighted blockquote as the FIRST line of the PR body** (renders prominently at the top):
+
+   ```
+   > 🧑 Triggered by @<github_login> via Orcha task <task_id>
+   ```
+
+   Fallback when the human has no registered `github_login`: use the display alias with NO `@`.
+   Never omit the line — always include the task id even without a handle.
+
+2. **`Co-authored-by` trailer on the branch's final commit** (blank line, then the trailer):
+
+   ```
+   Co-authored-by: <alias> <git_email>
+   ```
+
+   When `git_email` is null, use `<github_login>@users.noreply.github.com` (GitHub still links the
+   commit to their account); when both are null, skip the trailer but keep the blockquote.
+
+This is attribution ON a PR you were already allowed to open (per the autonomy table above) — it
+never authorizes opening or merging one.
+
 ## Merge target branch
 
 The branch PRs base on / merge into for this project. Only ever merge at the `Full` level, and only

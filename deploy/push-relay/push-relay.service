@@ -1,0 +1,22 @@
+[Unit]
+Description=Orcha push relay (APNs signer + deliverer; dormant without credentials)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# /opt/orcha-push-relay: relay.py + a venv built from requirements.txt +
+# relay.env holding RELAY_TOKEN and (once the paid Apple account exists) the
+# APNS_* variables. The .p8 key lives ONLY on this host, mode 0600.
+WorkingDirectory=/opt/orcha-push-relay
+EnvironmentFile=-/opt/orcha-push-relay/relay.env
+ExecStart=/opt/orcha-push-relay/venv/bin/python /opt/orcha-push-relay/relay.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/orcha-push-relay
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

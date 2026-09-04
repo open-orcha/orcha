@@ -15,6 +15,43 @@ def log_path(cwd: pathlib.Path) -> pathlib.Path:
     return cwd / ".claude" / ".orcha-notifier.log"
 
 
+# ISS-22 round 3 (the "unstuck" incident): pid-identity vetting alone is spoofable —
+# a recycled pid whose command happens to pass the ps vet, or an unusable ps
+# (the old FAIL-OPEN), reported a dead daemon as alive, so `--ensure`'s 2-minute
+# self-heal skipped the restart forever and the container sat unserviced. The
+# heartbeat is ground truth the daemon itself must keep proving: a file it
+# re-stamps every loop pass. Liveness for SERVING decisions now requires either a
+# FRESH heartbeat or (no heartbeat yet — a just-started daemon) a POSITIVE ps
+# identification; an unreadable ps no longer fails open.
+HEARTBEAT_STALE_SECS = 120.0  # 60× the 2s loop; generous for long ticks
+
+
+def hb_path(cwd: pathlib.Path) -> pathlib.Path:
+    return cwd / ".claude" / ".orcha-notifier.hb"
+
+
+def write_heartbeat(cwd: pathlib.Path, *, services) -> None:
+    """Stamp `<pid> <epoch>` — the daemon's own proof-of-life, once per loop pass."""
+    try:
+        services._hb_path(cwd).write_text(
+            f"{services.os.getpid()} {services.time.time()}"
+        )
+    except OSError:
+        pass
+
+
+def heartbeat_verdict(cwd: pathlib.Path, pid: int, *, services):
+    """True = fresh + same pid; False = stale or another pid's; None = no file."""
+    try:
+        raw = services._hb_path(cwd).read_text().split()
+        hb_pid, hb_ts = int(raw[0]), float(raw[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    if hb_pid != pid:
+        return False
+    return (services.time.time() - hb_ts) < HEARTBEAT_STALE_SECS
+
+
 def pid_alive(pid: int, *, services) -> bool:
     try:
         services.os.kill(pid, 0)
@@ -44,12 +81,48 @@ def ps_inspect(pid: int, *, services) -> Optional[tuple]:
 
 
 def daemon_pid_live(pid: int, cid: Optional[str], *, services) -> bool:
-    """Reject zombies, reused PIDs, and daemons bound to another container."""
+    """Reject zombies, reused PIDs, and daemons bound to another container.
+
+    This is the TERMINATION-lane check (may I / need I still kill this pid?) —
+    deliberately fail-open on an unusable ps so a wedged daemon stays killable.
+    Serving decisions (ensure/claim/daemon_running) use daemon_pid_healthy."""
     if not services._pid_alive(pid):
         return False
     info = services._ps_inspect(pid)
     if info is None:
         return True
+    state, command = info
+    if state and state[0] == "Z":
+        return False
+    if "notifier" not in command:
+        return False
+    return not (cid and "--container" in command and cid not in command)
+
+
+def daemon_pid_healthy(
+    pid: int, cid: Optional[str], cwd: Optional[pathlib.Path], *, services
+) -> bool:
+    """SERVING-lane liveness: is this daemon genuinely alive AND doing its job?
+
+    Heartbeat-primary: a fresh heartbeat proves both. A stale heartbeat (dead OR
+    wedged daemon) is unhealthy regardless of what ps says. With no heartbeat
+    file (daemon just started, pre-heartbeat build, or cwd unknown) fall back to
+    ps identity — but FAIL CLOSED when ps is unusable: a healthy daemon writes
+    its first heartbeat within one 2s loop pass, so "no proof either way" means
+    replace, not trust (the failure mode behind the unstuck incident)."""
+    if not services._pid_alive(pid):
+        return False
+    verdict = services._heartbeat_verdict(cwd, pid) if cwd is not None else None
+    if verdict is False:
+        return False
+    info = services._ps_inspect(pid)
+    if verdict is True:
+        # heartbeat proves life; ps (when usable) may still veto a recycled pid
+        if info is not None and "notifier" not in info[1]:
+            return False
+        return True
+    if info is None:
+        return False
     state, command = info
     if state and state[0] == "Z":
         return False
@@ -75,7 +148,11 @@ def api_base_for(cwd: pathlib.Path) -> Optional[str]:
 
 
 def daemon_running(cwd: pathlib.Path, *, services) -> Optional[int]:
-    """Return the live local daemon PID and remove stale local claims."""
+    """Return the HEALTHY local daemon PID, clearing (and killing) stale claims.
+
+    A pid that is alive by identity but unhealthy by heartbeat is a WEDGED
+    daemon: terminate it before clearing the claim, or `--ensure` would spawn a
+    duplicate beside it and the slot would never actually free."""
     path = services._pid_path(cwd)
     if not path.exists():
         return None
@@ -83,8 +160,11 @@ def daemon_running(cwd: pathlib.Path, *, services) -> Optional[int]:
         pid = int(path.read_text().strip())
     except (ValueError, OSError):
         return None
-    if services._daemon_pid_live(pid, services._container_id_for(cwd)):
+    cid = services._container_id_for(cwd)
+    if services._daemon_pid_healthy(pid, cid, cwd):
         return pid
+    if services._daemon_pid_live(pid, cid):
+        services._terminate_and_wait(pid, cid)
     try:
         path.unlink()
     except OSError:
@@ -108,20 +188,28 @@ def write_global_pid(
 
 
 def daemon_running_for_container(container_id: str, *, services) -> Optional[tuple]:
-    """Return a live container-wide claim and remove stale global claims."""
+    """Return a HEALTHY container-wide claim, clearing (and killing) stale ones.
+
+    The claim file's second line records the daemon's workspace, which is where
+    its heartbeat lives — so the health check here gets the same heartbeat
+    grounding as the local-pidfile path."""
     path = services._global_pid_path(container_id)
     try:
         lines = path.read_text().splitlines()
         pid = int(lines[0].strip())
     except (OSError, ValueError, IndexError):
         return None
-    if not services._daemon_pid_live(pid, container_id):
+    ws = lines[1].strip() if len(lines) > 1 else ""
+    hb_cwd = pathlib.Path(ws) if ws else None
+    if not services._daemon_pid_healthy(pid, container_id, hb_cwd):
+        if services._daemon_pid_live(pid, container_id):
+            services._terminate_and_wait(pid, container_id)
         try:
             path.unlink()
         except OSError:
             pass
         return None
-    return pid, (lines[1].strip() if len(lines) > 1 else "")
+    return pid, ws
 
 
 def claim_container(container_id: str, *, services):

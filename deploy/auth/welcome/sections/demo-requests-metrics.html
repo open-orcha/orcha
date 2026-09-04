@@ -1,0 +1,666 @@
+<section id="demo-requests-metrics" class="mk-section rw-root" aria-labelledby="rw-title">
+  <header class="rw-head">
+    <div class="rw-eyebrow">— 04 / The ledger</div>
+    <h2 class="rw-title" id="rw-title">Agents ask. You decide. <span class="rw-title-em">Every run priced.</span></h2>
+    <p class="rw-sub">Blockers surface as requests, not silent failures — and every dollar spent
+    is attributed back to the agent that spent it, honestly estimated.</p>
+  </header>
+
+  <div class="rw-theater" id="rw-theater" tabindex="-1">
+    <div class="rw-chrome" aria-hidden="true">
+      <span class="rw-dot3"></span><span class="rw-dot3"></span><span class="rw-dot3"></span>
+      <span class="rw-url">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+        app.orcha.cloud/acme-health
+      </span>
+    </div>
+
+    <div class="rw-frame">
+      <div class="rw-stage" id="rw-stage" role="img" aria-label="Animated preview: a request from Warden answered, then the metrics ledger">
+
+        <!-- scene 1 · the request payload -->
+        <div class="rw-scene rw-on" data-scene="0">
+          <div class="rw-sc-req">
+            <div class="rw-pane rw-reqlist" data-an="rise" style="--d:.1s">
+              <div class="rw-pane-h">Requests <span class="rw-grow"></span><span class="rw-mono rw-faint">All · Open · Answered · Escalations</span></div>
+              <div class="rw-reqcount">REQUESTS · <b>1 OPEN</b></div>
+              <div class="rw-reqrow rw-sel">
+                <span class="rw-av">W</span>
+                <span class="rw-reqgrow"><b>Infra blocker</b><span class="rw-faint">info request · opened 1d ago</span></span>
+                <span class="rw-pill rw-p-crm">P10</span>
+              </div>
+            </div>
+            <div class="rw-pane rw-reqdetail" data-an="rise" style="--d:.25s">
+              <div class="rw-pane-h">
+                <span class="rw-av">W</span> Warden <svg class="rw-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg> <span class="rw-av rw-av-you">H</span> you
+                <span class="rw-grow"></span>
+                <span class="rw-pill rw-p-crm">info request · Priority 10</span>
+              </div>
+              <div class="rw-reqmeta rw-faint">opened 1d ago</div>
+              <p class="rw-payload" data-an="fade" style="--d:.6s">Infra blocker, separate from the drafting question: my assigned worktree is
+              owned by root — every file unwritable to me (uid 1000). The neighbouring worktree has the same
+              ownership, so this is provisioning-wide, not just my task. I have <b>NOT</b> worked around it.</p>
+            </div>
+          </div>
+          <p class="rw-note">Blockers surface as <b>requests with priorities</b> — not silent failures.</p>
+        </div>
+
+        <!-- scene 2 · the answer, request closes -->
+        <div class="rw-scene" data-scene="1">
+          <div class="rw-sc-req">
+            <div class="rw-pane rw-reqlist" data-an="rise" style="--d:.1s">
+              <div class="rw-pane-h">Requests <span class="rw-grow"></span><span class="rw-mono rw-faint">All · Open · Answered · Escalations</span></div>
+              <div class="rw-reqcount">REQUESTS · <b>0 OPEN</b></div>
+              <div class="rw-reqrow rw-sel rw-late" data-an="fade" style="--d:2.4s">
+                <span class="rw-av">W</span>
+                <span class="rw-reqgrow"><b>Infra blocker</b><span class="rw-faint">info request · answered</span></span>
+                <span class="rw-pill rw-p-idle rw-late" data-an="pop" style="--d:2.5s"><span class="rw-pdot"></span>CLOSED</span>
+              </div>
+            </div>
+            <div class="rw-pane rw-reqdetail" data-an="rise" style="--d:.25s">
+              <div class="rw-pane-h">
+                <span class="rw-av">W</span> Warden <svg class="rw-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg> <span class="rw-av rw-av-you">H</span> you
+                <span class="rw-grow"></span>
+                <span class="rw-pill rw-p-crm">info request · Priority 10</span>
+              </div>
+              <p class="rw-payload rw-payload-sm">Infra blocker: my assigned worktree is owned by root — every file
+              unwritable to me. I have <b>NOT</b> worked around it.</p>
+              <div class="rw-ansrule" data-an="fade" style="--d:.9s"><span class="rw-ok">&check;</span> Answer · from you</div>
+              <p class="rw-payload rw-answer" data-an="fade" style="--d:1.15s">Fixed — real bug, good catch. Worktrees were created root-owned; I've
+              chowned every existing tree and queued the permanent fix. Retry your work.</p>
+            </div>
+          </div>
+          <p class="rw-note">Escalations answered in <b>one click</b> — the agent retries once you unblock it.</p>
+        </div>
+
+        <!-- scene 3 · metrics stat cards -->
+        <div class="rw-scene" data-scene="2">
+          <div class="rw-sc-metrics">
+            <div class="rw-pane rw-statrow" data-an="rise" style="--d:.1s">
+              <div class="rw-stat">
+                <span class="rw-slabel">Est. cost</span>
+                <span class="rw-sval rw-mono">$175.35</span>
+                <span class="rw-ssub rw-faint">estimated · 71 of 301 runs reported cost</span>
+              </div>
+              <div class="rw-stat">
+                <span class="rw-slabel">Runs</span>
+                <span class="rw-sval rw-mono">301</span>
+                <span class="rw-ssub rw-faint">last 7 days</span>
+              </div>
+              <div class="rw-stat">
+                <span class="rw-slabel">Sandbox compute</span>
+                <span class="rw-sval rw-mono">1d 20h</span>
+                <span class="rw-ssub rw-faint">container wall-clock</span>
+              </div>
+              <div class="rw-stat">
+                <span class="rw-slabel">Tasks</span>
+                <span class="rw-sval rw-mono">22 done</span>
+                <span class="rw-ssub rw-faint">10 human-verified</span>
+              </div>
+            </div>
+            <div class="rw-pane rw-barcard" data-an="rise" style="--d:.3s">
+              <div class="rw-pane-h">Daily activity <span class="rw-grow"></span><span class="rw-mono rw-faint">7d</span></div>
+              <div class="rw-bars" aria-hidden="true">
+                <span class="rw-bar rw-late" data-an="grow" style="--d:.6s;--h:38%"></span>
+                <span class="rw-bar rw-late" data-an="grow" style="--d:.7s;--h:62%"></span>
+                <span class="rw-bar rw-late" data-an="grow" style="--d:.8s;--h:44%"></span>
+                <span class="rw-bar rw-late" data-an="grow" style="--d:.9s;--h:81%"></span>
+                <span class="rw-bar rw-late" data-an="grow" style="--d:1s;--h:56%"></span>
+                <span class="rw-bar rw-late" data-an="grow" style="--d:1.1s;--h:93%"></span>
+                <span class="rw-bar rw-late" data-an="grow" style="--d:1.2s;--h:70%"></span>
+              </div>
+            </div>
+          </div>
+          <p class="rw-note">Dollars are <b>estimated</b> — not every run reports cost yet. Honest math, not a guess dressed up.</p>
+        </div>
+
+        <!-- scene 4 · cost & activity by agent -->
+        <div class="rw-scene" data-scene="3">
+          <div class="rw-sc-table">
+            <div class="rw-pane rw-agenttbl" data-an="rise" style="--d:.1s">
+              <div class="rw-pane-h">Cost &amp; activity by agent <span class="rw-grow"></span><span class="rw-mono rw-faint">7d</span></div>
+              <div class="rw-trhead">
+                <span>AGENT</span><span>MODEL</span><span>RUNS</span><span>COMPUTE</span><span>EST. COST</span>
+              </div>
+              <div class="rw-tr" data-an="slide" style="--d:.4s">
+                <span class="rw-tragent"><span class="rw-av">F</span>Forge</span>
+                <span class="rw-mono rw-faint">claude-sonnet-5</span>
+                <span class="rw-mono">10 <span class="rw-fail">(6 ok · 3 failed)</span></span>
+                <span class="rw-mono">8h 22m</span>
+                <span class="rw-mono rw-costval">$51.88</span>
+              </div>
+              <div class="rw-tr" data-an="slide" style="--d:.55s">
+                <span class="rw-tragent"><span class="rw-av">W</span>Warden</span>
+                <span class="rw-mono rw-faint">claude-sonnet-5</span>
+                <span class="rw-mono">19 ok</span>
+                <span class="rw-mono">6h 05m</span>
+                <span class="rw-mono rw-costval">$31.66</span>
+              </div>
+              <div class="rw-tr" data-an="slide" style="--d:.7s">
+                <span class="rw-tragent"><span class="rw-av">A</span>Atlas</span>
+                <span class="rw-mono rw-faint">claude-fable-5</span>
+                <span class="rw-mono">14 ok</span>
+                <span class="rw-mono">3h 41m</span>
+                <span class="rw-mono rw-costval">$28.60</span>
+              </div>
+              <div class="rw-tr" data-an="slide" style="--d:.85s">
+                <span class="rw-tragent"><span class="rw-av">L</span>Lex</span>
+                <span class="rw-mono rw-faint">claude-opus-5</span>
+                <span class="rw-mono">6 ok</span>
+                <span class="rw-mono">1h 52m</span>
+                <span class="rw-mono rw-costval">$20.32</span>
+              </div>
+            </div>
+          </div>
+          <p class="rw-note">Failure counts render in <b>red</b> — the ledger doesn't hide a bad run to flatter the total.</p>
+        </div>
+
+        <!-- scene 5 · closing still -->
+        <div class="rw-scene" data-scene="4">
+          <div class="rw-sc-close">
+            <div class="rw-close-in" data-an="rise" style="--d:.1s">
+              <span class="rw-check" data-an="pop" style="--d:.4s" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg>
+              </span>
+              <p class="rw-close-line">Escalations answered in one click. Every dollar attributed to an agent.</p>
+              <div class="rw-metrics">
+                <span class="rw-metric rw-late" data-an="pop" style="--d:.8s"><span class="rw-mlabel">Open requests</span><span class="rw-mval rw-mono">0</span></span>
+                <span class="rw-metric rw-late" data-an="pop" style="--d:.95s"><span class="rw-mlabel">Est. cost</span><span class="rw-mval rw-mono">$175.35</span></span>
+                <span class="rw-metric rw-late" data-an="pop" style="--d:1.1s"><span class="rw-mlabel">Verified</span><span class="rw-mval rw-mono">10 tasks</span></span>
+              </div>
+              <p class="rw-close-sub rw-faint">Nothing ships on an agent's say-so — and nothing costs what it doesn't.</p>
+            </div>
+          </div>
+          <p class="rw-note">You decide. <b>Every run, priced.</b></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="rw-capbar">
+      <p class="rw-cap" id="rw-cap"><strong>A request lands.</strong> Warden flags an infra blocker — priority 10, waiting on you.</p>
+      <span class="rw-count" id="rw-count">01 / 05</span>
+      <div class="rw-ctrl">
+        <button class="rw-cbtn" id="rw-prev" type="button" aria-label="Previous scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        </button>
+        <button class="rw-cbtn rw-play-t" id="rw-play" type="button" aria-label="Pause autoplay" aria-pressed="true">
+          <svg class="rw-ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 2.8v10.4c0 .6.65.97 1.17.66l8.2-5.2a.78.78 0 0 0 0-1.32l-8.2-5.2a.78.78 0 0 0-1.17.66z"/></svg>
+          <svg class="rw-ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1"/></svg>
+        </button>
+        <button class="rw-cbtn" id="rw-next" type="button" aria-label="Next scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <nav class="rw-dots" id="rw-dots" role="group" aria-label="Demo scenes"></nav>
+    <span class="rw-track" aria-hidden="true"><span class="rw-track-fill" id="rw-track-fill"></span></span>
+  </div>
+
+  <style>
+  /* =========================================================================
+     REQUESTS & METRICS CINEMATIC (rw-) — chapter 4: "Agents ask. You decide.
+     Every run priced." Player mechanics ported from sections/demo.html's
+     dm-scene engine, renamed to the rw- prefix, theme-aware via var() tokens.
+     ========================================================================= */
+  .rw-root {
+    --rw-ok: var(--success-text);
+    --rw-ok-soft: color-mix(in srgb, var(--success) 14%, transparent);
+    --rw-warn: var(--warning-text);
+    --rw-warn-soft: color-mix(in srgb, var(--warning-text) 15%, transparent);
+    --rw-crm: var(--accent-text);
+    --rw-crm-soft: var(--gold-soft);
+    padding: 96px 24px;
+    background: var(--canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+
+  .rw-head { max-width: 720px; margin: 0 auto 44px; text-align: center; }
+  .rw-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent-text);
+  }
+  .rw-title {
+    margin: 14px 0 14px;
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: clamp(30px, 4vw, 46px); line-height: 1.08;
+    letter-spacing: -.015em; color: var(--text-primary);
+  }
+  .rw-title-em { font-style: italic; color: var(--accent-text); }
+  .rw-sub {
+    font-size: 16px; line-height: 1.55; color: var(--text-secondary);
+    max-width: 620px; margin: 0 auto;
+  }
+
+  .rw-head, .rw-theater {
+    opacity: 0; transform: translateY(26px);
+    transition: opacity .9s cubic-bezier(.16,1,.3,1), transform .9s cubic-bezier(.16,1,.3,1);
+  }
+  .rw-theater { transition-delay: .1s; }
+  .rw-root.rw-in .rw-head, .rw-root.rw-in .rw-theater { opacity: 1; transform: none; }
+
+  .rw-theater {
+    max-width: 960px; margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-3xl);
+    box-shadow: var(--shadow-float);
+    overflow: hidden;
+  }
+  .rw-theater:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+
+  .rw-chrome {
+    display: flex; align-items: center; gap: 7px;
+    padding: 12px 16px;
+    background: var(--surface-subtle); border-bottom: 1px solid var(--border);
+  }
+  .rw-dot3 { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .rw-url {
+    margin-left: 10px; display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 12px;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
+  }
+  .rw-url svg { width: 13px; height: 13px; color: var(--accent-strong); }
+
+  .rw-frame { display: block; }
+
+  .rw-stage {
+    position: relative; overflow: hidden;
+    min-height: 452px;
+    background:
+      radial-gradient(560px 300px at 84% -10%, var(--gold-soft), transparent 60%),
+      var(--surface);
+  }
+  .rw-scene {
+    position: absolute; inset: 0;
+    padding: 30px 34px 60px;
+    opacity: 0; transform: translateX(26px);
+    transition: opacity .38s cubic-bezier(.16,1,.3,1), transform .38s cubic-bezier(.16,1,.3,1);
+    pointer-events: none; visibility: hidden;
+  }
+  .rw-scene.rw-on { opacity: 1; transform: none; visibility: visible; }
+  .rw-scene.rw-bye { opacity: 0; transform: translateX(-22px); visibility: visible; }
+
+  .rw-capbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 20px;
+    background: var(--surface-subtle); border-top: 1px solid var(--border);
+  }
+  .rw-cap { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-secondary); }
+  .rw-cap strong { color: var(--text-primary); font-weight: 700; }
+  .rw-cap { opacity: 1; transition: opacity .28s ease; }
+  .rw-cap.rw-swap { opacity: 0; }
+  .rw-count {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-tertiary); white-space: nowrap;
+  }
+  .rw-ctrl { display: flex; align-items: center; gap: 6px; }
+  .rw-cbtn {
+    all: unset; cursor: pointer; box-sizing: border-box;
+    width: 32px; height: 32px; border-radius: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); background: var(--surface);
+    border: 1px solid var(--border-strong);
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .rw-cbtn:hover { color: var(--text-primary); border-color: var(--accent-strong); }
+  .rw-cbtn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+  .rw-cbtn svg { width: 14px; height: 14px; }
+  .rw-cbtn.rw-play-t[aria-pressed="true"] { color: var(--accent-text); border-color: var(--accent-strong); background: var(--gold-soft); }
+  .rw-cbtn .rw-ic-pause { display: none; }
+  .rw-cbtn.rw-play-t[aria-pressed="true"] .rw-ic-pause { display: block; }
+  .rw-cbtn.rw-play-t[aria-pressed="true"] .rw-ic-play { display: none; }
+
+  .rw-dots {
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 14px 20px 6px;
+    background: var(--surface-subtle);
+  }
+  .rw-dot {
+    all: unset; cursor: pointer; position: relative;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--border-strong);
+    transition: background .2s ease, transform .2s ease;
+  }
+  .rw-dot:hover { background: var(--text-tertiary); transform: scale(1.15); }
+  .rw-dot:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+  .rw-dot[aria-current="true"] { background: var(--accent-strong); transform: scale(1.15); }
+  .rw-dot .rw-tip {
+    position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+    padding: 5px 9px; border-radius: 7px; white-space: nowrap;
+    background: var(--text-primary); color: var(--surface);
+    font-size: 11px; font-weight: 600; letter-spacing: -.005em;
+    opacity: 0; pointer-events: none; transition: opacity .15s ease;
+    box-shadow: var(--shadow-card); z-index: 5;
+  }
+  .rw-dot:hover .rw-tip, .rw-dot:focus-visible .rw-tip { opacity: 1; }
+
+  .rw-track {
+    display: block; height: 3px;
+    margin: 8px 20px 16px; border-radius: 99px;
+    background: var(--border); overflow: hidden;
+  }
+  .rw-track-fill {
+    display: block; height: 100%; width: 100%; border-radius: 99px;
+    background: var(--accent-strong);
+    transform: scaleX(0); transform-origin: left center;
+  }
+
+  /* ---- shared atoms -------------------------------------------------------- */
+  .rw-pane {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-xl); box-shadow: var(--shadow-card);
+  }
+  .rw-pane-h {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px; border-bottom: 1px solid var(--border);
+    font-size: 12.5px; font-weight: 700; color: var(--text-secondary);
+  }
+  .rw-grow { flex: 1; }
+  .rw-mono { font-family: var(--font-mono); }
+  .rw-faint { color: var(--text-tertiary); font-weight: 500; font-size: 10.5px; }
+  .rw-pane-h .rw-mono { font-size: 10.5px; }
+
+  .rw-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 700; font-size: 11px; line-height: 1;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .rw-pill .rw-pdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .rw-p-crm  { color: var(--rw-crm);  background: var(--rw-crm-soft);  border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
+  .rw-p-idle { color: var(--text-tertiary); background: var(--surface-subtle); border-color: var(--border-strong); }
+
+  .rw-av {
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 800; color: var(--on-accent-strong);
+    background: linear-gradient(135deg, var(--gold), var(--accent-strong));
+  }
+  .rw-av-you { background: linear-gradient(135deg, var(--text-secondary), var(--text-primary)); }
+
+  .rw-note {
+    position: absolute; left: 34px; right: 34px; bottom: 20px;
+    font-size: 11.5px; line-height: 1.5; color: var(--text-tertiary); text-align: center;
+  }
+  .rw-note b { color: var(--text-secondary); font-weight: 700; }
+
+  .rw-ok { color: var(--rw-ok); }
+  .rw-fail { color: var(--danger); font-weight: 700; }
+
+  @keyframes rw-rise  { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: none; } }
+  @keyframes rw-slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+  @keyframes rw-pop   { from { opacity: 0; transform: scale(.64); } to { opacity: 1; transform: none; } }
+  @keyframes rw-fade  { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes rw-grow  { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+  .rw-scene.rw-play [data-an] { animation-delay: var(--d, 0s); animation-fill-mode: both; }
+  .rw-scene.rw-play [data-an="rise"]  { animation: rw-rise  .55s cubic-bezier(.16,1,.3,1) both; }
+  .rw-scene.rw-play [data-an="slide"] { animation: rw-slide .5s  cubic-bezier(.16,1,.3,1) both; }
+  .rw-scene.rw-play [data-an="pop"]   { animation: rw-pop   .42s cubic-bezier(.16,1,.3,1) both; }
+  .rw-scene.rw-play [data-an="fade"]  { animation: rw-fade  .5s  ease both; }
+  .rw-scene.rw-play [data-an="grow"]  { animation: rw-grow  .5s  cubic-bezier(.16,1,.3,1) both; }
+
+  /* ---- scene 1-2 · requests ------------------------------------------------ */
+  .rw-sc-req { display: grid; grid-template-columns: 250px 1fr; gap: 18px; height: 100%; padding-bottom: 40px; align-content: center; }
+  .rw-reqlist { align-self: center; }
+  .rw-reqcount { padding: 9px 14px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); letter-spacing: .04em; border-bottom: 1px solid var(--border); }
+  .rw-reqrow { display: flex; align-items: center; gap: 9px; padding: 11px 14px; }
+  .rw-reqrow.rw-sel { background: var(--gold-soft); }
+  .rw-reqgrow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .rw-reqgrow b { font-size: 12px; color: var(--text-primary); font-weight: 700; }
+  .rw-reqgrow .rw-faint { font-size: 10.5px; }
+  .rw-reqdetail { align-self: center; }
+  .rw-arrow { width: 13px; height: 13px; color: var(--text-tertiary); flex: none; }
+  .rw-reqmeta { padding: 6px 14px 0; font-size: 10.5px; }
+  .rw-payload { padding: 10px 14px 14px; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); }
+  .rw-payload b { color: var(--text-primary); }
+  .rw-payload-sm { padding-bottom: 6px; font-size: 11.5px; }
+  .rw-ansrule {
+    margin: 4px 14px 0; padding-top: 10px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 700; color: var(--rw-ok);
+  }
+  .rw-answer { color: var(--text-secondary); }
+
+  /* ---- scene 3 · stat cards + bar chart ------------------------------------ */
+  .rw-sc-metrics { display: flex; flex-direction: column; gap: 14px; height: 100%; padding-bottom: 40px; justify-content: center; }
+  .rw-statrow { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .rw-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-right: 1px solid var(--border); }
+  .rw-stat:last-child { border-right: 0; }
+  .rw-slabel { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+  .rw-sval { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+  .rw-ssub { font-size: 10px; line-height: 1.35; }
+  .rw-barcard { padding-bottom: 4px; }
+  .rw-bars { display: flex; align-items: flex-end; gap: 10px; height: 84px; padding: 16px 16px 14px; }
+  .rw-bar { flex: 1; height: var(--h); border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--gold), var(--accent-strong)); transform-origin: bottom; }
+
+  /* ---- scene 4 · agent cost table ------------------------------------------ */
+  .rw-sc-table { display: grid; place-items: center; height: 100%; padding-bottom: 40px; }
+  .rw-agenttbl { width: min(560px, 100%); }
+  .rw-trhead, .rw-tr {
+    display: grid; grid-template-columns: 1.3fr 1.2fr .9fr 1fr .9fr;
+    align-items: center; gap: 8px; padding: 10px 14px;
+  }
+  .rw-trhead { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; color: var(--text-tertiary); border-bottom: 1px solid var(--border); }
+  .rw-tr { font-size: 12px; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+  .rw-tr:last-child { border-bottom: 0; }
+  .rw-tragent { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text-primary); }
+  .rw-tragent .rw-av { width: 20px; height: 20px; font-size: 9.5px; }
+  .rw-costval { color: var(--text-primary); font-weight: 700; }
+
+  /* ---- scene 5 · closing ---------------------------------------------------- */
+  .rw-sc-close { display: grid; place-items: center; height: 100%; padding-bottom: 40px; text-align: center; }
+  .rw-close-in { max-width: 420px; }
+  .rw-check {
+    display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 50%;
+    background: var(--rw-ok-soft); color: var(--rw-ok); border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+    margin-bottom: 16px;
+  }
+  .rw-check svg { width: 22px; height: 22px; }
+  .rw-close-line {
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: 21px; line-height: 1.3; letter-spacing: -.01em; color: var(--text-primary);
+  }
+  .rw-metrics { display: flex; justify-content: center; gap: 10px; margin: 20px 0 12px; flex-wrap: wrap; }
+  .rw-metric {
+    display: flex; flex-direction: column; gap: 3px; align-items: center;
+    padding: 10px 16px; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card);
+  }
+  .rw-mlabel { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+  .rw-mval { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+  .rw-close-sub { font-size: 12px; }
+
+  /* =========================================================================
+     Responsive
+     ========================================================================= */
+  @media (max-width: 720px) {
+    .rw-root { padding: 72px 14px; }
+    .rw-scene { padding: 22px 16px 56px; }
+    .rw-stage { min-height: 520px; }
+    .rw-sc-req { grid-template-columns: 1fr; gap: 12px; }
+    .rw-statrow { grid-template-columns: repeat(2, 1fr); }
+    .rw-stat:nth-child(2) { border-right: 0; }
+    .rw-stat:nth-child(1), .rw-stat:nth-child(2) { border-bottom: 1px solid var(--border); }
+    .rw-trhead { display: none; }
+    .rw-tr { grid-template-columns: 1fr; gap: 3px; padding: 12px 14px; }
+    .rw-capbar { flex-wrap: wrap; gap: 10px 14px; }
+    .rw-cap { flex: 1 1 100%; order: 3; font-size: 12.5px; }
+    .rw-count { order: 1; }
+    .rw-ctrl { order: 2; margin-left: auto; }
+    .rw-note { left: 16px; right: 16px; bottom: 14px; font-size: 11px; }
+  }
+
+  /* =========================================================================
+     Reduced motion — static representative stills; navigation stays manual
+     ========================================================================= */
+  @media (prefers-reduced-motion: reduce) {
+    .rw-head, .rw-theater { opacity: 1; transform: none; transition: none; }
+    .rw-scene { transition: none; }
+    .rw-cbtn.rw-play-t { display: none; }
+  }
+  </style>
+
+  <script>
+  /* =========================================================================
+     Requests & metrics cinematic player — vanilla port of the dm-scene engine
+     (see sections/demo.html) renamed to the rw- prefix. Self-init guard lets
+     multiple chapter players coexist on one page. rAF progress,
+     IntersectionObserver start, manual stepper (dots / arrows / play-pause),
+     keyboard, reduced-motion static mode. QA hooks: ?rwstep=N (0-based),
+     ?rwpaused=1.
+     ========================================================================= */
+  (function () {
+    "use strict";
+    if (window.__rwInit) return;
+    window.__rwInit = true;
+
+    var STEPS = [
+      { ms: 7200, cap: "<strong>A request lands.</strong> Warden flags an infra blocker — priority 10, waiting on you.",
+        title: "The request", aria: "A priority-10 info request from Warden describing a worktree permissions blocker" },
+      { ms: 7000, cap: "<strong>You answer.</strong> One reply closes the request and unblocks the agent.",
+        title: "You answer", aria: "The human's answer closing the request, which flips to closed" },
+      { ms: 7400, cap: "<strong>The ledger.</strong> Estimated cost, runs, sandbox compute, and verified tasks — at a glance.",
+        title: "The ledger", aria: "Stat cards for estimated cost, runs, sandbox compute, and tasks, plus a daily activity chart" },
+      { ms: 7600, cap: "<strong>Cost by agent.</strong> Runs, compute, and estimated cost per agent — failures shown in red.",
+        title: "Cost by agent", aria: "A table of cost and activity per agent with failure counts in red" },
+      { ms: 6600, cap: "<strong>Every dollar attributed.</strong> Nothing ships on an agent's say-so, and nothing costs what it doesn't.",
+        title: "Priced and decided", aria: "A closing summary of open requests, estimated cost, and verified tasks" }
+    ];
+    var N = STEPS.length;
+
+    var root    = document.getElementById("demo-requests-metrics");
+    var theater = document.getElementById("rw-theater");
+    var stage   = document.getElementById("rw-stage");
+    var scenes  = stage.querySelectorAll(".rw-scene");
+    var capEl   = document.getElementById("rw-cap");
+    var countEl = document.getElementById("rw-count");
+    var playBtn = document.getElementById("rw-play");
+    var trackFill = document.getElementById("rw-track-fill");
+    var dotsWrap = document.getElementById("rw-dots");
+
+    var dots = [];
+    for (var i = 0; i < N; i++) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "rw-dot";
+      b.setAttribute("aria-label", "Scene " + (i + 1) + ": " + STEPS[i].title);
+      var tip = document.createElement("span");
+      tip.className = "rw-tip";
+      tip.textContent = STEPS[i].title;
+      b.appendChild(tip);
+      dotsWrap.appendChild(b);
+      dots.push(b);
+    }
+
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var qs      = new URLSearchParams(location.search);
+
+    var cur = 0, elapsed = 0;
+    var userPaused = reduced || qs.get("rwpaused") === "1";
+    var inView = false;
+    var raf = null, lastT = 0;
+
+    function playing() { return !userPaused && !reduced && inView && !document.hidden; }
+    function pad(n) { return (n + 1 < 10 ? "0" : "") + (n + 1); }
+
+    function paintDots() {
+      for (var i = 0; i < N; i++) {
+        dots[i].setAttribute("aria-current", i === cur ? "true" : "false");
+      }
+    }
+
+    function setScene(i) {
+      var old = cur;
+      cur = ((i % N) + N) % N;
+      if (scenes[old] && old !== cur) {
+        scenes[old].classList.remove("rw-on", "rw-play");
+        scenes[old].classList.add("rw-bye");
+        (function (el) { setTimeout(function () { el.classList.remove("rw-bye"); }, 420); })(scenes[old]);
+      }
+      var sc = scenes[cur];
+      sc.classList.add("rw-on");
+      if (!reduced) {
+        sc.classList.remove("rw-play");
+        void sc.offsetWidth;
+        sc.classList.add("rw-play");
+      }
+      elapsed = 0;
+      trackFill.style.transform = reduced ? "scaleX(1)" : "scaleX(0)";
+      paintDots();
+      countEl.textContent = pad(cur) + " / " + pad(N - 1);
+      stage.setAttribute("aria-label", "Animated preview: " + STEPS[cur].aria);
+      capEl.classList.add("rw-swap");
+      setTimeout(function () { capEl.innerHTML = STEPS[cur].cap; capEl.classList.remove("rw-swap"); }, 160);
+    }
+
+    function tick(t) {
+      raf = null;
+      if (playing()) {
+        var dt = lastT ? Math.min(t - lastT, 100) : 0;
+        lastT = t;
+        elapsed += dt;
+        var p = elapsed / STEPS[cur].ms;
+        if (p >= 1) { setScene(cur + 1); }
+        else { trackFill.style.transform = "scaleX(" + p.toFixed(4) + ")"; }
+        raf = requestAnimationFrame(tick);
+      } else {
+        lastT = 0;
+      }
+    }
+
+    function sync() {
+      playBtn.setAttribute("aria-pressed", userPaused ? "false" : "true");
+      playBtn.setAttribute("aria-label", userPaused ? "Resume autoplay" : "Pause autoplay");
+      if (playing() && raf === null) raf = requestAnimationFrame(tick);
+    }
+
+    function jump(i) { userPaused = true; setScene(i); sync(); }
+
+    dots.forEach(function (b, i) {
+      b.addEventListener("click", function () { if (i !== cur) jump(i); else { setScene(i); sync(); } });
+    });
+    document.getElementById("rw-prev").addEventListener("click", function () { jump(cur - 1); });
+    document.getElementById("rw-next").addEventListener("click", function () { jump(cur + 1); });
+    playBtn.addEventListener("click", function () { userPaused = !userPaused; sync(); });
+    theater.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft")  { e.preventDefault(); jump(cur - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); jump(cur + 1); }
+    });
+
+    function onScreen(el, slack) {
+      var r = el.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      return r.top < vh * (slack || 1) && r.bottom > 0;
+    }
+    inView = onScreen(theater);
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        inView = entries[0].isIntersecting; sync();
+      }, { threshold: 0.3 }).observe(theater);
+    }
+    window.addEventListener("load", function () { inView = onScreen(theater); sync(); });
+    window.addEventListener("scroll", function () { inView = onScreen(theater); reveal(); sync(); }, { passive: true });
+    document.addEventListener("visibilitychange", sync);
+
+    function reveal() { if (onScreen(root, 0.92)) { root.classList.add("rw-in"); return true; } return false; }
+    if (reduced || !("IntersectionObserver" in window)) { root.classList.add("rw-in"); }
+    else if (!reveal()) {
+      var rev = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { root.classList.add("rw-in"); rev.disconnect(); }
+      }, { threshold: 0.12 });
+      rev.observe(root);
+      window.addEventListener("load", reveal, { once: true });
+    }
+
+    var s0 = parseInt(qs.get("rwstep") || "0", 10);
+    if (!(s0 >= 0 && s0 < N)) s0 = 0;
+    scenes[0].classList.remove("rw-on");
+    setScene(s0);
+    sync();
+  })();
+  </script>
+</section>

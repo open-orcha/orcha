@@ -28,7 +28,8 @@ try:
         use_case_registry,
     )
     from .llm_decisions import HANDOFF_ACK_SCHEMA, TRIAGE_SCHEMA
-    from .llm_decisions import handoff_ack as _handoff_ack, triage_wake as _triage_wake
+    from .llm_decisions import handoff_ack as _handoff_ack
+    from .llm_decisions import triage_wake as _triage_wake
     from .llm_formats import normalise_anthropic_response as _normalise_anthropic_response
     from .llm_formats import normalise_anthropic_stream_event as _normalise_anthropic_stream_event
     from .llm_http import http_post_json as _http_post_json, http_post_sse as _http_post_sse
@@ -62,7 +63,8 @@ except ImportError:  # Portal copies these modules into a top-level build direct
         use_case_registry,
     )
     from llm_decisions import HANDOFF_ACK_SCHEMA, TRIAGE_SCHEMA
-    from llm_decisions import handoff_ack as _handoff_ack, triage_wake as _triage_wake
+    from llm_decisions import handoff_ack as _handoff_ack
+    from llm_decisions import triage_wake as _triage_wake
     from llm_formats import normalise_anthropic_response as _normalise_anthropic_response
     from llm_formats import normalise_anthropic_stream_event as _normalise_anthropic_stream_event
     from llm_http import http_post_json as _http_post_json, http_post_sse as _http_post_sse

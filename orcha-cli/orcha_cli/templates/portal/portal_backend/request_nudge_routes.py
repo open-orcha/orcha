@@ -1,6 +1,6 @@
 """Nudge request owners with full task context when action is overdue."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event
 from portal_backend.application import app
@@ -12,6 +12,7 @@ from portal_backend.guards import (
     require_kind as _require_kind,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import NudgeBody
 
@@ -49,7 +50,7 @@ def _task_request_context_block(detail) -> str:
 
 
 @app.post("/api/requests/{rid}/nudge", status_code=200)
-def nudge_request(rid: str, body: NudgeBody):
+def nudge_request(rid: str, body: NudgeBody, request: Request):
     """#60: a STANDALONE wake-up for whoever owns the NEXT ACTION on a request — fully
     DECOUPLED from close. It NEVER changes the request's state (the handler does a SELECT
     only, never an UPDATE), so state invariance holds on every branch. The recipient is
@@ -81,6 +82,10 @@ def nudge_request(rid: str, body: NudgeBody):
         r = require_request(
             cur, rid
         )  # SELECT-only (no FOR UPDATE): a nudge never mutates the request
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(
+            cur, request, str(r["container_id"]), body.actor_agent_id
+        )
         _require_container_active(cur, str(r["container_id"]), body.actor_agent_id)
         # Human-only: a nudge is an operator wake action.
         cur.execute(

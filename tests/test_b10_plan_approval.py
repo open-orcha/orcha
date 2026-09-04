@@ -5,24 +5,24 @@ the portal, before the agent commits code. It reuses the B0 primitive: the porta
 POSTs /api/decisions with subject_type='plan_approval', subject_id=<task_id>,
 target=<the plan's author>. So the automatable surface is (a) that exact decision
 round-trip — recorded as a decisions row + routed to the assignee with {decision,
-reason} — and the reason-less-reject block, and (b) that the tasks page actually
-mounts the shared control on the in-progress plan (and the agents page does not).
-The live click-through is verified in the portal.
+reason} — and the reason-less-reject block, and (b) that the tasks page (React:
+frontend/src/pages/tasks/TasksPage.tsx, Phase 7) actually mounts the shared control on
+the in-progress plan (and the agents page does not — it deep-links instead).
+planMessageOf's earliest-agent-post selection is exercised in
+frontend/src/state/snapshot.test.ts (Vitest). The live click-through is verified in
+the portal and in frontend/src/pages/tasks/TasksPage.test.tsx.
 """
-import json
 import pathlib
 import re
-import shutil
-import subprocess
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
 from conftest import next_event
-from portal_source import page_source
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
+PORTAL = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"
+FRONTEND = PORTAL / "frontend" / "src"
 
 
 # ---------- API contract the portal performs ----------
@@ -92,122 +92,94 @@ async def test_plan_reject_with_reason_routes(client, make_agent, make_task, db)
     assert ev["reason"] == "split step 2 out first"
 
 
-# ---------- portal surface guards ----------
+# ---------- portal surface guards (React source) ----------
 
 def test_tasks_page_mounts_plan_approval_on_in_progress():
-    """Static guard (D4 redesign): tasks.html builds the plan from the thread, gates it on
-    in_progress + an undecided plan_decision (pendingPlan), and POSTs the B0 decisions
-    contract with subject_type='plan_approval' keyed to the task, routed to the plan author."""
-    html = page_source("tasks.html")
-    assert "function planMsgOf" in html and "function pendingPlan" in html, "plan helpers missing"
+    """Static guard (React port): the tasks page builds the plan from the thread/
+    plan_message, gates it on in_progress + an undecided plan_decision (pendingPlan in
+    state/SnapshotProvider.tsx), and POSTs the B0 decisions contract with
+    subject_type='plan_approval' keyed to the task, routed to the plan author."""
+    sp = (FRONTEND / "state" / "SnapshotProvider.tsx").read_text()
+    assert "export function planMessageOf" in sp and "export function pendingPlan" in sp, "plan helpers missing"
     # gated on in_progress + no durable decision yet
-    assert re.search(r'pendingPlan\(t\)\s*\{\s*return\s*t\.status\s*===\s*"in_progress"\s*&&\s*!t\.plan_decision', html), \
+    assert re.search(r'return\s+t\.status\s*===\s*"in_progress"\s*&&\s*!t\.plan_decision', sp), \
         "plan gate not gated on in_progress + undecided plan_decision"
+    html = (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
     # POSTs the B0 decisions contract, keyed to the task, routed to the plan author
     assert 'subject_type: "plan_approval"' in html, "wrong subject_type"
     assert "subject_id: t.id" in html, "plan decision must be keyed to the task"
-    assert "target_agent_id: authorId" in html, "decision must route to the plan's author"
+    assert "target_agent_id: author?.id" in html, "decision must route to the plan's author"
 
 
 def test_plan_card_shows_full_plan_scrollable():
-    """Static guard (ISS-32): an approval gate must show the WHOLE plan — the full thread
-    message body (no hard truncation) in a scrollable, pre-wrapped region."""
-    html = page_source("tasks.html")
-    gate = html[html.index("function gateSurface"):html.index("function who", html.index("function gateSurface"))]
-    # ISS-44: the full body is now rendered via linkify() (esc-first + clickable URLs), not
-    # bare esc() — still the WHOLE body, no truncation.
-    assert "TasO.linkify(isPlan ? (pm.body" in gate, "plan card should render the full message body"
-    assert "O.trunc(pm.body" not in gate and "slice(0," not in gate, "plan body must not be hard-truncated"
-    assert "max-height:300px;overflow-y:auto" in gate and "white-space:pre-wrap" in gate, "plan region not scrollable/pre-wrapped"
+    """Static guard (ISS-32): an approval gate must show the WHOLE plan — the full plan
+    message body (no hard truncation) in a scrollable, pre-wrapped region. ISS-44: the
+    body renders via the shared esc-first linkifier (Linkified)."""
+    html = (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    assert "text={isPlan ? pm?.body" in html, "plan card should render the full message body via Linkified"
+    assert "trunc(pm" not in html, "plan body must not be hard-truncated"
+    assert "maxHeight: 300, overflowY: \"auto\"" in html and 'whiteSpace: "pre-wrap"' in html, \
+        "plan region not scrollable/pre-wrapped"
 
 
 def test_plan_card_is_one_shot_per_session():
     """Static guard (review P2 / ISS-41): a recorded decision must not resurface. The
     DURABLE plan_decision renders a decided-note (suppressed across reload); a session
-    `acted` Set suppresses the gate immediately after a decision POSTs (optimistic), and
-    a successful decision marks the task acted."""
-    html = page_source("tasks.html")
-    assert "const acted = new Set()" in html, "no optimistic acted cache"
-    gate = html[html.index("function gateSurface"):html.index("function who", html.index("function gateSurface"))]
+    `acted` set suppresses the gate immediately after a decision POSTs (optimistic),
+    and a successful decision marks the task acted."""
+    html = (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    assert "useState<Set<string>>" in html and "acted" in html, "no optimistic acted cache"
     # a durable plan_decision -> quiet decided-note, never a live re-approve (ISS-41)
-    assert 'if (t.status === "in_progress" && t.plan_decision)' in gate, "decided plan not gated on the durable plan_decision"
-    assert 'Plan ${ok ? "approved" : "rejected"}' in gate, "no decided-note for a decided plan"
+    assert 'if (t.status === "in_progress" && t.plan_decision)' in html, \
+        "decided plan not gated on the durable plan_decision"
+    assert 'Plan {ok ? "approved" : "rejected"}' in html, "no decided-note for a decided plan"
     # acted suppresses the gate immediately; a successful decision marks it acted
-    assert "if (acted.has(t.id)) return" in gate, "gate not suppressed for a just-acted task"
-    assert "acted.add(t.id)" in html, "a successful decision doesn't mark the task acted"
+    assert "if (acted) return null" in html, "gate not suppressed for a just-acted task"
+    assert "onActed(t.id)" in html, "a successful decision doesn't mark the task acted"
 
 
 def test_agents_page_has_no_plan_surface():
     """B10 is a tasks-page surface only — the agents page renders no task thread, so it
     hosts no plan-approval *control* (it deep-links instead; see ISS-33 below)."""
-    html = page_source("agents.html")
-    assert "renderPlanApprovalCard" not in html
+    html = (FRONTEND / "pages" / "agents" / "AgentsPage.tsx").read_text()
     assert "plan_approval" not in html
+    assert "/api/decisions" not in html
 
 
 def test_agents_page_deeplinks_to_plan_approval():
-    """ISS-33 (D3 redesign): the Agents view must not dead-end. The gate callout flags an
+    """ISS-33 (React port): the Agents view must not dead-end. The gate callout flags an
     in-progress task whose agent posted a plan awaiting sign-off and deep-links to that
     task on the Tasks page (where the B10 control lives). ISS-36: surfaced regardless of
     the agent's status. ISS-41: once plan_decision is set it's a decided-note, not a live
     re-approve."""
-    html = page_source("agents.html")
-    block = re.search(r"function gateCallout\(a, mine\) \{.*?\n  \}", html, re.S).group(0)
+    html = (FRONTEND / "pages" / "agents" / "AgentsPage.tsx").read_text()
+    m = re.search(r"function GateCallout\(\{ a, mine \}.*?\n\}", html, re.S)
+    assert m, "no gate callout"
+    block = m.group(0)
     # detect an agent-posted plan on an in-progress task, surfaced regardless of status
-    assert "planMsgOf(t)" in block, "doesn't detect an agent-posted plan"
-    assert "regardless of" in block, "gate not advertised as decoupled from agent status (ISS-36)"
+    assert "planMessageOf(t)" in block, "doesn't detect an agent-posted plan"
+    assert "regardless of" in html, "gate not advertised as decoupled from agent status (ISS-36)"
     # undecided -> approve CTA deep-linking to the Tasks gate; decided -> note (ISS-41)
     assert "!planTask.plan_decision" in block, "approval not gated on the durable plan_decision (ISS-41)"
     assert "Plan awaiting your approval" in block and "Review plan" in block, "no plan-approval call-to-action"
-    assert 'href="/tasks?task=' in block, "no deep-link to the Tasks page"
+    assert '"/tasks?task="' in block, "no deep-link to the Tasks page"
 
 
 def test_agents_all_tasks_are_deeplinked():
-    """ISS-33 revalidation (D3 redesign): the in_progress-only 'Current task' link missed
-    tasks in other states, leaving the human dead-ended when an agent had no in-progress
-    task. EVERY assigned task — any status — must deep-link to the Tasks page via the
+    """ISS-33 revalidation: the in_progress-only 'Current task' link missed tasks in
+    other states, leaving the human dead-ended when an agent had no in-progress task.
+    EVERY assigned task — any status — must deep-link to the Tasks page via the
     'All tasks' chips."""
-    html = page_source("agents.html")
-    # the All-tasks chips are anchors pointing at /tasks?task=<id>, built from `mine`
+    html = (FRONTEND / "pages" / "agents" / "AgentsPage.tsx").read_text()
+    # the All-tasks chips are links pointing at /tasks?task=<id>, built from `mine`
     assert "All tasks ·" in html, "no All-tasks section"
     chips = html[html.index("All tasks ·"):]
-    assert '<a class="tchip" href="/tasks?task=${encodeURIComponent(t.id)}"' in chips, "All-tasks chips not deep-linked to the task id"
-    # ISS-68 PR-3: the chip list is a paginated render WINDOW over `mine` (load-more reveals the
-    # rest; the `All tasks · ${mine.length}` count is over every assigned task), so it still maps
-    # over `mine` — just sliced to the shown cap.
+    assert 'className="tchip" to={"/tasks?task=" + encodeURIComponent(t.id)}' in chips, \
+        "All-tasks chips not deep-linked to the task id"
+    # ISS-68 PR-3: the chip list is a paginated render WINDOW over `mine` (load-more
+    # reveals the rest; the count is over every assigned task).
     assert "mine.slice(0, tasksShown).map((t) =>" in chips, "All-tasks list isn't built from every assigned task"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
-def test_plan_message_picks_earliest_agent_post():
-    """planMessage = the agent's OPENING plan: the earliest non-human message,
-    ignoring human messages and preserving author identity for routing."""
-    html = page_source("tasks.html")
-    # ISS-68: planMsgOf is multi-line now (prefers the snapshot's plan_message, thread fallback);
-    # match through its own-line closing brace.
-    start = html.index("function planMsgOf")
-    js = html[start:html.index("function pendingPlan", start)]
-    # planMsgOf reads the mapped thread shape ({is_human, from, body}); earliest non-human
-    js += r"""
-const t={thread:[
-  {is_human:true,  from:"human", body:"human note"},
-  {is_human:false, from:"AG2",   body:"PLAN: do X then Y"},
-  {is_human:false, from:"AG2",   body:"progress update"},
-]};
-const pm=planMsgOf(t);
-console.log(JSON.stringify({from:pm&&pm.from, body:pm&&pm.body}));
-// no agent messages -> null
-console.log(JSON.stringify(planMsgOf({thread:[{is_human:true,from:"human",body:"x"}]})));
-// ISS-68: the trimmed snapshot ships plan_message instead of a thread -> used directly
-const pm2=planMsgOf({plan_message:{body:"PLAN via summary", author_alias:"AG9", at:"t"}});
-console.log(JSON.stringify({from:pm2&&pm2.from, body:pm2&&pm2.body}));
-"""
-    out = subprocess.run(["node", "-e", js], capture_output=True, text=True)
-    assert out.returncode == 0, out.stderr
-    lines = out.stdout.strip().splitlines()
-    first = json.loads(lines[0])
-    assert first["from"] == "AG2" and first["body"].startswith("PLAN:"), first
-    assert json.loads(lines[1]) is None
-    # plan_message path: rendered straight from the summary field (no thread present)
-    third = json.loads(lines[2])
-    assert third["from"] == "AG9" and third["body"] == "PLAN via summary", third
+# planMessage picks the earliest agent post (and the ISS-68 plan_message
+# pass-through): moved to frontend/src/state/snapshot.test.ts (Vitest).

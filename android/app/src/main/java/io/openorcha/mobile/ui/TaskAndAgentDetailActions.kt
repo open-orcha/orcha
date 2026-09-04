@@ -158,10 +158,7 @@ fun fetchCloseImplications() {
     val task = _uiState.value.selectedTask ?: return
     scope.launch {
         val imp = runCatching { api.getCloseImplications(selected.baseUrl, task.id) }.getOrNull()
-        val lines = buildList {
-            imp?.summary?.takeIf { it.isNotBlank() }?.let { add(it) }
-            addAll(imp?.implications.orEmpty())
-        }
+        val lines = io.openorcha.mobile.domain.CloseImplicationsUx.lines(imp)
         _uiState.update { it.copy(closeImplications = lines.ifEmpty { null }) }
     }
 }

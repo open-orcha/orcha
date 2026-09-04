@@ -1,8 +1,20 @@
 /* Portal stylesheet compatibility entrypoint: imports the responsibility-based CSS modules. */
+/* open-base.css is open Orcha's styles.css, synced verbatim (tools/sync-open-frontend.sh):
+   the React shell emits the OPEN class contract, so the open rules are the base layer and
+   the cloud modules below override/skin them (last-rule-wins on equal specificity). */
+/* fonts FIRST: the @font-face registrations (Inter, Hanken Grotesk, mono) the
+   skins reference — the vanilla pages linked this separately; the React shell
+   loads only this entrypoint. */
+@import url("/assets/styles/fonts.css");
+@import url("/assets/styles/open-base.css");
 @import url("/assets/styles/tokens.css");
 @import url("/assets/styles/shell.css");
 @import url("/assets/styles/components.css");
 @import url("/assets/styles/overlays.css");
 @import url("/assets/styles/conversation.css");
+@import url("/assets/styles/markdown.css");
 @import url("/assets/styles/responsive.css");
+@import url("/assets/styles/skin-minimal.css");
+@import url("/assets/styles/skin-gold.css");
+@import url("/assets/styles/skeleton.css");
 /* Legacy test/read markers: [data-theme] prefers-color-scheme --accent --amber --ok --warn --danger --violet .s-working .s-attn .s-done .s-idle */

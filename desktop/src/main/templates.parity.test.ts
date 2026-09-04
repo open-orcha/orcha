@@ -16,6 +16,7 @@ const PORTAL_SHARED = ['llm_util.py', 'secret_box.py', 'digest_curate.py']
 function walk(root: string, base: string = root): string[] {
   const out: string[] = []
   for (const entry of readdirSync(root)) {
+    if (entry === 'node_modules') continue // dev-machine artifact; the copy script skips it too
     const full = path.join(root, entry)
     if (statSync(full).isDirectory()) out.push(...walk(full, base))
     else out.push(path.relative(base, full))

@@ -183,7 +183,8 @@ def _boot(
             "resident",
         )
     )
-    sent, _, process = services.spawn_resident(
+    _spawn_info: dict = {}
+    sent, spawn_repr, process = services.spawn_resident(
         run_cwd,
         system_prompt=persona,
         log_path=log_path,
@@ -195,8 +196,34 @@ def _boot(
         run_token=token,
         conversation=True,
         dry_run=dry_run,
+        spawn_info=_spawn_info,
     )
     if not sent or process is None:
+        # Issue #75: the box-wide concurrency cap deferred this resident boot (a
+        # resident IS a sandbox container, counted against the same budget). Release
+        # the claimed lease so the conversation re-competes on a later tick, but log it
+        # as a cap-defer (expected back-pressure), NOT a loud spawn failure. A worktree
+        # was provisioned above — teardown so a deferred boot leaves no orphan tree.
+        if _spawn_info.get("deferred"):
+            if worktree:
+                services._safe_teardown_worktree(base_cwd, worktree, branch)
+            if not quiet:
+                print(
+                    f"[notifier] cap-deferred resident boot for "
+                    f"{candidate.get('agent_alias')}: {spawn_repr} — "
+                    "stays eligible next tick"
+                )
+            services._revoke_or_defer(api_base, token)
+            _release_failed(services, api_base, candidate)
+            return None
+        # Fail LOUD (spec §3.2): a sandbox-mode preflight/api-config failure
+        # surfaces its "(sandbox unavailable: …)" reason here instead of the
+        # conversation silently queueing forever.
+        if not quiet:
+            print(
+                f"[notifier] resident skip {candidate.get('agent_alias')} — "
+                f"spawn failed {spawn_repr}"
+            )
         services._revoke_or_defer(api_base, token)
         _release_failed(services, api_base, candidate)
         return None
@@ -214,6 +241,10 @@ def _boot(
         "session_id": session_id,
         "session_pinned": not cold,
         "cold": cold,
+        # Sandbox resident (remote-runner un-deferral): the warm session's ONE
+        # container, threaded through the handle so every turn's run row records
+        # it and the close/exit/stop paths can reap it (container + api-config).
+        "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
         "run_token": token,
         "serviced_seq": serviced,
         "current_run_id": None,

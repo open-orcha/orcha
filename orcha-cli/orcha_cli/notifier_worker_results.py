@@ -89,7 +89,7 @@ def drain_task_failure(
     services,
 ) -> None:
     """Preserve failed task work and apply bounded retry bookkeeping."""
-    services._finish_run(
+    if services._finish_run(
         api_base,
         worker.get("run_id"),
         status,
@@ -104,7 +104,8 @@ def drain_task_failure(
                 "task_id": task_id,
             }
         ),
-    )
+    ):
+        services._reap_sandbox_artifacts(worker)  # I4: reap the wake's container once stamped
     key = (agent_id, task_id)
     failed_drains[key] = failed_drains.get(key, 0) + 1
     attempts = failed_drains[key]

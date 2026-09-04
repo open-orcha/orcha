@@ -1,47 +1,50 @@
 import SwiftUI
 
-// Responsibility: Create-task form state, validation, assignment, priority, and submission.
-
 /// Flow 11 — Create & assign a task. Field order is fixed: Title → Description →
 /// DoD → Assign to → Priority → Advanced (Depends on + Park it). Create is disabled
 /// until Title + DoD are non-blank; a dirty form asks before discarding. A 1:1 port
 /// of the Android `CreateTaskScreen`.
 struct CreateTaskSheet: View {
-    @Environment(AppModel.self) var model
-    @Environment(\.palette) var p
-    @Environment(\.dismiss) var dismiss
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    @Environment(\.dismiss) private var dismiss
 
-    @State var title = ""
-    @State var description = ""
-    @State var dod = ""
-    @State var assignee: String?
-    @State var band: PriorityBand = .normal
-    @State var advanced = false
-    @State var dependsOn: Set<String> = []
-    @State var parked = false
-    @State var confirmDiscard = false
-    @State var triedSubmit = false
+    @State private var title = ""
+    @State private var description = ""
+    @State private var dod = ""
+    @State private var assignee: String?
+    @State private var band: PriorityBand = .normal
+    @State private var advanced = false
+    @State private var dependsOn: Set<String> = []
+    @State private var parked = false
+    @State private var confirmDiscard = false
+    @State private var triedSubmit = false
 
-    var dirty: Bool {
+    private var dirty: Bool {
         !title.isBlank || !description.isBlank || !dod.isBlank
             || assignee != nil || parked || !dependsOn.isEmpty
     }
 
-    var valid: Bool { !title.isBlank && !dod.isBlank }
+    private var valid: Bool { !title.isBlank && !dod.isBlank }
 
-    var agents: [AgentDto] {
+    private var agents: [AgentDto] {
         (model.snapshot?.agents ?? []).filter { $0.kind == "ai" && $0.terminatedAt == nil }
     }
 
-    var openTasks: [TaskDto] {
+    private var openTasks: [TaskDto] {
         (model.snapshot?.tasks ?? []).filter { !["completed", "cancelled"].contains($0.status) }
     }
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        // Collab v1: honest gating — a viewer / trusted non-member
+                        // sees WHY Create is off (the server 403s the write anyway).
+                        if let denial = model.access.writeDenialReason {
+                            Banner(kind: .info, text: denial)
+                        }
                         titleField
                         descriptionField
                         dodField
@@ -63,8 +66,8 @@ struct CreateTaskSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Create") { submit() }
-                        .font(.system(size: 16, weight: .heavy))
-                        .disabled(!valid)
+                        .font(p.uiFont(16, .heavy))
+                        .disabled(!valid || !model.access.canWrite)
                 }
             }
             .confirmationDialog(
@@ -82,7 +85,7 @@ struct CreateTaskSheet: View {
 
     // MARK: fields
 
-    var titleField: some View {
+    private var titleField: some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionH(title: "Title")
             OrchaTextField(text: $title, prompt: "Short, plain-language ask", lines: 1...2)
@@ -92,7 +95,7 @@ struct CreateTaskSheet: View {
         }
     }
 
-    var descriptionField: some View {
+    private var descriptionField: some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionH(title: "Description")
             OrchaTextField(text: $description, prompt: "Context the agent will read", lines: 3...8)
@@ -100,7 +103,7 @@ struct CreateTaskSheet: View {
         }
     }
 
-    var dodField: some View {
+    private var dodField: some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionH(title: "Definition of done")
             OrchaTextField(text: $dod, prompt: "How will you know it's done?", lines: 3...8)
@@ -114,13 +117,13 @@ struct CreateTaskSheet: View {
 
     // MARK: assign to
 
-    var assignSection: some View {
+    private var assignSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionH(title: "Assign to", count: assignee ?? "unassigned")
             if agents.isEmpty {
                 OrchaCard {
                     Text("No agents registered yet — the task will start unassigned.")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                 }
             } else {
@@ -146,7 +149,7 @@ struct CreateTaskSheet: View {
 
     // MARK: priority
 
-    var prioritySection: some View {
+    private var prioritySection: some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionH(title: "Priority", count: "P\(MobileUx.priorityFor(band))")
             Picker("Priority", selection: $band) {
@@ -158,4 +161,157 @@ struct CreateTaskSheet: View {
         }
     }
 
+    // MARK: advanced
+
+    private var advancedSection: some View {
+        DisclosureGroup(isExpanded: $advanced) {
+            VStack(alignment: .leading, spacing: 12) {
+                dependsOnCard
+                parkCard
+            }
+            .padding(.top, 4)
+        } label: {
+            Text("ADVANCED")
+                .font(p.uiFont(11, .bold))
+                .tracking(0.8)
+                .foregroundStyle(p.muted)
+        }
+        .tint(p.accent)
+    }
+
+    private var dependsOnCard: some View {
+        OrchaCard {
+            Text("Depends on").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
+            Text("This task won't become ready until these complete.")
+                .font(p.uiFont(13)).foregroundStyle(p.muted)
+            ForEach(openTasks.prefix(12)) { task in
+                Button {
+                    if dependsOn.contains(task.id) {
+                        dependsOn.remove(task.id)
+                    } else {
+                        dependsOn.insert(task.id)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: dependsOn.contains(task.id) ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(dependsOn.contains(task.id) ? p.accent : p.faint)
+                        Text(task.title)
+                            .font(p.uiFont(13))
+                            .foregroundStyle(p.text)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        StatusPill(status: task.status, domain: .task)
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var parkCard: some View {
+        OrchaCard {
+            Toggle(isOn: $parked) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Park it").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
+                    Text("The agent won't start yet — task is created pending.")
+                        .font(p.uiFont(13)).foregroundStyle(p.muted)
+                }
+            }
+            .tint(p.accent)
+        }
+    }
+
+    // MARK: helpers
+
+    private func helper(_ text: String, danger: Bool = false) -> some View {
+        Text(text)
+            .font(p.uiFont(12))
+            .foregroundStyle(danger ? p.danger : p.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func requestClose() {
+        if dirty { confirmDiscard = true } else { dismiss() }
+    }
+
+    private func submit() {
+        triedSubmit = true
+        guard valid, !model.actionInFlight else { return }
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDod = dod.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            if await model.createTask(
+                title: cleanTitle,
+                description: cleanDescription.isEmpty ? nil : cleanDescription,
+                dod: cleanDod,
+                assignee: assignee,
+                priority: MobileUx.priorityFor(band),
+                dependsOn: Array(dependsOn),
+                notReady: parked
+            ) != nil {
+                dismiss()
+            }
+        }
+    }
+}
+
+/// Rounded field matching `ManualConnectSheet` — surface2 fill, hairline border,
+/// vertical-growth `TextField`.
+private struct OrchaTextField: View {
+    @Environment(\.palette) private var p
+    @Binding var text: String
+    let prompt: String
+    let lines: ClosedRange<Int>
+
+    var body: some View {
+        TextField("", text: $text, prompt: Text(prompt), axis: .vertical)
+            .lineLimit(lines)
+            .padding(12)
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
+    }
+}
+
+/// Assignee chip — tinted when selected. "working" agents get a hint line.
+private struct AssigneeChip: View {
+    @Environment(\.palette) private var p
+    let alias: String
+    var status: String?
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            OrchaCard(
+                borderColor: selected ? p.accentLine : p.border,
+                container: selected ? p.accentSoft : p.surface
+            ) {
+                HStack(spacing: 8) {
+                    AgentAvatar(alias: alias, size: 30)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(alias)
+                            .font(p.uiFont(14, .semibold))
+                            .foregroundStyle(p.text)
+                        if let status {
+                            StatusPill(status: status, domain: .agent)
+                        }
+                    }
+                    if status == "working" {
+                        Text("working — will pick this up next")
+                            .font(p.uiFont(11))
+                            .foregroundStyle(p.muted)
+                    }
+                }
+            }
+            .frame(minWidth: 140)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private extension String {
+    var isBlank: Bool { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }

@@ -2,7 +2,7 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -14,6 +14,7 @@ from portal_backend.database import db_cursor
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import require_agent as _require_agent
 from portal_backend.guards import valid_uuid as _valid_uuid
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
 from portal_backend.schemas.conversations import (
     ConversationActor,
@@ -46,7 +47,7 @@ def _validate_turn_actor(cur, conversation, body):
 
 
 @app.post("/api/conversations/{conv_id}/turns", status_code=201)
-def append_turn(conv_id: str, body: TurnAppend):
+def append_turn(conv_id: str, body: TurnAppend, request: Request):
     """Append one turn; the server assigns a per-conversation monotonic seq. A HUMAN turn
     is PERSISTED FIRST, then a targeted 'conversation_turn' event is published to the agent
     so the resident-session manager (Forge) feeds it to the resident's stdin — guaranteeing
@@ -65,6 +66,18 @@ def append_turn(conv_id: str, body: TurnAppend):
             raise HTTPException(404, f"conversation {conv_id} not found")
         if conversation["status"] == "ended":
             raise HTTPException(409, "conversation has ended — cannot append turns")
+        # Per-project identity: a trusted proxy login must be a member of this
+        # conversation's container (403 otherwise), and a HUMAN turn is authored by
+        # that member — any client-supplied author is overridden. Agent turns keep
+        # their own validation below (author must be the conversation's agent + run).
+        effective = _trusted_actor(
+            cur,
+            request,
+            str(conversation["container_id"]),
+            body.author_agent_id if body.role == "human" else None,
+        )
+        if body.role == "human" and effective is not None:
+            body.author_agent_id = effective
         _validate_turn_actor(cur, conversation, body)
         llm_key = _container_llm_key(cur, str(conversation["container_id"]))
         attachments = _validate_conv_attachment_refs(
@@ -136,12 +149,21 @@ def set_conversation_session(conv_id: str, body: ConversationSession):
 
 
 @app.post("/api/conversations/{conv_id}/end", status_code=200)
-def end_conversation(conv_id: str, body: ConversationActor):
+def end_conversation(conv_id: str, body: ConversationActor, request: Request):
     """Mark a conversation ended (human closes it, or the idle reaper on session end).
     Idempotent. Frees the agent's single active-conversation slot."""
     if not _valid_uuid(conv_id):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
+        cur.execute(
+            "SELECT container_id FROM conversations WHERE id=%s", (conv_id,)
+        )
+        conv = cur.fetchone()
+        if conv:
+            # Per-project identity: a trusted login IS the actor (403 non-member).
+            body.actor_agent_id = _trusted_actor(
+                cur, request, str(conv["container_id"]), body.actor_agent_id
+            )
         _require_agent(cur, body.actor_agent_id)
         cur.execute(
             "UPDATE conversations SET status='ended', ended_at=now() "

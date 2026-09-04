@@ -57,6 +57,10 @@ def _scan_context(scan, agent_hold_until, services):
         "ack_config": services._ack_config_from_scan(scan),
         "ack_key": services._unseal_scan_key(scan, "ack_key_enc"),
         "autonomy_level": scan.get("autonomy_level"),
+        # Scan-wide T2 gate (container level == 'full'). Since mig 043 the ACTING gate is
+        # per-candidate in _grade_ephemeral (candidate.effective_autonomy, falling back to
+        # the container level here for pre-043 portals); this key stays as the scan-wide
+        # truth for embedders that read the context directly.
         "t2_enabled": scan.get("autonomy_level") == "full",
         "hold_now": time.time(),
         "agent_hold_until": agent_hold_until,

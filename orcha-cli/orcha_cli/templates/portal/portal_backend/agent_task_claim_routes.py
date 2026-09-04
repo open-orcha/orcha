@@ -6,6 +6,7 @@ from fastapi import Header, HTTPException
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
+from portal_backend.autonomy import effective_autonomy
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.guards import reject_if_retired as _reject_if_retired
@@ -60,8 +61,20 @@ def agent_next(
         )
         _ack_events_handled(cur, aid, "task_assigned", "task_id", tid)
         _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
-        cur.execute("SELECT autonomy_level FROM containers WHERE id=%s", (cid,))
-        autonomy_level = cur.fetchone()["autonomy_level"]
+        # #298 + mig 043: expose BOTH the container level+enforced flag AND this claiming agent's
+        # EFFECTIVE level (additive — `autonomy_level` keeps its container-level meaning so no
+        # existing consumer breaks). The worker keys its advisory gh/git behavior off
+        # effective_autonomy — its own override (or the container level when enforced/inherit).
+        cur.execute(
+            "SELECT autonomy_level, autonomy_enforced FROM containers WHERE id=%s", (cid,)
+        )
+        c = cur.fetchone()
+        autonomy_level = c["autonomy_level"]
+        autonomy_enforced = c["autonomy_enforced"]
+        cur.execute("SELECT autonomy_override FROM agents WHERE id=%s", (aid,))
+        effective_level = effective_autonomy(
+            autonomy_level, autonomy_enforced, cur.fetchone()["autonomy_override"]
+        )
         bump_agent(cur, aid)
         recompute_agent_status(cur, aid)
         log_event(cur, cid, "ai", aid, "task", tid, "claimed", {"title": task["title"]})
@@ -76,4 +89,6 @@ def agent_next(
             "protocol": task["protocol"],
         },
         "autonomy_level": autonomy_level,
+        "autonomy_enforced": autonomy_enforced,
+        "effective_autonomy": effective_level,
     }

@@ -19,6 +19,7 @@ from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
 from portal_backend.limits import MAX_DOD_LEN, MAX_NAME_LEN
+from portal_backend.push_outbox import push_request as _push_request
 from portal_backend.request_classification import classify_request_type
 from portal_backend.schemas.requests import RequestCreate, TaskRequestPayload
 
@@ -224,6 +225,12 @@ def create_request(cid: str, body: RequestCreate):
             },
         )
         conn.commit()
+
+    # Push pipeline (mig 041): a request born targeting a human (unspecified
+    # targets resolve to the human at birth — Orcha#30) is a needs-you item.
+    # AFTER the commit, best-effort; the hook checks the target's kind itself,
+    # so agent-targeted requests no-op here.
+    _push_request(cid, rid)
 
     return {
         "request_id": rid,

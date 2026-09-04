@@ -20,13 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,7 +80,7 @@ fun RunRow(run: RunDto, onOpenRun: (RunDto) -> Unit) {
     val p = Orcha.palette
     OrchaCard(onClick = { onOpenRun(run) }) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Rounded.Terminal, null, tint = p.accent, modifier = Modifier.size(18.dp))
+            Icon(OrchaIcons.Terminal, null, tint = p.accent, modifier = Modifier.size(18.dp))
             Text(run.runId.take(6), style = MonoStyle, color = p.text)
             run.agentAlias?.let {
                 Avatar(it, human = false, size = AvatarSize.Sm)

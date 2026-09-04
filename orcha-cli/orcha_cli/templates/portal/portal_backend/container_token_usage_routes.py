@@ -3,11 +3,12 @@
 import os
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
+from portal_backend.identity_routes import require_member_read
 
 MEASURED_USAGE = (
     "(wr.input_tokens IS NOT NULL OR wr.output_tokens IS NOT NULL "
@@ -44,7 +45,7 @@ def usage_window(row, quota):
 
 
 @app.get("/api/containers/{cid}/token-usage")
-def container_token_usage(cid: str):
+def container_token_usage(cid: str, request: Request):
     """#289 (EFFICIENCY epic, measurement backbone): the tokens-vs-quota METER. Aggregates the
     per-wake token usage the daemon now records on worker_runs (mig 019) into rolling windows so
     we can SEE what the fleet is burning and prove a fix moved the number.
@@ -69,6 +70,8 @@ def container_token_usage(cid: str):
     quota_7d = quota_env("ORCHA_QUOTA_WEEKLY_TOKENS")
     with db_cursor() as (_, cur):
         require_container(cur, cid)
+        # Access model: reads are project-isolated (trusted non-member 403).
+        require_member_read(cur, request, cid)
         cur.execute(
             f"""WITH r AS (
                    SELECT wr.ended_at,

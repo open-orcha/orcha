@@ -1,7 +1,7 @@
 import type { MenuItemConstructorOptions } from 'electron'
 
 export interface AppMenuHooks {
-  onNewProject: () => void
+  onAddProject: () => void
 }
 
 /** Build the macOS app menu template. Kept pure (no Menu.setApplicationMenu) so it's unit-testable;
@@ -16,9 +16,9 @@ export function buildAppMenuTemplate(hooks: AppMenuHooks): MenuItemConstructorOp
       label: 'File',
       submenu: [
         {
-          label: 'New Project…',
+          label: 'Add Project…',
           accelerator: 'CmdOrCtrl+N',
-          click: () => hooks.onNewProject()
+          click: () => hooks.onAddProject()
         },
         { type: 'separator' },
         isMac ? { role: 'close' as const } : { role: 'quit' as const }

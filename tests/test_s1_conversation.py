@@ -1,87 +1,96 @@
 """FT-SURFACE (S1 + S4 + S5-presence) — conversation panel on the agent view.
 
-S1 mounts the turn-based chat for one agent into #convWrap (a sibling of #detailMain, so
-the 3s Orcha.patch repaint never wipes the composer). It renders turns from the Vault
-conv-store (#115), sends a human turn, and replays each agent turn's work log via the
-SHARED run engine (startRunStream keyed by turn.run_id). S4 = a `/` skill palette in the
-composer. S5-presence = a header pill derived from agent.status. The live token stream +
-Stop + permission/ask-human cards are PR2 (Forge E4) — built forward-compatible here.
-The live visual is verified in the portal; the automatable surface is wiring + the
-conv-store contract round-trip.
+Phase 7: the vanilla static/{conversation.js,agents.html,app.js} surface is retired.
+The React port is frontend/src/pages/agents/Conversation.tsx (+ agents.css), mounted
+by AgentsPage into #convWrap keyed by agent id (`key={a.id}` = the vanilla
+mount()/teardown() lifecycle — remount only on agent change, and all composer state
+lives in useState so the 3s poll never clobbers typing). The '/' search-shortcut
+guard lives in shell/Shell.tsx; the run-card tmux relabel in pages/agents/runlog.tsx
+(+ pages/tasks/TasksPage.tsx). The conv-store contract (#115) is UNCHANGED — the API
+round-trip below still runs against the live portal.
+
+The node harnesses that eval'd conversation.js moved to Vitest, driving the REAL
+component with a stubbed fetch:
+  - frontend/src/pages/agents/Conversation.presence.test.tsx (presenceOf status map,
+    queued-vs-thinking, the stale-load race)
+  - frontend/src/pages/agents/Conversation.test.tsx (#337 attachments)
 """
-import json
 import pathlib
-import re
-import shutil
-import subprocess
 import pytest
-from portal_source import page_source, script_source
 
 pytestmark = pytest.mark.asyncio
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
+PORTAL = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"
+FRONTEND = PORTAL / "frontend" / "src"
+AGENTS_DIR = FRONTEND / "pages" / "agents"
+
+
+def _conv() -> str:
+    return (AGENTS_DIR / "Conversation.tsx").read_text()
 
 
 # ---------- serves + boots ----------
 
 async def test_agents_loads_conversation_module(client):
+    """The agents page serves the SPA shell; the conversation panel ships in the
+    dist bundle (Conversation.tsx), not a separate /assets/conversation.js."""
     r = await client.get("/agents")
     assert r.status_code == 200, r.text
-    assert "/assets/conversation.js" in r.text, "agents page doesn't load conversation.js"
-    assert 'id="convWrap"' in r.text, "no #convWrap mount point (panel must live outside the 3s patch)"
-    # the D3 'coming soon' placeholder is gone
-    assert "convo-hold" not in r.text, "the held placeholder wasn't replaced"
-    a = await client.get("/assets/conversation.js")
-    assert a.status_code == 200, "conversation.js not served from /assets"
+    assert "text/html" in r.headers.get("content-type", "")
+    assert 'id="root"' in r.text, "no SPA mount point"
+    assert "/assets/dist/" in r.text, "agents doesn't load the dist bundle"
 
 
 def test_agents_mounts_the_panel_outside_the_patched_panel():
-    html = page_source("agents.html")
-    # mounted into #convWrap (a sibling of #detailMain), remounted only on agent change
-    assert 'OrchaConvo.mount(Age$("convWrap")' in html, "panel not mounted into #convWrap"
-    assert "OrchaConvo.teardown()" in html, "panel not torn down on agent change"
-    assert "a.id === convAgent" in html, "panel remounts every tick (should only on agent change)"
+    """The panel mounts into #convWrap (a sibling of #detailMain, so the 3s snapshot
+    repaint never wipes the composer) and is keyed by agent id — React remounts it
+    ONLY on agent change (the vanilla mount/teardown + `a.id === convAgent` guard)."""
+    page = (AGENTS_DIR / "AgentsPage.tsx").read_text()
+    assert 'id="convWrap"' in page, "no #convWrap mount point"
+    assert "<Conversation key={a.id}" in page, \
+        "panel not keyed by agent id (would remount every tick or never teardown)"
+    assert 'id="detailMain"' in page, "no #detailMain (the panel must live outside it)"
 
 
 # ---------- static guards on the conversation module ----------
 
 def test_conversation_module_wires_the_conv_store_contract():
-    js = script_source("conversation.js")
-    assert "OrchaConvo" in js and "mount" in js and "teardown" in js, "OrchaConvo.mount/teardown not exposed"
+    js = _conv()
     # S1 read + send against Vault's stable conv-store (#115)
-    assert "/api/agents/" in js and "/conversation?limit=" in js, "doesn't load the agent's conversation"
+    assert '"/api/agents/"' in js and '"/conversation?limit=' in js, "doesn't load the agent's conversation"
     assert "/turns?after_seq=" in js, "doesn't poll new turns by seq"
     assert 'role: "human", author_agent_id: h.id, content: v' in js, "human send doesn't POST the turn contract"
     assert "actor_agent_id: h.id" in js, "conversation create doesn't pass the acting human"
-    # per-turn work log reuses the SHARED run engine, keyed by turn.run_id
-    assert "startRunStream(logEl, agentId, rid)" in js, "work log doesn't reuse the shared run stream by run_id"
+    # per-turn work log reuses the SHARED run engine (runlog.tsx), keyed by turn.run_id
+    assert "WorkLogDetails" in js and "t.run_id" in js, "work log doesn't reuse the shared run engine by run_id"
     # S4: the slash skill palette
-    assert 'v.startsWith("/")' in js and "SKILLS" in js, "no slash skill palette"
+    assert 'draft.startsWith("/")' in js and "SKILLS" in js, "no slash skill palette"
     # S5: presence derived from agent.status (not a stored field)
-    assert "presenceOf" in js and "a.status" in js, "presence not derived from agent.status"
+    assert "presenceOf" in js and "agent.status" in js, "presence not derived from agent.status"
     # S2 forward-compat: cards switch on turn.meta.type (light up with E4)
-    assert 'meta.type === "permission_request"' in js and 'meta.type === "ask_human"' in js, "permission/ask cards not forward-compatible"
-    # review P2: arrow-key nav must redraw WITHOUT refiltering (else slashIdx snaps to 0)
-    assert "function filterSlash" in js and "function renderSlash" in js, "slash filtering not split from rendering"
-    assert "slashIdx = (slashIdx + 1) % slashItems.length; renderSlash()" in js, "ArrowDown doesn't redraw without refiltering"
-    assert "openSlash(" not in js, "arrow nav still re-filters via openSlash (resets the highlight)"
+    assert 'meta.type === "permission_request"' in js and 'meta.type === "ask_human"' in js, \
+        "permission/ask cards not forward-compatible"
+    # review P2 parity: arrow-key nav must redraw WITHOUT refiltering — in React the
+    # filter is DERIVED (slashItems from draft), so ArrowDown only moves the index.
+    assert "SKILLS.filter((s) => s.startsWith(slashQuery))" in js, "slash filtering not derived from the draft"
+    assert "setSlashIdx((i) => (i + 1) % slashItems.length)" in js, \
+        "ArrowDown doesn't advance the highlight without refiltering"
 
 
 def test_conversation_caches_turns_no_reload_on_tab_switch():
-    """ISS-68: switching agent tabs and back must NOT reload the thread from scratch (flicker +
-    lost scroll). A fresh per-agent cache is painted instantly + delta-refreshed; only a missing
-    or stale (TTL) cache triggers a full load()."""
-    js = script_source("conversation.js")
+    """ISS-68: switching agent tabs and back must NOT reload the thread from scratch
+    (flicker + lost scroll). A fresh per-agent module-level cache is painted instantly
+    + delta-refreshed via poll(); only a missing or stale (TTL) cache triggers load()."""
+    js = _conv()
     assert "convCache" in js and "CONV_CACHE_TTL_MS" in js, "no per-agent conversation cache"
-    assert "function cacheConv" in js, "conversation state isn't snapshotted into the cache"
-    # mount paints from a fresh cache (no full reload) and delta-refreshes; stale/missing -> load()
-    m = re.search(r"function mount\(el, aid\) \{.*?pollTimer = setInterval", js, re.S).group(0)
-    assert "convCache[aid]" in m and "CONV_CACHE_TTL_MS" in m, "mount doesn't consult the cache TTL"
-    assert "renderList(); renderPresence();" in m and "poll();" in m, "mount doesn't paint-from-cache + delta-refresh"
-    assert "load();" in m, "mount lost the full-load fallback for a stale/missing cache"
+    assert "const cached = convCache[agent.id]" in js, "mount doesn't consult the cache"
+    assert "Date.now() - cached.at < CONV_CACHE_TTL_MS" in js, "mount doesn't check the cache TTL"
+    # fresh cache -> paint + delta-refresh; stale/missing -> full load()
+    assert "if (freshCache) void poll();" in js and "else void load();" in js, \
+        "mount lost the paint-from-cache / full-load split"
     # the cache is kept current as turns load + arrive
-    assert js.count("cacheConv()") >= 2, "cache not refreshed on load + poll"
+    assert "convCache[agent.id] = {" in js, "cache not refreshed as state changes"
 
 
 # ---------- the conv-store contract the panel depends on (round-trip) ----------
@@ -109,31 +118,25 @@ async def test_conversation_contract_round_trip(client, make_agent):
     assert "seq" in turns[-1] and "run_id" in turns[-1] and "meta" in turns[-1]   # shapes the panel renders
 
 
-# ---------- presence derivation (node) ----------
+# ---------- presence derivation (moved to Vitest) ----------
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
 def test_presence_derived_from_agent_status():
-    js = script_source("conversation.js")
-    harness = r"""
-global.window = {};
-global.fetch = () => Promise.reject("no fetch in test");
-global.setInterval = () => 0;
-__CONVJS__
-let STATUS = "idle";
-global.window.Orcha = { agentById: () => ({ alias: "Frame", status: STATUS }) };
-const C = window.OrchaConvo;
-const out = {};
-STATUS = "working"; out.working = C.presenceOf().k;
-STATUS = "needs_verification"; out.replied = C.presenceOf().k;
-STATUS = "awaiting_request"; out.waking = C.presenceOf().k;
-STATUS = "idle"; out.idle = C.presenceOf().k;
-STATUS = "terminated"; out.offline = C.presenceOf().k;
-console.log(JSON.stringify(out));
-"""
-    out = subprocess.run(["node", "-e", harness.replace("__CONVJS__", js)], capture_output=True, text=True)
-    assert out.returncode == 0, out.stderr
-    res = json.loads(out.stdout.strip().splitlines()[-1])
-    assert res == {"working": "working", "replied": "replied", "waking": "waking", "idle": "idle", "offline": "offline"}, res
+    """The behavioral map (working→working, needs_verification→replied,
+    awaiting_request→waking, idle→idle, terminated→offline) runs against the real
+    component in frontend/src/pages/agents/Conversation.presence.test.tsx
+    ("S1 presenceOf — the agent.status → pill map"). Here: pin the source map."""
+    js = _conv()
+    fn = js[js.index("function presenceOf"):js.index("function AttRow")]
+    assert 'case "working"' in fn and '{ k: "working", l: "working" }' in fn
+    assert 'case "needs_verification"' in fn and '{ k: "replied", l: "replied" }' in fn
+    assert 'case "awaiting_request"' in fn and '{ k: "waking"' in fn
+    assert 'case "terminated"' in fn and '{ k: "offline", l: "offline" }' in fn
+    assert 'return { k: "idle", l: "idle" }' in fn, "no idle default"
+    # the Vitest harness can't silently vanish
+    t = (AGENTS_DIR / "Conversation.presence.test.tsx").read_text()
+    assert "the agent.status → pill map" in t, "S1 presence-map Vitest scenario missing"
+    for beat in ('"m2", "p-replied", "replied"', '"m5", "p-offline", "offline"'):
+        assert beat in t, f"presence-map harness lost a beat: {beat}"
 
 
 # ---------- S1/S4 polish (#118 follow-ups) ----------
@@ -141,30 +144,34 @@ console.log(JSON.stringify(out));
 def test_conversation_shows_thinking_indicator_on_send():
     """After the human sends a turn, a transient 'thinking…' indicator shows until the
     agent's reply turn lands (immediate feedback that the agent is working)."""
-    js = script_source("conversation.js")
-    assert "function thinkingBubble" in js, "no thinking indicator"
-    assert "awaiting = true; renderList()" in js, "send doesn't raise the thinking indicator"
-    assert 'fresh.some((t) => t.role === "agent")' in js and "awaiting = false" in js, \
+    js = _conv()
+    assert "const thinking = () =>" in js and "conv-thinking" in js, "no thinking indicator"
+    assert "setAwaiting(true)" in js, "send doesn't raise the thinking indicator"
+    assert 'fresh.some((t) => t.role === "agent")' in js and "setAwaiting(false)" in js, \
         "the indicator isn't cleared when the agent reply lands"
-    # the indicator's CSS lives on the agent page
-    assert ".conv-thinking" in page_source("agents.html"), "no .conv-thinking style"
-    # review P2: the module-level awaiting flag must reset on mount/teardown so a pending
-    # "thinking…" can't leak to a different agent on a panel switch.
-    assert js.count("awaiting = false") >= 3, "awaiting not reset on mount + teardown (would leak between agents)"
+    # the indicator's CSS lives in the agents page stylesheet
+    assert ".conv-thinking" in (AGENTS_DIR / "agents.css").read_text(), "no .conv-thinking style"
+    # review P2 parity: `awaiting` is per-mount useState and the panel is keyed by
+    # agent id, so a pending "thinking…" can never leak to a different agent.
+    assert "useState(false); // optimistic until the reply lands" in js, \
+        "awaiting is not per-mount state (would leak between agents)"
 
 
 def test_slash_shortcut_guarded_when_an_input_is_focused():
     """The global '/' search shortcut must NOT fire while the user is typing in a field
     (composer, reason box, any input/textarea/select/contenteditable) — else typing '/'
     steals the keystroke + focus into the search bar (#118 S4 follow-up)."""
-    app = script_source("app.js")
-    assert "function isEditableTarget" in app, "no editable-target guard helper"
-    assert 'e.key === "/" && !isEditableTarget(document.activeElement)' in app, \
+    shell = (FRONTEND / "shell" / "Shell.tsx").read_text()
+    assert "isContentEditable" in shell and "INPUT|TEXTAREA|SELECT" in shell, \
+        "no editable-target guard helper"
+    assert 'e.key === "/" && !editing' in shell, \
         "the '/' shortcut isn't guarded against a focused input"
 
 
 def test_run_card_relabels_tmux_as_live_tab():
     """Feed display polish: the run-card wake_kind label shows 'live tab' for a tmux run
-    (display-only — the stored wake_kind value is unchanged). Other kinds render verbatim."""
-    app = script_source("app.js")
-    assert 'run.wake_kind === "tmux" ? "live tab"' in app, "tmux not relabeled 'live tab' in the run card"
+    (display-only — the stored wake_kind value is unchanged). Both run-card surfaces."""
+    for page in ("pages/agents/runlog.tsx", "pages/tasks/TasksPage.tsx"):
+        src = (FRONTEND / page).read_text()
+        assert 'run.wake_kind === "tmux" ? "live tab"' in src, \
+            f"{page}: tmux not relabeled 'live tab' in the run card"

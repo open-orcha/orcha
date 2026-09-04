@@ -2,11 +2,12 @@
 
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
+from portal_backend.identity_routes import trusted_actor
 from portal_backend.notification_formatting import _classify_notification
 from portal_backend.notification_taxonomy import _NOTIF_ACTOR_FIELDS
 from portal_backend.schemas.agent_state import NotificationsRead
@@ -150,7 +151,7 @@ def agent_notifications(
 
 
 @app.post("/api/agents/{aid}/notifications/read", status_code=200)
-def agent_notifications_read(aid: str, body: NotificationsRead):
+def agent_notifications_read(aid: str, body: NotificationsRead, request: Request):
     """#247 — advance this agent's notification read cursor (monotonic).
 
     UPSERTs agent_notification_state.read_through_ts. With ``through_ts`` omitted it jumps to the
@@ -163,7 +164,19 @@ def agent_notifications_read(aid: str, body: NotificationsRead):
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        require_agent(cur, aid)
+        agent = require_agent(cur, aid)
+        # Per-project identity: under proxy trust a HUMAN feed cursor belongs to the
+        # verified member — a member may only advance their OWN cursor, and a
+        # non-member of this project is refused outright (403 from trusted_actor).
+        cur.execute("SELECT kind FROM agents WHERE id=%s", (aid,))
+        if cur.fetchone()["kind"] == "human":
+            effective = trusted_actor(
+                cur, request, str(agent["container_id"]), aid
+            )
+            if str(effective) != str(aid):
+                raise HTTPException(
+                    403, "you can only mark your own notifications read"
+                )
         target = body.through_ts
         if target is None:
             cur.execute(

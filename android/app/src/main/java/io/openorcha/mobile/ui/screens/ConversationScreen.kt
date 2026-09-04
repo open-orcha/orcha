@@ -18,11 +18,6 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -64,6 +59,7 @@ import io.openorcha.mobile.ui.components.OrchaField
 import io.openorcha.mobile.ui.components.StatusDomain
 import io.openorcha.mobile.ui.components.StatusPill
 import io.openorcha.mobile.ui.components.pulseAlpha
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -82,29 +78,30 @@ fun ConversationScreen(
     onEnd: () -> Unit,
     onOpenRun: (RunDto) -> Unit,
     onOpenTask: (String) -> Unit,
+    onRetry: () -> String? = { null },
 ) {
     val p = Orcha.palette
     val agent = state.selectedAgent
     var draft by remember { mutableStateOf("") }
-    var pendingTurn by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var confirmEnd by remember { mutableStateOf(false) }
-    val unsentTurn = if (state.error != null) pendingTurn else null
+    val sendFlow = state.sendFlow
     val listState = rememberLazyListState()
     // issue 4: the web's client-side reveal (conversation.js REVEAL) — render the newest
     // 10 turns, "Load earlier" reveals +20 (the fetch already holds up to 80).
     var reveal by remember(agent?.id) { mutableStateOf(CONV_REVEAL_INITIAL) }
     val visibleTurns = if (state.turns.size > reveal) state.turns.takeLast(reveal) else state.turns
     val imeVisible = WindowInsets.isImeVisible
-    // issue 2: keep the newest turns in view when the keyboard opens or a turn lands
-    LaunchedEffect(state.turns.size, imeVisible) {
+    // issue 2: keep the newest turns in view when the keyboard opens, a turn lands, or the
+    // pending bubble appears/changes (chat send-UX: a new send scrolls the composer into view).
+    LaunchedEffect(state.turns.size, imeVisible, sendFlow.showsPendingBubble) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last >= 0 && (imeVisible || state.turns.isNotEmpty())) listState.animateScrollToItem(last)
     }
     val working = agent?.status == "working"
 
     Scaffold(
-        containerColor = p.bg,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -117,10 +114,10 @@ fun ConversationScreen(
                         }
                     }
                 },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
                 actions = {
-                    IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
-                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                    IconButton(onClick = onRefresh) { Icon(OrchaIcons.Refresh, "Refresh") }
+                    IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(text = { Text("End conversation") }, onClick = { menuOpen = false; confirmEnd = true })
                     }
@@ -184,20 +181,10 @@ fun ConversationScreen(
                         TurnBubble(turn, state.selectedContainer?.humanAgentId, agent?.alias, onOpenRun, agent?.id, state.snapshot?.tasks.orEmpty(), onOpenTask)
                     }
                 }
-                unsentTurn?.let { text ->
-                    item(key = "unsent") {
-                        Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
-                            Bubble(BubbleKind.Mine, text)
-                            Text(
-                                "Not sent · Tap to retry",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = p.danger,
-                                modifier = Modifier.padding(top = 2.dp).clickable { onSend(text) },
-                            )
-                        }
-                    }
-                }
-                if (working) {
+                // Chat send-UX (iOS `ChatSendFlow` parity): pending bubble, awaiting-reply
+                // indicator, and the overdue note — see ConversationTurnBubble.kt.
+                chatSendFlowItems(sendFlow, agentAlias = agent?.alias, onRetry = { onRetry()?.let { draft = it } })
+                if (working && !sendFlow.showsAwaitingReply) {
                     item {
                         Text(
                             "${agent?.alias ?: "The agent"} is working…",
@@ -207,7 +194,7 @@ fun ConversationScreen(
                         )
                     }
                 }
-                state.error?.let { item { Banner(BannerKind.Danger, it) } }
+                if (!sendFlow.isFailed) state.error?.let { item { Banner(BannerKind.Danger, it) } }
             }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -221,13 +208,13 @@ fun ConversationScreen(
                     maxLines = 4,
                 )
                 IconButton(
-                    onClick = { pendingTurn = draft.trim(); onSend(draft.trim()); draft = "" },
-                    enabled = draft.isNotBlank() && !state.actionInFlight,
+                    onClick = { onSend(draft.trim()); draft = "" },
+                    enabled = draft.isNotBlank() && sendFlow.canBegin,
                     colors = IconButtonDefaults.iconButtonColors(
                         containerColor = p.accent, contentColor = p.accentInk,
                         disabledContainerColor = p.accent.copy(alpha = 0.4f), disabledContentColor = p.accentInk,
                     ),
-                ) { Icon(Icons.AutoMirrored.Rounded.Send, "Send") }
+                ) { Icon(OrchaIcons.Send, "Send") }
             }
         }
     }

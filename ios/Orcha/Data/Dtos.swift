@@ -1,9 +1,7 @@
 import Foundation
 
-// Responsibility: Container and agent response models decoded from the Orcha API.
-
-// The Orcha API surface, mirrored from the Android client and proven against a live
-// stack. The domain files together form one serialization contract.
+// The Orcha API surface, mirrored from the Android client (proven against a live
+// stack). One file: these types are a single serialization contract.
 
 struct ContainersResponse: Decodable {
     var containers: [ContainerDto] = []
@@ -14,6 +12,33 @@ struct ContainerSnapshot: Decodable {
     var agents: [AgentDto] = []
     var tasks: [TaskDto] = []
     var requests: [RequestDto] = []
+    /// GH sidebar/iOS count mismatch: the server-computed, non-capped OPEN counts —
+    /// non-terminal tasks / status=="open" requests — mirroring the web fix
+    /// (container_snapshot_routes.py). Additive: nil on a pre-fix server (or a
+    /// container endpoint hit directly without them). Raw decoded value — consumers
+    /// should read `taskOpenTotal`/`requestOpenTotal` below, which fall back to
+    /// counting the loaded arrays when this is nil.
+    private var taskOpenTotalRaw: Int?
+    private var requestOpenTotalRaw: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case container, agents, tasks, requests
+        case taskOpenTotalRaw = "task_open_total"
+        case requestOpenTotalRaw = "request_open_total"
+    }
+
+    /// Non-terminal (open) task count. Prefers the server's true count(*) over the
+    /// capped/priority-ordered `tasks` array (default cap 1000 — was the "counting a
+    /// fetched page's length instead of a server total" bug); falls back to counting
+    /// the loaded array when polling an older server that predates the field.
+    var taskOpenTotal: Int {
+        taskOpenTotalRaw ?? tasks.filter { !MobileUx.isTerminalGroup($0.status) }.count
+    }
+    /// Open (status == "open") request count — same authoritative-field-with-fallback
+    /// contract as `taskOpenTotal`.
+    var requestOpenTotal: Int {
+        requestOpenTotalRaw ?? requests.filter { $0.status == "open" }.count
+    }
 }
 
 struct ContainerDto: Decodable {
@@ -25,11 +50,15 @@ struct ContainerDto: Decodable {
     /// GH #148 — the wake kill-switch, distinct from `status` (the laptop-level container
     /// lifecycle). Pre-SPEC-1 snapshots may omit this; treat missing as Running (spec §6.3).
     var wakesEnabled: Bool?
+    /// The GitHub repo bound to this workspace as "owner/name" (portal Connect-repo
+    /// parity, `home-github.js`). Nil = unbound, or a pre-binding server.
+    var githubRepo: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, status
         case autonomyLevel = "autonomy_level"
         case wakesEnabled = "wakes_enabled"
+        case githubRepo = "github_repo"
     }
 }
 
@@ -47,6 +76,10 @@ struct AgentDto: Decodable, Identifiable {
     var activeRun: ActiveRunDto?
     var lastActive: String?
     var terminatedAt: String?
+    /// Collab v1 — the GitHub identity a human member is mapped to (nil for AI agents
+    /// and unmapped humans) + their project role (owner | member | viewer).
+    var githubLogin: String?
+    var memberRole: String?
 
     enum CodingKeys: String, CodingKey {
         case id, alias, role, kind, status, model
@@ -57,6 +90,8 @@ struct AgentDto: Decodable, Identifiable {
         case activeRun = "active_run"
         case lastActive = "last_active"
         case terminatedAt = "terminated_at"
+        case githubLogin = "github_login"
+        case memberRole = "member_role"
     }
 }
 
@@ -89,5 +124,658 @@ struct ActiveRunDto: Decodable {
         case taskTitle = "task_title"
         case hasConversation = "has_conversation"
         case startedAt = "started_at"
+    }
+}
+
+struct TaskDto: Decodable, Identifiable {
+    let id: String
+    let title: String
+    var description: String?
+    var definitionOfDone: String?
+    var status: String = "unknown"
+    var priority: Int?
+    /// tasks.result is JSONB: /done writes `{"result": <text>, "by_agent_id": …}`,
+    /// legacy rows may be a bare string. Same tolerant decode as Android/portal.
+    var result: String?
+    var isRoot: Bool = false
+    var createdByAgentId: String?
+    var ownerAlias: String?
+    var ownerId: String?
+    var assignees: [String] = []
+    var createdAt: String?
+    var startedAt: String?
+    var completedAt: String?
+    var messageSummary: MessageSummaryDto?
+    var planMessage: TaskMessageDto?
+    var planDecision: String?
+    var dependsOn: [String] = []
+    /// Collab v1 — the owner-assigned human reviewer (nil = anyone), plus the resolved
+    /// `{agent_id, alias, github_login}` chip the server rides on the task list.
+    var reviewerAgentId: String?
+    var reviewer: TaskReviewerDto?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, description, status, priority, result, assignees, reviewer
+        case definitionOfDone = "definition_of_done"
+        case isRoot = "is_root"
+        case createdByAgentId = "created_by_agent_id"
+        case ownerAlias = "owner_alias"
+        case ownerId = "owner_id"
+        case createdAt = "created_at"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+        case messageSummary = "message_summary"
+        case planMessage = "plan_message"
+        case planDecision = "plan_decision"
+        case dependsOn = "depends_on"
+        case reviewerAgentId = "reviewer_agent_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        definitionOfDone = try c.decodeIfPresent(String.self, forKey: .definitionOfDone)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "unknown"
+        priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+        // tolerant result: string | {"result": string, ...} | null
+        if let plain = try? c.decodeIfPresent(String.self, forKey: .result) {
+            result = plain
+        } else if let obj = try? c.decodeIfPresent([String: LenientValue].self, forKey: .result) {
+            result = obj["result"]?.stringValue
+        } else {
+            result = nil
+        }
+        isRoot = try c.decodeIfPresent(Bool.self, forKey: .isRoot) ?? false
+        createdByAgentId = try c.decodeIfPresent(String.self, forKey: .createdByAgentId)
+        ownerAlias = try c.decodeIfPresent(String.self, forKey: .ownerAlias)
+        ownerId = try c.decodeIfPresent(String.self, forKey: .ownerId)
+        assignees = try c.decodeIfPresent([String].self, forKey: .assignees) ?? []
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        startedAt = try c.decodeIfPresent(String.self, forKey: .startedAt)
+        completedAt = try c.decodeIfPresent(String.self, forKey: .completedAt)
+        messageSummary = try c.decodeIfPresent(MessageSummaryDto.self, forKey: .messageSummary)
+        planMessage = try c.decodeIfPresent(TaskMessageDto.self, forKey: .planMessage)
+        // tolerant plan_decision: null | {"decision": string, "reason", "actor", "at"} (ISS-41
+        // shape — every caller only checks nil vs non-nil, never the string itself, so pulling
+        // just `.decision` out preserves that contract).
+        if let plain = try? c.decodeIfPresent(String.self, forKey: .planDecision) {
+            planDecision = plain
+        } else if let obj = try? c.decodeIfPresent([String: LenientValue].self, forKey: .planDecision) {
+            planDecision = obj["decision"]?.stringValue
+        } else {
+            planDecision = nil
+        }
+        dependsOn = try c.decodeIfPresent([String].self, forKey: .dependsOn) ?? []
+        reviewerAgentId = try c.decodeIfPresent(String.self, forKey: .reviewerAgentId)
+        reviewer = try c.decodeIfPresent(TaskReviewerDto.self, forKey: .reviewer)
+    }
+
+    init(
+        id: String, title: String, status: String = "unknown", priority: Int? = nil,
+        result: String? = nil, planMessage: TaskMessageDto? = nil, planDecision: String? = nil,
+        reviewer: TaskReviewerDto? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.priority = priority
+        self.result = result
+        self.planMessage = planMessage
+        self.planDecision = planDecision
+        self.reviewer = reviewer
+        self.reviewerAgentId = reviewer?.agentId
+    }
+}
+
+/// The resolved reviewer chip riding a task row (`task_list_query.py`) and the
+/// `PUT /api/tasks/{tid}/reviewer` echo.
+struct TaskReviewerDto: Decodable, Equatable {
+    let agentId: String
+    var alias: String?
+    var githubLogin: String?
+
+    enum CodingKeys: String, CodingKey {
+        case alias
+        case agentId = "agent_id"
+        case githubLogin = "github_login"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        alias = try c.decodeIfPresent(String.self, forKey: .alias)
+        githubLogin = try c.decodeIfPresent(String.self, forKey: .githubLogin)
+    }
+
+    init(agentId: String, alias: String? = nil, githubLogin: String? = nil) {
+        self.agentId = agentId
+        self.alias = alias
+        self.githubLogin = githubLogin
+    }
+}
+
+/// Decodes any JSON scalar/object leniently — used for the JSONB `result` shape.
+enum LenientValue: Decodable {
+    case string(String)
+    case other
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let s = try? c.decode(String.self) {
+            self = .string(s)
+        } else {
+            self = .other
+        }
+    }
+
+    var stringValue: String? {
+        if case let .string(s) = self { return s }
+        return nil
+    }
+}
+
+struct MessageSummaryDto: Decodable {
+    var count: Int = 0
+    var last: TaskMessageDto?
+}
+
+struct TaskMessageDto: Decodable {
+    var messageId: String?
+    var authorId: String?
+    var authorAlias: String?
+    var isHuman: Bool = false
+    var body: String = ""
+    var createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case body
+        case messageId = "message_id"
+        case authorId = "author_id"
+        case authorAlias = "author_alias"
+        case isHuman = "is_human"
+        case createdAt = "created_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        messageId = try c.decodeIfPresent(String.self, forKey: .messageId)
+        authorId = try c.decodeIfPresent(String.self, forKey: .authorId)
+        authorAlias = try c.decodeIfPresent(String.self, forKey: .authorAlias)
+        isHuman = try c.decodeIfPresent(Bool.self, forKey: .isHuman) ?? false
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+    }
+
+    init(body: String, messageId: String? = nil, authorAlias: String? = nil, authorId: String? = nil, isHuman: Bool = false, createdAt: String? = nil) {
+        self.body = body
+        self.messageId = messageId
+        self.authorAlias = authorAlias
+        self.authorId = authorId
+        self.isHuman = isHuman
+        self.createdAt = createdAt
+    }
+}
+
+struct RequestDto: Decodable, Identifiable {
+    let id: String
+    var type: String = "info"
+    var status: String = "open"
+    var priority: Int?
+    var payload: String = ""
+    var response: String?
+    var rejectionReason: String?
+    var requesterId: String?
+    var requesterAlias: String?
+    var targetId: String?
+    var targetAlias: String?
+    var parentRequestId: String?
+    var chainDepth: Int = 0
+    var createdAt: String?
+    var respondedAt: String?
+    var closedAt: String?
+    var expiresAt: String?
+    var taskLink: TaskLinkDto?
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, status, priority, payload, response
+        case rejectionReason = "rejection_reason"
+        case requesterId = "requester_id"
+        case requesterAlias = "requester_alias"
+        case targetId = "target_id"
+        case targetAlias = "target_alias"
+        case parentRequestId = "parent_request_id"
+        case chainDepth = "chain_depth"
+        case createdAt = "created_at"
+        case respondedAt = "responded_at"
+        case closedAt = "closed_at"
+        case expiresAt = "expires_at"
+        case taskLink = "task_link"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decodeIfPresent(String.self, forKey: .type) ?? "info"
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "open"
+        priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+        payload = try c.decodeIfPresent(String.self, forKey: .payload) ?? ""
+        response = try c.decodeIfPresent(String.self, forKey: .response)
+        rejectionReason = try c.decodeIfPresent(String.self, forKey: .rejectionReason)
+        requesterId = try c.decodeIfPresent(String.self, forKey: .requesterId)
+        requesterAlias = try c.decodeIfPresent(String.self, forKey: .requesterAlias)
+        targetId = try c.decodeIfPresent(String.self, forKey: .targetId)
+        targetAlias = try c.decodeIfPresent(String.self, forKey: .targetAlias)
+        parentRequestId = try c.decodeIfPresent(String.self, forKey: .parentRequestId)
+        chainDepth = try c.decodeIfPresent(Int.self, forKey: .chainDepth) ?? 0
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        respondedAt = try c.decodeIfPresent(String.self, forKey: .respondedAt)
+        closedAt = try c.decodeIfPresent(String.self, forKey: .closedAt)
+        expiresAt = try c.decodeIfPresent(String.self, forKey: .expiresAt)
+        taskLink = try c.decodeIfPresent(TaskLinkDto.self, forKey: .taskLink)
+    }
+
+    init(
+        id: String, type: String = "info", status: String = "open", payload: String = "",
+        priority: Int? = nil, requesterId: String? = nil, targetId: String? = nil,
+        createdAt: String? = nil, closedAt: String? = nil, expiresAt: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.status = status
+        self.payload = payload
+        self.priority = priority
+        self.requesterId = requesterId
+        self.targetId = targetId
+        self.createdAt = createdAt
+        self.closedAt = closedAt
+        self.expiresAt = expiresAt
+    }
+}
+
+struct TaskLinkDto: Decodable {
+    var taskId: String?
+    var title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case taskId = "task_id"
+        case title
+    }
+}
+
+/// Flow 07a — the nudge outcome (`main.py:7762-7801`). `nudged:false` is a clean no-op
+/// (the routed next-action owner is a human / the nudger) — informational, not an error.
+struct NudgeResult: Decodable {
+    var nudged: Bool = false
+    var nudgedRole: String?
+    var nudgedAgentId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nudged
+        case nudgedRole = "nudged_role"
+        case nudgedAgentId = "nudged_agent_id"
+    }
+}
+
+struct TaskMessagesResponse: Decodable {
+    var messages: [TaskMessageDto] = []
+    /// ISS-68 keyset paging (`main.py:5940`): present only when `limit`>0 was requested.
+    var hasMore: Bool = false
+    var nextBefore: String?
+    var nextBeforeId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case messages
+        case hasMore = "has_more"
+        case nextBefore = "next_before"
+        case nextBeforeId = "next_before_id"
+    }
+}
+
+struct TurnsResponse: Decodable {
+    var turns: [TurnDto] = []
+}
+
+struct RunsResponse: Decodable {
+    var runs: [RunDto] = []
+}
+
+struct RunDto: Decodable, Identifiable {
+    let runId: String
+    var agentId: String?
+    var agentAlias: String?
+    var taskId: String?
+    var taskTitle: String?
+    var status: String = "unknown"
+    var wakeKind: String?
+    var wakeEvent: String?
+    var startedAt: String?
+    var endedAt: String?
+    /// Unified git diff of the run's net change (the portal's "Runs & diffs").
+    var diff: String?
+
+    var id: String { runId }
+
+    enum CodingKeys: String, CodingKey {
+        case status, diff
+        case runId = "run_id"
+        case agentId = "agent_id"
+        case agentAlias = "agent_alias"
+        case taskId = "task_id"
+        case taskTitle = "task_title"
+        case wakeKind = "wake_kind"
+        case wakeEvent = "wake_event"
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+    }
+}
+
+struct ModelsResponse: Decodable {
+    var models: [ModelDto] = []
+}
+
+struct ModelDto: Decodable, Identifiable {
+    let id: String
+    var name: String?
+    var provider: String?
+    var runtime: String?
+}
+
+struct ConversationDto: Decodable {
+    let id: String
+    var status: String?
+}
+
+struct ConversationResponse: Decodable {
+    var conversation: ConversationDto?
+    /// Only `GET …/conversation` carries turns; the `POST …/conversations` (start)
+    /// response is `{conversation, created}` with NO `turns` key. A synthesized
+    /// decoder ignores the default and throws `keyNotFound` on that POST — which made
+    /// the FIRST message to any agent land in the failed-send bubble. Tolerant here.
+    var turns: [TurnDto] = []
+
+    enum CodingKeys: String, CodingKey {
+        case conversation, turns
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        conversation = try c.decodeIfPresent(ConversationDto.self, forKey: .conversation)
+        turns = try c.decodeIfPresent([TurnDto].self, forKey: .turns) ?? []
+    }
+
+    init(conversation: ConversationDto?, turns: [TurnDto] = []) {
+        self.conversation = conversation
+        self.turns = turns
+    }
+}
+
+struct TurnDto: Decodable, Identifiable {
+    var id: String?
+    var seq: Int = 0
+    var role: String = "human"
+    var authorAgentId: String?
+    var content: String = ""
+    var runId: String?
+    var createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, seq, role, content
+        case authorAgentId = "author_agent_id"
+        case runId = "run_id"
+        case createdAt = "created_at"
+    }
+}
+
+struct PersonaResponse: Decodable {
+    var alias: String?
+    var role: String?
+    var model: String?
+    var systemPrompt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case alias, role, model
+        case systemPrompt = "system_prompt"
+    }
+}
+
+struct DigestItem: Decodable {
+    var text: String = ""
+}
+
+struct DigestDto: Decodable {
+    var currentFocus: String?
+    var decisions: [DigestItem] = []
+    var learnings: [DigestItem] = []
+    var openThreads: [DigestItem] = []
+    var createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case decisions, learnings
+        case currentFocus = "current_focus"
+        case openThreads = "open_threads"
+        case createdAt = "created_at"
+    }
+}
+
+struct DigestResponse: Decodable {
+    var digest: DigestDto?
+}
+
+struct InboxResponse: Decodable {
+    var openRequests: [RequestDto] = []
+
+    enum CodingKeys: String, CodingKey {
+        case openRequests = "open_requests"
+    }
+}
+
+struct OutboxResponse: Decodable {
+    var outgoingRequests: [RequestDto] = []
+
+    enum CodingKeys: String, CodingKey {
+        case outgoingRequests = "outgoing_requests"
+    }
+}
+
+/// `GET /api/github/repos` — the GitHub App installation's repo list.
+/// `available:false` is a graceful off state (the App isn't wired on the server),
+/// deliberately NOT an error; `detail` optionally says why (github_routes.py).
+struct GithubReposResponse: Decodable {
+    var available = false
+    var repos: [GithubRepoDto] = []
+    var detail: String?
+
+    enum CodingKeys: String, CodingKey {
+        case available, repos, detail
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        available = try c.decodeIfPresent(Bool.self, forKey: .available) ?? false
+        repos = try c.decodeIfPresent([GithubRepoDto].self, forKey: .repos) ?? []
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+    }
+
+    init(available: Bool, repos: [GithubRepoDto] = [], detail: String? = nil) {
+        self.available = available
+        self.repos = repos
+        self.detail = detail
+    }
+}
+
+struct GithubRepoDto: Decodable, Identifiable, Equatable {
+    /// "owner/name" — the binding key the PUT sends back.
+    let fullName: String
+    var isPrivate = false
+    var description: String?
+    var htmlUrl: String?
+
+    var id: String { fullName }
+
+    enum CodingKeys: String, CodingKey {
+        case description
+        case fullName = "full_name"
+        case isPrivate = "private"
+        case htmlUrl = "html_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fullName = try c.decode(String.self, forKey: .fullName)
+        isPrivate = try c.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        htmlUrl = try c.decodeIfPresent(String.self, forKey: .htmlUrl)
+    }
+
+    init(fullName: String, isPrivate: Bool = false, description: String? = nil, htmlUrl: String? = nil) {
+        self.fullName = fullName
+        self.isPrivate = isPrivate
+        self.description = description
+        self.htmlUrl = htmlUrl
+    }
+}
+
+/// `PUT /api/containers/{cid}/github` echoes the persisted binding: `{"repo": "owner/name" | null}`.
+struct GithubBindingResponse: Decodable {
+    var repo: String?
+}
+
+struct GenericIdResponse: Decodable {
+    var taskId: String?
+    var status: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case taskId = "task_id"
+    }
+}
+
+/// `GET /api/me?cid=` — who is the acting human, per the trusted proxy identity
+/// (identity_routes.py). `trusted:false` is the self-host / trust-off lane: the app
+/// keeps its permissive paired-human behavior. `trusted:true` with a nil identity is
+/// the honest "signed in, but not a member of this project" state.
+struct MeResponse: Decodable {
+    var identity: ActingIdentity?
+    var trusted = false
+
+    enum CodingKeys: String, CodingKey {
+        case identity, trusted
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        identity = try c.decodeIfPresent(ActingIdentity.self, forKey: .identity)
+        trusted = try c.decodeIfPresent(Bool.self, forKey: .trusted) ?? false
+    }
+
+    init(identity: ActingIdentity? = nil, trusted: Bool = false) {
+        self.identity = identity
+        self.trusted = trusted
+    }
+}
+
+/// The acting member's identity payload: role + grants gate affordances off the same
+/// source the server enforces (owners hold every grant implicitly — see `Access`).
+struct ActingIdentity: Decodable, Equatable {
+    let agentId: String
+    var alias: String = ""
+    var githubLogin: String?
+    var memberRole: String = "member"
+    var grants: [String] = []
+    var avatarUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case alias, grants
+        case agentId = "agent_id"
+        case githubLogin = "github_login"
+        case memberRole = "member_role"
+        case avatarUrl = "avatar_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        alias = try c.decodeIfPresent(String.self, forKey: .alias) ?? ""
+        githubLogin = try c.decodeIfPresent(String.self, forKey: .githubLogin)
+        memberRole = try c.decodeIfPresent(String.self, forKey: .memberRole) ?? "member"
+        grants = try c.decodeIfPresent([String].self, forKey: .grants) ?? []
+        avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
+    }
+
+    init(
+        agentId: String, alias: String = "", githubLogin: String? = nil,
+        memberRole: String = "member", grants: [String] = [], avatarUrl: String? = nil
+    ) {
+        self.agentId = agentId
+        self.alias = alias
+        self.githubLogin = githubLogin
+        self.memberRole = memberRole
+        self.grants = grants
+        self.avatarUrl = avatarUrl
+    }
+}
+
+/// `GET /api/containers/{cid}/members` — the roster. `restricted:true` means roster
+/// privacy applies: `members` holds ONLY the caller's own row (member_routes.py).
+struct MembersResponse: Decodable {
+    var members: [MemberDto] = []
+    var restricted = false
+
+    enum CodingKeys: String, CodingKey {
+        case members, restricted
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        members = try c.decodeIfPresent([MemberDto].self, forKey: .members) ?? []
+        restricted = try c.decodeIfPresent(Bool.self, forKey: .restricted) ?? false
+    }
+
+    init(members: [MemberDto] = [], restricted: Bool = false) {
+        self.members = members
+        self.restricted = restricted
+    }
+}
+
+/// One roster row. `pending` = invited (github_login set) but never signed in.
+struct MemberDto: Decodable, Identifiable, Equatable {
+    let agentId: String
+    var alias: String = ""
+    var githubLogin: String?
+    var memberRole: String = "member"
+    var grants: [String] = []
+    var pending = false
+
+    var id: String { agentId }
+
+    enum CodingKeys: String, CodingKey {
+        case alias, grants, pending
+        case agentId = "agent_id"
+        case githubLogin = "github_login"
+        case memberRole = "member_role"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        alias = try c.decodeIfPresent(String.self, forKey: .alias) ?? ""
+        githubLogin = try c.decodeIfPresent(String.self, forKey: .githubLogin)
+        memberRole = try c.decodeIfPresent(String.self, forKey: .memberRole) ?? "member"
+        grants = try c.decodeIfPresent([String].self, forKey: .grants) ?? []
+        pending = try c.decodeIfPresent(Bool.self, forKey: .pending) ?? false
+    }
+
+    init(
+        agentId: String, alias: String = "", githubLogin: String? = nil,
+        memberRole: String = "member", grants: [String] = [], pending: Bool = false
+    ) {
+        self.agentId = agentId
+        self.alias = alias
+        self.githubLogin = githubLogin
+        self.memberRole = memberRole
+        self.grants = grants
+        self.pending = pending
     }
 }

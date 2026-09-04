@@ -79,7 +79,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create GitHub release (public repo => release is public)
+      - name: Create GitHub release (private repo => visible to repo members only)
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}

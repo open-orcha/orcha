@@ -59,8 +59,8 @@ def start_worker_run(aid: str, body: WorkerRunStart):
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,
                      conversation_id, conversation_ack_ts, last_message_path,
-                     worktree, branch, base_cwd, lane, status)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running')
+                     worktree, branch, base_cwd, lane, sandbox_container_id, status)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running')
                RETURNING *""",
             (
                 aid,
@@ -77,6 +77,7 @@ def start_worker_run(aid: str, body: WorkerRunStart):
                 body.branch,
                 body.base_cwd,
                 body.lane,
+                body.sandbox_container_id,
             ),
         )
         row = cur.fetchone()
@@ -116,8 +117,12 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
         require_agent(cur, aid)
+        # Resident-lane sandbox (remote-runner un-deferral): sandbox_container_id
+        # rides along so the host reaper can tell a container-backed resident row
+        # (whose liveness is docker's, not the host pid's) from a host-pid one.
         query = (
-            "SELECT run_id, pid, status, started_at FROM worker_runs "
+            "SELECT run_id, pid, status, started_at, sandbox_container_id "
+            "FROM worker_runs "
             "WHERE agent_id=%s AND wake_kind='resident'"
         )
         params: list = [aid]
@@ -134,6 +139,7 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
                 "run_id": str(row["run_id"]),
                 "pid": row["pid"],
                 "status": row["status"],
+                "sandbox_container_id": row["sandbox_container_id"],
                 "started_at": (
                     row["started_at"].isoformat() if row["started_at"] else None
                 ),
@@ -162,9 +168,17 @@ def list_container_running_runs(cid: str):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
         require_container(cur, cid)
+        # Remote-runner Task 5: `sandbox_container_id` marks a row whose liveness is the
+        # CONTAINER's (docker inspect), not the host pid's — the docker-run client pid dies
+        # with a daemon restart while the detached container keeps working (adoption, §3.3c).
+        # `worktree`/`base_cwd` let the sweep load that run's SandboxConfig for its
+        # max-runtime deadline and reap its per-run api-config file. `log_path` lets the
+        # sweep's finish CAPTURE the adopted run's stream-json output (the run wrote it to
+        # the workspace all along) — without it a re-adopted run finishes output=NULL.
         cur.execute(
             """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
-                      wr.started_at
+                      wr.started_at, wr.sandbox_container_id, wr.worktree, wr.base_cwd,
+                      wr.log_path
                  FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
                 WHERE a.container_id = %s AND wr.status = 'running'
                   AND a.terminated_at IS NULL
@@ -182,6 +196,10 @@ def list_container_running_runs(cid: str):
                 "wake_kind": row["wake_kind"],
                 "wake_event": row["wake_event"],
                 "lane": row["lane"],
+                "sandbox_container_id": row["sandbox_container_id"],
+                "worktree": row["worktree"],
+                "base_cwd": row["base_cwd"],
+                "log_path": row["log_path"],
                 "started_at": (
                     row["started_at"].isoformat() if row["started_at"] else None
                 ),

@@ -1,0 +1,313 @@
+/* Agents page-scoped styles — VERBATIM copy of the <style> block in
+   static/agents.html (the shared styles.css does not carry these classes; in
+   the vanilla portal they ship inside the page). No new CSS was written. */
+
+/* roster (left, sticky) */
+/* ISS-38: bound the roster to the viewport so it scrolls independently of the detail —
+   lets a deeplinked (?agent=) row scrollIntoView WITHOUT scrolling the page away from
+   the agent detail. Harmless while the roster is short; correct as it grows. */
+.roster-card { padding: 9px; max-height: calc(100vh - 92px); overflow-y: auto; }
+.roster-card .rh { padding: 9px 9px 7px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
+/* align-items:flex-start so the avatar + status glyph sit at the top when the role
+   wraps to a 2nd line; the row has no fixed height, so it grows with its content. */
+.rrow { display: flex; align-items: flex-start; gap: 11px; padding: 9px 10px; border-radius: 11px; cursor: pointer;
+  border: 1px solid transparent; transition: background .12s, border-color .12s; width: 100%; text-align: left;
+  background: transparent; font: inherit; color: inherit; }
+.rrow:hover { background: var(--hover); }
+.rrow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
+/* stack name (line 1) over role (line 2) */
+.rrow .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rrow .nm { font-weight: 650; font-size: 13.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* role on its own line, wrapping to AT MOST 2 lines then ellipsis */
+.rrow .rl { color: var(--faint); font-size: 11.5px; line-height: 1.3; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+/* ISS-71/ISS-69(a): roster badge for an agent holding its single-flight embodiment lease.
+   The KIND is colour-coded so a held lease is legible at a glance: live terminal (teal),
+   resident conversation (violet), ephemeral task (amber). */
+.rrow .rlive { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; align-self: center; font-size: 10px; font-weight: 700;
+  color: #1fc7cd; background: rgba(31,199,205,.12); border: 1px solid rgba(31,199,205,.3); border-radius: 999px; padding: 2px 7px; }
+.rrow .rlive .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
+.rrow .rlive.resident { color: #b794f6; background: rgba(183,148,246,.12); border-color: rgba(183,148,246,.3); }
+.rrow .rlive.ephemeral { color: #e6a23c; background: rgba(230,162,60,.12); border-color: rgba(230,162,60,.3); }
+
+/* detail header */
+.ahead { display: flex; align-items: center; gap: 16px; }
+.ahead .who h1 { font-size: 22px; font-weight: 740; letter-spacing: -.02em; display: flex; align-items: center; gap: 10px; margin: 0; }
+.ahead .who .role { color: var(--muted); font-size: 13px; margin-top: 3px; }
+
+/* gate callout (decoupled from agent status — ISS-36) */
+.gatecard { padding: 14px 16px; margin-bottom: 18px; border-radius: 14px; }
+.gatecard.attn { border: 1px solid var(--warn-line); background: linear-gradient(180deg, var(--warn-soft), transparent 90px); }
+.gatecard.decided { border: 1px solid var(--border); background: var(--surface-2); }
+.gatecard .row { display: flex; align-items: center; gap: 11px; }
+.gatecard .ttl { font-weight: 680; font-size: 14px; }
+.gatecard .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.gatecard .dnote { font-size: 12.5px; color: var(--text-2); }
+.gatecard .dnote b { color: var(--text); }
+
+/* conversation panel (S1) */
+.conv { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface);
+  box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden; }
+.conv-h { display: flex; align-items: center; gap: 11px; padding: 12px 15px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.conv-h .conv-who { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.conv-h .cn { font-weight: 680; font-size: 14px; }
+.conv-h .cr { color: var(--faint); font-size: 11.5px; }
+.presence { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; padding: 4px 10px;
+  border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.presence .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.presence.p-working { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.presence.p-working .d { animation: pulse 1.4s infinite; }
+.presence.p-replied { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.presence.p-waking { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.presence.p-offline { color: var(--faint); }
+/* busy = holding another (task) lease; your message is queued. Amber, steady dot (not the
+   accent pulse) so it reads as "occupied elsewhere" rather than "working on you". */
+.presence.p-busy { color: var(--amber); background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 30%, var(--border)); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+.conv-list { display: flex; flex-direction: column; gap: 14px; padding: 16px; max-height: 460px; overflow-y: auto; }
+.turn { display: flex; gap: 9px; align-items: flex-start; }
+.turn.human { flex-direction: row-reverse; }
+.turn .tb { max-width: 78%; }
+.turn .tmeta { font-size: 10.5px; color: var(--faint); font-weight: 600; margin-bottom: 4px; display: flex; gap: 7px; }
+.turn.human .tmeta { justify-content: flex-end; }
+.turn .tmeta .tt { color: var(--faint); font-weight: 400; }
+.turn .tx { font-size: 13.5px; line-height: 1.55; padding: 9px 13px; border-radius: 13px; white-space: pre-wrap;
+  background: var(--surface-2); border: 1px solid var(--border); }
+.turn.human .tx { background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 26%, var(--border)); }
+/* rich markdown rendering for conversation messages (Orcha.mdText) */
+.tx.md strong { font-weight: 700; }
+.tx.md em { font-style: italic; }
+.tx.md .md-code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 5px; border-radius: 5px;
+  background: var(--bg); border: 1px solid var(--border); }
+.tx.md .md-pre { margin: 7px 0; padding: 9px 11px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
+  overflow: auto; white-space: pre; }
+.tx.md .md-pre code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
+.tx.md .md-h { display: block; font-weight: 700; margin: 3px 0; }
+.tx.md .md-li { display: block; padding-left: 15px; position: relative; }
+.tx.md .md-li::before { content: "•"; position: absolute; left: 3px; color: var(--muted); }
+.tx.md .md-table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; overflow-x: auto; max-width: 100%; }
+.tx.md .md-table th, .tx.md .md-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; vertical-align: top; }
+.tx.md .md-table th { background: var(--surface-2); font-weight: 650; }
+.tx.md .md-table tr:nth-child(even) td { background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
+.turn details { margin-top: 6px; } .turn .work-sum { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.turn .log { margin-top: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); max-height: 240px; overflow: auto; }
+.conv-thinking { display: inline-flex; gap: 5px; align-items: center; padding: 11px 14px; border-radius: 13px;
+  background: var(--surface-2); border: 1px solid var(--border); }
+.conv-thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: convblink 1.2s infinite; }
+.conv-thinking span:nth-child(2) { animation-delay: .2s; } .conv-thinking span:nth-child(3) { animation-delay: .4s; }
+/* honest "your message is queued" notice shown instead of fake thinking dots when busy */
+.conv-queued { display: inline-flex; gap: 8px; align-items: center; padding: 11px 14px; border-radius: 13px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+  background: color-mix(in oklab, var(--amber) 8%, var(--surface-2)); border: 1px solid color-mix(in oklab, var(--amber) 22%, var(--border)); }
+.conv-queued svg { flex: 0 0 auto; color: var(--amber); }
+@keyframes convblink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+/* send-UX: optimistic pending bubble, failure note + Retry, cold-start honesty,
+   wakes-not-served banner, and the in-flight Send spinner */
+.turn.pending .tx { opacity: .55; }
+.turn.pending .tmeta .tt { font-style: italic; }
+.conv-sendfail { margin-top: 6px; display: flex; align-items: center; gap: 8px; padding: 8px 11px;
+  border-radius: 10px; font-size: 12px; color: var(--danger);
+  background: color-mix(in oklab, var(--danger) 10%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--danger) 30%, var(--border)); }
+.conv-sendfail svg { width: 14px; height: 14px; flex: none; }
+.conv-sendfail span { flex: 1; min-width: 0; }
+.conv-coldnote { margin-top: 6px; color: var(--faint); font-size: 11.5px; }
+.conv-wakes { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid var(--warn-line); background: var(--warn-soft); }
+.conv-wakes > svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--warn); }
+.conv-wakes .body { flex: 1; min-width: 0; }
+.conv-wakes .t1 { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.conv-wakes .t2 { color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 1px; }
+#convSend .spin { width: 12px; height: 12px; border: 2px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; display: inline-block; animation: convspin .7s linear infinite; }
+@keyframes convspin { to { transform: rotate(360deg); } }
+.gcard { border-radius: 12px; padding: 11px 13px; border: 1px solid var(--warn-line); background: var(--warn-soft); }
+.gcard.ask { border-color: var(--accent-line); background: var(--accent-soft); }
+.gcard .gh { font-weight: 660; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+.gcard .gpre { margin: 8px 0 0; font-size: 11.5px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; overflow: auto; max-height: 140px; }
+.gcard .gnote { color: var(--muted); font-size: 11px; margin-top: 7px; }
+.conv-composer { position: relative; display: flex; gap: 9px; align-items: flex-end; padding: 12px 14px; border-top: 1px solid var(--border); }
+.conv-in { flex: 1; resize: none; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 11px; padding: 10px 13px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; max-height: 160px; }
+.conv-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.slash { position: absolute; bottom: calc(100% - 4px); left: 14px; right: 14px; background: var(--raised); border: 1px solid var(--border);
+  border-radius: 11px; box-shadow: var(--shadow-lg); overflow: hidden; max-height: 220px; overflow-y: auto; z-index: 5; }
+.slash .si { padding: 8px 13px; font-size: 12.5px; font-family: "JetBrains Mono", ui-monospace, monospace; cursor: pointer; }
+.slash .si.on, .slash .si:hover { background: var(--accent-soft); color: var(--accent); }
+.conv-note { padding: 0 14px 12px; color: var(--faint); font-size: 11px; }
+
+/* #337: conversation attachment composer + rendered attachments (parity with #330 task threads) */
+.conv.dragover { outline: 2px dashed var(--accent-line); outline-offset: -4px; }
+.conv-attach { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  flex: 0 0 auto; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--muted); cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+.conv-attach:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.conv-attach:disabled { opacity: .5; cursor: not-allowed; }
+.conv-attach svg { width: 16px; height: 16px; }
+.conv-tray { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 4px; }
+.conv-tray:empty { display: none; }
+.conv-tray .att-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 230px; padding: 5px 8px;
+  border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; }
+.conv-tray .att-chip .thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: 0 0 auto; background: var(--surface-3); }
+.conv-tray .att-chip .ic { width: 28px; height: 28px; border-radius: 6px; flex: 0 0 auto; display: inline-flex;
+  align-items: center; justify-content: center; background: var(--surface-3); color: var(--muted); }
+.conv-tray .att-chip .ic svg { width: 15px; height: 15px; }
+.conv-tray .att-chip .meta { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.conv-tray .att-chip .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-tray .att-chip .sz { color: var(--faint); font-size: 10.5px; }
+.conv-tray .att-chip .rm { flex: 0 0 auto; cursor: pointer; color: var(--faint); border: 0; background: none;
+  font-size: 15px; line-height: 1; padding: 0 2px; }
+.conv-tray .att-chip .rm:hover { color: var(--danger); }
+.conv-tray .att-chip.uploading { opacity: .6; }
+.conv-tray .att-chip.failed { border-color: var(--danger-line, var(--danger)); }
+/* in-thread rendered attachments (read view) */
+.msg-atts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+.msg-atts .att-img { max-width: 200px; max-height: 150px; border-radius: 9px; border: 1px solid var(--border);
+  cursor: zoom-in; display: block; object-fit: cover; }
+.msg-atts .att-file { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; color: var(--text); text-decoration: none; }
+.msg-atts .att-file:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+.msg-atts .att-file svg { width: 15px; height: 15px; color: var(--muted); flex: 0 0 auto; }
+.msg-atts .att-file .sz { color: var(--faint); font-size: 10.5px; }
+/* lightbox */
+.att-lightbox { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.82); display: flex;
+  align-items: center; justify-content: center; padding: 32px; cursor: zoom-out; }
+.att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+
+/* persona */
+.persona-pre { font-size: 13.5px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; }
+.persona-full { margin-top: 10px; padding-top: 11px; border-top: 1px solid var(--border); font-size: 13px;
+  line-height: 1.6; color: var(--text-2); white-space: pre-wrap; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.persona-expand { margin-top: 10px; }
+
+/* controls (human-only) */
+.ctrl { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border);
+  border-radius: 11px; background: var(--surface-2); }
+.ctrl .grow { flex: 1; min-width: 0; }
+.ctrl .lbl { font-size: 12.5px; font-weight: 600; }
+.ctrl .desc { font-size: 11.5px; color: var(--muted); }
+.seg { display: inline-flex; background: var(--surface-3); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+  padding: 4px 11px; border-radius: 6px; cursor: pointer; }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
+.seg button:disabled { cursor: not-allowed; opacity: .55; }
+.ctrl.model-ctrl { flex-direction: column; align-items: stretch; gap: 9px; }
+.ctrl.model-ctrl .grow { width: 100%; }
+.ctrl.model-ctrl .seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+  gap: 2px; width: 100%; max-width: none; }
+.ctrl.model-ctrl .seg button { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 720px) {
+  .ctrl { flex-direction: column; align-items: stretch; }
+  .ctrl .seg { align-self: flex-start; }
+  .ctrl.model-ctrl .seg { align-self: stretch; grid-template-columns: 1fr; }
+}
+/* wake — READ-ONLY badge (per-agent toggle is a Forge fast-follow) */
+.wakebadge { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; padding: 5px 11px;
+  border-radius: 999px; border: 1px solid var(--border); }
+.wakebadge.on { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.wakebadge.off { color: var(--muted); background: var(--surface-3); }
+.wakebadge .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* memory digest */
+.digest { display: grid; gap: 13px; }
+.digest [data-more] { justify-self: start; }   /* keep the "Show more" pill compact in the grid */
+.digest .focus { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 11px;
+  padding: 12px 14px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.digest .focus .lbl, .dgroup .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+.dgroup .lbl { color: var(--faint); }
+.dgroup ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.dgroup li { font-size: 13px; line-height: 1.45; color: var(--text-2); padding-left: 18px; position: relative; }
+.dgroup li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted); }
+.dgroup.thr li::before { background: var(--warn); }
+
+/* all-tasks deeplink chips (ISS-33 revalidation: every task reachable, any status) */
+.tchips-wrap { margin-top: 4px; padding-top: 11px; border-top: 1px solid var(--border); }
+.tchips-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: 7px; }
+.tchips { display: flex; flex-wrap: wrap; gap: 7px; }
+.tchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 11.5px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); text-decoration: none; max-width: 220px; }
+.tchip:hover { border-color: var(--accent-line); color: var(--text); }
+.tchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* requests in/out */
+.rqrow { display: flex; align-items: flex-start; gap: 11px; padding: 12px 13px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--surface-2); color: inherit; text-decoration: none; }
+.rqrow:hover { border-color: var(--accent-line); }
+.rqrow .body { flex: 1; min-width: 0; }
+.rqrow .top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
+.rqrow .pl { font-size: 13px; line-height: 1.5; color: var(--text-2); }
+.rqrow .ans { margin-top: 8px; border-left: 2px solid var(--ok); padding: 3px 0 3px 11px; color: var(--muted); font-size: 12.5px; }
+
+/* ISS-63: collapsible Current-task / Incoming / Outgoing widgets (chevron in the card header,
+   state remembered in localStorage) so the worker-progress feed is quickly reachable. */
+.collapse-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+  border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  cursor: pointer; flex: 0 0 auto; transition: transform .15s, color .12s, border-color .12s; }
+.collapse-btn:hover { color: var(--text); border-color: var(--accent-line); }
+.collapse-btn svg { width: 15px; height: 15px; }
+.card.collapsed .collapse-btn { transform: rotate(-90deg); }   /* chevron points right when collapsed */
+/* !important: Current-task / Incoming / Outgoing card bodies carry an inline `display:flex`, which
+   (being inline) outranks a plain stylesheet rule — so only Memory digest (no inline display)
+   collapsed. A stylesheet !important beats a normal inline style, restoring collapse on all cards. */
+.card.collapsed .card-b { display: none !important; }
+/* S3 §3b "Pair in terminal" — docked beside the conversation (reference design lifted) */
+.conv-wrap { display: grid; grid-template-columns: minmax(0,1fr); gap: 16px; align-items: start; }
+.conv-wrap.paired { grid-template-columns: minmax(0,1fr) minmax(380px, 470px); }
+@media (max-width: 1180px) { .conv-wrap.paired { grid-template-columns: 1fr; } }
+#convPair { white-space: nowrap; }
+.term-slot:empty { display: none; }
+.term { position: relative; display: flex; flex-direction: column; height: 560px; background: #0a0e14; border: 1px solid #1e2733;
+  border-radius: 15px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.term-h { display: flex; align-items: center; gap: 10px; padding: 10px 13px; background: #11161f; border-bottom: 1px solid #1c2533; }
+.term-h .lights { display: flex; gap: 6px; } .term-h .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+.term-h .lights .r { background: #f6757e; } .term-h .lights .y { background: #f5b13d; } .term-h .lights .g { background: #38d39a; }
+.term-h .ttl { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; color: #8b98ae; }
+.term-h .pairtag { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 650; color: #1fc7cd;
+  background: rgba(31,199,205,.1); border: 1px solid rgba(31,199,205,.3); border-radius: 999px; padding: 3px 9px; }
+.term-h .pairtag .d { width: 6px; height: 6px; border-radius: 50%; background: #1fc7cd; animation: pulse 1.4s infinite; }
+.term-h .term-actions { margin-left: auto; display: flex; gap: 6px; }
+.term-h .x { width: 28px; height: 28px; border-radius: 8px; border: 1px solid #283242; background: transparent;
+  color: #8b98ae; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.term-h .x:hover { color: #f6757e; border-color: rgba(246,117,126,.4); } .term-h .x svg { width: 15px; height: 15px; }
+/* the maximize toggle stays teal on hover (only Close is destructive-red) */
+.term-h .x.term-max:hover { color: #1fc7cd; border-color: rgba(31,199,205,.4); }
+.term-body { flex: 1; min-height: 0; overflow: hidden; padding: 10px 12px; background: #0b0e14; }
+.term-body .term-xterm { height: 100%; }
+.term-body .xterm { height: 100%; }
+.term-saving { position: absolute; inset: 0; background: rgba(10,14,20,.86); backdrop-filter: blur(2px); display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #d5d9e0; }
+.term-saving .ring { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #1c2533; border-top-color: #1fc7cd; animation: spin 0.8s linear infinite; }
+.term-saving .st { font-size: 13px; font-weight: 600; } .term-saving .sub { font-size: 12px; color: #8b98ae; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* visible failure state (bridge down / busy / denied) — no silent flash-and-die */
+.term-error { position: absolute; inset: 0; background: #0b0e14; display: flex; align-items: center; gap: 12px;
+  padding: 22px 24px; color: #d5d9e0; }
+.term-error svg { width: 22px; height: 22px; flex: 0 0 auto; color: #f5b13d; }
+.term-error .st { font-size: 13.5px; font-weight: 650; margin-bottom: 4px; }
+.term-error .sub { font-size: 12px; color: #8b98ae; line-height: 1.5; white-space: pre-wrap; }
+/* ISS-84 #244: corrective-action buttons under a preflight failure (install / sign-in / retry) */
+.term-error .te-cta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* ISS-84 #244: install-hint code chip inside the "not installed" pre-gate modal */
+.pf-hint { margin: 2px 0; }
+.pf-hint code { display: block; padding: 10px 12px; background: #0b0e14; border: 1px solid #1c2533;
+  border-radius: 8px; font-size: 12px; color: #d5d9e0; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+/* conversation lock banner (§3b vice-versa): shown when the agent is in a live terminal */
+.conv-lock { display: flex; align-items: center; gap: 9px; padding: 11px 16px; font-size: 12.5px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft); border-top: 1px solid var(--accent-line); }
+.conv-in:disabled { opacity: .5; cursor: not-allowed; }
+/* only dim/disable the composer when the lock banner is actually VISIBLE — a sibling
+   selector still matches a [hidden] .conv-lock, so without :not([hidden]) every (unlocked)
+   composer would get pointer-events:none and be unusable (review P1). */
+.conv-lock:not([hidden]) + .conv-composer { opacity: .55; pointer-events: none; }
+
+/* ISS-65: maximize the Conversation or the Embedded Terminal into a large overlay.
+   We toggle a class on the EXISTING panel (never reparent the live xterm / composer),
+   so all wiring + the open websocket survive. A backdrop + Escape restore the dock. */
+.max-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(4,8,14,.62); backdrop-filter: blur(3px); }
+.conv.maximized, .term.maximized { position: fixed; inset: 3vh 3vw; z-index: 160; margin: 0;
+  height: auto; max-height: none; box-shadow: var(--shadow-lg); }
+.conv.maximized { display: flex; flex-direction: column; }
+.conv.maximized .conv-list { max-height: none; flex: 1 1 auto; }   /* the thread grows to fill */
+.conv-h .conv-max { flex: 0 0 auto; }

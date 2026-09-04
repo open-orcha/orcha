@@ -24,6 +24,10 @@ def _finish_sidecar(api_base, resident, sidecar, *, quiet, services) -> None:
 
     success = natural and proc.returncode == 0
     ackable_ids = sidecar.get("ackable_ids") or []
+    # I4: no run row to stamp (by design), so reap the sidecar's sandbox
+    # container + api-config directly on completion — it is label-exempt
+    # from the orphan pass, so nothing else would ever remove it.
+    services._reap_sandbox_artifacts(sidecar)
     resident["sidecar"] = None
     if success:
         services._post_json(

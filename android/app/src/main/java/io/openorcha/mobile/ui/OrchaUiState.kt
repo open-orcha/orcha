@@ -19,6 +19,16 @@ import io.openorcha.mobile.data.StoredContainer
 import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.data.TurnDto
+import io.openorcha.mobile.data.GitHubStartResponse
+import io.openorcha.mobile.domain.ChatSendFlow
+import io.openorcha.mobile.domain.GitHubHubFilter
+import io.openorcha.mobile.domain.GitHubHubKind
+import io.openorcha.mobile.domain.GitHubIssueDetailPhase
+import io.openorcha.mobile.domain.GitHubIssuesPhase
+import io.openorcha.mobile.domain.GitHubPullDetailPhase
+import io.openorcha.mobile.domain.GitHubPullsFilterState
+import io.openorcha.mobile.domain.GitHubPullsPhase
+import io.openorcha.mobile.domain.DeviceAuthFlow
 import io.openorcha.mobile.domain.Paging
 import io.openorcha.mobile.domain.RunFeed
 import io.openorcha.mobile.domain.RunFeedRow
@@ -48,16 +58,23 @@ enum class AppRoute {
     Conversation,
     CreateTask,
     Settings,
+    GitHubHub,
+    GitHubIssueDetail,
+    GitHubPullDetail,
 }
 
-enum class WorkspaceTab { Home, Tasks, Requests, Agents }
+enum class WorkspaceTab { Home, Tasks, Requests, Agents, Search }
 
 /** Per-card reachability + glance counts for the Containers home (flow 04 H1). */
 data class ContainerHealth(
-    val state: String,               // live | polling | unreachable | probing
+    val state: String,               // live | polling | unreachable | signin | probing
     val agents: Int = 0,
+    /** OPEN (non-terminal) task count — iOS parity: `snap.taskOpenTotal`, never the
+     *  length of the capped snapshot array. */
     val tasks: Int = 0,
     val needsYou: Int = 0,
+    /** The bound GitHub repo ("owner/name"), shown on the card's secondary line. */
+    val githubRepo: String? = null,
 )
 
 /** Flow 09: lazily-fetched agent-detail sections (each best-effort, absent on failure). */
@@ -73,6 +90,7 @@ data class AgentExtras(
 data class OrchaUiState(
     val route: AppRoute = AppRoute.Containers,
     val themeMode: io.openorcha.mobile.ui.theme.ThemeMode = io.openorcha.mobile.ui.theme.ThemeMode.Auto,
+    val skinMode: io.openorcha.mobile.ui.theme.SkinMode = io.openorcha.mobile.ui.theme.SkinMode.Classic,
     val containerHealth: Map<String, ContainerHealth> = emptyMap(),
     val agentExtras: AgentExtras = AgentExtras(),
     val closeImplications: List<String>? = null,
@@ -80,6 +98,9 @@ data class OrchaUiState(
     val selectedContainer: StoredContainer? = null,
     val snapshot: ContainerSnapshot? = null,
     val selectedTab: WorkspaceTab = WorkspaceTab.Home,
+    // Search tab (iOS `SearchTabView` parity): the live query, kept in state so it
+    // survives tab switches within the same workspace session.
+    val searchQuery: String = "",
     val selectedTask: TaskDto? = null,
     val taskMessages: List<TaskMessageDto> = emptyList(),
     // thread keyset paging (issue 4): cursors point at the OLDEST loaded message
@@ -98,9 +119,38 @@ data class OrchaUiState(
     val models: List<ModelDto> = emptyList(),
     val conversation: ConversationDto? = null,
     val turns: List<TurnDto> = emptyList(),
+    /** Chat send-UX (iOS `ChatSendFlow` parity): the conversation composer's optimistic
+     *  send-lifecycle state machine — pending bubble, echo/reply dedupe, tap-to-retry. */
+    val sendFlow: ChatSendFlow = ChatSendFlow(),
     val loading: Boolean = false,
     val actionInFlight: Boolean = false,
     val connecting: Boolean = false,
     val error: String? = null,
     val toast: String? = null,
+    // Device-token auth (cloud unification), iOS `AppModel` parity:
+    /** The last connect probe was bounced by the auth perimeter — the address is
+     *  reachable but needs a device token/sign-in before the connect can proceed. */
+    val connectNeedsToken: Boolean = false,
+    /** The raw address/QR payload whose probe needed a token, kept so the GitHub
+     *  sign-in flow (or a manually pasted token) can retry the SAME draft. */
+    val connectDraft: String? = null,
+    /** The GitHub sign-in options sheet's state machine. */
+    val deviceAuth: DeviceAuthFlow = DeviceAuthFlow(),
+    // GitHub hub (Android parity of iOS AppModel+GitHubHub.swift)
+    val githubHubKind: GitHubHubKind = GitHubHubKind.Pulls,
+    val githubHubFilter: GitHubHubFilter = GitHubHubFilter.Open,
+    val githubIssuesPhase: GitHubIssuesPhase = GitHubIssuesPhase.Idle,
+    val githubPullsPhase: GitHubPullsPhase = GitHubPullsPhase.Idle,
+    /** PR list's author/involvement/q/page filter — Android extension of the frozen
+     *  filter+pagination contract (issue: PR-list filtering + pagination). */
+    val githubPullsFilter: GitHubPullsFilterState = GitHubPullsFilterState(),
+    /** PR #223 round 3: stale-completion guards — bumped at the start of every primary
+     *  list load; a completion applies only while its captured generation is current. */
+    val githubIssuesLoadGeneration: Int = 0,
+    val githubPullsLoadGeneration: Int = 0,
+    val githubIssueNumber: Int? = null,
+    val githubIssueDetailPhase: GitHubIssueDetailPhase = GitHubIssueDetailPhase.Loading,
+    val githubPullNumber: Int? = null,
+    val githubPullDetailPhase: GitHubPullDetailPhase = GitHubPullDetailPhase.Loading,
+    val githubStarted: GitHubStartResponse? = null,
 )

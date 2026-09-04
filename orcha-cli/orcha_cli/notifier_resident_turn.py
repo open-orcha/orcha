@@ -7,7 +7,8 @@ import time
 
 
 def capture_result(
-    services, api_base, conv_id, resident, candidate, quiet
+    services, api_base, conv_id, resident, candidate, quiet,
+    live_residents=None,
 ) -> None:
     """Persist a completed reply and update the resident's session cursor."""
     services._pump_one(api_base, resident["agent_id"], resident)
@@ -16,11 +17,48 @@ def capture_result(
     )
     if result is None:
         return
+    text = (result.get("text") or "").strip()
+    if not text and not resident.get("cold"):
+        # Sandbox-continuity fix: a WARM (--resume) turn that "completed" with
+        # NO usable reply is the resume-failure signature — claude couldn't
+        # find the pinned session (ephemeral ~/.claude) and emitted an
+        # empty/error result with exit 0. NEVER post the empty bubble: it would
+        # resolve the human turn with nothing. Drop the pinned session, retire
+        # this resident, and release the lease with the turn STILL pending, so
+        # the next tick reboots FRESH (cold: persona+history) and re-services
+        # the same turn. No loop: _RESIDENT_RESUME_FAILED makes the one retry
+        # COLD, and a cold boot that also comes up empty falls through to the
+        # non-empty placeholder below (turn resolved, chain ends).
+        services._RESIDENT_RESUME_FAILED.add(conv_id)
+        if not quiet:
+            print(
+                f"[notifier] resident {resident.get('alias')} warm --resume "
+                f"produced an empty result (subtype={result.get('subtype')}) "
+                "— dropping pinned session, rebooting FRESH next tick with "
+                "the turn still pending"
+            )
+        services._finish_run(
+            api_base,
+            resident["current_run_id"],
+            "killed",
+            0,
+            resident.get("log_path"),
+        )
+        resident["current_run_id"] = None
+        services._close_resident(api_base, resident, reason="resume_failed")
+        if live_residents is not None:
+            services._retire_resident(api_base, live_residents, conv_id)
+        return
+    reply_text = text or (
+        "[error: the agent session ended without producing a reply "
+        f"(result subtype: {result.get('subtype') or 'unknown'}). "
+        "Please resend your message.]"
+    )
     posted = services._post_conversation_reply(
         api_base,
         conv_id,
         resident,
-        result.get("text") or "",
+        reply_text,
         {
             "subtype": result.get("subtype"),
             "num_turns": result.get("num_turns"),
@@ -111,7 +149,7 @@ def stop_turn(
         f"[turn stopped by {stopped_by}]",
         {"stopped": True, "by": renew.get("stop_requested_by")},
     )
-    services._finish_run(
+    if services._finish_run(
         api_base,
         resident.get("current_run_id"),
         "killed",
@@ -126,7 +164,10 @@ def stop_turn(
                 "by": renew.get("stop_requested_by"),
             }
         ),
-    )
+    ):
+        # I4 (resident lane): a human-stopped session's container, once stamped —
+        # the kill above only took down the docker client. No-op for host mode.
+        services._reap_sandbox_artifacts(resident)
     services._post_json(
         f"{api_base}/api/agents/{resident['agent_id']}/wake-ack",
         services._conversation_ack_body(

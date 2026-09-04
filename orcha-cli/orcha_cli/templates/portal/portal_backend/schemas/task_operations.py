@@ -49,6 +49,21 @@ class TaskReadiness(BaseModel):
     )
 
 
+class TaskReviewerUpdate(BaseModel):
+    """PUT /api/tasks/{tid}/reviewer — owner names the human who should verify the task
+    (collab v1). null clears it back to 'anyone'. Advisory: /verify stays permissive.
+    `actor_agent_id` is the trust-off fallback actor (identity_routes.require_owner)."""
+
+    reviewer_agent_id: Optional[str] = Field(
+        default=None,
+        description="UUID of the human member to assign as reviewer; null = anyone",
+    )
+    actor_agent_id: Optional[str] = Field(
+        default=None,
+        description="acting human's UUID when no trusted proxy identity is present",
+    )
+
+
 class TaskUnassign(BaseModel):
     """#326 (B2): POST /api/tasks/{tid}/unassign — clear the active assignee(s) so the row returns
     to the ready queue (owner==null). HUMAN-AUTHORITY gated (Orcha#30 — a deliberate dispatch reset,

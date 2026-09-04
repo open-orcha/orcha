@@ -33,6 +33,50 @@
 .brand .word small { display: block; font-weight: 550; font-size: 10.5px; letter-spacing: .14em;
   text-transform: uppercase; color: var(--muted); margin-top: 4px; }
 
+/* ---- multi-project: the sidebar project switcher ---- */
+.proj-switch { display: flex; align-items: center; gap: 8px; width: 100%; margin: 2px 0 4px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: 12.5px;
+  font-weight: 620; cursor: pointer; text-align: left;
+  transition: border-color .14s, background .14s; }
+.proj-switch:hover { border-color: var(--accent-line); background: var(--hover); }
+.proj-switch .pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-switch .chev { width: 13px; height: 13px; flex: none; color: var(--faint); }
+.pdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--idle); }
+.pdot.on { background: var(--ok); }
+/* collapsed rail: the switcher shrinks to its status dot (tooltip keeps the name) */
+html[data-sidebar="collapsed"] .proj-switch { justify-content: center; padding: 9px 0; }
+html[data-sidebar="collapsed"] .proj-switch .pname,
+html[data-sidebar="collapsed"] .proj-switch .chev { display: none; }
+
+/* ---- shared floating menu (project switcher / acting-as account menu) ---- */
+.pmenu.float { position: fixed; z-index: 70; min-width: 236px; max-width: 320px; display: none;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: 13px;
+  box-shadow: var(--shadow-lg); overflow: hidden; padding: 5px; }
+.pmenu.float.show { display: block; animation: pmIn .15s ease; }
+@keyframes pmIn { from { opacity: 0; transform: translateY(-4px); } }
+.pmenu .pm-head { display: flex; align-items: center; gap: 10px; padding: 10px 11px 11px;
+  border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.pmenu .pm-head .b { min-width: 0; }
+.pmenu .pm-head .t1 { font-size: 13px; font-weight: 680; overflow: hidden; text-overflow: ellipsis; }
+.pmenu .pm-head .t2 { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.pmenu .pm-head.plain { font-size: 10.5px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint); }
+.pmenu .pm-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 11px;
+  border: 0; border-radius: 9px; background: none; color: var(--text-2); font: inherit;
+  font-size: 13px; font-weight: 560; cursor: pointer; text-align: left; }
+.pmenu .pm-row:hover { background: var(--hover); color: var(--text); }
+.pmenu .pm-row.on { background: var(--accent-soft); color: var(--text); }
+.pmenu .pm-row.muted { color: var(--faint); cursor: default; }
+.pmenu .pm-row .b { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pmenu .pm-row .t1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmenu .pm-row .t2 { font-size: 11px; color: var(--muted); }
+.pmenu .pm-row .chk { width: 14px; height: 14px; flex: none; color: var(--accent); }
+.pmenu .pm-row svg.ico { width: 15px; height: 15px; flex: none; }
+.pmenu .pm-row.new { color: var(--accent); font-weight: 620; }
+.pmenu .pm-row.new:hover { background: var(--accent-soft); }
+.pmenu .pm-row.signout:hover { color: var(--danger); background: var(--danger-soft); }
+
 .nav { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
 .nav .lbl { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
   padding: 12px 10px 5px; font-weight: 650; }
@@ -184,6 +228,11 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 .aut .seg.lvl.on.warn   { color: var(--warn);   background: var(--warn-soft);   border-color: var(--warn-line); }
 .aut .seg.lvl.on.info   { color: var(--info);   background: var(--info-soft);   border-color: var(--info-line); }
 .aut .seg.lvl.on.accent { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+/* mig 043: the "Enforce for all agents" lock chip beside the levels. Lit = every per-agent
+   autonomy override is ignored (the container level governs everyone) — danger tone so an
+   active lock is unmistakable; unlit stays muted like an inactive level. */
+.aut .seg.lock { border-left: 1px solid var(--border); border-radius: 0 999px 999px 0; margin-left: 3px; }
+.aut .seg.lock.on { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
 /* read-only when no acting human */
 .aut.locked .seg { cursor: not-allowed; }
 /* GH #148: Autonomy is de-emphasized while the notifier is Paused ("applies when running"),
@@ -201,9 +250,18 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
   border-radius: 999px; padding: 3px 11px; font-size: 11.5px; font-weight: 600; }
 .pausebar .resume:hover { border-color: var(--accent-line); color: var(--accent); }
 
+/* per-project identity: the non-member viewer banner (pausebar idiom, info tone) */
+.viewerbar { display: none; align-items: center; gap: 8px; padding: 7px 26px; font-size: 12px; font-weight: 650;
+  color: var(--info, var(--accent)); background: var(--info-soft, var(--surface-2));
+  border-bottom: 1px solid var(--border-2); }
+.viewerbar.show { display: flex; }
+
 /* acting-as */
 .acting { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 5px 6px 5px 12px;
   border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
+/* collab: with a verified identity the chip is the account-menu trigger (sign out) */
+.acting.menu-trigger { cursor: pointer; transition: border-color .14s; }
+.acting.menu-trigger:hover { border-color: var(--accent-line); }
 .acting .lbl { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
 .acting .who { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
 
@@ -225,3 +283,43 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 
 .content { padding: 24px 26px 64px; max-width: 1320px; width: 100%; }
 .content.narrow { max-width: 1080px; }
+
+/* ---- collapsible sidebar (icon rail) ----
+ * Ported from the cloud vanilla portal (app-shell.js / shell.css): state
+ * lives on <html data-sidebar="collapsed">, persisted client-side under the
+ * same localStorage key ("orcha:sidebar"). Collapsing is an explicit ask for
+ * real estate — labels, counts, and the "needs you" card give way to icons +
+ * title= tooltips; the attn card shrinks to a bell+count chip (.attn-mini)
+ * that still deep-links to the action queue. */
+.brand-row { display: flex; align-items: flex-start; }
+.brand-row .brand { flex: 1; min-width: 0; }
+.sb-toggle { width: 26px; height: 26px; margin: 8px 0 0; flex: none; display: grid; place-items: center;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--faint);
+  cursor: pointer; padding: 0; }
+.sb-toggle:hover { background: var(--hover); color: var(--text); border-color: var(--border); }
+.sb-toggle .ico { width: 15px; height: 15px; transform: rotate(90deg); transition: transform .15s ease; }
+.attn-mini { display: none; }
+
+html[data-sidebar="collapsed"] .app { grid-template-columns: 64px minmax(0, 1fr); }
+html[data-sidebar="collapsed"] .sidebar { padding: 18px 9px 16px; }
+html[data-sidebar="collapsed"] .brand-row { flex-direction: column; align-items: center; gap: 4px; }
+html[data-sidebar="collapsed"] .brand { padding: 4px 0 2px; }
+html[data-sidebar="collapsed"] .brand .word,
+html[data-sidebar="collapsed"] .nav .lbl,
+html[data-sidebar="collapsed"] .nav a .grow,
+html[data-sidebar="collapsed"] .nav .ncount,
+html[data-sidebar="collapsed"] .attn-card { display: none; }
+html[data-sidebar="collapsed"] .sb-toggle { margin: 0; }
+html[data-sidebar="collapsed"] .sb-toggle .ico { transform: rotate(-90deg); }
+html[data-sidebar="collapsed"] .nav { margin-top: 10px; }
+html[data-sidebar="collapsed"] .nav a { justify-content: center; padding: 9px 0; }
+html[data-sidebar="collapsed"] .attn-mini { display: flex; flex-direction: column; align-items: center;
+  gap: 3px; margin: 6px 0 8px; padding: 9px 6px; border-radius: 11px; color: var(--warn);
+  background: linear-gradient(180deg, var(--warn-soft), transparent); border: 1px solid var(--warn-line); }
+/* collapsing is an explicit ask for real estate — lift the content width cap
+   so the page actually uses the reclaimed space (inner wrappers like
+   .set-wrap keep their own caps where narrow columns are the point). */
+html[data-sidebar="collapsed"] .content { max-width: none; }
+.attn-mini svg { width: 16px; height: 16px; }
+.attn-mini .n { font-size: 13px; font-weight: 760; color: var(--text); }
+

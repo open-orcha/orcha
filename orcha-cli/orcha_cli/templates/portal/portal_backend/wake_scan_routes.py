@@ -7,6 +7,7 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.model_setting_routes import _resolve_use_case_model
 from portal_backend.provider_keys import effective_use_case_provider, provider_key_enc
+from portal_backend.wake_backoff import apply_wake_backoff
 from portal_backend.wake_candidate_builder import build_wake_candidate
 from portal_backend.wake_scan_queries import list_wake_agents
 
@@ -43,13 +44,29 @@ def wake_scan(
     """
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    with db_cursor() as (_, cur):
+    with db_cursor() as (conn, cur):
         container = require_container(cur, cid)
+        # Multi-project (mig 037): stamp the notifier's poll, so the portal knows WHICH
+        # container a host-side daemon actually serves (containers.last_wake_scan_at —
+        # the project switcher's honest wakes-capability signal). Only the daemon calls
+        # this endpoint on a cadence. Throttled to one write/15s (and committed alone,
+        # before the read work below) so the scan stays effectively read-only.
         cur.execute(
-            "SELECT wakes_enabled, autonomy_level FROM containers WHERE id=%s", (cid,)
+            """UPDATE containers SET last_wake_scan_at = now()
+                WHERE id=%s AND (last_wake_scan_at IS NULL
+                                 OR last_wake_scan_at < now() - interval '15 seconds')""",
+            (cid,),
+        )
+        if cur.rowcount:
+            conn.commit()
+        cur.execute(
+            "SELECT wakes_enabled, autonomy_level, autonomy_enforced "
+            "FROM containers WHERE id=%s",
+            (cid,),
         )
         settings = cur.fetchone()
         wakes_enabled = bool(settings["wakes_enabled"])
+        autonomy_enforced = bool(settings["autonomy_enforced"])
         triage_model = _resolve_use_case_model(cur, cid, "triage")
         ack_model = _resolve_use_case_model(cur, cid, "ack")
         triage_key_enc = provider_key_enc(
@@ -75,15 +92,26 @@ def wake_scan(
                 valid_uuid=valid_uuid,
                 resolve_model=_compatibility["resolve_model"],
                 resolve_model_runtime=_compatibility["resolve_model_runtime"],
+                container_autonomy_level=settings["autonomy_level"],
+                container_autonomy_enforced=autonomy_enforced,
             )
             for agent in list_wake_agents(cur, cid, cooldown)
         ]
+        # No-progress wake circuit breaker (server-side, DB-backed — see wake_backoff.py):
+        # strike-account each should_wake candidate against its agent's own recent completed
+        # runs, suppress a candidate whose trigger keeps firing with no progress, and surface it
+        # to the human once suppression gets serious. NEVER cancels work or touches task state —
+        # only paces the wake cadence. Runs on this same cursor so its writes land in the same
+        # commit as the scan's own bookkeeping below.
+        candidates = apply_wake_backoff(cur, cid, candidates)
+        conn.commit()
     return {
         "container_id": cid,
         "container_status": container["status"],
         "active": container["status"] == "active",
         "wakes_enabled": wakes_enabled,
         "autonomy_level": settings["autonomy_level"],
+        "autonomy_enforced": autonomy_enforced,
         "triage_model": triage_model,
         "triage_key_enc": triage_key_enc,
         "ack_key_enc": ack_key_enc,

@@ -2,7 +2,7 @@
 
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
@@ -14,14 +14,21 @@ from portal_backend.guards import (
     resolve_alias as _resolve_alias,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas import TaskCreateBody
 
 
 @app.post("/api/containers/{cid}/tasks", status_code=201)
-def create_task(cid: str, body: TaskCreateBody):
+def create_task(cid: str, body: TaskCreateBody, request: Request):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
+        # Per-project identity: a trusted proxy login IS the creator (403 non-member) —
+        # a browser-lane create is always attributed to the verified member, never to a
+        # client-chosen (or defaulted) human.
+        body.created_by_agent_id = _trusted_actor(
+            cur, request, cid, body.created_by_agent_id
+        )
         _require_container_active(
             cur, cid, body.created_by_agent_id
         )  # GH #24 (was _require_container)

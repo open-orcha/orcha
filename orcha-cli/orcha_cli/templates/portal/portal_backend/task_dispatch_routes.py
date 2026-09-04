@@ -1,6 +1,6 @@
 """Release held tasks and reset active assignments."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
@@ -12,6 +12,7 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas.task_operations import TaskReadiness, TaskUnassign
 
 
@@ -28,7 +29,7 @@ def _deps_unmet(cur, tid: str) -> bool:
 
 
 @app.post("/api/tasks/{tid}/readiness", status_code=200)
-def set_task_readiness(tid: str, body: TaskReadiness):
+def set_task_readiness(tid: str, body: TaskReadiness, request: Request):
     """#326 (B3): flip a task between 'not_ready' (HELD — design-gated, excluded from the
     ready-queue + not self-claimable via /orcha-next) and dispatchable.
 
@@ -41,11 +42,13 @@ def set_task_readiness(tid: str, body: TaskReadiness):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
+        t = _require_task(cur, tid)
+        cid = str(t["container_id"])
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
         _require_kind(
             cur, body.actor_agent_id, ("human",)
         )  # Orcha#30 / #327: human-only flip
-        t = _require_task(cur, tid)
-        cid = str(t["container_id"])
         if t["is_root"]:
             raise HTTPException(409, "the root task has no readiness to flip")
         cur_status = t["status"]
@@ -103,7 +106,7 @@ def set_task_readiness(tid: str, body: TaskReadiness):
 
 
 @app.post("/api/tasks/{tid}/unassign", status_code=200)
-def unassign_task(tid: str, body: TaskUnassign):
+def unassign_task(tid: str, body: TaskUnassign, request: Request):
     """#326 (B2): clear the active assignee(s) so the task returns to the ready queue (owner==null).
 
     HUMAN-AUTHORITY gated (Orcha#30 — a deliberate dispatch reset; pairs with #327 AI-can't-assign).
@@ -114,11 +117,13 @@ def unassign_task(tid: str, body: TaskUnassign):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
+        t = _require_task(cur, tid)
+        cid = str(t["container_id"])
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
         _require_kind(
             cur, body.actor_agent_id, ("human",)
         )  # Orcha#30: dispatch reset is a human action
-        t = _require_task(cur, tid)
-        cid = str(t["container_id"])
         if t["is_root"]:
             raise HTTPException(
                 409, "the root task cannot be unassigned — only the human verifies it"

@@ -63,10 +63,11 @@ fun OrchaCard(
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val cardShape = RoundedCornerShape(Orcha.palette.radiusCard.dp)
     val base = modifier
         .fillMaxWidth()
-        .background(container, RoundedCornerShape(12.dp))
-        .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(12.dp))
+        .background(container, cardShape)
+        .border(BorderStroke(1.dp, borderColor), cardShape)
         .let { if (onClick != null) it.clickable(onClick = onClick) else it }
     Column(base.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }
@@ -92,7 +93,7 @@ fun MetaTag(text: String, mono: Boolean = false, tint: Color? = null, modifier: 
     Text(
         text,
         modifier = modifier
-            .border(BorderStroke(1.dp, tint?.copy(alpha = 0.4f) ?: Orcha.palette.border2), RoundedCornerShape(5.dp))
+            .border(BorderStroke(1.dp, tint?.copy(alpha = 0.4f) ?: Orcha.palette.border2), RoundedCornerShape(Orcha.palette.radiusTag.dp))
             .padding(horizontal = 6.dp, vertical = 1.dp),
         style = if (mono) MonoSmStyle else MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W500, letterSpacing = 0.sp),
         color = tint ?: Orcha.palette.muted,
@@ -171,6 +172,14 @@ fun OrchaField(
     maxLines: Int = Int.MAX_VALUE,
     isError: Boolean = false,
     supporting: String? = null,
+    /** Fires on the IME "search"/"done" action (single-line fields only) — lets a
+     *  server-backed field (e.g. the PR list's author/search filters) commit on submit
+     *  instead of firing a network request per keystroke. No-op for the multi-line
+     *  fields that don't pass it. */
+    onSearch: (() -> Unit)? = null,
+    /** Device-token auth: mask input like iOS's `SecureField` — the access-token
+     *  entry fields (sign-in fallback, Settings token update). */
+    masked: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
@@ -182,7 +191,18 @@ fun OrchaField(
         maxLines = maxLines,
         isError = isError,
         supportingText = supporting?.let { { Text(it, color = if (isError) Orcha.palette.danger else Orcha.palette.muted) } },
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(Orcha.palette.radiusButton.dp),
+        singleLine = onSearch != null || masked,
+        visualTransformation = if (masked) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        keyboardOptions = when {
+            masked -> androidx.compose.foundation.text.KeyboardOptions(
+                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+            )
+            onSearch != null -> androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search)
+            else -> androidx.compose.foundation.text.KeyboardOptions.Default
+        },
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch?.invoke() }),
         colors = OutlinedTextFieldDefaults.colors(
             focusedContainerColor = Orcha.palette.surface2,
             unfocusedContainerColor = Orcha.palette.surface2,
@@ -209,16 +229,18 @@ fun SegControl(options: List<String>, selected: Int, onSelect: (Int) -> Unit, mo
     ) {
         options.forEachIndexed { i, opt ->
             val on = i == selected
+            // Selected segment speaks the accent language — surface3-on-surface2 was
+            // indistinguishable in the dark skins ("colors need update for selected tab").
             Text(
                 opt,
                 modifier = Modifier
                     .weight(1f)
-                    .background(if (on) Orcha.palette.surface3 else Color.Transparent, RoundedCornerShape(8.dp))
+                    .background(if (on) Orcha.palette.accentSoft else Color.Transparent, RoundedCornerShape(8.dp))
                     .clickable { onSelect(i) }
                     .padding(vertical = 7.dp),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W600),
-                color = if (on) Orcha.palette.text else Orcha.palette.muted,
+                color = if (on) Orcha.palette.accent else Orcha.palette.muted,
             )
         }
     }

@@ -3,3 +3,4 @@ build/
 !project.yml
 xcuserdata/
 DerivedData/
+dd-sim/

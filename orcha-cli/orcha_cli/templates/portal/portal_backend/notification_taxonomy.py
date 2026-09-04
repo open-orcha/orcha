@@ -135,6 +135,15 @@ _NOTIF_TAXONOMY = {
         "link_kind": "task",
         "link_field": "task_id",
     },
+    "task_created_unassigned": {
+        # Automatic triage doorbell (task_start_core): targeted at the container's orchestrator
+        # agent only, so this always needs action from that recipient — 'needs_you', not 'earlier'.
+        "type": "task_created_unassigned",
+        "zone": "needs_you",
+        "priority": _NOTIF_PRI_TASK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
     "request_answered": {
         "type": "request_answered",
         "zone": "earlier",

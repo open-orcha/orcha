@@ -22,14 +22,16 @@ def checkpoint_and_respawn(
 
     services._kill_worker(process, graceful=True)
     diff = services._capture_diff(worktree)
-    services._finish_run(
+    if services._finish_run(
         api_base,
         worker.get("run_id"),
         "exited",
         0,
         worker.get("log_path"),
         diff,
-    )
+    ):
+        # I4: the OLD wake's container, once stamped
+        services._reap_sandbox_artifacts(worker)
     task_id = _current_task_id(api_base, agent_id, worker, context, services)
 
     services._revoke_or_defer(api_base, worker.get("run_token"))
@@ -38,6 +40,7 @@ def checkpoint_and_respawn(
     )
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
     log_path = _next_log_path(base_cwd, context, services)
+    _spawn_info: dict = {}
     sent, _command, new_process = services.spawn_headless(
         worktree or base_cwd,
         context.get("prompt", ""),
@@ -50,6 +53,7 @@ def checkpoint_and_respawn(
         runtime=context.get("model_runtime"),
         log_path=log_path,
         run_token=new_token,
+        spawn_info=_spawn_info,
     )
     if not (sent and new_process is not None):
         _handle_spawn_failure(
@@ -65,21 +69,27 @@ def checkpoint_and_respawn(
         )
         return
 
+    _run_payload = {
+        "wake_kind": "ephemeral",
+        "wake_event": "checkpoint_respawn",
+        "task_id": task_id,
+        "log_path": str(log_path) if log_path else None,
+        "pid": new_process.pid,
+        "runtime": context.get("model_runtime"),
+        "worktree": worktree,
+        "branch": branch,
+        "base_cwd": base_cwd,
+        "lane": worker.get("lane", "work"),
+        "token_id": new_token,
+    }
+    # Remote-runner §3.3c: a sandbox wake stamps its container name on the run row (and its
+    # wake_kind) so a restarted daemon re-adopts the live container by label instead of
+    # orphaning it, and metering can attribute container runtime to the run.
+    if _spawn_info.get("sandbox_container_id"):
+        _run_payload["sandbox_container_id"] = _spawn_info["sandbox_container_id"]
+        _run_payload["wake_kind"] = "sandbox"
     run = services._post_json(
-        f"{api_base}/api/agents/{agent_id}/runs",
-        {
-            "wake_kind": "ephemeral",
-            "wake_event": "checkpoint_respawn",
-            "task_id": task_id,
-            "log_path": str(log_path) if log_path else None,
-            "pid": new_process.pid,
-            "runtime": context.get("model_runtime"),
-            "worktree": worktree,
-            "branch": branch,
-            "base_cwd": base_cwd,
-            "lane": worker.get("lane", "work"),
-            "token_id": new_token,
-        },
+        f"{api_base}/api/agents/{agent_id}/runs", _run_payload
     )
     now = services.time.time()
     live_workers[agent_id] = {
@@ -112,6 +122,9 @@ def checkpoint_and_respawn(
         "respawns": respawns,
         "respawn_ctx": context,
         "lane": worker.get("lane", "work"),
+        # I4: the NEW wake's sandbox container rides the record so every
+        # Popen-completion path can reap it (container + api-config) after stamping.
+        "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
         "run_token": new_token,
     }
     services._post_json(

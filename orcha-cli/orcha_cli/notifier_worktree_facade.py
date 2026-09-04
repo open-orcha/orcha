@@ -68,9 +68,9 @@ def _finish_run(
     log_path,
     diff=None,
     kill_reason=None,
-) -> None:
+) -> bool:
     compat = _compat()
-    _embodiment.finish_run(
+    return _embodiment.finish_run(
         api_base,
         run_id,
         status,
@@ -82,6 +82,11 @@ def _finish_run(
         diff=diff,
         kill_reason=kill_reason,
     )
+
+
+def _reap_sandbox_artifacts(rec: dict) -> None:
+    """I4: reap a finished sandbox wake's container + per-run api-config."""
+    _embodiment.reap_sandbox_artifacts(rec, sandbox_mod=_compat()._sandbox)
 
 
 def _run_pid_alive(pid) -> bool:

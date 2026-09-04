@@ -1,0 +1,9 @@
+[Unit]
+Description=Forward the Orcha push outbox to the central relay (dormant without RELAY_URL/RELAY_TOKEN)
+
+[Service]
+Type=oneshot
+# push.env holds RELAY_URL + RELAY_TOKEN (and optionally ORCHA_PORTAL_URL).
+# Absent file or absent vars → the script exits 0 immediately (dormant).
+EnvironmentFile=-/opt/orcha-cloud/deploy/push.env
+ExecStart=/usr/bin/python3 /opt/orcha-cloud/deploy/push-forwarder.py

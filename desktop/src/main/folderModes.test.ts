@@ -17,6 +17,7 @@ describe('inspectFolder', () => {
       expect(state.initialized).toBe(false)
       expect(state.writable).toBe(true)
       expect(state.suggestedName).toBe('my-project')
+      expect(state.isGitRepo).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -28,6 +29,16 @@ describe('inspectFolder', () => {
     writeFileSync(path.join(dir, '.orcha', 'docker-compose.yml'), 'name: orcha-x\n')
     try {
       expect(inspectFolder(dir).initialized).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects a git repo (.git dir present)', () => {
+    const dir = tmp()
+    mkdirSync(path.join(dir, '.git'), { recursive: true })
+    try {
+      expect(inspectFolder(dir).isGitRepo).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

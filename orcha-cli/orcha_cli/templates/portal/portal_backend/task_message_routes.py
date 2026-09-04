@@ -3,7 +3,7 @@
 import json
 from typing import Any, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event
 from portal_backend.application import app
@@ -18,18 +18,27 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import require_member_read as _require_member_read
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
+from portal_backend.push_outbox import push_plan_approval as _push_plan_approval
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
 from portal_backend.schemas.task_operations import TaskMessage
 
 
 @app.post("/api/tasks/{tid}/messages", status_code=201)
-def post_message(tid: str, body: TaskMessage):
+def post_message(tid: str, body: TaskMessage, request: Request):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     if body.author_agent_id is not None and not _valid_uuid(body.author_agent_id):
         raise HTTPException(400, "author_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        # Per-project identity: a trusted proxy login IS the author (403 non-member) —
+        # a browser-lane post is attributed to the verified member, never to a
+        # client-chosen id (and never anonymously: the trusted lane always attributes).
+        body.author_agent_id = _trusted_actor(
+            cur, request, str(t["container_id"]), body.author_agent_id
+        )
         _reject_if_retired(cur, body.author_agent_id)  # ISS-51 [P1]
         _require_container_active(
             cur, str(t["container_id"]), body.author_agent_id
@@ -109,12 +118,20 @@ def post_message(tid: str, body: TaskMessage):
                 },
             )
         conn.commit()
+    # Push pipeline (mig 041): an agent-authored post may be the task's OPENING
+    # plan — the moment the approval gate becomes a needs-you item. AFTER the
+    # commit, best-effort; the hook itself verifies "earliest agent-authored
+    # message + in_progress + undecided" in its own transaction and no-ops on
+    # every later post.
+    if author_kind is not None and author_kind != "human":
+        _push_plan_approval(str(t["container_id"]), tid, mid)
     return {"message_id": mid, "task_id": tid}
 
 
 @app.get("/api/tasks/{tid}/messages")
 def get_task_messages(
     tid: str,
+    request: Request,
     limit: int = 0,
     before: Optional[str] = None,
     before_id: Optional[str] = None,
@@ -161,7 +178,9 @@ def get_task_messages(
         "COALESCE(m.attachments, '[]'::jsonb) AS attachments, m.created_at"
     )
     with db_cursor() as (_, cur):
-        _require_task(cur, tid)
+        t = _require_task(cur, tid)
+        # Access model: thread content is project-isolated (trusted non-member 403).
+        _require_member_read(cur, request, str(t["container_id"]))
         # GH #33: surface the FULL task body in a `task` header so a worker woken by a task-thread
         # message — told to "read the thread" — reads description + definition_of_done before acting,
         # not just the message preview and the title.

@@ -1,6 +1,6 @@
 """Read requests and record target responses."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
@@ -11,6 +11,7 @@ from portal_backend.guards import (
     require_container_active as _require_container_active,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import RequestRespond
 
@@ -38,7 +39,7 @@ def get_request(rid: str):
 
 
 @app.post("/api/requests/{rid}/respond", status_code=200)
-def respond_request(rid: str, body: RequestRespond):
+def respond_request(rid: str, body: RequestRespond, request: Request):
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
     if not _valid_uuid(body.responder_agent_id):
@@ -47,6 +48,10 @@ def respond_request(rid: str, body: RequestRespond):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize overlapping retries
+        # Per-project identity: a trusted proxy login IS the responder (403 non-member).
+        body.responder_agent_id = _trusted_actor(
+            cur, request, str(r["container_id"]), body.responder_agent_id
+        )
         _reject_if_retired(cur, body.responder_agent_id)  # ISS-51 [P1]
         _require_container_active(
             cur, str(r["container_id"]), body.responder_agent_id

@@ -1,17 +1,18 @@
 """Persist human decisions and route their rationale to affected work."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.decision_routing import _post_decision_to_thread
 from portal_backend.events import publish_event
 from portal_backend.guards import require_kind, valid_uuid
+from portal_backend.identity_routes import trusted_actor
 from portal_backend.schemas.agent_state import DecisionCreate
 
 
 @app.post("/api/decisions", status_code=201)
-def create_decision(body: DecisionCreate):
+def create_decision(body: DecisionCreate, request: Request):
     reason = (body.reason or "").strip()
     if body.decision == "reject" and not reason:
         raise HTTPException(
@@ -24,11 +25,10 @@ def create_decision(body: DecisionCreate):
     if body.target_agent_id is not None and not valid_uuid(body.target_agent_id):
         raise HTTPException(400, "target_agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        require_kind(cur, body.actor_agent_id, ("human",))
-        cur.execute(
-            "SELECT container_id FROM agents WHERE id=%s", (body.actor_agent_id,)
-        )
-        container_id = cur.fetchone()["container_id"]
+        # The decision lands in the TARGET's container when a target is named, else the
+        # actor's. Resolve that container FIRST so the per-project identity rule binds
+        # the actor against the project actually affected (403 for a non-member).
+        target = None
         if body.target_agent_id is not None:
             cur.execute(
                 "SELECT container_id FROM agents WHERE id=%s",
@@ -39,6 +39,23 @@ def create_decision(body: DecisionCreate):
                 raise HTTPException(
                     404, f"target agent {body.target_agent_id} not found"
                 )
+        if target is not None:
+            gate_cid = target["container_id"]
+        else:
+            require_kind(cur, body.actor_agent_id, ("human",))
+            cur.execute(
+                "SELECT container_id FROM agents WHERE id=%s", (body.actor_agent_id,)
+            )
+            gate_cid = cur.fetchone()["container_id"]
+        body.actor_agent_id = trusted_actor(
+            cur, request, str(gate_cid), body.actor_agent_id
+        )
+        require_kind(cur, body.actor_agent_id, ("human",))
+        cur.execute(
+            "SELECT container_id FROM agents WHERE id=%s", (body.actor_agent_id,)
+        )
+        container_id = cur.fetchone()["container_id"]
+        if target is not None:
             container_id = target["container_id"]
         cur.execute(
             """INSERT INTO decisions

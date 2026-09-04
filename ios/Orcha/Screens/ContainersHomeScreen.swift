@@ -7,6 +7,7 @@ struct ContainersHomeScreen: View {
     @Environment(\.palette) private var p
     @State private var showScanner = false
     @State private var showManualEntry = false
+    @State private var showTokenPrompt = false
     @State private var showSettings = false
     @State private var renaming: StoredContainer?
     @State private var newName = ""
@@ -36,13 +37,25 @@ struct ContainersHomeScreen: View {
         .task { model.probeContainers() }
         .refreshable { model.probeContainers() }
         .fullScreenCover(isPresented: $showScanner) {
-            ScannerScreen(onManualEntry: {
-                showScanner = false
-                showManualEntry = true
-            })
+            ScannerScreen(
+                onManualEntry: {
+                    showScanner = false
+                    showManualEntry = true
+                },
+                onTokenRequired: {
+                    // Scan hit the auth perimeter: the address is captured, only
+                    // a credential is missing — offer GitHub sign-in (primary)
+                    // with pasted-token entry as the advanced fallback.
+                    showScanner = false
+                    showTokenPrompt = true
+                }
+            )
         }
         .sheet(isPresented: $showManualEntry) {
             ManualConnectSheet()
+        }
+        .sheet(isPresented: $showTokenPrompt) {
+            AuthOptionsSheet()
         }
         .sheet(isPresented: $showSettings) {
             SettingsScreen()
@@ -70,14 +83,14 @@ struct ContainersHomeScreen: View {
             }
             Button("Cancel", role: .cancel) { disconnecting = nil }
         } message: {
-            Text("This only removes the pairing from this phone. The Orcha keeps running on your computer, and you can pair again anytime from the portal.")
+            Text("This removes the pairing — and every project sharing its address — from this phone only. The Orcha keeps running, and you can pair again anytime from the portal.")
         }
     }
 
     private var emptyState: some View {
         StateLayout(
             title: "Add your Orcha",
-            sub: "On your computer, open the Orcha portal and choose Pair phone — then scan the QR code here. Phone and laptop must share a Wi-Fi network."
+            sub: "Open your Orcha portal and choose Pair phone, then scan the QR here — or type the portal address, like orcha.yourteam.com. One pairing brings in every project on that Orcha."
         ) {
             BrandMark(size: 44)
         } actions: {
@@ -85,7 +98,7 @@ struct ContainersHomeScreen: View {
                 KitButton(title: "Add your Orcha", systemImage: "qrcode.viewfinder") { showScanner = true }
                     .frame(maxWidth: 260)
                 Button("Enter address manually") { showManualEntry = true }
-                    .font(.system(size: 14, weight: .bold))
+                    .font(p.uiFont(14, .bold))
                     .foregroundStyle(p.accent)
             }
         }
@@ -110,8 +123,8 @@ struct ContainersHomeScreen: View {
                         Button("Disconnect", role: .destructive) { disconnecting = container }
                     }
                 }
-                Text("Long-press a card to rename or disconnect. Your phone talks to each Orcha directly on your network.")
-                    .font(.system(size: 13))
+                Text("Every project on a paired Orcha appears here automatically — tap one to switch into it. Long-press a card to rename or disconnect.")
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.faint)
                     .padding(.horizontal, 4)
                     .padding(.top, 4)
@@ -132,7 +145,7 @@ private struct ContainerCard: View {
                 BrandMark()
                 VStack(alignment: .leading, spacing: 2) {
                     Text(container.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(p.uiFont(15, .semibold))
                         .foregroundStyle(p.text)
                         .lineLimit(1)
                     Text(container.baseUrl)
@@ -143,27 +156,42 @@ private struct ContainerCard: View {
                 Spacer()
                 ConnChip(state: health?.state ?? "probing")
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(p.uiFont(12, .semibold))
                     .foregroundStyle(p.faint)
             }
             switch health?.state {
             case nil, "probing":
                 Text("Checking…")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.faint)
             case "unreachable":
-                Text("Last seen a while ago — is the laptop awake?")
-                    .font(.system(size: 13))
+                Text("Last seen a while ago — is this Orcha up?")
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.muted)
             default:
                 HStack(spacing: 8) {
-                    Text("\(health?.agents ?? 0) agents · \(health?.tasks ?? 0) tasks")
-                        .font(.system(size: 13))
+                    Text("\(health?.agents ?? 0) agents · \(health?.tasks ?? 0) open")
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.muted)
                     Spacer()
                     if let needs = health?.needsYou, needs > 0 {
                         StatusPill(status: "\(needs) need you", domain: .agent)
                     }
+                }
+                // Bound GitHub repo (glance-only — connect/change lives in the
+                // workspace, on the Home tab's repo chip).
+                if let repo = health?.githubRepo {
+                    HStack(spacing: 5) {
+                        GitHubMark()
+                            .frame(width: 11, height: 11)
+                            .foregroundStyle(p.faint)
+                        Text(repo)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(p.muted)
+                            .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("GitHub repository: \(repo)")
                 }
             }
         }

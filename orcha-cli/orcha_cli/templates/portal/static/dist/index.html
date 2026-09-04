@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orcha</title>
+    <script>
+      // pre-paint theme: honor the persisted choice before first paint so
+      // full-page navigations never flash the dark default (GH #239 family).
+      try {
+        var t = localStorage.getItem("orcha:theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+      // pre-paint skin: same idiom, same key as the vanilla portal
+      // (orcha:skin) — "classic" carries no attribute, so only a non-classic
+      // pick (e.g. "swiss") is applied before first paint.
+      try {
+        var s = localStorage.getItem("orcha:skin");
+        if (s && s !== "classic") document.documentElement.setAttribute("data-skin", s);
+      } catch (e) {}
+      // pre-paint sidebar: same idiom, same key as the vanilla portal
+      // (orcha:sidebar) — collapsed state applied before first paint so the
+      // rail never flashes at the wrong width on a full-page navigation.
+      try {
+        if (localStorage.getItem("orcha:sidebar") === "collapsed") {
+          document.documentElement.setAttribute("data-sidebar", "collapsed");
+        }
+      } catch (e) {}
+    </script>
+    <!-- the shared styles.css token layer is injected at runtime by main.tsx:
+         a <link> here would get base-prefixed by Vite to /assets/dist/... -->
+    <script type="module" crossorigin src="/assets/dist/assets/index-BEc-f8oK.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/dist/assets/index-XqGQF1nE.css">
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

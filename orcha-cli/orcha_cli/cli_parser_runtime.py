@@ -148,6 +148,20 @@ def register_runtime_commands(
     )
     bridge.set_defaults(func=handlers["terminal-bridge"])
 
+    sbx = sub.add_parser(
+        "sandbox",
+        help="opt-in sandbox mode: run agent wakes inside an isolated `orcha/runner` Docker "
+        "container instead of directly on the host (see docs/sandbox-mode.md).",
+    )
+    sbx.add_argument(
+        "action",
+        choices=["on", "off", "status", "build-image"],
+        help="on/off toggle .claude/orcha.json's sandbox.enabled (preserving other config); "
+        "status prints the effective sandbox config; build-image builds the orcha/runner "
+        "image from the CLI's installed template (no project required).",
+    )
+    sbx.set_defaults(func=handlers["sandbox"])
+
     pause = sub.add_parser(
         "pause",
         help="pause an Orcha container (the project/milestone entity in the current project's DB). "

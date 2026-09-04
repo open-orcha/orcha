@@ -8,6 +8,10 @@ enum WorkspaceRoute: Hashable {
     case agent(String)
     case run(RunDto)
     case converse(String)
+    /// GitHub hub — the issues/PRs list and the two detail screens (by number).
+    case githubHub
+    case githubPull(Int)
+    case githubIssue(Int)
 }
 
 extension RunDto: Hashable {
@@ -36,9 +40,70 @@ struct WorkspaceScreen: View {
     }
 
     var body: some View {
+        if #available(iOS 26, *) {
+            // The Liquid Glass tab bar minimizes on scroll-down — the phone
+            // equivalent of the portal's collapsible sidebar (more content,
+            // chrome returns on scroll-up).
+            tabs.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            tabs
+        }
+    }
+
+    private var tabs: some View {
+        Group {
+            if #available(iOS 26, *) {
+                modernTabs
+            } else {
+                legacyTabs
+            }
+        }
+        .sheet(isPresented: $showCreateTask) {
+            CreateTaskSheet()
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsScreen()
+        }
+        .sheet(isPresented: Bindable(model).showContainerControls) {
+            ContainerControlsSheet()
+        }
+        .task { await model.refresh() }
+    }
+
+    /// iOS 26 Tab builder: the search tab takes the system search role, which
+    /// renders as the separated bottom-right glass circle (the Music pattern).
+    @available(iOS 26, *)
+    private var modernTabs: some View {
         @Bindable var model = model
-        TabView(selection: $model.selectedTab) {
-            workspaceTab { HomeTabView(showCreateTask: $showCreateTask) }
+        return TabView(selection: $model.selectedTab) {
+            Tab("Home", systemImage: "house.fill", value: WorkspaceTab.home) {
+                workspaceTab(path: $model.homePath) { HomeTabView(showCreateTask: $showCreateTask) }
+            }
+            .badge(needsYouCount)
+
+            Tab("Tasks", systemImage: "checklist", value: WorkspaceTab.tasks) {
+                workspaceTab { TasksTabView(showCreateTask: $showCreateTask) }
+            }
+
+            Tab("Requests", systemImage: "tray.full.fill", value: WorkspaceTab.requests) {
+                workspaceTab { RequestsTabView(groups: requestGroups) }
+            }
+            .badge(requestGroups.badgeCount)
+
+            Tab("Agents", systemImage: "sparkles", value: WorkspaceTab.agents) {
+                workspaceTab { AgentsTabView() }
+            }
+
+            Tab(value: WorkspaceTab.search, role: .search) {
+                workspaceTab { SearchTabView() }
+            }
+        }
+    }
+
+    private var legacyTabs: some View {
+        @Bindable var model = model
+        return TabView(selection: $model.selectedTab) {
+            workspaceTab(path: $model.homePath) { HomeTabView(showCreateTask: $showCreateTask) }
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .badge(needsYouCount)
                 .tag(WorkspaceTab.home)
@@ -55,36 +120,56 @@ struct WorkspaceScreen: View {
             workspaceTab { AgentsTabView() }
                 .tabItem { Label("Agents", systemImage: "sparkles") }
                 .tag(WorkspaceTab.agents)
+
+            workspaceTab { SearchTabView() }
+                .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                .tag(WorkspaceTab.search)
         }
-        .sheet(isPresented: $showCreateTask) {
-            CreateTaskSheet()
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsScreen()
-        }
-        .sheet(isPresented: $model.showContainerControls) {
-            ContainerControlsSheet()
-        }
-        .task { await model.refresh() }
     }
 
     @ViewBuilder
     private func workspaceTab(
+        path: Binding<[WorkspaceRoute]>? = nil,
         @ViewBuilder content: @escaping () -> some View
     ) -> some View {
-        NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+        // Home gets a bound path so notification taps can push the exact
+        // task/request screen programmatically; other tabs keep local state.
+        if let path {
+            NavigationStack(path: path) { tabRoot(content) }
+        } else {
+            NavigationStack { tabRoot(content) }
+        }
+    }
+
+    private func tabRoot(@ViewBuilder _ content: @escaping () -> some View) -> some View {
+        OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 content()
             }
             .navigationTitle(model.selectedContainer?.displayName ?? "Orcha")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
+                    // Icon-only: the title label ("My Orchas") crowded the inline
+                    // title into truncating ("Ship Quantal…"). VoiceOver keeps the name.
                     Button("My Orchas", systemImage: "chevron.backward") { model.closeWorkspace() }
-                        .labelStyle(.titleAndIcon)
+                        .labelStyle(.iconOnly)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    ConnChip(state: model.snapshot == nil ? (model.loading ? "probing" : "unreachable") : connState)
+                ToolbarItem(placement: .principal) {
+                    // Presence-style status: a tiny colored dot folded into the
+                    // title (chat-app pattern) replaces the orphan toolbar chip —
+                    // green connected, amber paused, red unreachable. VoiceOver
+                    // reads name + state; long names scale before truncating.
+                    HStack(spacing: 6) {
+                        PulseDot(color: titleDotColor, animated: false)
+                            .scaleEffect(0.8)
+                        Text(model.selectedContainer?.displayName ?? "Orcha")
+                            .font(p.uiFont(16, .bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(model.selectedContainer?.displayName ?? "Orcha"), \(titleDotState)")
+                    .accessibilityAddTraits(.isHeader)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     // GH #148 — entry point to the Notifier/Autonomy sheet; tinted by the
@@ -112,7 +197,7 @@ struct WorkspaceScreen: View {
                 }
             }
             .navigationDestination(for: WorkspaceRoute.self) { route in
-                OrchaThemed(mode: model.themeMode) {
+                OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                     switch route {
                     case let .task(id): TaskDetailScreen(taskId: id)
                     case let .thread(id): TaskThreadScreen(taskId: id)
@@ -120,16 +205,33 @@ struct WorkspaceScreen: View {
                     case let .agent(id): AgentDetailScreen(agentId: id)
                     case let .run(run): RunDetailScreen(run: run)
                     case let .converse(id): ConversationScreen(agentId: id)
+                    case .githubHub: GitHubHubScreen()
+                    case let .githubPull(number): GitHubPullDetailScreen(number: number)
+                    case let .githubIssue(number): GitHubIssueDetailScreen(number: number)
                     }
                 }
             }
-        }
     }
 
     private var connState: String {
         (model.snapshot?.container.status ?? "active") != "active" ? "paused" : "polling"
     }
+
+    /// Title presence dot: the toolbar ConnChip's states, dot-only.
+    private var titleDotState: String {
+        model.snapshot == nil ? (model.loading ? "probing" : "unreachable") : connState
+    }
+
+    private var titleDotColor: Color {
+        switch titleDotState {
+        case "polling", "live", "active": p.ok
+        case "paused": p.warn
+        case "unreachable": p.danger
+        default: p.idle
+        }
+    }
 }
+
 
 /// The shared connection banner row (flow 04 H8/H10): polling is the honest v1
 /// state (SSE is the listed follow-up); paused blocks agent action.
@@ -149,11 +251,9 @@ struct ConnectionBanners: View {
                 Banner(kind: .warn, text: "Notifier paused — agents won't wake.", action: "Resume") {
                     model.showContainerControls = true
                 }
-            } else {
-                Banner(kind: .warn, text: "Live updates unavailable — checking every 30s", action: "Refresh now") {
-                    Task { await model.refresh() }
-                }
             }
+            // Healthy polling is the normal state — the toolbar ConnChip already
+            // says "polling", so no standing warn banner nagging every screen.
         }
     }
 }
@@ -165,21 +265,21 @@ struct UnreachableState: View {
 
     var body: some View {
         StateLayout(
-            title: "Can't reach your laptop",
+            title: "Can't reach this Orcha",
             sub: "\(model.selectedContainer?.baseUrl ?? "The container") didn't answer. Your work is safe — the phone just can't see it right now.",
             danger: true
         ) {
             Image(systemName: "wifi.slash")
-                .font(.system(size: 30))
+                .font(p.uiFont(30))
                 .foregroundStyle(p.danger)
         } actions: {
             VStack(spacing: 12) {
                 OrchaCard {
-                    Text("1  Is the phone on the same Wi-Fi as the laptop?")
-                    Text("2  Is the laptop awake and Orcha running?")
-                    Text("3  Firewall or VPN blocking the port?")
+                    Text("1  Are you online? The portal needs an internet connection.")
+                    Text("2  Is the deployment up — or, self-hosting, is the computer awake with Orcha running?")
+                    Text("3  Access token rotated? Update it in Settings → Containers.")
                 }
-                .font(.system(size: 13))
+                .font(p.uiFont(13))
                 .foregroundStyle(p.text2)
                 KitButton(title: "Try again", role: .neutral) {
                     Task { await model.refresh() }

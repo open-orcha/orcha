@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +48,7 @@ import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.SegControl
 import io.openorcha.mobile.ui.components.StatusDomain
 import io.openorcha.mobile.ui.components.StatusPill
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
 /* =============================================================================
@@ -90,12 +89,12 @@ fun CreateTaskScreen(
     fun requestClose() { if (dirty) confirmDiscard = true else onBack() }
 
     Scaffold(
-        containerColor = p.bg,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 title = { Text("Create task") },
-                navigationIcon = { IconButton(onClick = { requestClose() }) { Icon(Icons.Rounded.Close, "Close") } },
+                navigationIcon = { IconButton(onClick = { requestClose() }) { Icon(OrchaIcons.Close, "Close") } },
                 actions = {
                     TextButton(
                         onClick = {

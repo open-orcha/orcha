@@ -45,6 +45,29 @@ async def too_long_or_invalid(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
+def start_local_index_warmer() -> None:
+    """Background warm loop for the LOCAL code source's symbol index (Addendum 2).
+
+    Every 4 minutes (inside the 10-min symbol/snapshot TTLs, so the index never goes
+    cold between passes) rebuild any missing index for containers bound to the local
+    working tree — including picking up NEW commits, since the state is keyed by the
+    resolved HEAD sha. Daemon thread; each pass swallows its own failures. No-op forever
+    on stacks without a local mount (thread exits after the first check)."""
+    import threading
+
+    def _loop() -> None:
+        from portal_backend.code_space_routes import warm_local_symbol_index
+        from portal_backend import local_git
+        time.sleep(3)  # let migrations settle before the first pass
+        if not local_git.available():
+            return
+        while True:
+            warm_local_symbol_index()
+            time.sleep(240)
+
+    threading.Thread(target=_loop, name="local-index-warmer", daemon=True).start()
+
+
 def startup_migrate() -> None:
     """Wait briefly for Postgres, then apply pending migrations at startup."""
     for _ in range(20):

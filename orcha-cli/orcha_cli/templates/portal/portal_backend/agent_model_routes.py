@@ -1,11 +1,13 @@
 """Routes for agent model and reasoning-effort selection."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent as _require_agent
+from portal_backend.identity_routes import enforce_grant as _enforce_grant
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.guards import valid_uuid as _valid_uuid
 from portal_backend.schemas.agent_state import (
     AgentModelUpdate,
@@ -29,7 +31,7 @@ def configure_catalogs(model_ids, reasoning_effort_ids):
 
 
 @app.post("/api/agents/{aid}/model", status_code=200)
-def set_agent_model(aid: str, body: AgentModelUpdate):
+def set_agent_model(aid: str, body: AgentModelUpdate, request: Request):
     """B8.1: update the LLM model an agent runs on. Persists agents.model (set at
     registration in D7) and flows through the D7 read payload (agent.model). The model
     must be a curated id (AVAILABLE_MODELS) — kept curated per kedar; new providers
@@ -45,6 +47,10 @@ def set_agent_model(aid: str, body: AgentModelUpdate):
         )
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
+        # Per-project identity: a model swap is a member action (403 non-member).
+        _trusted_actor(cur, request, str(agent["container_id"]), None)
+        # Access model: model/effort swaps are owner-or-manage_agents.
+        _enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
         cur.execute("SELECT kind, model FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if row["kind"] == "human":
@@ -82,7 +88,7 @@ def set_agent_model(aid: str, body: AgentModelUpdate):
 
 
 @app.post("/api/agents/{aid}/reasoning-effort", status_code=200)
-def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate):
+def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate, request: Request):
     """GH #51: set the reasoning effort an agent's worker spawns at. Persists
     agents.reasoning_effort and flows through the read payload + wake-scan candidate, where the
     daemon passes it to the worker (`claude --effort <level>`, or Codex model_reasoning_effort).
@@ -102,6 +108,10 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate):
         )
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
+        # Per-project identity: an effort change is a member action (403 non-member).
+        _trusted_actor(cur, request, str(agent["container_id"]), None)
+        # Access model: model/effort swaps are owner-or-manage_agents.
+        _enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
         cur.execute("SELECT kind, reasoning_effort FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if row["kind"] == "human":

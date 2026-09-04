@@ -1,0 +1,58 @@
+/* Skeleton loading states + the gentle content-swap fade (modules/app-skeleton.js).
+   Token-driven only (var(--surface-2/-3), var(--border)) — correct in every skin
+   (classic, swiss, minimal, gold) with zero skin-specific overrides needed. A single
+   left-to-right shimmer sweep, same gradient shape as the pre-existing dormant
+   `.sk` shimmer in styles/components.css, kept as its own `.ork-sk` class so this
+   file has no dependency on that one. */
+
+.ork-sk-wrap { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---- primitive shimmer block ------------------------------------------- */
+.ork-sk {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: ork-shimmer 1.3s ease infinite;
+  border-radius: 7px;
+}
+@keyframes ork-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+/* ---- list-rows / roster: one row = an avatar/pill + two text lines ------ */
+.ork-sk-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; }
+.ork-sk-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
+.ork-sk-line { height: 11px; }
+.ork-sk-line.sm { height: 9px; }
+.ork-sk-line.lg { height: 16px; }
+.ork-sk-line.w30 { width: 30%; }
+.ork-sk-line.w40 { width: 40%; }
+.ork-sk-line.w50 { width: 50%; }
+.ork-sk-line.w60 { width: 60%; }
+.ork-sk-line.w70 { width: 70%; }
+.ork-sk-line.w80 { width: 80%; }
+.ork-sk-avatar { width: 30px; height: 30px; border-radius: 999px; flex: none; }
+.ork-sk-avatar.sm { width: 22px; height: 22px; }
+.ork-sk-pill { width: 64px; height: 20px; border-radius: 999px; flex: none; margin-top: 1px; }
+.ork-sk-block { height: 88px; border-radius: 11px; margin: 4px 0; }
+
+/* ---- stat-cards + table (metrics/dashboard) ----------------------------- */
+.ork-sk-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 4px; }
+.ork-sk-tile { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 14px;
+  border: 1px solid var(--border); background: var(--surface); }
+.ork-sk-table { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--surface); padding: 12px 14px; }
+.ork-sk-trow { display: flex; align-items: center; gap: 12px; }
+.ork-sk-cell { height: 11px; flex: 1; min-width: 0; }
+
+/* ---- reduced motion: a static (non-shimmering) block, never a moving gradient */
+@media (prefers-reduced-motion: reduce) {
+  .ork-sk { animation: none; background: var(--surface-2); background-size: auto; }
+}
+
+/* ---- content swap: a gentle fade + tiny rise, disabled under reduced motion */
+.ork-fade-in { animation: ork-fade-in 150ms ease-out; }
+@keyframes ork-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ork-fade-in { animation: none; }
+}

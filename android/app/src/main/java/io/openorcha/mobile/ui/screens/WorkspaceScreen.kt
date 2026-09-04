@@ -4,16 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Checklist
-import androidx.compose.material.icons.rounded.Forum
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.SmartToy
-import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,6 +38,7 @@ import io.openorcha.mobile.ui.components.OrchaCard
 import io.openorcha.mobile.ui.components.StateLayout
 import io.openorcha.mobile.ui.components.NeutralButton
 import io.openorcha.mobile.ui.components.ConnChip
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
 /* Container workspace scaffold: top bar, bottom nav, tab routing, connection-state
@@ -72,6 +63,8 @@ fun WorkspaceScreen(
     onVerifyFor: (String, Boolean, String?) -> Unit,
     onSetWakes: (Boolean) -> Unit,
     onSetAutonomy: (String) -> Unit,
+    onOpenGithubHub: () -> Unit = {},
+    onSearchQueryChange: (String) -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val snapshot = state.snapshot
@@ -91,7 +84,7 @@ fun WorkspaceScreen(
     var controlsSheetOpen by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = Orcha.palette.bg,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -101,12 +94,12 @@ fun WorkspaceScreen(
                         ConnChip(if (snapshot == null) (if (state.loading) "probing" else "unreachable") else if (containerPaused) "paused" else "polling")
                     }
                 },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
                 actions = {
                     if (snapshot != null) {
-                        IconButton(onClick = { controlsSheetOpen = true }) { Icon(Icons.Rounded.Settings, "Container controls") }
+                        IconButton(onClick = { controlsSheetOpen = true }) { Icon(OrchaIcons.Settings, "Container controls") }
                     }
-                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                    IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(text = { Text("Settings") }, onClick = { menuOpen = false; onSettings() })
                         DropdownMenuItem(text = { Text("Switch container") }, onClick = { menuOpen = false; onBack() })
@@ -117,10 +110,11 @@ fun WorkspaceScreen(
         },
         bottomBar = {
             NavigationBar(containerColor = Orcha.palette.surface) {
-                WorkspaceNavItem(state, WorkspaceTab.Home, "Home", Icons.Rounded.Home, badge = needsYou.total, onTab)
-                WorkspaceNavItem(state, WorkspaceTab.Tasks, "Tasks", Icons.Rounded.Checklist, badge = 0, onTab)
-                WorkspaceNavItem(state, WorkspaceTab.Requests, "Requests", Icons.Rounded.Forum, badge = requestGroups.badgeCount, onTab)
-                WorkspaceNavItem(state, WorkspaceTab.Agents, "Agents", Icons.Rounded.SmartToy, badge = 0, onTab)
+                WorkspaceNavItem(state, WorkspaceTab.Home, "Home", OrchaIcons.Home, badge = needsYou.total, onTab)
+                WorkspaceNavItem(state, WorkspaceTab.Tasks, "Tasks", OrchaIcons.Checklist, badge = 0, onTab)
+                WorkspaceNavItem(state, WorkspaceTab.Requests, "Requests", OrchaIcons.Forum, badge = requestGroups.badgeCount, onTab)
+                WorkspaceNavItem(state, WorkspaceTab.Agents, "Agents", OrchaIcons.SmartToy, badge = 0, onTab)
+                WorkspaceNavItem(state, WorkspaceTab.Search, "Search", OrchaIcons.Search, badge = 0, onTab)
             }
         },
         floatingActionButton = {
@@ -129,23 +123,23 @@ fun WorkspaceScreen(
                     onClick = onCreateTask,
                     containerColor = Orcha.palette.accent,
                     contentColor = Orcha.palette.accentInk,
-                ) { Icon(Icons.Rounded.Add, "Create task") }
+                ) { Icon(OrchaIcons.Add, "Create task") }
             }
         },
     ) { padding ->
         when {
             snapshot == null && state.loading -> WorkspaceSkeleton(Modifier.padding(padding))
             snapshot == null -> StateLayout(
-                title = "Can't reach your laptop",
+                title = "Can't reach this Orcha",
                 sub = "${selected?.baseUrl ?: "The container"} didn't answer. Your work is safe — the phone just can't see it right now.",
                 modifier = Modifier.padding(padding),
                 danger = true,
-                glyph = { Icon(Icons.Rounded.WifiOff, null, tint = Orcha.palette.danger) },
+                glyph = { Icon(OrchaIcons.WifiOff, null, tint = Orcha.palette.danger) },
             ) {
                 OrchaCard {
-                    Text("1  Is the phone on the same Wi-Fi as the laptop?", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.text2)
-                    Text("2  Is the laptop awake and Orcha running?", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.text2)
-                    Text("3  Firewall or VPN blocking the port?", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.text2)
+                    Text("1  Are you online? The portal needs an internet connection.", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.text2)
+                    Text("2  Is the deployment up — or, self-hosting, is the computer awake with Orcha running?", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.text2)
+                    Text("3  Access token rotated? Update it in Settings → Containers.", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.text2)
                 }
                 NeutralButton("Try again", onRefresh)
             }
@@ -154,25 +148,22 @@ fun WorkspaceScreen(
                 // state (SSE is a listed follow-up). GH #148: laptop-level container-pause
                 // is a separate, higher tier than the in-container notifier switch — never
                 // conflate the two banners.
-                when {
-                    containerPaused -> Banner(
+                // No steady-state banner: polling is the normal connection model and
+                // pull-to-refresh already covers manual refresh — only genuinely
+                // abnormal states (paused) warrant a banner.
+                if (containerPaused) {
+                    Banner(
                         BannerKind.Info,
                         "This Orcha is paused/stopped on the laptop — resume it there before agents can act.",
                         Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
-                    notifierPaused -> Banner(
+                } else if (notifierPaused) {
+                    Banner(
                         BannerKind.Info,
                         "This Orcha is paused — agents won't act until resumed.",
                         Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         action = "Resume",
                         onAction = { controlsSheetOpen = true },
-                    )
-                    else -> Banner(
-                        BannerKind.Warn,
-                        "Live updates unavailable — checking every 30s",
-                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        action = "Refresh now",
-                        onAction = onRefresh,
                     )
                 }
                 PullToRefreshBox(isRefreshing = state.loading, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
@@ -181,10 +172,19 @@ fun WorkspaceScreen(
                         state, needsYou.planApprovals, needsYou.verifications, needsYou.requests,
                         onOpenTask, onOpenRequest, onOpenAgent, onTab,
                         onPlanSheet = { planSheetTask = it }, onVerifySheet = { verifySheetTask = it },
+                        onOpenGithubHub = onOpenGithubHub,
                     )
                     WorkspaceTab.Tasks -> TasksTab(snapshot.tasks, snapshot.agents, onOpenTask)
                     WorkspaceTab.Requests -> RequestsTab(snapshot.requests, snapshot.agents, humanId, onOpenRequest)
                     WorkspaceTab.Agents -> AgentsTab(snapshot.agents, onOpenAgent)
+                    WorkspaceTab.Search -> SearchTab(
+                        snapshot = snapshot,
+                        query = state.searchQuery,
+                        onQueryChange = onSearchQueryChange,
+                        onOpenTask = onOpenTask,
+                        onOpenRequest = onOpenRequest,
+                        onOpenAgent = onOpenAgent,
+                    )
                 }
                 }
             }

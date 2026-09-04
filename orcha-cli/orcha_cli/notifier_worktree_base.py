@@ -115,6 +115,54 @@ def overlay_runtime_config(base: pathlib.Path, worktree: pathlib.Path) -> None:
             except OSError:
                 pass
 
+    # LAST step on purpose: everything the overlay just wrote gets re-owned too.
+    mirror_base_ownership(base, worktree)
+
+
+def _chown_tree(root: pathlib.Path, uid: int, gid: int) -> None:
+    """Best-effort recursive chown that never follows symlinks out of the tree."""
+    chown = getattr(os, "lchown", None) or os.chown
+    try:
+        chown(root, uid, gid)
+    except OSError:
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            try:
+                chown(os.path.join(dirpath, name), uid, gid)
+            except OSError:
+                pass
+
+
+def mirror_base_ownership(base: pathlib.Path, worktree: pathlib.Path) -> None:
+    """Give a fresh worktree the SAME owner as the base checkout it came from.
+
+    Field bug (Warden, 2026-08-01): on cloud boxes the notifier daemon runs as
+    root while sandboxes run as a non-root uid, so `git worktree add` birthed
+    root-owned trees the worker could not write — every file, including the
+    worktree's own admin dir under the main repo's .git/worktrees (HEAD/index
+    live there), was read-only to the agent. Mirroring the BASE workspace's
+    owner (which provisioning already set to the runner uid) fixes both the
+    tree and the admin dir at creation time. No-op when the daemon already IS
+    the workspace owner (local self-host) or off POSIX."""
+    if os.name != "posix":
+        return
+    try:
+        stat = os.stat(base)
+        uid, gid = stat.st_uid, stat.st_gid
+        if uid == os.geteuid():
+            return
+    except OSError:
+        return
+    _chown_tree(worktree, uid, gid)
+    # the worktree's admin dir inside the main .git — git writes HEAD/index there
+    return_code, git_dir = run_git(["rev-parse", "--git-dir"], cwd=str(worktree))
+    if return_code == 0 and git_dir.strip():
+        admin = pathlib.Path(git_dir.strip())
+        if not admin.is_absolute():
+            admin = (worktree / admin).resolve()
+        _chown_tree(admin, uid, gid)
+
 
 def seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
     """Create a missing portal-agent CLI binding without overwriting user state."""

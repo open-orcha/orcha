@@ -109,7 +109,12 @@ def advance_live_resident(
             resident,
             candidate,
             quiet,
+            live_residents=live_residents,
         )
+        if conv_id not in live_residents:
+            # capture_result retired this resident (warm resume produced an
+            # empty result — sandbox-continuity fix). Next tick boots FRESH.
+            return
     if (
         resident.get("awaiting_result")
         and time.time() - resident.get("awaiting_since", 0)
@@ -217,24 +222,39 @@ def _handle_exited(
     services, api_base, conv_id, resident, live_residents, quiet
 ) -> None:
     process = resident["proc"]
+    finished = True
     if resident.get("current_run_id"):
-        services._finish_run(
+        finished = services._finish_run(
             api_base,
             resident["current_run_id"],
             "killed",
             process.returncode,
             resident.get("log_path"),
         )
-    if (
-        not resident.get("cold")
-        and time.time() - resident.get("booted_ts", 0)
+    # I4 (resident lane): the docker client exited → the sandboxed session is
+    # over; reap its container + api-config once the stamp landed (or when no
+    # turn row was open). A failed stamp keeps the exited container as evidence
+    # for the container-liveness sweep (I5). No-op for host mode.
+    if finished:
+        services._reap_sandbox_artifacts(resident)
+    if not resident.get("cold") and (
+        time.time() - resident.get("booted_ts", 0)
         < services.RESUME_FAIL_WINDOW_SECS
+        # Sandbox-continuity fix: a sandboxed boot (docker pull/start latency)
+        # can straggle past the died-fast window, so ALSO recognize claude's
+        # explicit "No conversation found with session ID" line in this boot's
+        # log slice — without it the next boot warm-resumes the same dead
+        # session forever.
+        or services._resume_error_in_log(
+            resident.get("log_path"), resident.get("turn_scan_offset", 0)
+        )
     ):
         services._RESIDENT_RESUME_FAILED.add(conv_id)
         if not quiet:
             print(
                 f"[notifier] resident {resident.get('alias')} warm --resume "
-                "failed fast → next boot COLD (ISS-61)"
+                "failed (fast exit or no-conversation error) → dropping "
+                "pinned session, next boot COLD (ISS-61)"
             )
     services._post_json(
         f"{api_base}/api/agents/{resident['agent_id']}/wake-ack",

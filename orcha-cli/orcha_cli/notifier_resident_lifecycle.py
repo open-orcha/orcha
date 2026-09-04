@@ -33,15 +33,27 @@ def _close_resident(
     sidecar = resident.get("sidecar")
     if isinstance(sidecar, dict) and sidecar.get("proc") is not None:
         compat._kill_worker(sidecar["proc"], graceful=True)
+        # I4 (resident lane): the sidecar is row-less by design AND label-exempt
+        # from the orphan pass — killing its docker client here without reaping
+        # would leak its sandbox container forever. No-op for host mode.
+        compat._reap_sandbox_artifacts(sidecar)
         resident["sidecar"] = None
+    finished = True
     if resident.get("current_run_id"):
-        compat._finish_run(
+        finished = compat._finish_run(
             api_base,
             resident["current_run_id"],
             "exited",
             0,
             resident.get("log_path"),
         )
+    # I4 (resident lane): the warm session's container is spawned without --rm by
+    # design — every close path must reap it (container + per-run api-config) or
+    # each retired resident leaks a container. Only after the stamp landed (or
+    # with no open row at all); a failed finish leaves the exited container as
+    # evidence for the container-liveness sweep to stamp + rm next tick (I5).
+    if finished:
+        compat._reap_sandbox_artifacts(resident)
     if teardown_worktree:
         compat._safe_teardown_worktree(
             resident.get("base_cwd"),
@@ -93,6 +105,11 @@ def _spawn_drain_sidecar(
         prompt = compat.build_resident_sidecar_drain_prompt(
             resident.get("alias"), inbox, messages
         )
+        # sandbox_sidecar (Task-5 REQUIREMENT): the sidecar registers NO worker_run
+        # (locked no-lease invariant) — in sandbox mode its container must carry the
+        # orcha.sidecar=1 label or the reaper's orphan pass (live managed container
+        # with no open run row → stop) would kill it mid-drain.
+        _side_info: dict = {}
         sent, _, process = compat.spawn_headless(
             base_cwd,
             prompt,
@@ -104,6 +121,8 @@ def _spawn_drain_sidecar(
             reasoning_effort=reasoning_effort,
             runtime=compat.RUNTIME_CLAUDE,
             log_path=log_path,
+            sandbox_sidecar=True,
+            spawn_info=_side_info,
         )
         if not sent or process is None:
             return False
@@ -113,6 +132,11 @@ def _spawn_drain_sidecar(
             "hard_deadline": time.time() + compat.HARD_CAP_MIN_SECS,
             "ack_ts": ack_ts,
             "ackable_ids": list(ackable_ids or []),
+            # I4: the sidecar has NO run row (nothing to stamp) but its
+            # sandbox container must still be reaped on completion —
+            # the handle is the only place its name survives.
+            "sandbox_container_id": _side_info.get("sandbox_container_id"),
+            "base_cwd": base_cwd,
         }
         if not quiet:
             print(

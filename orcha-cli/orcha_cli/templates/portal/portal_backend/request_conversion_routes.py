@@ -3,7 +3,7 @@
 import json
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
@@ -15,12 +15,13 @@ from portal_backend.guards import (
     resolve_alias as _resolve_alias,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import RequestConvert
 
 
 @app.post("/api/requests/{rid}/convert-to-task", status_code=200)
-def convert_to_task(rid: str, body: RequestConvert):
+def convert_to_task(rid: str, body: RequestConvert, request: Request):
     """Convert an answered info request into a real task (e.g. answer was insufficient and warrants work).
 
     Request moves from 'answered' → 'converted_to_task'; a new task is created with optional
@@ -34,6 +35,10 @@ def convert_to_task(rid: str, body: RequestConvert):
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize all request-state mutations
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.requester_agent_id = _trusted_actor(
+            cur, request, str(r["container_id"]), body.requester_agent_id
+        )
         _require_container_active(
             cur, str(r["container_id"]), body.requester_agent_id
         )  # GH #24 (human may still convert)

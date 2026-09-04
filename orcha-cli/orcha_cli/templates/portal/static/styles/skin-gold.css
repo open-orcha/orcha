@@ -1,0 +1,259 @@
+/* ============================================================================
+   Skin: "Gold" — opt-in design, selectable from Settings → Appearance.
+   Founder brief: make the local portal default to the SAME restrained,
+   minimalist amber chrome the desktop app already uses. Desktop's exact
+   accent (desktop/src/renderer/src/styles.css --color-accent) is #f0b94b —
+   this skin builds the whole accent family from that one value instead of
+   minimal's paler champagne (#e7c368), so Gold and Minimalist read as
+   deliberately different: Gold is the desktop's own amber, minimal.
+
+   Mechanism: identical to the Swiss/Minimalist skins — a token-layer override
+   selected by [data-skin="gold"] on <html>, orthogonal to [data-theme] (dark /
+   light / auto all keep working). Default (no attribute) = classic teal.
+   Minimalist discipline, same as skin-minimal.css: hairline borders over boxed
+   ones, flat elevation (shadows reduced, not removed — see --shadow-* below),
+   quiet chips, gold reserved for primary actions / active nav / focus / links
+   — never a decorative fill. Semantic status colors (ok/warn/danger/info/
+   violet/idle) are copied from classic tokens.css UNCHANGED, per the brief.
+
+   EVERY rule in this file is scoped under html[data-skin="gold"] — never leak
+   into the classic, swiss, or minimal skins.
+   ========================================================================== */
+
+/* ============================================================================
+   1) TOKENS — surfaces, text, accent, semantic state (unchanged), shadows
+   ========================================================================== */
+
+/* ---- dark (default for the skin; also served as the explicit [data-theme="dark"]) --- */
+html[data-skin="gold"],
+html[data-skin="gold"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* warm near-black surfaces — same family as the desktop shell
+     (--color-bg #141311 / --color-card #1d1b18) so the portal and the
+     desktop app read as the same product in dark mode. */
+  --bg:        #141311;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface:   #1d1b18;
+  --surface-2: #221f1b;
+  --surface-3: #29251f;
+  --raised:    #221f1b;
+  --border:    #3a352e;
+  --border-2:  #453f36;
+  --hover:     #241f19;
+
+  --text:   #efe9df;
+  --text-2: #cdc4b4;
+  --muted:  #948a76;
+  --faint:  #67604f;
+
+  /* the ONE accent — the desktop app's own amber, used sparingly (primary
+     buttons, active nav, focus rings, links) — never as a decorative fill. */
+  --accent:      #f0b94b;
+  --accent-ink:  #221a08;
+  --accent-soft: rgba(240, 185, 75, .12);
+  --accent-line: rgba(240, 185, 75, .34);
+  --accent-glow: rgba(240, 185, 75, .22);
+
+  --amber: #f0b94b;
+
+  /* semantic state — carried verbatim from classic tokens.css: the brief
+     keeps ok/warn/danger untouched, so status meaning never rides the skin */
+  --ok:        #38d39a;  --ok-soft:     rgba(56, 211, 154, .12);  --ok-line:     rgba(56, 211, 154, .32);
+  --info:      #5aa6ff;  --info-soft:   rgba(90, 166, 255, .12);  --info-line:   rgba(90, 166, 255, .32);
+  --warn:      #f5b13d;  --warn-soft:   rgba(245, 177, 61, .13);  --warn-line:   rgba(245, 177, 61, .34);
+  --danger:    #f6757e;  --danger-soft: rgba(246, 117, 126, .12); --danger-line: rgba(246, 117, 126, .32);
+  --violet:    #b08cff;  --violet-soft: rgba(176, 140, 255, .13); --violet-line: rgba(176, 140, 255, .32);
+  --idle:      #6b788e;  --idle-soft:   rgba(107, 120, 142, .14); --idle-line:   rgba(107, 120, 142, .30);
+
+  --diff-add:    #8fe3a8; --diff-add-bg: rgba(56, 211, 154, .10);
+  --diff-del:    #f6909a; --diff-del-bg: rgba(246, 117, 126, .10);
+  --diff-hunk:   #5aa6ff; --diff-hunk-bg: rgba(90, 166, 255, .07);
+
+  /* flat — reduced decorative shadow, a hairline border reads as the primary
+     separator (minimalist discipline, matches skin-minimal.css) */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.20);
+  --shadow:    0 4px 16px rgba(0,0,0,.24);
+  --shadow-lg: 0 16px 44px rgba(0,0,0,.34);
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+/* ---- light ---------------------------------------------------------------- */
+html[data-skin="gold"][data-theme="light"] {
+  color-scheme: light;
+
+  --bg:        #faf8f3;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface:   #ffffff;
+  --surface-2: #f6f2e9;
+  --surface-3: #efe9dc;
+  --raised:    #ffffff;
+  --border:    #e6ddc9;
+  --border-2:  #dbcfb3;
+  --hover:     #f2ede0;
+
+  --text:   #1c1a15;
+  --text-2: #423c30;
+  --muted:  #7b7260;
+  --faint:  #a49a84;
+
+  /* desktop amber darkened for AA-legible text/interactive use on light
+     surfaces (5.15:1 on white) — same hue family as the dark-mode accent,
+     just tuned for contrast the way minimal's --accent-text pair does */
+  --accent:      #8f660e;
+  --accent-ink:  #ffffff;
+  --accent-soft: rgba(143, 102, 14, .10);
+  --accent-line: rgba(143, 102, 14, .32);
+  --accent-glow: rgba(143, 102, 14, .18);
+
+  --amber: #8f660e;
+
+  --ok:     #11a472;  --ok-soft:   rgba(17, 164, 114, .11);  --ok-line:   rgba(17, 164, 114, .28);
+  --info:   #2f74e6;  --info-soft: rgba(47, 116, 230, .10);  --info-line: rgba(47, 116, 230, .26);
+  --warn:   #c9871a;  --warn-soft: rgba(201, 135, 26, .13);  --warn-line: rgba(201, 135, 26, .30);
+  --danger: #d94a55;  --danger-soft: rgba(217, 74, 85, .10); --danger-line: rgba(217, 74, 85, .26);
+  --violet: #7b54d6;  --violet-soft: rgba(123, 84, 214, .11); --violet-line: rgba(123, 84, 214, .26);
+  --idle:   #768296;  --idle-soft: rgba(118, 130, 150, .13);  --idle-line: rgba(118, 130, 150, .26);
+
+  --diff-add:  #1c7a4a; --diff-add-bg: rgba(17, 164, 114, .12);
+  --diff-del:  #c43d48; --diff-del-bg: rgba(217, 74, 85, .10);
+  --diff-hunk: #2f74e6; --diff-hunk-bg: rgba(47, 116, 230, .08);
+
+  --shadow-sm: 0 1px 2px rgba(28,22,10,.04);
+  --shadow:    0 4px 16px rgba(28,22,10,.06);
+  --shadow-lg: 0 16px 44px rgba(28,22,10,.10);
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+/* ---- auto: OS light preference flips the same way [data-theme="light"] does --- */
+@media (prefers-color-scheme: light) {
+  html[data-skin="gold"][data-theme="auto"] {
+    color-scheme: light;
+    --bg:        #faf8f3;
+    --bg-grad-1: transparent;
+    --bg-grad-2: transparent;
+    --surface:   #ffffff;
+    --surface-2: #f6f2e9;
+    --surface-3: #efe9dc;
+    --raised:    #ffffff;
+    --border:    #e6ddc9;
+    --border-2:  #dbcfb3;
+    --hover:     #f2ede0;
+    --text:   #1c1a15;
+    --text-2: #423c30;
+    --muted:  #7b7260;
+    --faint:  #a49a84;
+    --accent:      #8f660e;
+    --accent-ink:  #ffffff;
+    --accent-soft: rgba(143, 102, 14, .10);
+    --accent-line: rgba(143, 102, 14, .32);
+    --accent-glow: rgba(143, 102, 14, .18);
+    --amber: #8f660e;
+    --ok:     #11a472;  --ok-soft:   rgba(17, 164, 114, .11);  --ok-line:   rgba(17, 164, 114, .28);
+    --info:   #2f74e6;  --info-soft: rgba(47, 116, 230, .10);  --info-line: rgba(47, 116, 230, .26);
+    --warn:   #c9871a;  --warn-soft: rgba(201, 135, 26, .13);  --warn-line: rgba(201, 135, 26, .30);
+    --danger: #d94a55;  --danger-soft: rgba(217, 74, 85, .10); --danger-line: rgba(217, 74, 85, .26);
+    --violet: #7b54d6;  --violet-soft: rgba(123, 84, 214, .11); --violet-line: rgba(123, 84, 214, .26);
+    --idle:   #768296;  --idle-soft: rgba(118, 130, 150, .13);  --idle-line: rgba(118, 130, 150, .26);
+    --diff-add:  #1c7a4a; --diff-add-bg: rgba(17, 164, 114, .12);
+    --diff-del:  #c43d48; --diff-del-bg: rgba(217, 74, 85, .10);
+    --diff-hunk: #2f74e6; --diff-hunk-bg: rgba(47, 116, 230, .08);
+    --shadow-sm: 0 1px 2px rgba(28,22,10,.04);
+    --shadow:    0 4px 16px rgba(28,22,10,.06);
+    --shadow-lg: 0 16px 44px rgba(28,22,10,.10);
+    --ring:      0 0 0 3px var(--accent-glow);
+  }
+}
+
+/* ============================================================================
+   2) TYPE — same Hanken Grotesk UI face as the minimal skin; mono stack for
+   code/terminal is untouched
+   ========================================================================== */
+html[data-skin="gold"] body {
+  font-family: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+html[data-skin="gold"] body { line-height: 1.6; }
+html[data-skin="gold"] code,
+html[data-skin="gold"] kbd,
+html[data-skin="gold"] .mono { line-height: 1.5; }
+
+/* ============================================================================
+   3) STRUCTURE — minimalist discipline: hairline borders, flat cards, modest
+   radii (between classic's soft roundness and swiss's hard corners)
+   ========================================================================== */
+html[data-skin="gold"] .card,
+html[data-skin="gold"] .proto,
+html[data-skin="gold"] .gate,
+html[data-skin="gold"] .run,
+html[data-skin="gold"] .toast,
+html[data-skin="gold"] .ncenter,
+html[data-skin="gold"] .pmenu.float,
+html[data-skin="gold"] .none { border-radius: 10px; }
+html[data-skin="gold"] .btn,
+html[data-skin="gold"] .search input,
+html[data-skin="gold"] .proj-switch,
+html[data-skin="gold"] .lrow,
+html[data-skin="gold"] .tag,
+html[data-skin="gold"] .idpill,
+html[data-skin="gold"] .iconbtn,
+html[data-skin="gold"] .skin-tile { border-radius: 8px; }
+html[data-skin="gold"] .av { border-radius: 9px; }
+html[data-skin="gold"] .av.sm { border-radius: 7px; }
+html[data-skin="gold"] .av.lg { border-radius: 12px; }
+
+/* flat cards — reduced shadow, hairline border is the primary separator */
+html[data-skin="gold"] .card,
+html[data-skin="gold"] .proto,
+html[data-skin="gold"] .run { box-shadow: none; border-color: var(--border); }
+html[data-skin="gold"] .card-h,
+html[data-skin="gold"] .tbl thead th,
+html[data-skin="gold"] .tbl tbody td,
+html[data-skin="gold"] .proto > .ph { border-color: var(--border); }
+
+/* ============================================================================
+   4) QUIETER CHIPS — tinted text on soft background, no border ring (same
+   pattern as minimal, kept minimal here since the brief scopes this skin to
+   token + a few structural rules rather than the full declutter pass)
+   ========================================================================== */
+html[data-skin="gold"] .tag,
+html[data-skin="gold"] .pill,
+html[data-skin="gold"] .kind,
+html[data-skin="gold"] .run-chips .c { border-color: transparent; }
+html[data-skin="gold"] .tag { background: var(--surface-2); }
+html[data-skin="gold"] .tag.root { background: var(--violet-soft); }
+html[data-skin="gold"] .tag.wake-on { background: var(--ok-soft); }
+html[data-skin="gold"] .tag.role-owner { background: var(--warn-soft); }
+html[data-skin="gold"] .tag.mem-pending { background: var(--info-soft); }
+html[data-skin="gold"] .tag.review-for { background: var(--violet-soft); }
+html[data-skin="gold"] .kind.ai { background: var(--accent-soft); }
+html[data-skin="gold"] .kind.human { background: color-mix(in oklab, var(--amber) 12%, transparent); }
+
+/* ============================================================================
+   5) ACCENT DISCIPLINE — gold reserved for primary actions, active nav, focus
+   ========================================================================== */
+html[data-skin="gold"] .nav a.active { background: var(--accent-soft); border-color: var(--accent-line); }
+html[data-skin="gold"] .nav a.active .ico { color: var(--accent); }
+html[data-skin="gold"] .btn:not(.ghost):not(.subtle):not(.danger):not(.approve):not(.stop) {
+  background: var(--accent); color: var(--accent-ink);
+}
+html[data-skin="gold"] :focus-visible { box-shadow: var(--ring); }
+
+/* brand tile: warm ink block with a gold hairline, matching the desktop
+   shell's own card/accent relationship instead of the teal radial */
+html[data-skin="gold"] .brand .mark {
+  background: radial-gradient(120% 120% at 50% 30%, #241d10, #14100a);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+html[data-skin="gold"][data-theme="light"] .brand .mark,
+html[data-skin="gold"][data-theme="auto"] .brand .mark {
+  background: radial-gradient(120% 120% at 50% 30%, #2a2212, #1c150a);
+}
+
+/* ============================================================================
+   6) TABLES — never break layout; only chrome (hairlines) changes
+   ========================================================================== */
+html[data-skin="gold"] .tbl tbody tr:hover { background: var(--hover); }
+html[data-skin="gold"] .log,
+html[data-skin="gold"] .run-h { border-color: var(--border); }

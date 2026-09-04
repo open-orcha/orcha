@@ -79,14 +79,15 @@ def handle_exited(
             drain_desc="drained",
         )
         return
-    services._finish_run(
+    if services._finish_run(
         api_base,
         worker.get("run_id"),
         status,
         proc.returncode,
         worker.get("log_path"),
         diff,
-    )
+    ):
+        services._reap_sandbox_artifacts(worker)  # I4: clean completion — reap once stamped
     if is_task_worktree:
         _save_task_result(api_base, aid, worker, diff, failed_drains, services)
         _release_worker(api_base, aid, worker, lane, "released", services, task=True)
@@ -131,7 +132,7 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
         "cause": "human_stop",
         "by": renew.get("stop_requested_by"),
     }
-    services._finish_run(
+    if services._finish_run(
         api_base,
         worker.get("run_id"),
         "killed",
@@ -139,7 +140,9 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
         worker.get("log_path"),
         diff,
         kill_reason=json.dumps(diag),
-    )
+    ):
+        # I4 (force-rm: takes a still-stopping container down with it, post-stamp)
+        services._reap_sandbox_artifacts(worker)
     services._safe_teardown_worktree(
         worker.get("base_cwd"), worker.get("worktree"), worker.get("branch")
     )

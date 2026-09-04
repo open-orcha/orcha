@@ -1,6 +1,6 @@
 """Approve completed work or return it to its assignees."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
@@ -11,6 +11,7 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas.task_operations import TaskVerify
 
 _complete_and_unblock_getter = None
@@ -23,12 +24,16 @@ def configure_compatibility(complete_and_unblock_getter):
 
 
 @app.post("/api/tasks/{tid}/verify", status_code=200)
-def verify_task(tid: str, body: TaskVerify):
+def verify_task(tid: str, body: TaskVerify, request: Request):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         t = _require_task(cur, tid)
+        # Per-project identity: a trusted proxy login IS the verifier (403 non-member).
+        body.actor_agent_id = _trusted_actor(
+            cur, request, str(t["container_id"]), body.actor_agent_id
+        )
+        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         # Issue #11 follow-up: agents can't /done the root task, so it never
         # reaches needs_verification on its own. The human must be able to
         # /verify it from any non-terminal status to declare the container

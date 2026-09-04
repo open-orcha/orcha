@@ -1,25 +1,25 @@
-"""FT-SURFACE (D0) — portal design-system foundation (styles.css + app.js).
+"""FT-SURFACE (D0) — portal design-system foundation (styles.css + the React shell).
 
-D0 lands the shared frontend the D-series builds on: a token/theme stylesheet and an
-app.js shell mounted against the REAL backend snapshot.
-The automatable surface is (a) the portal actually serves the two assets, (b) the
-shell mounts data-driven against a real-shape snapshot — acting-as resolves the real
-kind='human' agent (never a hardcoded name) and window.ORCHA is mutated in place,
-(c) the live-feed engine folds in the real SSE client. The visual polish is verified
-live; the pages are NOT rewritten here (that's D1-D6).
+D0 landed the shared frontend the D-series builds on: a token/theme stylesheet and an
+app shell mounted data-driven against the real backend snapshot. The vanilla app.js is
+retired by the React migration (docs/orcha-portal-react-migration-plan.md Phase 7): the
+shell now lives in the React SOURCE at portal/frontend/src (SnapshotProvider + Shell +
+useRunStream), compiled into static/dist/. The automatable surface is (a) the portal
+serves the token layer + the SPA shell, (b) the foundation is data-driven (acting-as
+resolves the real kind='human' agent — never a hardcoded name), (c) the live-feed
+engine folds in the real SSE client. The mounted-shell behaviour that was exercised by
+eval'ing app.js in node is now covered functionally by the frontend Vitest suite
+(frontend/src/state/snapshot.test.ts).
 """
-import json
 import pathlib
-import re
-import shutil
-import subprocess
 import pytest
-from portal_source import script_source, style_source
 
 pytestmark = pytest.mark.asyncio
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-STATIC = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal" / "static"
+PORTAL = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"
+STATIC = PORTAL / "static"
+FRONTEND = PORTAL / "frontend" / "src"
 
 
 # ---------- the portal serves the foundation ----------
@@ -30,10 +30,12 @@ async def test_assets_are_served(client):
     assert "text/css" in css.headers.get("content-type", "")
     assert "--accent" in css.text and "[data-theme" in css.text  # token layer + theme
 
-    js = await client.get("/assets/app.js")
-    assert js.status_code == 200, js.text
-    assert "javascript" in js.headers.get("content-type", "")
-    assert "mountShell" in js.text
+    # the React SPA shell (built bundle) is served at every page route
+    r = await client.get("/")
+    assert r.status_code == 200, r.text
+    assert "text/html" in r.headers.get("content-type", "")
+    assert 'id="root"' in r.text, "no SPA mount point"
+    assert "/assets/dist/" in r.text, "shell doesn't load the dist bundle"
 
 
 def test_missing_static_dir_yields_404_not_crash_or_500():
@@ -64,7 +66,7 @@ def test_missing_static_dir_yields_404_not_crash_or_500():
 # ---------- styles.css: token layer + status system ----------
 
 def test_styles_has_tokens_themes_and_pills():
-    css = style_source()
+    css = (STATIC / "styles.css").read_text()
     assert "[data-theme" in css, "no theme switch"
     assert "prefers-color-scheme" in css, "auto theme doesn't follow OS"
     for tok in ("--accent", "--amber", "--ok", "--warn", "--danger", "--violet"):
@@ -73,115 +75,56 @@ def test_styles_has_tokens_themes_and_pills():
         assert pillcls in css, f"missing status pill class {pillcls}"
 
 
-# ---------- app.js: the three D0 adaptations + exports ----------
+# ---------- React foundation: the D0 adaptations, now in frontend/src ----------
 
-def test_app_js_adaptations_and_exports():
-    js = script_source("app.js")
-    # (1) live, in-place window.ORCHA so the captured D stays valid across the 3s poll
-    assert "window.ORCHA = window.ORCHA ||" in js, "window.ORCHA not a live object"
-    assert "function applySnapshot" in js, "no in-place snapshot updater"
-    # (2) acting-as is DATA-DRIVEN — the real kind='human' agent, never hardcoded
-    assert "function actingHuman" in js, "acting-as not data-driven"
-    assert "Dario" not in js, "acting-as still references the mock name"
-    assert 'a.kind === "human"' in js, "doesn't resolve the human from the snapshot"
-    # (3) helpers read the snapshot fresh (no stale derived cache)
-    assert "function agentByAlias" in js and "agents().find" in js, "agentByAlias not live-derived"
-    # the foundation's shared helpers are all exported
-    for sym in ("mountShell", "pill", "avatar", "kindBadge", "agentLink", "taskLink",
-                "requestLink", "renderDiff", "runCard", "activateRuns", "modal", "toast",
-                "classifyLine", "startRunStream", "applySnapshot"):
-        assert re.search(r"\b" + sym + r"\b", js), f"missing/!exported helper {sym}"
-    # live-feed engine folds in the real SSE client (per running run)
-    assert "new EventSource(" in js, "run feed not wired to the SSE endpoint"
-    assert 'd.status === "stream_timeout"' in js, "stream_timeout not treated as reconnectable"
-    assert "d.seq <= maxSeq" in js, "no monotonic guard against reconnect replay"
+def test_react_foundation_is_data_driven():
+    """The D0 adaptations survive the React port (frontend/src/state/SnapshotProvider.tsx):
+    acting-as is DATA-DRIVEN — the real kind='human' agent, never hardcoded — and the
+    shared accessors read the live snapshot."""
+    sp = (FRONTEND / "state" / "SnapshotProvider.tsx").read_text()
+    assert "export function actingHuman" in sp, "acting-as not data-driven"
+    assert 'kind === "human"' in sp, "doesn't resolve the human from the snapshot"
+    assert "Dario" not in sp, "acting-as still references the mock name"
+    assert "export function agentByAlias" in sp, "agentByAlias not derived from the snapshot"
+    assert "export function attnItems" in sp, "no shared attention aggregation"
+    # behaviour exercised in frontend/src/state/snapshot.test.ts (Vitest)
 
 
-# ---------- app.js mounts data-driven against a real-shape snapshot (node) ----------
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
-def test_shell_mounts_data_driven():
-    """Eval app.js against a stubbed DOM + a REAL-shape snapshot, then mountShell:
-    the topbar's 'acting as' must render the snapshot's human (kedar), not a hardcoded
-    name; pills resolve; agentByAlias reads live data."""
-    js = script_source("app.js")
-    harness = r"""
-const els = { sidebar: {innerHTML:""}, topbar: {innerHTML:""}, themeBtn:null };
-global.localStorage = { _m:{}, getItem(k){return this._m[k]||null;}, setItem(k,v){this._m[k]=v;} };
-global.document = {
-  documentElement: { setAttribute(){} },
-  addEventListener(){},
-  getElementById(id){ return els[id] || null; },
-  createElement(){ return { classList:{add(){},remove(){},toggle(){}}, addEventListener(){}, style:{}, appendChild(){} }; },
-  body: { appendChild(){} },
-};
-global.window = {};
-window.ORCHA = {
-  container: { id: "c1", name: "Orcha" },
-  agents: [
-    { id: "h1", alias: "kedar", kind: "human", status: "idle" },
-    { id: "a1", alias: "Frame", kind: "ai", status: "working" },
-  ],
-  tasks: [
-    { id: "t1", title: "do X", status: "needs_verification", assignees: ["Frame"] },
-    { id: "t2", title: "do Y", status: "in_progress", assignees: ["Frame"] },
-  ],
-  requests: [ { id: "r1", requester_id: "a1", target_id: null, status: "open" } ],
-};
-__APPJS__
-const O = window.Orcha;
-O.mountShell("home", { title: "Dashboard" });
-const out = {
-  actingHasHuman: /acting as/.test(els.topbar.innerHTML) && /kedar/.test(els.topbar.innerHTML),
-  actingNotHardcoded: !/Dario/.test(els.topbar.innerHTML),
-  needsYouCount: /Needs you/.test(els.sidebar.innerHTML),
-  // action queue = 1 needs_verification task + 1 open request to (null=)human = 2
-  attn: O.attnItems().count,
-  pillAttn: /s-attn/.test(O.pill("needs_verification")),
-  agentLive: (O.agentByAlias("kedar")||{}).kind === "human",
-  // applySnapshot mutates in place — same object reference stays valid
-  liveMutate: (function(){ const before = O.D; O.applySnapshot({ tasks: [] }); return O.D === before && O.tasks().length === 0; })(),
-};
-console.log(JSON.stringify(out));
-"""
-    src = harness.replace("__APPJS__", js)
-    res = subprocess.run(["node", "-e", src], capture_output=True, text=True)
-    assert res.returncode == 0, res.stderr
-    out = json.loads(res.stdout.strip().splitlines()[-1])
-    assert out["actingHasHuman"] is True, out      # acting-as shows the real human
-    assert out["actingNotHardcoded"] is True, out  # ...not a hardcoded name
-    assert out["needsYouCount"] is True, out
-    assert out["attn"] == 2, out                   # 1 verify + 1 escalation
-    assert out["pillAttn"] is True, out
-    assert out["agentLive"] is True, out
-    assert out["liveMutate"] is True, out          # window.ORCHA mutated in place
+def test_react_run_feed_folds_in_the_real_sse_client():
+    """The live-feed engine (was app.js startRunStream) is hooks/useRunStream.ts: per-run
+    EventSource, stream_timeout reconnect, and the monotonic seq guard against replay."""
+    rs = (FRONTEND / "hooks" / "useRunStream.ts").read_text()
+    assert "new EventSource(" in rs, "run feed not wired to the SSE endpoint"
+    assert '"/stream"' in rs, "not the per-run stream endpoint"
+    assert 'd.status === "stream_timeout"' in rs, "stream_timeout not treated as reconnectable"
+    assert "d.seq <= maxSeq" in rs, "no monotonic guard against reconnect replay"
+    assert "export function classifyLine" in (FRONTEND / "lib" / "classify.ts").read_text(), \
+        "no shared stream-json classifier"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not available to exercise client JS")
+def test_shell_brand_and_needs_you():
+    """The shell (frontend/src/shell/Shell.tsx) keeps the D0 brand + action-queue
+    affordances: the Quantal maker dot is amber #ffbf00 (not the old red) and the
+    'Needs you' queue renders from the shared attnItems. (Mounted-shell behaviour —
+    acting-as, counts — is covered in frontend/src/state/snapshot.test.ts.)"""
+    shell = (FRONTEND / "shell" / "Shell.tsx").read_text()
+    assert 'fill="#ffbf00"' in shell, "Quantal maker dot not amber"
+    assert "ef3b43" not in shell.lower(), "maker dot still the old red"
+    assert "Needs you" in shell, "no Needs-you action queue in the shell"
+    assert "attnItems" in shell, "shell doesn't count via the shared attnItems"
+    assert "Dario" not in shell, "shell still references the mock name"
+
+
 def test_theme_applied_on_load():
-    """Review P2: app.js must set <html data-theme> at load from the saved/default
-    theme — otherwise CSS's dark :root default wins until the user clicks (a saved
-    'light', or 'auto' on a light OS, would flash dark)."""
-    js = script_source("app.js")
-
-    def applied(saved):
-        harness = r"""
-const set = [];
-global.document = {
-  documentElement: { setAttribute(k, v) { if (k === "data-theme") set.push(v); } },
-  addEventListener(){}, getElementById(){ return null; },
-  createElement(){ return { classList:{add(){},remove(){}}, addEventListener(){}, style:{}, appendChild(){} }; },
-  body: { appendChild(){} },
-};
-global.localStorage = { getItem(){ return __SAVED__; }, setItem(){} };
-global.window = {};
-__APPJS__
-console.log(JSON.stringify({ applied: set }));
-"""
-        src = harness.replace("__SAVED__", json.dumps(saved)).replace("__APPJS__", js)
-        res = subprocess.run(["node", "-e", src], capture_output=True, text=True)
-        assert res.returncode == 0, res.stderr
-        return json.loads(res.stdout.strip().splitlines()[-1])["applied"]
-
-    assert "light" in applied("light"), "saved 'light' not applied on load"
-    assert "auto" in applied(None), "default 'auto' not applied on load"
+    """Review P2 (React port): the theme must be applied at load from the saved/default
+    value — otherwise CSS's dark :root default wins until the user clicks. main.tsx
+    calls initTheme() before render; initTheme applies localStorage's saved theme or
+    'auto' onto <html data-theme>."""
+    shell = (FRONTEND / "shell" / "Shell.tsx").read_text()
+    assert "export function initTheme" in shell, "no load-time theme initializer"
+    assert 'setAttribute("data-theme"' in shell, "theme not applied to <html data-theme>"
+    assert 'localStorage.getItem("orcha:theme") || "auto"' in shell, "saved/default theme not read"
+    main_tsx = (FRONTEND / "main.tsx").read_text()
+    assert "initTheme();" in main_tsx, "main.tsx doesn't apply the theme before render"
+    assert main_tsx.index("initTheme();") < main_tsx.index("createRoot"), \
+        "theme applied only after the app mounts (would flash the wrong theme)"

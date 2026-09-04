@@ -2,11 +2,12 @@
 
 from typing import Any, Optional
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
+from portal_backend.identity_routes import require_member_read
 from portal_backend.list_sorting import sort_clause, validate_sort
 from portal_backend.request_ownership import _annotate_request_ownership
 
@@ -23,6 +24,7 @@ REQUEST_STATUSES = {
 @app.get("/api/containers/{cid}/requests")
 def list_container_requests(
     cid: str,
+    request: Request,
     limit: int = 15,
     offset: int = 0,
     agent: Optional[str] = None,
@@ -53,6 +55,8 @@ def list_container_requests(
     offset = max(0, offset)
     with db_cursor() as (_, cur):
         require_container(cur, cid)
+        # Access model: reads are project-isolated (trusted non-member 403).
+        require_member_read(cur, request, cid)
         where = "container_id = %s"
         params: list[Any] = [cid]
         if agent and direction == "in":

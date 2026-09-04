@@ -1,0 +1,593 @@
+<section id="agent-chat" class="mk-section mk-section-alt aw-root" aria-labelledby="aw-title">
+  <header class="aw-head">
+    <div class="aw-eyebrow">— 02 / Deep dive: the conversation</div>
+    <h2 class="aw-title" id="aw-title">Talk to your <span class="aw-title-em">team</span>.</h2>
+    <p class="aw-sub">Every agent is a colleague with a roster row and a chat pane — brief them,
+    question them, and watch a plan become tasks without leaving the thread.</p>
+  </header>
+
+  <div class="aw-theater" id="aw-theater" tabindex="-1">
+    <div class="aw-chrome" aria-hidden="true">
+      <span class="aw-dot3"></span><span class="aw-dot3"></span><span class="aw-dot3"></span>
+      <span class="aw-url">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+        app.orcha.cloud/agents
+      </span>
+    </div>
+
+    <div class="aw-frame">
+      <div class="aw-stage" id="aw-stage" role="img" aria-label="Animated preview: a conversation with Atlas turning into filed tasks">
+
+        <!-- scene 1 · roster + composer -->
+        <div class="aw-scene aw-on" data-scene="0">
+          <div class="aw-sc-chat">
+            <div class="aw-pane aw-roster" data-an="rise" style="--d:.1s">
+              <div class="aw-pane-h">ROSTER <span class="aw-grow"></span><span class="aw-mono aw-faint">12</span></div>
+              <div class="aw-rrows">
+                <div class="aw-rrow"><span class="aw-av aw-av-you">H</span><span class="aw-rgrow"><b>you</b><span class="aw-faint">operator</span></span><span class="aw-pdotw aw-pd-on"></span></div>
+                <div class="aw-rrow"><span class="aw-av">S</span><span class="aw-rgrow"><b>sam-dev</b><span class="aw-faint">collaborator</span></span><span class="aw-pdotw aw-pd-on"></span></div>
+                <div class="aw-rrow aw-active"><span class="aw-av">A</span><span class="aw-rgrow"><b>Atlas</b><span class="aw-faint">orchestrator &middot; system architect</span></span><span class="aw-pdotw aw-pd-on"></span></div>
+                <div class="aw-rrow"><span class="aw-av">F</span><span class="aw-rgrow"><b>Forge</b><span class="aw-faint">backend engineer</span></span><span class="aw-chip aw-chip-task">&#9632; task</span></div>
+                <div class="aw-rrow"><span class="aw-av">W</span><span class="aw-rgrow"><b>Warden</b><span class="aw-faint">security &amp; compliance reviewer</span></span><span class="aw-pdotw"></span></div>
+                <div class="aw-rrow"><span class="aw-av">S</span><span class="aw-rgrow"><b>Sentry</b><span class="aw-faint">QA &amp; release verification</span></span><span class="aw-pdotw"></span></div>
+                <div class="aw-rrow"><span class="aw-av">M</span><span class="aw-rgrow"><b>Muse</b><span class="aw-faint">UX &middot; design system</span></span><span class="aw-pdotw"></span></div>
+              </div>
+            </div>
+            <div class="aw-pane aw-chatpane" data-an="rise" style="--d:.2s">
+              <div class="aw-pane-h aw-chat-h">
+                <span class="aw-av">A</span>
+                <span class="aw-chgrow"><b>Atlas</b><span class="aw-faint">orchestrator / system architect</span></span>
+                <span class="aw-pill aw-p-idle">&#8862; idle</span>
+                <button class="aw-pairbtn" type="button" tabindex="-1">&#9655; Pair in terminal</button>
+              </div>
+              <div class="aw-chatbody">
+                <div class="aw-composer">
+                  <span class="aw-ctxt"><span class="aw-btype">How should we split the payments work between Forge and Sentry?</span></span>
+                  <span class="aw-send" data-an="press" style="--d:2.4s" aria-hidden="true">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>
+                  </span>
+                </div>
+                <p class="aw-hint aw-faint">Message Atlas &mdash; type / for skills&hellip;</p>
+              </div>
+            </div>
+          </div>
+          <p class="aw-note">Roster of <b>12</b>: humans and agents share one list — presence, role, and what each is working on.</p>
+        </div>
+
+        <!-- scene 2 · structured streamed reply -->
+        <div class="aw-scene" data-scene="1">
+          <div class="aw-sc-chat">
+            <div class="aw-pane aw-roster aw-roster-dim" aria-hidden="true">
+              <div class="aw-pane-h">ROSTER <span class="aw-grow"></span><span class="aw-mono aw-faint">12</span></div>
+              <div class="aw-rrows">
+                <div class="aw-rrow aw-active"><span class="aw-av">A</span><span class="aw-rgrow"><b>Atlas</b><span class="aw-faint">orchestrator &middot; system architect</span></span><span class="aw-pdotw aw-pd-on"></span></div>
+                <div class="aw-rrow"><span class="aw-av">F</span><span class="aw-rgrow"><b>Forge</b><span class="aw-faint">backend engineer</span></span><span class="aw-chip aw-chip-task">&#9632; task</span></div>
+                <div class="aw-rrow"><span class="aw-av">S</span><span class="aw-rgrow"><b>Sentry</b><span class="aw-faint">QA &amp; release verification</span></span><span class="aw-pdotw"></span></div>
+              </div>
+            </div>
+            <div class="aw-pane aw-chatpane" data-an="rise" style="--d:.1s">
+              <div class="aw-pane-h aw-chat-h">
+                <span class="aw-av">A</span>
+                <span class="aw-chgrow"><b>Atlas</b><span class="aw-faint">orchestrator / system architect</span></span>
+                <span class="aw-pill aw-p-work"><span class="aw-pdot"></span>&#9679; working</span>
+              </div>
+              <div class="aw-chatbody aw-chatbody-scroll">
+                <div class="aw-bubble aw-bubble-user">How should we split the payments work between Forge and Sentry?</div>
+                <div class="aw-bubble aw-bubble-agent" data-an="rise" style="--d:.4s">
+                  <ol class="aw-plan">
+                    <li data-an="fade" style="--d:.9s"><b>Split by seam.</b> Forge owns the API + migration; Sentry owns the regression harness and fresh-session review.</li>
+                    <li data-an="fade" style="--d:1.6s"><b>Land the schema first.</b> Forge ships the ledger migration behind a flag before any endpoint changes.</li>
+                    <li data-an="fade" style="--d:2.3s"><b>Sentry writes the gate tests up front.</b> Red suite lands before Forge's implementation PR, so green means done.</li>
+                  </ol>
+                  <button class="aw-worklog aw-late" data-an="pop" style="--d:2.9s" type="button" tabindex="-1">work log &middot; 6b0a84ba</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="aw-note">Atlas streams a <b>structured plan</b> — numbered, with bold leads — and discloses its work log.</p>
+        </div>
+
+        <!-- scene 3 · chat becomes tasks -->
+        <div class="aw-scene" data-scene="2">
+          <div class="aw-sc-chat">
+            <div class="aw-pane aw-roster aw-roster-dim" aria-hidden="true">
+              <div class="aw-pane-h">ROSTER <span class="aw-grow"></span><span class="aw-mono aw-faint">12</span></div>
+              <div class="aw-rrows">
+                <div class="aw-rrow aw-active"><span class="aw-av">A</span><span class="aw-rgrow"><b>Atlas</b><span class="aw-faint">orchestrator &middot; system architect</span></span><span class="aw-pdotw aw-pd-on"></span></div>
+                <div class="aw-rrow"><span class="aw-av">F</span><span class="aw-rgrow"><b>Forge</b><span class="aw-faint">backend engineer</span></span><span class="aw-chip aw-chip-task">&#9632; task</span></div>
+                <div class="aw-rrow"><span class="aw-av">S</span><span class="aw-rgrow"><b>Sentry</b><span class="aw-faint">QA &amp; release verification</span></span><span class="aw-pdotw"></span></div>
+              </div>
+            </div>
+            <div class="aw-pane aw-chatpane" data-an="rise" style="--d:.1s">
+              <div class="aw-pane-h aw-chat-h">
+                <span class="aw-av">A</span>
+                <span class="aw-chgrow"><b>Atlas</b><span class="aw-faint">orchestrator / system architect</span></span>
+                <span class="aw-pill aw-p-idle">&#8862; idle</span>
+              </div>
+              <div class="aw-chatbody aw-chatbody-scroll">
+                <div class="aw-bubble aw-bubble-agent aw-bubble-compact">Filing tasks now &mdash; assignment wakes each agent.</div>
+                <div class="aw-taskchips" data-an="rise" style="--d:.5s">
+                  <span class="aw-tchip aw-late" data-an="pop" style="--d:.9s"><span class="aw-tid">task 41</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg><span class="aw-av aw-av-sm">F</span>Forge</span>
+                  <span class="aw-tchip aw-late" data-an="pop" style="--d:1.3s"><span class="aw-tid">task 42</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg><span class="aw-av aw-av-sm">S</span>Sentry</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="aw-note">Chat becomes work: <b>Atlas files the tasks</b>, assignment wakes the agents.</p>
+        </div>
+
+        <!-- scene 4 · closing still -->
+        <div class="aw-scene" data-scene="3">
+          <div class="aw-sc-close">
+            <div class="aw-close-in" data-an="rise" style="--d:.1s">
+              <span class="aw-check" data-an="pop" style="--d:.4s" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg>
+              </span>
+              <p class="aw-close-line">Every agent is a colleague you can brief, question, and redirect &mdash; in plain language.</p>
+              <p class="aw-close-sub aw-faint">Turn-based: Atlas wakes, works, and replies.</p>
+            </div>
+          </div>
+          <p class="aw-note">One roster, one thread per agent &mdash; the whole team, always reachable.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="aw-capbar">
+      <p class="aw-cap" id="aw-cap"><strong>Ask the team.</strong> Message Atlas like any colleague on the roster.</p>
+      <span class="aw-count" id="aw-count">01 / 04</span>
+      <div class="aw-ctrl">
+        <button class="aw-cbtn" id="aw-prev" type="button" aria-label="Previous scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        </button>
+        <button class="aw-cbtn aw-play-t" id="aw-play" type="button" aria-label="Pause autoplay" aria-pressed="true">
+          <svg class="aw-ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 2.8v10.4c0 .6.65.97 1.17.66l8.2-5.2a.78.78 0 0 0 0-1.32l-8.2-5.2a.78.78 0 0 0-1.17.66z"/></svg>
+          <svg class="aw-ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1"/></svg>
+        </button>
+        <button class="aw-cbtn" id="aw-next" type="button" aria-label="Next scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <nav class="aw-dots" id="aw-dots" role="group" aria-label="Chat demo scenes"></nav>
+    <span class="aw-track" aria-hidden="true"><span class="aw-track-fill" id="aw-track-fill"></span></span>
+  </div>
+
+  <style>
+  /* =========================================================================
+     AGENT CHAT CINEMATIC (aw-) — recreates the real Agents screen: roster +
+     chat pane. Theme-aware via var() tokens; mirrors the dm- player mechanics
+     from sections/demo.html scoped under the aw- prefix.
+     ========================================================================= */
+  .aw-root {
+    --aw-ok: var(--success-text);
+    --aw-ok-soft: color-mix(in srgb, var(--success) 14%, transparent);
+    --aw-warn: var(--warning-text);
+    --aw-warn-soft: color-mix(in srgb, var(--warning-text) 15%, transparent);
+    --aw-crm: var(--accent-text);
+    --aw-crm-soft: var(--gold-soft);
+    padding: 96px 24px;
+    background: var(--paper);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+
+  .aw-head { max-width: 720px; margin: 0 auto 44px; text-align: center; }
+  .aw-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent-text);
+  }
+  .aw-title {
+    margin: 14px 0 14px;
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: clamp(30px, 4vw, 46px); line-height: 1.08;
+    letter-spacing: -.015em; color: var(--text-primary);
+  }
+  .aw-title-em { font-style: italic; color: var(--accent-text); }
+  .aw-sub { font-size: 16px; line-height: 1.55; color: var(--text-secondary); max-width: 620px; margin: 0 auto; }
+
+  .aw-head, .aw-theater {
+    opacity: 0; transform: translateY(26px);
+    transition: opacity .9s cubic-bezier(.16,1,.3,1), transform .9s cubic-bezier(.16,1,.3,1);
+  }
+  .aw-theater { transition-delay: .1s; }
+  .aw-root.aw-in .aw-head, .aw-root.aw-in .aw-theater { opacity: 1; transform: none; }
+
+  .aw-theater {
+    max-width: 960px; margin: 0 auto;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-3xl); box-shadow: var(--shadow-float);
+    overflow: hidden;
+  }
+  .aw-theater:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+
+  .aw-chrome {
+    display: flex; align-items: center; gap: 7px; padding: 12px 16px;
+    background: var(--surface-subtle); border-bottom: 1px solid var(--border);
+  }
+  .aw-dot3 { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .aw-url {
+    margin-left: 10px; display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 12px;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
+  }
+  .aw-url svg { width: 13px; height: 13px; color: var(--accent-strong); }
+  .aw-frame { display: block; }
+
+  .aw-stage {
+    position: relative; overflow: hidden; min-height: 452px;
+    background: radial-gradient(560px 300px at 84% -10%, var(--gold-soft), transparent 60%), var(--surface);
+  }
+  .aw-scene {
+    position: absolute; inset: 0; padding: 30px 34px 60px;
+    opacity: 0; transform: translateX(26px);
+    transition: opacity .38s cubic-bezier(.16,1,.3,1), transform .38s cubic-bezier(.16,1,.3,1);
+    pointer-events: none; visibility: hidden;
+  }
+  .aw-scene.aw-on { opacity: 1; transform: none; visibility: visible; }
+  .aw-scene.aw-bye { opacity: 0; transform: translateX(-22px); visibility: visible; }
+
+  .aw-capbar {
+    display: flex; align-items: center; gap: 14px; padding: 13px 20px;
+    background: var(--surface-subtle); border-top: 1px solid var(--border);
+  }
+  .aw-cap { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-secondary); opacity: 1; transition: opacity .28s ease; }
+  .aw-cap strong { color: var(--text-primary); font-weight: 700; }
+  .aw-cap.aw-swap { opacity: 0; }
+  .aw-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+  .aw-ctrl { display: flex; align-items: center; gap: 6px; }
+  .aw-cbtn {
+    all: unset; cursor: pointer; box-sizing: border-box;
+    width: 32px; height: 32px; border-radius: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); background: var(--surface);
+    border: 1px solid var(--border-strong);
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .aw-cbtn:hover { color: var(--text-primary); border-color: var(--accent-strong); }
+  .aw-cbtn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+  .aw-cbtn svg { width: 14px; height: 14px; }
+  .aw-cbtn.aw-play-t[aria-pressed="true"] { color: var(--accent-text); border-color: var(--accent-strong); background: var(--gold-soft); }
+  .aw-cbtn .aw-ic-pause { display: none; }
+  .aw-cbtn.aw-play-t[aria-pressed="true"] .aw-ic-pause { display: block; }
+  .aw-cbtn.aw-play-t[aria-pressed="true"] .aw-ic-play { display: none; }
+
+  .aw-dots { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 14px 20px 6px; background: var(--surface-subtle); }
+  .aw-dot {
+    all: unset; cursor: pointer; position: relative;
+    width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong);
+    transition: background .2s ease, transform .2s ease;
+  }
+  .aw-dot:hover { background: var(--text-tertiary); transform: scale(1.15); }
+  .aw-dot:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+  .aw-dot[aria-current="true"] { background: var(--accent-strong); transform: scale(1.15); }
+  .aw-dot .aw-tip {
+    position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+    padding: 5px 9px; border-radius: 7px; white-space: nowrap;
+    background: var(--text-primary); color: var(--surface);
+    font-size: 11px; font-weight: 600; letter-spacing: -.005em;
+    opacity: 0; pointer-events: none; transition: opacity .15s ease;
+    box-shadow: var(--shadow-card); z-index: 5;
+  }
+  .aw-dot:hover .aw-tip, .aw-dot:focus-visible .aw-tip { opacity: 1; }
+
+  .aw-track { display: block; height: 3px; margin: 8px 20px 16px; border-radius: 99px; background: var(--border); overflow: hidden; }
+  .aw-track-fill { display: block; height: 100%; width: 100%; border-radius: 99px; background: var(--accent-strong); transform: scaleX(0); transform-origin: left center; }
+
+  .aw-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-card); }
+  .aw-pane-h { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 700; color: var(--text-secondary); }
+  .aw-grow { flex: 1; }
+  .aw-mono { font-family: var(--font-mono); }
+  .aw-faint { color: var(--text-tertiary); font-weight: 500; font-size: 10.5px; }
+  .aw-pane-h .aw-mono { font-size: 10.5px; }
+
+  .aw-pill {
+    display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 11px; line-height: 1;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .aw-pill .aw-pdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: aw-pulse 2s infinite; }
+  .aw-p-idle { color: var(--text-tertiary); background: var(--surface-subtle); border-color: var(--border-strong); }
+  .aw-p-work { color: var(--aw-crm); background: var(--aw-crm-soft); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
+  @keyframes aw-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .aw-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--aw-warn);
+    background: var(--aw-warn-soft); border: 1px solid color-mix(in srgb, var(--warning-text) 40%, transparent);
+    border-radius: 7px; padding: 3px 7px; white-space: nowrap;
+  }
+
+  .aw-av {
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; font-size: 11px; font-weight: 800; color: var(--on-accent-strong);
+    background: linear-gradient(135deg, var(--gold), var(--accent-strong));
+  }
+  .aw-av-you { background: linear-gradient(135deg, var(--text-secondary), var(--text-primary)); }
+  .aw-av-sm { width: 18px; height: 18px; font-size: 9px; }
+
+  .aw-note { position: absolute; left: 34px; right: 34px; bottom: 20px; font-size: 11.5px; line-height: 1.5; color: var(--text-tertiary); text-align: center; }
+  .aw-note b { color: var(--text-secondary); font-weight: 700; }
+
+  @keyframes aw-rise  { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: none; } }
+  @keyframes aw-slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+  @keyframes aw-pop   { from { opacity: 0; transform: scale(.64); } to { opacity: 1; transform: none; } }
+  @keyframes aw-fade  { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes aw-press { 0%,100% { transform: none; } 45% { transform: scale(.95); filter: brightness(1.06); } }
+  .aw-scene.aw-play [data-an] { animation-delay: var(--d, 0s); animation-fill-mode: both; }
+  .aw-scene.aw-play [data-an="rise"]  { animation: aw-rise  .55s cubic-bezier(.16,1,.3,1) both; }
+  .aw-scene.aw-play [data-an="slide"] { animation: aw-slide .5s  cubic-bezier(.16,1,.3,1) both; }
+  .aw-scene.aw-play [data-an="pop"]   { animation: aw-pop   .42s cubic-bezier(.16,1,.3,1) both; }
+  .aw-scene.aw-play [data-an="fade"]  { animation: aw-fade  .5s  ease both; }
+  .aw-scene.aw-play [data-an="press"] { animation: aw-press .5s  ease both; }
+
+  /* ---- scene 1 · roster + composer ---------------------------------------- */
+  .aw-sc-chat { display: grid; grid-template-columns: 240px 1fr; gap: 22px; height: 100%; padding-bottom: 40px; }
+  .aw-roster { align-self: center; max-height: 380px; overflow: hidden; }
+  .aw-rrows { padding: 4px 0; }
+  .aw-rrow { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .aw-rrow:last-child { border-bottom: 0; }
+  .aw-rrow.aw-active { background: var(--gold-soft); }
+  .aw-rgrow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .aw-rgrow b { font-size: 12px; color: var(--text-primary); font-weight: 700; }
+  .aw-pdotw { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); flex: none; }
+  .aw-pdotw.aw-pd-on { background: var(--aw-ok); box-shadow: 0 0 0 2px var(--aw-ok-soft); }
+
+  .aw-chatpane { align-self: center; display: flex; flex-direction: column; min-height: 300px; }
+  .aw-chat-h { position: relative; }
+  .aw-chgrow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .aw-chgrow b { font-size: 12.5px; color: var(--text-primary); font-weight: 700; }
+  .aw-pairbtn {
+    all: unset; cursor: default; font-size: 10.5px; font-weight: 600; color: var(--text-tertiary);
+    background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 7px; padding: 5px 9px; white-space: nowrap;
+  }
+  .aw-chatbody { padding: 14px; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; }
+  .aw-chatbody-scroll { justify-content: flex-start; }
+  .aw-hint { font-size: 11px; margin: 0; }
+
+  .aw-composer {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface-subtle); border: 1px solid var(--border);
+    border-radius: 99px; padding: 8px 8px 8px 14px; font-size: 12px;
+  }
+  .aw-ctxt { flex: 1; min-width: 0; color: var(--text-primary); overflow: hidden; }
+  .aw-btype { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: bottom; max-width: 100%; }
+  .aw-scene.aw-play .aw-composer .aw-btype { width: 0; animation: aw-type 1.9s steps(48, end) .4s forwards; }
+  @keyframes aw-type { from { width: 0; } to { width: 48ch; } }
+  .aw-composer .aw-send {
+    margin-left: auto; width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent-strong); color: var(--on-accent-strong);
+    display: grid; place-items: center; flex: none;
+  }
+  .aw-composer .aw-send svg { width: 11px; height: 11px; }
+
+  /* ---- scene 2 · structured reply ------------------------------------------ */
+  .aw-roster-dim { opacity: .5; }
+  .aw-bubble {
+    border-radius: 12px; padding: 9px 12px; font-size: 12px; line-height: 1.4; max-width: 92%;
+  }
+  .aw-bubble-user {
+    align-self: flex-end; margin-left: auto;
+    background: var(--gold-soft); border: 1px solid color-mix(in srgb, var(--gold) 32%, transparent);
+    color: var(--text-primary); border-radius: 12px 12px 4px 12px;
+  }
+  .aw-bubble-agent {
+    background: var(--surface-subtle); border: 1px solid var(--border);
+    color: var(--text-primary); border-radius: 12px 12px 12px 4px;
+  }
+  .aw-bubble-compact { padding: 9px 12px; }
+  .aw-plan { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+  .aw-plan li { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .aw-plan b { color: var(--text-primary); }
+  .aw-worklog {
+    all: unset; cursor: default; margin-top: 10px; display: inline-flex; align-items: center;
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600; color: var(--text-tertiary);
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 7px; padding: 4px 9px;
+  }
+
+  /* ---- scene 3 · chat becomes tasks ---------------------------------------- */
+  .aw-taskchips { display: flex; flex-wrap: wrap; gap: 9px; }
+  .aw-tchip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11.5px; font-weight: 600; color: var(--text-secondary);
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 999px; padding: 6px 12px 6px 10px;
+  }
+  .aw-tchip svg { width: 12px; height: 12px; color: var(--text-tertiary); }
+  .aw-tchip .aw-tid { font-family: var(--font-mono); font-size: 10.5px; color: var(--accent-text); font-weight: 700; }
+
+  /* ---- scene 4 · closing ---------------------------------------------------- */
+  .aw-sc-close { display: grid; place-items: center; height: 100%; padding-bottom: 40px; text-align: center; }
+  .aw-close-in { max-width: 440px; }
+  .aw-check {
+    display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 50%;
+    background: var(--aw-ok-soft); color: var(--aw-ok); border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+    margin-bottom: 16px;
+  }
+  .aw-check svg { width: 22px; height: 22px; }
+  .aw-close-line {
+    font-family: var(--font-serif); font-weight: 400; font-size: 20px; line-height: 1.35;
+    letter-spacing: -.01em; color: var(--text-primary); margin: 0;
+  }
+  .aw-close-sub { font-size: 12px; margin: 12px 0 0; }
+
+  @media (max-width: 720px) {
+    .aw-root { padding: 72px 14px; }
+    .aw-scene { padding: 22px 16px 56px; }
+    .aw-stage { min-height: 480px; }
+    .aw-sc-chat { grid-template-columns: 1fr; gap: 14px; }
+    .aw-roster { max-height: 160px; }
+    .aw-capbar { flex-wrap: wrap; gap: 10px 14px; }
+    .aw-cap { flex: 1 1 100%; order: 3; font-size: 12.5px; }
+    .aw-count { order: 1; }
+    .aw-ctrl { order: 2; margin-left: auto; }
+    .aw-note { left: 16px; right: 16px; bottom: 14px; font-size: 11px; }
+  }
+  @media (max-width: 420px) {
+    .aw-stage { min-height: 520px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .aw-head, .aw-theater { opacity: 1; transform: none; transition: none; }
+    .aw-scene { transition: none; }
+    .aw-pill .aw-pdot { animation: none; }
+    .aw-cbtn.aw-play-t { display: none; }
+  }
+  </style>
+
+  <script>
+  /* =========================================================================
+     Agent-chat cinematic player — same mechanics as the dm- player in
+     sections/demo.html, scoped to aw- ids/classes so multiple chapter
+     players coexist on one page. Self-init guard on window.__awInit.
+     ========================================================================= */
+  (function () {
+    "use strict";
+    if (window.__awInit) return;
+    window.__awInit = true;
+
+    var STEPS = [
+      { ms: 6600, cap: "<strong>Ask the team.</strong> Message Atlas like any colleague on the roster.",
+        title: "Ask Atlas", aria: "A message typed to Atlas in the chat composer" },
+      { ms: 8200, cap: "<strong>Atlas replies with a plan.</strong> Numbered, bold leads, a disclosable work log.",
+        title: "Structured reply", aria: "Atlas streaming a structured numbered plan with a work log disclosure" },
+      { ms: 6800, cap: "<strong>Chat becomes work.</strong> Atlas files the tasks; assignment wakes the agents.",
+        title: "Chat becomes tasks", aria: "Two task chips appearing inline, assigned to Forge and Sentry" },
+      { ms: 6000, cap: "<strong>Turn-based.</strong> Atlas wakes, works, and replies.",
+        title: "Every agent, reachable", aria: "A closing summary: every agent is a colleague you can brief and redirect" }
+    ];
+    var N = STEPS.length;
+
+    var root    = document.getElementById("agent-chat");
+    var theater = document.getElementById("aw-theater");
+    var stage   = document.getElementById("aw-stage");
+    var scenes  = stage.querySelectorAll(".aw-scene");
+    var capEl   = document.getElementById("aw-cap");
+    var countEl = document.getElementById("aw-count");
+    var playBtn = document.getElementById("aw-play");
+    var trackFill = document.getElementById("aw-track-fill");
+    var dotsWrap = document.getElementById("aw-dots");
+
+    var dots = [];
+    for (var i = 0; i < N; i++) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "aw-dot";
+      b.setAttribute("aria-label", "Scene " + (i + 1) + ": " + STEPS[i].title);
+      var tip = document.createElement("span");
+      tip.className = "aw-tip";
+      tip.textContent = STEPS[i].title;
+      b.appendChild(tip);
+      dotsWrap.appendChild(b);
+      dots.push(b);
+    }
+
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var qs      = new URLSearchParams(location.search);
+
+    var cur = 0, elapsed = 0;
+    var userPaused = reduced || qs.get("awpaused") === "1";
+    var inView = false;
+    var raf = null, lastT = 0;
+
+    function playing() { return !userPaused && !reduced && inView && !document.hidden; }
+    function pad(n) { return (n + 1 < 10 ? "0" : "") + (n + 1); }
+
+    function paintDots() {
+      for (var i = 0; i < N; i++) {
+        dots[i].setAttribute("aria-current", i === cur ? "true" : "false");
+      }
+    }
+
+    function setScene(i) {
+      var old = cur;
+      cur = ((i % N) + N) % N;
+      if (scenes[old] && old !== cur) {
+        scenes[old].classList.remove("aw-on", "aw-play");
+        scenes[old].classList.add("aw-bye");
+        (function (el) { setTimeout(function () { el.classList.remove("aw-bye"); }, 420); })(scenes[old]);
+      }
+      var sc = scenes[cur];
+      sc.classList.add("aw-on");
+      if (!reduced) {
+        sc.classList.remove("aw-play");
+        void sc.offsetWidth;
+        sc.classList.add("aw-play");
+      }
+      elapsed = 0;
+      trackFill.style.transform = reduced ? "scaleX(1)" : "scaleX(0)";
+      paintDots();
+      countEl.textContent = pad(cur) + " / " + pad(N - 1);
+      stage.setAttribute("aria-label", "Animated preview: " + STEPS[cur].aria);
+      capEl.classList.add("aw-swap");
+      setTimeout(function () { capEl.innerHTML = STEPS[cur].cap; capEl.classList.remove("aw-swap"); }, 160);
+    }
+
+    function tick(t) {
+      raf = null;
+      if (playing()) {
+        var dt = lastT ? Math.min(t - lastT, 100) : 0;
+        lastT = t;
+        elapsed += dt;
+        var p = elapsed / STEPS[cur].ms;
+        if (p >= 1) { setScene(cur + 1); }
+        else { trackFill.style.transform = "scaleX(" + p.toFixed(4) + ")"; }
+        raf = requestAnimationFrame(tick);
+      } else {
+        lastT = 0;
+      }
+    }
+
+    function sync() {
+      playBtn.setAttribute("aria-pressed", userPaused ? "false" : "true");
+      playBtn.setAttribute("aria-label", userPaused ? "Resume autoplay" : "Pause autoplay");
+      if (playing() && raf === null) raf = requestAnimationFrame(tick);
+    }
+
+    function jump(i) { userPaused = true; setScene(i); sync(); }
+
+    dots.forEach(function (b, i) {
+      b.addEventListener("click", function () { if (i !== cur) jump(i); else { setScene(i); sync(); } });
+    });
+    document.getElementById("aw-prev").addEventListener("click", function () { jump(cur - 1); });
+    document.getElementById("aw-next").addEventListener("click", function () { jump(cur + 1); });
+    playBtn.addEventListener("click", function () { userPaused = !userPaused; sync(); });
+    theater.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft")  { e.preventDefault(); jump(cur - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); jump(cur + 1); }
+    });
+
+    function onScreen(el, slack) {
+      var r = el.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      return r.top < vh * (slack || 1) && r.bottom > 0;
+    }
+    inView = onScreen(theater);
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        inView = entries[0].isIntersecting; sync();
+      }, { threshold: 0.3 }).observe(theater);
+    }
+    window.addEventListener("load", function () { inView = onScreen(theater); sync(); });
+    window.addEventListener("scroll", function () { inView = onScreen(theater); reveal(); sync(); }, { passive: true });
+    document.addEventListener("visibilitychange", sync);
+
+    function reveal() { if (onScreen(root, 0.92)) { root.classList.add("aw-in"); return true; } return false; }
+    if (reduced || !("IntersectionObserver" in window)) { root.classList.add("aw-in"); }
+    else if (!reveal()) {
+      var rev = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { root.classList.add("aw-in"); rev.disconnect(); }
+      }, { threshold: 0.12 });
+      rev.observe(root);
+      window.addEventListener("load", reveal, { once: true });
+    }
+
+    var s0 = parseInt(qs.get("awstep") || "0", 10);
+    if (!(s0 >= 0 && s0 < N)) s0 = 0;
+    scenes[0].classList.remove("aw-on");
+    setScene(s0);
+    sync();
+  })();
+  </script>
+</section>

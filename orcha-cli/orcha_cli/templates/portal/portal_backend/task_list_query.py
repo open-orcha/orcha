@@ -11,6 +11,14 @@ def _task_list_sql(where: str, order: str) -> str:
                       -- (NULL when unset). Rides the shared task-list builder so it surfaces on the
                       -- snapshot poll + GET /containers/{{cid}}/tasks with no extra call.
                       t.protocol,
+                      -- Collab v1: the owner-assigned human reviewer (NULL = anyone), plus a
+                      -- resolved {{agent_id, alias, github_login}} chip so the portal renders
+                      -- the reviewer without a lookup. Rides the shared task-list builder →
+                      -- surfaces on the snapshot poll AND GET /containers/{{cid}}/tasks.
+                      t.reviewer_agent_id,
+                      (SELECT json_build_object('agent_id', ra.id, 'alias', ra.alias,
+                                                'github_login', ra.github_login)
+                         FROM agents ra WHERE ra.id = t.reviewer_agent_id) AS reviewer,
                       t.created_at, t.started_at, t.completed_at,
                       COALESCE((SELECT json_agg(a.alias ORDER BY a.alias)
                                 FROM agent_tasks at JOIN agents a ON a.id = at.agent_id

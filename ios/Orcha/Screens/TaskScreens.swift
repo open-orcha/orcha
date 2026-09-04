@@ -1,8 +1,6 @@
 import SwiftUI
 import UIKit   // UIResponder keyboard notifications (Issue 2 — scroll composer above keyboard)
 
-// Responsibility: Task detail presentation, approval gates, dependencies, thread, and runs.
-
 /* =============================================================================
    Flow 05 — Task detail + thread. Flow 06 — worker runs + streaming log.
    A 1:1 port of the Android `TaskScreens.kt`. These are plain pushed screens:
@@ -12,21 +10,22 @@ import UIKit   // UIResponder keyboard notifications (Issue 2 — scroll compose
 /// Flow 05 T4 — task detail: header, flow-08 gate cards, DoD, deps, thread, runs,
 /// and the destructive close path (dialog → optional reason alert → cancelTask).
 struct TaskDetailScreen: View {
-    @Environment(AppModel.self) var model
-    @Environment(\.palette) var p
-    @Environment(\.dismiss) var dismiss
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    @Environment(\.dismiss) private var dismiss
     let taskId: String
 
-    @State var allRuns = false
-    @State var confirmClose = false
-    @State var reasonAlert = false
-    @State var closeReason = ""
-    @State var verifySheetTask: TaskDto?
-    @State var planSheetTask: TaskDto?
+    @State private var allRuns = false
+    @State private var confirmClose = false
+    @State private var reasonAlert = false
+    @State private var closeReason = ""
+    @State private var verifySheetTask: TaskDto?
+    @State private var planSheetTask: TaskDto?
+    @State private var reviewerPickerTask: TaskDto?
 
-    var task: TaskDto? { model.snapshot?.tasks.first { $0.id == taskId } }
+    private var task: TaskDto? { model.snapshot?.tasks.first { $0.id == taskId } }
 
-    var closable: Bool {
+    private var closable: Bool {
         guard let task else { return false }
         return !task.isRoot && task.status != "completed" && task.status != "cancelled"
     }
@@ -84,6 +83,7 @@ struct TaskDetailScreen: View {
         }
         .sheet(item: $verifySheetTask) { VerifySheet(task: $0) }
         .sheet(item: $planSheetTask) { PlanApprovalSheet(task: $0) }
+        .sheet(item: $reviewerPickerTask) { ReviewerPickerSheet(task: $0) }
         .task { await model.loadTaskDetail(taskId) }
         .refreshable {
             await model.refresh()
@@ -91,14 +91,14 @@ struct TaskDetailScreen: View {
         }
     }
 
-    func close(reason: String?) {
+    private func close(reason: String?) {
         Task {
             if await model.cancelTask(taskId, reason: reason) { dismiss() }
         }
     }
 
     @ViewBuilder
-    func detail(_ task: TaskDto) -> some View {
+    private func detail(_ task: TaskDto) -> some View {
         headerCard(task)
         gateCards(task)
         descriptionSection(task)
@@ -110,7 +110,7 @@ struct TaskDetailScreen: View {
 
     // MARK: header
 
-    func headerCard(_ task: TaskDto) -> some View {
+    private func headerCard(_ task: TaskDto) -> some View {
         OrchaCard {
             HStack(spacing: 8) {
                 StatusPill(status: task.status, domain: .task)
@@ -123,19 +123,60 @@ struct TaskDetailScreen: View {
                 Spacer()
             }
             Text(task.title)
-                .font(.system(size: 20, weight: .bold))
+                .font(p.uiFont(20, .bold))
                 .foregroundStyle(p.text)
             HStack(spacing: 8) {
                 if let assignee = task.assignees.first ?? task.ownerAlias {
-                    AgentAvatar(alias: assignee, size: 30)
+                    let agents = model.snapshot?.agents ?? []
+                    AgentAvatar(
+                        alias: assignee,
+                        human: MobileUx.isHumanAlias(assignee, in: agents),
+                        githubLogin: MobileUx.humanLogin(alias: assignee, in: agents),
+                        size: 30
+                    )
                     Text(assignee)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.text2)
                 } else {
                     Text("unassigned")
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.faint)
                 }
+            }
+            reviewerRow(task)
+        }
+    }
+
+    /// Collab v1 — the assigned-reviewer chip (avatar + login, or "anyone").
+    /// Owners / `assign_reviewers` holders get the picker; everyone else reads it.
+    private func reviewerRow(_ task: TaskDto) -> some View {
+        HStack(spacing: 8) {
+            Text("REVIEWER")
+                .font(p.uiFont(10.5, .bold))
+                .tracking(0.6)
+                .foregroundStyle(p.muted)
+            if let reviewer = task.reviewer {
+                AgentAvatar(
+                    alias: reviewer.alias ?? reviewer.githubLogin ?? "?",
+                    human: true,
+                    githubLogin: reviewer.githubLogin,
+                    size: 22
+                )
+                Text(reviewer.githubLogin ?? reviewer.alias ?? "member")
+                    .font(p.uiFont(13, .semibold))
+                    .foregroundStyle(p.text2)
+                    .lineLimit(1)
+            } else {
+                Text("anyone")
+                    .font(p.uiFont(13))
+                    .foregroundStyle(p.faint)
+            }
+            Spacer()
+            if model.access.canManage(Grant.assignReviewers) {
+                Button(task.reviewer == nil ? "Assign…" : "Change…") { reviewerPickerTask = task }
+                    .font(p.uiFont(12, .semibold))
+                    .foregroundStyle(p.accent)
+                    .accessibilityLabel(task.reviewer == nil ? "Assign a reviewer" : "Change the reviewer")
             }
         }
     }
@@ -143,14 +184,14 @@ struct TaskDetailScreen: View {
     // MARK: flow-08 violet gate cards
 
     @ViewBuilder
-    func gateCards(_ task: TaskDto) -> some View {
+    private func gateCards(_ task: TaskDto) -> some View {
         if task.status == "needs_verification" {
             OrchaCard(borderColor: p.violetLine) {
                 Text("AWAITING YOUR VERIFICATION")
-                    .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                    .font(p.uiFont(11, .bold)).tracking(0.8)
                     .foregroundStyle(p.violet)
                 Text(task.result ?? "The agent marked this done — review against the definition of done.")
-                    .font(.system(size: 13.5))
+                    .font(p.uiFont(13.5))
                     .foregroundStyle(p.text2)
                     .lineLimit(4)
                 KitButton(title: "Review & verify", small: true) { verifySheetTask = task }
@@ -159,10 +200,10 @@ struct TaskDetailScreen: View {
         if task.planMessage != nil, task.planDecision == nil, task.status == "in_progress" {
             OrchaCard(borderColor: p.violetLine) {
                 Text("PLAN AWAITING YOUR APPROVAL")
-                    .font(.system(size: 11, weight: .bold)).tracking(0.8)
+                    .font(p.uiFont(11, .bold)).tracking(0.8)
                     .foregroundStyle(p.violet)
                 Text(task.planMessage?.body ?? "")
-                    .font(.system(size: 13.5))
+                    .font(p.uiFont(13.5))
                     .foregroundStyle(p.text2)
                     .lineLimit(4)
                 KitButton(title: "Review plan", small: true) { planSheetTask = task }
@@ -170,4 +211,527 @@ struct TaskDetailScreen: View {
         }
     }
 
+    // MARK: description
+
+    @ViewBuilder
+    private func descriptionSection(_ task: TaskDto) -> some View {
+        if let description = task.description,
+           !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            SectionH(title: "Description")
+            OrchaCard {
+                Text(description)
+                    .font(p.uiFont(13.5))
+                    .foregroundStyle(p.text2)
+            }
+        }
+    }
+
+    // MARK: definition of done
+
+    @ViewBuilder
+    private func dodSection(_ task: TaskDto) -> some View {
+        SectionH(title: "Definition of done")
+        OrchaCard(borderColor: p.accentLine, container: p.surface2) {
+            let lines = (task.definitionOfDone ?? "No definition of done was provided.")
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("✓")
+                        .font(p.uiFont(14.5, .heavy))
+                        .foregroundStyle(p.accent)
+                    Text(line)
+                        .font(p.uiFont(14.5))
+                        .foregroundStyle(p.text)
+                }
+            }
+        }
+    }
+
+    // MARK: dependencies
+
+    @ViewBuilder
+    private func dependenciesSection(_ task: TaskDto) -> some View {
+        if !task.dependsOn.isEmpty {
+            SectionH(title: "Depends on", count: "\(task.dependsOn.count)")
+            ForEach(task.dependsOn, id: \.self) { depId in
+                let dep = model.snapshot?.tasks.first { $0.id == depId }
+                NavigationLink(value: WorkspaceRoute.task(depId)) {
+                    OrchaCard {
+                        HStack(spacing: 8) {
+                            Text(dep?.status == "completed" ? "✓" : "🔒")
+                                .font(p.uiFont(14, .heavy))
+                                .foregroundStyle(dep?.status == "completed" ? p.ok : p.warn)
+                            Text(dep?.title ?? depId)
+                                .font(p.uiFont(14, .semibold))
+                                .foregroundStyle(p.text)
+                                .lineLimit(1)
+                            Spacer()
+                            if let dep {
+                                StatusPill(status: dep.status, domain: .task)
+                            }
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: thread
+
+    @ViewBuilder
+    private var threadSection: some View {
+        SectionH(title: "Thread", count: "\(model.taskMessages.count)")
+        NavigationLink(value: WorkspaceRoute.thread(taskId)) {
+            OrchaCard {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Thread · \(model.taskMessages.count) messages")
+                            .font(p.uiFont(14, .semibold))
+                            .foregroundStyle(p.text)
+                        if let last = model.taskMessages.last {
+                            Text("\(last.authorAlias ?? (last.isHuman ? "you" : "agent")): \(last.body)")
+                                .font(p.uiFont(13))
+                                .foregroundStyle(p.muted)
+                                .lineLimit(1)
+                        } else {
+                            Text("No messages yet — say hi.")
+                                .font(p.uiFont(13))
+                                .foregroundStyle(p.faint)
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(p.uiFont(13, .semibold))
+                        .foregroundStyle(p.faint)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: worker runs
+
+    @ViewBuilder
+    private var runsSection: some View {
+        HStack {
+            SectionH(title: "Worker runs", count: "\(model.taskRuns.count)")
+            if model.taskRuns.contains(where: { $0.status == "running" }) {
+                StatusPill(status: "running", domain: .run)
+            }
+        }
+        if model.taskRuns.isEmpty {
+            OrchaCard {
+                Text("No runs yet — appears when a worker wakes for this task.")
+                    .foregroundStyle(p.muted)
+            }
+        }
+        ForEach(allRuns ? model.taskRuns : Array(model.taskRuns.prefix(3))) { run in
+            NavigationLink(value: WorkspaceRoute.run(run)) {
+                RunRowCard(run: run)
+            }
+            .buttonStyle(.plain)
+        }
+        if !allRuns, model.taskRuns.count > 3 {
+            Button("All runs (\(model.taskRuns.count))") { allRuns = true }
+                .buttonStyle(.plain)
+                .font(p.uiFont(13, .bold))
+                .foregroundStyle(p.accent)
+        }
+    }
+}
+
+/// Flow 05/06 — a single worker-run row. Top-level so AgentDetailScreen can reuse it.
+struct RunRowCard: View {
+    @Environment(\.palette) private var p
+    let run: RunDto
+
+    var body: some View {
+        OrchaCard {
+            HStack(spacing: 8) {
+                Image(systemName: "terminal")
+                    .font(p.uiFont(15, .semibold))
+                    .foregroundStyle(p.accent)
+                Text(run.runId.prefix(6))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(p.text)
+                if let alias = run.agentAlias {
+                    AgentAvatar(alias: alias, size: 26)
+                }
+                StatusPill(status: run.status, domain: .run)
+                Spacer()
+                Text(MobileUx.agoLabel(run.startedAt) ?? "")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(p.faint)
+            }
+            Text(run.taskTitle ?? run.wakeEvent ?? "worker run")
+                .font(p.uiFont(13))
+                .foregroundStyle(p.text2)
+                .lineLimit(1)
+        }
+    }
+}
+
+/* ---------- flow 05 T8 — the task thread (chat surface + composer) ---------- */
+
+/// Flow 05 T8 — chat surface: scrolling bubbles (auto-pin to bottom) + a composer
+/// pinned above the keyboard. A failed send keeps its text as a retryable bubble.
+struct TaskThreadScreen: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    let taskId: String
+
+    @State private var draft = ""
+    @State private var pendingSend: String?
+    /// GH #140 — a tapped task-id link pushes here, in addition to the tab's own
+    /// `WorkspaceRoute.task` destination; both target the same `TaskDetailScreen`.
+    @State private var linkedTaskId: String?
+
+    private var task: TaskDto? { model.snapshot?.tasks.first { $0.id == taskId } }
+    private var assignee: String? { task?.assignees.first ?? task?.ownerAlias }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Issue 4: "Load earlier" reveals the previous keyset page at the TOP; it
+                    // prepends older messages and must NOT scroll the view to the bottom.
+                    if model.threadHasMore {
+                        Button {
+                            Task { await model.loadEarlierThreadMessages(taskId) }
+                        } label: {
+                            if model.threadLoadingEarlier {
+                                ProgressView().frame(maxWidth: .infinity)
+                            } else {
+                                Text("Load earlier messages")
+                                    .font(p.uiFont(12, .bold))
+                                    .foregroundStyle(p.accent)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                        .disabled(model.threadLoadingEarlier)
+                    }
+                    if model.taskMessages.isEmpty, pendingSend == nil {
+                        OrchaCard {
+                            Text("No messages yet — say hi to \(assignee ?? "the assignee").")
+                                .foregroundStyle(p.muted)
+                        }
+                    }
+                    ForEach(Array(model.taskMessages.enumerated()), id: \.offset) { _, msg in
+                        threadBubble(msg)
+                    }
+                    if let unsent = pendingSend {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Bubble(.mine, unsent)
+                            if !model.actionInFlight {
+                                Button("Not sent · Tap to retry") { send(unsent) }
+                                    .buttonStyle(.plain)
+                                    .font(p.uiFont(11, .bold))
+                                    .foregroundStyle(p.danger)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    } else if let error = model.error {
+                        Banner(kind: .danger, text: error)
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(16)
+            }
+            // Scroll to bottom only when the NEWEST message changes (a new/sent message) or a
+            // pending bubble appears — never on a "Load earlier" prepend (which changes the top).
+            .onChange(of: model.taskMessages.last?.messageId) {
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: pendingSend) {
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+        .safeAreaInset(edge: .bottom) { composer }
+        .navigationTitle("Thread")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 1) {
+                    Text("Thread")
+                        .font(p.uiFont(15, .semibold))
+                        .foregroundStyle(p.text)
+                    if let title = task?.title {
+                        Text(title)
+                            .font(p.uiFont(11))
+                            .foregroundStyle(p.muted)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .task { await model.loadTaskDetail(taskId) }
+        .refreshable { await model.loadTaskDetail(taskId) }
+        .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
+    }
+
+    @ViewBuilder
+    private func threadBubble(_ msg: TaskMessageDto) -> some View {
+        let tasks = model.snapshot?.tasks ?? []
+        if msg.authorId == nil, !msg.isHuman {
+            Bubble(.system, msg.body, tasks: tasks, onTapTask: { linkedTaskId = $0 })
+        } else if msg.authorId != nil, msg.authorId == model.humanId {
+            Bubble(.mine, msg.body, time: MobileUx.agoLabel(msg.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 })
+        } else {
+            Bubble(
+                .theirs, msg.body,
+                author: msg.authorAlias ?? (msg.isHuman ? "human" : "agent"),
+                time: MobileUx.agoLabel(msg.createdAt),
+                tasks: tasks, onTapTask: { linkedTaskId = $0 }
+            )
+        }
+    }
+
+    /// `.composer` — rounded field + circular send button. Collab v1: a read-only
+    /// role (viewer / trusted non-member) gets the honest note instead — the
+    /// server would 403 the post anyway.
+    @ViewBuilder
+    private var composer: some View {
+        if let reason = model.access.writeDenialReason {
+            Banner(kind: .info, text: reason)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(p.bg)
+        } else {
+            composerField
+        }
+    }
+
+    private var composerField: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField("Message \(assignee ?? "the thread")…", text: $draft, axis: .vertical)
+                .lineLimit(1...4)
+                .font(p.uiFont(14.5))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(p.surface2, in: RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(p.border2, lineWidth: 1))
+            Button(action: sendDraft) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(p.uiFont(32))
+                    .foregroundStyle(canSend ? p.accent : p.faint)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .accessibilityLabel("Send")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(p.bg)
+    }
+
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInFlight
+    }
+
+    private func sendDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        draft = ""
+        send(text)
+    }
+
+    /// A send that errors keeps its text as an unsent bubble with a retry chip.
+    private func send(_ text: String) {
+        pendingSend = text
+        Task {
+            if await model.sendTaskMessage(taskId, body: text) {
+                pendingSend = nil
+            }
+        }
+    }
+}
+
+/* ---------- flow 06 R2 — run detail: mono log, pin-to-bottom, stop-run ---------- */
+
+/// Flow 06 R2 — run detail: header + stop-run, terminal banner, and the streaming
+/// mono log filling the remaining space with pragmatic pin-to-bottom tracking.
+struct RunDetailScreen: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    let run: RunDto
+
+    @State private var confirmStop = false
+    @State private var pinned = true
+
+    private enum RunPane: String, CaseIterable {
+        case log = "Log", changes = "Changes"
+    }
+
+    @State private var pane: RunPane = .log
+
+    var body: some View {
+        VStack(spacing: 10) {
+            header
+            Picker("View", selection: $pane) {
+                ForEach(RunPane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if run.status != "running" {
+                terminalBanner
+            }
+            if let note = model.runStreamNote {
+                Banner(kind: .info, text: note)
+            }
+            switch pane {
+            case .log:
+                if run.status != "running" {
+                    RunDigestCard(feed: model.runFeed)
+                }
+                logCard
+                if let error = model.error {
+                    Banner(kind: .danger, text: error, action: "Retry") {
+                        model.startRunLog(run)
+                    }
+                }
+            case .changes:
+                changesPane
+            }
+        }
+        .padding(16)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(run.runId.prefix(6))
+                    .font(.system(size: 15, weight: .bold, design: .monospaced))
+                    .foregroundStyle(p.text)
+            }
+        }
+        // Issue 3: a running run streams live over SSE; a finished run keeps the one-shot fetch.
+        // The collector is cancelled when the screen goes away.
+        .task { model.startRunLog(run) }
+        .onDisappear { model.stopRunLogStream() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            StatusPill(status: run.status, domain: .run)
+            if let wakeKind = run.wakeKind { MetaTag(text: wakeKind) }
+            if let alias = run.agentAlias { MetaTag(text: alias) }
+            Spacer()
+            if run.status == "running" {
+                KitButton(title: "Stop run", role: .dangerTonal, small: true, enabled: !model.actionInFlight) {
+                    confirmStop = true
+                }
+                .fixedSize()
+                .confirmationDialog("Stop this run?", isPresented: $confirmStop, titleVisibility: .visible) {
+                    Button("Stop run", role: .destructive, action: stopRun)
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The worker is interrupted mid-turn. The log so far is kept and the run is marked stopped.")
+                }
+            }
+        }
+    }
+
+    private var terminalBanner: some View {
+        let kind: BannerKind = ["killed", "failed", "error"].contains(run.status) ? .danger : .info
+        let ago = MobileUx.agoLabel(run.endedAt).map { " · \($0)" } ?? ""
+        return Banner(kind: kind, text: "Run \(MobileUx.statusCopy(run.status))\(ago)")
+    }
+
+    /// GitHub-style "Changes" pane — the run's net unified diff, parsed and
+    /// rendered per file with hunks, line numbers, and add/del row tints.
+    @ViewBuilder
+    private var changesPane: some View {
+        if let diff = run.diff, !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ScrollView {
+                DiffViewer(diff: diff)
+                    .padding(.bottom, 12)
+            }
+        } else if run.status == "running" {
+            OrchaCard {
+                Text("The diff lands when the worker finishes — watch the log meanwhile.")
+                    .font(p.uiFont(13))
+                    .foregroundStyle(p.muted)
+            }
+            Spacer()
+        } else {
+            OrchaCard {
+                Text("No diff captured for this run.")
+                    .font(p.uiFont(13))
+                    .foregroundStyle(p.muted)
+            }
+            Spacer()
+        }
+    }
+
+    private var logCard: some View {
+        OrchaCard {
+            if model.runFeed.isEmpty {
+                ScrollView {
+                    Text(emptyLogText)
+                        .font(p.uiFont(13))
+                        .foregroundStyle(p.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .refreshable { model.startRunLog(run) }
+            } else {
+                ScrollViewReader { proxy in
+                    ZStack(alignment: .bottom) {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 2) {
+                                ForEach(Array(model.runFeed.enumerated()), id: \.offset) { _, row in
+                                    FeedRow(row: row)
+                                }
+                                Color.clear.frame(height: 1).id("log-bottom")
+                            }
+                        }
+                        .refreshable { model.startRunLog(run) }
+                        // pragmatic pin tracking (flow 06 §auto-scroll): a downward
+                        // drag (scrolling back through history) pauses auto-scroll.
+                        .simultaneousGesture(
+                            DragGesture().onChanged { value in
+                                if value.translation.height > 12 { pinned = false }
+                            }
+                        )
+                        if !pinned {
+                            Button {
+                                pinned = true
+                                withAnimation { proxy.scrollTo("log-bottom", anchor: .bottom) }
+                            } label: {
+                                Text("Auto-scroll paused · Jump to latest")
+                                    .font(p.uiFont(11, .bold))
+                                    .foregroundStyle(p.accent)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(p.surface3, in: Capsule())
+                                    .overlay(Capsule().strokeBorder(p.border2, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.bottom, 6)
+                        }
+                    }
+                    .onChange(of: model.runFeed.count) {
+                        if pinned {
+                            proxy.scrollTo("log-bottom", anchor: .bottom)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyLogText: String {
+        if model.runLogStreaming { return "Waiting for the worker to emit output…" }
+        if model.loading { return "Loading stream…" }
+        return "No log lines yet."
+    }
+
+    private func stopRun() {
+        Task { await model.stopRun(run) }
+    }
 }

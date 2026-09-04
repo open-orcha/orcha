@@ -1,0 +1,53 @@
+# Optional local-run overlay: oauth2-proxy in front of the portal, so
+# http://localhost:4180 requires a real GitHub sign-in instead of the default
+# no-login local operator. See deploy/local/README.md -> "Optional: real
+# login on localhost" for the full walkthrough.
+#
+# This is a STANDALONE compose file (not a layer on the stack's own
+# docker-compose.yml) — it only runs oauth2-proxy, reaching the portal over
+# the host's loopback interface via host.docker.internal. Two things must
+# also be true, both covered in the README:
+#   1. the project's portal is rebound to loopback-only
+#      (127.0.0.1:<port>:8000 — see deploy/auth/docker-compose.portal-local.yml
+#      for the same pattern against the box stack; the port must match
+#      ORCHA_PORTAL_PORT below).
+#   2. the portal container has ORCHA_TRUST_PROXY_USER=1 in its environment
+#      (export it before `orcha up`, or add it to <project>/.orcha/.env).
+#
+# Usage:
+#   cp deploy/local/oauth2-proxy.env.example deploy/local/oauth2-proxy.env
+#   $EDITOR deploy/local/oauth2-proxy.env
+#   docker compose --env-file deploy/local/oauth2-proxy.env \
+#     -f deploy/local/docker-compose.oauth.yml up -d
+name: orcha-local-oauth
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4180:4180"
+    environment:
+      OAUTH2_PROXY_PROVIDER: github
+      OAUTH2_PROXY_CLIENT_ID: ${GITHUB_CLIENT_ID:?set GITHUB_CLIENT_ID in oauth2-proxy.env}
+      OAUTH2_PROXY_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?set GITHUB_CLIENT_SECRET in oauth2-proxy.env}
+      OAUTH2_PROXY_COOKIE_SECRET: "${COOKIE_SECRET:?missing COOKIE_SECRET in oauth2-proxy.env}"
+      # Empty = any GitHub account may sign in. Set a comma-separated roster
+      # in oauth2-proxy.env to restrict it (same idiom as deploy/auth).
+      OAUTH2_PROXY_GITHUB_USERS: ${ALLOWED_GITHUB_USERS:-}
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_REDIRECT_URL: http://localhost:4180/oauth2/callback
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      # No Caddy here: oauth2-proxy itself reverse-proxies to the portal, and
+      # stamps the verified identity onto the upstream request as it does so.
+      OAUTH2_PROXY_UPSTREAMS: http://host.docker.internal:${ORCHA_PORTAL_PORT:-8000}
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"
+      # http://localhost — no TLS in the local overlay, so the cookie must
+      # not require Secure or the browser silently drops it.
+      OAUTH2_PROXY_COOKIE_SECURE: "false"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+    extra_hosts:
+      # Linux Docker doesn't resolve host.docker.internal by default; macOS
+      # Docker Desktop/OrbStack already do, but this is harmless there too.
+      - "host.docker.internal:host-gateway"

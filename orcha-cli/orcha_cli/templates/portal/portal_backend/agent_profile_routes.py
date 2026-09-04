@@ -1,17 +1,61 @@
 """Retire agents and edit their human-controlled profile fields."""
 
 import psycopg
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, require_kind, valid_uuid
+from portal_backend.identity_routes import enforce_grant, trusted_actor
 from portal_backend.schemas.agent_state import AgentRetire, AgentUpdate
 
 
+def retire_agent_record(cur, aid):
+    """Shared retire mechanics (ISS-51 + collab v1's member removal — one semantics,
+    never two drifting copies): drop the agent's active task assignments, release any
+    task left with NO active assignee back to 'ready' (the thread is retained), clear
+    its self-wakes, and stamp terminated_at + status='terminated'. Returns the released
+    task ids. Callers own the authority gate, audit event, and commit."""
+    cur.execute(
+        """SELECT task_id FROM agent_tasks
+           WHERE agent_id=%s AND assignment_status IN ('assigned','accepted','working')""",
+        (aid,),
+    )
+    active_task_ids = [str(row["task_id"]) for row in cur.fetchall()]
+    cur.execute(
+        "DELETE FROM agent_tasks WHERE agent_id=%s "
+        "AND assignment_status IN ('assigned','accepted','working')",
+        (aid,),
+    )
+    cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s", (aid,))
+
+    released = []
+    for task_id in active_task_ids:
+        cur.execute(
+            """SELECT 1 FROM agent_tasks
+               WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')
+               LIMIT 1""",
+            (task_id,),
+        )
+        if cur.fetchone() is None:
+            cur.execute(
+                "UPDATE tasks SET status='ready', started_at=NULL "
+                "WHERE id=%s AND status='in_progress' AND is_root=false RETURNING id",
+                (task_id,),
+            )
+            if cur.fetchone():
+                released.append(task_id)
+
+    cur.execute(
+        "UPDATE agents SET terminated_at=now(), status='terminated' WHERE id=%s",
+        (aid,),
+    )
+    return released
+
+
 @app.post("/api/agents/{aid}/retire", status_code=200)
-def retire_agent(aid: str, body: AgentRetire):
+def retire_agent(aid: str, body: AgentRetire, request: Request):
     """ISS-51: retire an agent — human-authority gated. Sets agents.terminated_at +
     status='terminated' so the container roster (which now filters terminated_at IS
     NULL) stops listing it. Any task this agent was actively working is RELEASED back
@@ -22,8 +66,14 @@ def retire_agent(aid: str, body: AgentRetire):
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        require_kind(cur, body.actor_agent_id, ("human",))
         agent = require_agent(cur, aid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: retiring an agent is owner-or-manage_agents.
+        enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
+        body.actor_agent_id = trusted_actor(
+            cur, request, str(agent["container_id"]), body.actor_agent_id
+        )
+        require_kind(cur, body.actor_agent_id, ("human",))
         cur.execute("SELECT terminated_at FROM agents WHERE id=%s", (aid,))
         if cur.fetchone()["terminated_at"] is not None:
             return {
@@ -33,40 +83,7 @@ def retire_agent(aid: str, body: AgentRetire):
                 "already_retired": True,
             }
 
-        cur.execute(
-            """SELECT task_id FROM agent_tasks
-               WHERE agent_id=%s AND assignment_status IN ('assigned','accepted','working')""",
-            (aid,),
-        )
-        active_task_ids = [str(row["task_id"]) for row in cur.fetchall()]
-        cur.execute(
-            "DELETE FROM agent_tasks WHERE agent_id=%s "
-            "AND assignment_status IN ('assigned','accepted','working')",
-            (aid,),
-        )
-        cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s", (aid,))
-
-        released = []
-        for task_id in active_task_ids:
-            cur.execute(
-                """SELECT 1 FROM agent_tasks
-                   WHERE task_id=%s AND assignment_status IN ('assigned','accepted','working')
-                   LIMIT 1""",
-                (task_id,),
-            )
-            if cur.fetchone() is None:
-                cur.execute(
-                    "UPDATE tasks SET status='ready', started_at=NULL "
-                    "WHERE id=%s AND status='in_progress' AND is_root=false RETURNING id",
-                    (task_id,),
-                )
-                if cur.fetchone():
-                    released.append(task_id)
-
-        cur.execute(
-            "UPDATE agents SET terminated_at=now(), status='terminated' WHERE id=%s",
-            (aid,),
-        )
+        released = retire_agent_record(cur, aid)
         log_event(
             cur,
             agent["container_id"],
@@ -82,31 +99,64 @@ def retire_agent(aid: str, body: AgentRetire):
 
 
 @app.patch("/api/agents/{aid}", status_code=200)
-def update_agent(aid: str, body: AgentUpdate):
-    """Edit an agent's role / system_prompt / alias (onboarding + re-profiles; no such
-    route existed — personas were edited via raw DB). HUMAN-authority gated. PARTIAL:
-    only the supplied fields change. Editing a HUMAN's system_prompt is rejected (humans
-    carry no prompt). Renaming alias is 409-guarded on collision (UNIQUE per container);
-    NOTE a rename orphans the local CLI binding file (.claude/orcha-tabs/<oldalias>.json),
-    so the agent must re-bind (/orcha-use or re-register). The change flows through
-    GET /persona AND the container read payload (role, prompt_preview)."""
+def update_agent(aid: str, body: AgentUpdate, request: Request):
+    """Edit an agent's role / system_prompt / alias / autonomy_override (onboarding +
+    re-profiles; no such route existed — personas were edited via raw DB). HUMAN-authority
+    gated. PARTIAL: only the supplied fields change. Editing a HUMAN's system_prompt is
+    rejected (humans carry no prompt). Renaming alias is 409-guarded on collision (UNIQUE per
+    container); NOTE a rename orphans the local CLI binding file
+    (.claude/orcha-tabs/<oldalias>.json), so the agent must re-bind (/orcha-use or re-register).
+
+    mig 043: `autonomy_override` grants THIS agent a per-agent autonomy level without moving the
+    whole container. Supply 'plan'|'pr'|'full' to set it, or null to CLEAR it (inherit the
+    container level); OMITTING the field leaves it unchanged (detected via model_fields_set,
+    since null is a real target). Humans carry NO override (they never mark tasks done) —
+    rejected for kind='human'. A bad enum value is a 422 (the AgentUpdate schema Literal refuses
+    it before this body runs). Access model (mig 039): the override lane is
+    owner-or-manage_autonomy — the SAME grant the container autonomy slider requires, because
+    handing one agent a level is an autonomy write, not a persona edit. The change flows through
+    the container read payload (role, prompt_preview, autonomy_override, effective_autonomy)."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
-    if body.role is None and body.system_prompt is None and body.alias is None:
+    # mig 043: null is a MEANINGFUL value for autonomy_override (clear-to-inherit), so 'was it
+    # supplied?' is model_fields_set membership, NOT `is not None`.
+    override_supplied = "autonomy_override" in body.model_fields_set
+    profile_supplied = (
+        body.role is not None or body.system_prompt is not None or body.alias is not None
+    )
+    if not profile_supplied and not override_supplied:
         raise HTTPException(
-            400, "no updatable field supplied (role / system_prompt / alias)"
+            400,
+            "no updatable field supplied (role / system_prompt / alias / autonomy_override)",
         )
     with db_cursor() as (conn, cur):
-        require_kind(cur, body.actor_agent_id, ("human",))
         cur.execute("SELECT kind, container_id FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"agent {aid} not found")
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: profile fields (role/system_prompt/alias) stay owner-or-manage_agents
+        # (existing behavior, byte-for-byte); the mig-043 autonomy_override lane is
+        # owner-or-manage_autonomy — each field class needs ITS grant, so a PATCH carrying
+        # both needs both.
+        if profile_supplied:
+            enforce_grant(cur, request, str(row["container_id"]), "manage_agents")
+        if override_supplied:
+            enforce_grant(cur, request, str(row["container_id"]), "manage_autonomy")
+        body.actor_agent_id = trusted_actor(
+            cur, request, str(row["container_id"]), body.actor_agent_id
+        )
+        require_kind(cur, body.actor_agent_id, ("human",))
         if body.system_prompt is not None:
             if row["kind"] == "human":
                 raise HTTPException(400, "humans carry no system_prompt")
             if not body.system_prompt.strip():
                 raise HTTPException(400, "kind='ai' requires a non-empty system_prompt")
+        # mig 043: a human never marks a task done, so an override would be inert AND misleading —
+        # reject it outright (mirrors the humans-carry-no-system_prompt guard). Clearing to null on
+        # a human is a harmless no-op we still reject for a single consistent contract.
+        if override_supplied and row["kind"] == "human":
+            raise HTTPException(400, "humans carry no autonomy_override")
 
         sets, params, changed = [], [], []
         if body.role is not None:
@@ -123,11 +173,16 @@ def update_agent(aid: str, body: AgentUpdate):
             sets.append("alias=%s")
             params.append(body.alias)
             changed.append("alias")
+        if override_supplied:
+            sets.append("autonomy_override=%s")
+            params.append(body.autonomy_override)
+            changed.append("autonomy_override")
         params.append(aid)
         try:
             cur.execute(
                 f"UPDATE agents SET {', '.join(sets)} WHERE id=%s "
-                "RETURNING id, alias, role, kind, system_prompt, model, status",
+                "RETURNING id, alias, role, kind, system_prompt, model, status, "
+                "autonomy_override",
                 params,
             )
         except psycopg.errors.UniqueViolation:

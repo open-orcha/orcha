@@ -1,0 +1,572 @@
+<section id="task-verify" class="mk-section tw-root" aria-labelledby="tw-title">
+  <header class="tw-head">
+  <div class="tw-eyebrow">— 03 / The gate</div>
+  <h2 class="tw-title" id="tw-title">Nothing ships on <span class="tw-title-em">an agent&rsquo;s say-so</span>.</h2>
+  <p class="tw-sub">Every task carries a protocol: open a PR, never merge, stop for a human. Watch one
+  critical fix go from red tests to a verified, merged PR.</p>
+  </header>
+
+  <div class="tw-theater" id="tw-theater" tabindex="-1">
+  <!-- browser chrome -->
+  <div class="tw-chrome" aria-hidden="true">
+  <span class="tw-dot3"></span><span class="tw-dot3"></span><span class="tw-dot3"></span>
+  <span class="tw-url">
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+  app.orcha.cloud/tasks
+  </span>
+  </div>
+
+  <div class="tw-frame">
+  <div class="tw-stage" id="tw-stage" role="img" aria-label="Animated preview: a critical task from open to verified">
+
+  <!-- scene 1 · task detail + protocol -->
+  <div class="tw-scene tw-on" data-scene="0">
+  <div class="tw-sc-detail">
+  <div class="tw-pane tw-tasks" data-an="rise" style="--d:.1s">
+  <div class="tw-pane-h">Tasks · acme-health <span class="tw-grow"></span><span class="tw-mono tw-faint">10</span></div>
+  <div class="tw-tgroup">IN PROGRESS (4)</div>
+  <div class="tw-lrow tw-sel">
+  <span class="tw-pri tw-pri-1">P1</span>
+  <span class="tw-lgrow">CRITICAL: tenant eligibility gate bypassed by raw data router</span>
+  </div>
+  <div class="tw-lrow"><span class="tw-pri tw-pri-3">P3</span><span class="tw-lgrow">Backfill audit log for export jobs</span></div>
+  <div class="tw-lrow"><span class="tw-pri tw-pri-2">P2</span><span class="tw-lgrow">Retry storm on webhook delivery</span></div>
+  <div class="tw-tgroup">READY (6)</div>
+  <div class="tw-lrow tw-dim"><span class="tw-pri tw-pri-2">P2</span><span class="tw-lgrow">Rotate stale service credentials</span></div>
+  </div>
+  <div class="tw-pane tw-detail" data-an="rise" style="--d:.2s">
+  <div class="tw-pane-h tw-detail-h">
+  <span class="tw-dtitle">CRITICAL: tenant eligibility gate bypassed by raw data router</span>
+  <span class="tw-grow"></span>
+  </div>
+  <div class="tw-chiprow">
+  <span class="tw-pill tw-p-crm"><span class="tw-pdot"></span>IN PROGRESS</span>
+  <span class="tw-chip tw-chip-pri">Priority 1</span>
+  <span class="tw-chip"><span class="tw-av tw-av-sm">F</span>assignee Forge</span>
+  <span class="tw-chip">reviewer sam-dev</span>
+  </div>
+  <div class="tw-desc">
+  <p class="tw-desc-p">The raw ingestion router reads tenant records before eligibility
+  middleware runs, so a suspended tenant can still reach data on that path.</p>
+  </div>
+  <div class="tw-dod">
+  <div class="tw-dod-h">Definition of done</div>
+  <p class="tw-dod-p">The eligibility checks are enforced on EVERY authenticated path — with
+  tests proving a pending, suspended, and inactive tenant receives a generic 403. PR opened,
+  fresh-session review run, NOT merged without human review.</p>
+  </div>
+  <div class="tw-protocol" data-an="rise" style="--d:.4s">
+  <div class="tw-proto-h">
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+  Protocol
+  <span class="tw-grow"></span>
+  <span class="tw-chip tw-chip-proto">open PR only; never merge; stop for human review</span>
+  </div>
+  <div class="tw-proto-row"><span class="tw-proto-k">REVIEW CHAIN</span><span class="tw-proto-v">fresh-session review, then human (you) &mdash; final approver</span></div>
+  <div class="tw-proto-row"><span class="tw-proto-k">AUTONOMY</span><span class="tw-proto-v">open PR only; never merge; stop for human review</span></div>
+  </div>
+  </div>
+  </div>
+  <p class="tw-note">Every task carries a <b>protocol</b>: what the agent may do, and where it must stop.</p>
+  </div>
+
+  <!-- scene 2 · run stream + diff -->
+  <div class="tw-scene" data-scene="1">
+  <div class="tw-sc-run">
+  <div class="tw-pane tw-runpane" data-an="rise" style="--d:.1s">
+  <div class="tw-pane-h">Run stream · Forge <span class="tw-grow"></span><span class="tw-pill tw-p-crm"><span class="tw-pdot"></span>WORKING</span></div>
+  <div class="tw-term">
+  <span class="tw-tl" data-an="fade" style="--d:.4s"><span class="tw-tp">$</span> pytest tests/tenant_gate</span>
+  <span class="tw-tl" data-an="fade" style="--d:1s"><span class="tw-tw">3 failed</span><span class="tw-tmut">, 11 passed in 2.8s</span></span>
+  <span class="tw-tl" data-an="fade" style="--d:1.7s"><span class="tw-tc">&#9998;</span> editing services/gateway/module_guard.ts <span class="tw-tg">+9</span> <span class="tw-tw">&minus;2</span></span>
+  <span class="tw-tl tw-late" data-an="fade" style="--d:3.3s"><span class="tw-tp">$</span> pytest tests/tenant_gate</span>
+  <span class="tw-tl tw-late" data-an="fade" style="--d:4s"><span class="tw-tg">&check;</span> 214 passed <span class="tw-tmut">in 6.1s</span></span>
+  <details class="tw-diffdrop tw-late" data-an="fade" style="--d:4.6s">
+  <summary>code diff <span class="tw-mono tw-faint">module_guard.ts</span></summary>
+  <div class="tw-diffbody" role="figure" aria-label="Diff of module_guard.ts">
+  <div class="tw-dl tw-ctx"><span class="tw-ln">18</span><span class="tw-ln">18</span><span class="tw-dcode"><span class="tw-kw">export function</span> guardRequest(ctx: RequestCtx) {</span></div>
+  <div class="tw-dl tw-del"><span class="tw-ln">19</span><span class="tw-ln tw-e"></span><span class="tw-dsign">-</span><span class="tw-dcode">  <span class="tw-kw">if</span> (ctx.path.startsWith(<span class="tw-str">&quot;/api/&quot;</span>)) checkEligibility(ctx);</span></div>
+  <div class="tw-dl tw-add"><span class="tw-ln tw-e"></span><span class="tw-ln">19</span><span class="tw-dsign">+</span><span class="tw-dcode">  <span class="tw-kw">checkEligibility</span>(ctx); <span class="tw-cmt">// every authenticated path, not just /api/</span></span></div>
+  <div class="tw-dl tw-add"><span class="tw-ln tw-e"></span><span class="tw-ln">20</span><span class="tw-dsign">+</span><span class="tw-dcode">  <span class="tw-kw">if</span> (ctx.tenant.status !== <span class="tw-str">&quot;active&quot;</span>) <span class="tw-kw">throw new</span> ForbiddenError();</span></div>
+  <div class="tw-dl tw-ctx"><span class="tw-ln">20</span><span class="tw-ln">21</span><span class="tw-dcode">}</span></div>
+  </div>
+  </details>
+  </div>
+  </div>
+  </div>
+  <p class="tw-note">Failing tests, an edit, a green suite — the <b>diff renders inline</b> in the stream.</p>
+  </div>
+
+  <!-- scene 3 · PR opened, needs_verification -->
+  <div class="tw-scene" data-scene="2">
+  <div class="tw-sc-pr">
+  <div class="tw-pane tw-pr" data-an="rise" style="--d:.1s">
+  <div class="tw-pane-h tw-pr-h">
+  <span class="tw-pr-ic tw-open" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4" cy="3.5" r="1.7"/><path d="M4 5.2v5.6"/><circle cx="4" cy="12.5" r="1.7"/><path d="M7.5 3.5h2.5a2 2 0 0 1 2 2v5.3"/><circle cx="12" cy="12.5" r="1.7"/></svg></span>
+  <span class="tw-prtitle-wrap">
+  <span class="tw-pr-title">fix: enforce eligibility gate on raw data router <span class="tw-prnum">#41</span></span>
+  <span class="tw-pr-meta"><span class="tw-mono">acme-ehr[bot]</span> wants to merge into <span class="tw-mono">main</span></span>
+  </span>
+  <span class="tw-botpill" title="app bot"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="10" height="8" rx="2"/><path d="M8 5V2.6"/><circle cx="8" cy="2.1" r=".8" fill="currentColor"/><path d="M6 8.4v1M10 8.4v1"/></svg>bot</span>
+  </div>
+  <div class="tw-pr-body">
+  <p class="tw-pr-note" data-an="slide" style="--d:.7s">Forge opened PR #41 as the app bot &mdash; eligibility gate enforced on every PHI path.</p>
+  <div class="tw-prcheck" data-an="slide" style="--d:1.2s"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg>All checks passed — 214 tests, lint, build</div>
+  </div>
+  </div>
+  <div class="tw-flipcard tw-late" data-an="pop" style="--d:2s">
+  <span class="tw-flip-t">task-41</span>
+  <span class="tw-pill tw-p-warn"><span class="tw-pdot"></span>needs_verification</span>
+  </div>
+  </div>
+  <p class="tw-note">Agents stop here. <b>They never self-certify.</b></p>
+  </div>
+
+  <!-- scene 4 · reviewer pass + human verify -->
+  <div class="tw-scene" data-scene="3">
+  <div class="tw-sc-verify">
+  <div class="tw-pane tw-verify" data-an="rise" style="--d:.1s">
+  <div class="tw-pane-h">task-41 · patch ready <span class="tw-grow"></span>
+  <span class="tw-stack">
+  <span data-an="gone" style="--d:3.6s"><span class="tw-pill tw-p-warn"><span class="tw-pdot"></span>needs_verification</span></span>
+  <span class="tw-swap-in" data-an="pop" style="--d:3.75s"><span class="tw-pill tw-p-ok">&check; verified</span></span>
+  </span>
+  </div>
+  <div class="tw-vrows">
+  <div class="tw-vrow" data-an="slide" style="--d:.6s"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg>fresh-session review: gate enforced on all 6 paths</div>
+  <div class="tw-vrow" data-an="slide" style="--d:1.1s"><span class="tw-revrow"><span class="tw-av tw-av-sm">S</span>reviewer &middot; <b>sam-dev</b></span><span class="tw-grow"></span><span class="tw-pill tw-p-idle">approved</span></div>
+  </div>
+  <div class="tw-vfoot">
+  <span class="tw-stack">
+  <span data-an="gone" style="--d:3.55s"><span class="tw-mergebtn" data-an="press" style="--d:3.2s">Merge pull request</span></span>
+  <span class="tw-mergebtn tw-merged tw-swap-in" data-an="fade" style="--d:3.7s">Merged by you</span>
+  </span>
+  </div>
+  </div>
+  </div>
+  <p class="tw-note">Reviewer passes, then <b>you</b> click Verify — the merge button turns purple.</p>
+  </div>
+
+  <!-- scene 5 · close card -->
+  <div class="tw-scene" data-scene="4">
+  <div class="tw-sc-close">
+  <div class="tw-close-in" data-an="rise" style="--d:.1s">
+  <span class="tw-check" data-an="pop" style="--d:.4s" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg></span>
+  <p class="tw-close-line">Gate closed on every path. PR merged. The merge was yours.</p>
+  <div class="tw-metrics">
+  <span class="tw-metric tw-late" data-an="pop" style="--d:.8s"><span class="tw-mlabel">Cost</span><span class="tw-mval tw-mono">$0.87</span></span>
+  <span class="tw-metric tw-late" data-an="pop" style="--d:.95s"><span class="tw-mlabel">Duration</span><span class="tw-mval tw-mono">11m</span></span>
+  <span class="tw-metric tw-late" data-an="pop" style="--d:1.1s"><span class="tw-mlabel">Sandbox</span><span class="tw-mval tw-mono">reaped</span></span>
+  </div>
+  <p class="tw-close-sub tw-faint">Nothing ships on an agent&rsquo;s say-so.</p>
+  </div>
+  </div>
+  <p class="tw-note">Every run logs its <b>cost and duration</b> — the merge decision stays human.</p>
+  </div>
+  </div>
+  </div>
+
+  <!-- caption bar + controls -->
+  <div class="tw-capbar">
+  <p class="tw-cap" id="tw-cap"><strong>Open the task.</strong> Protocol says: open PR only, never merge, stop for human review.</p>
+  <span class="tw-count" id="tw-count">01 / 05</span>
+  <div class="tw-ctrl">
+  <button class="tw-cbtn" id="tw-prev" type="button" aria-label="Previous scene">
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+  </button>
+  <button class="tw-cbtn tw-play-t" id="tw-play" type="button" aria-label="Pause autoplay" aria-pressed="true">
+  <svg class="tw-ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 2.8v10.4c0 .6.65.97 1.17.66l8.2-5.2a.78.78 0 0 0 0-1.32l-8.2-5.2a.78.78 0 0 0-1.17.66z"/></svg>
+  <svg class="tw-ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1"/></svg>
+  </button>
+  <button class="tw-cbtn" id="tw-next" type="button" aria-label="Next scene">
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+  </button>
+  </div>
+  </div>
+
+  <!-- dot stepper -->
+  <nav class="tw-dots" id="tw-dots" role="group" aria-label="Demo scenes"></nav>
+  <span class="tw-track" aria-hidden="true"><span class="tw-track-fill" id="tw-track-fill"></span></span>
+  </div>
+
+  <style>
+  /* TASK/VERIFY CINEMATIC (tw-). Scoped .tw-. */
+  .tw-root {
+  --tw-ok: var(--success-text);
+  --tw-ok-soft: color-mix(in srgb, var(--success) 14%, transparent);
+  --tw-ok-bd: color-mix(in srgb, var(--success) 34%, transparent);
+  --tw-warn: var(--warning-text);
+  --tw-warn-soft: color-mix(in srgb, var(--warning-text) 15%, transparent);
+  --tw-vio: #9B78E6;
+  --tw-vio-soft: color-mix(in srgb, #9B78E6 16%, transparent);
+  --tw-crm: var(--accent-text);
+  --tw-crm-soft: var(--gold-soft);
+  padding: 96px 24px; background: var(--canvas); color: var(--text-primary); font-family: var(--font-sans);
+  }
+  .tw-head { max-width: 720px; margin: 0 auto 44px; text-align: center; }
+  .tw-eyebrow { font-family: var(--font-mono); font-size: 12px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; color: var(--accent-text); }
+  .tw-title { margin: 14px 0 14px; font-family: var(--font-serif); font-weight: 400; font-size: clamp(30px, 4vw, 46px); line-height: 1.08; letter-spacing: -.015em; color: var(--text-primary); }
+  .tw-title-em { font-style: italic; color: var(--accent-text); }
+  .tw-sub { font-size: 16px; line-height: 1.55; color: var(--text-secondary); max-width: 640px; margin: 0 auto; }
+  .tw-head, .tw-theater { opacity: 0; transform: translateY(26px); transition: opacity .9s cubic-bezier(.16,1,.3,1), transform .9s cubic-bezier(.16,1,.3,1); }
+  .tw-theater { transition-delay: .1s; }
+  .tw-root.tw-in .tw-head, .tw-root.tw-in .tw-theater { opacity: 1; transform: none; }
+
+  .tw-theater { max-width: 960px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-3xl); box-shadow: var(--shadow-float); overflow: hidden; }
+  .tw-theater:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+  .tw-chrome { display: flex; align-items: center; gap: 7px; padding: 12px 16px; background: var(--surface-subtle); border-bottom: 1px solid var(--border); }
+  .tw-dot3 { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .tw-url { margin-left: 10px; display: inline-flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary); }
+  .tw-url svg { width: 13px; height: 13px; color: var(--accent-strong); }
+  .tw-frame { display: block; }
+
+  .tw-stage { position: relative; overflow: hidden; min-height: 486px; background: radial-gradient(560px 300px at 84% -10%, var(--gold-soft), transparent 60%), var(--surface); }
+  .tw-scene { position: absolute; inset: 0; padding: 26px 30px 58px; opacity: 0; transform: translateX(26px); transition: opacity .38s cubic-bezier(.16,1,.3,1), transform .38s cubic-bezier(.16,1,.3,1); pointer-events: none; visibility: hidden; }
+  .tw-scene.tw-on { opacity: 1; transform: none; visibility: visible; }
+  .tw-scene.tw-bye { opacity: 0; transform: translateX(-22px); visibility: visible; }
+
+  .tw-capbar { display: flex; align-items: center; gap: 14px; padding: 13px 20px; background: var(--surface-subtle); border-top: 1px solid var(--border); }
+  .tw-cap { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-secondary); opacity: 1; transition: opacity .28s ease; }
+  .tw-cap strong { color: var(--text-primary); font-weight: 700; }
+  .tw-cap.tw-swap { opacity: 0; }
+  .tw-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+  .tw-ctrl { display: flex; align-items: center; gap: 6px; }
+  .tw-cbtn { all: unset; cursor: pointer; box-sizing: border-box; width: 32px; height: 32px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-tertiary); background: var(--surface); border: 1px solid var(--border-strong); transition: color .15s ease, border-color .15s ease, background .15s ease; }
+  .tw-cbtn:hover { color: var(--text-primary); border-color: var(--accent-strong); }
+  .tw-cbtn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+  .tw-cbtn svg { width: 14px; height: 14px; }
+  .tw-cbtn.tw-play-t[aria-pressed="true"] { color: var(--accent-text); border-color: var(--accent-strong); background: var(--gold-soft); }
+  .tw-cbtn .tw-ic-pause { display: none; }
+  .tw-cbtn.tw-play-t[aria-pressed="true"] .tw-ic-pause { display: block; }
+  .tw-cbtn.tw-play-t[aria-pressed="true"] .tw-ic-play { display: none; }
+
+  .tw-dots { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 14px 20px 6px; background: var(--surface-subtle); }
+  .tw-dot { all: unset; cursor: pointer; position: relative; width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); transition: background .2s ease, transform .2s ease; }
+  .tw-dot:hover { background: var(--text-tertiary); transform: scale(1.15); }
+  .tw-dot:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+  .tw-dot[aria-current="true"] { background: var(--accent-strong); transform: scale(1.15); }
+  .tw-dot .tw-tip { position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%); padding: 5px 9px; border-radius: 7px; white-space: nowrap; background: var(--text-primary); color: var(--surface); font-size: 11px; font-weight: 600; letter-spacing: -.005em; opacity: 0; pointer-events: none; transition: opacity .15s ease; box-shadow: var(--shadow-card); z-index: 5; }
+  .tw-dot:hover .tw-tip, .tw-dot:focus-visible .tw-tip { opacity: 1; }
+  .tw-track { display: block; height: 3px; margin: 8px 20px 16px; border-radius: 99px; background: var(--border); overflow: hidden; }
+  .tw-track-fill { display: block; height: 100%; width: 100%; border-radius: 99px; background: var(--accent-strong); transform: scaleX(0); transform-origin: left center; }
+
+  .tw-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-card); }
+  .tw-pane-h { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 700; color: var(--text-secondary); }
+  .tw-grow { flex: 1; }
+  .tw-mono { font-family: var(--font-mono); }
+  .tw-faint { color: var(--text-tertiary); font-weight: 500; }
+  .tw-pane-h .tw-mono { font-size: 10.5px; }
+  .tw-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 11px; line-height: 1; padding: 5px 10px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+  .tw-pill .tw-pdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .tw-p-crm { color: var(--tw-crm); background: var(--tw-crm-soft); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
+  .tw-p-crm .tw-pdot, .tw-p-warn .tw-pdot { animation: tw-pulse 2s infinite; }
+  .tw-p-ok { color: var(--tw-ok); background: var(--tw-ok-soft); border-color: var(--tw-ok-bd); }
+  .tw-p-warn { color: var(--tw-warn); background: var(--tw-warn-soft); border-color: color-mix(in srgb, var(--warning-text) 40%, transparent); }
+  .tw-p-idle { color: var(--text-tertiary); background: var(--surface-subtle); border-color: var(--border-strong); }
+  @keyframes tw-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .tw-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; color: var(--text-secondary); background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 7px; padding: 4px 9px; white-space: nowrap; }
+  .tw-chip-pri { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .tw-chip-proto { font-family: var(--font-mono); font-size: 9.5px; }
+  .tw-av { width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: var(--on-accent-strong); background: linear-gradient(135deg, var(--gold), var(--accent-strong)); }
+  .tw-av-sm { width: 18px; height: 18px; font-size: 9px; }
+  .tw-dadd { color: var(--tw-ok); font-family: var(--font-mono); font-size: 11px; font-weight: 700; }
+  .tw-ddel { color: var(--danger); font-family: var(--font-mono); font-size: 11px; font-weight: 700; }
+  .tw-note { position: absolute; left: 30px; right: 30px; bottom: 18px; font-size: 11.5px; line-height: 1.5; color: var(--text-tertiary); text-align: center; }
+  .tw-note b { color: var(--text-secondary); font-weight: 700; }
+  .tw-stack { position: relative; display: inline-grid; }
+  .tw-stack > * { grid-area: 1 / 1; }
+
+  @keyframes tw-rise { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: none; } }
+  @keyframes tw-slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+  @keyframes tw-pop { from { opacity: 0; transform: scale(.64); } to { opacity: 1; transform: none; } }
+  @keyframes tw-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes tw-gone { to { opacity: 0; transform: scale(.86); visibility: hidden; } }
+  @keyframes tw-press { 0%,100% { transform: none; } 45% { transform: scale(.95); filter: brightness(1.06); } }
+  .tw-scene.tw-play [data-an] { animation-delay: var(--d, 0s); animation-fill-mode: both; }
+  .tw-scene.tw-play [data-an="rise"] { animation: tw-rise .55s cubic-bezier(.16,1,.3,1) both; }
+  .tw-scene.tw-play [data-an="slide"] { animation: tw-slide .5s cubic-bezier(.16,1,.3,1) both; }
+  .tw-scene.tw-play [data-an="pop"] { animation: tw-pop .42s cubic-bezier(.16,1,.3,1) both; }
+  .tw-scene.tw-play [data-an="fade"] { animation: tw-fade .5s ease both; }
+  .tw-scene.tw-play [data-an="gone"] { animation: tw-gone .4s ease both; }
+  .tw-scene.tw-play [data-an="press"] { animation: tw-press .5s ease both; }
+  .tw-swap-in { opacity: 0; visibility: hidden; }
+  .tw-scene.tw-play .tw-swap-in { opacity: 1; visibility: visible; }
+
+  .tw-scene > div { padding-bottom: 34px; display: grid; height: 100%; }
+  .tw-sc-detail { grid-template-columns: 232px 1fr; gap: 18px; }
+  .tw-tasks { overflow: hidden; align-self: stretch; }
+  .tw-tgroup { padding: 9px 14px 5px; font-size: 10px; font-weight: 700; letter-spacing: .07em; color: var(--text-tertiary); }
+  .tw-lrow { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 11.5px; color: var(--text-secondary); border-left: 2px solid transparent; }
+  .tw-lrow.tw-sel { background: var(--tw-crm-soft); border-left-color: var(--accent-strong); color: var(--text-primary); font-weight: 600; }
+  .tw-lrow.tw-dim { opacity: .6; }
+  .tw-lgrow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tw-pri { font-family: var(--font-mono); font-size: 9px; font-weight: 800; padding: 2px 5px; border-radius: 5px; flex: none; }
+  .tw-pri-1 { color: var(--danger); background: color-mix(in srgb, var(--danger) 16%, transparent); }
+  .tw-pri-2 { color: var(--tw-warn); background: var(--tw-warn-soft); }
+  .tw-pri-3 { color: var(--text-tertiary); background: var(--surface-subtle); }
+  .tw-detail { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .tw-detail-h { align-items: flex-start; }
+  .tw-dtitle { font-size: 13px; line-height: 1.4; color: var(--text-primary); }
+  .tw-chiprow { display: flex; flex-wrap: wrap; gap: 6px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .tw-desc { padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .tw-desc-p { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--text-secondary); }
+  .tw-dod { padding: 11px 14px; border-bottom: 1px solid var(--border); border-left: 3px solid var(--accent-strong); background: var(--tw-crm-soft); }
+  .tw-dod-h { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-text); margin-bottom: 4px; }
+  .tw-dod-p { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--text-secondary); }
+  .tw-protocol { padding: 11px 14px 13px; }
+  .tw-proto-h { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }
+  .tw-proto-h svg { width: 14px; height: 14px; color: var(--accent-strong); }
+  .tw-proto-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; font-size: 11px; line-height: 1.5; border-top: 1px solid var(--border); }
+  .tw-proto-k { flex: none; width: 96px; font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; color: var(--text-tertiary); }
+  .tw-proto-v { color: var(--text-secondary); }
+
+  .tw-sc-run { align-items: center; }
+  .tw-runpane { width: min(560px, 100%); margin: 0 auto; overflow: hidden; }
+  .tw-term { --tb: #17130E; --tf: #D8CFBE; --tm: #9C9284; --tcm: #E7C368; --tok: #4ADE80; --twn: #FBBF24; background: var(--tb); padding: 14px 16px; overflow: hidden; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.9; color: var(--tf); }
+  .tw-term .tw-tl { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tw-term .tw-tp, .tw-term .tw-tmut { color: var(--tm); }
+  .tw-term .tw-tc { color: var(--tcm); }
+  .tw-term .tw-tg { color: var(--tok); }
+  .tw-term .tw-tw { color: var(--twn); }
+  .tw-diffdrop { margin-top: 10px; border-top: 1px solid #3A3226; padding-top: 10px; }
+  .tw-diffdrop summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; font-family: var(--font-sans); font-size: 11px; font-weight: 700; color: var(--tcm); }
+  .tw-diffdrop summary::-webkit-details-marker { display: none; }
+  .tw-diffdrop summary::before { content: "▸"; font-size: 9px; transition: transform .15s ease; }
+  .tw-diffdrop[open] summary::before { transform: rotate(90deg); }
+  .tw-diffdrop .tw-mono.tw-faint { color: var(--tm); font-weight: 500; }
+  .tw-diffbody { margin-top: 8px; border-radius: 8px; overflow: hidden; background: color-mix(in srgb, #000 22%, var(--tb)); font-size: 10.8px; line-height: 1.6; }
+  .tw-dl { display: flex; align-items: stretch; }
+  .tw-ln { flex: none; width: 26px; padding: 1px 6px 1px 0; text-align: right; color: var(--tm); opacity: .7; user-select: none; }
+  .tw-ln.tw-e { color: transparent; }
+  .tw-dsign { flex: none; width: 14px; text-align: center; color: var(--tm); }
+  .tw-dcode { flex: 1; min-width: 0; padding-right: 10px; color: var(--tf); white-space: pre; overflow-x: auto; }
+  .tw-dl.tw-del { background: rgba(255,107,107,.14); }
+  .tw-dl.tw-del .tw-dsign { color: #FF6B6B; }
+  .tw-dl.tw-add { background: rgba(74,222,128,.14); }
+  .tw-dl.tw-add .tw-dsign { color: var(--tok); }
+  .tw-kw { color: #C4A6F5; }
+  .tw-str { color: var(--tok); }
+  .tw-num { color: var(--tcm); }
+  .tw-cmt { color: var(--tm); font-style: italic; }
+
+  .tw-sc-pr { place-items: center; gap: 14px; }
+  .tw-pr { width: min(520px, 100%); }
+  .tw-pr-h { align-items: flex-start; }
+  .tw-pr-ic { width: 26px; height: 26px; border-radius: 7px; flex: none; display: grid; place-items: center; margin-top: 1px; }
+  .tw-pr-ic svg { width: 15px; height: 15px; }
+  .tw-pr-ic.tw-open { background: var(--tw-ok-soft); color: var(--tw-ok); border: 1px solid var(--tw-ok-bd); }
+  .tw-prtitle-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .tw-pr-title { font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.35; }
+  .tw-pr-title .tw-prnum { color: var(--text-tertiary); font-weight: 500; }
+  .tw-pr-meta { font-size: 11px; color: var(--text-tertiary); line-height: 1.5; }
+  .tw-pr-meta .tw-mono { font-size: 10.5px; color: var(--text-secondary); }
+  .tw-botpill { display: inline-flex; align-items: center; gap: 5px; flex: none; margin-top: 1px; font-size: 10px; font-weight: 700; color: var(--tw-vio); background: var(--tw-vio-soft); border: 1px solid color-mix(in srgb, var(--tw-vio) 40%, transparent); border-radius: 999px; padding: 3px 8px 3px 6px; }
+  .tw-botpill svg { width: 12px; height: 12px; }
+  .tw-pr-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 9px; }
+  .tw-pr-note { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--text-secondary); }
+  .tw-prcheck { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--text-secondary); background: var(--tw-ok-soft); border: 1px solid color-mix(in srgb, var(--success) 30%, transparent); border-radius: 10px; padding: 9px 12px; }
+  .tw-prcheck > svg { width: 13px; height: 13px; color: var(--tw-ok); flex: none; }
+  .tw-flipcard { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card); }
+  .tw-flip-t { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+
+  .tw-sc-verify { place-items: center; }
+  .tw-verify { width: min(460px, 100%); }
+  .tw-vrows { padding: 12px 14px 4px; display: flex; flex-direction: column; gap: 8px; }
+  .tw-vrow { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--text-secondary); background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; }
+  .tw-vrow > svg { width: 14px; height: 14px; color: var(--tw-ok); flex: none; }
+  .tw-revrow { display: inline-flex; align-items: center; gap: 8px; }
+  .tw-revrow b { color: var(--text-primary); }
+  .tw-vfoot { padding: 6px 14px 16px; }
+  .tw-mergebtn { display: block; text-align: center; width: 100%; background: #238636; color: #fff; font-size: 12.5px; font-weight: 700; padding: 9px 14px; border-radius: 8px; }
+  .tw-mergebtn.tw-merged { background: var(--tw-vio); }
+
+  .tw-sc-close { place-items: center; text-align: center; }
+  .tw-close-in { max-width: 420px; }
+  .tw-check { display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; background: var(--tw-ok-soft); color: var(--tw-ok); border: 1px solid var(--tw-ok-bd); margin-bottom: 16px; }
+  .tw-check svg { width: 22px; height: 22px; }
+  .tw-close-line { font-family: var(--font-serif); font-weight: 400; font-size: 21px; line-height: 1.3; letter-spacing: -.01em; color: var(--text-primary); }
+  .tw-metrics { display: flex; justify-content: center; gap: 10px; margin: 20px 0 12px; flex-wrap: wrap; }
+  .tw-metric { display: flex; flex-direction: column; gap: 3px; align-items: center; padding: 10px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card); }
+  .tw-mlabel { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+  .tw-mval { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+  .tw-close-sub { font-size: 12px; }
+
+  @media (max-width: 720px) {
+  .tw-root { padding: 72px 14px; }
+  .tw-scene { padding: 20px 16px 54px; }
+  .tw-stage { min-height: 560px; }
+  .tw-sc-detail { grid-template-columns: 1fr; gap: 10px; overflow-y: auto; }
+  .tw-tasks { max-height: 150px; overflow-y: auto; }
+  .tw-capbar { flex-wrap: wrap; gap: 10px 14px; }
+  .tw-cap { flex: 1 1 100%; order: 3; font-size: 12.5px; }
+  .tw-count { order: 1; }
+  .tw-ctrl { order: 2; margin-left: auto; }
+  .tw-note { left: 16px; right: 16px; bottom: 12px; font-size: 11px; }
+  .tw-proto-row { flex-direction: column; gap: 2px; }
+  .tw-proto-k { width: auto; }
+  }
+  @media (max-width: 420px) {
+  .tw-stage { min-height: 600px; }
+  .tw-diffbody { font-size: 10px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+  .tw-head, .tw-theater { opacity: 1; transform: none; transition: none; }
+  .tw-scene { transition: none; }
+  .tw-pill.tw-p-crm .tw-pdot, .tw-pill.tw-p-warn .tw-pdot { animation: none; }
+  .tw-cbtn.tw-play-t { display: none; }
+  }
+  </style>
+
+  <script>
+  /* Cinematic player. Self-init guard for multi-chapter pages. */
+  (function () {
+  "use strict";
+  if (window.__twInit) return;
+  window.__twInit = true;
+
+  var STEPS = [
+  { ms: 7400, cap: "<strong>Open the task.</strong> Protocol says: open PR only, never merge, stop for human review.",
+  title: "Task + protocol", aria: "Task detail with description, definition of done, and protocol card" },
+  { ms: 8200, cap: "<strong>The agent works.</strong> Failing tests, an edit, a green suite — the diff renders inline.",
+  title: "Run stream", aria: "Run stream with failing then passing tests and an inline diff" },
+  { ms: 7000, cap: "<strong>PR opened.</strong> The task flips to needs_verification — agents never self-certify.",
+  title: "PR opened", aria: "Bot pull request; task card flips to needs verification" },
+  { ms: 7600, cap: "<strong>Reviewer, then you.</strong> A fresh-session review passes; you click Verify.",
+  title: "Verify & merge", aria: "Reviewer approval, then a human verifying and merging the PR" },
+  { ms: 6800, cap: "<strong>Closed out.</strong> Cost, duration, and a reaped sandbox — the merge was yours.",
+  title: "Close", aria: "Closing summary with the run's cost, duration, and sandbox status" }
+  ];
+  var N = STEPS.length;
+  var root = document.getElementById("task-verify");
+  var theater = document.getElementById("tw-theater");
+  var stage = document.getElementById("tw-stage");
+  var scenes = stage.querySelectorAll(".tw-scene");
+  var capEl = document.getElementById("tw-cap");
+  var countEl = document.getElementById("tw-count");
+  var playBtn = document.getElementById("tw-play");
+  var trackFill = document.getElementById("tw-track-fill");
+  var dotsWrap = document.getElementById("tw-dots");
+
+  var dots = [];
+  for (var i = 0; i < N; i++) {
+  var b = document.createElement("button");
+  b.type = "button";
+  b.className = "tw-dot";
+  b.setAttribute("aria-label", "Scene " + (i + 1) + ": " + STEPS[i].title);
+  var tip = document.createElement("span");
+  tip.className = "tw-tip";
+  tip.textContent = STEPS[i].title;
+  b.appendChild(tip);
+  dotsWrap.appendChild(b);
+  dots.push(b);
+  }
+
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var qs      = new URLSearchParams(location.search);
+
+  var cur = 0, elapsed = 0;
+  var userPaused = reduced || qs.get("twpaused") === "1";
+  var inView = false;
+  var raf = null, lastT = 0;
+
+  function playing() { return !userPaused && !reduced && inView && !document.hidden; }
+  function pad(n) { return (n + 1 < 10 ? "0" : "") + (n + 1); }
+
+  function paintDots() {
+  for (var i = 0; i < N; i++) {
+  dots[i].setAttribute("aria-current", i === cur ? "true" : "false");
+  }
+  }
+
+  function setScene(i) {
+  var old = cur;
+  cur = ((i % N) + N) % N;
+  if (scenes[old] && old !== cur) {
+  scenes[old].classList.remove("tw-on", "tw-play");
+  scenes[old].classList.add("tw-bye");
+  (function (el) { setTimeout(function () { el.classList.remove("tw-bye"); }, 420); })(scenes[old]);
+  }
+  var sc = scenes[cur];
+  sc.classList.add("tw-on");
+  if (!reduced) {
+  sc.classList.remove("tw-play");
+  void sc.offsetWidth;
+  sc.classList.add("tw-play");
+  }
+  elapsed = 0;
+  trackFill.style.transform = reduced ? "scaleX(1)" : "scaleX(0)";
+  paintDots();
+  countEl.textContent = pad(cur) + " / " + pad(N - 1);
+  stage.setAttribute("aria-label", "Animated preview: " + STEPS[cur].aria);
+  capEl.classList.add("tw-swap");
+  setTimeout(function () { capEl.innerHTML = STEPS[cur].cap; capEl.classList.remove("tw-swap"); }, 160);
+  }
+
+  function tick(t) {
+  raf = null;
+  if (playing()) {
+  var dt = lastT ? Math.min(t - lastT, 100) : 0;
+  lastT = t;
+  elapsed += dt;
+  var p = elapsed / STEPS[cur].ms;
+  if (p >= 1) { setScene(cur + 1); }
+  else { trackFill.style.transform = "scaleX(" + p.toFixed(4) + ")"; }
+  raf = requestAnimationFrame(tick);
+  } else {
+  lastT = 0;
+  }
+  }
+
+  function sync() {
+  playBtn.setAttribute("aria-pressed", userPaused ? "false" : "true");
+  playBtn.setAttribute("aria-label", userPaused ? "Resume autoplay" : "Pause autoplay");
+  if (playing() && raf === null) raf = requestAnimationFrame(tick);
+  }
+
+  function jump(i) { userPaused = true; setScene(i); sync(); }
+
+  dots.forEach(function (b, i) {
+  b.addEventListener("click", function () { if (i !== cur) jump(i); else { setScene(i); sync(); } });
+  });
+  document.getElementById("tw-prev").addEventListener("click", function () { jump(cur - 1); });
+  document.getElementById("tw-next").addEventListener("click", function () { jump(cur + 1); });
+  playBtn.addEventListener("click", function () { userPaused = !userPaused; sync(); });
+  theater.addEventListener("keydown", function (e) {
+  if (e.key === "ArrowLeft")  { e.preventDefault(); jump(cur - 1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); jump(cur + 1); }
+  });
+
+  function onScreen(el, slack) {
+  var r = el.getBoundingClientRect();
+  var vh = window.innerHeight || document.documentElement.clientHeight;
+  return r.top < vh * (slack || 1) && r.bottom > 0;
+  }
+  inView = onScreen(theater);
+  if ("IntersectionObserver" in window) {
+  new IntersectionObserver(function (entries) {
+  inView = entries[0].isIntersecting; sync();
+  }, { threshold: 0.3 }).observe(theater);
+  }
+  window.addEventListener("load", function () { inView = onScreen(theater); sync(); });
+  window.addEventListener("scroll", function () { inView = onScreen(theater); reveal(); sync(); }, { passive: true });
+  document.addEventListener("visibilitychange", sync);
+
+  function reveal() { if (onScreen(root, 0.92)) { root.classList.add("tw-in"); return true; } return false; }
+  if (reduced || !("IntersectionObserver" in window)) { root.classList.add("tw-in"); }
+  else if (!reveal()) {
+  var rev = new IntersectionObserver(function (entries) {
+  if (entries[0].isIntersecting) { root.classList.add("tw-in"); rev.disconnect(); }
+  }, { threshold: 0.12 });
+  rev.observe(root);
+  window.addEventListener("load", reveal, { once: true });
+  }
+
+  var s0 = parseInt(qs.get("twstep") || "0", 10);
+  if (!(s0 >= 0 && s0 < N)) s0 = 0;
+  scenes[0].classList.remove("tw-on");
+  setScene(s0);
+  sync();
+  })();
+  </script>
+</section>

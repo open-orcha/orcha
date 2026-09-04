@@ -78,6 +78,12 @@
 .av.lg.human { border-radius: 50%; box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 4.5px var(--amber); }
 .av.sm { width: 24px; height: 24px; border-radius: 8px; font-size: 11px; }
 .av.sm.human { border-radius: 50%; box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 2.5px var(--amber); }
+/* collab v1: a GitHub avatar image over the letter tile (which stays as the
+   error fallback — ghAvatar() removes the img onerror). Scoped to .av.gh so the
+   base tile is untouched. */
+.av.gh { position: relative; overflow: hidden; }
+.av.gh .gh-face { position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: inherit; }
 
 /* cards */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 15px;
@@ -133,6 +139,12 @@
 .tag.model { font-family: "JetBrains Mono", monospace; font-size: 10.5px; }
 .tag.wake-on { color: var(--ok); border-color: var(--ok-line); background: var(--ok-soft); }
 .tag.wake-off { color: var(--idle); }
+/* collab v1: member-role chips + the invited-but-never-seen badge */
+.tag.role-owner { color: var(--amber); border-color: var(--warn-line); background: var(--warn-soft); }
+.tag.role-member { color: var(--muted); }
+.tag.mem-pending { color: var(--info); border-color: var(--info-line); background: var(--info-soft); }
+/* collab v1: "review: <login>" marker on someone else's verification item */
+.tag.review-for { color: var(--violet); border-color: var(--violet-line); background: var(--violet-soft); }
 
 /* deeplink chip */
 .dlink { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12.5px;
@@ -148,6 +160,14 @@
   padding: 0 2px; transition: background .12s ease; }
 .tref:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); text-decoration: underline; text-underline-offset: 2px; }
 .lnk:hover { text-decoration-thickness: 2px; }
+/* portal-wide PR/issue-link rewrite (modules/app-text.js rewriteGithubLinks):
+   .gh-pr-link is the rewritten internal /github?pr=N|issue=N hop — same .lnk
+   look, so it reads identically to any other authored link; .gh-pr-ext is the
+   small secondary "↗ open on GitHub" affix that preserves the original URL,
+   deliberately quieter (no underline, faint until hover) so it doesn't compete
+   with the primary link for attention. */
+.gh-pr-ext { display: inline-block; margin-left: 1px; color: var(--faint); text-decoration: none; font-size: 11px; }
+.gh-pr-ext:hover { color: var(--accent); }
 
 /* mono id pill */
 .idpill { display: inline-flex; align-items: center; gap: 8px; background: var(--surface-2);
@@ -182,3 +202,62 @@
    ========================================================================== */
 .thread { display: flex; flex-direction: column; gap: 16px; }
 .msg { display: flex; gap: 12px; }
+
+/* ---- files-changed viewer (dfv): tree sidebar + per-file diff pane ------ */
+.dfv { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.dfv .a { color: var(--diff-add); } .dfv .d { color: var(--diff-del); }
+.dfv-top { display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); font-size: 12px; background: var(--surface-2); }
+.dfv-top .dfv-n { color: var(--text-2); font-weight: 600; }
+.dfv-body { display: flex; align-items: stretch; max-height: 460px; }
+.dfv-side { width: 230px; min-width: 170px; flex: none; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: var(--surface); }
+.dfv-filter { margin: 8px; padding: 6px 10px; font: inherit; font-size: 12.5px; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; outline: none; }
+.dfv-filter:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.dfv-tree { overflow: auto; flex: 1; padding-bottom: 6px; }
+.dfv-r { display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 10px; cursor: pointer;
+  font-size: 12.5px; color: var(--text-2); user-select: none; min-width: 0; }
+.dfv-r:hover { background: var(--hover); }
+.dfv-r .dfv-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dfv-r.dfv-f.on { background: var(--accent-soft); color: var(--text); }
+.dfv-r .dfv-i { flex: none; color: var(--faint); }
+.dfv-dir .dfv-i { color: var(--muted); }
+.dfv-c { flex: none; width: 10px; font-size: 10px; color: var(--faint); }
+.dfv-ct { margin-left: auto; font-size: 11px; color: var(--faint); }
+.dfv-b { margin-left: auto; flex: none; font-family: "JetBrains Mono", monospace; font-size: 10.5px;
+  font-weight: 700; line-height: 1; padding: 2px 5px; border-radius: 5px; }
+.dfv-b.M { color: var(--warn);   background: var(--warn-soft); }
+.dfv-b.A { color: var(--ok);     background: var(--ok-soft); }
+.dfv-b.D { color: var(--danger); background: var(--danger-soft); }
+.dfv-b.R { color: var(--info);   background: var(--info-soft); }
+.dfv-main { flex: 1; min-width: 0; overflow: auto; }
+.dfv-ph { display: flex; align-items: center; gap: 12px; padding: 7px 12px; font-size: 11.5px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.dfv-ph .dfv-path { color: var(--text-2); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dfv-code { font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.55; }
+.dfv-code .dl { white-space: pre; padding: 0 12px; }
+.dfv-code .dl.meta { color: var(--faint); }
+.dfv-code .dl.hunk { color: var(--diff-hunk); background: var(--diff-hunk-bg); }
+.dfv-code .dl.add { color: var(--diff-add); background: var(--diff-add-bg); }
+.dfv-code .dl.del { color: var(--diff-del); background: var(--diff-del-bg); }
+@media (max-width: 720px) {
+  .dfv-body { flex-direction: column; max-height: none; }
+  .dfv-side { width: 100%; max-height: 200px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .dfv-main { max-height: 380px; }
+}
+
+
+/* ---- dfv full-view (2026-08-30): expand the diff widget to a fixed overlay,
+   collapse back with the same button or Esc. */
+.dfv-max { margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--border);
+  background: none; color: var(--muted); cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s; }
+.dfv-max:hover { color: var(--text); border-color: var(--border-2); background: var(--hover); }
+.dfv.dfv-full { position: fixed; inset: 12px; z-index: 90; display: flex; flex-direction: column;
+  box-shadow: 0 24px 80px -24px rgba(0,0,0,.6); }
+.dfv.dfv-full .dfv-body { flex: 1; min-height: 0; max-height: none; }
+.dfv.dfv-full .dfv-side { max-height: none; }
+.dfv.dfv-full .dfv-tree { max-height: none; flex: 1; }
+.dfv.dfv-full .dfv-main { max-height: none; overflow: auto; }

@@ -24,6 +24,7 @@ def run_row(row: dict) -> dict:
         "worktree": row.get("worktree"),
         "branch": row.get("branch"),
         "base_cwd": row.get("base_cwd"),
+        "sandbox_container_id": row.get("sandbox_container_id"),
         "output": row["output"],
         "diff": row.get("diff"),
         "kill_reason": row.get("kill_reason"),

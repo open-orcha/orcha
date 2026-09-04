@@ -57,6 +57,27 @@ def register_project_commands(
         default=None,
         help="alias for the first human agent (default: $USER or 'operator')",
     )
+    # PR attribution (docs/agent-prs.md): optional GitHub identity for the first human,
+    # so agent-opened PRs on tasks they trigger @mention them and carry a
+    # Co-authored-by trailer. Nullable/back-compat — omit and PRs attribute by alias.
+    init.add_argument(
+        "--github",
+        dest="github_login",
+        default=None,
+        help="the first human's GitHub username (for attributing agent-opened PRs)",
+    )
+    init.add_argument(
+        "--git-email",
+        dest="git_email",
+        default=None,
+        help="the first human's git commit email (for the Co-authored-by trailer)",
+    )
+    init.add_argument(
+        "--no-github",
+        action="store_true",
+        help="skip the GitHub auto-bind (by default, a github.com `origin` remote in "
+        "this checkout is bound to the new container automatically)",
+    )
     init.set_defaults(func=handlers["init"])
 
     up = sub.add_parser(
@@ -98,6 +119,13 @@ def register_project_commands(
         "re-copy portal/migrations/skills, rebuild portal) WITHOUT a data wipe. Use after a "
         "CLI reinstall so an existing project gets new portal code + compose (e.g. the R1 "
         "migration runner); then `orcha up`/startup migrates the live volume.",
+    )
+    upgrade.add_argument(
+        "--allow-downgrade",
+        action="store_true",
+        help="override the downgrade guard: re-copy templates even when this CLI is OLDER "
+        "than the project (project's migration tip above the CLI's). Without this flag, "
+        "an outdated CLI refuses rather than silently downgrading the portal.",
     )
     upgrade.set_defaults(func=handlers["upgrade"])
 
@@ -143,5 +171,18 @@ def register_project_commands(
         dest="as_user",
         default=None,
         help="register an additional human (kind='human') with this alias in one step",
+    )
+    # PR attribution: optional GitHub identity carried alongside --as (see init --github).
+    connect.add_argument(
+        "--github",
+        dest="github_login",
+        default=None,
+        help="the human's GitHub username (for attributing agent-opened PRs)",
+    )
+    connect.add_argument(
+        "--git-email",
+        dest="git_email",
+        default=None,
+        help="the human's git commit email (for the Co-authored-by trailer)",
     )
     connect.set_defaults(func=handlers["connect"])

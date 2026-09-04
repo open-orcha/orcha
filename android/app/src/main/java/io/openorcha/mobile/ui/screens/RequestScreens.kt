@@ -24,9 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -70,6 +67,7 @@ import io.openorcha.mobile.ui.components.PrimaryButton
 import io.openorcha.mobile.ui.components.RequestStatusPill
 import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.TonalButton
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -106,12 +104,12 @@ fun RequestDetailScreen(
     var confirmOwnerClose by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = p.bg,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 title = { Text("Request") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
                 actions = {
                     if (req != null) {
                         // Escalate is the only overflow action left — Nudge + Close now live in
@@ -119,7 +117,7 @@ fun RequestDetailScreen(
                         // "Triage-close" is retired; a stale request is closed with a reason.
                         val isRequester = req.requesterId == humanId
                         if (req.status in setOf("open", "answered") && isRequester) {
-                            IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                            IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More") }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                 DropdownMenuItem(text = { Text("Escalate") }, onClick = { menuOpen = false; onEscalate(null) })
                             }

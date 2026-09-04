@@ -1,0 +1,29 @@
+/* ORCHA CLOUD appearance section.
+ * The skin picker block is carried VERBATIM from the vanilla
+ * pages/settings.css ("appearance / design picker — browser-local, applies
+ * instantly"); the theme-seg rules style the cloud theme choice the same way
+ * the vanilla settings tabs restyled the shared .aut/.seg pill group. */
+
+.skin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .skin-grid { grid-template-columns: 1fr; } }
+.skin-tile { text-align: left; cursor: pointer; font: inherit; color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+  padding: 14px 15px; transition: border-color .15s ease; }
+.skin-tile:hover { border-color: var(--accent-line); }
+.skin-tile.on { border-color: var(--accent); box-shadow: var(--ring); }
+.skin-tile .sw { display: flex; gap: 5px; margin-bottom: 11px; }
+.skin-tile .sw i { width: 20px; height: 20px; border: 1px solid rgba(0,0,0,.25); display: block; }
+.skin-tile[data-skin="classic"] .sw i { border-radius: 6px; }
+.skin-tile[data-skin="swiss"] .sw i { border-radius: 0 !important; }
+.skin-tile[data-skin="minimal"] .sw i { border-radius: 999px; }
+.skin-tile[data-skin="gold"] .sw i { border-radius: 4px; }
+.skin-tile .nm { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 660; }
+.skin-tile .nm svg { width: 15px; height: 15px; color: var(--accent); margin-left: auto; flex: none; }
+.skin-tile .ds { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+
+/* theme choice (auto / dark / light) — reuses the shared .aut/.seg pill group
+   exactly like the vanilla .set-tabs did, active pill lit in the accent tone. */
+.theme-row { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+.theme-row .theme-lab { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
+.theme-seg .seg { cursor: pointer; }
+.theme-seg .seg.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }

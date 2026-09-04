@@ -965,6 +965,112 @@ def test_format_persona_always_injects_human_comms_guardrail():
     assert "No bare UUIDs" in out
 
 
+def test_format_persona_always_injects_multi_human_steering():
+    """Project-runtime epic: every wake that boots AS an agent carries the multi-human
+    conflict rules — owner > member, DoD > chat, explicit overrides, escalate genuine
+    contradictions via a request to the owner rather than silently picking a side."""
+    out = notifier.format_persona({"system_prompt": "You are Tim."}, None)
+    assert "Multi-human steering" in out
+    assert "owner's instructions outrank a member's" in out
+    assert "definition-of-done outranks chat steering" in out
+    assert "following X's direction over Y's earlier note" in out
+    assert "file an Orcha request addressed to the owner" in out
+    assert "pause that thread of work" in out
+    assert "Chat guidance is advisory" in out
+    # like the comms guardrail, it rides on the PERSONA — never on a persona-less render
+    assert "Multi-human steering" not in notifier.format_persona(
+        None, {"digest": {"current_focus": "X"}})
+
+
+def test_multi_human_steering_rides_conversation_lane_too():
+    """The conversation responder gets the same conflict rules — chat is exactly where
+    contradictory human steering shows up first."""
+    out = notifier.format_persona(
+        {"system_prompt": "You are Tim."}, None, lane="conversation")
+    assert "Multi-human steering" in out
+    assert "conversation responder" in out
+    # steering block stays in the stable prefix: ahead of the volatile digest sections
+    out2 = notifier.format_persona(
+        {"system_prompt": "You are Tim."},
+        {"digest": {"current_focus": "wake epic"}})
+    assert out2.index("Multi-human steering") < out2.index("Where you left off")
+
+
+# ---------- Agent→PR: repo-workflow guidance (docs/agent-prs.md) ----------
+
+def _repo_workspace(root):
+    """A workspace that looks repo-credentialed: git checkout + rotating token file."""
+    (root / ".git").mkdir()
+    (root / ".orcha").mkdir()
+    (root / ".orcha" / "github-token").write_text("ghs_fake")
+    return root
+
+
+def test_format_persona_repo_workflow_rides_on_credentialed_workspace(tmp_path):
+    """Agent→PR (docs/agent-prs.md): a workspace with a cloned repo + bot token gets the
+    standing branch→PR contract — never the default branch, orcha/<task-slug> branches,
+    push, `gh pr create`, and merge stays human."""
+    ws = _repo_workspace(tmp_path)
+    out = notifier.format_persona({"system_prompt": "You are Tim."}, None, workdir=str(ws))
+    assert "Working with the repository" in out
+    assert "NEVER commit to the default branch" in out
+    assert "orcha/<task-slug>" in out
+    assert "git push -u origin" in out
+    assert "gh pr create" in out
+    assert "Merging is ALWAYS a human decision" in out
+    assert "a human reviews it" in out
+
+
+def test_format_persona_repo_workflow_gated_out_without_credentials(tmp_path):
+    """The block is workspace-gated: bare dir, repo-without-token (plain local project),
+    and token-without-repo (unbound provisioned workspace) all render WITHOUT it."""
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    out = notifier.format_persona({"system_prompt": "P"}, None, workdir=str(bare))
+    assert "Working with the repository" not in out
+
+    repo_only = tmp_path / "repo-only"
+    repo_only.mkdir()
+    (repo_only / ".git").mkdir()
+    out = notifier.format_persona({"system_prompt": "P"}, None, workdir=str(repo_only))
+    assert "Working with the repository" not in out
+
+    token_only = tmp_path / "token-only"
+    token_only.mkdir()
+    (token_only / ".orcha").mkdir()
+    (token_only / ".orcha" / "github-token").write_text("ghs_fake")
+    out = notifier.format_persona({"system_prompt": "P"}, None, workdir=str(token_only))
+    assert "Working with the repository" not in out
+
+    # like the other standing blocks it rides the PERSONA, never a persona-less render
+    full = tmp_path / "full"
+    full.mkdir()
+    ws = _repo_workspace(full)
+    persona_less = notifier.format_persona(None, {"digest": {"current_focus": "X"}},
+                                           workdir=str(ws))
+    assert "Working with the repository" not in persona_less
+
+
+def test_format_persona_repo_workflow_defaults_to_cwd(tmp_path, monkeypatch):
+    """No workdir arg → the gate checks cwd, which is the workspace root for the daemon
+    (provision-projects.sh starts the notifier with `cd <ws>`)."""
+    _repo_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    out = notifier.format_persona({"system_prompt": "P"}, None)
+    assert "Working with the repository" in out
+
+
+def test_format_persona_repo_workflow_stays_in_stable_prefix(tmp_path):
+    """GH #34: the block is stable per-workspace, so it renders with the other standing
+    sections — after multi-human steering, ahead of the volatile digest tail."""
+    ws = _repo_workspace(tmp_path)
+    out = notifier.format_persona({"system_prompt": "P"},
+                                  {"digest": {"current_focus": "wake epic"}},
+                                  workdir=str(ws))
+    assert out.index("Multi-human steering") < out.index("Working with the repository")
+    assert out.index("Working with the repository") < out.index("Where you left off")
+
+
 def test_format_persona_surfaces_audience_register_ahead_of_facts():
     """#325: the digest's `audience` slice renders as 'Who you're talking to', and lands
     BEFORE the 'Where you left off' facts so the conversational register frames the work."""
@@ -1366,6 +1472,9 @@ def test_ensure_daemon_refuses_cross_worktree_duplicate(monkeypatch, tmp_path):
     # shelling out to a real `ps` (whose subprocess.run would also trip the Popen spy below).
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 77777)
     monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: pid == 77777)
+    # ISS-22 r3: the SERVING-lane claim check goes through _daemon_pid_healthy now
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == 77777)
     spawned = []
     monkeypatch.setattr(notifier.subprocess, "Popen",
                         lambda *a, **k: spawned.append(a))
@@ -1503,6 +1612,13 @@ def test_claim_container_atomic_single_winner(monkeypatch, tmp_path):
     # (not a "notifier") on our own pid and reject it as foreign, so the loser would wrongly re-win.
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == notifier.os.getpid())
     monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: pid == notifier.os.getpid())
+    # ISS-22 r3: the loser's claim vet goes through `daemon_running_for_container`, whose
+    # SERVING-lane check is `_daemon_pid_healthy` now. Left unmocked, the real check reads
+    # pytest (no heartbeat, not a "notifier" in ps) as a WEDGED daemon and — because
+    # `_daemon_pid_live` is mocked live above — `_terminate_and_wait` SIGTERMs the claim's
+    # pid, which is pytest's own: the whole test session self-terminates (exit 143).
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == notifier.os.getpid())
     won1, holder1 = notifier._claim_container("cid-1")
     assert won1 is True and holder1 is None                  # first claimer wins
     won2, holder2 = notifier._claim_container("cid-1")
@@ -1520,6 +1636,13 @@ def test_stop_daemon_clears_container_claim(monkeypatch, tmp_path):
     killed = []
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 88888 and 88888 not in killed)
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
+    # ISS-22 r3: `daemon_running` now health-vets the pidfile pid via `_daemon_pid_healthy`
+    # (heartbeat-primary, fail-closed). Left unmocked, the real check reads fake pid 88888
+    # as a WEDGED daemon, so `daemon_running` reaps it itself and returns None — and
+    # stop_daemon reports False ("nothing to stop"). Model the docstring's premise — a
+    # genuinely RUNNING daemon — so the test still proves stop_daemon's own teardown path.
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == 88888 and 88888 not in killed)
     assert notifier.stop_daemon(wt, quiet=True) is True
     assert not (gdir / "notifier-cid-1.pid").exists()
 
@@ -1619,6 +1742,9 @@ def test_stop_daemon_stops_cross_worktree_daemon(monkeypatch, tmp_path):
     (gdir / "notifier-cid-1.pid").write_text(f"77777\n{wt_a}")   # A's daemon, alive
     killed = []
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 77777 and 77777 not in killed)
+    # ISS-22 r3: serving-lane lookup (daemon_running_for_container) vets health first
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == 77777 and 77777 not in killed)
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
     assert notifier.stop_daemon(wt_b, quiet=True) is True        # B has NO per-cwd pidfile
     assert killed == [77777], "the A-started daemon must be SIGTERMed exactly once (it exits, no SIGKILL)"

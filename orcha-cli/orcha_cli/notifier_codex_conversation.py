@@ -61,14 +61,15 @@ def finish(
         services._maybe_pin_codex_session(api_base, conversation_id, resident)
         services._CODEX_RESUME_FAILED.discard(conversation_id)
 
-    services._finish_run(
+    if services._finish_run(
         api_base,
         resident.get("current_run_id"),
         status,
         exit_code,
         resident.get("log_path"),
         diff,
-    )
+    ):
+        services._reap_sandbox_artifacts(resident)  # I4: the turn's container, once stamped
     if teardown_worktree:
         services._safe_teardown_worktree(
             resident.get("base_cwd"),

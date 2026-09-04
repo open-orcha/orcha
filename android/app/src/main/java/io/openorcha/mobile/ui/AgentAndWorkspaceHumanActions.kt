@@ -18,6 +18,7 @@ import io.openorcha.mobile.data.StoredContainer
 import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.data.TurnDto
+import io.openorcha.mobile.domain.ChatSendFlow
 import io.openorcha.mobile.domain.Paging
 import io.openorcha.mobile.domain.RunFeed
 import io.openorcha.mobile.domain.RunFeedRow
@@ -35,7 +36,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Owns remaining request, agent, container-control, conversation, and creation actions. */
-internal interface AgentAndWorkspaceHumanActions : OrchaViewModelAccess {
+internal interface AgentAndWorkspaceHumanActions : OrchaViewModelAccess, ChatSendActions {
 fun escalateSelectedRequest(reason: String?) = runHumanAction("Request escalated") { selected, actor ->
     val request = _uiState.value.selectedRequest ?: error("No request selected")
     api.escalateRequest(selected.baseUrl, request.id, actor, reason)
@@ -97,16 +98,10 @@ fun setAutonomy(level: String) = runHumanAction("Autonomy set to $level") { sele
     refreshSelected()
 }
 
-fun sendConversationTurn(content: String) = runHumanAction("Message sent") { selected, actor ->
-    val agent = _uiState.value.selectedAgent ?: error("No agent selected")
-    val conversation = _uiState.value.conversation ?: api.startConversation(selected.baseUrl, agent.id, actor).conversation
-    val conversationId = conversation?.id ?: error("Conversation did not start")
-    api.sendConversationTurn(selected.baseUrl, conversationId, actor, content)
-    refreshConversation()
-}
-
 fun endConversation() = runHumanAction("Conversation ended") { selected, actor ->
     val conversation = _uiState.value.conversation ?: return@runHumanAction
+    cancelReplyWatch()
+    _uiState.update { it.copy(sendFlow = ChatSendFlow()) }
     api.endConversation(selected.baseUrl, conversation.id, actor)
     refreshConversation()
 }

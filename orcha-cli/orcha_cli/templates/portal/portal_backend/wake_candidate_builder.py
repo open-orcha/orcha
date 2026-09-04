@@ -1,5 +1,6 @@
 """Build one notifier wake candidate from persisted agent and event state."""
 
+from portal_backend.autonomy import effective_autonomy
 from portal_backend.drain_classification import (
     _DRAIN_DIRECTIVE,
     _DRAIN_RUN_ACKABLE,
@@ -41,6 +42,8 @@ def build_wake_candidate(
     valid_uuid,
     resolve_model,
     resolve_model_runtime,
+    container_autonomy_level="plan",
+    container_autonomy_enforced=False,
 ):
     """Return the stable wake-scan contract for one AI agent."""
     aid = str(agent["id"])
@@ -194,4 +197,13 @@ def build_wake_candidate(
         "model": resolve_model(agent["model"]),
         "model_runtime": resolve_model_runtime(agent["model"]),
         "reasoning_effort": resolve_reasoning_effort(agent["reasoning_effort"]),
+        # mig 043: this agent's own autonomy override (NULL = inherit) plus the EFFECTIVE level
+        # it acts under — additive, alongside the scan-wide container level+enforced flag. The
+        # worker keys its advisory gh/git behavior off effective_autonomy.
+        "autonomy_override": agent.get("autonomy_override"),
+        "effective_autonomy": effective_autonomy(
+            container_autonomy_level,
+            container_autonomy_enforced,
+            agent.get("autonomy_override"),
+        ),
     }

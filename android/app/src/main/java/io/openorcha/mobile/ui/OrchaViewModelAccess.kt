@@ -49,6 +49,11 @@ internal interface OrchaViewModelAccess {
     val json: Json
     var pollingJob: Job?
     var runStreamJob: Job?
+    /** Chat send-UX: the bounded post-send poll awaiting the turns delta (iOS `replyWatchTask`). */
+    var replyWatchJob: Job?
+    /** Device-token auth: the GitHub sign-in Custom Tab round-trip bridge (one shared
+     *  instance so `MainActivity.onNewIntent` and `signInWithGitHub()` see the same session). */
+    val deviceAuthSession: DeviceAuthSession
     val _uiState: MutableStateFlow<OrchaUiState>
     val scope: CoroutineScope
 
@@ -57,12 +62,26 @@ internal interface OrchaViewModelAccess {
     fun refreshSelectedTask()
     fun refreshAgentDetail()
     fun refreshConversation()
+    suspend fun refreshConversationQuiet(agentId: String)
+    fun cancelReplyWatch()
     fun refreshRunLog()
     fun openTask(taskId: String)
     fun cancelRunStream()
     fun startPolling()
     fun pairingBaseUrl(raw: String): String
+    fun pairingRemoteUrl(raw: String): String?
+    fun pairingContainerId(raw: String): String?
+    fun pairingHumanAgentId(raw: String): String?
     fun friendlyConnectionError(err: Throwable? = null): String
     fun messageKey(message: TaskMessageDto): Any
     fun runHumanAction(success: String, block: suspend (StoredContainer, String) -> Unit)
+
+    /**
+     * Device-token auth: probe+pair [rawBaseUrl] with an explicit bearer token (or
+     * none, for an unprotected server). Shared body for `connectManual` and the
+     * GitHub sign-in retry / manual-token entry so every entry point persists a
+     * token identically. Implemented once, on [ContainerNavigationActions]. Returns
+     * true on a successful connect.
+     */
+    suspend fun connectWithToken(rawBaseUrl: String, accessToken: String?): Boolean
 }

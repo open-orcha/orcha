@@ -1,11 +1,12 @@
 """Finish, stop, and append streamed output to worker runs."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_kind, valid_uuid
+from portal_backend.identity_routes import trusted_actor
 from portal_backend.schemas.worker_runs import (
     WorkerRunFinish,
     WorkerRunLines,
@@ -85,7 +86,7 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
 
 
 @app.post("/api/runs/{run_id}/stop", status_code=200)
-def stop_worker_run(run_id: str, body: WorkerRunStop):
+def stop_worker_run(run_id: str, body: WorkerRunStop, request: Request):
     """#240 + #171/ISS-72: a human requests a graceful STOP of a RUNNING worker run / resident
     turn. The API runs in Docker and cannot signal host PIDs, so it only RECORDS the intent on
     the run row; the host notifier reads it back on its next per-tick wake-renew (zero new poll)
@@ -97,7 +98,6 @@ def stop_worker_run(run_id: str, body: WorkerRunStop):
     if not valid_uuid(run_id):
         raise HTTPException(400, "run_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        require_kind(cur, body.actor_agent_id, ("human",))
         cur.execute(
             "SELECT run_id, agent_id, status, stop_requested_at FROM worker_runs "
             "WHERE run_id=%s",
@@ -106,6 +106,16 @@ def stop_worker_run(run_id: str, body: WorkerRunStop):
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, f"worker run {run_id} not found")
+        cur.execute(
+            "SELECT container_id FROM agents WHERE id=%s", (row["agent_id"],)
+        )
+        run_container = cur.fetchone()
+        if run_container:
+            # Per-project identity: a trusted login IS the actor (403 non-member).
+            body.actor_agent_id = trusted_actor(
+                cur, request, str(run_container["container_id"]), body.actor_agent_id
+            )
+        require_kind(cur, body.actor_agent_id, ("human",))
         if row["status"] != "running":
             return {
                 "run_id": run_id,

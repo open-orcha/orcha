@@ -1,7 +1,7 @@
 ---
 description: Register an additional human (kind='human') into the current Orcha container. The first human is registered automatically by `orcha init --as <name>`; use this skill only to add MORE humans mid-run.
 allowed-tools: Bash, Read, Write, AskUserQuestion
-argument-hint: <alias> [--role "..."]
+argument-hint: <alias> [--role "..."] [--github <login>] [--email <addr>]
 ---
 
 You are executing `/orcha-register-human`.
@@ -23,8 +23,10 @@ Humans (`kind='human'`) and AI (`kind='ai'`) are both agents but differ in what 
 1. **Parse `$ARGUMENTS`**:
    - First positional: `alias` — required (e.g. `Priya`)
    - `--role "..."` — optional descriptor (e.g. `"product owner"`, `"oncall"`). Default if omitted: `"human"`.
+   - `--github <login>` — optional GitHub username. When an agent later opens a PR on a task this human triggered, the PR body @mentions this handle and the commit carries a `Co-authored-by` trailer (docs/agent-prs.md). Strongly recommended.
+   - `--email <addr>` — optional preferred git author email for that `Co-authored-by` trailer. When omitted, agents fall back to `<login>@users.noreply.github.com` if a login exists.
 
-   If `alias` is missing, use **AskUserQuestion** to collect it before continuing.
+   If `alias` is missing, use **AskUserQuestion** to collect it before continuing. Do NOT block on the optional flags — but if the user gave neither `--github` nor `--email`, spend one AskUserQuestion offering to record their GitHub handle now (skippable).
 
 2. **Read `.claude/orcha.json`** for:
    - `api_base_url` (required — error → run `orcha init`)
@@ -37,10 +39,12 @@ Humans (`kind='human'`) and AI (`kind='ai'`) are both agents but differ in what 
      -d '{
        "alias": "<alias>",
        "role": "<role-or-human>",
-       "kind": "human"
+       "kind": "human",
+       "github_login": "<login>",
+       "git_email": "<email>"
      }'
    ```
-   Response: `{"agent_id": "...", "alias": "...", "container_id": "...", "kind": "human", "initial_task": null}`
+   Omit the `github_login` / `git_email` keys entirely when the user didn't provide them (never send placeholder strings). Response: `{"agent_id": "...", "alias": "...", "container_id": "...", "kind": "human", "initial_task": null}`. A 409 naming `github_login` means that handle already maps to another member of this container — surface it and confirm before retrying.
 
 4. **Bind this human.** Write `.claude/orcha-tabs/<alias>.json`:
    ```json
@@ -56,6 +60,8 @@ Humans (`kind='human'`) and AI (`kind='ai'`) are both agents but differ in what 
    alias:         <alias>
    role:          <role>
    kind:          human
+   github:        <@login or "not recorded — agent PRs will use your alias">
+   git email:     <email or "not recorded — noreply fallback">
    agent_id:      <agent_id>
    container_id:  <container_id>
    binding file:  .claude/orcha-tabs/<alias>.json

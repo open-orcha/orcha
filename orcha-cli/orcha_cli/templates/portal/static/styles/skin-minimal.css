@@ -1,0 +1,342 @@
+/* ============================================================================
+   Skin: "Minimalist" — opt-in design, selectable from Settings → Appearance.
+   Founder brief: "clean and modern ui and font like is used in most modern
+   UIs… less to show… think minimalist." Hanken Grotesk body face + the
+   welcome page's champagne-gold accent (#E7C368), used sparingly. Generous
+   whitespace, hairline separators instead of boxed borders, flat cards,
+   larger radii, quieter chips, de-emphasized secondary chrome.
+
+   Mechanism: identical to the Swiss skin in responsive.css — a token-layer
+   override selected by [data-skin="minimal"] on <html>, orthogonal to
+   [data-theme] (dark / light / auto all keep working). Default (no
+   attribute) = classic teal. Per-page selector rules are added ONLY where
+   the declutter brief needs behavior tokens alone can't express (hiding
+   decorative chrome, de-emphasizing secondary controls) — everything else
+   rides the existing component CSS by reusing the same custom properties.
+
+   EVERY rule in this file is scoped under html[data-skin="minimal"] — never
+   leak into the classic or swiss skins.
+   ========================================================================== */
+
+/* ============================================================================
+   1) TOKENS — surfaces, text, accent, semantic state, shadows, radii
+   ========================================================================== */
+
+/* ---- dark (default for the skin; also served as the explicit [data-theme="dark"]) --- */
+html[data-skin="minimal"],
+html[data-skin="minimal"][data-theme="dark"] {
+  color-scheme: dark;
+
+  /* deep warm near-black surfaces — calmer than the classic teal-tinted dark.
+     --bg/--text match the pre-paint <script> constants inlined in every page
+     head (M ? '#141414'/'#f5f0e6' : …) so first paint and post-CSS paint agree
+     exactly — no flash of a slightly different shade on load. */
+  --bg:        #141414;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface:   #1b1b1a;
+  --surface-2: #212120;
+  --surface-3: #282826;
+  --raised:    #212120;
+  --border:    #322f2b;
+  --border-2:  #3d3934;
+  --hover:     #221f1c;
+
+  --text:   #f5f0e6;
+  --text-2: #cec7b8;
+  --muted:  #958d7d;
+  --faint:  #696153;
+
+  /* the ONE accent — welcome page's champagne gold, used sparingly (primary
+     buttons, active nav, focus rings) — never as a decorative fill. */
+  --accent:      #e7c368;
+  --accent-ink:  #221b10;
+  --accent-soft: rgba(231, 195, 104, .12);
+  --accent-line: rgba(231, 195, 104, .34);
+  --accent-glow: rgba(231, 195, 104, .22);
+
+  --amber: #e7c368;
+
+  /* status colors — desaturated but still legible */
+  --ok:        #6fb894;  --ok-soft:     rgba(111, 184, 148, .12);  --ok-line:     rgba(111, 184, 148, .30);
+  --info:      #7ea3c9;  --info-soft:   rgba(126, 163, 201, .12);  --info-line:   rgba(126, 163, 201, .30);
+  --warn:      #cc9f5a;  --warn-soft:   rgba(204, 159, 90, .13);   --warn-line:   rgba(204, 159, 90, .32);
+  --danger:    #c97a72;  --danger-soft: rgba(201, 122, 114, .12);  --danger-line: rgba(201, 122, 114, .30);
+  --violet:    #a693c4;  --violet-soft: rgba(166, 147, 196, .12);  --violet-line: rgba(166, 147, 196, .30);
+  --idle:      #6e6558;  --idle-soft:   rgba(110, 101, 88, .16);   --idle-line:   rgba(110, 101, 88, .30);
+
+  --diff-add:    #8fbf9e; --diff-add-bg: rgba(111, 184, 148, .09);
+  --diff-del:    #c9928c; --diff-del-bg: rgba(201, 122, 114, .09);
+  --diff-hunk:   #7ea3c9; --diff-hunk-bg: rgba(126, 163, 201, .07);
+
+  /* flat — subtle elevation only, no heavy shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.20);
+  --shadow:    0 4px 16px rgba(0,0,0,.24);
+  --shadow-lg: 0 16px 44px rgba(0,0,0,.34);
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+/* ---- light ---------------------------------------------------------------- */
+html[data-skin="minimal"][data-theme="light"] {
+  color-scheme: light;
+
+  /* calm near-white surfaces — --bg/--text match the pre-paint <script>
+     constants ('#faf8f2'/'#1a1a1a') so first paint and post-CSS paint agree. */
+  --bg:        #faf8f2;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface:   #ffffff;
+  --surface-2: #f6f3ec;
+  --surface-3: #f0ebe0;
+  --raised:    #ffffff;
+  --border:    #e7e0d2;
+  --border-2:  #dcd3bf;
+  --hover:     #f3efe5;
+
+  --text:   #1a1a1a;
+  --text-2: #423d33;
+  --muted:  #7c7264;
+  --faint:  #a49a89;
+
+  /* gold darkened for AA-legible text/interactive use on light surfaces,
+     same relationship the welcome page uses between --gold and --accent-text */
+  --accent:      #96721a;
+  --accent-ink:  #ffffff;
+  --accent-soft: rgba(150, 114, 26, .10);
+  --accent-line: rgba(150, 114, 26, .32);
+  --accent-glow: rgba(150, 114, 26, .18);
+
+  --amber: #96721a;
+
+  --ok:     #3f8462;  --ok-soft:     rgba(63, 132, 98, .11);   --ok-line:     rgba(63, 132, 98, .28);
+  --info:   #3f6c96;  --info-soft:   rgba(63, 108, 150, .10);  --info-line:   rgba(63, 108, 150, .26);
+  --warn:   #9c7218;  --warn-soft:   rgba(156, 114, 24, .12);  --warn-line:   rgba(156, 114, 24, .30);
+  --danger: #a4483e;  --danger-soft: rgba(164, 72, 62, .10);   --danger-line: rgba(164, 72, 62, .26);
+  --violet: #6f5a92;  --violet-soft: rgba(111, 90, 146, .11);  --violet-line: rgba(111, 90, 146, .26);
+  --idle:   #918879;  --idle-soft:   rgba(145, 136, 121, .13); --idle-line:   rgba(145, 136, 121, .26);
+
+  --diff-add:  #2e6b4a; --diff-add-bg: rgba(63, 132, 98, .10);
+  --diff-del:  #93392f; --diff-del-bg: rgba(164, 72, 62, .09);
+  --diff-hunk: #3f6c96; --diff-hunk-bg: rgba(63, 108, 150, .07);
+
+  --shadow-sm: 0 1px 2px rgba(32,26,18,.04);
+  --shadow:    0 4px 16px rgba(32,26,18,.06);
+  --shadow-lg: 0 16px 44px rgba(32,26,18,.10);
+  --ring:      0 0 0 3px var(--accent-glow);
+}
+
+/* ---- auto: OS light preference flips the same way [data-theme="light"] does --- */
+@media (prefers-color-scheme: light) {
+  html[data-skin="minimal"][data-theme="auto"] {
+    color-scheme: light;
+    --bg:        #faf8f2;
+    --bg-grad-1: transparent;
+    --bg-grad-2: transparent;
+    --surface:   #ffffff;
+    --surface-2: #f6f3ec;
+    --surface-3: #f0ebe0;
+    --raised:    #ffffff;
+    --border:    #e7e0d2;
+    --border-2:  #dcd3bf;
+    --hover:     #f3efe5;
+    --text:   #1a1a1a;
+    --text-2: #423d33;
+    --muted:  #7c7264;
+    --faint:  #a49a89;
+    --accent:      #96721a;
+    --accent-ink:  #ffffff;
+    --accent-soft: rgba(150, 114, 26, .10);
+    --accent-line: rgba(150, 114, 26, .32);
+    --accent-glow: rgba(150, 114, 26, .18);
+    --amber: #96721a;
+    --ok:     #3f8462;  --ok-soft:     rgba(63, 132, 98, .11);   --ok-line:     rgba(63, 132, 98, .28);
+    --info:   #3f6c96;  --info-soft:   rgba(63, 108, 150, .10);  --info-line:   rgba(63, 108, 150, .26);
+    --warn:   #9c7218;  --warn-soft:   rgba(156, 114, 24, .12);  --warn-line:   rgba(156, 114, 24, .30);
+    --danger: #a4483e;  --danger-soft: rgba(164, 72, 62, .10);   --danger-line: rgba(164, 72, 62, .26);
+    --violet: #6f5a92;  --violet-soft: rgba(111, 90, 146, .11);  --violet-line: rgba(111, 90, 146, .26);
+    --idle:   #918879;  --idle-soft:   rgba(145, 136, 121, .13); --idle-line:   rgba(145, 136, 121, .26);
+    --diff-add:  #2e6b4a; --diff-add-bg: rgba(63, 132, 98, .10);
+    --diff-del:  #93392f; --diff-del-bg: rgba(164, 72, 62, .09);
+    --diff-hunk: #3f6c96; --diff-hunk-bg: rgba(63, 108, 150, .07);
+    --shadow-sm: 0 1px 2px rgba(32,26,18,.04);
+    --shadow:    0 4px 16px rgba(32,26,18,.06);
+    --shadow-lg: 0 16px 44px rgba(32,26,18,.10);
+    --ring:      0 0 0 3px var(--accent-glow);
+  }
+}
+
+/* ============================================================================
+   2) TYPE — Hanken Grotesk UI face; mono stack for code/terminal is untouched
+   ========================================================================== */
+html[data-skin="minimal"] body {
+  font-family: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+/* generous line-height bump — the declutter brief asks for more breathing
+   room; code/mono keeps the tighter classic rhythm (unaffected — see below) */
+html[data-skin="minimal"] body { line-height: 1.6; }
+html[data-skin="minimal"] code,
+html[data-skin="minimal"] kbd,
+html[data-skin="minimal"] .mono { line-height: 1.5; }
+
+/* ============================================================================
+   3) STRUCTURE — larger radii, hairline separators, flat elevation, spacing
+   ========================================================================== */
+
+/* larger radii across cards, tiles, buttons, pills, inputs */
+html[data-skin="minimal"] .card,
+html[data-skin="minimal"] .proto,
+html[data-skin="minimal"] .gate,
+html[data-skin="minimal"] .run,
+html[data-skin="minimal"] .toast,
+html[data-skin="minimal"] .ncenter,
+html[data-skin="minimal"] .pmenu.float,
+html[data-skin="minimal"] .none { border-radius: 18px; }
+html[data-skin="minimal"] .btn,
+html[data-skin="minimal"] .search input,
+html[data-skin="minimal"] .proj-switch,
+html[data-skin="minimal"] .lrow,
+html[data-skin="minimal"] .tag,
+html[data-skin="minimal"] .idpill,
+html[data-skin="minimal"] .iconbtn,
+html[data-skin="minimal"] .skin-tile { border-radius: 12px; }
+html[data-skin="minimal"] .av { border-radius: 13px; }
+html[data-skin="minimal"] .av.sm { border-radius: 10px; }
+html[data-skin="minimal"] .av.lg { border-radius: 17px; }
+
+/* flat cards — no heavy shadow, a hairline instead of a boxed border reads
+   as the primary separator; --shadow-sm above is already reduced globally */
+html[data-skin="minimal"] .card,
+html[data-skin="minimal"] .proto,
+html[data-skin="minimal"] .run { box-shadow: none; border-color: var(--border); }
+html[data-skin="minimal"] .card-h,
+html[data-skin="minimal"] .tbl thead th,
+html[data-skin="minimal"] .tbl tbody td,
+html[data-skin="minimal"] .proto > .ph { border-color: var(--border); }
+
+/* generous whitespace — bump the base spacing rhythm on the primary content
+   frame and card padding without touching layout structure (grid/flex intact) */
+html[data-skin="minimal"] .content { padding: 30px 32px 72px; }
+html[data-skin="minimal"] .card.pad { padding: 22px 24px; }
+html[data-skin="minimal"] .card-h { padding: 18px 22px; gap: 12px; }
+html[data-skin="minimal"] .card-b { padding: 12px 14px; }
+html[data-skin="minimal"] .tbl thead th { padding: 12px 16px; }
+html[data-skin="minimal"] .tbl tbody td { padding: 15px 16px; }
+html[data-skin="minimal"] .lrow { padding: 13px 15px; }
+html[data-skin="minimal"] .section-title { margin: 32px 2px 16px; }
+
+/* ============================================================================
+   4) DECLUTTER — hide purely decorative chrome (info exists elsewhere on
+   screen); interactive controls are NEVER hidden, only de-emphasized
+   ========================================================================== */
+
+/* section eyebrow labels are redundant with the section content itself —
+   drop the label text, keep the hairline divider as the section break */
+html[data-skin="minimal"] .section-title h2 { display: none; }
+html[data-skin="minimal"] .section-title .ln { background: var(--border); }
+
+/* sidebar nav group labels ("PROJECTS", "WORKSPACE" …) are decorative once
+   the icons+order already communicate grouping — hide, keep the links */
+html[data-skin="minimal"] .nav .lbl { display: none; }
+
+/* metrics stat-tile eyebrow ("TASKS COMPLETED" etc.) duplicates the value's
+   own context on a labeled dashboard — quiet it instead of removing, since
+   on the metrics page the label is the ONLY name for that number (info does
+   NOT exist elsewhere on screen there) — de-emphasize, don't hide. */
+html[data-skin="minimal"] .mx-tile .l { opacity: .68; }
+
+/* the acting-as / roster / protocol column mini-labels are similarly
+   decorative once the value beside them is self-explanatory in context */
+html[data-skin="minimal"] .acting .lbl,
+html[data-skin="minimal"] .aut-lab,
+html[data-skin="minimal"] .roster-card .rh,
+html[data-skin="minimal"] .nc-zlbl,
+html[data-skin="minimal"] .idpill .lbl { opacity: .7; }
+
+/* redundant decorative "kind" badge (AI/HUMAN) duplicates the avatar shape
+   (squircle vs. ring) already on screen next to it — de-emphasize, keep it
+   (never remove an information-bearing control entirely) */
+html[data-skin="minimal"] .kind { opacity: .75; }
+html[data-skin="minimal"] .kind:hover { opacity: 1; }
+
+/* priority tag ticks (.prio) duplicate row order / sort control state on
+   list pages — de-emphasize until hover, still fully legible on demand */
+html[data-skin="minimal"] .prio { opacity: .7; transition: opacity .14s; }
+html[data-skin="minimal"] .prio:hover { opacity: 1; }
+
+/* de-emphasize secondary controls (ghost/subtle buttons, icon buttons) until
+   hover/focus — primary actions (.btn without ghost/subtle/danger/approve/
+   stop) keep full strength since the gold accent already marks them primary */
+html[data-skin="minimal"] .btn.ghost,
+html[data-skin="minimal"] .btn.subtle,
+html[data-skin="minimal"] .iconbtn { opacity: .78; transition: opacity .14s, border-color .14s, background .14s, color .14s; }
+html[data-skin="minimal"] .btn.ghost:hover,
+html[data-skin="minimal"] .btn.subtle:hover,
+html[data-skin="minimal"] .iconbtn:hover,
+html[data-skin="minimal"] .btn.ghost:focus-visible,
+html[data-skin="minimal"] .btn.subtle:focus-visible,
+html[data-skin="minimal"] .iconbtn:focus-visible { opacity: 1; }
+
+/* ============================================================================
+   5) QUIETER CHIPS — tinted text on soft background, no border ring
+   ========================================================================== */
+html[data-skin="minimal"] .tag,
+html[data-skin="minimal"] .pill,
+html[data-skin="minimal"] .kind,
+html[data-skin="minimal"] .run-chips .c { border-color: transparent; }
+html[data-skin="minimal"] .tag { background: var(--surface-2); }
+html[data-skin="minimal"] .tag.root { background: var(--violet-soft); }
+html[data-skin="minimal"] .tag.wake-on { background: var(--ok-soft); }
+html[data-skin="minimal"] .tag.role-owner { background: var(--warn-soft); }
+html[data-skin="minimal"] .tag.mem-pending { background: var(--info-soft); }
+html[data-skin="minimal"] .tag.review-for { background: var(--violet-soft); }
+html[data-skin="minimal"] .pill.s-working { border-color: transparent; }
+html[data-skin="minimal"] .pill.s-ok { border-color: transparent; }
+html[data-skin="minimal"] .pill.s-attn,
+html[data-skin="minimal"] .pill.s-warn { border-color: transparent; }
+html[data-skin="minimal"] .pill.s-bad { border-color: transparent; }
+html[data-skin="minimal"] .pill.s-done,
+html[data-skin="minimal"] .pill.s-acc { border-color: transparent; }
+html[data-skin="minimal"] .pill.s-idle,
+html[data-skin="minimal"] .pill.s-ready,
+html[data-skin="minimal"] .pill.s-info { border-color: transparent; }
+html[data-skin="minimal"] .kind.ai { background: var(--accent-soft); }
+html[data-skin="minimal"] .kind.human { background: color-mix(in oklab, var(--amber) 12%, transparent); }
+
+/* ============================================================================
+   6) ACCENT DISCIPLINE — gold reserved for primary actions, active nav, focus
+   ========================================================================== */
+html[data-skin="minimal"] .nav a.active { background: var(--accent-soft); border-color: var(--accent-line); }
+html[data-skin="minimal"] .nav a.active .ico { color: var(--accent); }
+html[data-skin="minimal"] .btn:not(.ghost):not(.subtle):not(.danger):not(.approve):not(.stop) {
+  background: var(--accent); color: var(--accent-ink);
+}
+html[data-skin="minimal"] :focus-visible { box-shadow: var(--ring); }
+
+/* brand tile: warm ink block with a gold hairline instead of the teal radial */
+html[data-skin="minimal"] .brand .mark {
+  background: radial-gradient(120% 120% at 50% 30%, #241d14, #14100a);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+html[data-skin="minimal"][data-theme="light"] .brand .mark,
+html[data-skin="minimal"][data-theme="auto"] .brand .mark {
+  background: radial-gradient(120% 120% at 50% 30%, #2a2214, #1c160c);
+}
+
+/* ============================================================================
+   7) PROTOCOL CARD + DIFF DISCLOSURE — flat, hairline-separated, unchanged
+   functionality (collapse/expand, edit mode). Diff coloring already flows
+   from the desaturated --diff-* tokens above; only chrome is quieted here.
+   ========================================================================== */
+html[data-skin="minimal"] .proto > .ph { padding: 15px 18px; }
+html[data-skin="minimal"] .proto .pb { padding: 8px 18px 18px; }
+html[data-skin="minimal"] .diff { border-color: var(--border); }
+html[data-skin="minimal"] .diff .dstat { border-color: var(--border); opacity: .85; }
+html[data-skin="minimal"] .diff .dl.meta { opacity: .7; }
+
+/* ============================================================================
+   8) TABLES / TERMINAL — never break layout; only chrome (radii, spacing,
+   hairlines) changes, structure and scroll behavior are untouched
+   ========================================================================== */
+html[data-skin="minimal"] .tbl tbody tr:hover { background: var(--hover); }
+html[data-skin="minimal"] .log,
+html[data-skin="minimal"] .run-h { border-color: var(--border); }

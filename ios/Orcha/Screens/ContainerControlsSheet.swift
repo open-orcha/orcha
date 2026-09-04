@@ -24,21 +24,28 @@ struct ContainerControlsSheet: View {
     /// Spec §6.2 — a DIFFERENT, higher state than the notifier: the laptop-level container
     /// lifecycle (`/orcha-pause`), not the in-container wake switch.
     private var laptopPaused: Bool { (container?.status ?? "active") != "active" }
-    private var readOnly: Bool { model.humanId == nil || laptopPaused }
+    /// Collab v1: both switches are `manage_autonomy` writes server-side — the
+    /// same gate applies here, honestly (self-host stays permissive).
+    private var lacksGrant: Bool { !model.access.canManage(Grant.manageAutonomy) }
+    private var readOnly: Bool { model.humanId == nil || laptopPaused || lacksGrant }
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if laptopPaused {
                             Banner(kind: .info, text: "This Orcha is paused or stopped on the laptop — controls are disabled until it resumes.")
                         }
+                        if lacksGrant {
+                            Banner(kind: .info, text: model.access.manageDenialReason(Grant.manageAutonomy, action: "Changing the notifier or autonomy")
+                                ?? "These controls need the owner role or the 'manage autonomy' permission.")
+                        }
                         notifierSection
                         autonomySection
                         if model.humanId == nil {
                             Text("Change autonomy from the laptop.")
-                                .font(.system(size: 12.5))
+                                .font(p.uiFont(12.5))
                                 .foregroundStyle(p.muted)
                         }
                         if let error = model.error {
@@ -95,9 +102,9 @@ struct ContainerControlsSheet: View {
             OrchaCard {
                 Toggle(isOn: Binding(get: { wakesEnabled }, set: { pendingWakes = $0 })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Notifier").font(.system(size: 14, weight: .bold)).foregroundStyle(p.text)
+                        Text("Notifier").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
                         Text(wakesEnabled ? "Running — agents wake normally" : "Paused — nothing wakes")
-                            .font(.system(size: 13))
+                            .font(p.uiFont(13))
                             .foregroundStyle(wakesEnabled ? p.ok : p.danger)
                     }
                 }
@@ -125,7 +132,7 @@ struct ContainerControlsSheet: View {
                 .disabled(readOnly || model.actionInFlight)
                 .opacity(wakesEnabled ? 1 : 0.6)
                 Text(autonomyFooter)
-                    .font(.system(size: 12.5))
+                    .font(p.uiFont(12.5))
                     .foregroundStyle(p.muted)
             }
         }

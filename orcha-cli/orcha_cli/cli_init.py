@@ -21,6 +21,8 @@ def cmd_init(args: argparse.Namespace, services) -> None:
     _compose = services._compose
     _wait_for_portal = services._wait_for_portal
     _post_json = services._post_json
+    _put_json = services._put_json
+    _detect_github_repo = services._detect_github_repo
     _prune_stale_bindings = services._prune_stale_bindings
     stop_daemon_for_container = services.stop_daemon_for_container
     ensure_daemon = services.ensure_daemon
@@ -53,6 +55,15 @@ def cmd_init(args: argparse.Namespace, services) -> None:
     # Orcha#30: figure out who the first human is.
     human_alias = args.as_user or os.environ.get("USER") or "operator"
     human_alias = human_alias.strip() or "operator"
+
+    # GitHub auto-bind (project-runtime epic): when init runs inside a git checkout whose
+    # `origin` points at github.com, bind the new container to that repo automatically —
+    # so the box-side provisioner / token-refresh timer can mint repo-scoped tokens
+    # without a manual Connect-repo click. `--no-github` opts out; detection failures are
+    # silent (best-effort sugar, never a reason for init to fail).
+    github_repo: Optional[str] = None
+    if not getattr(args, "no_github", False):
+        github_repo = _detect_github_repo(project_root)
 
     # 1. Render docker-compose template
     template_text = (PKG_TEMPLATES / "docker-compose.yml.j2").read_text()
@@ -95,6 +106,11 @@ def cmd_init(args: argparse.Namespace, services) -> None:
         "db_port": db_port,
         "bridge_port": bridge_port,
     }
+    if github_repo:
+        # Recorded locally as well as bound via the API below, so folder-side tooling
+        # (and a later `orcha up` on a fresh box) can see the binding without a portal
+        # round-trip.
+        config["github_repo"] = github_repo
     claude_config.parent.mkdir(parents=True, exist_ok=True)
     claude_config.write_text(json.dumps(config, indent=2) + "\n")
 
@@ -152,17 +168,44 @@ def cmd_init(args: argparse.Namespace, services) -> None:
                 )
             sys.exit(f"error: container creation failed: {e}")
 
+    # 7b. GitHub auto-bind: seed the freshly created container's repo binding the same way
+    #     init seeds everything else — through the portal API (PUT /api/containers/{cid}/github,
+    #     the exact endpoint the portal's Connect-repo modal uses). Best-effort: a failure
+    #     leaves the container unbound (bindable later from the portal), never kills init.
+    if container_id is not None and github_repo:
+        try:
+            _put_json(
+                f"{api_base}/api/containers/{container_id}/github",
+                {"repo": github_repo},
+            )
+            print(f"[orcha] ✓ GitHub repo bound from origin remote: {github_repo}")
+        except Exception as e:
+            print(f"[orcha] warn: GitHub auto-bind failed ({e}); "
+                  "bind manually from the portal's Connect-repo modal")
+    elif github_repo:
+        print(f"[orcha] GitHub origin detected ({github_repo}) but no container was "
+              "created — recorded in .claude/orcha.json only")
+
     # 8. Orcha#30: register the first human agent (kind='human').
     if container_id is not None:
         try:
+            # PR attribution: carry the optional GitHub identity so agent-opened PRs
+            # credit this human (docs/agent-prs.md). Omit keys when absent (NULL).
+            _human_body = {
+                "alias": human_alias,
+                "role": "operator",
+                "kind": "human",
+                # prompt intentionally omitted — humans don't carry a system prompt
+            }
+            _gh = (getattr(args, "github_login", None) or "").lstrip("@").strip()
+            _ge = (getattr(args, "git_email", None) or "").strip()
+            if _gh:
+                _human_body["github_login"] = _gh
+            if _ge:
+                _human_body["git_email"] = _ge
             data = _post_json(
                 f"{api_base}/api/containers/{container_id}/agents",
-                {
-                    "alias": human_alias,
-                    "role": "operator",
-                    "kind": "human",
-                    # prompt intentionally omitted — humans don't carry a system prompt
-                },
+                _human_body,
             )
             human_agent_id = data["agent_id"]
             tabs_dir.mkdir(parents=True, exist_ok=True)

@@ -12,41 +12,39 @@ const repoRoot = path.resolve(desktopRoot, '..')
 const src = path.join(repoRoot, 'orcha-cli', 'orcha_cli', 'templates')
 const dst = path.join(desktopRoot, 'resources', 'orcha-templates')
 
-// The portal container imports shared service modules
-// that sit next to main.py. They live OUTSIDE templates/ in the CLI (orcha_cli/<mod>.py),
-// so bundle them into resources/orcha-templates/portal-shared/; the init engine merges them
-// into the deployed .orcha/portal/ (mirrors the CLI's _install_llm_util). Missing these →
-// portal crashes ModuleNotFoundError on startup.
-const PORTAL_SHARED_MODULES = [
-  'llm_util.py',
-  'llm_catalog.py',
-  'llm_decisions.py',
-  'llm_formats.py',
-  'llm_http.py',
-  'llm_observability.py',
-  'llm_providers.py',
-  'llm_stream.py',
-  'llm_vision.py',
-  'secret_box.py',
-  'digest_curate.py',
-  'digest_recalibrate.py',
-  'digest_summary.py'
-]
+// The portal container imports shared modules that sit next to main.py. They live
+// OUTSIDE templates/ in the CLI (orcha_cli/<mod>.py); bundle them into
+// resources/orcha-templates/portal-shared/ and the init engine merges them into the
+// deployed .orcha/portal/ (mirrors the CLI's _PORTAL_SHARED_MODULES). The set is
+// discovered by GLOB, not a hardcoded list — llm_util is now a facade over sibling
+// llm_*.py modules, and a hardcoded trio silently shipped portals that crashed
+// ModuleNotFoundError('llm_catalog') on startup (PORTAL_TIMEOUT for every new project).
+import { readdirSync } from 'node:fs'
+const REQUIRED_SHARED = ['llm_util.py', 'secret_box.py', 'digest_curate.py']
+const sharedFrom = (dir) =>
+  readdirSync(dir).filter((f) => /^(llm_[\w]+|secret_box|digest_[\w]+)\.py$/.test(f))
+let PORTAL_SHARED_MODULES = []
 const cliPkg = path.join(repoRoot, 'orcha-cli', 'orcha_cli')
 
 if (!existsSync(src)) {
   console.error(`[copy-orcha-templates] source not found: ${src}`)
   process.exit(1)
 }
-for (const mod of PORTAL_SHARED_MODULES) {
-  if (!existsSync(path.join(cliPkg, mod))) {
+PORTAL_SHARED_MODULES = sharedFrom(cliPkg)
+for (const mod of REQUIRED_SHARED) {
+  if (!PORTAL_SHARED_MODULES.includes(mod)) {
     console.error(`[copy-orcha-templates] shared module not found: ${path.join(cliPkg, mod)}`)
     process.exit(1)
   }
 }
 await rm(dst, { recursive: true, force: true })
 await mkdir(path.dirname(dst), { recursive: true })
-await cp(src, dst, { recursive: true })
+// node_modules can appear under templates on a dev machine (the portal frontend's
+// vitest deps) — never part of the template payload.
+await cp(src, dst, {
+  recursive: true,
+  filter: (s) => !s.split(path.sep).includes('node_modules')
+})
 const sharedDst = path.join(dst, 'portal-shared')
 await mkdir(sharedDst, { recursive: true })
 for (const mod of PORTAL_SHARED_MODULES) {

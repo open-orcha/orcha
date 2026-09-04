@@ -97,6 +97,28 @@ def _extract_codex_session_id(log_path) -> Optional[str]:
     return None
 
 
+# claude's stderr line when `--resume <id>` can't find the session (stderr is
+# merged into the resident log via stderr=STDOUT). Bytes, matched raw: it is
+# plain text, not a stream-json event.
+_RESUME_ERROR_MARKER = b"No conversation found with session ID"
+
+
+def _resume_error_in_log(log_path, start_offset: int = 0) -> bool:
+    """Sandbox-continuity fix: did THIS boot's log slice record claude's
+    --resume failure? Scan from `start_offset` (the log is append-mode across
+    boots — an old boot's error line must never taint a healthy new boot).
+    Missing/unreadable log → False (the died-fast window still catches it)."""
+    if not log_path:
+        return False
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(start_offset)
+            chunk = f.read(262144)
+    except (OSError, ValueError):
+        return False
+    return _RESUME_ERROR_MARKER in chunk
+
+
 def _result_after(log_path, start_offset: int = 0) -> Optional[dict]:
     """E3 reply-capture: find the FIRST terminal `result` event at/after `start_offset` bytes —
     the boundary that ends the turn the manager just fed. Returns {text, subtype, num_turns,

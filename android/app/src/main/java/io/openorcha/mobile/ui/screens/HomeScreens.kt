@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,14 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.QrCodeScanner
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -63,6 +56,7 @@ import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.SegControl
 import io.openorcha.mobile.ui.components.StateLayout
 import io.openorcha.mobile.ui.components.NeutralButton
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
 import io.openorcha.mobile.ui.theme.ThemeMode
@@ -84,14 +78,14 @@ fun ContainersHomeScreen(
     onSettings: () -> Unit,
 ) {
     Scaffold(
-        containerColor = Orcha.palette.bg,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("Orcha", fontWeight = FontWeight.W800) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 actions = {
-                    IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
-                    IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
+                    IconButton(onClick = onRefresh) { Icon(OrchaIcons.Refresh, "Refresh") }
+                    IconButton(onClick = onSettings) { Icon(OrchaIcons.Settings, "Settings") }
                 },
             )
         },
@@ -100,7 +94,7 @@ fun ContainersHomeScreen(
                 onClick = onScan,
                 containerColor = Orcha.palette.accent,
                 contentColor = Orcha.palette.accentInk,
-                icon = { Icon(Icons.Rounded.QrCodeScanner, null) },
+                icon = { Icon(OrchaIcons.QrCodeScanner, null) },
                 text = { Text("Add", fontWeight = FontWeight.W700) },
             )
         },
@@ -109,12 +103,12 @@ fun ContainersHomeScreen(
             // H3 · first launch: one job — get the user to pairing.
             StateLayout(
                 title = "Add your Orcha",
-                sub = "On your computer, open the Orcha portal and choose Pair phone — then scan the QR code here. Phone and laptop must share a Wi-Fi network.",
+                sub = "Open your Orcha portal and choose Pair phone, then scan the QR here — or type the portal address, like orcha.yourteam.com. One pairing brings in every project on that Orcha.",
                 modifier = Modifier.padding(padding),
                 glyph = { BrandMark(44.dp) },
             ) {
                 Spacer(Modifier.height(6.dp))
-                PrimaryButton("Add your Orcha", onScan, leading = { Icon(Icons.Rounded.QrCodeScanner, null, tint = Orcha.palette.accentInk) })
+                PrimaryButton("Add your Orcha", onScan, leading = { Icon(OrchaIcons.QrCodeScanner, null, tint = Orcha.palette.accentInk) })
                 TextButton(onClick = onAdd) { Text("Enter address manually", color = Orcha.palette.accent, fontWeight = FontWeight.W700) }
             }
         } else {
@@ -135,7 +129,7 @@ fun ContainersHomeScreen(
                 }
                 item {
                     Text(
-                        "Long-press a card to rename or disconnect. Your phone talks to each Orcha directly on your network.",
+                        "Every project on a paired Orcha appears here automatically — tap one to switch into it. Long-press a card to rename or disconnect.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Orcha.palette.faint,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
@@ -168,7 +162,7 @@ private fun ContainerCard(
             }
             ConnChip(health?.state ?: "probing")
             IconButton(onClick = { menu = true }) {
-                Icon(Icons.Rounded.ChevronRight, null, tint = Orcha.palette.faint)
+                Icon(OrchaIcons.ChevronRight, null, tint = Orcha.palette.faint)
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Open") }, onClick = { menu = false; onOpen(container.id) })
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = true })
@@ -179,14 +173,29 @@ private fun ContainerCard(
         when {
             health == null || health.state == "probing" -> Text("Checking…", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.faint)
             health.state == "unreachable" -> Text(
-                "Last seen a while ago — is the laptop awake?",
+                "Last seen a while ago — is this Orcha up?",
                 style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.muted,
             )
-            else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${health.agents} agents · ${health.tasks} tasks", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.muted)
-                Spacer(Modifier.weight(1f))
-                if (health.needsYou > 0) {
-                    io.openorcha.mobile.ui.components.StatusPill("${health.needsYou} need you", io.openorcha.mobile.ui.components.StatusDomain.Agent)
+            health.state == "signin" -> Text(
+                "Signed out — Settings → Sign in again to reconnect.",
+                style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.warn,
+            )
+            else -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // iOS ContainerCard parity: "N open" (non-terminal tasks), not the
+                    // all-time task total.
+                    Text("${health.agents} agents · ${health.tasks} open", style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.muted)
+                    Spacer(Modifier.weight(1f))
+                    if (health.needsYou > 0) {
+                        io.openorcha.mobile.ui.components.StatusPill("${health.needsYou} need you", io.openorcha.mobile.ui.components.StatusDomain.Agent)
+                    }
+                }
+                // Bound GitHub repo (glance-only — connect/change lives in the workspace).
+                health.githubRepo?.let { repo ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Icon(OrchaIcons.GitHub, contentDescription = null, tint = Orcha.palette.faint, modifier = Modifier.size(12.dp))
+                        Text(repo, style = MonoSmStyle, color = Orcha.palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
@@ -196,7 +205,7 @@ private fun ContainerCard(
         AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
             title = { Text("Disconnect ${container.displayName}?") },
-            text = { Text("This only removes the pairing from this phone. The Orcha keeps running on your computer, and you can pair again anytime from the portal.") },
+            text = { Text("This removes the pairing — and every project sharing its address — from this phone only. The Orcha keeps running, and you can pair again anytime from the portal.") },
             confirmButton = {
                 TextButton(onClick = { confirmDisconnect = false; onForget(container.id) }) {
                     Text("Disconnect", color = Orcha.palette.danger, fontWeight = FontWeight.W700)
@@ -223,7 +232,8 @@ private fun ContainerCard(
 }
 
 /* =============================================================================
-   Flow 03 — pairing. The pairing endpoint (doc 13 ask A1/A2) doesn't exist yet,
-   so the scanner is honest about the gap: QR payloads paste-able, LAN address
-   manual entry, unreachable state with the design's checklist copy.
+   Flow 03 — pairing entry point (see ScannerScreen.kt / ManualConnectScreen.kt):
+   scan is primary, manual address+token entry is the fallback. Both a local
+   self-host address and a deployed cloud/remote portal address work equally —
+   see ManualConnectScreen.kt for the address-neutral copy and self-host help.
    ============================================================================= */

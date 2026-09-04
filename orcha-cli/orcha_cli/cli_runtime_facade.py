@@ -9,6 +9,7 @@ from . import (
     cli_claim_guard,
     cli_lifecycle,
     cli_live,
+    cli_sandbox,
     cli_snapshot,
     cli_transcript,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "_self_wake_request",
     "cmd_pause",
     "cmd_resume",
+    "cmd_sandbox",
     "cmd_self_wake",
     "cmd_snapshot",
     "cmd_stop",
@@ -122,6 +124,11 @@ def _exec_live_session(
 
 def cmd_use(args) -> None:
     cli_live.use_command(args, exec_session=_services()._exec_live_session)
+
+
+def cmd_sandbox(args) -> None:
+    """Toggle/inspect sandbox wake mode; build the runner image (docs/sandbox-mode.md)."""
+    cli_sandbox.sandbox_command(args, pkg_templates=_services().PKG_TEMPLATES)
 
 
 def cmd_terminal_bridge(args) -> None:

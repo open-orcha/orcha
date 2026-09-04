@@ -31,7 +31,22 @@ data class ContainerSnapshot(
     val requests: List<RequestDto> = emptyList(),
     @SerialName("task_total") val taskTotal: Int? = null,
     @SerialName("request_total") val requestTotal: Int? = null,
-)
+    /** Server-computed, non-capped OPEN counts (iOS `taskOpenTotalRaw` parity) —
+     *  additive fields, null on a pre-fix server. Read via [taskOpenTotal]. */
+    @SerialName("task_open_total") private val taskOpenTotalRaw: Int? = null,
+    @SerialName("request_open_total") private val requestOpenTotalRaw: Int? = null,
+) {
+    /** Non-terminal (open) task count — prefers the server's true count over the
+     *  capped/priority-ordered `tasks` array; falls back to counting the loaded rows
+     *  on an older server (iOS `ContainerSnapshot.taskOpenTotal` parity). */
+    val taskOpenTotal: Int
+        get() = taskOpenTotalRaw
+            ?: tasks.count { it.status != "completed" && it.status != "cancelled" }
+
+    /** Open (status == "open") request count — same contract as [taskOpenTotal]. */
+    val requestOpenTotal: Int
+        get() = requestOpenTotalRaw ?: requests.count { it.status == "open" }
+}
 
 @Serializable
 data class ContainerDto(
@@ -44,6 +59,9 @@ data class ContainerDto(
     @SerialName("autonomy_level") val autonomyLevel: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("completed_at") val completedAt: String? = null,
+    /** The container's currently-bound repo ("owner/name"), or null. GitHub hub entry
+     *  point parity (iOS `ContainerDto.githubRepo`). */
+    @SerialName("github_repo") val githubRepo: String? = null,
 )
 
 @Serializable
@@ -62,6 +80,9 @@ data class AgentDto(
     @SerialName("last_active") val lastActive: String? = null,
     @SerialName("heartbeat_age_secs") val heartbeatAgeSecs: Double? = null,
     @SerialName("terminated_at") val terminatedAt: String? = null,
+    /** The signed-in GitHub login for a human agent, or null (self-host / unmapped).
+     *  Drives the GitHub hub's "Mine" filter (iOS `AgentDto.githubLogin`). */
+    @SerialName("github_login") val githubLogin: String? = null,
 )
 
 @Serializable

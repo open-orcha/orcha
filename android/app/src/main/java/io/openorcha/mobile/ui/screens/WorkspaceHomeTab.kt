@@ -1,5 +1,9 @@
 package io.openorcha.mobile.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -7,15 +11,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.RequestDto
@@ -30,6 +39,7 @@ import io.openorcha.mobile.ui.components.AvatarSize
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.DangerTonalButton
+import io.openorcha.mobile.ui.components.MetaTag
 import io.openorcha.mobile.ui.components.OkTonalButton
 import io.openorcha.mobile.ui.components.OrchaCard
 import io.openorcha.mobile.ui.components.PrimaryButton
@@ -39,6 +49,7 @@ import io.openorcha.mobile.ui.components.StatusDomain
 import io.openorcha.mobile.ui.components.StatusPill
 import io.openorcha.mobile.ui.components.StatTile
 import io.openorcha.mobile.ui.theme.MonoSmStyle
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
 /* Home tab (flow 04 H5): needs-you queue → agents glance → stat tiles → activity feed. */
@@ -55,6 +66,7 @@ internal fun HomeTab(
     onTab: (WorkspaceTab) -> Unit,
     onPlanSheet: (TaskDto) -> Unit,
     onVerifySheet: (TaskDto) -> Unit,
+    onOpenGithubHub: () -> Unit = {},
 ) {
     val snapshot = state.snapshot ?: return
     val p = Orcha.palette
@@ -63,6 +75,10 @@ internal fun HomeTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        // The workspace's repo binding — when a repo IS bound, the Hub chip opens the
+        // issues/PRs surface (phone parity of the portal's GitHub hub page + iOS's
+        // HomeTabView repo chip / Hub link); unbound, there is nothing to list yet.
+        snapshot.container.githubRepo?.let { repo -> item { GitHubHubEntryChip(repo, onOpenGithubHub) } }
         item { SectionH("Needs you", "${planApprovals.size + verifications.size + requestsForMe.size}") }
         if (planApprovals.isEmpty() && verifications.isEmpty() && requestsForMe.isEmpty()) {
             item { OrchaCard { Text("Nothing needs you right now.", color = p.muted) } }
@@ -177,5 +193,38 @@ internal fun HomeTab(
         }
         state.error?.let { item { Banner(BannerKind.Danger, it) } }
         item { Spacer(Modifier.height(72.dp)) } // FAB clearance
+    }
+}
+
+/** The bound-repo chip + "Hub" link (GitHub hub entry point) — Android parity of iOS
+ *  HomeTabView's `GitHubRepoChip` + Hub `NavigationLink`. Repo-connect (binding a new
+ *  repo) is out of scope here; this only surfaces the hub once a repo is already bound. */
+@Composable
+private fun GitHubHubEntryChip(repo: String, onOpenHub: () -> Unit) {
+    val p = Orcha.palette
+    // One tap target: repo name, GitHub mark, and Hub chip all open the in-app
+    // issues/PRs hub — no external browser detour.
+    Row(
+        Modifier.clickable(onClick = onOpenHub),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MetaTag(repo, mono = true)
+        Row(
+            Modifier
+                .background(p.accentSoft, RoundedCornerShape(999.dp))
+                .border(BorderStroke(1.dp, p.accentLine), RoundedCornerShape(999.dp))
+                .clickable(onClick = onOpenHub)
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(OrchaIcons.GitHub, contentDescription = null, tint = p.accent, modifier = Modifier.size(13.dp))
+            Text(
+                "Hub",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.W600),
+                color = p.accent,
+            )
+        }
     }
 }

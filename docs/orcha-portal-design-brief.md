@@ -156,6 +156,13 @@ Design real components for each. These are the live entities:
   monospace (e.g. JetBrains Mono) for IDs/diffs/streams; the name "Orcha" set with quiet confidence.
 
 ## 8. Technical constraints & output format
+
+> **Retired (2026-08-05):** the vanilla-JS mandate below described the original
+> portal. The shipped portal is now a **React 18 + TypeScript + Vite** SPA
+> (`templates/portal/frontend/`, plan: `docs/orcha-portal-react-migration-plan.md`)
+> against the same FastAPI backend; `styles.css` remains the shared token layer.
+> The mockup-output guidance still applies to *design deliverables*.
+
 - **Output:** hi-fi **HTML + CSS** mockups, **vanilla** — no React/Vue/Tailwind/build step. The real portal
   is **static HTML + vanilla JS hitting a FastAPI backend** and lives as `home.html`, `agents.html`,
   `tasks.html`, `requests.html` (+ detail views). Design so these can be **lifted directly** into that

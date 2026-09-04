@@ -1,7 +1,7 @@
 """Resolve a proposed agent by creating, reassigning, or refusing it."""
 
 import psycopg
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
@@ -12,12 +12,13 @@ from portal_backend.guards import (
     resolve_alias as _resolve_alias,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import SuggestionDecision
 
 
 @app.post("/api/agent-suggestions/{rid}/decide", status_code=200)
-def decide_suggestion(rid: str, body: SuggestionDecision):
+def decide_suggestion(rid: str, body: SuggestionDecision, request: Request):
     """Human resolves an agent suggestion.
 
     kind='create': spawns the proposed agent, then accepts the underlying task request for them.
@@ -27,10 +28,14 @@ def decide_suggestion(rid: str, body: SuggestionDecision):
     if not _valid_uuid(rid):
         raise HTTPException(400, "request_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         r = require_request(
             cur, rid, for_update=True
         )  # lock: serialize all request-state mutations
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(
+            cur, request, str(r["container_id"]), body.actor_agent_id
+        )
+        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         # Orcha#30: detect a pending suggestion by detail.proposed_alias, not by null target.
         # The request now lives in the targeted human's inbox until resolved.
         detail = r["detail"] or {}

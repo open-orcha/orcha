@@ -1,6 +1,6 @@
 """Assign or reassign an existing task and wake its owner."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
@@ -14,11 +14,12 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas.task_operations import AssignTask
 
 
 @app.post("/api/tasks/{tid}/assign", status_code=200)
-def assign_task(tid: str, body: AssignTask):
+def assign_task(tid: str, body: AssignTask, request: Request):
     """B5: assign an EXISTING task to an agent and wake them — unblocks O4 (assign-from-detail).
 
     Actor: a human OR a dispatching AI orchestrator (#327 — matches create_task, which already
@@ -41,6 +42,8 @@ def assign_task(tid: str, body: AssignTask):
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
         cid = str(t["container_id"])
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
         # #327: the AI orchestrator may dispatch (assign/reassign) an EXISTING task. This is the
         # SAME state change create_task already lets any kind='ai' make at create-time (its
         # `assignee_alias` is not human-gated), so locking assign-existing behind a human was an

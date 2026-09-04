@@ -71,6 +71,7 @@ def build_persona(
         protocol,
         lane=lane,
         render_resume=render_resume,
+        api_base=api_base,
     )
     if return_resume_rendered:
         return formatted, resume_rendered

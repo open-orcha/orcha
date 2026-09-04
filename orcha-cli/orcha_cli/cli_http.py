@@ -46,6 +46,27 @@ def _post_json(url: str, body: dict) -> dict:
         raise RuntimeError(f"HTTP {e.code} {e.read().decode(errors='replace')[:500]}") from e
 
 
+def _put_json(url: str, body: dict) -> dict:
+    """Tiny urllib PUT helper; returns parsed JSON. Raises on non-2xx.
+
+    Mirrors ``_post_json`` — added for `orcha init`'s GitHub auto-bind
+    (PUT /api/containers/{cid}/github), kept generic for other setters.
+    """
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} {e.read().decode(errors='replace')[:500]}") from e
+
+
 def _get_json(url: str, timeout: float = 5.0) -> Optional[dict]:
     """Tiny urllib GET → JSON helper. Returns None on connection/HTTP error.
 

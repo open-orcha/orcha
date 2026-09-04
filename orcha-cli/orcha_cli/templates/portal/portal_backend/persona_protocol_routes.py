@@ -85,9 +85,17 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
     complete spec, not just the title. The body is returned whenever a task resolves, independent
     of whether a protocol is set; `protocol` is null when no working agreement exists.
 
-    Returns {task_id, title, description, definition_of_done, protocol} for the resolved task, or
-    {task_id: null, protocol: null} when none resolves — so a cold/idle wake carries neither a body
-    nor a protocol section."""
+    PR attribution (docs/agent-prs.md): the resolved task also carries `requested_by` — the
+    triggering HUMAN's {alias, github_login, git_email} — so an agent opening a PR for this task
+    can @mention them in the body and add a Co-authored-by trailer. Resolution: the task's
+    created_by_agent_id when that row is a human (the trusted browser lane stamps it); otherwise
+    (agent-created subtask, or a headerless-CLI NULL) fall back to the container's earliest live
+    owner human, so attribution is never silently dropped. `requested_by` is null only when the
+    container has no live human at all.
+
+    Returns {task_id, title, description, definition_of_done, protocol, requested_by} for the
+    resolved task, or {task_id: null, protocol: null} when none resolves — so a cold/idle wake
+    carries neither a body nor a protocol section."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
@@ -101,14 +109,16 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
             )
         ):
             cur.execute(
-                "SELECT id, title, description, definition_of_done, protocol "
+                "SELECT id, title, description, definition_of_done, protocol, "
+                "created_by_agent_id "
                 "FROM tasks WHERE id=%s AND is_root=false",
                 (task_id,),
             )
             row = cur.fetchone()
         if row is None:
             cur.execute(
-                """SELECT t.id, t.title, t.description, t.definition_of_done, t.protocol
+                """SELECT t.id, t.title, t.description, t.definition_of_done, t.protocol,
+                          t.created_by_agent_id
                    FROM tasks t
                    JOIN agent_tasks at ON at.task_id = t.id
                    WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
@@ -118,6 +128,25 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
                 (aid,),
             )
             row = cur.fetchone()
+        requested_by = None
+        if row is not None:
+            # Triggering human: the stamped creator when human, else the earliest
+            # live owner — attribution must degrade gracefully, never vanish.
+            cur.execute(
+                """SELECT alias, github_login, git_email FROM agents
+                    WHERE id=%s AND kind='human' AND terminated_at IS NULL""",
+                (row["created_by_agent_id"],),
+            )
+            requested_by = cur.fetchone()
+            if requested_by is None:
+                cur.execute(
+                    """SELECT alias, github_login, git_email FROM agents
+                        WHERE container_id=%s AND kind='human'
+                          AND member_role='owner' AND terminated_at IS NULL
+                        ORDER BY created_at ASC LIMIT 1""",
+                    (str(agent["container_id"]),),
+                )
+                requested_by = cur.fetchone()
         resume_context = None
         if row is not None:
             cur.execute(
@@ -143,6 +172,7 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
         "description": row["description"],
         "definition_of_done": row["definition_of_done"],
         "protocol": row["protocol"] or None,
+        "requested_by": dict(requested_by) if requested_by else None,
     }
     if resume_context:
         result["resume_context"] = resume_context

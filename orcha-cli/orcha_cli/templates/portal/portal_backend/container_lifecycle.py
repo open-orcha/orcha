@@ -1,6 +1,6 @@
 """Catalog and lifecycle routes for portal containers."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -20,6 +20,8 @@ from portal_backend.model_policy import (
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
 )
+from portal_backend.identity_routes import enforce_grant as _enforce_grant
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas import ContainerStatusUpdate
 
 ALLOWED_CONTAINER_STATUSES = {"active", "paused", "completed", "cancelled", "failed"}
@@ -41,7 +43,7 @@ def list_reasoning_efforts():
 
 
 @app.post("/api/containers/{cid}/status", status_code=200)
-def set_container_status(cid: str, body: ContainerStatusUpdate):
+def set_container_status(cid: str, body: ContainerStatusUpdate, request: Request):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if body.status not in ALLOWED_CONTAINER_STATUSES:
@@ -49,8 +51,12 @@ def set_container_status(cid: str, body: ContainerStatusUpdate):
             400, f"status must be one of {sorted(ALLOWED_CONTAINER_STATUSES)}"
         )
     with db_cursor() as (conn, cur):
-        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         c = _require_container(cur, cid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: pause/resume/complete are owner-or-manage_autonomy.
+        _enforce_grant(cur, request, cid, "manage_autonomy")
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
+        _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         old = c["status"]
         completed_clause = ""
         params = [body.status, cid]

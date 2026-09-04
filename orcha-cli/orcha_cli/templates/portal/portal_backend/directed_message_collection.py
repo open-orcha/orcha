@@ -38,7 +38,8 @@ def collect_directed_messages(
         # ABOVE conv_delivered_ts — the resident crashed / never booted — still surface.
         """SELECT e.ts, e.event_name, e.payload FROM agent_events e
            WHERE e.event_key = %s AND e.ts > %s
-             AND e.event_name IN ('prompt', 'task_message', 'task_assigned', 'conversation_turn')
+             AND e.event_name IN ('prompt', 'task_message', 'task_assigned',
+                                   'task_created_unassigned', 'conversation_turn')
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id = %s AND a.event_id = e.id)
              AND NOT (e.event_name = 'conversation_turn'
@@ -108,6 +109,31 @@ def collect_directed_messages(
             ):
                 ack_through_ts = included_ts
                 break
+        elif event_name == "task_created_unassigned":
+            # Automatic triage: a task created with no assignee (Slack capture / GitHub-hub
+            # Start) has nobody to route it — this is the orchestrator's doorbell. The message
+            # is an explicit ROUTING DIRECTIVE (not a passive FYI): read the task, assign the
+            # best-fit specialist per the roster's expertise via the task-assign API, and do NOT
+            # implement it itself — the assignee's own targeted task_assigned wakes them
+            # automatically once assigned, closing the loop without further manual poking.
+            event_task_id = payload.get("task_id")
+            title = payload.get("title") or "(untitled)"
+            if event_task_id:
+                cur.execute("SELECT status FROM tasks WHERE id=%s", (event_task_id,))
+                task_row = cur.fetchone()
+                task_status = task_row["status"] if task_row else None
+            else:
+                task_status = None
+            if not event_task_id or task_status in (None, "completed", "cancelled"):
+                message = None
+            else:
+                short_id = str(event_task_id)[:8]
+                message = (
+                    f"[unassigned task needs ROUTING: {title} (task {short_id})] — this task "
+                    "was captured with no assignee: read it, then ASSIGN the best-fit agent "
+                    "based on the roster's expertise via the task-assign API. Do not implement "
+                    "it yourself — assigning it wakes the assignee automatically."
+                )
         elif event_name == "conversation_turn":
             event_task_id = None
             content = payload.get("content") or ""

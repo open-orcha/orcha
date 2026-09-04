@@ -52,6 +52,7 @@ def _worker_state(
     run_task_id,
     token,
     prompt,
+    sandbox_container_id=None,
 ):
     """Build the daemon-owned state used by progress and completion reapers."""
     now = time.time()
@@ -80,6 +81,9 @@ def _worker_state(
         "last_progress_ts": now,
         "run_id": run_id,
         "log_path": log_path,
+        # I4: the wake's sandbox container rides the record so every
+        # completion path can reap it (container + api-config) after stamping.
+        "sandbox_container_id": sandbox_container_id,
         "worktree": worktree,
         "branch": branch,
         "base_cwd": candidate.get("headless_cwd"),
@@ -190,6 +194,7 @@ def spawn(
             api_base, candidate["agent_id"], lane, "headless"
         )
     )
+    _spawn_info: dict = {}
     sent, command, process = services.spawn_headless(
         run_cwd,
         prompt,
@@ -203,23 +208,46 @@ def spawn(
         log_path=log_path,
         run_token=token,
         conversation=False,
+        spawn_info=_spawn_info,
     )
+    # Issue #75: the box-wide concurrency cap deferred this spawn (ground-truth count
+    # ≥ budget at decision time). NOT a failure — release everything we speculatively
+    # claimed (lease, worktree) so the candidate re-competes cleanly on a later tick in
+    # the SAME server-side ORDER BY created_at order (oldest agent first = fairness, no
+    # starvation), and log the cap ONCE for this deferral (per tick, not per second).
+    if _spawn_info.get("deferred"):
+        if worktree:
+            services._teardown_worktree(headless_cwd, worktree, branch)
+        if not dry_run:
+            services._revoke_or_defer(api_base, token)
+        if not quiet:
+            print(
+                f"[notifier] cap-deferred wake for {candidate.get('alias')}: "
+                f"{command} — stays eligible next tick"
+            )
+        return None
     if sent and process is not None and live_workers is not None:
+        _run_payload = {
+            "wake_kind": "ephemeral",
+            "wake_event": event,
+            "task_id": run_task_id,
+            "log_path": str(log_path) if log_path else None,
+            "pid": getattr(process, "pid", None),
+            "runtime": candidate.get("model_runtime"),
+            "worktree": worktree,
+            "branch": branch,
+            "base_cwd": headless_cwd,
+            "lane": lane,
+            "token_id": token,
+        }
+        # Remote-runner §3.3c: a sandbox wake stamps its container name (and wake_kind)
+        # so re-adoption by label + container-runtime metering work off the run row.
+        if _spawn_info.get("sandbox_container_id"):
+            _run_payload["sandbox_container_id"] = _spawn_info["sandbox_container_id"]
+            _run_payload["wake_kind"] = "sandbox"
         run = services._post_json(
             f"{api_base}/api/agents/{candidate['agent_id']}/runs",
-            {
-                "wake_kind": "ephemeral",
-                "wake_event": event,
-                "task_id": run_task_id,
-                "log_path": str(log_path) if log_path else None,
-                "pid": getattr(process, "pid", None),
-                "runtime": candidate.get("model_runtime"),
-                "worktree": worktree,
-                "branch": branch,
-                "base_cwd": headless_cwd,
-                "lane": lane,
-                "token_id": token,
-            },
+            _run_payload,
         )
         run_id = (run or {}).get("run_id")
         if not run_id and not quiet:
@@ -242,6 +270,7 @@ def spawn(
             run_task_id=run_task_id,
             token=token,
             prompt=prompt,
+            sandbox_container_id=_spawn_info.get("sandbox_container_id"),
         )
     elif worktree and not sent:
         services._teardown_worktree(headless_cwd, worktree, branch)

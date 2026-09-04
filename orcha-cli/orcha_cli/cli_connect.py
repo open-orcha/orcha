@@ -92,9 +92,17 @@ def connect_command(
     human_alias = (args.as_user or "").strip() or None
     if human_alias:
         try:
+            # PR attribution: carry the optional GitHub identity (same as init --github).
+            _human_body = {"alias": human_alias, "role": "operator", "kind": "human"}
+            _gh = (getattr(args, "github_login", None) or "").lstrip("@").strip()
+            _ge = (getattr(args, "git_email", None) or "").strip()
+            if _gh:
+                _human_body["github_login"] = _gh
+            if _ge:
+                _human_body["git_email"] = _ge
             response = post_json(
                 f"{api_base}/api/containers/{container_id}/agents",
-                {"alias": human_alias, "role": "operator", "kind": "human"},
+                _human_body,
             )
             human_agent_id = response["agent_id"]
             binding = {

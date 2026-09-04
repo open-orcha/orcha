@@ -1,0 +1,338 @@
+<section id="demo-fleet" class="mk-section fw-root" aria-labelledby="fw-title">
+  <header class="fw-head">
+    <div class="fw-eyebrow">— 01 / Product demo</div>
+    <h2 class="fw-title" id="fw-title">One task, <span class="fw-title-em">end to end</span>.</h2>
+    <p class="fw-sub">Dispatch from anywhere, watch it run in a sandbox, read the diff,
+    and merge — a human holds the pen on every decision that matters.</p>
+  </header>
+
+  <div class="fw-theater" id="fw-theater" tabindex="-1">
+    <div class="fw-chrome" aria-hidden="true">
+      <span class="fw-dot3"></span><span class="fw-dot3"></span><span class="fw-dot3"></span>
+      <span class="fw-url">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+        app.orcha.cloud
+      </span>
+    </div>
+
+    <div class="fw-frame">
+      <div class="fw-stage" id="fw-stage" role="img" aria-label="Animated preview: one task dispatched, run, and merged">
+        <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+          <defs>
+            <symbol id="fw-i-check" viewBox="0 0 16 16"><path d="M2.5 8.5 6 12l7.5-8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+            <symbol id="fw-i-propen" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4" cy="3.5" r="1.7"/><path d="M4 5.2v5.6"/><circle cx="4" cy="12.5" r="1.7"/><path d="M7.5 3.5h2.5a2 2 0 0 1 2 2v5.3"/><circle cx="12" cy="12.5" r="1.7"/></g></symbol>
+            <symbol id="fw-i-prmerged" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4" cy="3.5" r="1.7"/><path d="M4 5.2v5.6"/><circle cx="4" cy="12.5" r="1.7"/><path d="M4.2 5.2c.4 2.4 2.6 4.3 5.9 4.3"/><circle cx="12" cy="9.5" r="1.7"/></g></symbol>
+          </defs>
+        </svg>
+
+        <!-- scene 1 · dispatch from anywhere -->
+        <div class="fw-scene fw-on" data-scene="0">
+          <div class="fw-sc-task">
+            <div class="fw-pane fw-chat" data-an="rise" style="--d:.1s">
+              <div class="fw-pane-h">Chat · acme-labs/acme-ehr <span class="fw-grow"></span><span class="fw-mono fw-faint">web · iOS · CLI</span></div>
+              <div class="fw-chatbody">
+                <div class="fw-bubble" data-an="rise" style="--d:.4s">
+                  <span class="fw-btype">Eligibility gate bypassed on raw data router</span>
+                </div>
+                <div class="fw-composer">
+                  <span class="fw-faint">Message an agent…</span>
+                  <span class="fw-send" data-an="press" style="--d:2.5s" aria-hidden="true">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="fw-comet" aria-hidden="true"><span class="fw-cdot"></span></div>
+            <div class="fw-pane fw-tasklist" data-an="rise" style="--d:.3s">
+              <div class="fw-pane-h">Tasks <span class="fw-grow"></span><span class="fw-mono fw-faint">3 active</span></div>
+              <div class="fw-trow"><span class="fw-tid">#39</span><span class="fw-tt">Portal: markdown in agent replies</span><span class="fw-pill fw-p-vio">merged</span></div>
+              <div class="fw-trow"><span class="fw-tid">#40</span><span class="fw-tt">Tighten sandbox egress allowlist</span><span class="fw-pill fw-p-ok">verified</span></div>
+              <div class="fw-trow fw-new fw-late" data-an="slide" style="--d:3.6s"><span class="fw-tid">#41</span><span class="fw-tt">CRITICAL: eligibility gate bypassed</span><span class="fw-pill fw-p-crm"><span class="fw-pdot"></span>queued</span></div>
+            </div>
+          </div>
+          <p class="fw-note">Dispatch from the portal, the iOS app, or the CLI — every task lands in the <b>same queue</b>, attributed to you.</p>
+        </div>
+
+        <!-- scene 2 · the sandbox spins up -->
+        <div class="fw-scene" data-scene="1">
+          <div class="fw-sc-box">
+            <div class="fw-sbx">
+              <svg class="fw-edge" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 100 100"><rect x="1" y="1" width="98" height="98" rx="4" pathLength="260"/></svg>
+              <span class="fw-sbx-t">container · task-41</span>
+              <div class="fw-clone">
+                <span data-an="fade" style="--d:.7s"><span class="fw-cpr">$</span> docker run --rm orcha/runner:latest</span><br>
+                <span data-an="fade" style="--d:1.4s"><span class="fw-cpr">$</span> git clone acme-labs/acme-ehr.git</span><br>
+                <span class="fw-late" data-an="fade" style="--d:2.3s"><span class="fw-cok">&check;</span> workspace ready in 1.9s</span>
+              </div>
+              <div class="fw-caps">
+                <span class="fw-chip fw-late" data-an="pop" style="--d:2.9s">fresh container</span>
+                <span class="fw-chip fw-late" data-an="pop" style="--d:3.05s">capped</span>
+                <span class="fw-chip fw-late" data-an="pop" style="--d:3.2s">non-root</span>
+                <span class="fw-chip fw-late" data-an="pop" style="--d:3.35s">reaped after run</span>
+              </div>
+            </div>
+          </div>
+          <p class="fw-note">Every agent wake runs in a <b>fresh Docker container</b> — capped, non-root, reaped after the run.</p>
+        </div>
+
+        <!-- scene 3 · the agent works, diff inline -->
+        <div class="fw-scene" data-scene="2">
+          <div class="fw-sc-term">
+            <div class="fw-term" data-an="rise" style="--d:.1s">
+              <span class="fw-tl" data-an="fade" style="--d:.5s"><span class="fw-tp">$</span> pytest tests/tenant_gate</span>
+              <span class="fw-tl" data-an="fade" style="--d:1.1s"><span class="fw-tw">F</span> 3 failed &mdash; raw data router bypasses gate</span>
+              <span class="fw-tl" data-an="fade" style="--d:1.9s"><span class="fw-tc">&#9998;</span> editing module_guard.ts <span class="fw-tg">+18</span> <span class="fw-tw">&minus;3</span></span>
+              <details class="fw-tl fw-late fw-diffdrop" data-an="fade" style="--d:2.7s">
+                <summary>code diff <span class="fw-faint">module_guard.ts</span></summary>
+                <div class="fw-diffbody">
+                  <div class="fw-dl fw-del"><span class="fw-dsign">-</span><span class="fw-dcode">  <span class="fw-kw">if</span> (route.isRaw) <span class="fw-kw">return</span> next();</span></div>
+                  <div class="fw-dl fw-add"><span class="fw-dsign">+</span><span class="fw-dcode">  <span class="fw-kw">if</span> (route.isRaw) checkEligibility(tenant);</span></div>
+                  <div class="fw-dl fw-add"><span class="fw-dsign">+</span><span class="fw-dcode">  <span class="fw-kw">if</span> (!tenant.active) <span class="fw-kw">return</span> res.status(<span class="fw-num">403</span>).end();</span></div>
+                </div>
+              </details>
+              <span class="fw-tl fw-late" data-an="fade" style="--d:5.6s"><span class="fw-tp">$</span> pytest tests/tenant_gate</span>
+              <span class="fw-tl fw-late" data-an="fade" style="--d:6.4s"><span class="fw-tg">&check;</span> 214 passed <span class="fw-tmut">in 4.1s</span></span>
+            </div>
+          </div>
+          <p class="fw-note">The agent reproduces the failure, edits the code, and re-runs the suite — <b>the diff renders inline in the run stream</b>.</p>
+        </div>
+
+        <!-- scene 4 · bot PR + needs_verification -->
+        <div class="fw-scene" data-scene="3">
+          <div class="fw-sc-pr">
+            <div class="fw-pane fw-pr" data-an="rise" style="--d:.1s">
+              <div class="fw-pane-h fw-pr-h">
+                <span class="fw-pr-ic fw-open" aria-hidden="true"><svg viewBox="0 0 16 16"><use href="#fw-i-propen"/></svg></span>
+                <span class="fw-prtitle-wrap">
+                  <span class="fw-pr-title">fix: enforce eligibility on raw data router <span class="fw-prnum">#41</span></span>
+                  <span class="fw-pr-meta"><span class="fw-mono">orcha-cloud[bot]</span> wants to merge 1 commit into <span class="fw-mono">main</span> from <span class="fw-mono">orcha/gate-raw-router</span></span>
+                </span>
+                <span class="fw-botpill" title="orcha-cloud[bot]"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="10" height="8" rx="2"/><path d="M8 5V2.6"/><circle cx="8" cy="2.1" r=".8" fill="currentColor"/><path d="M6 8.4v1M10 8.4v1"/></svg>bot</span>
+              </div>
+              <div class="fw-pr-body">
+                <div class="fw-prstats" data-an="slide" style="--d:.6s">
+                  <span class="fw-branch"><span class="fw-mono">orcha/gate-raw-router</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 3v10M12 6l-8 4"/></svg><span class="fw-mono">main</span></span>
+                  <span class="fw-grow"></span>
+                  <span class="fw-diff-stat"><span class="fw-dadd">+18</span> <span class="fw-ddel">&minus;3</span> <span class="fw-faint">· 1 file</span></span>
+                </div>
+                <div class="fw-prcheck" data-an="slide" style="--d:1s"><svg viewBox="0 0 16 16"><use href="#fw-i-check"/></svg>All checks passed — 214 tests, lint, build</div>
+                <div class="fw-vfoot fw-late" data-an="fade" style="--d:2s">
+                  <span class="fw-pill fw-p-warn"><span class="fw-pdot"></span>needs_verification</span>
+                  Agents stop here. They never self-certify.
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="fw-note">Agents push as the app bot — <b>zero human credentials in the container</b>. Tokens last one hour and auto-rotate.</p>
+        </div>
+
+        <!-- scene 5 · human verify + merge -->
+        <div class="fw-scene" data-scene="4">
+          <div class="fw-sc-merge">
+            <div class="fw-pane fw-pr fw-pr-merge" data-an="rise" style="--d:.1s">
+              <div class="fw-pane-h fw-pr-h">
+                <span class="fw-stack">
+                  <span class="fw-pr-ic fw-open" data-an="gone" style="--d:3.4s" aria-hidden="true"><svg viewBox="0 0 16 16"><use href="#fw-i-propen"/></svg></span>
+                  <span class="fw-pr-ic fw-merged fw-swap-in" data-an="pop" style="--d:3.5s" aria-hidden="true"><svg viewBox="0 0 16 16"><use href="#fw-i-prmerged"/></svg></span>
+                </span>
+                <span class="fw-prtitle-wrap">
+                  <span class="fw-pr-title">fix: enforce eligibility on raw data router <span class="fw-prnum">#41</span></span>
+                  <span class="fw-pr-meta fw-stack">
+                    <span data-an="gone" style="--d:3.4s"><span class="fw-mono">open</span> · awaiting merge</span>
+                    <span class="fw-swap-in" data-an="fade" style="--d:3.55s"><span class="fw-mono">merged</span> by <b>you</b></span>
+                  </span>
+                </span>
+              </div>
+              <div class="fw-pr-body">
+                <div class="fw-prcheck" data-an="slide" style="--d:.6s"><svg viewBox="0 0 16 16"><use href="#fw-i-check"/></svg>fresh-session review: <b>gate enforced on all 6 paths</b></div>
+                <div class="fw-stack">
+                  <span data-an="gone" style="--d:3.45s"><span class="fw-mergebtn" data-an="press" style="--d:3.1s">Merge pull request</span></span>
+                  <span class="fw-pill fw-p-vio fw-swap-in" data-an="pop" style="--d:3.65s">Merged · task verified</span>
+                </div>
+                <span class="fw-clickdot" aria-hidden="true"></span>
+              </div>
+            </div>
+          </div>
+          <p class="fw-note">Agents stop at <b>needs_verification</b> and <b>never self-certify</b> — the merge is always a human decision.</p>
+        </div>
+
+        <!-- scene 6 · closing still -->
+        <div class="fw-scene" data-scene="5">
+          <div class="fw-sc-close">
+            <div class="fw-close-in" data-an="rise" style="--d:.1s">
+              <span class="fw-check" data-an="pop" style="--d:.4s" aria-hidden="true">
+                <svg viewBox="0 0 16 16"><use href="#fw-i-check"/></svg>
+              </span>
+              <p class="fw-close-line">Eligibility gate fixed. PR merged. A human made the call.</p>
+              <div class="fw-metrics">
+                <span class="fw-metric fw-late" data-an="pop" style="--d:.8s"><span class="fw-mlabel">Cost</span><span class="fw-mval fw-mono">$0.87</span></span>
+                <span class="fw-metric fw-late" data-an="pop" style="--d:.95s"><span class="fw-mlabel">Duration</span><span class="fw-mval fw-mono">11m</span></span>
+                <span class="fw-metric fw-late" data-an="pop" style="--d:1.1s"><span class="fw-mlabel">Sandbox</span><span class="fw-mval fw-mono">reaped</span></span>
+              </div>
+              <p class="fw-close-sub fw-faint">The merge was yours.</p>
+            </div>
+          </div>
+          <p class="fw-note">Every run logs its <b>cost and duration</b> — the whole task, priced and timed.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="fw-capbar">
+      <p class="fw-cap" id="fw-cap"><strong>Dispatch from anywhere.</strong> Type a task in the portal, iOS app, or CLI.</p>
+      <span class="fw-count" id="fw-count">01 / 06</span>
+      <div class="fw-ctrl">
+        <button class="fw-cbtn" id="fw-prev" type="button" aria-label="Previous scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        </button>
+        <button class="fw-cbtn fw-play-t" id="fw-play" type="button" aria-label="Pause autoplay" aria-pressed="true">
+          <svg class="fw-ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 2.8v10.4c0 .6.65.97 1.17.66l8.2-5.2a.78.78 0 0 0 0-1.32l-8.2-5.2a.78.78 0 0 0-1.17.66z"/></svg>
+          <svg class="fw-ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1"/></svg>
+        </button>
+        <button class="fw-cbtn" id="fw-next" type="button" aria-label="Next scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <nav class="fw-dots" id="fw-dots" role="group" aria-label="Demo scenes"></nav>
+    <span class="fw-track" aria-hidden="true"><span class="fw-track-fill" id="fw-track-fill"></span></span>
+  </div>
+
+  <style>
+.fw-root{--fw-ok:var(--success-text);--fw-ok-soft:color-mix(in srgb,var(--success) 14%,transparent);--fw-warn:var(--warning-text);--fw-warn-soft:color-mix(in srgb,var(--warning-text) 15%,transparent);--fw-vio:#9B78E6;--fw-vio-soft:color-mix(in srgb,#9B78E6 16%,transparent);--fw-crm:var(--accent-text);--fw-crm-soft:var(--gold-soft);padding:96px 24px;background:var(--canvas);color:var(--text-primary);font-family:var(--font-sans)}.fw-head{max-width:720px;margin:0 auto 44px;text-align:center}.fw-eyebrow{font-family:var(--font-mono);font-size:12px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-text)}.fw-title{margin:14px 0 14px;font-family:var(--font-serif);font-weight:400;font-size:clamp(30px,4vw,46px);line-height:1.08;letter-spacing:-.015em;color:var(--text-primary)}.fw-title-em{font-style:italic;color:var(--accent-text)}.fw-sub{font-size:16px;line-height:1.55;color:var(--text-secondary);max-width:620px;margin:0 auto}.fw-head,.fw-theater{opacity:0;transform:translateY(26px);transition:opacity .9s cubic-bezier(.16,1,.3,1),transform .9s cubic-bezier(.16,1,.3,1)}.fw-theater{transition-delay:.1s}.fw-root.fw-in .fw-head,.fw-root.fw-in .fw-theater{opacity:1;transform:none}.fw-theater{max-width:960px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-3xl);box-shadow:var(--shadow-float);overflow:hidden}.fw-theater:focus-visible{outline:2px solid var(--accent-strong);outline-offset:3px}.fw-chrome{display:flex;align-items:center;gap:7px;padding:12px 16px;background:var(--surface-subtle);border-bottom:1px solid var(--border)}.fw-dot3{width:10px;height:10px;border-radius:50%;background:var(--border-strong)}.fw-url{margin-left:10px;display:inline-flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px 12px;font-family:var(--font-mono);font-size:11.5px;color:var(--text-tertiary)}.fw-url svg{width:13px;height:13px;color:var(--accent-strong)}.fw-frame{display:block}.fw-stage{position:relative;overflow:hidden;min-height:452px;background:radial-gradient(560px 300px at 84% -10%,var(--gold-soft),transparent 60%),var(--surface)}.fw-scene{position:absolute;inset:0;padding:30px 34px 60px;opacity:0;transform:translateX(26px);transition:opacity .38s cubic-bezier(.16,1,.3,1),transform .38s cubic-bezier(.16,1,.3,1);pointer-events:none;visibility:hidden}.fw-scene.fw-on{opacity:1;transform:none;visibility:visible}.fw-scene.fw-bye{opacity:0;transform:translateX(-22px);visibility:visible}.fw-capbar{display:flex;align-items:center;gap:14px;padding:13px 20px;background:var(--surface-subtle);border-top:1px solid var(--border)}.fw-cap{flex:1;min-width:0;font-size:13.5px;color:var(--text-secondary);opacity:1;transition:opacity .28s ease}.fw-cap strong{color:var(--text-primary);font-weight:700}.fw-cap.fw-swap{opacity:0}.fw-count{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);white-space:nowrap}.fw-ctrl{display:flex;align-items:center;gap:6px}.fw-cbtn{all:unset;cursor:pointer;box-sizing:border-box;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;color:var(--text-tertiary);background:var(--surface);border:1px solid var(--border-strong);transition:color .15s ease,border-color .15s ease,background .15s ease}.fw-cbtn:hover{color:var(--text-primary);border-color:var(--accent-strong)}.fw-cbtn:focus-visible{outline:2px solid var(--accent-strong);outline-offset:1px}.fw-cbtn svg{width:14px;height:14px}.fw-cbtn.fw-play-t[aria-pressed="true"]{color:var(--accent-text);border-color:var(--accent-strong);background:var(--gold-soft)}.fw-cbtn .fw-ic-pause{display:none}.fw-cbtn.fw-play-t[aria-pressed="true"] .fw-ic-pause{display:block}.fw-cbtn.fw-play-t[aria-pressed="true"] .fw-ic-play{display:none}.fw-dots{display:flex;align-items:center;justify-content:center;gap:9px;padding:14px 20px 6px;background:var(--surface-subtle)}.fw-dot{all:unset;cursor:pointer;position:relative;width:9px;height:9px;border-radius:50%;background:var(--border-strong);transition:background .2s ease,transform .2s ease}.fw-dot:hover{background:var(--text-tertiary);transform:scale(1.15)}.fw-dot:focus-visible{outline:2px solid var(--accent-strong);outline-offset:2px}.fw-dot[aria-current="true"]{background:var(--accent-strong);transform:scale(1.15)}.fw-dot .fw-tip{position:absolute;bottom:calc(100% + 9px);left:50%;transform:translateX(-50%);padding:5px 9px;border-radius:7px;white-space:nowrap;background:var(--text-primary);color:var(--surface);font-size:11px;font-weight:600;letter-spacing:-.005em;opacity:0;pointer-events:none;transition:opacity .15s ease;box-shadow:var(--shadow-card);z-index:5}.fw-dot:hover .fw-tip,.fw-dot:focus-visible .fw-tip{opacity:1}.fw-track{display:block;height:3px;margin:8px 20px 16px;border-radius:99px;background:var(--border);overflow:hidden}.fw-track-fill{display:block;height:100%;width:100%;border-radius:99px;background:var(--accent-strong);transform:scaleX(0);transform-origin:left center}.fw-pane{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);box-shadow:var(--shadow-card)}.fw-pane-h{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--border);font-size:12.5px;font-weight:700;color:var(--text-secondary)}.fw-grow{flex:1}.fw-mono{font-family:var(--font-mono)}.fw-faint{color:var(--text-tertiary);font-weight:500}.fw-pane-h .fw-mono{font-size:10.5px}.fw-pill{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:11px;line-height:1;padding:5px 10px;border-radius:999px;border:1px solid transparent;white-space:nowrap}.fw-pill .fw-pdot{width:6px;height:6px;border-radius:50%;background:currentColor}.fw-p-crm{color:var(--fw-crm);background:var(--fw-crm-soft);border-color:color-mix(in srgb,var(--gold) 40%,transparent)}.fw-p-crm .fw-pdot{animation:fw-pulse 2s infinite}.fw-p-ok{color:var(--fw-ok);background:var(--fw-ok-soft);border-color:color-mix(in srgb,var(--success) 34%,transparent)}.fw-p-warn{color:var(--fw-warn);background:var(--fw-warn-soft);border-color:color-mix(in srgb,var(--warning-text) 40%,transparent)}.fw-p-vio{color:var(--fw-vio);background:var(--fw-vio-soft);border-color:color-mix(in srgb,var(--fw-vio) 40%,transparent)}@keyframes fw-pulse{0%,100%{opacity:1}50%{opacity:.35}}.fw-dadd{color:var(--fw-ok);font-family:var(--font-mono);font-size:11px;font-weight:700}.fw-ddel{color:var(--danger);font-family:var(--font-mono);font-size:11px;font-weight:700}.fw-diff-stat{display:inline-flex;align-items:center;gap:6px}.fw-note{position:absolute;left:34px;right:34px;bottom:20px;font-size:11.5px;line-height:1.5;color:var(--text-tertiary);text-align:center}.fw-note b{color:var(--text-secondary);font-weight:700}.fw-stack{position:relative;display:inline-grid}.fw-stack > *{grid-area:1 / 1}@keyframes fw-rise{from{opacity:0;transform:translateY(13px)}to{opacity:1;transform:none}}@keyframes fw-slide{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}@keyframes fw-pop{from{opacity:0;transform:scale(.64)}to{opacity:1;transform:none}}@keyframes fw-fade{from{opacity:0}to{opacity:1}}@keyframes fw-gone{to{opacity:0;transform:scale(.86);visibility:hidden}}@keyframes fw-press{0%,100%{transform:none}45%{transform:scale(.95);filter:brightness(1.06)}}.fw-scene.fw-play [data-an]{animation-delay:var(--d,0s);animation-fill-mode:both}.fw-scene.fw-play [data-an="rise"]{animation:fw-rise .55s cubic-bezier(.16,1,.3,1) both}.fw-scene.fw-play [data-an="slide"]{animation:fw-slide .5s cubic-bezier(.16,1,.3,1) both}.fw-scene.fw-play [data-an="pop"]{animation:fw-pop .42s cubic-bezier(.16,1,.3,1) both}.fw-scene.fw-play [data-an="fade"]{animation:fw-fade .5s ease both}.fw-scene.fw-play [data-an="gone"]{animation:fw-gone .4s ease both}.fw-scene.fw-play [data-an="press"]{animation:fw-press .5s ease both}.fw-swap-in{opacity:0;visibility:hidden}.fw-scene.fw-play .fw-swap-in{opacity:1;visibility:visible}.fw-sc-task{display:grid;grid-template-columns:260px 1fr;gap:44px;align-items:center;height:100%;padding-bottom:40px}.fw-chat{align-self:center}.fw-chatbody{padding:12px 12px 12px}.fw-bubble{background:var(--gold-soft);border:1px solid color-mix(in srgb,var(--gold) 32%,transparent);color:var(--text-primary);border-radius:12px 12px 4px 12px;padding:9px 11px;font-size:12px;line-height:1.4;margin-left:24px;overflow:hidden}.fw-btype{display:inline-block;overflow:hidden;white-space:nowrap;vertical-align:bottom;max-width:100%}.fw-scene.fw-play .fw-chat .fw-btype{width:0;animation:fw-type 1.6s steps(38,end) .5s forwards}@keyframes fw-type{from{width:0}to{width:38ch}}.fw-composer{margin-top:12px;display:flex;align-items:center;gap:8px;background:var(--surface-subtle);border:1px solid var(--border);border-radius:99px;padding:7px 7px 7px 14px;font-size:11px}.fw-composer .fw-send{margin-left:auto;width:24px;height:24px;border-radius:50%;background:var(--accent-strong);color:var(--on-accent-strong);display:grid;place-items:center;flex:none}.fw-composer .fw-send svg{width:11px;height:11px}.fw-sc-task .fw-comet{position:absolute;left:290px;right:46%;top:50%;height:2px;margin-top:-24px;background:repeating-linear-gradient(90deg,var(--border-strong) 0 6px,transparent 6px 12px)}.fw-sc-task .fw-comet .fw-cdot{position:absolute;top:50%;left:0;margin-top:-4px;width:8px;height:8px;border-radius:50%;background:var(--accent-strong);box-shadow:0 0 12px var(--gold);opacity:0}.fw-scene.fw-play .fw-sc-task .fw-comet .fw-cdot{animation:fw-comet 1s ease-in-out 2.9s forwards}@keyframes fw-comet{0%{left:0;opacity:0}18%{opacity:1}82%{opacity:1}100%{left:100%;opacity:0}}.fw-tasklist{min-width:0;align-self:center}.fw-trow{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);font-size:12.5px;color:var(--text-secondary)}.fw-trow:last-child{border-bottom:0}.fw-tid{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)}.fw-tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fw-trow.fw-new{background:var(--gold-soft)}.fw-trow.fw-new .fw-tt{color:var(--text-primary);font-weight:600}.fw-sbx{position:relative;width:min(440px,100%);padding:22px 24px 20px}.fw-sbx .fw-edge{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.fw-sbx .fw-edge rect{fill:none;stroke:var(--accent-strong);stroke-width:1.6;stroke-dasharray:7 6;vector-effect:non-scaling-stroke;opacity:.55}.fw-scene.fw-play .fw-sbx .fw-edge rect{animation:fw-sketch 1.3s cubic-bezier(.16,1,.3,1) .15s both}@keyframes fw-sketch{from{stroke-dashoffset:260;opacity:0}12%{opacity:.55}to{stroke-dashoffset:0;opacity:.55}}.fw-sbx .fw-sbx-t{position:absolute;top:-9px;left:20px;background:var(--surface);padding:0 8px;font-family:var(--font-mono);font-size:11px;color:var(--accent-text)}.fw-sbx .fw-clone{font-family:var(--font-mono);font-size:11.5px;line-height:1.95;color:var(--text-secondary)}.fw-sbx .fw-clone .fw-cpr{color:var(--text-tertiary)}.fw-sbx .fw-clone .fw-cok{color:var(--fw-ok)}.fw-sbx .fw-caps{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}.fw-chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);background:var(--surface-subtle);border:1px solid var(--border);border-radius:7px;padding:4px 8px;white-space:nowrap}.fw-term{--fw-t-bg:#17130E;--fw-t-fg:#D8CFBE;--fw-t-mut:#9C9284;--fw-t-crm:#E7C368;--fw-t-ok:#4ADE80;--fw-t-warn:#FBBF24}.fw-sc-term{height:100%;padding-bottom:40px;display:grid;align-items:center}.fw-term{background:var(--fw-t-bg);border:1px solid #3A3226;border-radius:var(--radius-xl);padding:16px 18px;overflow:hidden;box-shadow:var(--shadow-card);font-family:var(--font-mono);font-size:11.5px;line-height:1.95;color:var(--fw-t-fg)}.fw-term .fw-tl{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.fw-term .fw-tp{color:var(--fw-t-mut)}.fw-term .fw-tmut{color:var(--fw-t-mut)}.fw-term .fw-tc{color:var(--fw-t-crm)}.fw-term .fw-tg{color:var(--fw-t-ok)}.fw-term .fw-tw{color:var(--fw-t-warn)}.fw-diffdrop{white-space:normal}.fw-diffdrop summary{cursor:pointer;color:var(--fw-t-crm);list-style:none}.fw-diffdrop summary::-webkit-details-marker{display:none}.fw-diffdrop summary::before{content:"▸ "}.fw-diffdrop[open] summary::before{content:"▾ "}.fw-diffbody{margin:4px 0 2px;padding:6px 0 2px;border-top:1px dashed #3A3226}.fw-dl{display:flex;align-items:stretch;white-space:nowrap}.fw-dsign{flex:none;width:14px;text-align:center}.fw-dcode{flex:1;min-width:0;color:var(--fw-t-fg)}.fw-dl.fw-del{background:color-mix(in srgb,var(--danger) 16%,transparent)}.fw-dl.fw-del .fw-dsign{color:var(--danger)}.fw-dl.fw-add{background:color-mix(in srgb,var(--fw-t-ok) 16%,transparent)}.fw-dl.fw-add .fw-dsign{color:var(--fw-t-ok)}.fw-kw{color:#B79CF0}.fw-num{color:var(--fw-t-crm)}.fw-pr{width:min(500px,100%)}.fw-pr-h{align-items:flex-start}.fw-pr-ic{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;margin-top:1px}.fw-pr-ic svg{width:15px;height:15px}.fw-pr-ic.fw-open{background:var(--fw-ok-soft);color:var(--fw-ok);border:1px solid color-mix(in srgb,var(--success) 34%,transparent)}.fw-pr-ic.fw-merged{background:var(--fw-vio-soft);color:var(--fw-vio);border:1px solid color-mix(in srgb,var(--fw-vio) 40%,transparent)}.fw-prtitle-wrap{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}.fw-pr-title{font-size:13px;font-weight:700;color:var(--text-primary);line-height:1.35}.fw-pr-title .fw-prnum{color:var(--text-tertiary);font-weight:500}.fw-pr-meta{font-size:11px;color:var(--text-tertiary);line-height:1.5}.fw-pr-meta .fw-mono{font-size:10.5px;color:var(--text-secondary)}.fw-botpill{display:inline-flex;align-items:center;gap:5px;flex:none;margin-top:1px;font-size:10px;font-weight:700;color:var(--fw-vio);background:var(--fw-vio-soft);border:1px solid color-mix(in srgb,var(--fw-vio) 40%,transparent);border-radius:999px;padding:3px 8px 3px 6px}.fw-botpill svg{width:12px;height:12px}.fw-pr-body{padding:12px 14px 14px;display:flex;flex-direction:column;gap:9px}.fw-prstats{display:flex;align-items:center;gap:10px;font-size:11.5px}.fw-branch{display:inline-flex;align-items:center;gap:6px;color:var(--text-secondary)}.fw-branch svg{width:13px;height:13px;color:var(--text-tertiary)}.fw-branch .fw-mono{font-size:10.5px}.fw-prcheck{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text-secondary);background:var(--fw-ok-soft);border:1px solid color-mix(in srgb,var(--success) 30%,transparent);border-radius:10px;padding:9px 12px}.fw-prcheck > svg{width:13px;height:13px;color:var(--fw-ok);flex:none}.fw-prcheck b{color:var(--text-primary)}.fw-vfoot{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--text-tertiary)}.fw-sc-box,.fw-sc-pr,.fw-sc-merge{display:grid;place-items:center;height:100%;padding-bottom:40px}.fw-pr-merge .fw-pr-meta .fw-stack{display:inline-grid}.fw-mergebtn{display:block;text-align:center;width:100%;background:#238636;color:#fff;font-size:12.5px;font-weight:700;padding:9px 14px;border-radius:8px}.fw-clickdot{position:absolute;z-index:3;width:14px;height:14px;border-radius:50%;background:color-mix(in srgb,var(--text-primary) 85%,transparent);box-shadow:0 2px 10px rgb(0 0 0 / .35),0 0 0 1px color-mix(in srgb,var(--surface) 65%,transparent);right:40px;bottom:24px;opacity:0;pointer-events:none}.fw-scene.fw-play .fw-clickdot{animation:fw-ride 1.5s cubic-bezier(.3,.7,.4,1) 2.1s both}@keyframes fw-ride{0%{opacity:0;transform:translate(90px,48px) scale(1)}30%{opacity:1}72%{transform:translate(0,0) scale(1)}84%{transform:translate(0,0) scale(.72)}100%{opacity:0;transform:translate(0,0) scale(1.5)}}.fw-sc-close{display:grid;place-items:center;height:100%;padding-bottom:40px;text-align:center}.fw-close-in{max-width:420px}.fw-check{display:inline-grid;place-items:center;width:46px;height:46px;border-radius:50%;background:var(--fw-ok-soft);color:var(--fw-ok);border:1px solid color-mix(in srgb,var(--success) 34%,transparent);margin-bottom:16px}.fw-check svg{width:22px;height:22px}.fw-close-line{font-family:var(--font-serif);font-weight:400;font-size:21px;line-height:1.3;letter-spacing:-.01em;color:var(--text-primary)}.fw-metrics{display:flex;justify-content:center;gap:10px;margin:20px 0 12px;flex-wrap:wrap}.fw-metric{display:flex;flex-direction:column;gap:3px;align-items:center;padding:10px 16px;border-radius:12px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-card)}.fw-mlabel{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary)}.fw-mval{font-size:15px;font-weight:700;color:var(--text-primary)}.fw-close-sub{font-size:12px}@media (max-width:720px){.fw-root{padding:72px 14px}.fw-scene{padding:22px 16px 56px}.fw-stage{min-height:476px}.fw-sc-task{grid-template-columns:1fr;gap:16px;padding-bottom:46px;align-content:center}.fw-chat{max-width:320px;margin:0 auto;width:100%}.fw-tasklist{max-width:320px;margin:0 auto;width:100%}.fw-sc-task .fw-comet{display:none}.fw-capbar{flex-wrap:wrap;gap:10px 14px}.fw-cap{flex:1 1 100%;order:3;font-size:12.5px}.fw-count{order:1}.fw-ctrl{order:2;margin-left:auto}.fw-note{left:16px;right:16px;bottom:14px;font-size:11px}}@media (max-width:420px){.fw-stage{min-height:512px}}@media (prefers-reduced-motion:reduce){.fw-head,.fw-theater{opacity:1;transform:none;transition:none}.fw-scene{transition:none}.fw-pill.fw-p-crm .fw-pdot{animation:none}.fw-cbtn.fw-play-t{display:none}}
+  </style>
+
+  <script>
+(function () {
+"use strict";
+if (window.__fwInit) return; window.__fwInit = true;
+var STEPS = [
+{ ms: 7000, cap: "<strong>Dispatch from anywhere.</strong> Type a task in the portal, iOS app, or CLI.",
+title: "Dispatch", aria: "A task typed in the portal lands in the shared task queue" },
+{ ms: 6600, cap: "<strong>The sandbox spins up.</strong> A fresh Docker container — capped, non-root, reaped after.",
+title: "Sandbox", aria: "An isolated Docker container starting with resource caps and a cloned repo" },
+{ ms: 8200, cap: "<strong>The agent works.</strong> It reproduces the failure, edits the code, and re-runs the suite.",
+title: "Agent works", aria: "A terminal streaming a failing test, an inline diff disclosure, and a passing re-run" },
+{ ms: 7600, cap: "<strong>The bot opens a PR.</strong> Authored by orcha-cloud[bot] — the task flips to needs_verification.",
+title: "Bot opens a PR", aria: "A bot-authored pull request and the task flipping to needs verification" },
+{ ms: 6600, cap: "<strong>A human verifies and merges.</strong> Fresh-session review passes; you click merge.",
+title: "Verify & merge", aria: "A fresh-session review passing and a human merging the pull request" },
+{ ms: 7200, cap: "<strong>Priced and timed.</strong> Every run logs its cost and duration — the merge was yours.",
+title: "Cost & duration", aria: "A closing summary with the run's cost, duration, and reaped sandbox" }
+];
+var N = STEPS.length;
+var root    = document.getElementById("demo-fleet");
+var theater = document.getElementById("fw-theater");
+var stage   = document.getElementById("fw-stage");
+var scenes  = stage.querySelectorAll(".fw-scene");
+var capEl   = document.getElementById("fw-cap");
+var countEl = document.getElementById("fw-count");
+var playBtn = document.getElementById("fw-play");
+var trackFill = document.getElementById("fw-track-fill");
+var dotsWrap = document.getElementById("fw-dots");
+var dots = [];
+for (var i = 0; i < N; i++) {
+var b = document.createElement("button");
+b.type = "button";
+b.className = "fw-dot";
+b.setAttribute("aria-label", "Scene " + (i + 1) + ": " + STEPS[i].title);
+var tip = document.createElement("span");
+tip.className = "fw-tip";
+tip.textContent = STEPS[i].title;
+b.appendChild(tip);
+dotsWrap.appendChild(b);
+dots.push(b);
+}
+var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+var qs = new URLSearchParams(location.search);
+var cur = 0, elapsed = 0;
+var userPaused = reduced || qs.get("fwpaused") === "1";
+var inView = false;
+var raf = null, lastT = 0;
+function playing() { return !userPaused && !reduced && inView && !document.hidden; }
+function pad(n) { return (n + 1 < 10 ? "0" : "") + (n + 1); }
+function paintDots() {
+for (var i = 0; i < N; i++) dots[i].setAttribute("aria-current", i === cur ? "true" : "false");
+}
+function setScene(i) {
+var old = cur;
+cur = ((i % N) + N) % N;
+if (scenes[old] && old !== cur) {
+scenes[old].classList.remove("fw-on", "fw-play");
+scenes[old].classList.add("fw-bye");
+(function (el) { setTimeout(function () { el.classList.remove("fw-bye"); }, 420); })(scenes[old]);
+}
+var sc = scenes[cur];
+sc.classList.add("fw-on");
+if (!reduced) {
+sc.classList.remove("fw-play");
+void sc.offsetWidth;
+sc.classList.add("fw-play");
+}
+elapsed = 0;
+trackFill.style.transform = reduced ? "scaleX(1)" : "scaleX(0)";
+paintDots();
+countEl.textContent = pad(cur) + " / " + pad(N - 1);
+stage.setAttribute("aria-label", "Animated preview: " + STEPS[cur].aria);
+capEl.classList.add("fw-swap");
+setTimeout(function () { capEl.innerHTML = STEPS[cur].cap; capEl.classList.remove("fw-swap"); }, 160);
+}
+function tick(t) {
+raf = null;
+if (playing()) {
+var dt = lastT ? Math.min(t - lastT, 100) : 0;
+lastT = t;
+elapsed += dt;
+var p = elapsed / STEPS[cur].ms;
+if (p >= 1) { setScene(cur + 1); }
+else { trackFill.style.transform = "scaleX(" + p.toFixed(4) + ")"; }
+raf = requestAnimationFrame(tick);
+} else {
+lastT = 0;
+}
+}
+function sync() {
+playBtn.setAttribute("aria-pressed", userPaused ? "false" : "true");
+playBtn.setAttribute("aria-label", userPaused ? "Resume autoplay" : "Pause autoplay");
+if (playing() && raf === null) raf = requestAnimationFrame(tick);
+}
+function jump(i) { userPaused = true; setScene(i); sync(); }
+dots.forEach(function (b, i) {
+b.addEventListener("click", function () { if (i !== cur) jump(i); else { setScene(i); sync(); } });
+});
+document.getElementById("fw-prev").addEventListener("click", function () { jump(cur - 1); });
+document.getElementById("fw-next").addEventListener("click", function () { jump(cur + 1); });
+playBtn.addEventListener("click", function () { userPaused = !userPaused; sync(); });
+theater.addEventListener("keydown", function (e) {
+if (e.key === "ArrowLeft")  { e.preventDefault(); jump(cur - 1); }
+if (e.key === "ArrowRight") { e.preventDefault(); jump(cur + 1); }
+});
+function onScreen(el, slack) {
+var r = el.getBoundingClientRect();
+var vh = window.innerHeight || document.documentElement.clientHeight;
+return r.top < vh * (slack || 1) && r.bottom > 0;
+}
+inView = onScreen(theater);
+if ("IntersectionObserver" in window) {
+new IntersectionObserver(function (entries) { inView = entries[0].isIntersecting; sync(); }, { threshold: 0.3 }).observe(theater);
+}
+window.addEventListener("load", function () { inView = onScreen(theater); sync(); });
+window.addEventListener("scroll", function () { inView = onScreen(theater); reveal(); sync(); }, { passive: true });
+document.addEventListener("visibilitychange", sync);
+function reveal() { if (onScreen(root, 0.92)) { root.classList.add("fw-in"); return true; } return false; }
+if (reduced || !("IntersectionObserver" in window)) { root.classList.add("fw-in"); }
+else if (!reveal()) {
+var rev = new IntersectionObserver(function (entries) {
+if (entries[0].isIntersecting) { root.classList.add("fw-in"); rev.disconnect(); }
+}, { threshold: 0.12 });
+rev.observe(root);
+window.addEventListener("load", reveal, { once: true });
+}
+var s0 = parseInt(qs.get("fwstep") || "0", 10);
+if (!(s0 >= 0 && s0 < N)) s0 = 0;
+scenes[0].classList.remove("fw-on");
+setScene(s0);
+sync();
+})();
+  </script>
+</section>

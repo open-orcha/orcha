@@ -102,7 +102,14 @@ async def test_accept_task_report_back_survives_max_length_notes(client, make_ag
     report-back instruction away — it's the mechanism that tells the accepter to answer the request.
     With max-length notes, the spawned protocol must still LEAD with REPORT BACK and stay within the
     field cap, keeping (a prefix of) the carried notes after it."""
-    from orcha_cli.templates.portal.main import MAX_PROTOCOL_FIELD_LEN
+    # CANONICAL module only — `from orcha_cli.templates.portal.main import …`
+    # imported main.py under a SECOND module identity, re-executing it: the
+    # re-run re-registered the attachments-dir provider against the twin
+    # module's globals, silently redirecting every later attachment write
+    # (the slack task-attachment suite's CI-only failure — task created, no
+    # files, no message, no logs). conftest already puts the portal dir on
+    # sys.path; `main` is the one true module object.
+    from main import MAX_PROTOCOL_FIELD_LEN
     a = await make_agent("a", "eng")
     b = await make_agent("b", "eng")
     task = _task_payload()

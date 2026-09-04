@@ -209,11 +209,34 @@ data class AgentUpdateBody(
     @SerialName("system_prompt") val systemPrompt: String? = null,
 )
 
-/** Lenient: server copy varies; render whatever strings it offers, else generic copy. */
+/** The `summary` block of `GET /api/tasks/{tid}/close-implications`
+ *  (`task_impact_routes.py`) — the blast radius of closing a task, as counts. */
+@Serializable
+data class CloseImplicationsSummary(
+    @SerialName("downstream_total") val downstreamTotal: Int = 0,
+    @SerialName("would_unblock") val wouldUnblock: Int = 0,
+    @SerialName("still_blocked") val stillBlocked: Int = 0,
+    @SerialName("in_flight_agents") val inFlightAgents: Int = 0,
+    @SerialName("open_requests") val openRequests: Int = 0,
+    @SerialName("completes_container") val completesContainer: Boolean = false,
+)
+
+/**
+ * `GET /api/tasks/{tid}/close-implications`. The server's `summary` is an OBJECT of
+ * counts (never a string) — the previous `summary: String?` made every decode throw,
+ * which `fetchCloseImplications` swallowed, so the destructive close confirm never
+ * showed its blast radius. `implications` (free-text lines) is kept as a tolerant
+ * extra for servers that offer copy directly; the rendered lines come from
+ * [io.openorcha.mobile.domain.CloseImplicationsUx].
+ */
 @Serializable
 data class CloseImplicationsResponse(
+    @SerialName("task_id") val taskId: String? = null,
+    val title: String? = null,
+    val status: String? = null,
+    @SerialName("is_root") val isRoot: Boolean = false,
+    val summary: CloseImplicationsSummary? = null,
     val implications: List<String> = emptyList(),
-    val summary: String? = null,
     val detail: JsonElement? = null,
 )
 

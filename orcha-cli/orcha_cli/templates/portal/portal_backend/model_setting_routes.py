@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -16,6 +16,9 @@ from portal_backend.guards import (
 from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import enforce_grant as _enforce_grant
+from portal_backend.identity_routes import require_member_read as _require_member_read
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas import ModelSettingsUpdate
 
 try:
@@ -47,7 +50,7 @@ def _resolve_use_case_model(cur, cid: str, use_case_key: str) -> Optional[dict]:
 
 
 @app.get("/api/containers/{cid}/settings/providers", status_code=200)
-def get_settings_providers(cid: str):
+def get_settings_providers(cid: str, request: Request):
     """The provider+model CATALOG that feeds the SETTINGS dropdowns (SPEC-SETTINGS §0/§3). This is
     the #290 universal-client axis (Anthropic live; OpenAI/Gemini stubbed with available=false),
     NOT GET /api/models (the spawnable-embodiment catalog) — feeding the picker from here is the
@@ -57,11 +60,13 @@ def get_settings_providers(cid: str):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
+        # Access model: reads are project-isolated (trusted non-member 403).
+        _require_member_read(cur, request, cid)
     return {"providers": llm_util.provider_catalog()}
 
 
 @app.get("/api/containers/{cid}/settings/models", status_code=200)
-def get_settings_models(cid: str):
+def get_settings_models(cid: str, request: Request):
     """The per-use-case model selections for this container — one element per REGISTERED use-case
     (llm_util.USE_CASE_REGISTRY), each with its shipped default and the stored override (if any).
     `is_set=false` ⇒ the page renders ○ 'using shipped default'; `is_set=true` ⇒ ● 'set to X'.
@@ -70,6 +75,8 @@ def get_settings_models(cid: str):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
+        # Access model: reads are project-isolated (trusted non-member 403).
+        _require_member_read(cur, request, cid)
         cur.execute(
             "SELECT use_case_key, provider, model FROM container_model_settings WHERE container_id=%s",
             (cid,),
@@ -96,7 +103,7 @@ def get_settings_models(cid: str):
 
 
 @app.put("/api/containers/{cid}/settings/models", status_code=200)
-def put_settings_models(cid: str, body: ModelSettingsUpdate):
+def put_settings_models(cid: str, body: ModelSettingsUpdate, request: Request):
     """Replace the FULL set of per-container model overrides (SPEC-SETTINGS §2.2). HUMAN-AUTHORITY
     gated + audit-logged — a model swap is a deliberate cost/quality decision, mirroring
     /settings/llm-key and /auto-wake. Semantics:
@@ -126,10 +133,14 @@ def put_settings_models(cid: str, body: ModelSettingsUpdate):
             )
         to_set[ov.key] = (ov.provider, ov.model)
     with db_cursor() as (conn, cur):
+        _require_container(cur, cid)
+        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
+        # Access model: model settings ride the keys bundle — owner-or-manage_keys.
+        _enforce_grant(cur, request, cid, "manage_keys")
+        body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
         _require_kind(
             cur, body.actor_agent_id, ("human",)
         )  # a cost/quality decision is a human action
-        _require_container(cur, cid)
         # Full-replace: drop the prior override set, then insert the validated new one. Any
         # registered key absent from `to_set` is therefore reset to its shipped default.
         cur.execute(

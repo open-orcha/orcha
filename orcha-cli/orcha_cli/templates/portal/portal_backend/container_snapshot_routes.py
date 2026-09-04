@@ -1,32 +1,47 @@
 """Assemble the compact container snapshot polled by the portal."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
+from portal_backend.autonomy import effective_autonomy
 from portal_backend.database import db_cursor
 from portal_backend.guards import valid_uuid as _valid_uuid
+from portal_backend.identity_routes import require_member_read as _require_member_read
 from portal_backend.request_ownership import _annotate_request_ownership
 from portal_backend.task_list_query import _task_list_sql
 
 
 @app.get("/api/containers/{cid}")
-def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
+def get_container(
+    cid: str, request: Request, task_limit: int = 1000, request_limit: int = 1000
+):
     """The portal's 5s poll. ISS-68 (#167): the snapshot no longer ships each task's full
     message THREAD (~277KB re-sent every poll) — tasks carry a compact `message_summary`
     {count,last} + `plan_message` (the approval card renders the plan thread-free), and the
     full thread is lazy-fetched on expand via GET /api/tasks/{tid}/messages. Tasks/requests
     are priority-ordered and capped at task_limit/request_limit (the portal passes the count
     it has loaded so the poll refreshes that window; `task_total`/`request_total` gate
-    'load more'). Defaults are generous so non-portal callers still get the full set."""
+    'load more'). `task_open_total`/`request_open_total` (additive) are the non-terminal /
+    'open'-status counts — the ONE authoritative source for both the sidebar nav badges and
+    the page-header counts, so the two can never read differently again (GH sidebar/iOS count
+    mismatch: the header said '62 tasks' while the sidebar badge said '0' — different
+    semantics, same-looking number). Defaults are generous so non-portal callers still get
+    the full set."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     task_limit = max(1, min(task_limit, 1000))
     request_limit = max(1, min(request_limit, 1000))
     with db_cursor() as (_, cur):
+        # Access model: reads are project-isolated — a trusted non-member is 403'd
+        # (trust off / no header, and the unmapped bootstrap state, unchanged).
+        _require_member_read(cur, request, cid)
         cur.execute(
             """SELECT id, name, description, status, root_task_id,
                       max_auto_agents, max_tasks, execution_mode, wakes_enabled,
-                      autonomy_level,
+                      autonomy_level, autonomy_enforced, github_repo,
+                      -- mig 037: the notifier's last wake-scan poll — recent means a
+                      -- host daemon serves THIS project's wakes (switcher/notice signal).
+                      last_wake_scan_at,
                       created_at, completed_at
                FROM containers WHERE id=%s""",
             (cid,),
@@ -43,6 +58,13 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
             """SELECT a.id, a.alias, a.role, a.kind, a.turns_used, a.turn_budget,
                       a.last_heartbeat_at, a.is_auto_created, a.created_at, a.terminated_at,
                       a.model, a.reasoning_effort,
+                      -- Collab v1: GitHub identity + project role so the portal renders
+                      -- member chips/avatars and owner-only affordances off the same poll.
+                      a.github_login, a.member_role,
+                      -- mig 043: this agent's per-agent autonomy override (NULL = inherit the
+                      -- container level). The roster card renders a small badge when non-NULL;
+                      -- the effective level is computed below (container-enforced aware).
+                      a.autonomy_override,
                       -- #266: the configured clock-driven auto-wake cadence (NULL = off) so the
                       -- portal can render/edit it on the agent card without a second call.
                       a.auto_wake_interval_secs,
@@ -171,12 +193,34 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
         )
         agents = cur.fetchall()
 
+        # mig 043: surface each agent's EFFECTIVE autonomy level alongside its raw override, using
+        # the ONE shared rule (container level if the container enforces it for everyone, else the
+        # agent's override, else the container level). Additive per-agent field — the container's
+        # own autonomy_level/autonomy_enforced remain on `c` unchanged, so no existing field shifts
+        # meaning. The roster reads `autonomy_override` for the badge and `effective_autonomy` for
+        # the "acts as" label; the container carries the lock (autonomy_enforced) glyph.
+        _cl = c["autonomy_level"]
+        _ce = bool(c["autonomy_enforced"])
+        for _a in agents:
+            _a["effective_autonomy"] = effective_autonomy(
+                _cl, _ce, _a.get("autonomy_override")
+            )
+
         # ISS-68: TRIMMED, priority-ordered, capped task rows (same shape as GET
         # /api/containers/{cid}/tasks — message_summary + plan_message, NO full thread).
+        # GH #(sidebar/iOS count mismatch): task_open_total rides the SAME count(*) pass
+        # (one extra FILTER column, not a second query) — non-terminal statuses (everything
+        # but completed/cancelled). This is the one authoritative "open tasks" number; the
+        # sidebar badge AND the page header both read it so they can never diverge again.
         cur.execute(
-            "SELECT count(*) AS n FROM tasks t WHERE t.container_id = %s", (cid,)
+            """SELECT count(*) AS n,
+                      count(*) FILTER (WHERE t.status NOT IN ('completed', 'cancelled')) AS open_n
+               FROM tasks t WHERE t.container_id = %s""",
+            (cid,),
         )
-        task_total = cur.fetchone()["n"]
+        _task_counts = cur.fetchone()
+        task_total = _task_counts["n"]
+        task_open_total = _task_counts["open_n"]
         task_order = (
             "ORDER BY CASE t.status WHEN 'needs_verification' THEN 0 "
             "WHEN 'in_progress' THEN 1 ELSE 2 END, t.priority, t.created_at"
@@ -187,10 +231,17 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
         tasks = cur.fetchall()
 
         # ISS-68: priority-ordered (open→answered→closed), capped request rows.
+        # request_open_total mirrors task_open_total above: same query, one extra FILTER
+        # column, the single authoritative "open requests" number for badge + header.
         cur.execute(
-            "SELECT count(*) AS n FROM requests WHERE container_id = %s", (cid,)
+            """SELECT count(*) AS n,
+                      count(*) FILTER (WHERE status = 'open') AS open_n
+               FROM requests WHERE container_id = %s""",
+            (cid,),
         )
-        request_total = cur.fetchone()["n"]
+        _request_counts = cur.fetchone()
+        request_total = _request_counts["n"]
+        request_open_total = _request_counts["open_n"]
         cur.execute(
             """SELECT id, type, status, priority, requester_id, target_id,
                       payload, response, rejection_reason, spawned_task_id,
@@ -222,4 +273,9 @@ def get_container(cid: str, task_limit: int = 1000, request_limit: int = 1000):
         "requests": requests,
         "task_total": task_total,
         "request_total": request_total,
+        # Additive (GH sidebar/iOS count mismatch): non-terminal task count / open request
+        # count. Older cached snapshots (or callers that predate this field) simply lack
+        # the key — every consumer treats absence as "fall back to prior behavior".
+        "task_open_total": task_open_total,
+        "request_open_total": request_open_total,
     }

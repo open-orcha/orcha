@@ -7,6 +7,7 @@ struct HomeTabView: View {
     @Binding var showCreateTask: Bool
     @State private var planSheetTask: TaskDto?
     @State private var verifySheetTask: TaskDto?
+    @State private var showRepoConnect = false
 
     var body: some View {
         Group {
@@ -28,6 +29,9 @@ struct HomeTabView: View {
         }
         .sheet(item: $verifySheetTask) { task in
             VerifySheet(task: task)
+        }
+        .sheet(isPresented: $showRepoConnect) {
+            ConnectRepoSheet()
         }
     }
 
@@ -63,6 +67,46 @@ struct HomeTabView: View {
         return ScrollView {
             VStack(spacing: 10) {
                 ConnectionBanners()
+                // The workspace's repo binding — the portal context card's `.tag.gh`
+                // chip: bound shows the mark + owner/name, unbound invites connecting.
+                // When a repo IS bound, the hub link opens the issues/PRs surface
+                // (the phone parity of the portal's GitHub hub page); unbound, only
+                // the connect chip shows — the hub has nothing to list yet.
+                HStack(spacing: 8) {
+                    GitHubRepoChip(repo: snapshot.container.githubRepo) {
+                        showRepoConnect = true
+                    }
+                    if snapshot.container.githubRepo != nil {
+                        NavigationLink(value: WorkspaceRoute.githubHub) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.triangle.pull")
+                                Text("Hub")
+                            }
+                            .font(p.uiFont(12, .semibold))
+                            .foregroundStyle(p.accent)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(p.accentSoft, in: RoundedRectangle(cornerRadius: p.radiusTag + 4))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: p.radiusTag + 4)
+                                    .strokeBorder(p.accentLine, lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("GitHub hub")
+                        .accessibilityHint("Open issues and pull requests to start work")
+                    }
+                    Spacer()
+                }
+                if let cu = model.catchUp {
+                    CatchUpCard(
+                        previous: cu.previous,
+                        current: WorkspaceDigest.make(snapshot),
+                        gap: cu.gapLabel,
+                        onDismiss: { model.catchUp = nil }
+                    )
+                }
+                WorkspaceBriefCard(digest: WorkspaceDigest.make(snapshot))
                 SectionH(title: "Needs you", count: "\(plans.count + verifs.count + reqs.count)")
                 if plans.isEmpty && verifs.isEmpty && reqs.isEmpty {
                     OrchaCard {
@@ -70,13 +114,22 @@ struct HomeTabView: View {
                             .foregroundStyle(p.muted)
                     }
                 }
+                // Kicker colors mirror the portal's gate spines (plan/verify = amber
+                // family, escalation = red) instead of the old arbitrary violet/green
+                // that clashed with the status pill on the same row.
                 ForEach(plans) { task in
-                    QueueCard(kicker: "PLAN APPROVAL", kickerColor: p.violet, task: task) {
+                    QueueCard(kicker: "PLAN APPROVAL", kickerColor: p.warn, task: task) {
                         planSheetTask = task
                     }
                 }
+                // Collab v1: a task with an owner-assigned reviewer is SOMEONE's
+                // review — de-emphasized + tagged for everyone but the assignee and
+                // owners (web renderQueue parity; the verify gate stays permissive).
                 ForEach(verifs) { task in
-                    QueueCard(kicker: "VERIFY TASK", kickerColor: p.ok, task: task) {
+                    QueueCard(
+                        kicker: "VERIFY TASK", kickerColor: p.warn, task: task,
+                        reviewTag: MobileUx.reviewTag(for: task, identity: model.identity)
+                    ) {
                         verifySheetTask = task
                     }
                 }
@@ -97,7 +150,7 @@ struct HomeTabView: View {
                                         AgentAvatar(alias: agent.alias, size: 30)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(agent.alias)
-                                                .font(.system(size: 15, weight: .semibold))
+                                                .font(p.uiFont(15, .semibold))
                                                 .foregroundStyle(p.text)
                                                 .lineLimit(1)
                                             StatusPill(status: agent.status ?? "idle", domain: .agent)
@@ -125,11 +178,16 @@ struct HomeTabView: View {
                         NavigationLink(value: WorkspaceRoute.task(task.id)) {
                             OrchaCard {
                                 HStack(alignment: .top, spacing: 10) {
-                                    AgentAvatar(alias: msg.authorAlias ?? (msg.isHuman ? "H" : "?"), human: msg.isHuman, size: 30)
+                                    AgentAvatar(
+                                        alias: msg.authorAlias ?? (msg.isHuman ? "H" : "?"),
+                                        human: msg.isHuman,
+                                        githubLogin: MobileUx.humanLogin(alias: msg.authorAlias, in: snapshot.agents),
+                                        size: 30
+                                    )
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack {
                                             Text(msg.authorAlias ?? (msg.isHuman ? "you" : "system"))
-                                                .font(.system(size: 15, weight: .semibold))
+                                                .font(p.uiFont(15, .semibold))
                                                 .foregroundStyle(p.text)
                                             Spacer()
                                             Text(MobileUx.agoLabel(msg.createdAt) ?? "")
@@ -137,7 +195,7 @@ struct HomeTabView: View {
                                                 .foregroundStyle(p.faint)
                                         }
                                         Text(msg.body)
-                                            .font(.system(size: 13))
+                                            .font(p.uiFont(13))
                                             .foregroundStyle(p.text2)
                                             .lineLimit(2)
                                     }
@@ -158,26 +216,33 @@ struct HomeTabView: View {
 }
 
 /// A needs-you queue card for plan approvals / verifications (flow 04 H5).
+/// `reviewTag` (collab v1) marks a verify card assigned to ANOTHER member's
+/// review: the card dims and carries a "review: <login>" tag (web parity).
 private struct QueueCard: View {
     @Environment(\.palette) private var p
     let kicker: String
     let kickerColor: Color
     let task: TaskDto
+    var reviewTag: String? = nil
     let onAct: () -> Void
 
     var body: some View {
         OrchaCard {
             HStack {
                 Text(kicker)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(p.uiFont(11, .bold))
                     .tracking(0.8)
                     .foregroundStyle(kickerColor)
+                if let reviewTag {
+                    MetaTag(text: "review: \(reviewTag)", tint: p.violet)
+                        .accessibilityLabel("Assigned to \(reviewTag) for review")
+                }
                 Spacer()
                 StatusPill(status: task.status, domain: .task)
             }
             NavigationLink(value: WorkspaceRoute.task(task.id)) {
                 Text(task.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(p.uiFont(15, .semibold))
                     .foregroundStyle(p.text)
                     .multilineTextAlignment(.leading)
                     .lineLimit(2)
@@ -185,12 +250,13 @@ private struct QueueCard: View {
             .buttonStyle(.plain)
             if let excerpt = task.planMessage?.body ?? task.definitionOfDone, !excerpt.isEmpty {
                 Text(excerpt)
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.muted)
                     .lineLimit(2)
             }
             KitButton(title: "Review & decide", role: .tonal, small: true, action: onAct)
         }
+        .opacity(reviewTag == nil ? 1 : 0.65)
     }
 }
 
@@ -203,24 +269,24 @@ private struct RequestQueueCard: View {
         OrchaCard {
             HStack {
                 Text("REQUEST FOR YOU")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(p.uiFont(11, .bold))
                     .tracking(0.8)
-                    .foregroundStyle(p.info)
+                    .foregroundStyle(p.danger)
                 Spacer()
                 StatusPill(status: request.status, domain: .request)
             }
             Text("“\(request.payload)”")
-                .font(.system(size: 15, weight: .semibold))
+                .font(p.uiFont(15, .semibold))
                 .foregroundStyle(p.text)
                 .lineLimit(3)
             HStack(spacing: 8) {
                 AgentAvatar(alias: request.requesterAlias ?? "?", size: 30)
                 Text("\(request.requesterAlias ?? "agent") → you\(MobileUx.agoLabel(request.createdAt).map { " · \($0)" } ?? "")")
-                    .font(.system(size: 13))
+                    .font(p.uiFont(13))
                     .foregroundStyle(p.text2)
                 Spacer()
                 Text("Respond")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(p.uiFont(13, .bold))
                     .foregroundStyle(p.accent)
             }
         }
