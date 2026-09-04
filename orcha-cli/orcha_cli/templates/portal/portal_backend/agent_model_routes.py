@@ -23,11 +23,18 @@ def _reasoning_effort_ids():
     return set()
 
 
-def configure_catalogs(model_ids, reasoning_effort_ids):
+def _reasoning_effort_ids_by_model():
+    return {}
+
+
+def configure_catalogs(
+    model_ids, reasoning_effort_ids, reasoning_effort_ids_by_model
+):
     """Supply facade-owned catalog getters for compatibility monkeypatches."""
-    global _model_ids, _reasoning_effort_ids
+    global _model_ids, _reasoning_effort_ids, _reasoning_effort_ids_by_model
     _model_ids = model_ids
     _reasoning_effort_ids = reasoning_effort_ids
+    _reasoning_effort_ids_by_model = reasoning_effort_ids_by_model
 
 
 @app.post("/api/agents/{aid}/model", status_code=200)
@@ -51,13 +58,17 @@ def set_agent_model(aid: str, body: AgentModelUpdate, request: Request):
         _trusted_actor(cur, request, str(agent["container_id"]), None)
         # Access model: model/effort swaps are owner-or-manage_agents.
         _enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
-        cur.execute("SELECT kind, model FROM agents WHERE id=%s", (aid,))
+        cur.execute("SELECT kind, model, reasoning_effort FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if row["kind"] == "human":
             raise HTTPException(400, "humans carry no model")
         old_model = row["model"]
+        old_effort = row["reasoning_effort"]
+        supported_efforts = _reasoning_effort_ids_by_model().get(body.model, set())
+        new_effort = old_effort if old_effort in supported_efforts else None
         cur.execute(
-            "UPDATE agents SET model=%s WHERE id=%s RETURNING model", (body.model, aid)
+            "UPDATE agents SET model=%s, reasoning_effort=%s WHERE id=%s RETURNING model",
+            (body.model, new_effort, aid),
         )
         new_model = cur.fetchone()["model"]
         cold_reset = []
@@ -80,11 +91,18 @@ def set_agent_model(aid: str, body: AgentModelUpdate, request: Request):
             {
                 "model": new_model,
                 "previous_model": old_model,
+                "reasoning_effort": new_effort,
+                "previous_reasoning_effort": old_effort,
                 "cold_reset_conversations": cold_reset,
             },
         )
         conn.commit()
-    return {"agent_id": aid, "model": new_model, "cold_reset_conversations": cold_reset}
+    return {
+        "agent_id": aid,
+        "model": new_model,
+        "reasoning_effort": new_effort,
+        "cold_reset_conversations": cold_reset,
+    }
 
 
 @app.post("/api/agents/{aid}/reasoning-effort", status_code=200)
@@ -92,30 +110,31 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate, reque
     """GH #51: set the reasoning effort an agent's worker spawns at. Persists
     agents.reasoning_effort and flows through the read payload + wake-scan candidate, where the
     daemon passes it to the worker (`claude --effort <level>`, or Codex model_reasoning_effort).
-    Must be a curated level (AVAILABLE_REASONING_EFFORTS), or null to clear back to the runtime
-    default. Humans carry no effort (400). Unlike a model swap, effort applies per-spawn (it is not
-    baked into a warm session), so no cold reset is needed — the next worker spawn picks it up."""
+    Must be supported by the agent's selected model, or null to clear back to the runtime default.
+    Humans carry no effort (400). Unlike a model swap, effort applies per-spawn (it is not baked
+    into a warm session), so no cold reset is needed — the next worker spawn picks it up."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
-    if (
-        body.reasoning_effort is not None
-        and body.reasoning_effort not in _reasoning_effort_ids()
-    ):
-        raise HTTPException(
-            400,
-            f"reasoning_effort '{body.reasoning_effort}' is not valid; "
-            f"choose one of {sorted(_reasoning_effort_ids())}",
-        )
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
         # Per-project identity: an effort change is a member action (403 non-member).
         _trusted_actor(cur, request, str(agent["container_id"]), None)
         # Access model: model/effort swaps are owner-or-manage_agents.
         _enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
-        cur.execute("SELECT kind, reasoning_effort FROM agents WHERE id=%s", (aid,))
+        cur.execute("SELECT kind, model, reasoning_effort FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if row["kind"] == "human":
             raise HTTPException(400, "humans carry no reasoning effort")
+        supported = _reasoning_effort_ids_by_model().get(row["model"], set())
+        if (
+            body.reasoning_effort is not None
+            and body.reasoning_effort not in supported
+        ):
+            raise HTTPException(
+                400,
+                f"reasoning_effort '{body.reasoning_effort}' is not valid for "
+                f"model '{row['model']}'; choose one of {sorted(supported)}",
+            )
         old_effort = row["reasoning_effort"]
         cur.execute(
             "UPDATE agents SET reasoning_effort=%s WHERE id=%s RETURNING reasoning_effort",

@@ -156,6 +156,7 @@ def build_wake_candidate(
             full_answer=request_answer(cur, latest, latest_payload),
         )
 
+    resolved_model = resolve_model(agent["model"])
     return {
         "agent_id": aid,
         "alias": agent["alias"],
@@ -194,9 +195,11 @@ def build_wake_candidate(
         "tmux_target": agent["tmux_target"],
         "headless_cwd": agent["headless_cwd"],
         "headless_flags": agent["headless_flags"],
-        "model": resolve_model(agent["model"]),
-        "model_runtime": resolve_model_runtime(agent["model"]),
-        "reasoning_effort": resolve_reasoning_effort(agent["reasoning_effort"]),
+        "model": resolved_model,
+        "model_runtime": resolve_model_runtime(resolved_model),
+        "reasoning_effort": resolve_reasoning_effort(
+            agent["reasoning_effort"], resolved_model
+        ),
         # mig 043: this agent's own autonomy override (NULL = inherit) plus the EFFECTIVE level
         # it acts under — additive, alongside the scan-wide container level+enforced flag. The
         # worker keys its advisory gh/git behavior off effective_autonomy.

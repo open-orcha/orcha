@@ -30,15 +30,19 @@ ALLOWED_CONTAINER_STATUSES = {"active", "paused", "completed", "cancelled", "fai
 @app.get("/api/models")
 def list_models():
     """D7: the curated model list the create-agent picker renders ({id, name}) plus
-    the default. There is no live model-list API from the CLI — this is a maintained
-    constant. B8's dropdown reads this; the selected id is persisted as agents.model."""
+    runtime and model-specific reasoning efforts. There is no live model-list API from
+    the worker CLIs, so this is a maintained constant. B8's dropdown reads this; the
+    selected id is persisted as agents.model."""
     return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL}
 
 
 @app.get("/api/reasoning-efforts")
 def list_reasoning_efforts():
-    """GH #51: the curated reasoning-effort list the agent settings UI renders ({id, name})
-    plus the default. Mirrors /api/models; the selected id is persisted as agents.reasoning_effort."""
+    """GH #51: all curated effort labels plus the default.
+
+    Clients filter this union through each /api/models row's reasoning_efforts list;
+    the server applies the same per-model validation before persisting a selection.
+    """
     return {"efforts": AVAILABLE_REASONING_EFFORTS, "default": DEFAULT_REASONING_EFFORT}
 
 

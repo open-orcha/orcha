@@ -21,7 +21,7 @@ const RAW_SNAPSHOT = {
     { id: "h1", alias: "kedar", kind: "human", role: "Founder", status: "idle" },
     {
       id: "a1", alias: "forge", kind: "ai", role: "Builder", status: "working",
-      model: "claude-sonnet-4-6", wake_enabled: true, auto_wake_interval_secs: null,
+      model: "claude-sonnet-5", wake_enabled: true, auto_wake_interval_secs: null,
       prompt_preview: "You are Forge.", embodiment: "idle", reasoning_effort: "high",
     },
     { id: "a2", alias: "scout", kind: "ai", role: "Researcher", status: "idle", model: "claude-opus-5" },
@@ -232,17 +232,36 @@ describe("SEED_MODELS fallback list (model catalog refresh)", () => {
     vi.restoreAllMocks();
   });
 
-  it("contains claude-opus-5 and not the stale claude-opus-4-8", async () => {
+  it("contains Fable 5.1 and GPT-6 Astra alongside the current model families", async () => {
     stubFetch(); // /api/models returns { models: [] } — the seed stays in effect
     const { container } = mount();
     await screen.findByText("Roster · 3");
-    // forge's model is claude-sonnet-4-6 (not in the curated seed) so the
-    // segmented control renders the seeded curated list regardless.
     const seg = container.querySelector("#modelSeg") as HTMLElement;
     expect(seg).toBeTruthy();
+    expect(within(seg).getByTitle("Fable 5.1")).toBeInTheDocument();
     expect(within(seg).getByTitle("Opus 5")).toBeInTheDocument();
     expect(within(seg).queryByTitle("Opus 4.8")).toBeNull();
+
+    fireEvent.click(screen.getByText("Codex"));
+    expect(within(seg).getByTitle("GPT-6 Astra")).toBeInTheDocument();
     const ids = calls.filter((c) => c.url === "/api/agents/a1/model");
     expect(ids).toEqual([]); // sanity: no accidental POSTs from render
+  });
+
+  it("filters reasoning-effort chips to the selected model", async () => {
+    stubFetch();
+    const { container } = mount();
+    await screen.findByText("Roster · 3");
+    const effortSeg = container.querySelector("#effortSeg") as HTMLElement;
+    expect(within(effortSeg).getByText("Maximum")).toBeInTheDocument();
+    expect(within(effortSeg).queryByText("Ultra")).toBeNull();
+
+    fireEvent.click(screen.getByText("Codex"));
+    fireEvent.click(within(container.querySelector("#modelSeg") as HTMLElement).getByTitle("GPT-5.6 Sol"));
+    await waitFor(() => expect(within(effortSeg).getByText("Ultra")).toBeInTheDocument());
+
+    fireEvent.click(within(container.querySelector("#modelSeg") as HTMLElement).getByTitle("GPT-6 Astra"));
+    await waitFor(() => expect(within(effortSeg).queryByText("Ultra")).toBeNull());
+    expect(within(effortSeg).getByText("Maximum")).toBeInTheDocument();
   });
 });

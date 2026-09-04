@@ -40,21 +40,24 @@ interface ModelInfo {
   id: string;
   name: string;
   runtime?: string;
+  reasoning_efforts?: string[];
 }
 // Seeded with the backend's curated list so the control renders correctly
 // pre-fetch; GET /api/models is the source of truth (picks up new ids).
 const SEED_MODELS: ModelInfo[] = [
-  { id: "claude-opus-5", name: "Opus 5", runtime: "claude" },
-  { id: "claude-fable-5", name: "Fable 5", runtime: "claude" },
-  { id: "claude-sonnet-5", name: "Sonnet 5", runtime: "claude" },
-  { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", runtime: "claude" },
-  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", runtime: "codex" },
-  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", runtime: "codex" },
-  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", runtime: "codex" },
-  { id: "gpt-5.5", name: "GPT-5.5", runtime: "codex" },
-  { id: "gpt-5.4", name: "GPT-5.4", runtime: "codex" },
-  { id: "gpt-5.4-mini", name: "GPT-5.4 mini", runtime: "codex" },
-  { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", runtime: "codex" },
+  { id: "claude-fable-5-1", name: "Fable 5.1", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-opus-5", name: "Opus 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-fable-5", name: "Fable 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-sonnet-5", name: "Sonnet 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", runtime: "claude", reasoning_efforts: [] },
+  { id: "gpt-6-astra", name: "GPT-6 Astra", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "gpt-5.5", name: "GPT-5.5", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh"] },
+  { id: "gpt-5.4", name: "GPT-5.4", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh"] },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 mini", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh"] },
+  { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh"] },
 ];
 const MODEL_RUNTIMES = [
   { id: "claude", name: "Claude" },
@@ -65,9 +68,8 @@ function modelRuntimeName(runtime: string): string {
 }
 
 /* ---------- reasoning-effort control (GH #51) ------------------------------
-   Options come from GET /api/reasoning-efforts (canonical list; fetched once,
-   cached in state). Mirrors the model control's shape exactly: id null is the
-   "default" (runtime default) entry. */
+   Labels come from GET /api/reasoning-efforts and are filtered through the
+   selected /api/models row's reasoning_efforts. id null is the runtime default. */
 interface ReasoningEffortInfo {
   id: string | null;
   name: string;
@@ -78,6 +80,8 @@ const SEED_REASONING_EFFORTS: ReasoningEffortInfo[] = [
   { id: "medium", name: "Medium" },
   { id: "high", name: "High" },
   { id: "xhigh", name: "Extra-high" },
+  { id: "max", name: "Maximum" },
+  { id: "ultra", name: "Ultra" },
 ];
 
 /* ---------- auto-wake control (#300) --------------------------------------- */
@@ -407,10 +411,12 @@ export function AgentsPage() {
   // The model control sends the curated MODEL ID (POST /model only accepts ids)
   // while displaying the friendly name.
   const [models, setModels] = useState<ModelInfo[]>(SEED_MODELS);
+  const [defaultModel, setDefaultModel] = useState("claude-opus-5");
   useEffect(() => {
     getJSON<any>("/api/models")
       .then((d) => {
         if (d && Array.isArray(d.models) && d.models.length) setModels(d.models);
+        if (d && typeof d.default === "string") setDefaultModel(d.default);
       })
       .catch(() => { /* keep the seed */ });
   }, []);
@@ -438,6 +444,12 @@ export function AgentsPage() {
   const modelsForRuntime = (runtime: string): ModelInfo[] => {
     const wanted = runtime === "codex" ? "codex" : "claude";
     return models.filter((m) => modelRuntimeOf(m.id) === wanted);
+  };
+  const reasoningEffortsForModel = (modelId: string | null): ReasoningEffortInfo[] => {
+    const model = models.find((m) => m.id === modelId) || models.find((m) => m.id === defaultModel);
+    if (!model || !Array.isArray(model.reasoning_efforts)) return reasoningEfforts;
+    const supported = new Set(model.reasoning_efforts);
+    return reasoningEfforts.filter((effort) => effort.id == null || supported.has(effort.id));
   };
   const modelRuntimeForAgent = (ag: Agent): string => {
     const saved = runtimeFilters[ag.id];
@@ -678,6 +690,7 @@ export function AgentsPage() {
       const selectedRuntime = modelRuntimeForAgent(a);
       const visibleModels = modelsForRuntime(selectedRuntime);
       const modelVal = modelOverride && modelOverride.aid === a.id ? modelOverride.model : a.model;
+      const visibleReasoningEfforts = reasoningEffortsForModel(modelVal);
       const awakeVal = awakeOverride && awakeOverride.aid === a.id ? awakeOverride.val : a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : null;
       const effortVal = effortOverride && effortOverride.aid === a.id ? effortOverride.val : a.reasoning_effort != null ? a.reasoning_effort : null;
       // #64 override segment — graceful absence: an open backend that omits the
@@ -816,7 +829,7 @@ export function AgentsPage() {
                         <div className="desc">How hard this agent's worker thinks per spawn (default = runtime default)</div>
                       </div>
                       <div className="seg" id="effortSeg" aria-label="Reasoning effort">
-                        {reasoningEfforts.map((e) => (
+                        {visibleReasoningEfforts.map((e) => (
                           <button
                             key={String(e.id)}
                             type="button"

@@ -152,7 +152,7 @@
                 "models"
               ]
             },
-            "description": "D7: the curated {id,name} model list the create-agent dropdown renders, plus the default (claude-opus-4-8 / Opus 4.8). No live model-list API exists — this is a maintained constant; the selected id is persisted as agents.model. Includes claude-fable-5 / Fable 5 (limited availability through 2026-06-22); when that entry is removed, agents that chose it auto-fall-back to the default at spawn time (resolve_model) with zero breakage. The notifier now spawns the worker on the selected model via --model (GAP A)."
+            "description": "D7: the curated worker-model list the create-agent dropdown renders, plus the default. Each model includes its runtime and supported reasoning-effort ids. No live model-list API exists — this is a maintained constant; the selected id is persisted as agents.model. Retired entries auto-fall back to the default at spawn time (resolve_model) with zero breakage. The notifier spawns the worker on the selected model via --model."
           }
         },
         {

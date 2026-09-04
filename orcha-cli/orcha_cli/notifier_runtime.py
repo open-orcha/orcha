@@ -17,8 +17,10 @@ _CODEX_EXEC_FALLBACKS = (
     "/usr/local/bin/codex",
     "~/.local/bin/codex",
 )
-# GH #51: Codex reasoning-effort tiers don't include 'xhigh' — fold it into 'high'. Others pass through.
-_CODEX_EFFORT = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high"}
+# Codex accepts these values verbatim; per-model validation happens in the portal catalog.
+_CODEX_EFFORT = {
+    effort: effort for effort in ("low", "medium", "high", "xhigh", "max", "ultra")
+}
 
 
 def _normalize_runtime(runtime: Optional[str]) -> str:
