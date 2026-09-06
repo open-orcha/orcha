@@ -1023,6 +1023,33 @@ def test_stalled_worker_killed_and_marked_failed(monkeypatch, tmp_path):
     assert any(u.endswith("/runs/R/finish") for u, _ in posts)   # run marked killed
 
 
+def test_codex_silent_after_completed_item_is_not_stall_killed(monkeypatch, tmp_path):
+    """A Codex worker can be alive and quiet after an item.completed event while the turn is still
+    open. The stall watchdog must wait for a terminal turn event or the hard cap, not SIGTERM it at
+    the two-minute log-silence threshold."""
+    posts, sigs = [], []
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)))
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    log = tmp_path / "codex-between-steps.log"
+    log.write_text(
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"web_search","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"web_search","status":"completed"}}\n'
+    )
+    proc = FakeProc(exited=False)
+    live = {"agent-X": {"proc": proc, "hard_deadline": time.time() + 1200,
+                        "last_size": log.stat().st_size,
+                        "last_progress_ts": time.time() - 200,
+                        "run_id": "R", "log_path": str(log), "worktree": None,
+                        "respawn_ctx": {"model_runtime": "codex"}}}
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert "agent-X" in live and not sigs
+    assert not [u for u, _ in posts if u.endswith("/wake-ack") or u.endswith("/finish")]
+
+
 # ---------- #270: watchdog kill diagnostics + worktree preservation ----------
 
 def test_stall_kill_records_structured_kill_reason(monkeypatch, tmp_path):
@@ -1332,8 +1359,9 @@ def test_worker_is_live_handles_no_id_tool_shape(tmp_path):
 def test_worker_is_live_codex_runtime(tmp_path):
     """GH#61 unit: with runtime="codex", _worker_is_live reads the `codex exec --json` schema, not
     Claude stream-json. It is True for an in-flight command (item.started with no item.completed),
-    the legacy `*_begin`/`*_end` shape with an unmatched begin, and a rate-limit/backoff tail; it is
-    False once every command completed, for an idle agent_message, and for opaque/missing logs."""
+    a quiet unfinished turn after an item.completed event, the legacy `*_begin`/`*_end` shape with
+    an unmatched begin, and a rate-limit/backoff tail; it is False once a turn completed, for a
+    plain non-retry error, and for opaque/missing logs."""
     def _log(name, text):
         p = tmp_path / name
         p.write_text(text)
@@ -1359,11 +1387,20 @@ def test_worker_is_live_codex_runtime(tmp_path):
         '{"type":"error","msg":{"type":"stream_error","message":"429 Too Many Requests, retrying"}}\n')
     assert notifier._worker_is_live(rl, runtime="codex") is True
 
-    # every command completed, tail ends idle → NOT live (the dead-Codex teeth case)
+    # A completed item is not a completed turn. Codex can go quiet here while the model is thinking
+    # over the tool result or composing the next step, so the stall watchdog must leave it alone.
+    between_steps = _log("cbs.log",
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+    assert notifier._worker_is_live(between_steps, runtime="codex") is True
+
+    # every command completed and the turn ended → NOT live (the dead-Codex teeth case)
     done = _log("cd.log",
         '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
         '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
-        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n')
+        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n'
+        '{"type":"turn.completed"}\n')
     assert notifier._worker_is_live(done, runtime="codex") is False
 
     # a plain error WITHOUT retry/429 semantics is a dead worker, not a sleeping one
@@ -1381,7 +1418,8 @@ def test_worker_is_live_codex_runtime(tmp_path):
         '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
         '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
         '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
-        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"turn.completed"}\n')
     assert notifier._worker_is_live(updated_done, runtime="codex") is False
     # …but the SAME repeated-update stream with no terminal event is still in flight → live (the
     # id-pairing signal, not the count, carries it).
@@ -1395,7 +1433,8 @@ def test_worker_is_live_codex_runtime(tmp_path):
     # in progress — it finished. A bare `retries` field must no longer read as a live 429.
     retries_done = _log("crd.log",
         '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"},'
-        '"msg":{"type":"agent_message","retries":2}}\n')
+        '"msg":{"type":"agent_message","retries":2}}\n'
+        '{"type":"turn.completed"}\n')
     assert notifier._worker_is_live(retries_done, runtime="codex") is False
     # an explicit `retry_after` backoff IS a live, mid-429 worker.
     retry_after = _log("cra.log",
@@ -2030,9 +2069,9 @@ def test_codex_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeyp
 
 def test_codex_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_path):
     """GH#61 teeth: the Codex exemption is liveness-gated like the Claude one. A Codex worker whose
-    last command already COMPLETED (no in-flight item) is idle/done, not alive — it must still be
-    hard-killed past the cap, and the kill diagnostic must record the codex runtime + a False
-    liveness verdict (proving the runtime-aware probe ran and saw no in-flight work)."""
+    tail ends in a plain non-retry error is not alive — it must still be hard-killed past the cap,
+    and the kill diagnostic must record the codex runtime + a False liveness verdict (proving the
+    runtime-aware probe ran and saw no in-flight work)."""
     posts, sigs, spawned = [], [], []
     monkeypatch.setattr(notifier, "_post_json", lambda u, b, **k: posts.append((u, b)))
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
@@ -2043,10 +2082,11 @@ def test_codex_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch,
                         lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
 
     log = tmp_path / "w.log"
-    # the command STARTED then COMPLETED — nothing in flight → not live.
+    # The command completed, then Codex emitted a real error with no retry/backoff semantics.
     log.write_text(
         '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
-        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"error","msg":{"type":"fatal","message":"unexpected EOF"}}\n')
     live = _stalled_respawn_entry(FakeProc(pid=4321, exited=False), log, model_runtime="codex")
 
     notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)

@@ -33,6 +33,24 @@ def _codex_is_rate_limit(obj: dict) -> bool:
     return False
 
 
+def _codex_is_non_retry_error(obj: dict) -> bool:
+    """Return True for error-shaped Codex events that are not rate-limit backoff.
+
+    A plain error is evidence that the worker is not merely quiet between model
+    steps. Rate-limit/retry errors are handled first by `_codex_is_rate_limit`.
+    """
+    if not isinstance(obj, dict):
+        return False
+    msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+    for t in ((obj.get("type") or ""), (msg.get("type") or "")):
+        t = t.lower()
+        if t in ("error", "fatal") or t.endswith("_error") or t.endswith(".error"):
+            return True
+        if "fatal" in t:
+            return True
+    return False
+
+
 def _codex_event_phase(obj: dict):
     """GH#61: classify a Codex `codex exec --json` event as the START or END of a tool/command,
     returning ('start'|'end'|None, id_or_None). Codex frames work as item lifecycle events —
@@ -103,8 +121,11 @@ def _codex_tail_is_live(tail: bytes) -> bool:
       * count — more starts than ends (covers no-id + parallel calls);
       * order — the LAST tool-phase event in the tail is a START (a no-id call in flight at the tail);
     plus a rate-limit/backoff event as the last meaningful signal (mid-429, alive but sleeping).
-    A genuinely finished/idle Codex tail trips none of these → False, so the dead-Codex teeth case
-    still hard-kills. Parsing is fail-open/tolerant (codex unpinned on this host).
+    plus an unfinished-turn signal — Codex can be legitimately quiet after an `item.completed`
+    event while the model is thinking/composing the next step, and the only reliable terminal
+    boundary is `turn.completed`/`turn.failed`. A genuinely terminal/error Codex tail trips none
+    of these → False, so the dead-Codex teeth case still hard-kills. Parsing is fail-open/tolerant
+    (codex unpinned on this host).
 
     PR #80 review: a `turn.completed`/`turn.failed` event is a hard TURN boundary that overrides the
     in-flight pairing. In the official `codex exec --json` shape a command `item.started` is closed by
@@ -114,7 +135,8 @@ def _codex_tail_is_live(tail: bytes) -> bool:
     make the turn end the last signal — so a completed/failed turn correctly reads NOT live."""
     inflight: set = set()
     start_count = end_count = 0
-    last_signal = None                         # 'start' | 'end' | 'rate_limit' | 'turn_end'
+    # 'turn_start' | 'start' | 'end' | 'rate_limit' | 'turn_end' | 'error'
+    last_signal = None
     for raw in tail.split(b"\n"):
         s = raw.strip()
         if not s:
@@ -134,6 +156,19 @@ def _codex_tail_is_live(tail: bytes) -> bool:
             continue
         if _codex_is_rate_limit(obj):
             last_signal = "rate_limit"
+            continue
+        if _codex_is_non_retry_error(obj):
+            inflight.clear()
+            start_count = end_count = 0
+            last_signal = "error"
+            continue
+        msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else {}
+        if (obj.get("type") or "").lower() == "turn.started" or (
+            msg.get("type") or ""
+        ).lower() in ("turn_start", "turn_started"):
+            inflight.clear()
+            start_count = end_count = 0
+            last_signal = "turn_start"
             continue
         phase, iid = _codex_event_phase(obj)
         if phase == "start":
@@ -163,4 +198,6 @@ def _codex_tail_is_live(tail: bytes) -> bool:
         return True
     if start_count > end_count:                # count: more starts issued than terminated (no-id safe)
         return True
-    return last_signal in ("start", "rate_limit")   # order/backoff: tail ends mid-tool or mid-429
+    # order/backoff/open-turn: tail ends mid-tool, mid-429, or after a completed item in an
+    # unterminated Codex turn. A terminal turn or plain error remains non-live.
+    return last_signal in ("turn_start", "start", "end", "rate_limit")
