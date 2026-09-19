@@ -1,10 +1,11 @@
 """Project-level worktree routing: persistence, API exposure, and final cwd policy."""
 
+import pathlib
+import time
 from types import SimpleNamespace
 
 import pytest
-
-from orcha_cli import notifier_wake_worker
+from orcha_cli import notifier_checkpoint, notifier_wake_worker
 
 
 async def _set(client, cid, human_id, disabled):
@@ -58,9 +59,12 @@ async def test_human_can_toggle_setting_on_and_off(
     enabled = await _set(client, container["id"], human["agent_id"], True)
     assert enabled.status_code == 200, enabled.text
     assert enabled.json()["worktrees_disabled"] is True
-    assert db.execute(
-        "SELECT worktrees_disabled FROM containers WHERE id=%s", (container["id"],)
-    )[0]["worktrees_disabled"] is True
+    assert (
+        db.execute(
+            "SELECT worktrees_disabled FROM containers WHERE id=%s", (container["id"],)
+        )[0]["worktrees_disabled"]
+        is True
+    )
 
     scan = (
         await client.get(
@@ -75,9 +79,12 @@ async def test_human_can_toggle_setting_on_and_off(
     disabled = await _set(client, container["id"], human["agent_id"], False)
     assert disabled.status_code == 200, disabled.text
     assert disabled.json()["worktrees_disabled"] is False
-    assert db.execute(
-        "SELECT worktrees_disabled FROM containers WHERE id=%s", (container["id"],)
-    )[0]["worktrees_disabled"] is False
+    assert (
+        db.execute(
+            "SELECT worktrees_disabled FROM containers WHERE id=%s", (container["id"],)
+        )[0]["worktrees_disabled"]
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -85,9 +92,12 @@ async def test_setting_write_is_human_gated(client, container, make_agent, db):
     ai = await make_agent("builder")
     response = await _set(client, container["id"], ai["agent_id"], True)
     assert response.status_code == 403, response.text
-    assert db.execute(
-        "SELECT worktrees_disabled FROM containers WHERE id=%s", (container["id"],)
-    )[0]["worktrees_disabled"] is False
+    assert (
+        db.execute(
+            "SELECT worktrees_disabled FROM containers WHERE id=%s", (container["id"],)
+        )[0]["worktrees_disabled"]
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -139,10 +149,14 @@ def test_disabled_setting_bypasses_all_worktree_provisioning_paths(trigger):
 def test_turning_setting_off_restores_normal_task_worktree_routing():
     calls = []
     services = SimpleNamespace(
-        _provision_task_worktree=lambda *args: calls.append(("task", args))
-        or ("/project/.orcha-worktrees/task", "orcha/task"),
-        _provision_worktree=lambda *args: calls.append(("agent", args))
-        or ("/project/.orcha-worktrees/agent", "orcha/agent"),
+        _provision_task_worktree=lambda *args: (
+            calls.append(("task", args))
+            or ("/project/.orcha-worktrees/task", "orcha/task")
+        ),
+        _provision_worktree=lambda *args: (
+            calls.append(("agent", args))
+            or ("/project/.orcha-worktrees/agent", "orcha/agent")
+        ),
     )
     candidate = {
         "headless_cwd": "/project/main",
@@ -152,7 +166,122 @@ def test_turning_setting_off_restores_normal_task_worktree_routing():
         "worktrees_disabled": False,
     }
 
-    assert notifier_wake_worker._worktree_for(
-        candidate, [], {}, False, services
-    ) == ("/project/.orcha-worktrees/task", "orcha/task", True)
+    assert notifier_wake_worker._worktree_for(candidate, [], {}, False, services) == (
+        "/project/.orcha-worktrees/task",
+        "orcha/task",
+        True,
+    )
     assert [kind for kind, _args in calls] == ["task"]
+
+
+class _Proc:
+    pid = 4321
+
+
+def _checkpoint_services(*, disabled, spawned, provisioned):
+    posts = []
+
+    def get_json(url):
+        if url.endswith("/runs?limit=20"):
+            return {"runs": [{"run_id": "run-1", "task_id": "task-1"}]}
+        if url.endswith("/persona"):
+            return {"worktrees_disabled": disabled}
+        return None
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"run_id": "run-2"} if url.endswith("/runs") else {}
+
+    return SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        HARD_CAP_RESPAWN_MAX=3,
+        pathlib=pathlib,
+        time=time,
+        _kill_worker=lambda *args, **kwargs: None,
+        _capture_diff=lambda worktree: "saved diff" if worktree else None,
+        _finish_run=lambda *args, **kwargs: True,
+        _reap_sandbox_artifacts=lambda *args, **kwargs: None,
+        _get_json=get_json,
+        _revoke_or_defer=lambda *args, **kwargs: None,
+        _mint_embodiment_token=lambda *args, **kwargs: "token-2",
+        _build_persona=lambda *args, **kwargs: "persona",
+        spawn_headless=lambda cwd, *args, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+        _post_json=post_json,
+        _provision_task_worktree=lambda *args: (
+            provisioned.append(("task", args))
+            or ("/project/.orcha-worktrees/task-1", "orcha/task-1")
+        ),
+        _provision_worktree=lambda *args: (
+            provisioned.append(("agent", args))
+            or ("/project/.orcha-worktrees/agent", "orcha/agent")
+        ),
+    )
+
+
+def _checkpoint_worker(*, disabled, worktree, branch, task_worktree):
+    return {
+        "proc": _Proc(),
+        "run_id": "run-1",
+        "log_path": None,
+        "base_cwd": "/project/main",
+        "worktree": worktree,
+        "branch": branch,
+        "task_bound": True,
+        "task_worktree": task_worktree,
+        "worktrees_disabled": disabled,
+        "cap": 1200,
+        "respawns": 0,
+        "agent_id": "agent-1",
+        "respawn_ctx": {
+            "prompt": "continue",
+            "alias": "builder",
+            "task_id": "task-1",
+            "worktrees_disabled": disabled,
+        },
+    }
+
+
+def test_checkpoint_resume_rechecks_toggle_and_moves_to_main_without_cleanup():
+    spawned, provisioned = [], []
+    services = _checkpoint_services(
+        disabled=True, spawned=spawned, provisioned=provisioned
+    )
+    worker = _checkpoint_worker(
+        disabled=False,
+        worktree="/project/.orcha-worktrees/task-1",
+        branch="orcha/task-1",
+        task_worktree=True,
+    )
+    live = {"agent-1": worker}
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha", "agent-1", worker, live, True, services
+    )
+
+    assert spawned == ["/project/main"]
+    assert provisioned == []
+    assert live["agent-1"]["worktree"] is None
+    assert live["agent-1"]["task_worktree"] is False
+    assert live["agent-1"]["worktrees_disabled"] is True
+
+
+def test_checkpoint_resume_rechecks_toggle_off_and_restores_task_routing():
+    spawned, provisioned = [], []
+    services = _checkpoint_services(
+        disabled=False, spawned=spawned, provisioned=provisioned
+    )
+    worker = _checkpoint_worker(
+        disabled=True, worktree=None, branch=None, task_worktree=False
+    )
+    live = {"agent-1": worker}
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha", "agent-1", worker, live, True, services
+    )
+
+    assert spawned == ["/project/.orcha-worktrees/task-1"]
+    assert [kind for kind, _args in provisioned] == ["task"]
+    assert live["agent-1"]["task_worktree"] is True
+    assert live["agent-1"]["worktrees_disabled"] is False
