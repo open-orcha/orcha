@@ -442,3 +442,43 @@ def test_checkpoint_toggle_round_trip_reuses_preserved_task_worktree(tmp_path):
     assert live["agent-1"]["worktree"] == worktree
     assert live["agent-1"]["task_worktree"] is True
     assert (pathlib.Path(worktree) / "wip.txt").read_text() == "preserved round trip\n"
+
+
+def test_checkpoint_toggle_round_trip_keeps_main_checkout_deletion(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    task_file = pathlib.Path(worktree) / "wip.txt"
+    task_file.write_text("delete during round trip\n")
+    worker = _checkpoint_worker(
+        disabled=False, worktree=worktree, branch=branch, task_worktree=True
+    )
+    worker["base_cwd"] = str(main)
+    live = {"agent-1": worker}
+    spawned = []
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha",
+        "agent-1",
+        worker,
+        live,
+        True,
+        _real_checkpoint_services(disabled=True, spawned=spawned),
+    )
+    assert (main / "wip.txt").read_text() == "delete during round trip\n"
+    (main / "wip.txt").unlink()
+
+    main_worker = live["agent-1"]
+    spawned.clear()
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha",
+        "agent-1",
+        main_worker,
+        live,
+        True,
+        _real_checkpoint_services(disabled=False, spawned=spawned),
+    )
+
+    assert spawned == [worktree]
+    assert live["agent-1"]["worktree"] == worktree
+    assert live["agent-1"]["task_worktree"] is True
+    assert not task_file.exists()
