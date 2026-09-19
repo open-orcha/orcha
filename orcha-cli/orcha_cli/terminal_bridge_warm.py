@@ -20,6 +20,7 @@ class WarmSession:
         run_id,
         rec,
         run_token=None,
+        worktrees_disabled=False,
     ):
         self.aid = aid
         self.alias = alias
@@ -32,6 +33,7 @@ class WarmSession:
         self.run_id = run_id
         self.rec = rec
         self.run_token = run_token
+        self.worktrees_disabled = bool(worktrees_disabled)
         self._expiry_task = None
 
     def pty_alive(self):
@@ -83,14 +85,21 @@ async def expire_warm(bridge, session, quiet=True):
         bridge._retire_warm(session, quiet=quiet)
 
 
-def retire_warm(bridge, session, quiet=True):
+def retire_warm(bridge, session, quiet=True, teardown_worktree=True):
     """Terminate a session and release every resource it owns."""
     disposition = None
     try:
         bridge.terminate_pty(session.pid, session.master_fd)
-        disposition = bridge.safe_teardown_worktree(
-            session.base_cwd, session.worktree, session.branch
-        )
+        if teardown_worktree:
+            disposition = bridge.safe_teardown_worktree(
+                session.base_cwd, session.worktree, session.branch
+            )
+        elif session.worktree:
+            # A project routing toggle may retire an old warm process, but must never clean up the
+            # worktree it used.  Leave it available for explicit human inspection/removal.
+            disposition = "preserved-routing-change"
+        else:
+            disposition = "noop"
     finally:
         bridge.release_live_lease(session.api_base, session.aid)
         bridge.finish_live_run(

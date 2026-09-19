@@ -13,6 +13,8 @@ import json
 import re
 import time
 
+import pytest
+
 from orcha_cli import notifier
 
 
@@ -1928,6 +1930,75 @@ def test_service_residents_boots_in_isolated_worktree(monkeypatch, tmp_path):
     assert live["C1"]["worktree"] == "/wt/Vox"
     assert live["C1"]["branch"] == "orcha/resident-C1"
     assert live["C1"]["base_cwd"] == str(tmp_path)
+
+
+def test_service_residents_disabled_worktrees_boots_claude_in_main(monkeypatch, tmp_path):
+    """A direct human prompt uses the main checkout and never provisions a resident worktree."""
+    conv = {
+        "conversation_id": "C1",
+        "agent_id": "A1",
+        "agent_alias": "Vox",
+        "session_id": None,
+        "pending_human": True,
+        "last_turn_seq": 1,
+        "worktrees_disabled": True,
+    }
+    _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hi"}])
+    monkeypatch.setattr(notifier, "_is_git_repo", lambda cwd: True)
+    monkeypatch.setattr(
+        notifier,
+        "_provision_resident_worktree",
+        lambda *args: pytest.fail("disabled routing must not provision a worktree"),
+    )
+    spawned_cwd = []
+    monkeypatch.setattr(
+        notifier,
+        "spawn_resident",
+        lambda cwd, **kwargs: spawned_cwd.append(cwd) or (True, "r", ResidentProc()),
+    )
+
+    live = {}
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert spawned_cwd == [str(tmp_path)]
+    assert live["C1"]["worktree"] is None
+    assert live["C1"]["worktrees_disabled"] is True
+
+
+def test_service_residents_disabled_worktrees_boots_codex_in_main(monkeypatch, tmp_path):
+    """The one-shot Codex conversation lane obeys the same project routing decision."""
+    conv = {
+        "conversation_id": "C1",
+        "agent_id": "A1",
+        "agent_alias": "Vox",
+        "model": "gpt-5.5",
+        "model_runtime": "codex",
+        "session_id": None,
+        "pending_human": True,
+        "last_turn_seq": 1,
+        "worktrees_disabled": True,
+    }
+    _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hi"}])
+    monkeypatch.setattr(notifier, "_is_git_repo", lambda cwd: True)
+    monkeypatch.setattr(
+        notifier,
+        "_provision_resident_worktree",
+        lambda *args: pytest.fail("disabled routing must not provision a worktree"),
+    )
+    spawned_cwd = []
+    monkeypatch.setattr(
+        notifier,
+        "spawn_headless",
+        lambda cwd, *args, **kwargs: spawned_cwd.append(cwd)
+        or (True, "r", ResidentProc()),
+    )
+
+    live = {}
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert spawned_cwd == [str(tmp_path)]
+    assert live["C1"]["worktree"] is None
+    assert live["C1"]["worktrees_disabled"] is True
 
 
 def test_service_residents_fails_closed_when_worktree_provision_fails(monkeypatch, tmp_path):

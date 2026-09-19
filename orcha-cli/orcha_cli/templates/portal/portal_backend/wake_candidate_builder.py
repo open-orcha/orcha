@@ -44,6 +44,7 @@ def build_wake_candidate(
     resolve_model_runtime,
     container_autonomy_level="plan",
     container_autonomy_enforced=False,
+    worktrees_disabled=False,
 ):
     """Return the stable wake-scan contract for one AI agent."""
     aid = str(agent["id"])
@@ -209,4 +210,8 @@ def build_wake_candidate(
             container_autonomy_enforced,
             agent.get("autonomy_override"),
         ),
+        # Project routing is resolved here once for every wake cause.  The notifier consumes this
+        # at the final cwd decision, so assignments, task messages, requests/escalations, retries,
+        # automatic/self wakes, and resumed task work cannot drift into separate policies.
+        "worktrees_disabled": bool(worktrees_disabled),
     }

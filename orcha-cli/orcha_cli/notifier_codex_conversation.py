@@ -105,6 +105,7 @@ def run_state(conversation: dict, run: dict, services, *, base_cwd=None) -> dict
         "worktree": run.get("worktree"),
         "branch": run.get("branch"),
         "base_cwd": run.get("base_cwd") or base_cwd,
+        "worktrees_disabled": bool(conversation.get("worktrees_disabled")),
         "serviced_seq": conversation.get("last_turn_seq", 0),
         "current_run_id": run["run_id"],
         "run_id": run["run_id"],

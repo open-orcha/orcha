@@ -23,6 +23,23 @@ def start_or_feed_candidate(
     resident = live_residents.get(conv_id)
     if resident is not None and resident.get("awaiting_result"):
         return
+    desired_worktree_routing = bool(candidate.get("worktrees_disabled"))
+    if (
+        resident is not None
+        and bool(resident.get("worktrees_disabled", False)) != desired_worktree_routing
+    ):
+        # A project toggle applies to the next turn even when a warm resident exists.  Retire the
+        # process/lease but preserve its old worktree exactly as-is; the replacement boots with the
+        # newly selected routing below.
+        services._close_resident(
+            api_base,
+            resident,
+            reason="worktree_routing_changed",
+            teardown_worktree=False,
+            stamp_woken=False,
+        )
+        live_residents.pop(conv_id, None)
+        resident = None
     serviced = resident.get("serviced_seq", 0) if resident else 0
     if candidate.get("last_turn_seq", 0) <= serviced:
         return
@@ -158,13 +175,14 @@ def _boot(
         if log_path and log_path.exists()
         else 0
     )
+    worktrees_disabled = bool(candidate.get("worktrees_disabled"))
     in_git = not dry_run and services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)
-        if in_git
+        if in_git and not worktrees_disabled
         else (None, None)
     )
-    if in_git and worktree is None:
+    if in_git and not worktrees_disabled and worktree is None:
         if not quiet:
             print(
                 f"[notifier] resident skip {candidate.get('agent_alias')} — "
@@ -238,6 +256,7 @@ def _boot(
         "worktree": worktree,
         "branch": branch,
         "base_cwd": base_cwd,
+        "worktrees_disabled": worktrees_disabled,
         "session_id": session_id,
         "session_pinned": not cold,
         "cold": cold,

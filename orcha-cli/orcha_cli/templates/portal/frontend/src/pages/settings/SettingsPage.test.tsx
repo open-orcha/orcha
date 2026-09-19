@@ -31,6 +31,7 @@ interface Call {
 let calls: Call[] = [];
 let keyStatus: Record<string, unknown> = { configured: true, masked: "sk-...abcd", source: "db" };
 let rawAgents: unknown[] = [];
+let worktreesDisabled = false;
 
 function installFetch() {
   calls = [];
@@ -45,11 +46,20 @@ function installFetch() {
     if (url === "/api/containers") return json([{ id: "c1", status: "active" }]);
     if (url === "/api/containers/c1")
       return json({
-        container: { id: "c1", name: "Orcha", autonomy_level: "plan" },
+        container: {
+          id: "c1",
+          name: "Orcha",
+          autonomy_level: "plan",
+          worktrees_disabled: worktreesDisabled,
+        },
         agents: rawAgents,
         tasks: [],
         requests: [],
       });
+    if (url === "/api/containers/c1/worktrees" && method === "POST") {
+      worktreesDisabled = !!(body as { disabled?: boolean } | undefined)?.disabled;
+      return json({ container_id: "c1", worktrees_disabled: worktreesDisabled });
+    }
     if (url.endsWith("/settings/llm-key") && method === "GET") return json(keyStatus);
     if (url.endsWith("/settings/llm-key") && method === "PUT")
       return json({ configured: true, masked: "sk-...9999" });
@@ -78,7 +88,43 @@ beforeEach(() => {
   delete extensions.settingsSections;
   delete extensions.settingsGeneral;
   localStorage.clear();
+  worktreesDisabled = false;
   installFetch();
+});
+
+describe("SettingsPage worktree routing", () => {
+  it("defaults off and clearly warns that concurrent agents share the checkout", async () => {
+    renderPage();
+    const toggle = await screen.findByRole("switch", { name: "Disable worktrees" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/Concurrent agents may edit the same checkout/)).toBeInTheDocument();
+    expect(screen.getByText(/Existing worktrees are not removed/)).toBeInTheDocument();
+  });
+
+  it("persists toggles with the acting human and renders an enabled project", async () => {
+    worktreesDisabled = true;
+    rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
+    renderPage();
+    const toggle = await screen.findByRole("switch", { name: "Disable worktrees" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      const post = calls.find((c) => c.method === "POST" && c.url === "/api/containers/c1/worktrees");
+      expect(post).toBeTruthy();
+      expect(post!.body).toEqual({ disabled: false, actor_agent_id: "h1" });
+    });
+  });
+
+  it("requires an acting human before changing the project setting", async () => {
+    rawAgents = [{ id: "a1", alias: "forge", kind: "ai", status: "active" }];
+    renderPage();
+    fireEvent.click(await screen.findByRole("switch", { name: "Disable worktrees" }));
+    await waitFor(() =>
+      expect(screen.getByText("Pick an acting human to change worktree routing")).toBeInTheDocument(),
+    );
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/worktrees"))).toBe(false);
+  });
 });
 afterEach(() => {
   cleanup();

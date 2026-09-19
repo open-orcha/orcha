@@ -68,13 +68,14 @@ def start_candidate(
             )
         return
 
+    worktrees_disabled = bool(candidate.get("worktrees_disabled"))
     in_git = services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)
-        if in_git
+        if in_git and not worktrees_disabled
         else (None, None)
     )
-    if in_git and worktree is None:
+    if in_git and not worktrees_disabled and worktree is None:
         _fail(
             services,
             api_base,
@@ -196,6 +197,7 @@ def start_candidate(
         "conversation_ack_ts": candidate.get("conversation_ack_ts"),
         "resume_session_id": session_id if use_resume else None,
         "run_token": token,
+        "worktrees_disabled": worktrees_disabled,
         "hard_deadline": time.time() + services.HARD_CAP_MIN_SECS,
         "last_size": 0,
         "last_progress_ts": time.time(),

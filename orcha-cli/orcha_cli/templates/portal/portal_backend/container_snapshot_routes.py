@@ -38,7 +38,7 @@ def get_container(
         cur.execute(
             """SELECT id, name, description, status, root_task_id,
                       max_auto_agents, max_tasks, execution_mode, wakes_enabled,
-                      autonomy_level, autonomy_enforced, github_repo,
+                      autonomy_level, autonomy_enforced, worktrees_disabled, github_repo,
                       -- mig 037: the notifier's last wake-scan poll — recent means a
                       -- host daemon serves THIS project's wakes (switcher/notice signal).
                       last_wake_scan_at,
