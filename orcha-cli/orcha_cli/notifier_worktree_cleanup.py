@@ -15,6 +15,21 @@ DIFF_EXCLUDES = (
 )
 
 
+def _full_patch(cwd, services: Any):
+    """Return the checkout's complete binary-safe patch from ``origin/main``."""
+    add_code, _ = services._run_git(
+        ["add", "-A", "-N", "--", *DIFF_EXCLUDES], cwd=cwd
+    )
+    if add_code != 0:
+        return None
+    return_code, patch = services._run_git(
+        ["diff", "--binary", "--full-index", "origin/main", "--", *DIFF_EXCLUDES],
+        cwd=cwd,
+        timeout=60,
+    )
+    return patch if return_code == 0 else None
+
+
 def capture_diff(worktree, services: Any, cap: int = 200_000):
     """Return the worker's net diff from main, including untracked files."""
     if not worktree:
@@ -48,15 +63,17 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     except OSError:
         return False
 
-    services._run_git(["add", "-A", "-N", "--", *DIFF_EXCLUDES], cwd=source_cwd)
-    return_code, patch = services._run_git(
-        ["diff", "--binary", "--full-index", "origin/main", "--", *DIFF_EXCLUDES],
-        cwd=source_cwd,
-        timeout=60,
-    )
-    if return_code != 0:
+    patch = _full_patch(source_cwd, services)
+    if patch is None:
         return False
     if not patch.strip():
+        return True
+
+    # A durable task worktree can be selected again after an off -> on toggle.
+    # The previous handoff may already have copied this complete file view there;
+    # treat that exact state as success instead of trying to apply it twice.
+    destination_patch = _full_patch(destination_cwd, services)
+    if destination_patch == patch:
         return True
 
     patch_path = None
