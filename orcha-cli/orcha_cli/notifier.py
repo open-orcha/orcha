@@ -66,6 +66,7 @@ from .notifier_worktree_facade import (
     _drain_pending_revokes,
     _ensure_worktree_exclude,
     _finish_run,
+    _handoff_worktree_changes,
     _is_git_repo,
     _mint_embodiment_token,
     _overlay_runtime_config,

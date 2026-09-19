@@ -21,7 +21,8 @@ def checkpoint_and_respawn(
     cap = worker.get("cap", services.HARD_CAP_MIN_SECS)
 
     services._kill_worker(process, graceful=True)
-    diff = services._capture_diff(worktree)
+    source_cwd = worktree or base_cwd
+    diff = services._capture_diff(source_cwd)
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -41,6 +42,19 @@ def checkpoint_and_respawn(
         task_id,
         services,
     )
+    destination_cwd = worktree or base_cwd
+    if not services._handoff_worktree_changes(source_cwd, destination_cwd):
+        _handle_handoff_failure(
+            api_base,
+            agent_id,
+            worker,
+            live_workers,
+            task_id,
+            diff,
+            quiet,
+            services,
+        )
+        return
 
     services._revoke_or_defer(api_base, worker.get("run_token"))
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
@@ -266,4 +280,65 @@ def _handle_spawn_failure(
         print(
             f"[notifier] checkpoint-respawn for {agent_id} FAILED to spawn "
             f"a fresh worker — {outcome} + lease released"
+        )
+
+
+def _handle_handoff_failure(
+    api_base,
+    agent_id,
+    worker,
+    live_workers,
+    task_id,
+    diff,
+    quiet,
+    services,
+) -> None:
+    """Stop visibly when a checkout switch cannot preserve the worker's file view."""
+    if worker.get("task_worktree"):
+        sha = services._checkpoint_task_worktree(
+            worker.get("base_cwd"),
+            worker.get("worktree"),
+            worker.get("branch"),
+            task_id,
+            worker.get("run_id"),
+        )
+        saved = services._saved_ref(worker, sha, diff)
+        human = services._saved_human_line(
+            worker.get("base_cwd"), worker.get("branch"), sha
+        )
+        services._record_task_saved_ref(api_base, worker, saved, human)
+        services._synthesize_task_digest(
+            api_base,
+            agent_id,
+            task_id,
+            saved,
+            worker.get("started_ts"),
+            human,
+        )
+
+    if task_id:
+        services._post_json(
+            f"{api_base}/api/tasks/{task_id}/messages",
+            {
+                "author_agent_id": worker.get("agent_id") or agent_id,
+                "body": (
+                    "Checkpoint replacement paused because Orcha could not safely carry "
+                    "the in-progress files into the checkout selected by the project setting. "
+                    "The existing files remain preserved, and no replacement worker was started."
+                ),
+            },
+        )
+    services._post_json(
+        f"{api_base}/api/agents/{agent_id}/wake-ack",
+        {
+            "kind": "worker_checkpoint_handoff_failed",
+            "release_lease": True,
+            "lane": worker.get("lane", "work"),
+        },
+    )
+    services._retire_headless(api_base, live_workers, agent_id)
+    if not quiet:
+        print(
+            f"[notifier] checkpoint-respawn for {agent_id} paused: in-progress files "
+            "could not be carried into the selected checkout; source preserved"
         )
