@@ -286,6 +286,43 @@ async def test_handle_connection_passes_target_model_runtime_to_spawn(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_handle_connection_disabled_worktrees_uses_main_checkout(monkeypatch):
+    """Live terminal sessions share the same project-level routing preference."""
+    _wire_handle(monkeypatch)
+
+    def _get(url, **kwargs):
+        if url.endswith("/agents/HUMAN/persona"):
+            return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss"}
+        if url.endswith("/agents/AID/persona"):
+            return {
+                "agent_id": "AID",
+                "kind": "ai",
+                "alias": "Vault",
+                "worktrees_disabled": True,
+            }
+        return None
+
+    monkeypatch.setattr(notifier, "_get_json", _get)
+    monkeypatch.setattr(
+        notifier,
+        "_provision_live_worktree",
+        lambda *args: pytest.fail("disabled routing must not provision a live worktree"),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        tb,
+        "spawn_pty",
+        lambda alias, cold, sid, cwd, **kwargs: captured.update(cwd=cwd)
+        or (_DEAD_PID, os.open(os.devnull, os.O_RDONLY)),
+    )
+
+    ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN")
+    await tb.handle_connection(ws, "http://x", "/base", quiet=True)
+
+    assert captured["cwd"] == "/base"
+
+
+@pytest.mark.asyncio
 async def test_handle_connection_human_target_normalizes_runtime_to_claude(monkeypatch):
     """#297 (Lens P2): a HUMAN target's /persona carries model=None AND model_runtime=None
     (runtime is only set when model is truthy). The bridge must still mark the spawn as resolved by
@@ -464,6 +501,38 @@ def test_retire_warm_terminates_teardown_releases_and_finishes(monkeypatch):
     assert killed == [4321] and released == ["AID"]
     assert teardown == [("/wt/live-Vault", "orcha/live-Vault")]
     assert finished == [("run-1", "exited")]
+
+
+def test_routing_change_retires_warm_session_without_removing_worktree(monkeypatch):
+    """A project toggle may recycle the process, but cleanup stays a separate human action."""
+    teardown = []
+    monkeypatch.setattr(tb, "terminate_pty", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tb,
+        "safe_teardown_worktree",
+        lambda *args: teardown.append(args) or "removed",
+    )
+    monkeypatch.setattr(tb, "release_live_lease", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tb, "finish_live_run", lambda *args, **kwargs: None)
+    session = tb._WarmSession(
+        "AID",
+        "Vault",
+        "http://x",
+        "/base",
+        4321,
+        7,
+        "/wt/live-Vault",
+        "orcha/live-Vault",
+        "run-1",
+        {"chunks": [], "len": 0},
+    )
+
+    disposition = tb._retire_warm(
+        session, quiet=True, teardown_worktree=False
+    )
+
+    assert disposition == "preserved-routing-change"
+    assert teardown == []
 
 
 def _wire_warm_handle(monkeypatch, pid, fd):

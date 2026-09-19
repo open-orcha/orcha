@@ -185,6 +185,10 @@ def spawn_resident(cwd: str, **kwargs):
 def select_transport(cand: dict) -> str:
     """Choose the reachable host transport for a wake candidate."""
     compat = _compat()
+    # A live tmux pane has its own already-selected cwd, which may be an agent worktree.  When the
+    # project requires main-checkout routing, only the headless path can make that cwd guarantee.
+    if cand.get("worktrees_disabled"):
+        return "ephemeral" if cand.get("headless_cwd") else "unreachable"
     if cand.get("tmux_target") and compat.tmux_pane_live(cand["tmux_target"]):
         return "tmux"
     if cand.get("headless_cwd"):

@@ -100,6 +100,15 @@ const SETTINGS_CSS = `
   .set-savebar .saved svg { width: 15px; height: 15px; color: var(--ok); }
   .set-err { color: var(--danger); font-size: 12.5px; }
 
+  /* project execution routing */
+  .wt-setting { display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+  .wt-setting-main { flex: 1; min-width: 0; }
+  .wt-setting-title { font-size: 13.5px; font-weight: 650; }
+  .wt-setting-desc { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+  .wt-setting-warn { color: var(--warn); font-size: 11.5px; line-height: 1.45; margin-top: 8px; }
+  .wt-switch { flex: none; min-width: 74px; }
+
   /* per-provider key cards (multi-provider, follow-on to #294 Item 1) — one
      .pk-card per additional AVAILABLE catalog provider, stacked like the
      Anthropic card above; reuses the same .sc-* banner/row/result tokens. */
@@ -1334,6 +1343,74 @@ export function AppearanceCard() {
 }
 
 /* ====================================================================== *
+ *  Project execution routing                                              *
+ * ====================================================================== */
+export function WorktreeRoutingCard({ cid }: { cid: string | null }) {
+  const { snap, refresh } = useSnapshot();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const persisted = !!snap?.container?.worktrees_disabled;
+  const [disabled, setDisabled] = useState(persisted);
+  const who = actingHuman(snap);
+
+  useEffect(() => setDisabled(persisted), [persisted]);
+
+  const toggle = async () => {
+    if (!cid || busy) return;
+    if (!who) {
+      toast("Pick an acting human to change worktree routing", "warn");
+      return;
+    }
+    const next = !disabled;
+    setBusy(true);
+    try {
+      await sendJSON("POST", "/api/containers/" + encodeURIComponent(cid) + "/worktrees", {
+        disabled: next,
+        actor_agent_id: who.id,
+      });
+      setDisabled(next);
+      await refresh();
+      toast(
+        next
+          ? "Worktrees disabled — future agent runs use the main checkout."
+          : "Worktrees enabled — future agent runs use normal isolation.",
+        "ok",
+      );
+    } catch (e) {
+      toast("Couldn't change worktree routing (" + statusOf(e) + ").", "danger");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="wt-setting">
+      <div className="wt-setting-main">
+        <div className="wt-setting-title">Disable worktrees</div>
+        <div className="wt-setting-desc">
+          Run every agent in this project&#39;s main checkout instead of creating or selecting an
+          isolated task or agent worktree. Turning this off restores normal worktree routing.
+        </div>
+        <div className="wt-setting-warn">
+          Concurrent agents may edit the same checkout and can overwrite or conflict with each
+          other&#39;s changes. Existing worktrees are not removed.
+        </div>
+      </div>
+      <button
+        type="button"
+        className={"btn sm wt-switch" + (disabled ? " approve" : " ghost")}
+        role="switch"
+        aria-checked={disabled}
+        aria-label="Disable worktrees"
+        disabled={busy}
+        onClick={() => void toggle()}
+      >
+        {busy ? "Saving…" : disabled ? "On" : "Off"}
+      </button>
+    </div>
+  );
+}
+
+/* ====================================================================== *
  *  The page                                                               *
  * ====================================================================== */
 export function SettingsPage() {
@@ -1379,9 +1456,8 @@ export function SettingsPage() {
         <div className="set-intro">
           <h1>Settings</h1>
           <p>
-            Workspace-level configuration. The Anthropic API key below powers Orcha&#39;s universal LLM
-            client (#290) — the direct-API calls behind guided onboarding and wake triage — separate from
-            each agent&#39;s own embodiment model.
+            Project-level configuration for agent execution, model providers, connected devices, and
+            this portal&#39;s appearance.
           </p>
         </div>
 
@@ -1417,6 +1493,18 @@ export function SettingsPage() {
 
         {active === GENERAL_TAB && (
           <>
+        <div className="card set-card" data-settab={GENERAL_TAB}>
+          <div className="card-h">
+            <h2>Agent workspace</h2>
+          </div>
+          <div className="card-b">
+            <div className="lead">
+              Choose whether agents work in isolated Git worktrees or share this project&#39;s main checkout.
+            </div>
+            <WorktreeRoutingCard cid={cid} />
+          </div>
+        </div>
+
         {(extensions.settingsGeneral?.key ?? true) && (
         <div className="card set-card" data-settab={GENERAL_TAB}>
           <div className="card-h">

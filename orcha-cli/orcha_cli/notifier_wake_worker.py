@@ -8,6 +8,11 @@ import time
 
 def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
     """Provision isolation appropriate to the candidate's likely work."""
+    # This is the final routing decision shared by every work-lane trigger.  A disabled project
+    # never creates OR selects a task/agent worktree; run_cwd below therefore falls back to the
+    # registered main checkout.  Existing worktrees are deliberately left untouched.
+    if candidate.get("worktrees_disabled"):
+        return None, None, False
     headless_cwd = candidate.get("headless_cwd")
     noncode_events = ("request_answered", "request_closed")
     single_noncode = (
