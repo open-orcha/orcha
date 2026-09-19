@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from orcha_cli import notifier_checkpoint, notifier_wake_worker
+from orcha_cli import notifier, notifier_checkpoint, notifier_wake_worker
 
 
 async def _set(client, cid, human_id, disabled):
@@ -199,6 +199,7 @@ def _checkpoint_services(*, disabled, spawned, provisioned):
         time=time,
         _kill_worker=lambda *args, **kwargs: None,
         _capture_diff=lambda worktree: "saved diff" if worktree else None,
+        _handoff_worktree_changes=lambda *args: True,
         _finish_run=lambda *args, **kwargs: True,
         _reap_sandbox_artifacts=lambda *args, **kwargs: None,
         _get_json=get_json,
@@ -209,6 +210,8 @@ def _checkpoint_services(*, disabled, spawned, provisioned):
             spawned.append(cwd) or (True, "command", _Proc())
         ),
         _post_json=post_json,
+        posts=posts,
+        _retire_headless=lambda _api, live, aid: live.pop(aid, None),
         _provision_task_worktree=lambda *args: (
             provisioned.append(("task", args))
             or ("/project/.orcha-worktrees/task-1", "orcha/task-1")
@@ -285,3 +288,118 @@ def test_checkpoint_resume_rechecks_toggle_off_and_restores_task_routing():
     assert [kind for kind, _args in provisioned] == ["task"]
     assert live["agent-1"]["task_worktree"] is True
     assert live["agent-1"]["worktrees_disabled"] is False
+
+
+def test_checkpoint_handoff_conflict_stops_and_posts_visible_failure():
+    spawned, provisioned = [], []
+    services = _checkpoint_services(
+        disabled=True, spawned=spawned, provisioned=provisioned
+    )
+    services._handoff_worktree_changes = lambda *args: False
+    worker = _checkpoint_worker(
+        disabled=False,
+        worktree="/project/.orcha-worktrees/agent",
+        branch="orcha/agent",
+        task_worktree=False,
+    )
+    live = {"agent-1": worker}
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha", "agent-1", worker, live, True, services
+    )
+
+    assert spawned == []
+    assert "agent-1" not in live
+    assert any(
+        url.endswith("/tasks/task-1/messages")
+        and "no replacement worker was started" in body["body"]
+        for url, body in services.posts
+    )
+    assert any(
+        url.endswith("/wake-ack")
+        and body["kind"] == "worker_checkpoint_handoff_failed"
+        and body["release_lease"] is True
+        for url, body in services.posts
+    )
+
+
+def _checkpoint_repo(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    assert notifier._run_git(["init"], cwd=main)[0] == 0
+    assert (
+        notifier._run_git(["symbolic-ref", "HEAD", "refs/heads/main"], cwd=main)[0] == 0
+    )
+    assert (
+        notifier._run_git(["config", "user.email", "test@example.com"], cwd=main)[0]
+        == 0
+    )
+    assert notifier._run_git(["config", "user.name", "Test"], cwd=main)[0] == 0
+    (main / "base.txt").write_text("base\n")
+    assert notifier._run_git(["add", "base.txt"], cwd=main)[0] == 0
+    assert notifier._run_git(["commit", "-m", "base"], cwd=main)[0] == 0
+    origin = tmp_path / "origin.git"
+    assert (
+        notifier._run_git(["clone", "--bare", str(main), str(origin)], cwd=tmp_path)[0]
+        == 0
+    )
+    assert notifier._run_git(["remote", "add", "origin", str(origin)], cwd=main)[0] == 0
+    assert notifier._run_git(["fetch", "origin"], cwd=main)[0] == 0
+    return main
+
+
+def _real_checkpoint_services(*, disabled, spawned):
+    services = _checkpoint_services(disabled=disabled, spawned=spawned, provisioned=[])
+    services._capture_diff = notifier._capture_diff
+    services._handoff_worktree_changes = notifier._handoff_worktree_changes
+    services._provision_task_worktree = notifier._provision_task_worktree
+    services._provision_worktree = notifier._provision_worktree
+    return services
+
+
+def test_checkpoint_toggle_to_main_carries_in_progress_files(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    (pathlib.Path(worktree) / "wip.txt").write_text("from task worktree\n")
+    worker = _checkpoint_worker(
+        disabled=False, worktree=worktree, branch=branch, task_worktree=True
+    )
+    worker["base_cwd"] = str(main)
+    live = {"agent-1": worker}
+    spawned = []
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha",
+        "agent-1",
+        worker,
+        live,
+        True,
+        _real_checkpoint_services(disabled=True, spawned=spawned),
+    )
+
+    assert spawned == [str(main)]
+    assert (main / "wip.txt").read_text() == "from task worktree\n"
+
+
+def test_checkpoint_toggle_back_to_worktree_carries_main_files(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / "wip.txt").write_text("from main checkout\n")
+    worker = _checkpoint_worker(
+        disabled=True, worktree=None, branch=None, task_worktree=False
+    )
+    worker["base_cwd"] = str(main)
+    live = {"agent-1": worker}
+    spawned = []
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha",
+        "agent-1",
+        worker,
+        live,
+        True,
+        _real_checkpoint_services(disabled=False, spawned=spawned),
+    )
+
+    destination = pathlib.Path(spawned[0])
+    assert destination != main
+    assert (destination / "wip.txt").read_text() == "from main checkout\n"

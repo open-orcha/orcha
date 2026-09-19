@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import pathlib
+import tempfile
 from typing import Any
-
 
 DIFF_EXCLUDES = (
     ".",
@@ -26,6 +28,61 @@ def capture_diff(worktree, services: Any, cap: int = 200_000):
     if len(output) > cap:
         output = output[:cap] + "\n...[diff truncated]..."
     return output
+
+
+def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
+    """Carry a worker's complete in-progress state into a newly selected checkout.
+
+    The patch is based on ``origin/main`` so it includes both commits made on a
+    worker branch and uncommitted files. A three-way dry run must succeed before
+    the destination is touched. On any conflict or I/O error the caller can stop
+    the replacement worker while leaving the source checkout intact.
+    """
+    if not source_cwd or not destination_cwd:
+        return False
+    try:
+        source_path = pathlib.Path(source_cwd).resolve()
+        destination_path = pathlib.Path(destination_cwd).resolve()
+        if source_path == destination_path:
+            return True
+    except OSError:
+        return False
+
+    services._run_git(["add", "-A", "-N", "--", *DIFF_EXCLUDES], cwd=source_cwd)
+    return_code, patch = services._run_git(
+        ["diff", "--binary", "--full-index", "origin/main", "--", *DIFF_EXCLUDES],
+        cwd=source_cwd,
+        timeout=60,
+    )
+    if return_code != 0:
+        return False
+    if not patch.strip():
+        return True
+
+    patch_path = None
+    try:
+        fd, patch_path = tempfile.mkstemp(
+            prefix="orcha-checkout-handoff-", suffix=".patch"
+        )
+        os.close(fd)
+        pathlib.Path(patch_path).write_text(patch)
+        check_code, _ = services._run_git(
+            ["apply", "--check", "--3way", patch_path], cwd=destination_cwd, timeout=60
+        )
+        if check_code != 0:
+            return False
+        apply_code, _ = services._run_git(
+            ["apply", "--3way", patch_path], cwd=destination_cwd, timeout=60
+        )
+        return apply_code == 0
+    except OSError:
+        return False
+    finally:
+        if patch_path:
+            try:
+                pathlib.Path(patch_path).unlink()
+            except OSError:
+                pass
 
 
 def branch_commit_count(base_cwd, branch, services: Any) -> int:
