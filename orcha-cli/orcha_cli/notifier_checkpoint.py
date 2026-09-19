@@ -33,11 +33,17 @@ def checkpoint_and_respawn(
         # I4: the OLD wake's container, once stamped
         services._reap_sandbox_artifacts(worker)
     task_id = _current_task_id(api_base, agent_id, worker, context, services)
+    worktree, branch, task_worktree, worktrees_disabled = _respawn_routing(
+        api_base,
+        agent_id,
+        worker,
+        context,
+        task_id,
+        services,
+    )
 
     services._revoke_or_defer(api_base, worker.get("run_token"))
-    new_token = services._mint_embodiment_token(
-        api_base, agent_id, "work", "headless"
-    )
+    new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
     log_path = _next_log_path(base_cwd, context, services)
     _spawn_info: dict = {}
@@ -88,9 +94,7 @@ def checkpoint_and_respawn(
     if _spawn_info.get("sandbox_container_id"):
         _run_payload["sandbox_container_id"] = _spawn_info["sandbox_container_id"]
         _run_payload["wake_kind"] = "sandbox"
-    run = services._post_json(
-        f"{api_base}/api/agents/{agent_id}/runs", _run_payload
-    )
+    run = services._post_json(f"{api_base}/api/agents/{agent_id}/runs", _run_payload)
     now = services.time.time()
     live_workers[agent_id] = {
         "proc": new_process,
@@ -102,10 +106,8 @@ def checkpoint_and_respawn(
         "worktree": worktree,
         "branch": branch,
         "base_cwd": base_cwd,
-        "task_bound": bool(
-            worker.get("task_bound", bool(worker.get("task_worktree")))
-        ),
-        "task_worktree": bool(worker.get("task_worktree")),
+        "task_bound": bool(worker.get("task_bound", bool(worker.get("task_worktree")))),
+        "task_worktree": task_worktree,
         "wake_ack_ts": worker.get("wake_ack_ts"),
         "wake_task_id": worker.get("wake_task_id"),
         "started_ts": worker.get("started_ts"),
@@ -114,14 +116,13 @@ def checkpoint_and_respawn(
         "lines_seq": 1,
         "lines_buf": b"",
         "handled_event_ids": (
-            context.get("handled_event_ids")
-            or worker.get("handled_event_ids")
-            or []
+            context.get("handled_event_ids") or worker.get("handled_event_ids") or []
         ),
         "cap": cap,
         "respawns": respawns,
         "respawn_ctx": context,
         "lane": worker.get("lane", "work"),
+        "worktrees_disabled": worktrees_disabled,
         # I4: the NEW wake's sandbox container rides the record so every
         # Popen-completion path can reap it (container + api-config) after stamping.
         "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
@@ -140,16 +141,51 @@ def checkpoint_and_respawn(
             f"[notifier] worker for {agent_id} (pid {process.pid}) crossed "
             "the soft hard-cap while still progressing — checkpointed "
             f"(C1 digest) + respawned (pid {new_process.pid}, respawn "
-            f"{respawns}/{services.HARD_CAP_RESPAWN_MAX}) on the same worktree"
+            f"{respawns}/{services.HARD_CAP_RESPAWN_MAX}) in the selected project checkout"
         )
+
+
+def _respawn_routing(api_base, agent_id, worker, context, task_id, services):
+    """Apply the latest project routing preference to a checkpoint continuation.
+
+    A checkpoint replacement is a new worker run, so a setting changed while the old process was
+    alive must take effect here too.  The previous checkout is only detached from the new worker;
+    it is never removed or reset as a side effect of routing changes.
+    """
+    previous_disabled = bool(
+        worker.get("worktrees_disabled", context.get("worktrees_disabled", False))
+    )
+    desired_disabled = previous_disabled
+    project = services._get_json(f"{api_base}/api/agents/{agent_id}/persona")
+    if isinstance(project, dict) and "worktrees_disabled" in project:
+        desired_disabled = bool(project["worktrees_disabled"])
+
+    if desired_disabled:
+        return None, None, False, True
+
+    worktree = worker.get("worktree")
+    branch = worker.get("branch")
+    task_worktree = bool(worker.get("task_worktree"))
+    if previous_disabled:
+        worktree = branch = None
+        task_worktree = False
+        base_cwd = worker.get("base_cwd")
+        if task_id:
+            worktree, branch = services._provision_task_worktree(
+                base_cwd, context.get("alias"), task_id
+            )
+            task_worktree = worktree is not None
+        if worktree is None:
+            worktree, branch = services._provision_worktree(
+                base_cwd, context.get("alias")
+            )
+    return worktree, branch, task_worktree, False
 
 
 def _current_task_id(api_base, agent_id, worker, context, services):
     """Resolve task attribution from the exact run that was checkpointed."""
     run_id = worker.get("run_id")
-    data = services._get_json(
-        f"{api_base}/api/agents/{agent_id}/runs?limit=20"
-    )
+    data = services._get_json(f"{api_base}/api/agents/{agent_id}/runs?limit=20")
     task_id = context.get("task_id")
     if data and data.get("runs"):
         for run in data["runs"]:
@@ -225,9 +261,7 @@ def _handle_spawn_failure(
     services._retire_headless(api_base, live_workers, agent_id)
     if not quiet:
         outcome = (
-            "task worktree preserved"
-            if is_task_worktree
-            else "worktree torn down"
+            "task worktree preserved" if is_task_worktree else "worktree torn down"
         )
         print(
             f"[notifier] checkpoint-respawn for {agent_id} FAILED to spawn "

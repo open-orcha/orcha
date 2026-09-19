@@ -15,10 +15,9 @@ def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
         return None, None, False
     headless_cwd = candidate.get("headless_cwd")
     noncode_events = ("request_answered", "request_closed")
-    single_noncode = (
-        (candidate.get("pending_events") or 0) <= 1
-        and candidate.get("latest_event") in noncode_events
-    )
+    single_noncode = (candidate.get("pending_events") or 0) <= 1 and candidate.get(
+        "latest_event"
+    ) in noncode_events
     code_wake = (
         bool(auto_tasks)
         or bool(candidate.get("wake_task_id"))
@@ -78,6 +77,9 @@ def _worker_state(
         "task_worktree": task_worktree,
         "handled_event_ids": handled,
         "event": event,
+        # Checkpoint respawns re-read the persisted project setting, but this value is the
+        # fail-safe when the API is temporarily unavailable during that hand-off.
+        "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
     }
     return {
         "proc": process,
@@ -114,6 +116,7 @@ def _worker_state(
         "respawn_ctx": respawn,
         "run_token": token,
         "lane": "work",
+        "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
     }
 
 
@@ -150,10 +153,7 @@ def spawn(
         if not (claim and claim.get("claimed")):
             reason = (claim or {}).get("reason", "claim failed (unreachable)")
             if not quiet:
-                print(
-                    f"[notifier] skip {candidate['alias']} "
-                    f"— single-flight: {reason}"
-                )
+                print(f"[notifier] skip {candidate['alias']} — single-flight: {reason}")
             return None
 
     auto_tasks = candidate.get("auto_start_task_ids") or []
