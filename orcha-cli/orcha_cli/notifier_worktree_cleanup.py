@@ -30,6 +30,37 @@ def _full_patch(cwd, services: Any):
     return patch if return_code == 0 else None
 
 
+def _apply_patch(cwd, patch: str, services: Any, *, reverse: bool = False) -> bool:
+    """Apply a patch only after Git confirms the complete operation is safe."""
+    patch_path = None
+    try:
+        fd, patch_path = tempfile.mkstemp(
+            prefix="orcha-checkout-handoff-", suffix=".patch"
+        )
+        os.close(fd)
+        pathlib.Path(patch_path).write_text(patch)
+        arguments = ["apply", "--check"]
+        if not reverse:
+            arguments.append("--3way")
+        if reverse:
+            arguments.append("--reverse")
+        arguments.append(patch_path)
+        check_code, _ = services._run_git(arguments, cwd=cwd, timeout=60)
+        if check_code != 0:
+            return False
+        arguments.remove("--check")
+        apply_code, _ = services._run_git(arguments, cwd=cwd, timeout=60)
+        return apply_code == 0
+    except OSError:
+        return False
+    finally:
+        if patch_path:
+            try:
+                pathlib.Path(patch_path).unlink()
+            except OSError:
+                pass
+
+
 def capture_diff(worktree, services: Any, cap: int = 200_000):
     """Return the worker's net diff from main, including untracked files."""
     if not worktree:
@@ -66,40 +97,25 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     patch = _full_patch(source_cwd, services)
     if patch is None:
         return False
-    if not patch.strip():
-        return True
 
     # A durable task worktree can be selected again after an off -> on toggle.
     # The previous handoff may already have copied this complete file view there;
     # treat that exact state as success instead of trying to apply it twice.
     destination_patch = _full_patch(destination_cwd, services)
+    if destination_patch is None:
+        return False
     if destination_patch == patch:
         return True
 
-    patch_path = None
-    try:
-        fd, patch_path = tempfile.mkstemp(
-            prefix="orcha-checkout-handoff-", suffix=".patch"
+    # If the active checkout is now clean, the worker intentionally removed all
+    # prior task changes. Reverse the preserved destination patch so those stale
+    # files cannot reappear when the durable task worktree is selected again.
+    if not patch.strip():
+        return _apply_patch(
+            destination_cwd, destination_patch, services, reverse=True
         )
-        os.close(fd)
-        pathlib.Path(patch_path).write_text(patch)
-        check_code, _ = services._run_git(
-            ["apply", "--check", "--3way", patch_path], cwd=destination_cwd, timeout=60
-        )
-        if check_code != 0:
-            return False
-        apply_code, _ = services._run_git(
-            ["apply", "--3way", patch_path], cwd=destination_cwd, timeout=60
-        )
-        return apply_code == 0
-    except OSError:
-        return False
-    finally:
-        if patch_path:
-            try:
-                pathlib.Path(patch_path).unlink()
-            except OSError:
-                pass
+
+    return _apply_patch(destination_cwd, patch, services)
 
 
 def branch_commit_count(base_cwd, branch, services: Any) -> int:
