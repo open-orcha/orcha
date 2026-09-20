@@ -5,7 +5,13 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from orcha_cli import notifier, notifier_checkpoint, notifier_wake_worker
+from orcha_cli import (
+    notifier,
+    notifier_checkpoint,
+    notifier_codex_conversation,
+    notifier_reaper_completion,
+    notifier_wake_worker,
+)
 
 
 async def _set(client, cid, human_id, disabled):
@@ -176,6 +182,76 @@ def test_turning_setting_off_restores_normal_task_worktree_routing():
 
 class _Proc:
     pid = 4321
+
+
+def test_main_routed_task_exit_captures_base_checkout_diff():
+    captured = []
+    finished = []
+    worker = {
+        "proc": SimpleNamespace(pid=4321, returncode=0),
+        "run_id": "run-1",
+        "base_cwd": "/project/main",
+        "worktree": None,
+        "task_bound": True,
+        "task_worktree": False,
+        "respawn_ctx": {"task_id": "task-1"},
+    }
+    live = {"agent-1": worker}
+    services = SimpleNamespace(
+        RUNTIME_CODEX="codex",
+        _capture_diff=lambda cwd: captured.append(cwd) or "main diff",
+        _normalize_runtime=lambda runtime: runtime,
+        _finish_run=lambda *args, **kwargs: finished.append((args, kwargs)) or True,
+        _reap_sandbox_artifacts=lambda *args: None,
+        _teardown_worktree=lambda *args: None,
+        _post_json=lambda *args: {},
+        _retire_headless=lambda _api, workers, aid: workers.pop(aid, None),
+    )
+
+    notifier_reaper_completion.handle_exited(
+        "http://orcha",
+        "agent-1",
+        worker,
+        live,
+        {},
+        {},
+        0,
+        True,
+        services,
+    )
+
+    assert captured == ["/project/main"]
+    assert finished[0][0][5] == "main diff"
+
+
+def test_main_routed_conversation_completion_captures_base_checkout_diff():
+    captured = []
+    finished = []
+    resident = {
+        "agent_id": "agent-1",
+        "current_run_id": "run-1",
+        "base_cwd": "/project/main",
+        "worktree": None,
+    }
+    services = SimpleNamespace(
+        _capture_diff=lambda cwd: captured.append(cwd) or "main diff",
+        _finish_run=lambda *args, **kwargs: finished.append((args, kwargs)) or True,
+        _reap_sandbox_artifacts=lambda *args: None,
+        _post_json=lambda *args: {},
+        _conversation_ack_body=lambda kind, **kwargs: {"kind": kind, **kwargs},
+    )
+
+    posted = notifier_codex_conversation.finish(
+        "http://orcha",
+        "conversation-1",
+        resident,
+        services,
+        post_reply=False,
+    )
+
+    assert posted is False
+    assert captured == ["/project/main"]
+    assert finished[0][0][5] == "main diff"
 
 
 def _checkpoint_services(*, disabled, spawned, provisioned):

@@ -36,7 +36,9 @@ def handle_terminal_result(
     if now - seen <= services.GRACEFUL_EXIT_SECS:
         return True
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     drain_status = "exited"
     if runtime == services.RUNTIME_CODEX:
         drain_status = services._codex_exit_status(
@@ -133,7 +135,9 @@ def kill_stalled(
         "last_event_type": services._last_event_type(log_path),
     }
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     if services._finish_run(
         api_base,
         worker.get("run_id"),
