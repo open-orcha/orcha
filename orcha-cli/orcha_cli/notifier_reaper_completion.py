@@ -94,8 +94,14 @@ def handle_exited(
         _save_task_result(api_base, aid, worker, diff, failed_drains, services)
         _release_worker(api_base, aid, worker, lane, "released", services, task=True)
     else:
-        services._teardown_worktree(
-            worker.get("base_cwd"), worker.get("worktree"), worker.get("branch")
+        cleanup = (
+            services._safe_teardown_worktree(
+                worker.get("base_cwd"),
+                worker.get("worktree"),
+                worker.get("branch"),
+            )
+            if worker.get("worktree")
+            else "noop"
         )
         _release_worker(api_base, aid, worker, lane, "released", services)
     if proc.returncode == 0:
@@ -108,7 +114,11 @@ def handle_exited(
         disposition = (
             "task worktree preserved"
             if is_task_worktree
-            else "worktree torn down"
+            else (
+                "dirty worktree preserved"
+                if cleanup == "preserved-dirty"
+                else "clean worktree retired"
+            )
         )
         print(
             f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "

@@ -378,7 +378,11 @@ def test_start_live_run_posts_live_kind_and_returns_run_id(monkeypatch):
     monkeypatch.setattr(notifier, "_post_json",
                         lambda url, body, **k: posts.append((url, body)) or {"run_id": "R1"})
     rid = tb.start_live_run(
-        "http://x", "AID", worktree="/project/live", base_cwd="/project"
+        "http://x",
+        "AID",
+        worktree="/project/live",
+        branch="orcha/live-builder",
+        base_cwd="/project",
     )
     assert rid == "R1"
     url, body = posts[0]
@@ -392,6 +396,7 @@ def test_start_live_run_posts_live_kind_and_returns_run_id(monkeypatch):
         "pid": None,
         "token_id": None,
         "worktree": "/project/live",
+        "branch": "orcha/live-builder",
         "base_cwd": "/project",
     }
 
@@ -449,6 +454,7 @@ async def test_handle_connection_records_and_finishes_live_run(monkeypatch):
         "pid": _DEAD_PID,
         "token_id": "live-tok-1",
         "worktree": None,
+        "branch": None,
         "base_cwd": "/base",
     }]
     assert len(finishes) == 1 and finishes[0][1]["status"] == "exited"
