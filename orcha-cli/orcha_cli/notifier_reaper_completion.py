@@ -50,7 +50,9 @@ def handle_exited(
     """Finalize a child process which has already exited."""
     proc = worker["proc"]
     lane = worker.get("lane", "work")
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     runtime = services._normalize_runtime(
         (worker.get("respawn_ctx") or {}).get("model_runtime")
     )
@@ -125,7 +127,9 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     proc = worker["proc"]
     lane = worker.get("lane", "work")
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     diag = {
         "run_id": str(worker.get("run_id")),
         "agent_id": aid,

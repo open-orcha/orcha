@@ -31,7 +31,9 @@ def finish(
     teardown_worktree: bool = False,
 ) -> bool:
     """Publish the final reply, finish its run, and release the conversation lease."""
-    diff = services._capture_diff(resident.get("worktree"))
+    diff = services._capture_diff(
+        resident.get("worktree") or resident.get("base_cwd")
+    )
     posted = False
     real_text = (
         services._conversation_reply_text(
