@@ -209,12 +209,34 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     destination_patch = _full_patch(destination_cwd, services)
     if destination_patch is None:
         return False
-    if destination_patch == patch:
-        if _is_linked_worktree(source_cwd):
-            _write_handoff_record(source_cwd, patch, services)
-        return True
+
+    source_managed_patch = _read_handoff_record(source_cwd, services)
+    if _is_linked_worktree(source_cwd) or source_managed_patch is not None:
+        # Refresh ownership while this checkout is still the active source. In
+        # particular, a clean first task -> main handoff establishes an empty
+        # main record; after edits there, exporting back to the task worktree
+        # must update that record so a later return can replace only those edits.
+        if not _write_handoff_record(source_cwd, patch, services):
+            return False
 
     managed_patch = _read_handoff_record(destination_cwd, services)
+    if destination_patch == patch:
+        # An identical clean checkout is safe to claim even without a previous
+        # record. Linked task worktrees and already-managed destinations are
+        # likewise known to belong to this handoff. Do not claim an otherwise
+        # unknown dirty main checkout merely because its contents happen to
+        # match the source.
+        can_manage_destination = (
+            not destination_patch.strip()
+            or _is_linked_worktree(destination_cwd)
+            or managed_patch is not None
+        )
+        if can_manage_destination and not _write_handoff_record(
+            destination_cwd, patch, services
+        ):
+            return False
+        return True
+
     if managed_patch is None:
         # An unrecorded dirty destination may contain human or another worker's
         # work. There is no safe way to tell that apart from stale task state, so
@@ -241,11 +263,6 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
         if not transferred:
             return False
 
-    # A preserved task checkout is a later destination during an off -> on
-    # round trip. Record the exact state exported from it only after a successful
-    # transfer, so that state can be proven stale and replaced on return.
-    if _is_linked_worktree(source_cwd):
-        _write_handoff_record(source_cwd, patch, services)
     return True
 
 

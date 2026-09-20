@@ -743,6 +743,23 @@ def test_checkpoint_toggle_round_trip_reuses_preserved_task_worktree(tmp_path):
     assert (pathlib.Path(worktree) / "wip.txt").read_text() == "preserved round trip\n"
 
 
+def test_checkpoint_repeated_toggle_after_initial_clean_handoff(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    main_file = main / "wip.txt"
+    main_file.write_text("first main edit\n")
+
+    assert notifier._handoff_worktree_changes(str(main), worktree) is True
+    task_file = pathlib.Path(worktree) / "wip.txt"
+    assert task_file.read_text() == "first main edit\n"
+    task_file.write_text("later task edit\n")
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    assert main_file.read_text() == "later task edit\n"
+
+
 def test_checkpoint_toggle_round_trip_keeps_main_checkout_deletion(tmp_path):
     main = _checkpoint_repo(tmp_path)
     worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
@@ -840,6 +857,24 @@ def test_handoff_does_not_delete_unknown_destination_work(tmp_path):
     assert task_file.read_text() == "agent work\n"
     assert human_file.read_text() == "independent main checkout work\n"
     assert not (main / "task-work.txt").exists()
+
+
+def test_handoff_does_not_claim_unknown_identical_main_checkout(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
+    main_file = main / "shared.txt"
+    task_file = pathlib.Path(worktree) / "shared.txt"
+    main_file.write_text("independently created\n")
+    task_file.write_text("independently created\n")
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    task_file.write_text("later task edit\n")
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is False
+    assert main_file.read_text() == "independently created\n"
+    assert task_file.read_text() == "later task edit\n"
 
 
 def test_round_trip_preserves_new_independent_destination_work(tmp_path):
