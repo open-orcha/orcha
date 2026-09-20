@@ -482,3 +482,46 @@ def test_checkpoint_toggle_round_trip_keeps_main_checkout_deletion(tmp_path):
     assert live["agent-1"]["worktree"] == worktree
     assert live["agent-1"]["task_worktree"] is True
     assert not task_file.exists()
+
+
+def test_checkpoint_toggle_round_trip_replaces_old_task_files(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    old_task_file = pathlib.Path(worktree) / "old-task.txt"
+    old_task_file.write_text("old task work\n")
+    worker = _checkpoint_worker(
+        disabled=False, worktree=worktree, branch=branch, task_worktree=True
+    )
+    worker["base_cwd"] = str(main)
+    live = {"agent-1": worker}
+    spawned = []
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha",
+        "agent-1",
+        worker,
+        live,
+        True,
+        _real_checkpoint_services(disabled=True, spawned=spawned),
+    )
+    assert (main / "old-task.txt").read_text() == "old task work\n"
+    (main / "old-task.txt").unlink()
+    (main / "new-task.txt").write_text("replacement task work\n")
+
+    main_worker = live["agent-1"]
+    spawned.clear()
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha",
+        "agent-1",
+        main_worker,
+        live,
+        True,
+        _real_checkpoint_services(disabled=False, spawned=spawned),
+    )
+
+    destination = pathlib.Path(worktree)
+    assert spawned == [worktree]
+    assert live["agent-1"]["worktree"] == worktree
+    assert live["agent-1"]["task_worktree"] is True
+    assert not (destination / "old-task.txt").exists()
+    assert (destination / "new-task.txt").read_text() == "replacement task work\n"
