@@ -515,6 +515,9 @@ def test_service_residents_cold_boot_and_feeds_turn(monkeypatch, tmp_path):
     assert spawned[0][1]["system_prompt"] == "PERSONA"
     assert any("wake-claim" in u and b.get("lease_kind") == "resident" for u, b in posts)
     assert any(u.endswith("/runs") for u, _ in posts)                    # per-turn run opened
+    run_post = next(body for url, body in posts if url.endswith("/runs"))
+    assert run_post["worktree"] is None
+    assert run_post["base_cwd"] == str(tmp_path)
     proc.stdin.seek(0)
     assert (json.loads(proc.stdin.read().decode())["message"]["content"][0]["text"]
             == notifier._wrap_conversation_turn("hello"))   # PR R5: every fed turn carries the lane reminder
