@@ -275,8 +275,9 @@ def _orphan_recovery_services(monkeypatch, row):
         finished.append((args, kwargs))
         return True
 
+    rows = row if isinstance(row, list) else [row]
     monkeypatch.setattr(
-        notifier, "_get_json", lambda *_args, **_kwargs: {"runs": [row]}
+        notifier, "_get_json", lambda *_args, **_kwargs: {"runs": rows}
     )
     monkeypatch.setattr(notifier, "_post_json", post_json)
     monkeypatch.setattr(notifier, "_capture_diff", capture_diff)
@@ -364,6 +365,75 @@ def test_restart_recovery_keeps_lease_when_run_snapshot_cannot_be_saved(monkeypa
     assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 0
     assert captured == ["/project/main"]
     assert not any(url.endswith("/wake-ack") for url, _body in posts)
+
+
+def test_restart_recovery_does_not_capture_checkout_used_by_live_sibling(monkeypatch):
+    rows = [
+        {
+            "run_id": "dead-run",
+            "agent_id": "agent-1",
+            "pid": 4321,
+            "wake_kind": "ephemeral",
+            "lane": "work",
+            "worktree": None,
+            "base_cwd": "/project/main",
+        },
+        {
+            "run_id": "live-run",
+            "agent_id": "agent-1",
+            "pid": 8765,
+            "wake_kind": "checkpoint_respawn",
+            "lane": "work",
+            "worktree": None,
+            "base_cwd": "/project/main",
+        },
+    ]
+    captured, finished, posts, _events = _orphan_recovery_services(
+        monkeypatch, rows
+    )
+    monkeypatch.setattr(notifier, "_run_pid_alive", lambda pid: pid == 8765)
+
+    assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 1
+    assert captured == []
+    assert len(finished) == 1
+    assert finished[0][0][1] == "dead-run"
+    assert finished[0][0][5] is None
+    assert not any(url.endswith("/wake-ack") for url, _body in posts)
+
+
+def test_restart_recovery_captures_when_live_sibling_uses_another_checkout(
+    monkeypatch,
+):
+    rows = [
+        {
+            "run_id": "dead-run",
+            "agent_id": "agent-1",
+            "pid": 4321,
+            "wake_kind": "ephemeral",
+            "lane": "work",
+            "worktree": "/project/dead-worktree",
+            "base_cwd": "/project/main",
+        },
+        {
+            "run_id": "live-run",
+            "agent_id": "agent-1",
+            "pid": 8765,
+            "wake_kind": "checkpoint_respawn",
+            "lane": "work",
+            "worktree": "/project/live-worktree",
+            "base_cwd": "/project/main",
+        },
+    ]
+    captured, finished, _posts, _events = _orphan_recovery_services(
+        monkeypatch, rows
+    )
+    monkeypatch.setattr(notifier, "_run_pid_alive", lambda pid: pid == 8765)
+
+    assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 1
+    assert captured == ["/project/dead-worktree"]
+    assert len(finished) == 1
+    assert finished[0][0][1] == "dead-run"
+    assert finished[0][0][5] == "main diff"
 
 
 def _checkpoint_services(*, disabled, spawned, provisioned):

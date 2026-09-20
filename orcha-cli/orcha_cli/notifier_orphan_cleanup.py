@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
+from collections import Counter
 from typing import Optional
 
 # Remote-runner spec §3.3c/§3.5: sandbox rows are reconciled by CONTAINER liveness.
@@ -23,6 +25,31 @@ from . import sandbox as _sandbox
 # Both checks are deferrals, not exemptions — past the grace, the existing
 # vanish/orphan-stop semantics apply unchanged.
 ORPHAN_BOOT_GRACE_SECS = 90.0
+
+
+def _checkout_key(row: dict) -> Optional[str]:
+    """Canonical checkout identity for safe restart-recovery snapshots."""
+    cwd = row.get("worktree") or row.get("base_cwd")
+    if not cwd:
+        return None
+    return os.path.normcase(os.path.realpath(os.fspath(cwd)))
+
+
+def _capture_recovered_diff(row: dict, checkout_users: Counter, services):
+    """Capture only when this run is the checkout's sole open owner.
+
+    A notifier restart can leave a dead run beside a live replacement. With
+    worktrees disabled both rows point at the main checkout, so reading it while
+    the replacement is active would attach that replacement's edits to the dead
+    run. The running-runs response is the ownership boundary: when another open
+    row names the same canonical checkout, finishing the dead row without a
+    snapshot is safer than claiming shared mutable state as its result.
+    """
+    cwd = row.get("worktree") or row.get("base_cwd")
+    key = _checkout_key(row)
+    if key is not None and checkout_users[key] > 1:
+        return None
+    return services._capture_diff(cwd)
 
 
 def _age_secs(iso_ts) -> Optional[float]:
@@ -70,7 +97,13 @@ def reap_orphan_leases(api_base: str, cid: str, quiet: bool, services) -> None:
 
 
 def _reconcile_sandbox_run(
-    api_base: str, r: dict, sbx: str, *, quiet: bool = True, services
+    api_base: str,
+    r: dict,
+    sbx: str,
+    *,
+    checkout_users: Counter,
+    quiet: bool = True,
+    services,
 ) -> int:
     """Remote-runner Task 5: reconcile ONE sandbox-backed 'running' row against its
     container's actual state (spec §3.5). Reuses the sweep's `_finish_run` transport
@@ -104,7 +137,7 @@ def _reconcile_sandbox_run(
         # finish the row so the agent stops reading as busy forever (#342 semantics).
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
-            services._capture_diff(cwd),
+            _capture_recovered_diff(r, checkout_users, services),
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_container_vanished",
@@ -137,7 +170,7 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
-    diff = services._capture_diff(cwd)
+    diff = _capture_recovered_diff(r, checkout_users, services)
     if state.oom_killed:
         ok = services._finish_run(
             api_base, run_id, "killed", state.exit_code, log_path,
@@ -201,6 +234,9 @@ def reap_orphaned_runs(
         # pass below: an empty view from a dead API must never stop live containers.
         return 0
     runs = data.get("runs", [])
+    checkout_users = Counter(
+        key for row in runs if (key := _checkout_key(row)) is not None
+    )
 
     def alive(row):
         pid = row.get("pid")
@@ -226,7 +262,12 @@ def reap_orphaned_runs(
             continue
         try:
             finished = _reconcile_sandbox_run(
-                api_base, row, sbx, quiet=quiet, services=services
+                api_base,
+                row,
+                sbx,
+                checkout_users=checkout_users,
+                quiet=quiet,
+                services=services,
             )
         except Exception:
             # a docker hiccup on ONE run must never abort the sweep for the rest
@@ -261,8 +302,7 @@ def reap_orphaned_runs(
         finished = 0
         all_finished = True
         for row in dead:
-            cwd = row.get("worktree") or row.get("base_cwd")
-            diff = services._capture_diff(cwd)
+            diff = _capture_recovered_diff(row, checkout_users, services)
             ok = services._finish_run(
                 api_base,
                 row.get("run_id"),
