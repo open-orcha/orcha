@@ -40,8 +40,6 @@ def _apply_patch(cwd, patch: str, services: Any, *, reverse: bool = False) -> bo
         os.close(fd)
         pathlib.Path(patch_path).write_text(patch)
         arguments = ["apply", "--check"]
-        if not reverse:
-            arguments.append("--3way")
         if reverse:
             arguments.append("--reverse")
         arguments.append(patch_path)
@@ -59,6 +57,30 @@ def _apply_patch(cwd, patch: str, services: Any, *, reverse: bool = False) -> bo
                 pathlib.Path(patch_path).unlink()
             except OSError:
                 pass
+
+
+def _replace_patch(cwd, current: str, desired: str, services: Any) -> bool:
+    """Replace one complete checkout patch with another, restoring on failure."""
+    if current.strip() and not _apply_patch(cwd, current, services, reverse=True):
+        return False
+
+    desired_applied = False
+    if desired.strip():
+        desired_applied = _apply_patch(cwd, desired, services)
+        if not desired_applied:
+            if current.strip():
+                _apply_patch(cwd, current, services)
+            return False
+
+    reconciled = _full_patch(cwd, services)
+    if reconciled == desired:
+        return True
+
+    if desired_applied:
+        _apply_patch(cwd, desired, services, reverse=True)
+    if current.strip():
+        _apply_patch(cwd, current, services)
+    return False
 
 
 def capture_diff(worktree, services: Any, cap: int = 200_000):
@@ -80,9 +102,10 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     """Carry a worker's complete in-progress state into a newly selected checkout.
 
     The patch is based on ``origin/main`` so it includes both commits made on a
-    worker branch and uncommitted files. A three-way dry run must succeed before
-    the destination is touched. On any conflict or I/O error the caller can stop
-    the replacement worker while leaving the source checkout intact.
+    worker branch and uncommitted files. A complete dry run must succeed before
+    each patch operation touches the destination. On any conflict or I/O error,
+    the caller can stop the replacement worker while leaving the source checkout
+    intact.
     """
     if not source_cwd or not destination_cwd:
         return False
@@ -107,15 +130,10 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     if destination_patch == patch:
         return True
 
-    # If the active checkout is now clean, the worker intentionally removed all
-    # prior task changes. Reverse the preserved destination patch so those stale
-    # files cannot reappear when the durable task worktree is selected again.
-    if not patch.strip():
-        return _apply_patch(
-            destination_cwd, destination_patch, services, reverse=True
-        )
-
-    return _apply_patch(destination_cwd, patch, services)
+    # Reconcile the destination to the source's complete view. Applying only the
+    # source patch would leave destination-only files behind when a worker deletes
+    # old task work and creates different files while worktrees are disabled.
+    return _replace_patch(destination_cwd, destination_patch, patch, services)
 
 
 def branch_commit_count(base_cwd, branch, services: Any) -> int:
