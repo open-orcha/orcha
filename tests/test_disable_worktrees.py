@@ -254,6 +254,118 @@ def test_main_routed_conversation_completion_captures_base_checkout_diff():
     assert finished[0][0][5] == "main diff"
 
 
+def _orphan_recovery_services(monkeypatch, row):
+    captured = []
+    finished = []
+    posts = []
+    events = []
+
+    def post_json(url, body=None, **_kwargs):
+        events.append(("post", url))
+        posts.append((url, body))
+        return {}
+
+    def capture_diff(cwd):
+        events.append(("capture", cwd))
+        captured.append(cwd)
+        return "main diff"
+
+    def finish_run(*args, **kwargs):
+        events.append(("finish", args[1]))
+        finished.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(
+        notifier, "_get_json", lambda *_args, **_kwargs: {"runs": [row]}
+    )
+    monkeypatch.setattr(notifier, "_post_json", post_json)
+    monkeypatch.setattr(notifier, "_capture_diff", capture_diff)
+    monkeypatch.setattr(notifier, "_finish_run", finish_run)
+    monkeypatch.setattr(notifier._sandbox, "daemon_reachable", lambda: True)
+    monkeypatch.setattr(notifier._sandbox, "managed_containers", lambda _cid: [])
+    return captured, finished, posts, events
+
+
+def test_restart_recovered_main_routed_sandbox_exit_captures_base_checkout_diff(
+    monkeypatch,
+):
+    row = {
+        "run_id": "run-1",
+        "agent_id": "agent-1",
+        "pid": 4321,
+        "wake_kind": "sandbox",
+        "sandbox_container_id": "orcha-run-main",
+        "worktree": None,
+        "base_cwd": "/project/main",
+        "log_path": "/project/main/run.log",
+    }
+    captured, finished, _posts, _events = _orphan_recovery_services(monkeypatch, row)
+    monkeypatch.setattr(
+        notifier._sandbox,
+        "probe",
+        lambda _name: SimpleNamespace(running=False, exit_code=0, oom_killed=False),
+    )
+    monkeypatch.setattr(notifier._sandbox, "remove", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        notifier._sandbox, "remove_api_config", lambda *_args, **_kwargs: None
+    )
+
+    assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 1
+    assert captured == ["/project/main"]
+    assert finished[0][0][5] == "main diff"
+
+
+def test_restart_recovered_main_routed_host_exit_captures_before_lease_release(
+    monkeypatch,
+):
+    row = {
+        "run_id": "run-1",
+        "agent_id": "agent-1",
+        "pid": 4321,
+        "wake_kind": "ephemeral",
+        "lane": "work",
+        "worktree": None,
+        "base_cwd": "/project/main",
+        "log_path": "/project/main/run.log",
+    }
+    captured, finished, posts, events = _orphan_recovery_services(monkeypatch, row)
+    monkeypatch.setattr(notifier, "_run_pid_alive", lambda _pid: False)
+
+    assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 1
+    assert captured == ["/project/main"]
+    assert finished[0][0][5] == "main diff"
+    assert any(
+        url.endswith("/wake-ack") and body["release_lease"] is True
+        for url, body in posts
+    )
+    assert events.index(("finish", "run-1")) < next(
+        index
+        for index, event in enumerate(events)
+        if event[0] == "post" and event[1].endswith("/wake-ack")
+    )
+
+
+def test_restart_recovery_keeps_lease_when_run_snapshot_cannot_be_saved(monkeypatch):
+    row = {
+        "run_id": "run-1",
+        "agent_id": "agent-1",
+        "pid": 4321,
+        "wake_kind": "ephemeral",
+        "lane": "work",
+        "worktree": None,
+        "base_cwd": "/project/main",
+    }
+    captured, _finished, posts, _events = _orphan_recovery_services(
+        monkeypatch, row
+    )
+    monkeypatch.setattr(notifier, "_run_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(notifier, "_finish_run", lambda *_args, **_kwargs: False)
+
+    assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 0
+    assert captured == ["/project/main"]
+    assert not any(url.endswith("/wake-ack") for url, _body in posts)
+
+
 def _checkpoint_services(*, disabled, spawned, provisioned):
     posts = []
 

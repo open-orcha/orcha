@@ -80,6 +80,7 @@ def _reconcile_sandbox_run(
     leaves a stopped container for a later sweep, never an unstamped run."""
     state = _sandbox.probe(sbx)
     run_id = r.get("run_id")
+    cwd = r.get("worktree") or r.get("base_cwd")
     # The row's per-wake log (§3.3d: written inside the container onto the WORKSPACE,
     # so the host path is readable here) — pass it through every finish exactly like
     # the normal reap path does, so an ADOPTED run's output is captured into
@@ -103,6 +104,7 @@ def _reconcile_sandbox_run(
         # finish the row so the agent stops reading as busy forever (#342 semantics).
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
+            services._capture_diff(cwd),
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_container_vanished",
@@ -113,7 +115,6 @@ def _reconcile_sandbox_run(
         return 1 if ok else 0                  # failed POST → retried next sweep
     # cwd for per-workspace config + api-config reap: same resolution the worktree
     # sweep uses — the run's recorded worktree (its spawn cwd) else its base_cwd.
-    cwd = r.get("worktree") or r.get("base_cwd")
     if state.running:
         if r.get("wake_kind") == "resident":
             # Resident lane un-deferral: a warm resident session is long-lived BY
@@ -136,16 +137,20 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
+    diff = services._capture_diff(cwd)
     if state.oom_killed:
         ok = services._finish_run(
             api_base, run_id, "killed", state.exit_code, log_path,
+            diff,
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_oom",
                                     "detail": "out of memory — raise sandbox.memory"},
                                    ensure_ascii=False))
     else:
-        ok = services._finish_run(api_base, run_id, "exited", state.exit_code, log_path)
+        ok = services._finish_run(
+            api_base, run_id, "exited", state.exit_code, log_path, diff
+        )
     if not ok:
         # I5 (Task-5 review): the stamp did NOT land — removing now would destroy
         # the only evidence of the exit state AND leave the row 'running' forever
@@ -253,12 +258,32 @@ def reap_orphaned_runs(
             any(alive(row) for row in rows)
             or (agent_id, lane) in live_sandbox_lanes
         )
-        if live_sibling:
-            for row in dead:
-                services._finish_run(
-                    api_base, row.get("run_id"), "killed", -1, None
-                )
-        else:
+        finished = 0
+        all_finished = True
+        for row in dead:
+            cwd = row.get("worktree") or row.get("base_cwd")
+            diff = services._capture_diff(cwd)
+            ok = services._finish_run(
+                api_base,
+                row.get("run_id"),
+                "killed",
+                -1,
+                row.get("log_path"),
+                diff,
+                kill_reason=json.dumps(
+                    {
+                        "run_id": str(row.get("run_id")),
+                        "agent_id": agent_id,
+                        "cause": "host_process_missing_after_notifier_restart",
+                        "detail": "host process missing after notifier restart",
+                    }
+                ),
+            )
+            if ok:
+                finished += 1
+            else:
+                all_finished = False
+        if not live_sibling and all_finished:
             services._post_json(
                 f"{api_base}/api/agents/{agent_id}/wake-ack",
                 {
@@ -267,13 +292,14 @@ def reap_orphaned_runs(
                     "lane": lane,
                 },
             )
-        reaped += len(dead)
+        reaped += finished
         if not quiet:
-            outcome = (
-                "finished orphans, kept lease (live sibling)"
-                if live_sibling
-                else "released lease"
-            )
+            if live_sibling:
+                outcome = "finished orphans, kept lease (live sibling)"
+            elif all_finished:
+                outcome = "finished orphans and released lease"
+            else:
+                outcome = "finish failed; kept lease for retry"
             print(
                 f"[notifier] swept {len(dead)} dead-pid orphaned "
                 f"{lane}-lane run(s) for {agent_id} ({outcome}) (#342)"

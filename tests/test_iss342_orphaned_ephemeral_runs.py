@@ -187,15 +187,14 @@ def _patch_io(monkeypatch, runs):
 
 def test_sweep_releases_lease_when_no_live(monkeypatch):
     """TEETH (#342): an EPHEMERAL running run with a dead pid and NO live sibling → release the lease
-    (the server orphans the row); it does NOT per-run /finish, so the release path is the single
-    source of truth — mirrors the resident reaper's contract."""
+    after first finishing the recovered row so its output and checkout snapshot are preserved."""
     posts = _patch_io(monkeypatch, [
         {"run_id": "R", "agent_id": "A1", "pid": _DEAD_PID, "wake_kind": "ephemeral"}])
 
     n = notifier.reap_orphaned_runs("http://x", "C1")
     assert n == 1
+    assert any("/runs/R/finish" in u for u, _ in posts)
     assert any("/agents/A1/wake-ack" in u and (b or {}).get("release_lease") for u, b in posts)
-    assert not any("/finish" in u for u, _ in posts)
 
 
 def test_sweep_keeps_lease_with_live_sibling(monkeypatch):
@@ -258,7 +257,7 @@ def test_sweep_acks_conversation_lane(monkeypatch):
 def test_sweep_lanes_release_independently(monkeypatch):
     """TEETH (GH #91/#90 PR R3): same agent, one dead CONVERSATION run + one LIVE WORK worker. The
     sweep groups per (agent, lane): the live WORK sibling renews only the WORK lease and must NOT
-    shield the dead conversation lane — its lease is released (not per-run finished). The old
+    shield the dead conversation lane — its recovered run is finished and its lease released. The old
     per-agent grouping saw 'a live sibling' and kept the conv lane wedged."""
     posts = _patch_io(monkeypatch, [
         {"run_id": "C-DEAD", "agent_id": "A1", "pid": _DEAD_PID, "wake_kind": "resident",
@@ -270,7 +269,7 @@ def test_sweep_lanes_release_independently(monkeypatch):
     assert n == 1
     assert any("wake-ack" in u and (b or {}).get("release_lease")
                and (b or {}).get("lane") == "conversation" for u, b in posts)
-    assert not any("/finish" in u for u, _ in posts)         # lane released, not sibling-finished
+    assert any("/runs/C-DEAD/finish" in u for u, _ in posts)
     assert not any("wake-ack" in u and (b or {}).get("lane") == "work"
                    for u, b in posts)                        # live WORK lane untouched
 
