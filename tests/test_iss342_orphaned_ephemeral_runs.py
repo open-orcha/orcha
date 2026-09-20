@@ -18,6 +18,8 @@ Fix (teeth below):
 import os
 import uuid
 
+import pytest
+
 from orcha_cli import notifier
 
 
@@ -213,13 +215,19 @@ def test_sweep_captures_task_run_before_releasing_lease(monkeypatch):
         "log_path": "/repo/run.log",
     }])
     monkeypatch.setattr(notifier, "_capture_diff", lambda path: f"diff:{path}")
+    monkeypatch.setattr(notifier, "_existing_snapshot_ref", lambda path, run_id: None)
     monkeypatch.setattr(
         notifier, "_capture_snapshot", lambda path, run_id: f"snapshot:{run_id}"
+    )
+    monkeypatch.setattr(
+        notifier,
+        "_capture_snapshot_diff",
+        lambda path, snapshot_ref: f"diff:{snapshot_ref}",
     )
 
     assert notifier.reap_orphaned_runs("http://x", "C1") == 1
     finish = next(body for url, body in posts if "/runs/TASK-RUN/finish" in url)
-    assert finish["diff"] == "diff:/repo/.orcha-worktrees/task-1"
+    assert finish["diff"] == "diff:snapshot:TASK-RUN"
     assert finish["snapshot_ref"] == "snapshot:TASK-RUN"
     assert any("/agents/A1/wake-ack" in url for url, _ in posts)
 
@@ -235,6 +243,68 @@ def test_sweep_keeps_lease_with_live_sibling(monkeypatch):
     assert n == 1
     assert any("/runs/DEAD/finish" in u for u, _ in posts)                      # dead row finished
     assert not any("wake-ack" in u and (b or {}).get("release_lease") for u, b in posts)  # lease kept
+
+
+def test_sweep_uses_dead_run_snapshot_when_live_sibling_shares_checkout(monkeypatch):
+    checkout = "/repo"
+    posts = _patch_io(monkeypatch, [
+        {"run_id": "DEAD", "agent_id": "A1", "task_id": "TASK-1",
+         "pid": _DEAD_PID, "wake_kind": "ephemeral", "worktree": checkout},
+        {"run_id": "LIVE", "agent_id": "A1", "task_id": "TASK-1",
+         "pid": os.getpid(), "wake_kind": "checkpoint_respawn", "worktree": checkout},
+    ])
+    monkeypatch.setattr(
+        notifier,
+        "_existing_snapshot_ref",
+        lambda path, run_id: "a" * 40 if run_id == "DEAD" else None,
+    )
+    monkeypatch.setattr(
+        notifier,
+        "_capture_snapshot_diff",
+        lambda path, snapshot_ref: "dead run diff",
+    )
+    monkeypatch.setattr(
+        notifier,
+        "_capture_snapshot",
+        lambda *_args: pytest.fail("must not snapshot a shared live checkout"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "_capture_diff",
+        lambda *_args: pytest.fail("must not diff a shared live checkout"),
+    )
+
+    assert notifier.reap_orphaned_runs("http://x", "C1") == 1
+    finish = next(body for url, body in posts if "/runs/DEAD/finish" in url)
+    assert finish["diff"] == "dead run diff"
+    assert finish["snapshot_ref"] == "a" * 40
+
+
+def test_sweep_does_not_capture_shared_checkout_without_dead_snapshot(monkeypatch):
+    checkout = "/repo"
+    posts = _patch_io(monkeypatch, [
+        {"run_id": "DEAD", "agent_id": "A1", "task_id": "TASK-1",
+         "pid": _DEAD_PID, "wake_kind": "ephemeral", "worktree": checkout},
+        {"run_id": "LIVE", "agent_id": "A1", "task_id": "TASK-1",
+         "pid": os.getpid(), "wake_kind": "checkpoint_respawn",
+         "worktree": f"{checkout}/."},
+    ])
+    monkeypatch.setattr(notifier, "_existing_snapshot_ref", lambda *_args: None)
+    monkeypatch.setattr(
+        notifier,
+        "_capture_snapshot",
+        lambda *_args: pytest.fail("must not snapshot a shared live checkout"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "_capture_diff",
+        lambda *_args: pytest.fail("must not diff a shared live checkout"),
+    )
+
+    assert notifier.reap_orphaned_runs("http://x", "C1") == 1
+    finish = next(body for url, body in posts if "/runs/DEAD/finish" in url)
+    assert finish["diff"] is None
+    assert finish["snapshot_ref"] is None
 
 
 def test_sweep_shields_live_pids(monkeypatch):
@@ -426,7 +496,11 @@ def test_sandbox_exited_task_run_captures_review_state(monkeypatch, tmp_path):
         states={"orcha-run-done": _state(running=False, exit_code=0)},
     )
     monkeypatch.setattr(notifier, "_capture_diff", lambda path: "saved diff")
+    monkeypatch.setattr(notifier, "_existing_snapshot_ref", lambda path, run_id: None)
     monkeypatch.setattr(notifier, "_capture_snapshot", lambda path, run_id: "saved ref")
+    monkeypatch.setattr(
+        notifier, "_capture_snapshot_diff", lambda path, snapshot_ref: "saved diff"
+    )
 
     assert notifier.reap_orphaned_runs("http://x", "C1") == 1
     finish = next(body for url, body in posts if "/runs/S/finish" in url)

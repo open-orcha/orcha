@@ -16,6 +16,17 @@ DIFF_EXCLUDES = (
 )
 
 
+def _snapshot_ref_name(run_id) -> str | None:
+    if not run_id:
+        return None
+    safe_run_id = "".join(
+        character
+        for character in str(run_id).lower()
+        if character.isalnum() or character == "-"
+    )
+    return f"refs/orcha/run-snapshots/{safe_run_id}" if safe_run_id else None
+
+
 def capture_diff(worktree, services: Any, cap: int = 200_000):
     """Return the worker's net diff from main, including untracked files."""
     if not worktree:
@@ -23,6 +34,39 @@ def capture_diff(worktree, services: Any, cap: int = 200_000):
     services._run_git(["add", "-A", "-N", "--", *DIFF_EXCLUDES], cwd=worktree)
     return_code, output = services._run_git(
         ["diff", "origin/main", "--", *DIFF_EXCLUDES], cwd=worktree
+    )
+    if return_code != 0:
+        return None
+    if len(output) > cap:
+        output = output[:cap] + "\n...[diff truncated]..."
+    return output
+
+
+def existing_snapshot_ref(worktree, run_id, services: Any) -> str | None:
+    """Return a run's already-frozen snapshot without creating one."""
+    ref_name = _snapshot_ref_name(run_id)
+    if not worktree or not ref_name:
+        return None
+    return_code, output = services._run_git(
+        ["rev-parse", "--verify", ref_name], cwd=worktree
+    )
+    snapshot_ref = output.strip()
+    return (
+        snapshot_ref
+        if return_code == 0 and len(snapshot_ref) == 40
+        else None
+    )
+
+
+def capture_snapshot_diff(
+    worktree, snapshot_ref, services: Any, cap: int = 200_000
+):
+    """Return the diff represented by an immutable run snapshot."""
+    if not worktree or not snapshot_ref:
+        return None
+    return_code, output = services._run_git(
+        ["diff", "origin/main", snapshot_ref, "--", *DIFF_EXCLUDES],
+        cwd=worktree,
     )
     if return_code != 0:
         return None
@@ -44,14 +88,9 @@ def capture_snapshot(worktree, run_id) -> str | None:
     worktree_path = pathlib.Path(worktree)
     if not worktree_path.is_dir():
         return None
-    safe_run_id = "".join(
-        character
-        for character in str(run_id).lower()
-        if character.isalnum() or character == "-"
-    )
-    if not safe_run_id:
+    ref_name = _snapshot_ref_name(run_id)
+    if not ref_name:
         return None
-    ref_name = f"refs/orcha/run-snapshots/{safe_run_id}"
     index_fd = None
     index_path = None
     try:

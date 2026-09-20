@@ -159,6 +159,16 @@ def _capture_diff(worktree, cap: int = 200_000):
     return _cleanup.capture_diff(worktree, _compat(), cap)
 
 
+def _existing_snapshot_ref(worktree, run_id):
+    return _cleanup.existing_snapshot_ref(worktree, run_id, _compat())
+
+
+def _capture_snapshot_diff(worktree, snapshot_ref, cap: int = 200_000):
+    return _cleanup.capture_snapshot_diff(
+        worktree, snapshot_ref, _compat(), cap
+    )
+
+
 def _capture_snapshot(worktree, run_id):
     return _cleanup.capture_snapshot(worktree, run_id)
 

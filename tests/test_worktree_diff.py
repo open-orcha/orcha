@@ -102,6 +102,20 @@ def test_run_snapshot_is_create_only_for_repeated_capture(tmp_path):
     assert frozen == "first reviewed state\n"
 
 
+def test_run_snapshot_diff_stays_pinned_after_worktree_moves(tmp_path):
+    work = _make_repo(tmp_path)
+    run_id = "33333333-3333-4333-8333-333333333333"
+    (work / "README.md").write_text("first reviewed state\n")
+    snapshot = notifier._capture_snapshot(str(work), run_id)
+
+    (work / "README.md").write_text("live replacement state\n")
+
+    assert notifier._existing_snapshot_ref(str(work), run_id) == snapshot
+    snapshot_diff = notifier._capture_snapshot_diff(str(work), snapshot)
+    assert "first reviewed state" in snapshot_diff
+    assert "live replacement state" not in snapshot_diff
+
+
 def test_two_workers_do_not_tangle(tmp_path):
     work = _make_repo(tmp_path)
     wt1, b1 = notifier._provision_worktree(str(work), "alice")
