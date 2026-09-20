@@ -211,6 +211,7 @@ async def _start_session(
         pid=pid,
         token_id=run_token,
         worktree=worktree,
+        branch=branch,
         base_cwd=base_cwd,
     )
     if run_token and run_id is None:

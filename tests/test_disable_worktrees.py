@@ -12,6 +12,7 @@ from orcha_cli import (
     notifier_reaper_completion,
     notifier_resident_claude_start,
     notifier_wake_worker,
+    terminal_bridge_api,
     terminal_bridge_connection,
 )
 from orcha_cli.notifier_routing_handoff import carry_previous_checkout
@@ -1250,34 +1251,19 @@ async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp
 
 @pytest.mark.asyncio
 async def test_live_terminal_carries_committed_branch_after_clean_worktree_retired(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     main = _checkpoint_repo(tmp_path)
-    worktree, branch = notifier._provision_live_worktree(str(main), "builder")
-    terminal_file = pathlib.Path(worktree) / "committed-terminal.txt"
-    terminal_file.write_text("committed terminal work\n")
-    assert notifier._run_git(["add", terminal_file.name], cwd=worktree)[0] == 0
-    assert notifier._run_git(
-        ["commit", "-m", "save terminal work"], cwd=worktree
-    )[0] == 0
-    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
-    assert not pathlib.Path(worktree).exists()
-
-    history = {
-        "runs": [
-            {
-                "run_id": "run-1",
-                "task_id": None,
-                "conversation_id": None,
-                "wake_kind": "live",
-                "lane": "work",
-                "worktree": worktree,
-                "branch": branch,
-                "base_cwd": str(main),
-            }
-        ]
-    }
+    history = {"runs": []}
     spawned = []
+
+    def post_json(url, body):
+        assert url.endswith("/api/agents/agent-1/runs")
+        run = {"run_id": f"run-{len(history['runs']) + 1}", **body}
+        history["runs"].insert(0, run)
+        return {"run_id": run["run_id"]}
+
+    monkeypatch.setattr(terminal_bridge_api.notifier, "_post_json", post_json)
 
     class Bridge:
         async def acquire_live_lease(self, *args, **kwargs):
@@ -1294,7 +1280,7 @@ async def test_live_terminal_carries_committed_branch_after_clean_worktree_retir
             return 4321, 9
 
         def start_live_run(self, *args, **kwargs):
-            return "run-2"
+            return terminal_bridge_api.start_live_run(*args, **kwargs)
 
         def make_frame(self, kind, **kwargs):
             return {"kind": kind, **kwargs}
@@ -1303,9 +1289,7 @@ async def test_live_terminal_carries_committed_branch_after_clean_worktree_retir
         _get_json = staticmethod(lambda _url: history)
         _handoff_worktree_changes = staticmethod(notifier._handoff_worktree_changes)
         _handoff_branch_changes = staticmethod(notifier._handoff_branch_changes)
-        _provision_live_worktree = staticmethod(
-            lambda *args: pytest.fail("disabled routing must not provision")
-        )
+        _provision_live_worktree = staticmethod(notifier._provision_live_worktree)
 
     class Ws:
         async def send(self, frame):
@@ -1314,6 +1298,35 @@ async def test_live_terminal_carries_committed_branch_after_clean_worktree_retir
 
         async def close(self, code=None):
             pytest.fail("successful handoff must not close the socket")
+
+    first = await terminal_bridge_connection._start_session(
+        Bridge(),
+        Notifier(),
+        Ws(),
+        "http://orcha",
+        str(main),
+        "agent-1",
+        "builder",
+        None,
+        "claude",
+        False,
+        False,
+        None,
+    )
+
+    assert first is not None
+    worktree, branch = first["worktree"], first["branch"]
+    assert history["runs"][0]["worktree"] == worktree
+    assert history["runs"][0]["branch"] == branch
+
+    terminal_file = pathlib.Path(worktree) / "committed-terminal.txt"
+    terminal_file.write_text("committed terminal work\n")
+    assert notifier._run_git(["add", terminal_file.name], cwd=worktree)[0] == 0
+    assert notifier._run_git(
+        ["commit", "-m", "save terminal work"], cwd=worktree
+    )[0] == 0
+    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
+    assert not pathlib.Path(worktree).exists()
 
     session = await terminal_bridge_connection._start_session(
         Bridge(),
@@ -1331,7 +1344,7 @@ async def test_live_terminal_carries_committed_branch_after_clean_worktree_retir
     )
 
     assert session is not None
-    assert spawned == [str(main)]
+    assert spawned == [worktree, str(main)]
     assert (main / terminal_file.name).read_text() == "committed terminal work\n"
 
 
@@ -1460,6 +1473,112 @@ def test_taskless_prompt_wake_carries_main_state_back_to_worktree(tmp_path):
         "saved by direct prompt\n"
     )
     assert not any("/tasks/None/" in url for url, _body in posts)
+
+
+def test_taskless_prompt_success_preserves_files_for_later_switch_to_main(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    history = {"runs": []}
+    spawned = []
+    live_workers = {}
+
+    def post_json(url, body):
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            run = {"run_id": f"run-{len(history['runs']) + 1}", **body}
+            history["runs"].insert(0, run)
+            return {"run_id": run["run_id"]}
+        return {}
+
+    next_pid = iter((4321, 4322))
+
+    def spawn_headless(cwd, *args, **kwargs):
+        spawned.append(cwd)
+        return True, "command", SimpleNamespace(pid=next(next_pid), returncode=0)
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        RUNTIME_CODEX="codex",
+        pathlib=pathlib,
+        _post_json=post_json,
+        _get_json=lambda _url: history,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: pytest.fail(
+            "taskless prompt must not provision a task worktree"
+        ),
+        _provision_worktree=notifier._provision_worktree,
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+        _mint_embodiment_token=lambda *args: "token",
+        _revoke_or_defer=lambda *args: None,
+        _teardown_worktree=notifier._teardown_worktree,
+        _safe_teardown_worktree=notifier._safe_teardown_worktree,
+        _capture_diff=notifier._capture_diff,
+        _normalize_runtime=lambda runtime: runtime or "claude",
+        _finish_run=lambda *args, **kwargs: True,
+        _reap_sandbox_artifacts=lambda *args: None,
+        _retire_headless=lambda _api, workers, aid: workers.pop(aid, None),
+        spawn_headless=spawn_headless,
+    )
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": str(main),
+        "pending_events": 1,
+        "latest_event": "prompt",
+        "worktrees_disabled": False,
+    }
+
+    first = notifier_wake_worker.spawn(
+        "http://orcha",
+        candidate,
+        prompt="create direct-prompt work",
+        event="prompt",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers=live_workers,
+        services=services,
+    )
+
+    assert first["sent"] is True
+    worker = live_workers["agent-1"]
+    source = pathlib.Path(worker["worktree"])
+    assert history["runs"][0]["task_id"] is None
+    (source / "direct-prompt.txt").write_text("complete taskless work\n")
+
+    notifier_reaper_completion.handle_exited(
+        "http://orcha",
+        "agent-1",
+        worker,
+        live_workers,
+        {},
+        {},
+        0,
+        True,
+        services,
+    )
+
+    assert source.exists()
+    assert (source / "direct-prompt.txt").read_text() == "complete taskless work\n"
+    assert live_workers == {}
+
+    second = notifier_wake_worker.spawn(
+        "http://orcha",
+        {**candidate, "worktrees_disabled": True},
+        prompt="continue direct-prompt work",
+        event="prompt",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers=live_workers,
+        services=services,
+    )
+
+    assert second["sent"] is True
+    assert spawned == [str(source), str(main)]
+    assert (main / "direct-prompt.txt").read_text() == "complete taskless work\n"
 
 
 @pytest.mark.asyncio

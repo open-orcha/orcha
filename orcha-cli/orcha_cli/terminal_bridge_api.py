@@ -77,6 +77,7 @@ def start_live_run(
     pid=None,
     token_id=None,
     worktree=None,
+    branch=None,
     base_cwd=None,
 ):
     """Create a best-effort worker-run audit record."""
@@ -89,6 +90,7 @@ def start_live_run(
             "pid": pid,
             "token_id": token_id,
             "worktree": worktree,
+            "branch": branch,
             "base_cwd": base_cwd,
         },
     )
