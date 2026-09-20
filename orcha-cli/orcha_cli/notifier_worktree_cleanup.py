@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import tempfile
@@ -83,6 +84,87 @@ def _replace_patch(cwd, current: str, desired: str, services: Any) -> bool:
     return False
 
 
+def _handoff_record_path(cwd, services: Any):
+    """Return a checkout-specific record stored inside Git's private metadata."""
+    return_code, common_dir = services._run_git(
+        ["rev-parse", "--git-common-dir"], cwd=cwd
+    )
+    if return_code != 0 or not common_dir.strip():
+        return None
+    common_path = pathlib.Path(common_dir.strip())
+    if not common_path.is_absolute():
+        common_path = pathlib.Path(cwd) / common_path
+    checkout_key = hashlib.sha256(
+        str(pathlib.Path(cwd).resolve()).encode("utf-8")
+    ).hexdigest()
+    return (
+        common_path.resolve() / "orcha" / "handoffs" / f"{checkout_key}.patch"
+    )
+
+
+def _read_handoff_record(cwd, services: Any):
+    """Read the exact patch previously placed in this checkout by Orcha."""
+    try:
+        path = _handoff_record_path(cwd, services)
+        return path.read_text() if path is not None and path.is_file() else None
+    except OSError:
+        return None
+
+
+def _write_handoff_record(cwd, patch: str, services: Any) -> bool:
+    """Atomically remember only the state Orcha owns in a destination checkout."""
+    temporary = None
+    try:
+        path = _handoff_record_path(cwd, services)
+        if path is None:
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        os.close(fd)
+        pathlib.Path(temporary).write_text(patch)
+        os.replace(temporary, path)
+        temporary = None
+        return True
+    except OSError:
+        return False
+    finally:
+        if temporary:
+            try:
+                pathlib.Path(temporary).unlink()
+            except OSError:
+                pass
+
+
+def _is_linked_worktree(cwd) -> bool:
+    """Return whether this is a dedicated linked worktree rather than main."""
+    try:
+        return pathlib.Path(cwd, ".git").is_file()
+    except OSError:
+        return False
+
+
+def _replace_managed_patch(cwd, managed: str, desired: str, services: Any) -> bool:
+    """Replace only Orcha-owned state while preserving independent destination work."""
+    if managed.strip() and not _apply_patch(cwd, managed, services, reverse=True):
+        return False
+
+    if desired.strip() and not _apply_patch(cwd, desired, services):
+        if managed.strip():
+            _apply_patch(cwd, managed, services)
+        return False
+
+    if _write_handoff_record(cwd, desired, services):
+        return True
+
+    # A record is required before this state can be safely reconciled again.
+    # Restore the original destination if persisting that ownership proof fails.
+    if desired.strip():
+        _apply_patch(cwd, desired, services, reverse=True)
+    if managed.strip():
+        _apply_patch(cwd, managed, services)
+    return False
+
+
 def capture_diff(worktree, services: Any, cap: int = 200_000):
     """Return the worker's net diff from main, including untracked files."""
     if not worktree:
@@ -128,12 +210,43 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     if destination_patch is None:
         return False
     if destination_patch == patch:
+        if _is_linked_worktree(source_cwd):
+            _write_handoff_record(source_cwd, patch, services)
         return True
 
-    # Reconcile the destination to the source's complete view. Applying only the
-    # source patch would leave destination-only files behind when a worker deletes
-    # old task work and creates different files while worktrees are disabled.
-    return _replace_patch(destination_cwd, destination_patch, patch, services)
+    managed_patch = _read_handoff_record(destination_cwd, services)
+    if managed_patch is None:
+        # An unrecorded dirty destination may contain human or another worker's
+        # work. There is no safe way to tell that apart from stale task state, so
+        # stop without modifying either checkout. A clean destination is safe.
+        if destination_patch.strip():
+            return False
+        transferred = _replace_patch(
+            destination_cwd, destination_patch, patch, services
+        )
+        if not transferred:
+            return False
+        if not _write_handoff_record(destination_cwd, patch, services):
+            if patch.strip():
+                _apply_patch(destination_cwd, patch, services, reverse=True)
+            return False
+    else:
+        # The checkout may have been cleaned or recreated since the last handoff.
+        # A clean destination is safe regardless of a stale private record.
+        if not destination_patch.strip():
+            managed_patch = ""
+        transferred = _replace_managed_patch(
+            destination_cwd, managed_patch, patch, services
+        )
+        if not transferred:
+            return False
+
+    # A preserved task checkout is a later destination during an off -> on
+    # round trip. Record the exact state exported from it only after a successful
+    # transfer, so that state can be proven stale and replaced on return.
+    if _is_linked_worktree(source_cwd):
+        _write_handoff_record(source_cwd, patch, services)
+    return True
 
 
 def branch_commit_count(base_cwd, branch, services: Any) -> int:

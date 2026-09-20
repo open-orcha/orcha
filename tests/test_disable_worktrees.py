@@ -525,3 +525,40 @@ def test_checkpoint_toggle_round_trip_replaces_old_task_files(tmp_path):
     assert live["agent-1"]["task_worktree"] is True
     assert not (destination / "old-task.txt").exists()
     assert (destination / "new-task.txt").read_text() == "replacement task work\n"
+
+
+def test_handoff_does_not_delete_unknown_destination_work(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
+    task_file = pathlib.Path(worktree) / "task-work.txt"
+    task_file.write_text("agent work\n")
+    human_file = main / "human-work.txt"
+    human_file.write_text("independent main checkout work\n")
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is False
+    assert task_file.read_text() == "agent work\n"
+    assert human_file.read_text() == "independent main checkout work\n"
+    assert not (main / "task-work.txt").exists()
+
+
+def test_round_trip_preserves_new_independent_destination_work(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
+    destination = pathlib.Path(worktree)
+    old_task_file = destination / "old-task.txt"
+    old_task_file.write_text("old task work\n")
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    (main / "old-task.txt").unlink()
+    (main / "new-task.txt").write_text("replacement task work\n")
+    independent_file = destination / "human-work.txt"
+    independent_file.write_text("independent destination work\n")
+
+    assert notifier._handoff_worktree_changes(str(main), worktree) is True
+    assert not old_task_file.exists()
+    assert (destination / "new-task.txt").read_text() == "replacement task work\n"
+    assert independent_file.read_text() == "independent destination work\n"
