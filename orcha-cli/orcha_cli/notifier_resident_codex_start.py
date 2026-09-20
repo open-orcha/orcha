@@ -5,6 +5,8 @@ from __future__ import annotations
 import pathlib
 import time
 
+from .notifier_routing_handoff import carry_previous_checkout
+
 
 def start_candidate(
     services,
@@ -85,6 +87,21 @@ def start_candidate(
         )
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
+    if not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        conversation_id=conv_id,
+    ):
+        _fail(
+            services,
+            api_base,
+            candidate,
+            quiet,
+            "saved files could not be carried into the selected checkout",
+        )
+        return
     log_path = services._conversation_log_path(base_cwd, conv_id)
     reply_path = services._conversation_reply_path(log_path)
     session_id = candidate.get("session_id")

@@ -10,8 +10,11 @@ from orcha_cli import (
     notifier_checkpoint,
     notifier_codex_conversation,
     notifier_reaper_completion,
+    notifier_resident_claude_start,
     notifier_wake_worker,
+    terminal_bridge_connection,
 )
+from orcha_cli.notifier_routing_handoff import carry_previous_checkout
 
 
 async def _set(client, cid, human_id, disabled):
@@ -658,7 +661,9 @@ def _real_checkpoint_services(*, disabled, spawned):
 
 def test_checkpoint_toggle_to_main_carries_in_progress_files(tmp_path):
     main = _checkpoint_repo(tmp_path)
-    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    worktree, branch = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
     (pathlib.Path(worktree) / "wip.txt").write_text("from task worktree\n")
     worker = _checkpoint_worker(
         disabled=False, worktree=worktree, branch=branch, task_worktree=True
@@ -745,7 +750,9 @@ def test_checkpoint_toggle_round_trip_reuses_preserved_task_worktree(tmp_path):
 
 def test_checkpoint_repeated_toggle_after_initial_clean_handoff(tmp_path):
     main = _checkpoint_repo(tmp_path)
-    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    worktree, _branch = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
 
     assert notifier._handoff_worktree_changes(worktree, str(main)) is True
     main_file = main / "wip.txt"
@@ -896,3 +903,263 @@ def test_round_trip_preserves_new_independent_destination_work(tmp_path):
     assert not old_task_file.exists()
     assert (destination / "new-task.txt").read_text() == "replacement task work\n"
     assert independent_file.read_text() == "independent destination work\n"
+
+
+def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
+    tmp_path,
+):
+    """Separate later wakes must resume the newest task file view in either mode."""
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
+    task_file = pathlib.Path(worktree) / "continued.txt"
+    task_file.write_text("saved by first task wake\n")
+    assert notifier._run_git(["add", "continued.txt"], cwd=worktree)[0] == 0
+    assert notifier._run_git(["commit", "-m", "checkpoint"], cwd=worktree)[0] == 0
+
+    previous = {
+        "task_id": "task-1",
+        "worktree": worktree,
+        "base_cwd": str(main),
+    }
+    services = SimpleNamespace(
+        _get_json=lambda _url: {"runs": [previous]},
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+    )
+    assert carry_previous_checkout(
+        "http://orcha",
+        "agent-1",
+        str(main),
+        services,
+        task_id="task-1",
+    )
+    main_file = main / "continued.txt"
+    assert main_file.read_text() == "saved by first task wake\n"
+
+    main_file.write_text("edited by main-checkout wake\n")
+    previous = {
+        "task_id": "task-1",
+        "worktree": None,
+        "base_cwd": str(main),
+    }
+    assert carry_previous_checkout(
+        "http://orcha",
+        "agent-1",
+        worktree,
+        services,
+        task_id="task-1",
+    )
+    assert task_file.read_text() == "edited by main-checkout wake\n"
+
+    task_file.write_text("edited by later worktree wake\n")
+    previous = {
+        "task_id": "task-1",
+        "worktree": worktree,
+        "base_cwd": str(main),
+    }
+    assert carry_previous_checkout(
+        "http://orcha",
+        "agent-1",
+        str(main),
+        services,
+        task_id="task-1",
+    )
+    assert main_file.read_text() == "edited by later worktree wake\n"
+
+
+def test_ordinary_task_wake_handoff_failure_stops_before_spawn(monkeypatch):
+    posts = []
+    spawned = []
+    monkeypatch.setattr(
+        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+    )
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"claimed": True} if url.endswith("/wake-claim") else {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: ("/project/task", "orcha/task"),
+        _provision_worktree=lambda *args: ("/project/agent", "orcha/agent"),
+        spawn_headless=lambda *args, **kwargs: spawned.append(args),
+    )
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "context_task_id": "task-1",
+        "pending_events": 1,
+        "worktrees_disabled": True,
+    }
+
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        candidate,
+        prompt="continue",
+        event="task_message",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+
+    assert result["sent"] is False
+    assert spawned == []
+    assert any(
+        url.endswith("/tasks/task-1/messages")
+        and "no worker was started" in body["body"]
+        for url, body in posts
+    )
+    assert any(
+        url.endswith("/wake-ack")
+        and body["kind"] == "worker_routing_handoff_failed"
+        and body["release_lease"] is True
+        for url, body in posts
+    )
+
+
+def test_resident_toggle_carries_preserved_worktree_state_to_main(
+    monkeypatch, tmp_path
+):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_resident_worktree(str(main), "conv-1")
+    (pathlib.Path(worktree) / "resident.txt").write_text("resident work\n")
+    spawned = []
+    live = {
+        "conv-1": {
+            "worktree": worktree,
+            "branch": branch,
+            "base_cwd": str(main),
+            "worktrees_disabled": False,
+            "serviced_seq": 0,
+        }
+    }
+    candidate = {
+        "agent_id": "agent-1",
+        "agent_alias": "builder",
+        "last_turn_seq": 1,
+        "worktrees_disabled": True,
+    }
+    posts = []
+
+    def post_json(url, body):
+        posts.append((url, body))
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "run-2"}
+        return {}
+
+    services = SimpleNamespace(
+        WAKE_LEASE_TTL_SECS=120,
+        RUNTIME_CLAUDE="claude",
+        _RESIDENT_RESUME_FAILED=set(),
+        _close_resident=lambda *args, **kwargs: None,
+        _reap_dead_pid_resident_runs=lambda *args, **kwargs: None,
+        _post_json=post_json,
+        _get_json=lambda url: (
+            {"turns": []} if url.endswith("conversation?limit=200") else None
+        ),
+        _build_persona=lambda *args, **kwargs: "persona",
+        _format_history=None,
+        _resident_log_path=lambda *args: None,
+        _is_git_repo=lambda _cwd: True,
+        _provision_resident_worktree=lambda *args: pytest.fail(
+            "disabled routing must not provision"
+        ),
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _mint_embodiment_token=lambda *args: "token",
+        spawn_resident=lambda cwd, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+    )
+    monkeypatch.setattr(
+        notifier_resident_claude_start._feed_service,
+        "feed",
+        lambda *args, **kwargs: None,
+    )
+
+    notifier_resident_claude_start.start_or_feed_candidate(
+        services,
+        "http://orcha",
+        "conv-1",
+        candidate,
+        live,
+        set(),
+        base_cwd=str(main),
+        quiet=True,
+        dry_run=False,
+    )
+
+    assert spawned == [str(main)]
+    assert (main / "resident.txt").read_text() == "resident work\n"
+
+
+@pytest.mark.asyncio
+async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_live_worktree(str(main), "builder")
+    (pathlib.Path(worktree) / "terminal.txt").write_text("terminal work\n")
+    spawned = []
+
+    class Bridge:
+        async def acquire_live_lease(self, *args, **kwargs):
+            return {"claimed": True, "cold": True, "session_id": None}
+
+        def release_live_lease(self, *args):
+            pytest.fail("successful handoff must keep the live lease")
+
+        def mint_live_token(self, *args):
+            return "token"
+
+        def spawn_pty(self, alias, cold, session_id, cwd, **kwargs):
+            spawned.append(cwd)
+            return 4321, 9
+
+        def start_live_run(self, *args, **kwargs):
+            return "run-2"
+
+        def make_frame(self, kind, **kwargs):
+            return {"kind": kind, **kwargs}
+
+    class Notifier:
+        _handoff_worktree_changes = staticmethod(notifier._handoff_worktree_changes)
+        _get_json = staticmethod(lambda _url: None)
+        _provision_live_worktree = staticmethod(
+            lambda *args: pytest.fail("disabled routing must not provision")
+        )
+
+    class Ws:
+        async def send(self, frame):
+            assert frame["kind"] == "status"
+            assert frame["state"] == "connected"
+
+        async def close(self, code=None):
+            pytest.fail("successful handoff must not close the socket")
+
+    session = await terminal_bridge_connection._start_session(
+        Bridge(),
+        Notifier(),
+        Ws(),
+        "http://orcha",
+        str(main),
+        "agent-1",
+        "builder",
+        None,
+        "claude",
+        True,
+        False,
+        None,
+        worktree,
+    )
+
+    assert session is not None
+    assert spawned == [str(main)]
+    assert (main / "terminal.txt").read_text() == "terminal work\n"
