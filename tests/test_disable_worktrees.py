@@ -968,6 +968,89 @@ def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
     assert main_file.read_text() == "edited by later worktree wake\n"
 
 
+@pytest.mark.asyncio
+async def test_ordinary_wake_uses_serialized_lane_to_carry_task_files(
+    client, make_agent, make_task, tmp_path
+):
+    """The real run feed must retain the lane used by work-wake lookup."""
+    agent = await make_agent("builder")
+    task = await make_task("continue work", "files carried", assignee_alias="builder")
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(
+        str(main), "builder", task["id"]
+    )
+    (pathlib.Path(worktree) / "ordinary-wake.txt").write_text("saved work\n")
+
+    started = await client.post(
+        f"/api/agents/{agent['agent_id']}/runs",
+        json={
+            "wake_kind": "ephemeral",
+            "wake_event": "task_message",
+            "task_id": task["id"],
+            "lane": "work",
+            "worktree": worktree,
+            "branch": branch,
+            "base_cwd": str(main),
+        },
+    )
+    assert started.status_code == 201, started.text
+    history = (await client.get(f"/api/agents/{agent['agent_id']}/runs")).json()
+    assert history["runs"][0]["lane"] == "work"
+
+    spawned = []
+
+    def post_json(url, _body):
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "run-2"}
+        return {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _get_json=lambda _url: history,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: pytest.fail(
+            "disabled routing must not provision"
+        ),
+        _provision_worktree=lambda *args: pytest.fail(
+            "disabled routing must not provision"
+        ),
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+        _mint_embodiment_token=lambda *args: "token",
+        _revoke_or_defer=lambda *args: None,
+        _teardown_worktree=lambda *args: None,
+        spawn_headless=lambda cwd, *args, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+    )
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        {
+            "agent_id": agent["agent_id"],
+            "alias": "builder",
+            "headless_cwd": str(main),
+            "context_task_id": task["id"],
+            "pending_events": 1,
+            "worktrees_disabled": True,
+        },
+        prompt="continue task",
+        event="task_message",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+    assert result["sent"] is True
+    assert spawned == [str(main)]
+    assert (main / "ordinary-wake.txt").read_text() == "saved work\n"
+
+
 def test_ordinary_task_wake_handoff_failure_stops_before_spawn(monkeypatch):
     posts = []
     spawned = []
@@ -1165,6 +1248,93 @@ async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp
     assert (main / "terminal.txt").read_text() == "terminal work\n"
 
 
+@pytest.mark.asyncio
+async def test_live_terminal_carries_committed_branch_after_clean_worktree_retired(
+    tmp_path,
+):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_live_worktree(str(main), "builder")
+    terminal_file = pathlib.Path(worktree) / "committed-terminal.txt"
+    terminal_file.write_text("committed terminal work\n")
+    assert notifier._run_git(["add", terminal_file.name], cwd=worktree)[0] == 0
+    assert notifier._run_git(
+        ["commit", "-m", "save terminal work"], cwd=worktree
+    )[0] == 0
+    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
+    assert not pathlib.Path(worktree).exists()
+
+    history = {
+        "runs": [
+            {
+                "run_id": "run-1",
+                "task_id": None,
+                "conversation_id": None,
+                "wake_kind": "live",
+                "lane": "work",
+                "worktree": worktree,
+                "branch": branch,
+                "base_cwd": str(main),
+            }
+        ]
+    }
+    spawned = []
+
+    class Bridge:
+        async def acquire_live_lease(self, *args, **kwargs):
+            return {"claimed": True, "cold": True, "session_id": None}
+
+        def release_live_lease(self, *args):
+            pytest.fail("successful handoff must keep the live lease")
+
+        def mint_live_token(self, *args):
+            return "token"
+
+        def spawn_pty(self, alias, cold, session_id, cwd, **kwargs):
+            spawned.append(cwd)
+            return 4321, 9
+
+        def start_live_run(self, *args, **kwargs):
+            return "run-2"
+
+        def make_frame(self, kind, **kwargs):
+            return {"kind": kind, **kwargs}
+
+    class Notifier:
+        _get_json = staticmethod(lambda _url: history)
+        _handoff_worktree_changes = staticmethod(notifier._handoff_worktree_changes)
+        _handoff_branch_changes = staticmethod(notifier._handoff_branch_changes)
+        _provision_live_worktree = staticmethod(
+            lambda *args: pytest.fail("disabled routing must not provision")
+        )
+
+    class Ws:
+        async def send(self, frame):
+            assert frame["kind"] == "status"
+            assert frame["state"] == "connected"
+
+        async def close(self, code=None):
+            pytest.fail("successful handoff must not close the socket")
+
+    session = await terminal_bridge_connection._start_session(
+        Bridge(),
+        Notifier(),
+        Ws(),
+        "http://orcha",
+        str(main),
+        "agent-1",
+        "builder",
+        None,
+        "claude",
+        True,
+        False,
+        None,
+    )
+
+    assert session is not None
+    assert spawned == [str(main)]
+    assert (main / terminal_file.name).read_text() == "committed terminal work\n"
+
+
 def test_handoff_ownership_prevents_one_task_replacing_another(tmp_path):
     main = _checkpoint_repo(tmp_path)
     first_worktree, _ = notifier._provision_task_worktree(
@@ -1290,6 +1460,88 @@ def test_taskless_prompt_wake_carries_main_state_back_to_worktree(tmp_path):
         "saved by direct prompt\n"
     )
     assert not any("/tasks/None/" in url for url, _body in posts)
+
+
+@pytest.mark.asyncio
+async def test_direct_prompt_with_active_task_remains_taskless_and_carries_files(
+    client, make_agent, make_task, tmp_path
+):
+    agent = await make_agent("builder")
+    await make_task("separate active task", "done", assignee_alias="builder")
+    main = _checkpoint_repo(tmp_path)
+    (main / "direct-prompt.txt").write_text("taskless prompt work\n")
+
+    started = await client.post(
+        f"/api/agents/{agent['agent_id']}/runs",
+        json={
+            "wake_kind": "ephemeral",
+            "wake_event": "prompt",
+            "lane": "work",
+            "base_cwd": str(main),
+        },
+    )
+    assert started.status_code == 201, started.text
+    assert started.json()["task_id"] is None
+    finished = await client.post(
+        f"/api/runs/{started.json()['run_id']}/finish",
+        json={"status": "exited"},
+    )
+    assert finished.status_code == 200, finished.text
+    history = (await client.get(f"/api/agents/{agent['agent_id']}/runs")).json()
+    assert history["runs"][0]["task_id"] is None
+
+    spawned = []
+
+    def post_json(url, _body):
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "run-2"}
+        return {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _get_json=lambda _url: history,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: pytest.fail(
+            "taskless prompt must not provision a task worktree"
+        ),
+        _provision_worktree=notifier._provision_worktree,
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+        _mint_embodiment_token=lambda *args: "token",
+        _revoke_or_defer=lambda *args: None,
+        _teardown_worktree=notifier._teardown_worktree,
+        spawn_headless=lambda cwd, *args, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+    )
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        {
+            "agent_id": agent["agent_id"],
+            "alias": "builder",
+            "headless_cwd": str(main),
+            "pending_events": 1,
+            "latest_event": "prompt",
+            "worktrees_disabled": False,
+        },
+        prompt="continue direct work",
+        event="prompt",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+    assert result["sent"] is True
+    assert len(spawned) == 1
+    assert (pathlib.Path(spawned[0]) / "direct-prompt.txt").read_text() == (
+        "taskless prompt work\n"
+    )
 
 
 def test_taskless_prompt_handoff_failure_stops_without_invalid_task_post(monkeypatch):

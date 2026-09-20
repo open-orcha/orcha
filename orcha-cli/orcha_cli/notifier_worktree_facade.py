@@ -165,6 +165,18 @@ def _handoff_worktree_changes(
     )
 
 
+def _handoff_branch_changes(
+    base_cwd, branch, destination_cwd, *, owner_key=None
+) -> bool:
+    return _cleanup.handoff_branch_changes(
+        base_cwd,
+        branch,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+    )
+
+
 def _branch_commit_count(base_cwd, branch) -> int:
     return _cleanup.branch_commit_count(base_cwd, branch, _compat())
 

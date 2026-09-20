@@ -60,6 +60,32 @@ def _full_patch(cwd, services: Any):
     return "".join(patches)
 
 
+def _branch_patch(base_cwd, branch: str, services: Any):
+    """Return committed branch state relative to main without a checked-out tree."""
+    if not branch or not branch.startswith("orcha/"):
+        return None
+    ref = f"refs/heads/{branch}"
+    verify_code, _ = services._run_git(
+        ["show-ref", "--verify", "--quiet", ref], cwd=base_cwd, timeout=60
+    )
+    if verify_code != 0:
+        return None
+    return_code, patch = services._run_git(
+        [
+            "diff",
+            "--binary",
+            "--full-index",
+            "origin/main",
+            ref,
+            "--",
+            *DIFF_EXCLUDES,
+        ],
+        cwd=base_cwd,
+        timeout=60,
+    )
+    return patch if return_code == 0 else None
+
+
 def _apply_patch(cwd, patch: str, services: Any, *, reverse: bool = False) -> bool:
     """Apply a patch only after Git confirms the complete operation is safe."""
     patch_path = None
@@ -228,6 +254,59 @@ def capture_diff(worktree, services: Any, cap: int = 200_000):
     return output
 
 
+def _place_handoff_patch(
+    destination_cwd, patch: str, owner_key: str, services: Any
+) -> bool:
+    """Safely reconcile one known stream's patch into its destination checkout."""
+    destination_patch = _full_patch(destination_cwd, services)
+    if destination_patch is None:
+        return False
+
+    destination_record = _read_handoff_record(destination_cwd, services)
+    if (
+        destination_record is not None
+        and destination_record.get("owner_key") != owner_key
+        and destination_patch.strip()
+    ):
+        return False
+    managed_patch = (
+        destination_record.get("patch")
+        if destination_record is not None
+        and destination_record.get("owner_key") == owner_key
+        else None
+    )
+    if destination_patch == patch:
+        can_manage_destination = (
+            not destination_patch.strip()
+            or _is_linked_worktree(destination_cwd)
+            or managed_patch is not None
+        )
+        return not can_manage_destination or _write_handoff_record(
+            destination_cwd, owner_key, patch, services
+        )
+
+    if managed_patch is None:
+        if destination_patch.strip():
+            return False
+        transferred = _replace_patch(
+            destination_cwd, destination_patch, patch, services
+        )
+        if not transferred:
+            return False
+        if not _write_handoff_record(destination_cwd, owner_key, patch, services):
+            if patch.strip():
+                _apply_patch(destination_cwd, patch, services, reverse=True)
+            return False
+    else:
+        if not destination_patch.strip():
+            managed_patch = ""
+        if not _replace_managed_patch(
+            destination_cwd, managed_patch, patch, owner_key, services
+        ):
+            return False
+    return True
+
+
 def handoff_changes(
     source_cwd, destination_cwd, services: Any, *, owner_key: str | None = None
 ) -> bool:
@@ -257,10 +336,6 @@ def handoff_changes(
     # A durable task worktree can be selected again after an off -> on toggle.
     # The previous handoff may already have copied this complete file view there;
     # treat that exact state as success instead of trying to apply it twice.
-    destination_patch = _full_patch(destination_cwd, services)
-    if destination_patch is None:
-        return False
-
     source_record = _read_handoff_record(source_cwd, services)
     if source_record is not None and source_record.get("owner_key") != owner_key:
         # A shared checkout still belongs to another task/conversation/terminal.
@@ -275,63 +350,26 @@ def handoff_changes(
         # must update that record so a later return can replace only those edits.
         return False
 
-    destination_record = _read_handoff_record(destination_cwd, services)
-    if (
-        destination_record is not None
-        and destination_record.get("owner_key") != owner_key
-        and destination_patch.strip()
-    ):
-        # The other stream's state may be perfectly valid/applicable, but it is
-        # not ours to replace.  A clean checkout can be safely re-owned.
+    return _place_handoff_patch(destination_cwd, patch, owner_key, services)
+
+
+def handoff_branch_changes(
+    base_cwd,
+    branch,
+    destination_cwd,
+    services: Any,
+    *,
+    owner_key: str | None = None,
+) -> bool:
+    """Carry committed state from a retained worker branch after its worktree is gone."""
+    if not base_cwd or not branch or not destination_cwd:
         return False
-    managed_patch = (
-        destination_record.get("patch")
-        if destination_record is not None
-        and destination_record.get("owner_key") == owner_key
-        else None
+    patch = _branch_patch(base_cwd, branch, services)
+    if patch is None:
+        return False
+    return _place_handoff_patch(
+        destination_cwd, patch, owner_key or "legacy-unscoped", services
     )
-    if destination_patch == patch:
-        # An identical clean checkout is safe to claim even without a previous
-        # record. Linked task worktrees and already-managed destinations are
-        # likewise known to belong to this handoff. Do not claim an otherwise
-        # unknown dirty main checkout merely because its contents happen to
-        # match the source.
-        can_manage_destination = (
-            not destination_patch.strip()
-            or _is_linked_worktree(destination_cwd)
-            or managed_patch is not None
-        )
-        return not can_manage_destination or _write_handoff_record(
-            destination_cwd, owner_key, patch, services
-        )
-
-    if managed_patch is None:
-        # An unrecorded dirty destination may contain human or another worker's
-        # work. There is no safe way to tell that apart from stale task state, so
-        # stop without modifying either checkout. A clean destination is safe.
-        if destination_patch.strip():
-            return False
-        transferred = _replace_patch(
-            destination_cwd, destination_patch, patch, services
-        )
-        if not transferred:
-            return False
-        if not _write_handoff_record(destination_cwd, owner_key, patch, services):
-            if patch.strip():
-                _apply_patch(destination_cwd, patch, services, reverse=True)
-            return False
-    else:
-        # The checkout may have been cleaned or recreated since the last handoff.
-        # A clean destination is safe regardless of a stale private record.
-        if not destination_patch.strip():
-            managed_patch = ""
-        transferred = _replace_managed_patch(
-            destination_cwd, managed_patch, patch, owner_key, services
-        )
-        if not transferred:
-            return False
-
-    return True
 
 
 def branch_commit_count(base_cwd, branch, services: Any) -> int:
