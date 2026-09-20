@@ -11,6 +11,7 @@ def run_row(row: dict) -> dict:
         "task_id": str(row["task_id"]) if row["task_id"] else None,
         "wake_kind": row["wake_kind"],
         "wake_event": row["wake_event"],
+        "lane": row.get("lane") or "work",
         "status": row["status"],
         "exit_code": row["exit_code"],
         "log_path": row["log_path"],
@@ -52,7 +53,7 @@ def infer_agent_active_task(cur, aid: str) -> Optional[str]:
 def is_non_task_work(wake_kind, wake_event, conversation_id) -> bool:
     """Return whether a run is intentionally independent of task work."""
     return (
-        wake_event == "conversation_turn"
+        wake_event in ("conversation_turn", "prompt")
         or wake_kind == "live"
         or conversation_id is not None
     )
