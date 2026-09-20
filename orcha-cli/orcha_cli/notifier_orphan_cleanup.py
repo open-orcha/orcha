@@ -35,7 +35,12 @@ def _checkout_key(row: dict) -> Optional[str]:
     return os.path.normcase(os.path.realpath(os.fspath(cwd)))
 
 
-def _capture_recovered_diff(row: dict, checkout_users: Counter, services):
+def _capture_recovered_diff(
+    row: dict,
+    checkout_users: Counter,
+    unknown_checkout_users: int,
+    services,
+):
     """Capture only when this run is the checkout's sole open owner.
 
     A notifier restart can leave a dead run beside a live replacement. With
@@ -47,7 +52,9 @@ def _capture_recovered_diff(row: dict, checkout_users: Counter, services):
     """
     cwd = row.get("worktree") or row.get("base_cwd")
     key = _checkout_key(row)
-    if key is not None and checkout_users[key] > 1:
+    if key is not None and (
+        checkout_users[key] > 1 or unknown_checkout_users > 0
+    ):
         return None
     return services._capture_diff(cwd)
 
@@ -102,6 +109,7 @@ def _reconcile_sandbox_run(
     sbx: str,
     *,
     checkout_users: Counter,
+    unknown_checkout_users: int,
     quiet: bool = True,
     services,
 ) -> int:
@@ -137,7 +145,9 @@ def _reconcile_sandbox_run(
         # finish the row so the agent stops reading as busy forever (#342 semantics).
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
-            _capture_recovered_diff(r, checkout_users, services),
+            _capture_recovered_diff(
+                r, checkout_users, unknown_checkout_users, services
+            ),
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_container_vanished",
@@ -170,7 +180,9 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
-    diff = _capture_recovered_diff(r, checkout_users, services)
+    diff = _capture_recovered_diff(
+        r, checkout_users, unknown_checkout_users, services
+    )
     if state.oom_killed:
         ok = services._finish_run(
             api_base, run_id, "killed", state.exit_code, log_path,
@@ -237,6 +249,12 @@ def reap_orphaned_runs(
     checkout_users = Counter(
         key for row in runs if (key := _checkout_key(row)) is not None
     )
+    # Rows from an older daemon (or malformed callers) may not identify their
+    # checkout. Treat them as possible owners of every checkout rather than
+    # attaching their live edits to a different run during a rolling upgrade.
+    unknown_checkout_users = sum(
+        1 for row in runs if _checkout_key(row) is None
+    )
 
     def alive(row):
         pid = row.get("pid")
@@ -266,6 +284,7 @@ def reap_orphaned_runs(
                 row,
                 sbx,
                 checkout_users=checkout_users,
+                unknown_checkout_users=unknown_checkout_users,
                 quiet=quiet,
                 services=services,
             )
@@ -302,7 +321,9 @@ def reap_orphaned_runs(
         finished = 0
         all_finished = True
         for row in dead:
-            diff = _capture_recovered_diff(row, checkout_users, services)
+            diff = _capture_recovered_diff(
+                row, checkout_users, unknown_checkout_users, services
+            )
             ok = services._finish_run(
                 api_base,
                 row.get("run_id"),

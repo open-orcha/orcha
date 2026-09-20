@@ -401,6 +401,47 @@ def test_restart_recovery_does_not_capture_checkout_used_by_live_sibling(monkeyp
     assert not any(url.endswith("/wake-ack") for url, _body in posts)
 
 
+@pytest.mark.parametrize(
+    ("wake_kind", "lane"),
+    [("live", "work"), ("resident", "conversation")],
+)
+def test_restart_recovery_treats_pathless_live_runs_as_checkout_owners(
+    monkeypatch, wake_kind, lane
+):
+    rows = [
+        {
+            "run_id": "dead-run",
+            "agent_id": "agent-1",
+            "pid": 4321,
+            "wake_kind": "ephemeral",
+            "lane": "work",
+            "worktree": None,
+            "base_cwd": "/project/main",
+        },
+        {
+            "run_id": "live-run",
+            "agent_id": "agent-2",
+            "pid": 8765,
+            "wake_kind": wake_kind,
+            "lane": lane,
+            # Exact legacy live-terminal / host-resident payload: neither
+            # checkout field was recorded before this fix.
+            "worktree": None,
+            "base_cwd": None,
+        },
+    ]
+    captured, finished, _posts, _events = _orphan_recovery_services(
+        monkeypatch, rows
+    )
+    monkeypatch.setattr(notifier, "_run_pid_alive", lambda pid: pid == 8765)
+
+    assert notifier.reap_orphaned_runs("http://orcha", "container-1") == 1
+    assert captured == []
+    assert len(finished) == 1
+    assert finished[0][0][1] == "dead-run"
+    assert finished[0][0][5] is None
+
+
 def test_restart_recovery_captures_when_live_sibling_uses_another_checkout(
     monkeypatch,
 ):

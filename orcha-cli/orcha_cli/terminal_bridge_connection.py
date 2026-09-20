@@ -179,7 +179,14 @@ async def _start_session(
         runtime=runtime,
         run_token=run_token,
     )
-    run_id = bridge.start_live_run(api_base, aid, pid=pid, token_id=run_token)
+    run_id = bridge.start_live_run(
+        api_base,
+        aid,
+        pid=pid,
+        token_id=run_token,
+        worktree=worktree,
+        base_cwd=base_cwd,
+    )
     if run_token and run_id is None:
         bridge.revoke_live_token(api_base, run_token)
         run_token = None
