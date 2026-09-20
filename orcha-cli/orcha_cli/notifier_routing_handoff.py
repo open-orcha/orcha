@@ -13,6 +13,8 @@ def previous_checkout(
     task_id=None,
     conversation_id=None,
     wake_kind=None,
+    lane=None,
+    require_taskless=False,
 ):
     """Return the newest recorded checkout for the same logical stream of work."""
     data = services._get_json(f"{api_base}/api/agents/{agent_id}/runs?limit=200")
@@ -25,10 +27,34 @@ def previous_checkout(
             continue
         if wake_kind and run.get("wake_kind") != wake_kind:
             continue
+        if lane and run.get("lane") != lane:
+            continue
+        if require_taskless and (
+            run.get("task_id") is not None or run.get("conversation_id") is not None
+        ):
+            continue
         checkout = run.get("worktree") or run.get("base_cwd")
         if checkout:
             return checkout
     return None
+
+
+def checkout_owner_key(
+    agent_id,
+    *,
+    task_id=None,
+    conversation_id=None,
+    wake_kind=None,
+    lane=None,
+):
+    """Name the logical stream allowed to reconcile a checkout's saved patch."""
+    if task_id:
+        return f"task:{task_id}"
+    if conversation_id:
+        return f"conversation:{conversation_id}"
+    if wake_kind == "live":
+        return f"terminal:{agent_id}"
+    return f"{lane or 'work'}:{agent_id}:taskless"
 
 
 def carry_previous_checkout(
@@ -41,6 +67,8 @@ def carry_previous_checkout(
     task_id=None,
     conversation_id=None,
     wake_kind=None,
+    lane=None,
+    require_taskless=False,
 ):
     """Move the prior file view into ``destination_cwd`` before a new run starts.
 
@@ -56,6 +84,8 @@ def carry_previous_checkout(
         task_id=task_id,
         conversation_id=conversation_id,
         wake_kind=wake_kind,
+        lane=lane,
+        require_taskless=require_taskless,
     )
     if not source_cwd or not destination_cwd:
         return True
@@ -66,4 +96,14 @@ def carry_previous_checkout(
             return True
     except OSError:
         return False
-    return services._handoff_worktree_changes(str(source), str(destination))
+    return services._handoff_worktree_changes(
+        str(source),
+        str(destination),
+        owner_key=checkout_owner_key(
+            agent_id,
+            task_id=task_id,
+            conversation_id=conversation_id,
+            wake_kind=wake_kind,
+            lane=lane,
+        ),
+    )
