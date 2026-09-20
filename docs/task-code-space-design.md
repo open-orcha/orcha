@@ -34,7 +34,7 @@ tools from the review moment.
 
 ### Branch file viewer
 
-![Task Code Space showing a read-only branch file](images/gh-249/code-space-file.jpg)
+![Task Code Space showing a read-only run snapshot](images/gh-249/code-space-file.jpg)
 
 The screenshots use an existing completed task/run so the diff view has
 representative data. The layout and behavior are the same for issue #249.
@@ -55,7 +55,11 @@ so it includes committed, staged, unstaged, and untracked work without changing
 the agent's real index. A private Git ref keeps the snapshot alive, and the
 portal serves it from the project's read-only repository mount. The file view
 therefore cannot drift if the task branch advances after the reviewed run. No
-host filesystem path is sent to the browser.
+host filesystem path is sent to the browser. Both the private ref and database
+field are create-once: repeated finish delivery returns the first snapshot
+rather than retargeting an already-reviewed run. Daemon-restart recovery uses
+the recorded worktree to capture the same diff and snapshot before it finishes
+an adopted sandbox or dead-process task run.
 
 For a run that is still active, the snapshot and captured diff remain empty
 until the worker finishes. Older runs created before immutable snapshots show

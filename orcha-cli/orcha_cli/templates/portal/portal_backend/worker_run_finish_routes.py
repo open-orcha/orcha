@@ -53,7 +53,7 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
             """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
                       task_id=COALESCE(task_id, %s),
                       diff=COALESCE(%s, diff), kill_reason=COALESCE(%s, kill_reason),
-                      snapshot_ref=COALESCE(%s, snapshot_ref),
+                      snapshot_ref=COALESCE(snapshot_ref, %s),
                       input_tokens=COALESCE(%s, input_tokens),
                       output_tokens=COALESCE(%s, output_tokens),
                       cache_read_input_tokens=COALESCE(%s, cache_read_input_tokens),

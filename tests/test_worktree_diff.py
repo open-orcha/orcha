@@ -88,6 +88,20 @@ def test_run_snapshot_freezes_worktree_without_touching_real_index(tmp_path):
     assert kept_ref.strip() == snapshot
 
 
+def test_run_snapshot_is_create_only_for_repeated_capture(tmp_path):
+    work = _make_repo(tmp_path)
+    run_id = "22222222-2222-4222-8222-222222222222"
+    (work / "README.md").write_text("first reviewed state\n")
+    first = notifier._capture_snapshot(str(work), run_id)
+
+    (work / "README.md").write_text("later retry state\n")
+    second = notifier._capture_snapshot(str(work), run_id)
+
+    assert second == first
+    _, frozen = notifier._run_git(["show", f"{second}:README.md"], cwd=str(work))
+    assert frozen == "first reviewed state\n"
+
+
 def test_two_workers_do_not_tangle(tmp_path):
     work = _make_repo(tmp_path)
     wt1, b1 = notifier._provision_worktree(str(work), "alice")

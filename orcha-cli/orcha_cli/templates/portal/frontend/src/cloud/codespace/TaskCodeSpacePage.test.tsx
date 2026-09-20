@@ -117,6 +117,8 @@ describe("TaskCodeSpacePage", () => {
 
   it("uses the selected run snapshot for the file tree and syntax-highlighted viewer", async () => {
     mount("/code?task=task-1&run=run-latest-1234&view=file&path=src%2Fa.ts");
+    expect(await screen.findByText("snapshot aaaaaaa")).toBeInTheDocument();
+    expect(screen.getByText("Run snapshot")).toBeInTheDocument();
     expect(await screen.findByText("src/a.ts", { selector: ".rb-file-path" })).toBeInTheDocument();
     expect(document.querySelector(".rb-code")).toBeTruthy();
     await waitFor(() => {

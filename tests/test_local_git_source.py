@@ -185,6 +185,12 @@ async def test_run_snapshot_routes_stay_pinned_after_branch_moves(
     (local_repo / "README.md").write_text("later branch state\n")
     _git(local_repo, "add", "README.md")
     _git(local_repo, "commit", "-q", "-m", "move branch")
+    later_ref = local_git.resolve_ref()
+    repeated = await client.post(
+        f"/api/runs/{run_id}/finish",
+        json={"status": "exited", "exit_code": 0, "snapshot_ref": later_ref},
+    )
+    assert repeated.status_code == 200, repeated.text
 
     tree = await client.get(
         f"/api/containers/{container['id']}/runs/{run_id}/snapshot/tree"

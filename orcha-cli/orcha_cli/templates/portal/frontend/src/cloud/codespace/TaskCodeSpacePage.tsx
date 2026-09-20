@@ -124,6 +124,7 @@ export function TaskCodeSpacePage() {
 
   const branchLabel = run?.branch || "repository HEAD";
   const snapshotAvailable = Boolean(runId && gitRef);
+  const sourceLabel = gitRef ? `snapshot ${gitRef.slice(0, 7)}` : "snapshot unavailable";
 
   return (
     <div className="tcs-shell" data-task-code-space="true">
@@ -133,7 +134,7 @@ export function TaskCodeSpacePage() {
           <h1>{task?.title || "Task code"}</h1>
         </div>
         <div className="tcs-source" aria-label="Code source">
-          <span className="tcs-branch mono" title={branchLabel}>{branchLabel}</span>
+          <span className="tcs-branch mono" title={gitRef || branchLabel}>{sourceLabel}</span>
           {run ? <span>{run.status}{shortRun(run) ? " run" : ""}</span> : <span>Finding the latest run…</span>}
         </div>
         <div className="tcs-mode" role="tablist" aria-label="Code review mode">

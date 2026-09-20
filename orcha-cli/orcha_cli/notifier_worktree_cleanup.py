@@ -44,6 +44,14 @@ def capture_snapshot(worktree, run_id) -> str | None:
     worktree_path = pathlib.Path(worktree)
     if not worktree_path.is_dir():
         return None
+    safe_run_id = "".join(
+        character
+        for character in str(run_id).lower()
+        if character.isalnum() or character == "-"
+    )
+    if not safe_run_id:
+        return None
+    ref_name = f"refs/orcha/run-snapshots/{safe_run_id}"
     index_fd = None
     index_path = None
     try:
@@ -65,6 +73,10 @@ def capture_snapshot(worktree, run_id) -> str | None:
                 check=False,
             )
 
+        existing = git(["rev-parse", "--verify", ref_name])
+        existing_ref = existing.stdout.strip()
+        if existing.returncode == 0 and len(existing_ref) == 40:
+            return existing_ref
         if git(["read-tree", "HEAD"]).returncode != 0:
             return None
         if git(["add", "-A", "--", *DIFF_EXCLUDES]).returncode != 0:
@@ -90,17 +102,16 @@ def capture_snapshot(worktree, run_id) -> str | None:
         snapshot_ref = commit.stdout.strip()
         if commit.returncode != 0 or len(snapshot_ref) != 40:
             return None
-        safe_run_id = "".join(
-            character
-            for character in str(run_id).lower()
-            if character.isalnum() or character == "-"
-        )
-        if not safe_run_id:
-            return None
         kept = git(
-            ["update-ref", f"refs/orcha/run-snapshots/{safe_run_id}", snapshot_ref]
+            ["update-ref", ref_name, snapshot_ref, "0" * 40]
         )
-        return snapshot_ref if kept.returncode == 0 else None
+        if kept.returncode == 0:
+            return snapshot_ref
+        # A concurrent retry may have won the create-only update. Its commit is
+        # the immutable value for this run; never replace it with ours.
+        winner = git(["rev-parse", "--verify", ref_name])
+        winner_ref = winner.stdout.strip()
+        return winner_ref if winner.returncode == 0 and len(winner_ref) == 40 else None
     except (OSError, subprocess.SubprocessError):
         return None
     finally:
