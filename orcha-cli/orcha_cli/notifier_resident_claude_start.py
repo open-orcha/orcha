@@ -6,6 +6,8 @@ import pathlib
 import time
 
 from . import notifier_resident_claude_feed as _feed_service
+from .notifier_routing_handoff import carry_previous_checkout
+
 
 def start_or_feed_candidate(
     services,
@@ -24,6 +26,7 @@ def start_or_feed_candidate(
     if resident is not None and resident.get("awaiting_result"):
         return
     desired_worktree_routing = bool(candidate.get("worktrees_disabled"))
+    routing_source_cwd = None
     if (
         resident is not None
         and bool(resident.get("worktrees_disabled", False)) != desired_worktree_routing
@@ -31,6 +34,7 @@ def start_or_feed_candidate(
         # A project toggle applies to the next turn even when a warm resident exists.  Retire the
         # process/lease but preserve its old worktree exactly as-is; the replacement boots with the
         # newly selected routing below.
+        routing_source_cwd = resident.get("worktree") or resident.get("base_cwd")
         services._close_resident(
             api_base,
             resident,
@@ -75,6 +79,7 @@ def start_or_feed_candidate(
             base_cwd=base_cwd,
             quiet=quiet,
             dry_run=dry_run,
+            routing_source_cwd=routing_source_cwd,
         )
     if resident is not None:
         _feed_service.feed(
@@ -98,6 +103,7 @@ def _boot(
     base_cwd,
     quiet,
     dry_run,
+    routing_source_cwd=None,
 ):
     if not dry_run:
         services._reap_dead_pid_resident_runs(
@@ -191,6 +197,21 @@ def _boot(
         _release_failed(services, api_base, candidate)
         return None
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
+    if not dry_run and not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        source_cwd=routing_source_cwd,
+        conversation_id=conv_id,
+    ):
+        _release_failed(services, api_base, candidate)
+        if not quiet:
+            print(
+                f"[notifier] resident skip {candidate.get('agent_alias')} — "
+                "saved files could not be carried into the selected checkout"
+            )
+        return None
     token = (
         None
         if dry_run

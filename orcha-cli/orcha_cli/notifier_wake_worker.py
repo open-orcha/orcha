@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 import time
 
+from .notifier_routing_handoff import carry_previous_checkout
+
 
 def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
     """Provision isolation appropriate to the candidate's likely work."""
@@ -192,6 +194,44 @@ def spawn(
         candidate, auto_tasks, live_workers, dry_run, services
     )
     run_cwd = worktree or headless_cwd
+    if not dry_run and run_task_id and not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        task_id=run_task_id,
+    ):
+        services._post_json(
+            f"{api_base}/api/tasks/{run_task_id}/messages",
+            {
+                "author_agent_id": candidate["agent_id"],
+                "body": (
+                    "Run start paused because Orcha could not safely carry the task's "
+                    "saved files into the checkout selected by the project setting. "
+                    "Both checkouts remain preserved, and no worker was started."
+                ),
+            },
+        )
+        services._post_json(
+            f"{api_base}/api/agents/{candidate['agent_id']}/wake-ack",
+            {
+                "kind": "worker_routing_handoff_failed",
+                "release_lease": True,
+                "lane": lane,
+            },
+        )
+        if not quiet:
+            print(
+                f"[notifier] wake for {candidate.get('alias')} paused: saved files "
+                "could not be carried into the selected checkout",
+                file=sys.stderr,
+            )
+        return {
+            "sent": False,
+            "command": "checkout handoff failed",
+            "resume_rendered": resume_rendered,
+            "lane": lane,
+        }
     token = (
         None
         if dry_run

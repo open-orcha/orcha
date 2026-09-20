@@ -1,5 +1,6 @@
 """Authorize websocket clients and orchestrate attached live-terminal sessions."""
 
+from .notifier_routing_handoff import carry_previous_checkout
 from .terminal_bridge_relay import (
     parse_query,
     safe_close,
@@ -46,12 +47,14 @@ async def handle_connection(bridge, notifier, ws, api_base, base_cwd, quiet=True
         )
 
     warm = bridge._take_warm(aid)
+    routing_source_cwd = None
     if (
         warm is not None
         and bool(getattr(warm, "worktrees_disabled", False)) != worktrees_disabled
     ):
         # The persisted project routing changed while this PTY was parked.  Do not reattach it in
         # the wrong checkout, and do not remove its old worktree as a side effect of the toggle.
+        routing_source_cwd = warm.worktree or warm.base_cwd
         warm.cancel_expiry()
         bridge._retire_warm(
             warm, quiet=quiet, teardown_worktree=False
@@ -77,6 +80,7 @@ async def handle_connection(bridge, notifier, ws, api_base, base_cwd, quiet=True
             worktrees_disabled,
             preempt,
             on_yielding,
+            routing_source_cwd,
         )
         if session is None:
             return
@@ -146,6 +150,7 @@ async def _start_session(
     worktrees_disabled,
     preempt,
     on_yielding,
+    routing_source_cwd=None,
 ):
     """Claim resources and start a new PTY-backed live session."""
     claim = await bridge.acquire_live_lease(
@@ -169,12 +174,33 @@ async def _start_session(
         if worktrees_disabled
         else notifier._provision_live_worktree(base_cwd, alias)
     )
+    run_cwd = worktree or base_cwd
+    if not carry_previous_checkout(
+        api_base,
+        aid,
+        run_cwd,
+        notifier,
+        source_cwd=routing_source_cwd,
+        wake_kind="live",
+    ):
+        bridge.release_live_lease(api_base, aid)
+        await ws.send(
+            bridge.make_frame(
+                "error",
+                message=(
+                    "Could not safely carry the saved files into the checkout selected "
+                    "by the project setting. Both checkouts were preserved."
+                ),
+            )
+        )
+        await ws.close(code=1011)
+        return None
     run_token = bridge.mint_live_token(api_base, aid)
     pid, master_fd = bridge.spawn_pty(
         alias,
         cold,
         claim.get("session_id"),
-        worktree or base_cwd,
+        run_cwd,
         model=model,
         runtime=runtime,
         run_token=run_token,
