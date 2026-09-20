@@ -135,6 +135,19 @@ describe("TaskCodeSpacePage", () => {
     expect(requestedUrls.some((url) => url.includes("/snapshot/"))).toBe(false);
   });
 
+  it("shows capture pending instead of an empty diff for a running run", async () => {
+    runsPayload = [{ ...RUNS[0], status: "running", snapshot_ref: null, diff: null }];
+    mount("/code?task=task-1&run=run-latest-1234&view=diff");
+    expect(await screen.findByText("Run capture is still pending.")).toBeInTheDocument();
+    expect(screen.queryByText("No net change (empty diff).")).not.toBeInTheDocument();
+  });
+
+  it("reserves the empty-diff message for a completed captured run", async () => {
+    runsPayload = [{ ...RUNS[0], status: "exited", diff: "" }];
+    mount("/code?task=task-1&run=run-latest-1234&view=diff");
+    expect(await screen.findByText("No net change (empty diff).")).toBeInTheDocument();
+  });
+
   it("Close returns to the stored task page and restores its scroll position", async () => {
     sessionStorage.setItem("orcha:task-code-space:origin", JSON.stringify({ href: "/tasks?task=task-1", scrollY: 420, taskId: "task-1" }));
     mount("/code?task=task-1&view=diff");

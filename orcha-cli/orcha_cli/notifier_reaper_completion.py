@@ -5,6 +5,28 @@ from __future__ import annotations
 import json
 
 
+def _current_run_task_id(api_base, aid, worker, services):
+    """Resolve task binding again because a worker can accept a task after launch."""
+    launch_task_id = (worker.get("respawn_ctx") or {}).get("task_id")
+    if worker.get("task_bound", bool(worker.get("task_worktree"))):
+        return launch_task_id
+    run_id = worker.get("run_id")
+    if not run_id or not worker.get("worktree"):
+        return None
+    payload = services._get_json(
+        f"{api_base}/api/agents/{aid}/runs?limit=20", timeout=2.0
+    ) or {}
+    matching_run = next(
+        (
+            run
+            for run in payload.get("runs", [])
+            if str(run.get("run_id") or run.get("id")) == str(run_id)
+        ),
+        None,
+    )
+    return (matching_run or {}).get("task_id")
+
+
 def _save_task_result(api_base, aid, worker, diff, failed_drains, services):
     task_id = (worker.get("respawn_ctx") or {}).get("task_id")
     sha = services._checkpoint_task_worktree(
@@ -58,8 +80,10 @@ def handle_exited(
     if runtime == services.RUNTIME_CODEX:
         status = services._codex_exit_status(worker.get("log_path"), proc.returncode)
     is_task_worktree = bool(worker.get("task_worktree"))
-    is_task_bound = bool(worker.get("task_bound", is_task_worktree))
-    task_id = (worker.get("respawn_ctx") or {}).get("task_id")
+    task_id = _current_run_task_id(api_base, aid, worker, services)
+    is_task_bound = bool(task_id) or bool(
+        worker.get("task_bound", is_task_worktree)
+    )
     if is_task_bound and status in ("rate_limited", "failed"):
         services._drain_task_failure(
             api_base,

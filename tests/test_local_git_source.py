@@ -178,7 +178,12 @@ async def test_run_snapshot_routes_stay_pinned_after_branch_moves(
     frozen_ref = local_git.resolve_ref()
     finished = await client.post(
         f"/api/runs/{run_id}/finish",
-        json={"status": "exited", "exit_code": 0, "snapshot_ref": frozen_ref},
+        json={
+            "status": "exited",
+            "exit_code": 0,
+            "snapshot_ref": frozen_ref,
+            "diff": "first captured diff",
+        },
     )
     assert finished.status_code == 200, finished.text
 
@@ -188,9 +193,20 @@ async def test_run_snapshot_routes_stay_pinned_after_branch_moves(
     later_ref = local_git.resolve_ref()
     repeated = await client.post(
         f"/api/runs/{run_id}/finish",
-        json={"status": "exited", "exit_code": 0, "snapshot_ref": later_ref},
+        json={
+            "status": "exited",
+            "exit_code": 0,
+            "snapshot_ref": later_ref,
+            "diff": "later retry diff",
+        },
     )
     assert repeated.status_code == 200, repeated.text
+
+    runs = await client.get(f"/api/agents/{agent['agent_id']}/runs")
+    assert runs.status_code == 200, runs.text
+    stored = next(run for run in runs.json()["runs"] if run["run_id"] == run_id)
+    assert stored["snapshot_ref"] == frozen_ref
+    assert stored["diff"] == "first captured diff"
 
     tree = await client.get(
         f"/api/containers/{container['id']}/runs/{run_id}/snapshot/tree"

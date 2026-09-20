@@ -125,6 +125,8 @@ export function TaskCodeSpacePage() {
   const branchLabel = run?.branch || "repository HEAD";
   const snapshotAvailable = Boolean(runId && gitRef);
   const sourceLabel = gitRef ? `snapshot ${gitRef.slice(0, 7)}` : "snapshot unavailable";
+  const diffCaptured = run?.diff != null;
+  const runActive = run?.status === "running";
 
   return (
     <div className="tcs-shell" data-task-code-space="true">
@@ -206,7 +208,16 @@ export function TaskCodeSpacePage() {
                 {runId ? <span className="tag mono" title={runId}>run {shortRun(run)}</span> : null}
               </div>
               <div className="tcs-diff-scroll">
-                {runs ? <FilesChanged diff={run?.diff || ""} /> : <BrowseSkeletonPane />}
+                {!runs ? (
+                  <BrowseSkeletonPane />
+                ) : !diffCaptured ? (
+                  <div className="tcs-empty">
+                    <strong>{runActive ? "Run capture is still pending." : "A captured diff is unavailable for this run."}</strong>
+                    <span>{runActive ? "Changes will appear after the agent run finishes." : "This run finished without a reviewable diff capture."}</span>
+                  </div>
+                ) : (
+                  <FilesChanged diff={run.diff || ""} />
+                )}
               </div>
             </section>
           ) : !snapshotAvailable ? (
