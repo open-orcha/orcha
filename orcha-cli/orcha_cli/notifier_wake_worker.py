@@ -194,24 +194,27 @@ def spawn(
         candidate, auto_tasks, live_workers, dry_run, services
     )
     run_cwd = worktree or headless_cwd
-    if not dry_run and run_task_id and not carry_previous_checkout(
+    if not dry_run and not carry_previous_checkout(
         api_base,
         candidate["agent_id"],
         run_cwd,
         services,
         task_id=run_task_id,
+        lane="work",
+        require_taskless=run_task_id is None,
     ):
-        services._post_json(
-            f"{api_base}/api/tasks/{run_task_id}/messages",
-            {
-                "author_agent_id": candidate["agent_id"],
-                "body": (
-                    "Run start paused because Orcha could not safely carry the task's "
-                    "saved files into the checkout selected by the project setting. "
-                    "Both checkouts remain preserved, and no worker was started."
-                ),
-            },
-        )
+        if run_task_id:
+            services._post_json(
+                f"{api_base}/api/tasks/{run_task_id}/messages",
+                {
+                    "author_agent_id": candidate["agent_id"],
+                    "body": (
+                        "Run start paused because Orcha could not safely carry the "
+                        "saved files into the checkout selected by the project setting. "
+                        "Both checkouts remain preserved, and no worker was started."
+                    ),
+                },
+            )
         services._post_json(
             f"{api_base}/api/agents/{candidate['agent_id']}/wake-ack",
             {

@@ -501,7 +501,7 @@ def _checkpoint_services(*, disabled, spawned, provisioned):
         time=time,
         _kill_worker=lambda *args, **kwargs: None,
         _capture_diff=lambda worktree: "saved diff" if worktree else None,
-        _handoff_worktree_changes=lambda *args: True,
+        _handoff_worktree_changes=lambda *args, **kwargs: True,
         _finish_run=lambda *args, **kwargs: True,
         _reap_sandbox_artifacts=lambda *args, **kwargs: None,
         _get_json=get_json,
@@ -597,7 +597,7 @@ def test_checkpoint_handoff_conflict_stops_and_posts_visible_failure():
     services = _checkpoint_services(
         disabled=True, spawned=spawned, provisioned=provisioned
     )
-    services._handoff_worktree_changes = lambda *args: False
+    services._handoff_worktree_changes = lambda *args, **kwargs: False
     worker = _checkpoint_worker(
         disabled=False,
         worktree="/project/.orcha-worktrees/agent",
@@ -1163,3 +1163,185 @@ async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp
     assert session is not None
     assert spawned == [str(main)]
     assert (main / "terminal.txt").read_text() == "terminal work\n"
+
+
+def test_handoff_ownership_prevents_one_task_replacing_another(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    first_worktree, _ = notifier._provision_task_worktree(
+        str(main), "builder", "task-1"
+    )
+    second_worktree, _ = notifier._provision_task_worktree(
+        str(main), "builder", "task-2"
+    )
+    (pathlib.Path(first_worktree) / "first.txt").write_text("first task\n")
+    (pathlib.Path(second_worktree) / "second.txt").write_text("second task\n")
+
+    assert notifier._handoff_worktree_changes(
+        first_worktree, str(main), owner_key="task:task-1"
+    )
+    assert (
+        notifier._handoff_worktree_changes(
+            second_worktree, str(main), owner_key="task:task-2"
+        )
+        is False
+    )
+
+    assert (main / "first.txt").read_text() == "first task\n"
+    assert not (main / "second.txt").exists()
+    assert (pathlib.Path(second_worktree) / "second.txt").read_text() == "second task\n"
+
+
+def test_rejected_handoff_does_not_change_destination_index(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, _ = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    (pathlib.Path(worktree) / "task.txt").write_text("task work\n")
+    (main / "human.txt").write_text("independent work\n")
+    before_status = notifier._run_git(["status", "--porcelain=v1"], cwd=str(main))[1]
+    before_index = notifier._run_git(["diff", "--cached", "--binary"], cwd=str(main))[1]
+
+    assert (
+        notifier._handoff_worktree_changes(
+            worktree, str(main), owner_key="task:task-1"
+        )
+        is False
+    )
+
+    assert (
+        notifier._run_git(["status", "--porcelain=v1"], cwd=str(main))[1]
+        == before_status
+    )
+    assert (
+        notifier._run_git(["diff", "--cached", "--binary"], cwd=str(main))[1]
+        == before_index
+    )
+    assert (main / "human.txt").read_text() == "independent work\n"
+    assert not (main / "task.txt").exists()
+
+
+def test_taskless_prompt_wake_carries_main_state_back_to_worktree(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / "prompt-work.txt").write_text("saved by direct prompt\n")
+    spawned = []
+    posts = []
+
+    def post_json(url, body):
+        posts.append((url, body))
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "run-2"}
+        return {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _post_json=post_json,
+        _get_json=lambda url: {
+            "runs": [
+                {
+                    "run_id": "run-1",
+                    "task_id": None,
+                    "conversation_id": None,
+                    "wake_kind": "ephemeral",
+                    "lane": "work",
+                    "worktree": None,
+                    "base_cwd": str(main),
+                }
+            ]
+        },
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: pytest.fail(
+            "taskless prompt must not provision a task worktree"
+        ),
+        _provision_worktree=notifier._provision_worktree,
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _mint_embodiment_token=lambda *args: "token",
+        _revoke_or_defer=lambda *args: None,
+        _teardown_worktree=notifier._teardown_worktree,
+        spawn_headless=lambda cwd, *args, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+    )
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": str(main),
+        "pending_events": 1,
+        "latest_event": "prompt",
+        "worktrees_disabled": False,
+    }
+
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        candidate,
+        prompt="continue direct work",
+        event="prompt",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+
+    assert result["sent"] is True
+    assert spawned and pathlib.Path(spawned[0]) != main
+    assert (pathlib.Path(spawned[0]) / "prompt-work.txt").read_text() == (
+        "saved by direct prompt\n"
+    )
+    assert not any("/tasks/None/" in url for url, _body in posts)
+
+
+def test_taskless_prompt_handoff_failure_stops_without_invalid_task_post(monkeypatch):
+    posts = []
+    spawned = []
+    monkeypatch.setattr(
+        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+    )
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"claimed": True} if url.endswith("/wake-claim") else {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: pytest.fail(
+            "taskless prompt must not provision a task worktree"
+        ),
+        _provision_worktree=lambda *args: ("/project/agent", "orcha/agent"),
+        spawn_headless=lambda *args, **kwargs: spawned.append(args),
+    )
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "pending_events": 1,
+        "latest_event": "prompt",
+        "worktrees_disabled": False,
+    }
+
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        candidate,
+        prompt="continue direct work",
+        event="prompt",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+
+    assert result["sent"] is False
+    assert spawned == []
+    assert not any("/tasks/" in url for url, _body in posts)
+    assert any(
+        url.endswith("/wake-ack")
+        and body["kind"] == "worker_routing_handoff_failed"
+        and body["release_lease"] is True
+        for url, body in posts
+    )

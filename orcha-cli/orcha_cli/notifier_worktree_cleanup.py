@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import tempfile
@@ -17,18 +18,46 @@ DIFF_EXCLUDES = (
 
 
 def _full_patch(cwd, services: Any):
-    """Return the checkout's complete binary-safe patch from ``origin/main``."""
-    add_code, _ = services._run_git(
-        ["add", "-A", "-N", "--", *DIFF_EXCLUDES], cwd=cwd
-    )
-    if add_code != 0:
-        return None
-    return_code, patch = services._run_git(
+    """Return the complete binary-safe patch without changing the checkout index."""
+    return_code, tracked = services._run_git(
         ["diff", "--binary", "--full-index", "origin/main", "--", *DIFF_EXCLUDES],
         cwd=cwd,
         timeout=60,
     )
-    return patch if return_code == 0 else None
+    if return_code != 0:
+        return None
+
+    # ``git diff`` deliberately omits ordinary untracked files.  Diff each one
+    # against /dev/null rather than using ``git add -N``: intent-to-add mutates
+    # the real index and made even a rejected handoff observably change a human
+    # checkout.  NUL separation preserves unusual but valid path names.
+    untracked_code, untracked = services._run_git(
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", *DIFF_EXCLUDES],
+        cwd=cwd,
+        timeout=60,
+    )
+    if untracked_code != 0:
+        return None
+    patches = [tracked]
+    for relative_path in filter(None, untracked.split("\0")):
+        file_code, file_patch = services._run_git(
+            [
+                "diff",
+                "--no-index",
+                "--binary",
+                "--full-index",
+                "--",
+                "/dev/null",
+                relative_path,
+            ],
+            cwd=cwd,
+            timeout=60,
+        )
+        # --no-index uses 1 for the expected "files differ" result.
+        if file_code not in (0, 1):
+            return None
+        patches.append(file_patch)
+    return "".join(patches)
 
 
 def _apply_patch(cwd, patch: str, services: Any, *, reverse: bool = False) -> bool:
@@ -103,16 +132,31 @@ def _handoff_record_path(cwd, services: Any):
 
 
 def _read_handoff_record(cwd, services: Any):
-    """Read the exact patch previously placed in this checkout by Orcha."""
+    """Read the stream owner and exact patch previously placed by Orcha."""
     try:
         path = _handoff_record_path(cwd, services)
-        return path.read_text() if path is not None and path.is_file() else None
-    except OSError:
+        if path is None or not path.is_file():
+            return None
+        raw = path.read_text()
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            # Records written before ownership scoping contained only a patch.
+            # Treat them as unowned so dirty state fails closed instead of being
+            # attributed to whichever stream happens to arrive next.
+            return {"owner_key": None, "patch": raw}
+        if not isinstance(record, dict) or not isinstance(record.get("patch"), str):
+            return None
+        return {
+            "owner_key": record.get("owner_key"),
+            "patch": record["patch"],
+        }
+    except (OSError, UnicodeError):
         return None
 
 
-def _write_handoff_record(cwd, patch: str, services: Any) -> bool:
-    """Atomically remember only the state Orcha owns in a destination checkout."""
+def _write_handoff_record(cwd, owner_key: str, patch: str, services: Any) -> bool:
+    """Atomically remember the stream and state Orcha owns in a checkout."""
     temporary = None
     try:
         path = _handoff_record_path(cwd, services)
@@ -121,7 +165,12 @@ def _write_handoff_record(cwd, patch: str, services: Any) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         os.close(fd)
-        pathlib.Path(temporary).write_text(patch)
+        pathlib.Path(temporary).write_text(
+            json.dumps(
+                {"version": 2, "owner_key": owner_key, "patch": patch},
+                separators=(",", ":"),
+            )
+        )
         os.replace(temporary, path)
         temporary = None
         return True
@@ -143,7 +192,9 @@ def _is_linked_worktree(cwd) -> bool:
         return False
 
 
-def _replace_managed_patch(cwd, managed: str, desired: str, services: Any) -> bool:
+def _replace_managed_patch(
+    cwd, managed: str, desired: str, owner_key: str, services: Any
+) -> bool:
     """Replace only Orcha-owned state while preserving independent destination work."""
     if managed.strip() and not _apply_patch(cwd, managed, services, reverse=True):
         return False
@@ -153,7 +204,7 @@ def _replace_managed_patch(cwd, managed: str, desired: str, services: Any) -> bo
             _apply_patch(cwd, managed, services)
         return False
 
-    if _write_handoff_record(cwd, desired, services):
+    if _write_handoff_record(cwd, owner_key, desired, services):
         return True
 
     # A record is required before this state can be safely reconciled again.
@@ -169,18 +220,17 @@ def capture_diff(worktree, services: Any, cap: int = 200_000):
     """Return the worker's net diff from main, including untracked files."""
     if not worktree:
         return None
-    services._run_git(["add", "-A", "-N", "--", *DIFF_EXCLUDES], cwd=worktree)
-    return_code, output = services._run_git(
-        ["diff", "origin/main", "--", *DIFF_EXCLUDES], cwd=worktree
-    )
-    if return_code != 0:
+    output = _full_patch(worktree, services)
+    if output is None:
         return None
     if len(output) > cap:
         output = output[:cap] + "\n...[diff truncated]..."
     return output
 
 
-def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
+def handoff_changes(
+    source_cwd, destination_cwd, services: Any, *, owner_key: str | None = None
+) -> bool:
     """Carry a worker's complete in-progress state into a newly selected checkout.
 
     The patch is based on ``origin/main`` so it includes both commits made on a
@@ -191,6 +241,7 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     """
     if not source_cwd or not destination_cwd:
         return False
+    owner_key = owner_key or "legacy-unscoped"
     try:
         source_path = pathlib.Path(source_cwd).resolve()
         destination_path = pathlib.Path(destination_cwd).resolve()
@@ -210,16 +261,35 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
     if destination_patch is None:
         return False
 
-    source_managed_patch = _read_handoff_record(source_cwd, services)
-    if _is_linked_worktree(source_cwd) or source_managed_patch is not None:
+    source_record = _read_handoff_record(source_cwd, services)
+    if source_record is not None and source_record.get("owner_key") != owner_key:
+        # A shared checkout still belongs to another task/conversation/terminal.
+        # Never relabel and export its state as though the arriving stream made it.
+        return False
+    if (
+        _is_linked_worktree(source_cwd) or source_record is not None
+    ) and not _write_handoff_record(source_cwd, owner_key, patch, services):
         # Refresh ownership while this checkout is still the active source. In
         # particular, a clean first task -> main handoff establishes an empty
         # main record; after edits there, exporting back to the task worktree
         # must update that record so a later return can replace only those edits.
-        if not _write_handoff_record(source_cwd, patch, services):
-            return False
+        return False
 
-    managed_patch = _read_handoff_record(destination_cwd, services)
+    destination_record = _read_handoff_record(destination_cwd, services)
+    if (
+        destination_record is not None
+        and destination_record.get("owner_key") != owner_key
+        and destination_patch.strip()
+    ):
+        # The other stream's state may be perfectly valid/applicable, but it is
+        # not ours to replace.  A clean checkout can be safely re-owned.
+        return False
+    managed_patch = (
+        destination_record.get("patch")
+        if destination_record is not None
+        and destination_record.get("owner_key") == owner_key
+        else None
+    )
     if destination_patch == patch:
         # An identical clean checkout is safe to claim even without a previous
         # record. Linked task worktrees and already-managed destinations are
@@ -231,11 +301,9 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
             or _is_linked_worktree(destination_cwd)
             or managed_patch is not None
         )
-        if can_manage_destination and not _write_handoff_record(
-            destination_cwd, patch, services
-        ):
-            return False
-        return True
+        return not can_manage_destination or _write_handoff_record(
+            destination_cwd, owner_key, patch, services
+        )
 
     if managed_patch is None:
         # An unrecorded dirty destination may contain human or another worker's
@@ -248,7 +316,7 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
         )
         if not transferred:
             return False
-        if not _write_handoff_record(destination_cwd, patch, services):
+        if not _write_handoff_record(destination_cwd, owner_key, patch, services):
             if patch.strip():
                 _apply_patch(destination_cwd, patch, services, reverse=True)
             return False
@@ -258,7 +326,7 @@ def handoff_changes(source_cwd, destination_cwd, services: Any) -> bool:
         if not destination_patch.strip():
             managed_patch = ""
         transferred = _replace_managed_patch(
-            destination_cwd, managed_patch, patch, services
+            destination_cwd, managed_patch, patch, owner_key, services
         )
         if not transferred:
             return False

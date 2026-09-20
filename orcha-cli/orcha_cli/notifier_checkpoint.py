@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .notifier_routing_handoff import checkout_owner_key
+
 
 def checkpoint_and_respawn(
     api_base: str,
@@ -43,7 +45,15 @@ def checkpoint_and_respawn(
         services,
     )
     destination_cwd = worktree or base_cwd
-    if not services._handoff_worktree_changes(source_cwd, destination_cwd):
+    if not services._handoff_worktree_changes(
+        source_cwd,
+        destination_cwd,
+        owner_key=checkout_owner_key(
+            agent_id,
+            task_id=task_id,
+            lane="work",
+        ),
+    ):
         _handle_handoff_failure(
             api_base,
             agent_id,
