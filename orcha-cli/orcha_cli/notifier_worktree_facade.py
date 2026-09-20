@@ -67,6 +67,7 @@ def _finish_run(
     exit_code,
     log_path,
     diff=None,
+    snapshot_ref=None,
     kill_reason=None,
 ) -> bool:
     compat = _compat()
@@ -80,6 +81,7 @@ def _finish_run(
         capture_output=compat._capture_run_output,
         usage_from_log=compat._usage_from_log,
         diff=diff,
+        snapshot_ref=snapshot_ref,
         kill_reason=kill_reason,
     )
 
@@ -155,6 +157,10 @@ def _provision_task_worktree(base_cwd, alias, task_id):
 
 def _capture_diff(worktree, cap: int = 200_000):
     return _cleanup.capture_diff(worktree, _compat(), cap)
+
+
+def _capture_snapshot(worktree, run_id):
+    return _cleanup.capture_snapshot(worktree, run_id)
 
 
 def _branch_commit_count(base_cwd, branch) -> int:

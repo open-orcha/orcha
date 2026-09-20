@@ -89,6 +89,9 @@ def drain_task_failure(
     services,
 ) -> None:
     """Preserve failed task work and apply bounded retry bookkeeping."""
+    snapshot_ref = services._capture_snapshot(
+        worker.get("worktree"), worker.get("run_id")
+    )
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -96,6 +99,7 @@ def drain_task_failure(
         returncode,
         worker.get("log_path"),
         diff,
+        snapshot_ref=snapshot_ref,
         kill_reason=json.dumps(
             {
                 "run_id": str(worker.get("run_id")),

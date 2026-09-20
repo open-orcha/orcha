@@ -4,8 +4,8 @@
  * It deliberately reuses the existing repository browse state/components and
  * the run's captured diff. The task/run association already lives in
  * GET /api/tasks/{id}/runs, so no second source of truth or filesystem-path API
- * is introduced. A run branch drives the file tree/viewer; its captured net
- * diff drives the verifier-facing Changes mode.
+ * is introduced. The run's immutable snapshot drives the file tree/viewer;
+ * its captured net diff drives the verifier-facing Changes mode.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -73,9 +73,11 @@ export function TaskCodeSpacePage() {
     return runs.find((candidate) => candidate.branch || candidate.diff) || runs[0] || null;
   }, [requestedRunId, runs]);
 
-  const gitRef = run?.branch || "HEAD";
+  const runId = run?.run_id || run?.id || "";
+  const gitRef = run?.snapshot_ref || "";
+  const browseCid = runId && gitRef ? (cid || "") : "";
   const { dirCache, expanded, rows, toggleDir, retryDir, filePayload, fileError, fileLoading } =
-    useBrowseTree(cid || "", gitRef, path);
+    useBrowseTree(browseCid, gitRef, path, runId || undefined);
 
   const changeParams = useCallback((changes: Record<string, string | null>) => {
     setParams((previous) => {
@@ -120,8 +122,8 @@ export function TaskCodeSpacePage() {
 
   if (!cid) return null;
 
-  const runId = run?.run_id || run?.id || "";
   const branchLabel = run?.branch || "repository HEAD";
+  const snapshotAvailable = Boolean(runId && gitRef);
 
   return (
     <div className="tcs-shell" data-task-code-space="true">
@@ -160,21 +162,25 @@ export function TaskCodeSpacePage() {
       </header>
 
       <div className="tcs-workspace">
-        <aside className="tcs-tree" aria-label="Branch files">
+        <aside className="tcs-tree" aria-label="Run snapshot files">
           <div className="tcs-tree-head">
-            <span>Branch files</span>
-            <span className="mono" title={branchLabel}>{branchLabel}</span>
+            <span>Run snapshot</span>
+            <span className="mono" title={gitRef || branchLabel}>
+              {gitRef ? gitRef.slice(0, 7) : "unavailable"}
+            </span>
           </div>
           <div className="tcs-tree-scroll">
-            <BrowseTree
-              rows={rows}
-              dirCache={dirCache}
-              expanded={expanded}
-              selectedPath={path}
-              onToggleDir={toggleDir}
-              onRetryDir={retryDir}
-              onSelectFile={(selectedPath) => changeParams({ path: selectedPath, view: "file" })}
-            />
+            {snapshotAvailable ? (
+              <BrowseTree
+                rows={rows}
+                dirCache={dirCache}
+                expanded={expanded}
+                selectedPath={path}
+                onToggleDir={toggleDir}
+                onRetryDir={retryDir}
+                onSelectFile={(selectedPath) => changeParams({ path: selectedPath, view: "file" })}
+              />
+            ) : null}
           </div>
         </aside>
 
@@ -202,9 +208,14 @@ export function TaskCodeSpacePage() {
                 {runs ? <FilesChanged diff={run?.diff || ""} /> : <BrowseSkeletonPane />}
               </div>
             </section>
+          ) : !snapshotAvailable ? (
+            <div className="tcs-empty">
+              <strong>An immutable file snapshot is unavailable for this run.</strong>
+              <span>The captured diff is still available. Files are hidden so later branch changes cannot be mistaken for reviewed code.</span>
+            </div>
           ) : !path ? (
             <div className="tcs-empty">
-              <strong>Choose a file from the branch.</strong>
+              <strong>Choose a file from the run snapshot.</strong>
               <span>The viewer is read-only and keeps syntax highlighting on.</span>
             </div>
           ) : fileLoading || (filePayload && filePayload.path !== path) ? (

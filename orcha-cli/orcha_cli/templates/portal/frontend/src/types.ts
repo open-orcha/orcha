@@ -91,6 +91,7 @@ export interface Run {
   ended?: string | null;
   kill_reason?: string | null;
   diff?: string | null;
+  snapshot_ref?: string | null;
   output?: string | null;
   agent_id?: string | null;
   agent?: string | null;

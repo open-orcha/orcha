@@ -55,6 +55,7 @@ def finish_run(
     capture_output,
     usage_from_log,
     diff=None,
+    snapshot_ref=None,
     kill_reason=None,
 ) -> bool:
     """Persist a run's terminal output, diff, diagnostic, and token usage.
@@ -71,6 +72,7 @@ def finish_run(
             "exit_code": exit_code,
             "output": capture_output(log_path),
             "diff": diff,
+            "snapshot_ref": snapshot_ref,
             "kill_reason": kill_reason,
             **usage_from_log(log_path),
         },

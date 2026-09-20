@@ -30,6 +30,11 @@ function browsePrefix(cid: string): string {
   return "/api/containers/" + encodeURIComponent(cid) + "/github/browse";
 }
 
+function runSnapshotPrefix(cid: string, runId: string): string {
+  return "/api/containers/" + encodeURIComponent(cid) + "/runs/" +
+    encodeURIComponent(runId) + "/snapshot";
+}
+
 // tree is repo-scoped like issues/pulls: a 404 means "no repo connected"
 // (classifyError's reading), not "this particular dir is missing".
 export function fetchTree(cid: string, ref: string, path: string): Promise<BrowseResult<BrowseTreePayload>> {
@@ -42,6 +47,24 @@ export function fetchTree(cid: string, ref: string, path: string): Promise<Brows
 export function fetchFile(cid: string, ref: string, path: string): Promise<BrowseResult<BrowseFilePayload>> {
   const q = new URLSearchParams({ ref, path });
   return getBrowse<BrowseFilePayload>(browsePrefix(cid) + "/file?" + q.toString(), classifyDetailError);
+}
+
+export function fetchRunSnapshotTree(
+  cid: string,
+  runId: string,
+  path: string,
+): Promise<BrowseResult<BrowseTreePayload>> {
+  const q = new URLSearchParams({ path });
+  return getBrowse<BrowseTreePayload>(runSnapshotPrefix(cid, runId) + "/tree?" + q.toString(), classifyError);
+}
+
+export function fetchRunSnapshotFile(
+  cid: string,
+  runId: string,
+  path: string,
+): Promise<BrowseResult<BrowseFilePayload>> {
+  const q = new URLSearchParams({ path });
+  return getBrowse<BrowseFilePayload>(runSnapshotPrefix(cid, runId) + "/file?" + q.toString(), classifyDetailError);
 }
 
 export function fetchSearch(

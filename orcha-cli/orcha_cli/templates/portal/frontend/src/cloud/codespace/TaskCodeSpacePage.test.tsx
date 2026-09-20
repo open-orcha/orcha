@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
+import type { Run } from "../../types";
 import { TaskCodeSpacePage } from "./TaskCodeSpacePage";
 
 const TASK = {
@@ -29,17 +30,19 @@ const TASK = {
   thread: [],
 };
 
-const RUNS = [
+const RUNS: Run[] = [
   {
     run_id: "run-latest-1234",
     status: "exited",
     branch: "orcha/task-review",
+    snapshot_ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     diff: "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new",
   },
   {
     run_id: "run-older-5678",
     status: "exited",
     branch: "orcha/older-review",
+    snapshot_ref: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     diff: "",
   },
 ];
@@ -49,9 +52,11 @@ function json(data: unknown, status = 200): Response {
 }
 
 let requestedUrls: string[] = [];
+let runsPayload = RUNS;
 
 beforeEach(() => {
   requestedUrls = [];
+  runsPayload = RUNS;
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { cb(0); return 1; });
   window.scrollTo = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -64,15 +69,15 @@ beforeEach(() => {
         agents: [], tasks: [TASK], requests: [],
       });
     }
-    if (url === "/api/tasks/task-1/runs") return json({ task_id: "task-1", runs: RUNS });
-    if (url.startsWith("/api/containers/c1/github/browse/tree")) {
+    if (url === "/api/tasks/task-1/runs") return json({ task_id: "task-1", runs: runsPayload });
+    if (url.startsWith("/api/containers/c1/runs/run-latest-1234/snapshot/tree")) {
       if (url.includes("path=src")) {
-        return json({ ref: "orcha/task-review", path: "src", entries: [{ name: "a.ts", path: "src/a.ts", type: "file" }] });
+        return json({ ref: RUNS[0].snapshot_ref, path: "src", entries: [{ name: "a.ts", path: "src/a.ts", type: "file" }] });
       }
-      return json({ ref: "orcha/task-review", path: "", entries: [{ name: "src", path: "src", type: "dir" }] });
+      return json({ ref: RUNS[0].snapshot_ref, path: "", entries: [{ name: "src", path: "src", type: "dir" }] });
     }
-    if (url.startsWith("/api/containers/c1/github/browse/file")) {
-      return json({ ref: "orcha/task-review", path: "src/a.ts", size: 18, content: "export const a = 1;" });
+    if (url.startsWith("/api/containers/c1/runs/run-latest-1234/snapshot/file")) {
+      return json({ ref: RUNS[0].snapshot_ref, path: "src/a.ts", size: 18, content: "export const a = 1;" });
     }
     return json({});
   }));
@@ -110,13 +115,22 @@ describe("TaskCodeSpacePage", () => {
     expect(await screen.findByText("src/a.ts", { selector: ".dfv-path" })).toBeInTheDocument();
   });
 
-  it("uses the selected run branch for the file tree and syntax-highlighted viewer", async () => {
+  it("uses the selected run snapshot for the file tree and syntax-highlighted viewer", async () => {
     mount("/code?task=task-1&run=run-latest-1234&view=file&path=src%2Fa.ts");
     expect(await screen.findByText("src/a.ts", { selector: ".rb-file-path" })).toBeInTheDocument();
     expect(document.querySelector(".rb-code")).toBeTruthy();
     await waitFor(() => {
-      expect(requestedUrls.some((url) => url.includes("ref=orcha%2Ftask-review"))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes("/runs/run-latest-1234/snapshot/file"))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes("github/browse"))).toBe(false);
     });
+  });
+
+  it("does not fall back to a mutable branch for a legacy run", async () => {
+    runsPayload = [{ ...RUNS[0], snapshot_ref: null }];
+    mount("/code?task=task-1&run=run-latest-1234&view=file&path=src%2Fa.ts");
+    expect(await screen.findByText("An immutable file snapshot is unavailable for this run.")).toBeInTheDocument();
+    expect(requestedUrls.some((url) => url.includes("github/browse"))).toBe(false);
+    expect(requestedUrls.some((url) => url.includes("/snapshot/"))).toBe(false);
   });
 
   it("Close returns to the stored task page and restores its scroll position", async () => {

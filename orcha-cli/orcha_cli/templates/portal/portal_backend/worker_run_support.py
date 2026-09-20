@@ -27,6 +27,7 @@ def run_row(row: dict) -> dict:
         "sandbox_container_id": row.get("sandbox_container_id"),
         "output": row["output"],
         "diff": row.get("diff"),
+        "snapshot_ref": row.get("snapshot_ref"),
         "kill_reason": row.get("kill_reason"),
         "started_at": (row["started_at"].isoformat() if row["started_at"] else None),
         "ended_at": row["ended_at"].isoformat() if row["ended_at"] else None,

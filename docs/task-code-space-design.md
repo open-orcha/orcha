@@ -4,8 +4,8 @@ Issue: [#249](https://github.com/open-orcha/orcha/issues/249)
 
 ## Purpose
 
-Task Code Space gives a verifier one quiet place to read an agent's branch and
-review its captured changes before accepting the task. It is a read-only mode
+Task Code Space gives a verifier one quiet place to read an agent's captured
+files and review its captured changes before accepting the task. It is a read-only mode
 of the existing Code Space rather than a second code browser.
 
 The task page and task-backed run cards on both the task and agent pages now
@@ -20,11 +20,11 @@ viewport contains:
 
 1. A compact review ribbon with the task title, source branch, Files/Changes
    switch, and one Close action.
-2. The agent branch's file tree on the left.
+2. The selected run's immutable file tree and short snapshot reference on the left.
 3. Either a syntax-highlighted, read-only file or the run's captured unified
    diff against `origin/main` on the right.
 
-This keeps the branch and verifier diff visible in the same spatial model while
+This keeps the run snapshot and verifier diff visible in the same spatial model while
 removing task lists, portal navigation, editing, terminals, and discussion
 tools from the review moment.
 
@@ -42,21 +42,26 @@ representative data. The layout and behavior are the same for issue #249.
 ## Data source and honesty
 
 `GET /api/tasks/{task_id}/runs` is the association source of truth. It already
-returns each run's branch, worktree metadata, status, and captured net diff.
+returns each run's branch, worktree metadata, status, captured net diff, and
+immutable snapshot reference.
 Task Code Space uses:
 
-- the selected run's `branch` with the existing repository browse endpoints
-  for the tree and file contents;
+- the selected run's `snapshot_ref` with run-scoped local browse endpoints for
+  the tree and file contents;
 - the selected run's captured `diff` for **Changes vs main**.
 
-This works with both existing code sources: local projects resolve the branch
-through the mounted repository; GitHub-bound projects resolve it through the
-current GitHub browse API. No host filesystem path is sent to the browser.
+At run finish, the notifier builds the snapshot through a temporary Git index,
+so it includes committed, staged, unstaged, and untracked work without changing
+the agent's real index. A private Git ref keeps the snapshot alive, and the
+portal serves it from the project's read-only repository mount. The file view
+therefore cannot drift if the task branch advances after the reviewed run. No
+host filesystem path is sent to the browser.
 
-For a run that is still active, the branch remains browsable but the captured
-diff may be empty until the worker finishes and records its net change. The UI
-says “No net change” instead of inventing a result. An unavailable run feed or
-a task with no run gets a directed empty state.
+For a run that is still active, the snapshot and captured diff remain empty
+until the worker finishes. Older runs created before immutable snapshots show
+their captured diff but deliberately hide Files rather than falling back to a
+mutable branch. An unavailable run feed or a task with no run gets a directed
+empty state.
 
 ## Return and desktop behavior
 
