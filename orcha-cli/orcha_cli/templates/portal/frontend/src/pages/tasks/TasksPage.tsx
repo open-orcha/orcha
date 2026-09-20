@@ -38,6 +38,7 @@ import { nearBottom, pinToBottom } from "../../lib/logScroll";
 import type { Agent, Attachment, Run, Snapshot, Task, ThreadMsg } from "../../types";
 import { tasksPageCss } from "./pageCss";
 import { SortCtl, sortComparator } from "../../lib/sort";
+import { rememberTaskCodeSpaceOrigin, taskCodeSpaceHref } from "../../cloud/codespace/taskCodeSpace";
 
 /* ---- raw POST/PATCH helpers (vanilla postJSON/patchJSON parity: the pages
    need ok + status + parsed body to drive 409-reassign and error toasts) ---- */
@@ -1479,7 +1480,7 @@ function killCause(kr: string | null | undefined): string {
   }
 }
 
-function RunCard({ run }: { run: Run }) {
+function RunCard({ run, taskId }: { run: Run; taskId: string }) {
   const { snap } = useSnapshot();
   const toast = useToast();
   const [confirmStop, setConfirmStop] = useState(false);
@@ -1564,6 +1565,14 @@ function RunCard({ run }: { run: Run }) {
             live
           </span>
         ) : null}
+        <Link
+          className="btn sm subtle"
+          to={taskCodeSpaceHref(taskId, rid)}
+          onClick={() => rememberTaskCodeSpaceOrigin(taskId)}
+          title="Open this run's branch and captured diff in a read-only view"
+        >
+          Open code space
+        </Link>
         {live ? (
           <button
             className="btn sm stop"
@@ -1700,7 +1709,7 @@ function RunsPanel({ tid }: { tid: string }) {
       </div>
       <div className="card-b" style={{ padding: "13px 14px" }}>
         {runs.length ? (
-          runs.map((r) => <RunCard key={r.run_id || r.id} run={r} />)
+          runs.map((r) => <RunCard key={r.run_id || r.id} run={r} taskId={tid} />)
         ) : (
           <div className="none">No runs yet — appears when a worker wakes for this task.</div>
         )}
@@ -1957,6 +1966,14 @@ export function TasksPage() {
                         ) : null}
                       </div>
                     </div>
+                    <Link
+                      className="btn"
+                      to={taskCodeSpaceHref(t.id)}
+                      onClick={() => rememberTaskCodeSpaceOrigin(t.id)}
+                      title="Review this task's latest agent branch and changes"
+                    >
+                      Open code space
+                    </Link>
                   </div>
                   {t.description ? (
                     <div className="field" style={{ marginTop: 16, paddingTop: 15, borderTop: "1px solid var(--border)" }}>

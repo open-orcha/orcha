@@ -9,6 +9,7 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { sendJSON } from "../../api/client";
 import { Icon, Modal, useToast } from "../../components/ui";
 import { esc, shortId, relTime, clockTime } from "../../lib/format";
@@ -17,6 +18,7 @@ import type { Agent, Run } from "../../types";
 import { classifyLine, type LogEvent } from "../../lib/classify";
 import { nearBottom, pinToBottom } from "../../lib/logScroll";
 import { FilesChanged } from "../../components/FilesChanged";
+import { rememberTaskCodeSpaceOrigin, taskCodeSpaceHref } from "../../cloud/codespace/taskCodeSpace";
 
 // LogEvent comes from lib/classify; `sec` (section collapse) is a legacy
 // vanilla affordance the shared classifier never emits.
@@ -221,6 +223,16 @@ function RunCard({ run }: { run: Run }) {
             live
           </span>
         )}
+        {run.task_id ? (
+          <Link
+            className="btn sm subtle"
+            to={taskCodeSpaceHref(run.task_id, rid)}
+            onClick={() => rememberTaskCodeSpaceOrigin(run.task_id!)}
+            title="Open this run's branch and captured diff in a read-only view"
+          >
+            Open code space
+          </Link>
+        ) : null}
         {live && (
           <button
             className="btn sm stop"

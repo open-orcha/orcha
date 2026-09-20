@@ -294,7 +294,7 @@ export interface OrchaDesktopApi {
   /** Subscribe to which stack's embedded portal view is active (main is the source of
    *  truth — a notification click or deep link can change it without any renderer click).
    *  `project` is null when no view is showing (home/manager or the wizard is on screen). */
-  onPortalActive(cb: (active: { project: string | null }) => void): () => void
+  onPortalActive(cb: (active: { project: string | null; fullWindow?: boolean }) => void): () => void
   // fleet (post-provision):
   /** GET a JSON path on a stack's own localhost portal (port + path validated in main —
    *  the renderer can't reach localhost directly under sandbox:true). Rejects with

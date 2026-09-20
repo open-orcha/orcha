@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react";
 // React migration (docs/orcha-portal-react-migration-plan.md).
 // dev-only: serve the SPA shell at the portal's clean page routes, mirroring
 // the FastAPI page routes (main.py) so BrowserRouter URLs work under `npm run dev`.
-const PAGE_ROUTES = ["/", "/tasks", "/agents", "/requests", "/settings", "/onboarding"];
+const PAGE_ROUTES = ["/", "/tasks", "/agents", "/requests", "/settings", "/onboarding", "/code"];
 const pageRoutesPlugin = () => ({
   name: "orcha-page-routes",
   configureServer(server: { middlewares: { use: (fn: (req: { url?: string }, res: unknown, next: () => void) => void) => void } }) {
