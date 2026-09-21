@@ -158,10 +158,18 @@ def _capture_diff(worktree, cap: int = 200_000):
 
 
 def _handoff_worktree_changes(
-    source_cwd, destination_cwd, *, owner_key=None
+    source_cwd,
+    destination_cwd,
+    *,
+    owner_key=None,
+    source_owner_verified=False,
 ) -> bool:
     return _cleanup.handoff_changes(
-        source_cwd, destination_cwd, _compat(), owner_key=owner_key
+        source_cwd,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+        source_owner_verified=source_owner_verified,
     )
 
 

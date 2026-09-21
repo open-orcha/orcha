@@ -334,7 +334,12 @@ def _place_handoff_patch(
 
 
 def handoff_changes(
-    source_cwd, destination_cwd, services: Any, *, owner_key: str | None = None
+    source_cwd,
+    destination_cwd,
+    services: Any,
+    *,
+    owner_key: str | None = None,
+    source_owner_verified: bool = False,
 ) -> bool:
     """Carry a worker's complete in-progress state into a newly selected checkout.
 
@@ -368,12 +373,16 @@ def handoff_changes(
         # Never relabel and export its state as though the arriving stream made it.
         return False
     if (
-        _is_linked_worktree(source_cwd) or source_record is not None
+        _is_linked_worktree(source_cwd)
+        or source_record is not None
+        or source_owner_verified
     ) and not _write_handoff_record(source_cwd, owner_key, patch, services):
         # Refresh ownership while this checkout is still the active source. In
         # particular, a clean first task -> main handoff establishes an empty
         # main record; after edits there, exporting back to the task worktree
         # must update that record so a later return can replace only those edits.
+        # A main checkout without a record is claimed only when routing history
+        # has proved that this exact source belonged to the same logical stream.
         return False
 
     return _place_handoff_patch(destination_cwd, patch, owner_key, services)

@@ -82,23 +82,23 @@ def carry_previous_checkout(
     a routing change fails closed when no recoverable source remains. All actual
     transfers use the ownership-aware handoff and fail closed on conflicts.
     """
-    prior_run = None
+    prior_run = previous_run(
+        api_base,
+        agent_id,
+        services,
+        task_id=task_id,
+        conversation_id=conversation_id,
+        wake_kind=wake_kind,
+        lane=lane,
+        require_taskless=require_taskless,
+    )
+    recorded_source_cwd = (
+        prior_run.get("worktree") or prior_run.get("base_cwd")
+        if prior_run
+        else None
+    )
     if source_cwd is None:
-        prior_run = previous_run(
-            api_base,
-            agent_id,
-            services,
-            task_id=task_id,
-            conversation_id=conversation_id,
-            wake_kind=wake_kind,
-            lane=lane,
-            require_taskless=require_taskless,
-        )
-        source_cwd = (
-            prior_run.get("worktree") or prior_run.get("base_cwd")
-            if prior_run
-            else None
-        )
+        source_cwd = recorded_source_cwd
     if not source_cwd or not destination_cwd:
         return True
     try:
@@ -106,6 +106,10 @@ def carry_previous_checkout(
         destination = pathlib.Path(destination_cwd).resolve()
         if source == destination:
             return True
+        source_owner_verified = bool(
+            recorded_source_cwd
+            and source == pathlib.Path(recorded_source_cwd).resolve()
+        )
         if not source.exists():
             branch = prior_run.get("branch") if prior_run else None
             base_cwd = prior_run.get("base_cwd") if prior_run else None
@@ -145,4 +149,5 @@ def carry_previous_checkout(
             wake_kind=wake_kind,
             lane=lane,
         ),
+        source_owner_verified=source_owner_verified,
     )
