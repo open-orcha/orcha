@@ -190,7 +190,11 @@ def _is_git_repo(cwd) -> bool:
 
 
 def _worktree_is_dirty(worktree, excludes=None) -> bool:
-    return _cleanup.worktree_is_dirty(worktree, _compat(), excludes)
+    return _cleanup.worktree_is_dirty(
+        worktree,
+        _compat(),
+        _cleanup.DIFF_EXCLUDES if excludes is None else excludes,
+    )
 
 
 def _safe_teardown_worktree(base_cwd, worktree, branch) -> str:

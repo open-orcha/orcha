@@ -446,7 +446,7 @@ def safe_teardown_worktree(base_cwd, worktree, branch, services: Any) -> str:
     """Retire a clean worktree without ever discarding uncommitted work."""
     if not worktree:
         return "noop"
-    if services._worktree_is_dirty(worktree, excludes=DIFF_EXCLUDES):
+    if services._worktree_is_dirty(worktree):
         return "preserved-dirty"
     services._teardown_worktree(base_cwd, worktree, branch)
     return "removed"
