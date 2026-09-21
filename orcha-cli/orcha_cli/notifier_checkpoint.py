@@ -35,7 +35,13 @@ def checkpoint_and_respawn(
     ):
         # I4: the OLD wake's container, once stamped
         services._reap_sandbox_artifacts(worker)
-    task_id = _current_task_id(api_base, agent_id, worker, context, services)
+    current_run = _current_run(api_base, agent_id, worker, services)
+    task_id = (
+        current_run.get("task_id")
+        if current_run is not None
+        else context.get("task_id")
+    )
+    source_owner_verified = _run_records_checkout(current_run, source_cwd, services)
     worktree, branch, task_worktree, worktrees_disabled = _respawn_routing(
         api_base,
         agent_id,
@@ -53,6 +59,7 @@ def checkpoint_and_respawn(
             task_id=task_id,
             lane="work",
         ),
+        source_owner_verified=source_owner_verified,
     ):
         _handle_handoff_failure(
             api_base,
@@ -206,16 +213,31 @@ def _respawn_routing(api_base, agent_id, worker, context, task_id, services):
     return worktree, branch, task_worktree, False
 
 
-def _current_task_id(api_base, agent_id, worker, context, services):
-    """Resolve task attribution from the exact run that was checkpointed."""
+def _current_run(api_base, agent_id, worker, services):
+    """Return the persisted run record for the worker being checkpointed."""
     run_id = worker.get("run_id")
     data = services._get_json(f"{api_base}/api/agents/{agent_id}/runs?limit=20")
-    task_id = context.get("task_id")
     if data and data.get("runs"):
         for run in data["runs"]:
             if run.get("run_id") == run_id:
-                return run.get("task_id")
-    return task_id
+                return run
+    return None
+
+
+def _run_records_checkout(run, source_cwd, services):
+    """Prove the stopped run owned the exact checkout being handed off."""
+    if not run or not source_cwd:
+        return False
+    recorded_cwd = run.get("worktree") or run.get("base_cwd")
+    if not recorded_cwd:
+        return False
+    try:
+        return (
+            services.pathlib.Path(recorded_cwd).resolve()
+            == services.pathlib.Path(source_cwd).resolve()
+        )
+    except OSError:
+        return False
 
 
 def _next_log_path(base_cwd, context, services):
