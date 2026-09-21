@@ -710,6 +710,67 @@ def test_checkpoint_toggle_back_to_worktree_carries_main_files(tmp_path):
     assert (destination / "wip.txt").read_text() == "from main checkout\n"
 
 
+def test_checkpoint_carries_task_files_main_to_worktree_to_main(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    main_file = main / "wip.txt"
+    main_file.write_text("edited in main checkout\n")
+    spawned = []
+    history = {
+        "runs": [
+            {
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "worktree": None,
+                "base_cwd": str(main),
+            }
+        ]
+    }
+    routing = {"disabled": False}
+    services = _real_checkpoint_services(disabled=False, spawned=spawned)
+
+    def get_json(url):
+        if url.endswith("/runs?limit=20"):
+            return history
+        if url.endswith("/persona"):
+            return {"worktrees_disabled": routing["disabled"]}
+        return None
+
+    def post_json(url, body):
+        services.posts.append((url, body))
+        if url.endswith("/runs"):
+            run = {"run_id": f"run-{len(history['runs']) + 1}", **body}
+            history["runs"].insert(0, run)
+            return {"run_id": run["run_id"]}
+        return {}
+
+    services._get_json = get_json
+    services._post_json = post_json
+    worker = _checkpoint_worker(
+        disabled=True, worktree=None, branch=None, task_worktree=False
+    )
+    worker["base_cwd"] = str(main)
+    live = {"agent-1": worker}
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha", "agent-1", worker, live, True, services
+    )
+
+    task_worker = live["agent-1"]
+    task_file = pathlib.Path(task_worker["worktree"]) / main_file.name
+    assert spawned == [task_worker["worktree"]]
+    assert task_file.read_text() == "edited in main checkout\n"
+    task_file.write_text("edited later in task worktree\n")
+
+    routing["disabled"] = True
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha", "agent-1", task_worker, live, True, services
+    )
+
+    assert spawned == [task_worker["worktree"], str(main)]
+    assert live["agent-1"]["worktree"] is None
+    assert main_file.read_text() == "edited later in task worktree\n"
+
+
 def test_checkpoint_toggle_round_trip_reuses_preserved_task_worktree(tmp_path):
     main = _checkpoint_repo(tmp_path)
     worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
