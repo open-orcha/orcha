@@ -14,10 +14,12 @@ DIFF_EXCLUDES = (
     ":(exclude).claude/orcha.json",
     ":(exclude).claude/orcha-tabs",
     ":(exclude).claude/settings.json",
+    ":(exclude).claude/commands/orcha-*.md",
+    ":(exclude).agents/skills/orcha-*",
 )
 
 
-def _full_patch(cwd, services: Any):
+def _full_patch(cwd, services: Any, *, include_ignored: bool = False):
     """Return the complete binary-safe patch without changing the checkout index."""
     return_code, tracked = services._run_git(
         ["diff", "--binary", "--full-index", "origin/main", "--", *DIFF_EXCLUDES],
@@ -31,15 +33,37 @@ def _full_patch(cwd, services: Any):
     # against /dev/null rather than using ``git add -N``: intent-to-add mutates
     # the real index and made even a rejected handoff observably change a human
     # checkout.  NUL separation preserves unusual but valid path names.
-    untracked_code, untracked = services._run_git(
-        ["ls-files", "--others", "--exclude-standard", "-z", "--", *DIFF_EXCLUDES],
-        cwd=cwd,
-        timeout=60,
-    )
-    if untracked_code != 0:
-        return None
+    untracked_commands = [
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", *DIFF_EXCLUDES]
+    ]
+    if include_ignored:
+        untracked_commands.append(
+            [
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "-z",
+                "--",
+                *DIFF_EXCLUDES,
+            ]
+        )
+
     patches = [tracked]
-    for relative_path in filter(None, untracked.split("\0")):
+    untracked_paths = []
+    seen_paths = set()
+    for command in untracked_commands:
+        untracked_code, untracked = services._run_git(
+            command, cwd=cwd, timeout=60
+        )
+        if untracked_code != 0:
+            return None
+        for relative_path in filter(None, untracked.split("\0")):
+            if relative_path not in seen_paths:
+                seen_paths.add(relative_path)
+                untracked_paths.append(relative_path)
+
+    for relative_path in untracked_paths:
         file_code, file_patch = services._run_git(
             [
                 "diff",
@@ -128,7 +152,7 @@ def _replace_patch(cwd, current: str, desired: str, services: Any) -> bool:
                 _apply_patch(cwd, current, services)
             return False
 
-    reconciled = _full_patch(cwd, services)
+    reconciled = _full_patch(cwd, services, include_ignored=True)
     if reconciled == desired:
         return True
 
@@ -258,7 +282,9 @@ def _place_handoff_patch(
     destination_cwd, patch: str, owner_key: str, services: Any
 ) -> bool:
     """Safely reconcile one known stream's patch into its destination checkout."""
-    destination_patch = _full_patch(destination_cwd, services)
+    destination_patch = _full_patch(
+        destination_cwd, services, include_ignored=True
+    )
     if destination_patch is None:
         return False
 
@@ -329,7 +355,7 @@ def handoff_changes(
     except OSError:
         return False
 
-    patch = _full_patch(source_cwd, services)
+    patch = _full_patch(source_cwd, services, include_ignored=True)
     if patch is None:
         return False
 
@@ -406,21 +432,21 @@ def is_git_repo(cwd, services: Any) -> bool:
 
 
 def worktree_is_dirty(worktree, services: Any, excludes=None) -> bool:
-    """Return whether a worktree has staged, unstaged, or untracked changes."""
+    """Return whether a worktree has changes or cannot be inspected safely."""
     if not worktree:
         return False
-    arguments = ["status", "--porcelain"]
+    arguments = ["status", "--porcelain", "--ignored", "--untracked-files=all"]
     if excludes:
         arguments.extend(["--", *excludes])
     return_code, output = services._run_git(arguments, cwd=worktree)
-    return return_code == 0 and bool(output.strip())
+    return return_code != 0 or bool(output.strip())
 
 
 def safe_teardown_worktree(base_cwd, worktree, branch, services: Any) -> str:
     """Retire a clean worktree without ever discarding uncommitted work."""
     if not worktree:
         return "noop"
-    if services._worktree_is_dirty(worktree):
+    if services._worktree_is_dirty(worktree, excludes=DIFF_EXCLUDES):
         return "preserved-dirty"
     services._teardown_worktree(base_cwd, worktree, branch)
     return "removed"

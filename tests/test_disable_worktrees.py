@@ -885,6 +885,32 @@ def test_handoff_does_not_claim_unknown_identical_main_checkout(tmp_path):
     assert task_file.read_text() == "later task edit\n"
 
 
+def test_handoff_does_not_overwrite_unknown_ignored_destination(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / ".gitignore").write_text(".env\n")
+    assert notifier._run_git(["add", ".gitignore"], cwd=main)[0] == 0
+    assert notifier._run_git(
+        ["commit", "-m", "ignore local environment"], cwd=main
+    )[0] == 0
+    assert notifier._run_git(["push", "origin", "main"], cwd=main)[0] == 0
+    worktree, _branch = notifier._provision_worktree(str(main), "builder")
+    source_file = pathlib.Path(worktree) / ".env"
+    destination_file = main / ".env"
+    source_file.write_text("SOURCE=worker\n")
+    destination_file.write_text("SOURCE=human\n")
+    before_index = notifier._run_git(
+        ["diff", "--cached", "--binary"], cwd=str(main)
+    )[1]
+
+    assert notifier._handoff_worktree_changes(worktree, str(main)) is False
+    assert source_file.read_text() == "SOURCE=worker\n"
+    assert destination_file.read_text() == "SOURCE=human\n"
+    assert (
+        notifier._run_git(["diff", "--cached", "--binary"], cwd=str(main))[1]
+        == before_index
+    )
+
+
 def test_round_trip_preserves_new_independent_destination_work(tmp_path):
     main = _checkpoint_repo(tmp_path)
     worktree, _branch = notifier._provision_task_worktree(
@@ -1475,8 +1501,16 @@ def test_taskless_prompt_wake_carries_main_state_back_to_worktree(tmp_path):
     assert not any("/tasks/None/" in url for url, _body in posts)
 
 
-def test_taskless_prompt_success_preserves_files_for_later_switch_to_main(tmp_path):
+def test_taskless_prompt_success_preserves_ignored_files_for_later_switch_to_main(
+    tmp_path,
+):
     main = _checkpoint_repo(tmp_path)
+    (main / ".gitignore").write_text(".env\n")
+    assert notifier._run_git(["add", ".gitignore"], cwd=main)[0] == 0
+    assert notifier._run_git(
+        ["commit", "-m", "ignore local environment"], cwd=main
+    )[0] == 0
+    assert notifier._run_git(["push", "origin", "main"], cwd=main)[0] == 0
     history = {"runs": []}
     spawned = []
     live_workers = {}
@@ -1546,7 +1580,7 @@ def test_taskless_prompt_success_preserves_files_for_later_switch_to_main(tmp_pa
     worker = live_workers["agent-1"]
     source = pathlib.Path(worker["worktree"])
     assert history["runs"][0]["task_id"] is None
-    (source / "direct-prompt.txt").write_text("complete taskless work\n")
+    (source / ".env").write_text("PROMPT_SETTING=complete\n")
 
     notifier_reaper_completion.handle_exited(
         "http://orcha",
@@ -1561,7 +1595,7 @@ def test_taskless_prompt_success_preserves_files_for_later_switch_to_main(tmp_pa
     )
 
     assert source.exists()
-    assert (source / "direct-prompt.txt").read_text() == "complete taskless work\n"
+    assert (source / ".env").read_text() == "PROMPT_SETTING=complete\n"
     assert live_workers == {}
 
     second = notifier_wake_worker.spawn(
@@ -1578,7 +1612,52 @@ def test_taskless_prompt_success_preserves_files_for_later_switch_to_main(tmp_pa
 
     assert second["sent"] is True
     assert spawned == [str(source), str(main)]
-    assert (main / "direct-prompt.txt").read_text() == "complete taskless work\n"
+    assert (main / ".env").read_text() == "PROMPT_SETTING=complete\n"
+
+
+def test_safe_teardown_preserves_worktree_when_cleanliness_check_fails(
+    monkeypatch,
+):
+    removed = []
+    monkeypatch.setattr(notifier, "_run_git", lambda *args, **kwargs: (1, ""))
+    monkeypatch.setattr(
+        notifier, "_teardown_worktree", lambda *args: removed.append(args)
+    )
+
+    assert (
+        notifier._safe_teardown_worktree("/project", "/project/worker", "orcha/worker")
+        == "preserved-dirty"
+    )
+    assert removed == []
+
+
+def test_safe_teardown_excludes_only_orcha_runtime_overlay(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / ".gitignore").write_text(
+        ".claude/orcha.json\n"
+        ".claude/orcha-tabs/\n"
+        ".claude/commands/orcha-*.md\n"
+        ".agents/skills/orcha-*/\n"
+    )
+    assert notifier._run_git(["add", ".gitignore"], cwd=main)[0] == 0
+    assert notifier._run_git(["commit", "-m", "ignore runtime overlay"], cwd=main)[0] == 0
+    assert notifier._run_git(["push", "origin", "main"], cwd=main)[0] == 0
+
+    (main / ".claude" / "orcha-tabs").mkdir(parents=True)
+    (main / ".claude" / "commands").mkdir(parents=True)
+    (main / ".claude" / "orcha.json").write_text("{}")
+    (main / ".claude" / "orcha-tabs" / "builder.json").write_text("{}")
+    (main / ".claude" / "commands" / "orcha-status.md").write_text("status")
+    skill = main / ".agents" / "skills" / "orcha-status" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("status")
+
+    worktree, branch = notifier._provision_worktree(str(main), "builder")
+    assert pathlib.Path(worktree, ".claude", "orcha.json").exists()
+    assert pathlib.Path(worktree, ".agents", "skills", "orcha-status").exists()
+
+    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
+    assert not pathlib.Path(worktree).exists()
 
 
 @pytest.mark.asyncio
