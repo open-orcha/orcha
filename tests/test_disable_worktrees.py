@@ -996,17 +996,15 @@ def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
 
 
 @pytest.mark.asyncio
-async def test_ordinary_wake_uses_serialized_lane_to_carry_task_files(
+async def test_ordinary_wake_carries_task_files_main_to_worktree_to_main(
     client, make_agent, make_task, tmp_path
 ):
-    """The real run feed must retain the lane used by work-wake lookup."""
+    """The real run feed must prove ownership across separate routing modes."""
     agent = await make_agent("builder")
     task = await make_task("continue work", "files carried", assignee_alias="builder")
     main = _checkpoint_repo(tmp_path)
-    worktree, branch = notifier._provision_task_worktree(
-        str(main), "builder", task["id"]
-    )
-    (pathlib.Path(worktree) / "ordinary-wake.txt").write_text("saved work\n")
+    main_file = main / "ordinary-wake.txt"
+    main_file.write_text("saved by main-checkout wake\n")
 
     started = await client.post(
         f"/api/agents/{agent['agent_id']}/runs",
@@ -1015,8 +1013,8 @@ async def test_ordinary_wake_uses_serialized_lane_to_carry_task_files(
             "wake_event": "task_message",
             "task_id": task["id"],
             "lane": "work",
-            "worktree": worktree,
-            "branch": branch,
+            "worktree": None,
+            "branch": None,
             "base_cwd": str(main),
         },
     )
@@ -1025,12 +1023,13 @@ async def test_ordinary_wake_uses_serialized_lane_to_carry_task_files(
     assert history["runs"][0]["lane"] == "work"
 
     spawned = []
+    live_workers = {}
 
     def post_json(url, _body):
         if url.endswith("/wake-claim"):
             return {"claimed": True}
         if url.endswith("/runs"):
-            return {"run_id": "run-2"}
+            return {"run_id": "unpersisted-test-run"}
         return {}
 
     services = SimpleNamespace(
@@ -1040,12 +1039,8 @@ async def test_ordinary_wake_uses_serialized_lane_to_carry_task_files(
         _get_json=lambda _url: history,
         _post_json=post_json,
         _build_persona=lambda *args, **kwargs: "persona",
-        _provision_task_worktree=lambda *args: pytest.fail(
-            "disabled routing must not provision"
-        ),
-        _provision_worktree=lambda *args: pytest.fail(
-            "disabled routing must not provision"
-        ),
+        _provision_task_worktree=notifier._provision_task_worktree,
+        _provision_worktree=notifier._provision_worktree,
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
         _handoff_branch_changes=notifier._handoff_branch_changes,
         _mint_embodiment_token=lambda *args: "token",
@@ -1063,19 +1058,64 @@ async def test_ordinary_wake_uses_serialized_lane_to_carry_task_files(
             "headless_cwd": str(main),
             "context_task_id": task["id"],
             "pending_events": 1,
-            "worktrees_disabled": True,
+            "worktrees_disabled": False,
         },
         prompt="continue task",
         event="task_message",
         dry_run=False,
         quiet=True,
         lease_ttl=120,
-        live_workers={},
+        live_workers=live_workers,
         services=services,
     )
     assert result["sent"] is True
+    worktree = pathlib.Path(spawned[-1])
+    assert worktree != main
+    assert (worktree / main_file.name).read_text() == "saved by main-checkout wake\n"
+
+    worktree_file = worktree / main_file.name
+    worktree_file.write_text("edited by later worktree wake\n")
+    worker = live_workers[agent["agent_id"]]
+    continued = await client.post(
+        f"/api/agents/{agent['agent_id']}/runs",
+        json={
+            "wake_kind": "ephemeral",
+            "wake_event": "task_message",
+            "task_id": task["id"],
+            "lane": "work",
+            "worktree": worker["worktree"],
+            "branch": worker["branch"],
+            "base_cwd": str(main),
+        },
+    )
+    assert continued.status_code == 201, continued.text
+    history = (await client.get(f"/api/agents/{agent['agent_id']}/runs")).json()
+    assert history["runs"][0]["worktree"] == str(worktree)
+
+    spawned.clear()
+    live_workers.clear()
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        {
+            "agent_id": agent["agent_id"],
+            "alias": "builder",
+            "headless_cwd": str(main),
+            "context_task_id": task["id"],
+            "pending_events": 1,
+            "worktrees_disabled": True,
+        },
+        prompt="continue task in main",
+        event="task_message",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers=live_workers,
+        services=services,
+    )
+
+    assert result["sent"] is True
     assert spawned == [str(main)]
-    assert (main / "ordinary-wake.txt").read_text() == "saved work\n"
+    assert main_file.read_text() == "edited by later worktree wake\n"
 
 
 def test_ordinary_task_wake_handoff_failure_stops_before_spawn(monkeypatch):
@@ -1213,11 +1253,20 @@ def test_resident_toggle_carries_preserved_worktree_state_to_main(
 
 
 @pytest.mark.asyncio
-async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp_path):
+async def test_live_terminal_carries_state_main_to_worktree_to_main(
+    tmp_path, monkeypatch
+):
     main = _checkpoint_repo(tmp_path)
-    worktree, _branch = notifier._provision_live_worktree(str(main), "builder")
-    (pathlib.Path(worktree) / "terminal.txt").write_text("terminal work\n")
+    history = {"runs": []}
     spawned = []
+
+    def post_json(url, body):
+        assert url.endswith("/api/agents/agent-1/runs")
+        run = {"run_id": f"run-{len(history['runs']) + 1}", **body}
+        history["runs"].insert(0, run)
+        return {"run_id": run["run_id"]}
+
+    monkeypatch.setattr(terminal_bridge_api.notifier, "_post_json", post_json)
 
     class Bridge:
         async def acquire_live_lease(self, *args, **kwargs):
@@ -1234,17 +1283,15 @@ async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp
             return 4321, 9
 
         def start_live_run(self, *args, **kwargs):
-            return "run-2"
+            return terminal_bridge_api.start_live_run(*args, **kwargs)
 
         def make_frame(self, kind, **kwargs):
             return {"kind": kind, **kwargs}
 
     class Notifier:
         _handoff_worktree_changes = staticmethod(notifier._handoff_worktree_changes)
-        _get_json = staticmethod(lambda _url: None)
-        _provision_live_worktree = staticmethod(
-            lambda *args: pytest.fail("disabled routing must not provision")
-        )
+        _get_json = staticmethod(lambda _url: history)
+        _provision_live_worktree = staticmethod(notifier._provision_live_worktree)
 
     class Ws:
         async def send(self, frame):
@@ -1254,7 +1301,7 @@ async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp
         async def close(self, code=None):
             pytest.fail("successful handoff must not close the socket")
 
-    session = await terminal_bridge_connection._start_session(
+    first = await terminal_bridge_connection._start_session(
         Bridge(),
         Notifier(),
         Ws(),
@@ -1267,12 +1314,55 @@ async def test_live_terminal_toggle_carries_preserved_worktree_state_to_main(tmp
         True,
         False,
         None,
-        worktree,
     )
 
-    assert session is not None
+    assert first is not None
     assert spawned == [str(main)]
-    assert (main / "terminal.txt").read_text() == "terminal work\n"
+    main_file = main / "terminal.txt"
+    main_file.write_text("edited in main terminal\n")
+
+    second = await terminal_bridge_connection._start_session(
+        Bridge(),
+        Notifier(),
+        Ws(),
+        "http://orcha",
+        str(main),
+        "agent-1",
+        "builder",
+        None,
+        "claude",
+        False,
+        False,
+        None,
+        str(main),
+    )
+
+    assert second is not None
+    worktree = pathlib.Path(second["worktree"])
+    assert spawned[-1] == str(worktree)
+    worktree_file = worktree / main_file.name
+    assert worktree_file.read_text() == "edited in main terminal\n"
+    worktree_file.write_text("edited in worktree terminal\n")
+
+    third = await terminal_bridge_connection._start_session(
+        Bridge(),
+        Notifier(),
+        Ws(),
+        "http://orcha",
+        str(main),
+        "agent-1",
+        "builder",
+        None,
+        "claude",
+        True,
+        False,
+        None,
+        str(worktree),
+    )
+
+    assert third is not None
+    assert spawned[-1] == str(main)
+    assert main_file.read_text() == "edited in worktree terminal\n"
 
 
 @pytest.mark.asyncio
