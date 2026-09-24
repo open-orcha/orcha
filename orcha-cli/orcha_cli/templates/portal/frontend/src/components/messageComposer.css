@@ -1,0 +1,80 @@
+.message-composer.message-composer {
+  position: relative;
+  display: flex;
+  gap: 9px;
+  align-items: flex-end;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.message-composer .message-composer__input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  overflow-y: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 11px;
+  padding: 10px 13px;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  outline: none;
+  max-height: 160px;
+}
+
+.message-composer .message-composer__input:focus {
+  border-color: var(--accent-line);
+  box-shadow: var(--ring);
+}
+
+.message-composer .message-composer__input:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.message-composer .message-composer__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s;
+}
+
+.message-composer .message-composer__attach:hover {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.message-composer .message-composer__attach:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.message-composer .message-composer__attach svg {
+  width: 16px;
+  height: 16px;
+}
+
+.message-composer__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: message-composer-spin .7s linear infinite;
+}
+
+@keyframes message-composer-spin {
+  to { transform: rotate(360deg); }
+}
