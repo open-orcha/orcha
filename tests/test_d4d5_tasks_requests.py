@@ -29,6 +29,10 @@ def _requests() -> str:
     return (FRONTEND / "pages" / "requests" / "RequestsPage.tsx").read_text()
 
 
+def _composer() -> str:
+    return (FRONTEND / "components" / "MessageComposer.tsx").read_text()
+
+
 # ---------- ISS-53: typing surfaces survive the 3s repaint ----------
 # Retired as a runtime harness: React controlled inputs hold drafts in component
 # state, so a repaint re-renders the SAME draft instead of wiping the DOM. The
@@ -57,6 +61,7 @@ async def test_tasks_serves_the_spa_shell(client):
 
 def test_tasks_static_guards():
     html = _tasks()
+    composer = _composer()
     # no *.html deeplinks; agent deeplinks on served routes
     for bad in ('href="agents.html', 'href="tasks.html', "'agents.html"):
         assert bad not in html, f"tasks links to a *.html route: {bad}"
@@ -66,8 +71,11 @@ def test_tasks_static_guards():
     assert "/cancel" in html, "B7 close-task not wired"
     sp = (FRONTEND / "state" / "SnapshotProvider.tsx").read_text()
     assert "!t.plan_decision" in sp, "plan gate not gated on the durable plan_decision"
-    # the reject-reason + reply inputs are the protected typing surfaces
-    assert '"rt-" + t.id' in html and 'id="reply"' in html, "no reject-reason / reply inputs"
+    # the reject-reason + shared reply composer are the protected typing surfaces
+    assert '"rt-" + t.id' in html, "no reject-reason input"
+    assert 'textareaId="reply"' in html and "<MessageComposer" in html, "no task reply composer"
+    assert "value={value}" in composer and "onValueChange(event.target.value)" in composer, \
+        "shared reply textarea is not controlled"
     # runs via the shared engine, fetched per task
     assert "useRunStream" in html and "FilesChanged" in html, "runs don't use the shared engine"
     assert '"/api/tasks/" + encodeURIComponent(tid) + "/runs"' in html, "runs not fetched per task"
