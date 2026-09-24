@@ -96,6 +96,11 @@ describe("Task thread composer parity", () => {
     expect(container.querySelector("#replyWrap .message-composer")).toBeTruthy();
     expect(container.querySelector("#attachBtn")?.className).toContain("message-composer__attach");
     expect(container.querySelector("#replyBtn")).toHaveAttribute("data-task", "t1");
+    const composer = container.querySelector("#replyWrap .message-composer") as HTMLElement;
+    const composerStyle = getComputedStyle(composer);
+    expect(composerStyle.paddingTop).toBe("0px");
+    expect(composerStyle.paddingRight).toBe("0px");
+    expect(composerStyle.borderTopWidth).toBe("0px");
 
     let scrollHeight = 92;
     Object.defineProperty(input, "scrollHeight", { configurable: true, get: () => scrollHeight });
@@ -128,9 +133,16 @@ describe("Task thread composer parity", () => {
     expect(button.textContent).toContain("Posting");
     expect(button.closest(".message-composer")).toHaveAttribute("aria-busy", "true");
 
+    await waitFor(() => expect(input.value).toBe(""));
+    fireEvent.change(input, { target: { value: "follow-up draft" } });
+    const followUp = new File(["notes"], "follow-up.txt", { type: "text/plain" });
+    fireEvent.change(container.querySelector("#attachInput") as HTMLInputElement, { target: { files: [followUp] } });
+    await waitFor(() => expect(container.querySelector("#attachTray")?.textContent).toContain("follow-up.txt"));
+
     releasePost();
     await waitFor(() => expect(button.disabled).toBe(false));
-    expect(input.value).toBe("");
+    expect(input.value).toBe("follow-up draft");
+    expect(container.querySelector("#attachTray")?.textContent).toContain("follow-up.txt");
   });
 
   it("keeps task-thread controls disabled while the assignee owns a live terminal", async () => {

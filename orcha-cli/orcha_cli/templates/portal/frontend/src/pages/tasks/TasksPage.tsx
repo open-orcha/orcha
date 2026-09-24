@@ -836,6 +836,12 @@ function ThreadCard({
       return;
     }
     const atts = done.map((s) => ({ id: s.ref!.id, name: s.ref!.name }));
+    // Match the Conversation composer: move the submitted draft out of the
+    // editable controls before awaiting the network. A person can immediately
+    // begin a follow-up without the older request later clearing that new work.
+    const submittedStaged = staged;
+    setText("");
+    setStaged([]);
     postingRef.current = true;
     setPosting(true);
     try {
@@ -846,15 +852,17 @@ function ThreadCard({
       });
       if (r.ok) {
         toast("Comment posted", "ok");
-        setText("");
-        setStaged([]);
         void refresh();
       } else {
+        setText((current) => current.trim() ? current : v);
+        setStaged((current) => current.length ? current : submittedStaged);
         // VB4: the 422 body-cap (and any other rejection) surfaces its explicit detail.
         const det = detailText(r.d);
         toast("Failed (" + r.status + ")" + (det ? ": " + det : ""), "danger");
       }
     } catch {
+      setText((current) => current.trim() ? current : v);
+      setStaged((current) => current.length ? current : submittedStaged);
       toast("Couldn't reach the portal — your comment is still in the composer.", "danger");
     } finally {
       postingRef.current = false;

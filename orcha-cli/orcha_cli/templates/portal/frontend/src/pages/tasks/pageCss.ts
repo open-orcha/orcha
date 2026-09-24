@@ -57,7 +57,7 @@ export const tasksPageCss = String.raw`
   /* #301: attachment composer (paperclip + drag-drop + staging tray) */
   .reply-wrap { display: flex; flex-direction: column; gap: 8px; }
   .reply-wrap.dragover { outline: 2px dashed var(--accent-line); outline-offset: 3px; border-radius: 11px; }
-  .task-thread-composer { padding: 0; border-top: 0; }
+  .message-composer.message-composer.task-thread-composer { padding: 0; border-top: 0; }
   .attach-tray { display: flex; flex-wrap: wrap; gap: 8px; }
   .attach-tray:empty { display: none; }
   .att-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 230px; padding: 5px 8px;
