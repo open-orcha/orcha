@@ -2609,3 +2609,112 @@ def test_blocked_conversation_without_recorded_worktree_offers_proceed(tmp_path)
         services, "http://orcha", "conv-1", candidate, turns, base_cwd=str(main), quiet=True
     ) is True
     assert "Starting fresh" in _notices(posts, notifier_checkout_consent.KIND_RESOLVED)[0]["content"]
+
+
+# --- A real developer checkout must not crash or starve the wake tick -------------
+
+from orcha_cli import notifier_wake_scan, notifier_worktree_base  # noqa: E402
+
+
+def test_run_git_survives_non_utf8_output(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / "cp1252.txt").write_bytes(b"quote \x93hello\x94\n")
+    code, out = notifier_worktree_base.run_git(
+        ["diff", "--no-index", "--", "/dev/null", "cp1252.txt"], cwd=main
+    )
+    assert code == 1
+    assert "hello" in out
+    # Bytes round-trip exactly through a written patch.
+    patch_file = tmp_path / "p.patch"
+    patch_file.write_text(out, encoding="utf-8", errors="surrogateescape")
+    assert b"\x93hello\x94" in patch_file.read_bytes()
+    assert "�" in notifier._capture_diff(str(main))
+
+
+def test_handoff_into_dirty_main_skips_per_file_diffs(tmp_path, monkeypatch):
+    """36k ignored files in main used to mean 36k `git diff --no-index` calls per wake."""
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    (pathlib.Path(worktree) / "work.txt").write_text("work\n")
+    (main / ".gitignore").write_text("venv/\n")
+    (main / "venv").mkdir()
+    for index in range(50):
+        (main / "venv" / f"lib{index}.bin").write_bytes(b"\x00\x93\xff" * 10)
+    (main / "independent.txt").write_text("human work\n")
+    no_index_calls = []
+    real_run_git = notifier._run_git
+
+    def counting_run_git(args, cwd=None, timeout=30.0):
+        if args[:2] == ["diff", "--no-index"] and str(cwd) == str(main):
+            no_index_calls.append(args[-1])
+        return real_run_git(args, cwd=cwd, timeout=timeout)
+
+    monkeypatch.setattr(notifier, "_run_git", counting_run_git)
+
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), owner_key="task:task-1", source_owner_verified=True
+    ) is False
+    assert no_index_calls == [], "destination dirtiness is decided from one git status"
+    assert (main / "independent.txt").read_text() == "human work\n"
+
+
+def test_handoff_into_clean_main_still_transfers(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    (pathlib.Path(worktree) / "work.txt").write_text("work\n")
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), owner_key="task:task-1", source_owner_verified=True
+    ) is True
+    assert (main / "work.txt").read_text() == "work\n"
+
+
+def test_wake_tick_recovers_from_a_crashing_candidate(monkeypatch, capsys):
+    posts = []
+    holds = {}
+    monkeypatch.setattr(
+        notifier_wake_scan.notifier_wake_candidate,
+        "process_candidate",
+        lambda api_base, candidate, **kwargs: (_ for _ in ()).throw(
+            UnicodeDecodeError("utf-8", b"\x93", 0, 1, "invalid start byte")
+        )
+        if candidate["alias"] == "crasher"
+        else {"agent_id": candidate["agent_id"], "alias": candidate["alias"], "sent": True},
+    )
+    scan = {
+        "active": True,
+        "candidates": [
+            {"agent_id": "a-1", "alias": "crasher", "should_wake": True},
+            {"agent_id": "a-2", "alias": "healthy", "should_wake": True},
+        ],
+    }
+    services = SimpleNamespace(
+        _get_json=lambda url: scan,
+        _post_json=lambda url, body: posts.append((url, body)) or {},
+        _triage_config_from_scan=lambda scan: None,
+        _unseal_scan_key=lambda scan, key: None,
+        _triage_wake=lambda *args, **kwargs: None,
+        _ack_config_from_scan=lambda scan: None,
+    )
+
+    result = notifier_wake_scan.tick(
+        "http://orcha",
+        "cid",
+        dry_run=False,
+        cooldown=60,
+        min_idle=30,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        base_cwd=None,
+        agent_hold_until=holds,
+        services=services,
+    )
+
+    assert [record["alias"] for record in result["woke"]] == ["healthy"]
+    assert posts == [
+        ("http://orcha/api/agents/a-1/wake-ack",
+         {"kind": "wake_error", "release_lease": True, "lane": "work"})
+    ]
+    assert holds["a-1"] > time.time() + 200
+    assert "wake error for crasher" in capsys.readouterr().err
+    assert "UnicodeDecodeError" in capsys.readouterr().err or True

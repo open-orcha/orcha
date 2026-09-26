@@ -205,14 +205,29 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
         if not c.get("pending_human"):
             continue
         runtime = _normalize_runtime(c.get("model_runtime"))
-        if runtime == RUNTIME_CODEX:
-            _resident_codex_start.start_candidate(
-                sys.modules[__name__], api_base, conv_id, c, live_residents,
-                base_cwd=base_cwd, quiet=quiet, dry_run=dry_run,
+        try:
+            if runtime == RUNTIME_CODEX:
+                _resident_codex_start.start_candidate(
+                    sys.modules[__name__], api_base, conv_id, c, live_residents,
+                    base_cwd=base_cwd, quiet=quiet, dry_run=dry_run,
+                )
+                continue
+            if runtime == RUNTIME_CLAUDE:
+                _resident_claude_start.start_or_feed_candidate(
+                    sys.modules[__name__], api_base, conv_id, c, live_residents, live_pids,
+                    base_cwd=base_cwd, quiet=quiet, dry_run=dry_run,
+                )
+        except Exception as error:  # noqa: BLE001 - one conversation must not stall the rest
+            # A crash after wake-claim would otherwise leave the conversation lease held
+            # (and the human unanswered) until it expires, then crash again silently.
+            print(
+                f"[notifier] conversation error for {c.get('agent_alias')} "
+                f"(continuing): {type(error).__name__}: {error}",
+                file=sys.stderr,
             )
-            continue
-        if runtime == RUNTIME_CLAUDE:
-            _resident_claude_start.start_or_feed_candidate(
-                sys.modules[__name__], api_base, conv_id, c, live_residents, live_pids,
-                base_cwd=base_cwd, quiet=quiet, dry_run=dry_run,
-            )
+            if not dry_run and c.get("agent_id") and live_residents.get(conv_id) is None:
+                _post_json(
+                    f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
+                    {"kind": "conversation_error", "release_lease": True,
+                     "lane": "conversation"},
+                )

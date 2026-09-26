@@ -20,11 +20,16 @@ def run_git(args, cwd=None, timeout: float = 30.0):
             cwd=cwd,
             capture_output=True,
             text=True,
+            # Patch output can contain non-UTF-8 bytes (a Windows-1252 text file, a
+            # binary that git treats as text). surrogateescape keeps every byte
+            # recoverable instead of raising UnicodeDecodeError mid-wake.
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=timeout,
             check=False,
         )
         return result.returncode, result.stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError):
         return 1, ""
 
 

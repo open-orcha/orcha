@@ -113,16 +113,47 @@ def tick(
     context = _scan_context(scan, holds, services)
     woke = []
     for candidate in scan.get("candidates", []):
-        record = notifier_wake_candidate.process_candidate(
-            api_base,
-            candidate,
-            context=context,
-            dry_run=dry_run,
-            quiet=quiet,
-            lease_ttl=lease_ttl,
-            live_workers=live_workers,
-            services=services,
-        )
+        try:
+            record = notifier_wake_candidate.process_candidate(
+                api_base,
+                candidate,
+                context=context,
+                dry_run=dry_run,
+                quiet=quiet,
+                lease_ttl=lease_ttl,
+                live_workers=live_workers,
+                services=services,
+            )
+        except Exception as error:  # noqa: BLE001 - one agent must not stall the scan
+            _recover_candidate_error(
+                api_base, candidate, context, error, dry_run, services
+            )
+            continue
         if record is not None:
             woke.append(record)
     return {"ok": True, "woke": woke}
+
+
+CANDIDATE_ERROR_HOLD_SECS = 300.0
+
+
+def _recover_candidate_error(api_base, candidate, context, error, dry_run, services):
+    """Release a lease the failed wake may hold, hold the agent down, and say so."""
+    agent_id = candidate.get("agent_id")
+    print(
+        f"[notifier] wake error for {candidate.get('alias')} (continuing, "
+        f"held {int(CANDIDATE_ERROR_HOLD_SECS)}s): {type(error).__name__}: {error}",
+        file=sys.stderr,
+    )
+    if dry_run or not agent_id:
+        return
+    holds = context.get("agent_hold_until")
+    if isinstance(holds, dict):
+        holds[agent_id] = context.get("hold_now", time.time()) + CANDIDATE_ERROR_HOLD_SECS
+    try:
+        services._post_json(
+            f"{api_base}/api/agents/{agent_id}/wake-ack",
+            {"kind": "wake_error", "release_lease": True, "lane": "work"},
+        )
+    except Exception:  # noqa: BLE001
+        pass
