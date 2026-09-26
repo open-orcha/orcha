@@ -7,8 +7,11 @@ import { Input } from '../../ui/Input'
 import { Label } from '../../ui/Label'
 import { AlertCircle, Loader2, Search } from 'lucide-react'
 
-/** "From GitHub" source: gh-authenticated repo picker (when available) + a URL field that's
- *  ALWAYS offered (public repos, or a machine with no gh CLI). Resolves to a destination via
+/** Git-URL source ("From GitHub, GitLab or Bitbucket" card): gh-authenticated GitHub repo
+ *  picker (when available) + a URL field that's ALWAYS offered (public repos, other hosts,
+ *  or a machine with no gh CLI). The URL field takes exactly what shared/repoUrl.ts
+ *  accepts — https:// on github.com / gitlab.com / bitbucket.org — and the copy says so;
+ *  SSH is rejected inline. Resolves to a destination via
  *  suggestCloneDest + pickCloneDest, then hands {repoUrl, dest} up — cloning itself happens
  *  in the SAME provisioning step as local-folder init (OnboardingWizard.create). */
 export default function GithubSourceStep({
@@ -89,7 +92,7 @@ export default function GithubSourceStep({
       <div className="mx-auto flex w-full max-w-[680px] flex-col gap-4 animate-slide-in">
         <div className="flex flex-col gap-1">
           <span className="onb-eyebrow">Source</span>
-          <h2 className="onb-title text-2xl">Clone from GitHub</h2>
+          <h2 className="onb-title text-2xl">Clone a repository</h2>
         </div>
         <Card className="flex items-start gap-2 border-danger/40 text-sm text-danger">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -109,7 +112,7 @@ export default function GithubSourceStep({
     <div className="mx-auto flex w-full max-w-[680px] flex-col gap-4 animate-slide-in">
       <div className="flex flex-col gap-1">
         <span className="onb-eyebrow">Source</span>
-        <h2 className="onb-title text-2xl">Clone from GitHub</h2>
+        <h2 className="onb-title text-2xl">Clone a repository</h2>
       </div>
 
       {checkingAuth ? (
@@ -171,8 +174,12 @@ export default function GithubSourceStep({
             setDest(null)
           }}
         />
-        {url.trim() && !validation?.ok && (
+        {url.trim() && !validation?.ok ? (
           <span className="text-xs text-danger">{validation && !validation.ok ? validation.reason : ''}</span>
+        ) : (
+          <span className="text-xs text-text/50">
+            https:// URLs on github.com, gitlab.com or bitbucket.org. SSH (git@…) URLs aren’t supported.
+          </span>
         )}
       </div>
 
