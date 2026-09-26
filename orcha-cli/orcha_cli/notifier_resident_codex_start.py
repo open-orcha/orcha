@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import time
 
+from . import notifier_checkout_consent as _consent
 from .notifier_routing_handoff import carry_previous_checkout
 
 
@@ -29,14 +30,7 @@ def start_candidate(
         )
         or {}
     ).get("turns", [])
-    resolved_through = max(
-        [
-            turn["seq"]
-            for turn in turns
-            if turn.get("role") == "agent"
-        ],
-        default=0,
-    )
+    resolved_through = _consent.resolved_through(turns)
     pending = [
         turn
         for turn in turns
@@ -87,21 +81,35 @@ def start_candidate(
         )
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
-    if not carry_previous_checkout(
-        api_base,
-        candidate["agent_id"],
-        run_cwd,
-        services,
-        conversation_id=conv_id,
-    ):
-        _fail(
+
+    def _carry():
+        return carry_previous_checkout(
+            api_base,
+            candidate["agent_id"],
+            run_cwd,
+            services,
+            conversation_id=conv_id,
+        )
+
+    if not _carry():
+        consented = _consent.handle_carry_failure(
             services,
             api_base,
+            conv_id,
             candidate,
-            quiet,
-            "saved files could not be carried into the selected checkout",
+            turns,
+            base_cwd=base_cwd,
+            quiet=quiet,
         )
-        return
+        if not (consented and _carry()):
+            _fail(
+                services,
+                api_base,
+                candidate,
+                quiet,
+                "saved files could not be carried into the selected checkout",
+            )
+            return
     log_path = services._conversation_log_path(base_cwd, conv_id)
     reply_path = services._conversation_reply_path(log_path)
     session_id = candidate.get("session_id")

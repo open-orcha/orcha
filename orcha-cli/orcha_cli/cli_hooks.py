@@ -11,9 +11,15 @@ import sys
 from typing import Optional
 
 
+# (event, command, matcher[, timeout_secs]). The file-guard PreToolUse entry may
+# block while another agent holds a file lock, so it carries an explicit timeout
+# above the guard's own wait budget (cli_file_lock.DEFAULT_WAIT_SECS).
 HOOKS = (
     ("PostToolUse", "orcha poll-inbox", "*"),
     ("PreToolUse", "orcha conv-guard", "*"),
+    ("PreToolUse", "orcha file-guard", "*", 660),
+    ("PostToolUse", "orcha file-guard", "Edit|Write|MultiEdit|NotebookEdit"),
+    ("SessionEnd", "orcha file-guard", None),
     ("SessionStart", "orcha watch --detach", None),
     ("SessionStart", "orcha rehydrate", None),
     ("SessionEnd", "orcha unwatch", None),
@@ -84,6 +90,71 @@ def record_reachability(args, services) -> None:
         )
 
 
+# Codex CLI (>= 0.153) reads the same hook schema from <repo>/.codex/hooks.json.
+# Only the file-lock guard is registered there: Codex edits arrive as one
+# ``apply_patch`` call (matcher aliases Edit/Write), and the other Orcha hooks are
+# Claude-session bookkeeping.
+CODEX_HOOKS = (
+    ("PreToolUse", "orcha file-guard", "*", 660),
+    ("PostToolUse", "orcha file-guard", "apply_patch|Edit|Write"),
+    ("SessionEnd", "orcha file-guard", None),
+)
+
+
+def _ensure_hooks(settings: dict, specs) -> Optional[bool]:
+    """Merge ``specs`` into ``settings['hooks']``; None means the file is unusable."""
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return None
+    added = False
+    for spec in specs:
+        event, command, matcher = spec[:3]
+        timeout = spec[3] if len(spec) > 3 else None
+        entries = hooks.setdefault(event, [])
+        if not isinstance(entries, list):
+            return None
+        if any(
+            isinstance(entry, dict)
+            and any(
+                isinstance(hook, dict) and hook.get("command") == command
+                for hook in entry.get("hooks", []) or []
+            )
+            for entry in entries
+        ):
+            continue
+        hook: dict = {"type": "command", "command": command}
+        if timeout is not None:
+            hook["timeout"] = timeout
+        new_entry: dict = {"hooks": [hook]}
+        if matcher is not None:
+            new_entry["matcher"] = matcher
+        entries.append(new_entry)
+        added = True
+    return added
+
+
+def write_codex_hook_config(project_dir: pathlib.Path) -> bool:
+    """Register the file-lock guard for Codex workers in <project>/.codex/hooks.json."""
+    hooks_path = pathlib.Path(project_dir) / ".codex" / "hooks.json"
+    settings: dict = {}
+    if hooks_path.exists():
+        try:
+            settings = json.loads(hooks_path.read_text())
+            if not isinstance(settings, dict):
+                settings = {}
+        except Exception:
+            return False
+    added = _ensure_hooks(settings, CODEX_HOOKS)
+    if not added:
+        return False
+    try:
+        hooks_path.parent.mkdir(parents=True, exist_ok=True)
+        hooks_path.write_text(json.dumps(settings, indent=2) + "\n")
+    except OSError:
+        return False
+    return True
+
+
 def write_hook_config(claude_dir: pathlib.Path) -> bool:
     """Add every managed hook without replacing user-defined hook entries."""
     settings_path = claude_dir / "settings.json"
@@ -99,7 +170,12 @@ def write_hook_config(claude_dir: pathlib.Path) -> bool:
     if not isinstance(hooks, dict):
         return False
 
-    def ensure(event: str, command: str, matcher: Optional[str]) -> bool:
+    def ensure(
+        event: str,
+        command: str,
+        matcher: Optional[str],
+        timeout: Optional[int] = None,
+    ) -> bool:
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
             return False
@@ -111,21 +187,25 @@ def write_hook_config(claude_dir: pathlib.Path) -> bool:
                 for hook in entry.get("hooks", []) or []
             ):
                 return False
-        new_entry: dict = {
-            "hooks": [{"type": "command", "command": command}]
-        }
+        hook: dict = {"type": "command", "command": command}
+        if timeout is not None:
+            hook["timeout"] = timeout
+        new_entry: dict = {"hooks": [hook]}
         if matcher is not None:
             new_entry["matcher"] = matcher
         entries.append(new_entry)
         return True
 
     added = False
-    for event, command, matcher in HOOKS:
-        added |= ensure(event, command, matcher)
+    for spec in HOOKS:
+        event, command, matcher = spec[:3]
+        timeout = spec[3] if len(spec) > 3 else None
+        added |= ensure(event, command, matcher, timeout)
     if added:
         claude_dir.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-    return added
+    codex_added = write_codex_hook_config(pathlib.Path(claude_dir).parent)
+    return added or codex_added
 
 
 def enable_hooks(services) -> None:

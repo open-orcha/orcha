@@ -197,6 +197,10 @@ def _is_git_repo(cwd) -> bool:
     return _cleanup.is_git_repo(cwd, _compat())
 
 
+def _discard_worktree(base_cwd, worktree, branch) -> bool:
+    return _cleanup.discard_worktree(base_cwd, worktree, branch, _compat())
+
+
 def _worktree_is_dirty(worktree, excludes=None) -> bool:
     return _cleanup.worktree_is_dirty(
         worktree,

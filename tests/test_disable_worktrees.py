@@ -1946,3 +1946,666 @@ def test_taskless_prompt_handoff_failure_stops_without_invalid_task_post(monkeyp
         and body["release_lease"] is True
         for url, body in posts
     )
+
+
+# --- Stale checkout records must not block wakes forever -------------------------
+
+
+def _deleted_branch_history(tmp_path):
+    """Provision, then cleanly retire, a task worktree so only its run record survives."""
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    assert worktree and branch
+    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
+    assert not pathlib.Path(worktree).exists()
+    assert (
+        notifier._run_git(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=main
+        )[0]
+        != 0
+    ), "a commit-less worker branch is deleted with its worktree"
+    history = {
+        "runs": [
+            {
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "lane": "work",
+                "worktree": worktree,
+                "branch": branch,
+                "base_cwd": str(main),
+            }
+        ]
+    }
+    return main, history
+
+
+@pytest.mark.parametrize("disabled", [True, False])
+def test_wake_carries_nothing_when_recorded_branch_was_already_deleted(
+    tmp_path, disabled
+):
+    """Regression: worktree gone + branch deleted + branch name still on the run row.
+
+    The recovery path used to diff a ref that no longer existed, fail closed, and
+    pause every later wake for that task with no operator recourse.
+    """
+    main, history = _deleted_branch_history(tmp_path)
+    services = SimpleNamespace(
+        _get_json=lambda _url: history,
+        _run_git=notifier._run_git,
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+    )
+    destination = (
+        str(main)
+        if disabled
+        else notifier._provision_task_worktree(str(main), "builder", "task-1")[0]
+    )
+
+    assert carry_previous_checkout(
+        "http://orcha", "agent-1", destination, services, task_id="task-1", lane="work"
+    ) is True
+
+
+def test_wake_still_recovers_from_a_retained_branch_that_exists(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    (pathlib.Path(worktree) / "kept.txt").write_text("committed work\n")
+    assert notifier._run_git(["add", "kept.txt"], cwd=worktree)[0] == 0
+    assert notifier._run_git(["commit", "-m", "keep"], cwd=worktree)[0] == 0
+    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
+    history = {
+        "runs": [
+            {
+                "task_id": "task-1",
+                "lane": "work",
+                "worktree": worktree,
+                "branch": branch,
+                "base_cwd": str(main),
+            }
+        ]
+    }
+    services = SimpleNamespace(
+        _get_json=lambda _url: history,
+        _run_git=notifier._run_git,
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+    )
+
+    assert carry_previous_checkout(
+        "http://orcha", "agent-1", str(main), services, task_id="task-1", lane="work"
+    ) is True
+    assert (main / "kept.txt").read_text() == "committed work\n"
+
+
+def test_branch_recovery_still_runs_when_existence_is_unknowable():
+    """Services without git access keep the previous (recovery-attempt) behaviour."""
+    calls = []
+    history = {
+        "runs": [
+            {
+                "task_id": "task-1",
+                "lane": "work",
+                "worktree": "/gone/worktree",
+                "branch": "orcha/task-builder-task-1",
+                "base_cwd": "/project/main",
+            }
+        ]
+    }
+    services = SimpleNamespace(
+        _get_json=lambda _url: history,
+        _handoff_branch_changes=lambda *args, **kwargs: calls.append(args) or True,
+    )
+
+    assert carry_previous_checkout(
+        "http://orcha", "agent-1", "/project/main", services, task_id="task-1"
+    ) is True
+    assert calls == [("/project/main", "orcha/task-builder-task-1", "/project/main")]
+
+
+def test_handoff_failure_notice_is_not_repeated_every_tick(monkeypatch):
+    notifier_wake_worker.reset_notice_state()
+    posts = []
+    monkeypatch.setattr(
+        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+    )
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"claimed": True} if url.endswith("/wake-claim") else {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: ("/project/task", "orcha/task"),
+        _provision_worktree=lambda *args: ("/project/agent", "orcha/agent"),
+        spawn_headless=lambda *args, **kwargs: pytest.fail("must not spawn"),
+    )
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "context_task_id": "task-1",
+        "pending_events": 1,
+        "worktrees_disabled": True,
+    }
+    results = [
+        notifier_wake_worker.spawn(
+            "http://orcha",
+            candidate,
+            prompt="continue",
+            event="task_message",
+            dry_run=False,
+            quiet=True,
+            lease_ttl=120,
+            live_workers={},
+            services=services,
+        )
+        for _ in range(3)
+    ]
+
+    assert all(result["handoff_failed"] is True for result in results)
+    notices = [body for url, body in posts if url.endswith("/tasks/task-1/messages")]
+    assert len(notices) == 1
+    assert "retries every" in notices[0]["body"]
+    acks = [body for url, body in posts if url.endswith("/wake-ack")]
+    assert len(acks) == 3
+
+
+def test_handoff_failure_holds_candidate_down(monkeypatch):
+    from orcha_cli import notifier_wake_candidate
+
+    monkeypatch.setattr(
+        notifier_wake_worker,
+        "spawn",
+        lambda *args, **kwargs: {
+            "sent": False,
+            "command": "checkout handoff failed",
+            "resume_rendered": False,
+            "lane": "work",
+            "handoff_failed": True,
+        },
+    )
+    monkeypatch.setattr(
+        notifier_wake_candidate, "_grade_ephemeral", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        notifier_wake_candidate, "_ack_delivery", lambda *args, **kwargs: None
+    )
+    services = SimpleNamespace(
+        build_wake_prompt=lambda candidate: "prompt",
+        select_transport=lambda candidate: "ephemeral",
+        derive_wake_event=lambda candidate: "task_message",
+    )
+    context = {"agent_hold_until": {}, "hold_now": 1000.0}
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "should_wake": True,
+        "reason": "task_message",
+    }
+
+    record = notifier_wake_candidate.process_candidate(
+        "http://orcha",
+        candidate,
+        context=context,
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+
+    assert record["sent"] is False
+    assert context["agent_hold_until"]["agent-1"] == pytest.approx(
+        1000.0 + notifier_wake_worker.HANDOFF_FAILURE_HOLD_SECS
+    )
+    context["hold_now"] = 1001.0
+    assert notifier_wake_candidate._held(candidate, context, True) is True
+    context["hold_now"] = 1000.0 + notifier_wake_worker.HANDOFF_FAILURE_HOLD_SECS
+    assert notifier_wake_candidate._held(candidate, context, True) is False
+
+
+# --- Guardrail: worktrees off while several tasks share the main checkout ------
+
+
+def _shared_checkout_services(posts, spawned):
+    def post_json(url, body):
+        posts.append((url, body))
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "run-x"}
+        return {}
+
+    return SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: pytest.fail("worktrees are disabled"),
+        _provision_worktree=lambda *args: pytest.fail("worktrees are disabled"),
+        _mint_embodiment_token=lambda *args: "token",
+        _revoke_or_defer=lambda *args: None,
+        _teardown_worktree=lambda *args: None,
+        spawn_headless=lambda cwd, *args, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+    )
+
+
+def _sibling(task_id, *, alias="other", worktree=None, base_cwd="/project/main"):
+    return {
+        "wake_task_id": task_id,
+        "worktree": worktree,
+        "base_cwd": base_cwd,
+        "respawn_ctx": {"alias": alias},
+    }
+
+
+def test_shared_checkout_siblings_only_count_other_tasks_in_main():
+    candidate = {
+        "agent_id": "agent-1",
+        "headless_cwd": "/project/main",
+        "worktrees_disabled": True,
+    }
+    live_workers = {
+        "agent-1": _sibling("task-9"),  # ourselves
+        "agent-2": _sibling("task-2"),  # different task, shared main
+        "agent-3": _sibling("task-1"),  # same task: allowed, no advisory
+        "agent-4": _sibling("task-4", worktree="/project/.orcha-worktrees/x"),
+        "agent-5": _sibling("task-5", base_cwd="/elsewhere"),
+        "agent-6": _sibling(None),
+    }
+
+    siblings = notifier_wake_worker.shared_checkout_siblings(
+        live_workers, candidate, "task-1"
+    )
+
+    assert [s["agent_id"] for s in siblings] == ["agent-2"]
+    assert siblings[0]["alias"] == "other"
+    candidate["worktrees_disabled"] = False
+    assert notifier_wake_worker.shared_checkout_siblings(
+        live_workers, candidate, "task-1"
+    ) == []
+
+
+def test_shared_checkout_advisory_posted_once_and_wake_proceeds(monkeypatch):
+    notifier_wake_worker.reset_notice_state()
+    monkeypatch.setattr(
+        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: True
+    )
+    posts, spawned = [], []
+    services = _shared_checkout_services(posts, spawned)
+    live_workers = {"agent-2": _sibling("task-2", alias="reviewer")}
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "context_task_id": "task-1",
+        "pending_events": 1,
+        "worktrees_disabled": True,
+    }
+
+    for _ in range(2):
+        result = notifier_wake_worker.spawn(
+            "http://orcha",
+            candidate,
+            prompt="continue",
+            event="task_message",
+            dry_run=False,
+            quiet=True,
+            lease_ttl=120,
+            live_workers=live_workers,
+            services=services,
+        )
+        assert result["sent"] is True
+
+    assert spawned == ["/project/main", "/project/main"]
+    advisories = [
+        body
+        for url, body in posts
+        if url.endswith("/tasks/task-1/messages") and "worktrees are disabled" in body["body"]
+    ]
+    assert len(advisories) == 1
+    assert advisories[0]["author_agent_id"] == "agent-1"
+    assert "reviewer (task task-2)" in advisories[0]["body"]
+    assert "Enable worktrees" in advisories[0]["body"]
+    assert "file lock" in advisories[0]["body"]
+
+
+def test_no_advisory_when_alone_or_when_worktrees_are_on(monkeypatch):
+    notifier_wake_worker.reset_notice_state()
+    monkeypatch.setattr(
+        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: True
+    )
+    posts, spawned = [], []
+    services = _shared_checkout_services(posts, spawned)
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "context_task_id": "task-1",
+        "pending_events": 1,
+        "worktrees_disabled": True,
+    }
+
+    notifier_wake_worker.spawn(
+        "http://orcha",
+        candidate,
+        prompt="continue",
+        event="task_message",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={"agent-3": _sibling("task-1", alias="pair")},
+        services=services,
+    )
+    assert not any(url.endswith("/tasks/task-1/messages") for url, _ in posts)
+
+
+# --- Conversation lane: ask before discarding, or ask to re-enable worktrees ------
+
+from orcha_cli import notifier_checkout_consent  # noqa: E402
+
+
+def _consent_turn(seq, role, content, kind=None):
+    turn = {"seq": seq, "role": role, "content": content, "meta": {}}
+    if kind:
+        turn["meta"] = {"orcha_kind": kind}
+    return turn
+
+
+def test_resolved_through_ignores_orcha_consent_notices():
+    turns = [
+        _consent_turn(1, "human", "Just ack"),
+        _consent_turn(2, "agent", "⚠️ I can't start…", notifier_checkout_consent.KIND_PROMPT),
+        _consent_turn(3, "human", "discard"),
+    ]
+    assert notifier_checkout_consent.resolved_through(turns) == 0
+    turns.append(_consent_turn(4, "agent", "done"))
+    assert notifier_checkout_consent.resolved_through(turns) == 4
+
+
+def _blocked_resident_repo(tmp_path):
+    """A resident worktree with work, and a main checkout holding unrelated changes."""
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_resident_worktree(str(main), "conv-1")
+    (pathlib.Path(worktree) / "resident.txt").write_text("resident work\n")
+    (main / "independent.txt").write_text("unrelated human work\n")
+    history = {
+        "runs": [
+            {
+                "conversation_id": "conv-1",
+                "lane": "conversation",
+                "worktree": worktree,
+                "branch": branch,
+                "base_cwd": str(main),
+            }
+        ]
+    }
+    return main, worktree, branch, history
+
+
+def _consent_services(main, history, turns, spawned, posts):
+    def post_json(url, body):
+        posts.append((url, body))
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": f"run-{len(posts)}"}
+        if url.endswith("/turns"):
+            return {"turn": {"seq": 99}}
+        return {}
+
+    return SimpleNamespace(
+        WAKE_LEASE_TTL_SECS=120,
+        RUNTIME_CLAUDE="claude",
+        _RESIDENT_RESUME_FAILED=set(),
+        _close_resident=lambda *args, **kwargs: None,
+        _reap_dead_pid_resident_runs=lambda *args, **kwargs: None,
+        _post_json=post_json,
+        _get_json=lambda url: (
+            {"turns": turns} if url.endswith("conversation?limit=200") else history
+        ),
+        _build_persona=lambda *args, **kwargs: "persona",
+        _format_history=None,
+        _resident_log_path=lambda *args: None,
+        _is_git_repo=lambda _cwd: True,
+        _provision_resident_worktree=lambda *args: pytest.fail("disabled routing"),
+        _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+        _run_git=notifier._run_git,
+        _discard_worktree=notifier._discard_worktree,
+        _mint_embodiment_token=lambda *args: "token",
+        spawn_resident=lambda cwd, **kwargs: (
+            spawned.append(cwd) or (True, "command", _Proc())
+        ),
+    )
+
+
+def _start(services, main, turns_seq):
+    live = {}
+    notifier_resident_claude_start.start_or_feed_candidate(
+        services,
+        "http://orcha",
+        "conv-1",
+        {
+            "agent_id": "agent-1",
+            "agent_alias": "builder",
+            "last_turn_seq": turns_seq,
+            "worktrees_disabled": True,
+        },
+        live,
+        set(),
+        base_cwd=str(main),
+        quiet=True,
+        dry_run=False,
+    )
+    return live
+
+
+def _notices(posts, kind):
+    return [
+        body
+        for url, body in posts
+        if url.endswith("/turns") and (body.get("meta") or {}).get("orcha_kind") == kind
+    ]
+
+
+def test_blocked_conversation_asks_once_then_waits(monkeypatch, tmp_path):
+    main, worktree, _branch, history = _blocked_resident_repo(tmp_path)
+    monkeypatch.setattr(
+        notifier_resident_claude_start._feed_service, "feed", lambda *a, **k: None
+    )
+    turns = [_consent_turn(1, "human", "Just ack")]
+    spawned, posts = [], []
+    services = _consent_services(main, history, turns, spawned, posts)
+
+    live = _start(services, main, 1)
+
+    assert spawned == [] and live == {}
+    prompts = _notices(posts, notifier_checkout_consent.KIND_PROMPT)
+    assert len(prompts) == 1
+    assert "discard" in prompts[0]["content"] and "Disable worktrees" in prompts[0]["content"]
+    assert prompts[0]["run_id"], "an agent turn must ride a run row"
+    assert any(url.endswith("/finish") for url, _ in posts)
+    assert any(
+        url.endswith("/wake-ack") and body["kind"] == "resident_failed" for url, body in posts
+    )
+    assert (pathlib.Path(worktree) / "resident.txt").exists()
+
+    # The question is now the latest turn; a second tick (no reply yet) asks nothing new.
+    turns.append(_consent_turn(2, "agent", prompts[0]["content"], notifier_checkout_consent.KIND_PROMPT))
+    _start(services, main, 2)
+    assert len(_notices(posts, notifier_checkout_consent.KIND_PROMPT)) == 1
+    assert spawned == []
+
+
+def test_consent_discards_worktree_and_starts_in_main(monkeypatch, tmp_path):
+    main, worktree, branch, history = _blocked_resident_repo(tmp_path)
+    monkeypatch.setattr(
+        notifier_resident_claude_start._feed_service, "feed", lambda *a, **k: None
+    )
+    turns = [
+        _consent_turn(1, "human", "Just ack"),
+        _consent_turn(2, "agent", "⚠️ …", notifier_checkout_consent.KIND_PROMPT),
+        _consent_turn(3, "human", "Discard, go ahead"),
+    ]
+    spawned, posts = [], []
+    services = _consent_services(main, history, turns, spawned, posts)
+
+    live = _start(services, main, 3)
+
+    assert spawned == [str(main)]
+    assert live["conv-1"]["worktree"] is None
+    # The original request is still pending for the resident (consent turns don't resolve it).
+    assert live["conv-1"]["serviced_seq"] == 0
+    assert not pathlib.Path(worktree).exists()
+    assert notifier._run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=main)[0] != 0
+    assert (main / "independent.txt").read_text() == "unrelated human work\n"
+    assert not (main / "resident.txt").exists()
+    assert len(_notices(posts, notifier_checkout_consent.KIND_RESOLVED)) == 1
+    assert _notices(posts, notifier_checkout_consent.KIND_PROMPT) == []
+
+
+def test_decline_answers_once_and_keeps_worktree(monkeypatch, tmp_path):
+    main, worktree, _branch, history = _blocked_resident_repo(tmp_path)
+    monkeypatch.setattr(
+        notifier_resident_claude_start._feed_service, "feed", lambda *a, **k: None
+    )
+    turns = [
+        _consent_turn(1, "human", "Just ack"),
+        _consent_turn(2, "agent", "⚠️ …", notifier_checkout_consent.KIND_PROMPT),
+        _consent_turn(3, "human", "No, keep them"),
+    ]
+    spawned, posts = [], []
+    services = _consent_services(main, history, turns, spawned, posts)
+
+    _start(services, main, 3)
+    declined = _notices(posts, notifier_checkout_consent.KIND_DECLINED)
+    assert len(declined) == 1 and "Disable worktrees" in declined[0]["content"]
+    assert spawned == []
+    assert (pathlib.Path(worktree) / "resident.txt").exists()
+
+    turns.append(_consent_turn(4, "agent", declined[0]["content"], notifier_checkout_consent.KIND_DECLINED))
+    _start(services, main, 4)
+    assert len(_notices(posts, notifier_checkout_consent.KIND_DECLINED)) == 1
+
+
+def test_reenabling_worktrees_after_decline_resumes_in_isolated_checkout(monkeypatch, tmp_path):
+    main, worktree, _branch, history = _blocked_resident_repo(tmp_path)
+    monkeypatch.setattr(
+        notifier_resident_claude_start._feed_service, "feed", lambda *a, **k: None
+    )
+    turns = [
+        _consent_turn(1, "human", "Just ack"),
+        _consent_turn(2, "agent", "⚠️ …", notifier_checkout_consent.KIND_PROMPT),
+        _consent_turn(3, "human", "no"),
+    ]
+    spawned, posts = [], []
+    services = _consent_services(main, history, turns, spawned, posts)
+    services._provision_resident_worktree = notifier._provision_resident_worktree
+
+    live = {}
+    notifier_resident_claude_start.start_or_feed_candidate(
+        services,
+        "http://orcha",
+        "conv-1",
+        {
+            "agent_id": "agent-1",
+            "agent_alias": "builder",
+            "last_turn_seq": 3,
+            "worktrees_disabled": False,
+        },
+        live,
+        set(),
+        base_cwd=str(main),
+        quiet=True,
+        dry_run=False,
+    )
+    assert spawned == [worktree]
+    assert (pathlib.Path(worktree) / "resident.txt").read_text() == "resident work\n"
+
+
+def test_discard_worktree_keeps_committed_work_reachable(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    worktree, branch = notifier._provision_resident_worktree(str(main), "conv-9")
+    (pathlib.Path(worktree) / "kept.txt").write_text("committed\n")
+    assert notifier._run_git(["add", "kept.txt"], cwd=worktree)[0] == 0
+    assert notifier._run_git(["commit", "-m", "keep"], cwd=worktree)[0] == 0
+    (pathlib.Path(worktree) / "scratch.txt").write_text("uncommitted\n")
+
+    assert notifier._discard_worktree(str(main), worktree, branch)
+
+    assert not pathlib.Path(worktree).exists()
+    assert notifier._run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=main)[0] != 0
+    _code, refs = notifier._run_git(["for-each-ref", "--format=%(refname:short)", "refs/heads/orcha-discarded/"], cwd=main)
+    assert refs.strip().startswith("orcha-discarded/")
+    _code, log = notifier._run_git(["log", "--oneline", refs.strip()], cwd=main)
+    assert "keep" in log
+
+
+def test_codex_conversation_blocked_asks_the_human_too(monkeypatch, tmp_path):
+    from orcha_cli import notifier_resident_codex_start
+
+    main, _worktree, _branch, history = _blocked_resident_repo(tmp_path)
+    turns = [_consent_turn(1, "human", "Just ack")]
+    spawned, posts = [], []
+    services = _consent_services(main, history, turns, spawned, posts)
+    services.RUNTIME_CODEX = "codex"
+    services._CODEX_RESUME_FAILED = set()
+    services.spawn_headless = lambda cwd, *a, **k: pytest.fail("must not spawn while blocked")
+
+    notifier_resident_codex_start.start_candidate(
+        services,
+        "http://orcha",
+        "conv-1",
+        {"agent_id": "agent-1", "agent_alias": "builder", "worktrees_disabled": True},
+        {},
+        base_cwd=str(main),
+        quiet=True,
+        dry_run=False,
+    )
+
+    assert len(_notices(posts, notifier_checkout_consent.KIND_PROMPT)) == 1
+    assert any(
+        url.endswith("/wake-ack") and body["kind"] == "codex_conversation_failed"
+        for url, body in posts
+    )
+
+
+def test_blocked_conversation_without_recorded_worktree_offers_proceed(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / "independent.txt").write_text("unrelated\n")
+    posts = []
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"run_id": "run-n"} if url.endswith("/runs") else {"turn": {}}
+
+    services = SimpleNamespace(
+        _post_json=post_json,
+        _get_json=lambda url: {"runs": []},
+        _discard_worktree=lambda *args: pytest.fail("nothing to discard"),
+    )
+    candidate = {"agent_id": "agent-1", "agent_alias": "builder"}
+    turns = [_consent_turn(1, "human", "hello")]
+
+    assert notifier_checkout_consent.handle_carry_failure(
+        services, "http://orcha", "conv-1", candidate, turns, base_cwd=str(main), quiet=True
+    ) is False
+    prompt = _notices(posts, notifier_checkout_consent.KIND_PROMPT)[0]["content"]
+    assert "proceed" in prompt and "discard" not in prompt.lower()
+
+    turns += [
+        _consent_turn(2, "agent", prompt, notifier_checkout_consent.KIND_PROMPT),
+        _consent_turn(3, "human", "proceed"),
+    ]
+    assert notifier_checkout_consent.handle_carry_failure(
+        services, "http://orcha", "conv-1", candidate, turns, base_cwd=str(main), quiet=True
+    ) is True
+    assert "Starting fresh" in _notices(posts, notifier_checkout_consent.KIND_RESOLVED)[0]["content"]
