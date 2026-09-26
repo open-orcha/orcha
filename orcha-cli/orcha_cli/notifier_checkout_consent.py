@@ -117,6 +117,20 @@ def prompt_text(worktree, base_cwd) -> str:
     )
 
 
+def blocked_text(base_cwd) -> str:
+    """Question when no previous worktree of ours is recorded (nothing to discard)."""
+    return (
+        "⚠️ I can't start in the main checkout yet. Worktrees are disabled for this "
+        f"project, but Orcha can't safely place my saved state into `{base_cwd}` "
+        "(the main checkout has unrelated changes, or the saved state no longer "
+        "applies).\n\n"
+        "• Reply **proceed** to start fresh in the main checkout anyway.\n"
+        "• Or turn **Disable worktrees** off in Settings and I'll continue in an "
+        "isolated checkout.\n\n"
+        "Your last message will be handled as soon as one of those happens."
+    )
+
+
 def handle_carry_failure(
     services, api_base, conv_id, candidate, turns, *, base_cwd, quiet
 ) -> bool:
@@ -129,9 +143,6 @@ def handle_carry_failure(
         prior = None
     worktree = (prior or {}).get("worktree")
     branch = (prior or {}).get("branch")
-    if not worktree:
-        # Nothing of ours to discard; the block comes from elsewhere. Say so once.
-        worktree = "(no previous worktree recorded)"
     prompt_seq = _latest_seq(turns, KIND_PROMPT)
     resolved_seq = _latest_seq(turns, KIND_RESOLVED)
     if prompt_seq and prompt_seq > resolved_seq:
@@ -144,8 +155,17 @@ def handle_carry_failure(
             return False
         reply = str(replies[-1].get("content") or "")
         if CONSENT_RE.match(reply):
-            if prior and prior.get("worktree"):
-                services._discard_worktree(base_cwd, prior["worktree"], branch)
+            if worktree:
+                services._discard_worktree(base_cwd, worktree, branch)
+                resolved = (
+                    f"Discarded the uncommitted changes in `{worktree}` and switched "
+                    f"to the main checkout `{base_cwd}`. Handling your request now."
+                )
+            else:
+                resolved = (
+                    f"Starting fresh in the main checkout `{base_cwd}`. Handling your "
+                    "request now."
+                )
             _post_notice(
                 services,
                 api_base,
@@ -153,13 +173,12 @@ def handle_carry_failure(
                 candidate,
                 base_cwd,
                 KIND_RESOLVED,
-                f"Discarded the uncommitted changes in `{worktree}` and switched to the "
-                f"main checkout `{base_cwd}`. Handling your request now.",
+                resolved,
             )
             if not quiet:
                 print(
                     f"[notifier] {candidate.get('agent_alias')} — human consented; "
-                    f"discarded {worktree} and continuing in {base_cwd}"
+                    f"discarded {worktree or 'nothing'} and continuing in {base_cwd}"
                 )
             return True
         if DECLINE_RE.match(reply):
@@ -186,12 +205,12 @@ def handle_carry_failure(
         candidate,
         base_cwd,
         KIND_PROMPT,
-        prompt_text(worktree, base_cwd),
+        prompt_text(worktree, base_cwd) if worktree else blocked_text(base_cwd),
     )
     if not quiet:
         print(
             f"[notifier] {candidate.get('agent_alias')} — asked the human whether to "
-            f"discard {worktree} or re-enable worktrees",
+            f"discard {worktree or 'nothing'} or re-enable worktrees",
             file=__import__("sys").stderr,
         )
     return False

@@ -2576,3 +2576,36 @@ def test_codex_conversation_blocked_asks_the_human_too(monkeypatch, tmp_path):
         url.endswith("/wake-ack") and body["kind"] == "codex_conversation_failed"
         for url, body in posts
     )
+
+
+def test_blocked_conversation_without_recorded_worktree_offers_proceed(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    (main / "independent.txt").write_text("unrelated\n")
+    posts = []
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"run_id": "run-n"} if url.endswith("/runs") else {"turn": {}}
+
+    services = SimpleNamespace(
+        _post_json=post_json,
+        _get_json=lambda url: {"runs": []},
+        _discard_worktree=lambda *args: pytest.fail("nothing to discard"),
+    )
+    candidate = {"agent_id": "agent-1", "agent_alias": "builder"}
+    turns = [_consent_turn(1, "human", "hello")]
+
+    assert notifier_checkout_consent.handle_carry_failure(
+        services, "http://orcha", "conv-1", candidate, turns, base_cwd=str(main), quiet=True
+    ) is False
+    prompt = _notices(posts, notifier_checkout_consent.KIND_PROMPT)[0]["content"]
+    assert "proceed" in prompt and "discard" not in prompt.lower()
+
+    turns += [
+        _consent_turn(2, "agent", prompt, notifier_checkout_consent.KIND_PROMPT),
+        _consent_turn(3, "human", "proceed"),
+    ]
+    assert notifier_checkout_consent.handle_carry_failure(
+        services, "http://orcha", "conv-1", candidate, turns, base_cwd=str(main), quiet=True
+    ) is True
+    assert "Starting fresh" in _notices(posts, notifier_checkout_consent.KIND_RESOLVED)[0]["content"]
