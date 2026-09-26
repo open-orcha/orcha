@@ -11,6 +11,24 @@ missing.
 ## [Unreleased]
 
 ### Fixed
+- Workers stopped waking on task-thread and conversation posts once a run's
+  recorded worktree AND its retained `orcha/*` branch were gone: the checkout
+  carry gate (added 2026-09-20) tried to recover from the deleted branch, failed
+  closed, and paused every later wake for that stream while re-posting "Run start
+  paused…" to the task thread on every scan tick. A deleted commit-less branch now
+  means "nothing to carry" and the wake proceeds; a genuine handoff failure holds
+  the agent down for 5 minutes and posts the thread notice at most every 30 min.
+
+### Added
+- `orcha file-guard` — per-file edit lock for agents that share one checkout
+  (project has "Disable worktrees" on). Registered as PreToolUse (waits for
+  another session's lock on the same file, `ORCHA_FILE_LOCK_WAIT_SECS`, default
+  600 s), PostToolUse and SessionEnd hooks; different files never wait on each
+  other; `ORCHA_FILE_LOCK=0` disables. Locks live in `.git/orcha/file-locks`.
+- Shared-checkout guardrail: when worktrees are disabled and another agent is
+  already working on a different task in the same main checkout, the wake posts
+  one heads-up to the task thread asking to enable worktrees (once per task per
+  6 h) and continues.
 - PR #223 review + audit pass (cloud unification):
   - Container reset (`POST /api/containers/{cid}/reset`) now wipes the
     unification tables too (device tokens, Code Space threads/messages, wake

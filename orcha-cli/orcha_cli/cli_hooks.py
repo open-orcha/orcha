@@ -11,9 +11,15 @@ import sys
 from typing import Optional
 
 
+# (event, command, matcher[, timeout_secs]). The file-guard PreToolUse entry may
+# block while another agent holds a file lock, so it carries an explicit timeout
+# above the guard's own wait budget (cli_file_lock.DEFAULT_WAIT_SECS).
 HOOKS = (
     ("PostToolUse", "orcha poll-inbox", "*"),
     ("PreToolUse", "orcha conv-guard", "*"),
+    ("PreToolUse", "orcha file-guard", "*", 660),
+    ("PostToolUse", "orcha file-guard", "Edit|Write|MultiEdit|NotebookEdit"),
+    ("SessionEnd", "orcha file-guard", None),
     ("SessionStart", "orcha watch --detach", None),
     ("SessionStart", "orcha rehydrate", None),
     ("SessionEnd", "orcha unwatch", None),
@@ -99,7 +105,12 @@ def write_hook_config(claude_dir: pathlib.Path) -> bool:
     if not isinstance(hooks, dict):
         return False
 
-    def ensure(event: str, command: str, matcher: Optional[str]) -> bool:
+    def ensure(
+        event: str,
+        command: str,
+        matcher: Optional[str],
+        timeout: Optional[int] = None,
+    ) -> bool:
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
             return False
@@ -111,17 +122,20 @@ def write_hook_config(claude_dir: pathlib.Path) -> bool:
                 for hook in entry.get("hooks", []) or []
             ):
                 return False
-        new_entry: dict = {
-            "hooks": [{"type": "command", "command": command}]
-        }
+        hook: dict = {"type": "command", "command": command}
+        if timeout is not None:
+            hook["timeout"] = timeout
+        new_entry: dict = {"hooks": [hook]}
         if matcher is not None:
             new_entry["matcher"] = matcher
         entries.append(new_entry)
         return True
 
     added = False
-    for event, command, matcher in HOOKS:
-        added |= ensure(event, command, matcher)
+    for spec in HOOKS:
+        event, command, matcher = spec[:3]
+        timeout = spec[3] if len(spec) > 3 else None
+        added |= ensure(event, command, matcher, timeout)
     if added:
         claude_dir.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")

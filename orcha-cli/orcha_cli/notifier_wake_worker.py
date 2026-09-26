@@ -7,6 +7,91 @@ import time
 
 from .notifier_routing_handoff import carry_previous_checkout
 
+# A wake whose saved files cannot be carried into the selected checkout is not
+# retried on every scan tick: the candidate is held down for this long, and the
+# visible thread notice is repeated at most once per interval instead of on every
+# attempt (issue: thread spam every ~20s while a stale checkout record persisted).
+HANDOFF_FAILURE_HOLD_SECS = 300.0
+HANDOFF_FAILURE_NOTICE_INTERVAL_SECS = 1800.0
+# One advisory per task while several agents share the main checkout because the
+# project disabled worktrees.
+SHARED_CHECKOUT_ADVISORY_INTERVAL_SECS = 6 * 3600.0
+
+_HANDOFF_FAILURE_NOTICE_TS: dict = {}
+_SHARED_CHECKOUT_ADVISORY_TS: dict = {}
+
+
+def reset_notice_state() -> None:
+    """Forget notice timestamps (tests and daemon restarts)."""
+    _HANDOFF_FAILURE_NOTICE_TS.clear()
+    _SHARED_CHECKOUT_ADVISORY_TS.clear()
+
+
+def _due(registry, key, interval, now=None):
+    """Return whether a notice keyed by ``key`` may be posted again, stamping it if so."""
+    now = time.time() if now is None else now
+    last = registry.get(key)
+    if last is not None and now - last < interval:
+        return False
+    registry[key] = now
+    return True
+
+
+def shared_checkout_siblings(live_workers, candidate, run_task_id):
+    """List other live workers editing the same main checkout for a different task."""
+    if not candidate.get("worktrees_disabled") or not run_task_id or not live_workers:
+        return []
+    base_cwd = candidate.get("headless_cwd")
+    siblings = []
+    for agent_id, state in live_workers.items():
+        if agent_id == candidate.get("agent_id") or not isinstance(state, dict):
+            continue
+        other_task = state.get("wake_task_id")
+        if not other_task or other_task == run_task_id:
+            continue
+        if state.get("worktree"):
+            continue
+        if base_cwd and state.get("base_cwd") not in (None, base_cwd):
+            continue
+        respawn = state.get("respawn_ctx") or {}
+        siblings.append(
+            {
+                "agent_id": agent_id,
+                "alias": respawn.get("alias") or agent_id,
+                "task_id": other_task,
+            }
+        )
+    return siblings
+
+
+def _advise_shared_checkout(api_base, candidate, run_task_id, live_workers, services):
+    """Post one task-thread heads-up when worktrees are off and other tasks share main."""
+    siblings = shared_checkout_siblings(live_workers, candidate, run_task_id)
+    if not siblings:
+        return None
+    if not _due(
+        _SHARED_CHECKOUT_ADVISORY_TS,
+        run_task_id,
+        SHARED_CHECKOUT_ADVISORY_INTERVAL_SECS,
+    ):
+        return None
+    others = ", ".join(
+        f"{sibling['alias']} (task {sibling['task_id']})" for sibling in siblings
+    )
+    body = (
+        "Heads-up: worktrees are disabled for this project, so this task shares the "
+        f"main checkout with {len(siblings)} other active task(s): {others}. "
+        "Enable worktrees (Settings → \"Disable worktrees\" off) so every task gets its "
+        "own isolated checkout and branch. Until then Orcha serialises edits per file: "
+        "an agent waits for another agent's file lock before touching the same file, "
+        "but unrelated edits still land in one shared working tree."
+    )
+    services._post_json(
+        f"{api_base}/api/tasks/{run_task_id}/messages",
+        {"author_agent_id": candidate["agent_id"], "body": body},
+    )
+    return siblings
+
 
 def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
     """Provision isolation appropriate to the candidate's likely work."""
@@ -203,7 +288,11 @@ def spawn(
         lane="work",
         require_taskless=run_task_id is None,
     ):
-        if run_task_id:
+        if run_task_id and _due(
+            _HANDOFF_FAILURE_NOTICE_TS,
+            (candidate["agent_id"], run_task_id),
+            HANDOFF_FAILURE_NOTICE_INTERVAL_SECS,
+        ):
             services._post_json(
                 f"{api_base}/api/tasks/{run_task_id}/messages",
                 {
@@ -211,7 +300,10 @@ def spawn(
                     "body": (
                         "Run start paused because Orcha could not safely carry the "
                         "saved files into the checkout selected by the project setting. "
-                        "Both checkouts remain preserved, and no worker was started."
+                        "Both checkouts remain preserved, and no worker was started. "
+                        f"Orcha retries every {int(HANDOFF_FAILURE_HOLD_SECS // 60)} "
+                        "minutes; to unblock sooner, re-enable worktrees or commit/stash "
+                        "the unrelated changes in the target checkout."
                     ),
                 },
             )
@@ -234,7 +326,12 @@ def spawn(
             "command": "checkout handoff failed",
             "resume_rendered": resume_rendered,
             "lane": lane,
+            "handoff_failed": True,
         }
+    if not dry_run:
+        _advise_shared_checkout(
+            api_base, candidate, run_task_id, live_workers, services
+        )
     token = (
         None
         if dry_run
