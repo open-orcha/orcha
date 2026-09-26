@@ -118,7 +118,9 @@ def _apply_patch(cwd, patch: str, services: Any, *, reverse: bool = False) -> bo
             prefix="orcha-checkout-handoff-", suffix=".patch"
         )
         os.close(fd)
-        pathlib.Path(patch_path).write_text(patch)
+        pathlib.Path(patch_path).write_text(
+            patch, encoding="utf-8", errors="surrogateescape"
+        )
         arguments = ["apply", "--check"]
         if reverse:
             arguments.append("--reverse")
@@ -266,6 +268,13 @@ def _replace_managed_patch(
     return False
 
 
+def printable(text):
+    """Return text safe to serialise as JSON (surrogate-escaped bytes replaced)."""
+    if text is None:
+        return None
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def capture_diff(worktree, services: Any, cap: int = 200_000):
     """Return the worker's net diff from main, including untracked files."""
     if not worktree:
@@ -275,20 +284,95 @@ def capture_diff(worktree, services: Any, cap: int = 200_000):
         return None
     if len(output) > cap:
         output = output[:cap] + "\n...[diff truncated]..."
-    return output
+    return printable(output)
+
+
+def _status_paths(cwd, services: Any):
+    """Paths with any change in ``cwd`` (tracked, untracked, ignored) — one git call."""
+    return_code, output = services._run_git(
+        [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--ignored",
+            "--untracked-files=all",
+            "--",
+            *DIFF_EXCLUDES,
+            # Linked worktrees nested under the main checkout are separate
+            # checkouts, never part of this checkout's file state (ls-files, which
+            # builds the patches, never descends into them either).
+            ":(exclude).orcha-worktrees",
+        ],
+        cwd=cwd,
+        timeout=60,
+    )
+    if return_code != 0:
+        return None
+    # Patches are taken against origin/main, so commits on the checkout's own
+    # branch count as state too (they are invisible to `git status`).
+    committed_code, committed = services._run_git(
+        ["diff", "--name-only", "-z", "origin/main", "--", *DIFF_EXCLUDES],
+        cwd=cwd,
+        timeout=60,
+    )
+    if committed_code != 0:
+        return None
+    paths = {path for path in committed.split("\0") if path}
+    entries = output.split("\0")
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        paths.add(entry[3:])
+        if entry[0] in "RC":
+            # Rename/copy entries carry the original path as the next NUL field.
+            index += 1
+    return paths
+
+
+def _patch_paths(patch: str):
+    """File paths a unified patch touches (``diff --git a/X b/X`` headers)."""
+    paths = set()
+    for line in (patch or "").splitlines():
+        if line.startswith("diff --git a/"):
+            rest = line[len("diff --git a/"):]
+            split = rest.rfind(" b/")
+            if split > 0:
+                paths.add(rest[:split])
+    return paths
 
 
 def _place_handoff_patch(
     destination_cwd, patch: str, owner_key: str, services: Any
 ) -> bool:
     """Safely reconcile one known stream's patch into its destination checkout."""
-    destination_patch = _full_patch(
-        destination_cwd, services, include_ignored=True
-    )
-    if destination_patch is None:
-        return False
-
+    # A developer's main checkout can hold tens of thousands of ignored files
+    # (virtualenvs, node_modules). Diffing each of them against /dev/null takes
+    # minutes and starves every wake, so decide from one `git status` first and
+    # only build the destination's exact patch when the outcome depends on it.
     destination_record = _read_handoff_record(destination_cwd, services)
+    changed = _status_paths(destination_cwd, services)
+    if changed is None:
+        return False
+    if not changed:
+        destination_patch = ""
+    else:
+        if destination_record is not None and destination_record.get(
+            "owner_key"
+        ) != owner_key:
+            return False
+        if destination_record is None and not changed <= _patch_paths(patch):
+            # Independent work exists that this stream's patch does not even
+            # mention; it can never be an identical state, so never touch it.
+            return False
+        destination_patch = _full_patch(
+            destination_cwd, services, include_ignored=True
+        )
+        if destination_patch is None:
+            return False
+
     if (
         destination_record is not None
         and destination_record.get("owner_key") != owner_key

@@ -19,6 +19,15 @@ missing.
   means "nothing to carry" and the wake proceeds; a genuine handoff failure holds
   the agent down for 5 minutes and posts the thread notice at most every 30 min.
 
+- With worktrees disabled, a wake into a real developer checkout could crash the
+  whole notifier tick (`UnicodeDecodeError` while diffing a non-UTF-8 ignored
+  file) right after claiming the agent's lease, starving that agent for the lease
+  TTL and then crashing again — silently under `--quiet`. Git output is now
+  decoded byte-faithfully, the destination's dirtiness is decided from one
+  `git status` instead of one `git diff` per ignored file (36k subprocesses on a
+  checkout with a virtualenv), and a crashing candidate/conversation now releases
+  its lease, is held down for 5 min, and is logged even in quiet mode.
+
 ### Added
 - `orcha file-guard` — per-file edit lock for agents that share one checkout
   (project has "Disable worktrees" on). Registered as PreToolUse (waits for
