@@ -123,6 +123,7 @@ export interface Container {
   status?: string;
   autonomy_level?: string; // plan | pr | full
   autonomy_enforced?: boolean; // #64 mig-043: container level governs everyone (overrides ignored)
+  worktrees_disabled?: boolean; // project routes every agent run through the main checkout
   autonomy_paused?: boolean;
   last_wake_scan_at?: string | null; // mig 037: daemon wake-scan stamp — drives wakesServed
   root_task_id?: string | null;

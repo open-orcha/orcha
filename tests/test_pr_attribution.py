@@ -32,9 +32,10 @@ def test_migration_042_exists_and_is_next_sequential():
     # is now the latest. 042 (git_email) still exists (asserted above).
     # 045 added by Code Space (docs/orcha-code-space-design.md); 046 added by the GitHub PAT
     # storage seam (Orcha Cloud local run gap #1, docs/orcha-cloud-local-run.md §1); 048 added by
-    # the host-side roster analysis storage seam (docs/orcha-cloud-local-run.md). Keep this pin
-    # moving with the chain tip so gaps/dupes still fail loudly.
-    assert numbers[-1] == 48, f"048 must be the latest migration, saw {numbers[-1]:03d}"
+    # the host-side roster analysis storage seam (docs/orcha-cloud-local-run.md); 049 adds the
+    # project-level worktree-routing preference. Keep this pin moving with the chain tip so
+    # gaps/dupes still fail loudly.
+    assert numbers[-1] == 49, f"049 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):

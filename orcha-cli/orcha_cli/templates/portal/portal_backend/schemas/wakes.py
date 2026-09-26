@@ -140,6 +140,19 @@ class WakesToggle(BaseModel):
     )
 
 
+class WorktreeRoutingUpdate(BaseModel):
+    disabled: bool = Field(
+        ...,
+        description=(
+            "true = route all future agent runs through the project's main checkout; "
+            "false = use the normal isolated worktree routing"
+        ),
+    )
+    actor_agent_id: str = Field(
+        ..., description="UUID of the human changing the project routing preference"
+    )
+
+
 class AutonomyUpdate(BaseModel):
     level: str = Field(..., description="engine autonomy level: 'plan' | 'pr' | 'full'")
     actor_agent_id: str = Field(

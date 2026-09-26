@@ -1,5 +1,6 @@
 """Authorize websocket clients and orchestrate attached live-terminal sessions."""
 
+from .notifier_routing_handoff import carry_previous_checkout
 from .terminal_bridge_relay import (
     parse_query,
     safe_close,
@@ -36,6 +37,7 @@ async def handle_connection(bridge, notifier, ws, api_base, base_cwd, quiet=True
     alias = target.get("alias") or aid
     model = target.get("model")
     runtime = target.get("model_runtime") or bridge.RUNTIME_CLAUDE
+    worktrees_disabled = bool(target.get("worktrees_disabled"))
     preempt = params.get("preempt") in ("1", "true", "yes")
 
     async def on_yielding():
@@ -45,6 +47,19 @@ async def handle_connection(bridge, notifier, ws, api_base, base_cwd, quiet=True
         )
 
     warm = bridge._take_warm(aid)
+    routing_source_cwd = None
+    if (
+        warm is not None
+        and bool(getattr(warm, "worktrees_disabled", False)) != worktrees_disabled
+    ):
+        # The persisted project routing changed while this PTY was parked.  Do not reattach it in
+        # the wrong checkout, and do not remove its old worktree as a side effect of the toggle.
+        routing_source_cwd = warm.worktree or warm.base_cwd
+        warm.cancel_expiry()
+        bridge._retire_warm(
+            warm, quiet=quiet, teardown_worktree=False
+        )
+        warm = None
     if warm is not None and warm.pty_alive():
         session = _adopt_warm(bridge, ws, warm)
         await session["connected"]
@@ -62,8 +77,10 @@ async def handle_connection(bridge, notifier, ws, api_base, base_cwd, quiet=True
             alias,
             model,
             runtime,
+            worktrees_disabled,
             preempt,
             on_yielding,
+            routing_source_cwd,
         )
         if session is None:
             return
@@ -115,6 +132,7 @@ def _adopt_warm(bridge, ws, warm):
         "run_id": warm.run_id,
         "rec": warm.rec,
         "run_token": warm.run_token,
+        "worktrees_disabled": bool(getattr(warm, "worktrees_disabled", False)),
         "connected": connected(),
     }
 
@@ -129,8 +147,10 @@ async def _start_session(
     alias,
     model,
     runtime,
+    worktrees_disabled,
     preempt,
     on_yielding,
+    routing_source_cwd=None,
 ):
     """Claim resources and start a new PTY-backed live session."""
     claim = await bridge.acquire_live_lease(
@@ -149,18 +169,51 @@ async def _start_session(
         return None
 
     cold = bool(claim.get("cold", True))
-    worktree, branch = notifier._provision_live_worktree(base_cwd, alias)
+    worktree, branch = (
+        (None, None)
+        if worktrees_disabled
+        else notifier._provision_live_worktree(base_cwd, alias)
+    )
+    run_cwd = worktree or base_cwd
+    if not carry_previous_checkout(
+        api_base,
+        aid,
+        run_cwd,
+        notifier,
+        source_cwd=routing_source_cwd,
+        wake_kind="live",
+    ):
+        bridge.release_live_lease(api_base, aid)
+        await ws.send(
+            bridge.make_frame(
+                "error",
+                message=(
+                    "Could not safely carry the saved files into the checkout selected "
+                    "by the project setting. Both checkouts were preserved."
+                ),
+            )
+        )
+        await ws.close(code=1011)
+        return None
     run_token = bridge.mint_live_token(api_base, aid)
     pid, master_fd = bridge.spawn_pty(
         alias,
         cold,
         claim.get("session_id"),
-        worktree or base_cwd,
+        run_cwd,
         model=model,
         runtime=runtime,
         run_token=run_token,
     )
-    run_id = bridge.start_live_run(api_base, aid, pid=pid, token_id=run_token)
+    run_id = bridge.start_live_run(
+        api_base,
+        aid,
+        pid=pid,
+        token_id=run_token,
+        worktree=worktree,
+        branch=branch,
+        base_cwd=base_cwd,
+    )
     if run_token and run_id is None:
         bridge.revoke_live_token(api_base, run_token)
         run_token = None
@@ -178,6 +231,7 @@ async def _start_session(
         "run_id": run_id,
         "rec": rec,
         "run_token": run_token,
+        "worktrees_disabled": worktrees_disabled,
     }
 
 
@@ -207,6 +261,7 @@ async def _detach_or_retire(
         session["run_id"],
         session["rec"],
         run_token=session["run_token"],
+        worktrees_disabled=session.get("worktrees_disabled", False),
     )
     if alive and not user_closed:
         bridge._park_warm(warm, quiet=quiet)

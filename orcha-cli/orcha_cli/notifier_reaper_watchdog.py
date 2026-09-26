@@ -36,7 +36,9 @@ def handle_terminal_result(
     if now - seen <= services.GRACEFUL_EXIT_SECS:
         return True
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     drain_status = "exited"
     if runtime == services.RUNTIME_CODEX:
         drain_status = services._codex_exit_status(
@@ -77,8 +79,8 @@ def handle_terminal_result(
         services._reap_sandbox_artifacts(worker)  # I4: completed (lingering) — reap once stamped
     if worker.get("task_worktree"):
         _save_task_result(api_base, aid, worker, diff, failed_drains, services)
-    else:
-        services._teardown_worktree(
+    elif worker.get("worktree"):
+        services._safe_teardown_worktree(
             worker.get("base_cwd"), worker.get("worktree"), worker.get("branch")
         )
     ack = {
@@ -133,7 +135,9 @@ def kill_stalled(
         "last_event_type": services._last_event_type(log_path),
     }
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     if services._finish_run(
         api_base,
         worker.get("run_id"),

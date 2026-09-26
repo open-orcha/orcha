@@ -5,6 +5,8 @@ from __future__ import annotations
 import pathlib
 import time
 
+from .notifier_routing_handoff import carry_previous_checkout
+
 
 def start_candidate(
     services,
@@ -68,13 +70,14 @@ def start_candidate(
             )
         return
 
+    worktrees_disabled = bool(candidate.get("worktrees_disabled"))
     in_git = services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)
-        if in_git
+        if in_git and not worktrees_disabled
         else (None, None)
     )
-    if in_git and worktree is None:
+    if in_git and not worktrees_disabled and worktree is None:
         _fail(
             services,
             api_base,
@@ -84,6 +87,21 @@ def start_candidate(
         )
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
+    if not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        conversation_id=conv_id,
+    ):
+        _fail(
+            services,
+            api_base,
+            candidate,
+            quiet,
+            "saved files could not be carried into the selected checkout",
+        )
+        return
     log_path = services._conversation_log_path(base_cwd, conv_id)
     reply_path = services._conversation_reply_path(log_path)
     session_id = candidate.get("session_id")
@@ -196,6 +214,7 @@ def start_candidate(
         "conversation_ack_ts": candidate.get("conversation_ack_ts"),
         "resume_session_id": session_id if use_resume else None,
         "run_token": token,
+        "worktrees_disabled": worktrees_disabled,
         "hard_deadline": time.time() + services.HARD_CAP_MIN_SECS,
         "last_size": 0,
         "last_progress_ts": time.time(),

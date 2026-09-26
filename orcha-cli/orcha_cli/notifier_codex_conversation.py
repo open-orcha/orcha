@@ -31,7 +31,9 @@ def finish(
     teardown_worktree: bool = False,
 ) -> bool:
     """Publish the final reply, finish its run, and release the conversation lease."""
-    diff = services._capture_diff(resident.get("worktree"))
+    diff = services._capture_diff(
+        resident.get("worktree") or resident.get("base_cwd")
+    )
     posted = False
     real_text = (
         services._conversation_reply_text(
@@ -105,6 +107,7 @@ def run_state(conversation: dict, run: dict, services, *, base_cwd=None) -> dict
         "worktree": run.get("worktree"),
         "branch": run.get("branch"),
         "base_cwd": run.get("base_cwd") or base_cwd,
+        "worktrees_disabled": bool(conversation.get("worktrees_disabled")),
         "serviced_seq": conversation.get("last_turn_seq", 0),
         "current_run_id": run["run_id"],
         "run_id": run["run_id"],

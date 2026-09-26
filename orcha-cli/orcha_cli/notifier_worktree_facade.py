@@ -157,6 +157,34 @@ def _capture_diff(worktree, cap: int = 200_000):
     return _cleanup.capture_diff(worktree, _compat(), cap)
 
 
+def _handoff_worktree_changes(
+    source_cwd,
+    destination_cwd,
+    *,
+    owner_key=None,
+    source_owner_verified=False,
+) -> bool:
+    return _cleanup.handoff_changes(
+        source_cwd,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+        source_owner_verified=source_owner_verified,
+    )
+
+
+def _handoff_branch_changes(
+    base_cwd, branch, destination_cwd, *, owner_key=None
+) -> bool:
+    return _cleanup.handoff_branch_changes(
+        base_cwd,
+        branch,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+    )
+
+
 def _branch_commit_count(base_cwd, branch) -> int:
     return _cleanup.branch_commit_count(base_cwd, branch, _compat())
 
@@ -170,7 +198,11 @@ def _is_git_repo(cwd) -> bool:
 
 
 def _worktree_is_dirty(worktree, excludes=None) -> bool:
-    return _cleanup.worktree_is_dirty(worktree, _compat(), excludes)
+    return _cleanup.worktree_is_dirty(
+        worktree,
+        _compat(),
+        _cleanup.DIFF_EXCLUDES if excludes is None else excludes,
+    )
 
 
 def _safe_teardown_worktree(base_cwd, worktree, branch) -> str:

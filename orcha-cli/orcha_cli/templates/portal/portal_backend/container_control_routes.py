@@ -7,9 +7,52 @@ from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, require_kind, valid_uuid
 from portal_backend.identity_routes import enforce_grant, trusted_actor
-from portal_backend.schemas.wakes import AutonomyUpdate, WakesToggle
+from portal_backend.schemas.wakes import (
+    AutonomyUpdate,
+    WakesToggle,
+    WorktreeRoutingUpdate,
+)
 
 AUTONOMY_LEVELS = ("plan", "pr", "full")
+
+
+@app.post("/api/containers/{cid}/worktrees", status_code=200)
+def set_worktrees_disabled(cid: str, body: WorktreeRoutingUpdate, request: Request):
+    """Choose whether every future agent run uses the shared main checkout.
+
+    The persisted flag is intentionally routing-only: changing it never deletes or migrates an
+    existing worktree.  The notifier applies it at the final cwd decision for work wakes,
+    conversation turns, and live terminals.  As with other execution controls, only a human with
+    the owner role or ``manage_autonomy`` permission may change it.
+    """
+    if not valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    with db_cursor() as (connection, cur):
+        require_container(cur, cid)
+        enforce_grant(cur, request, cid, "manage_autonomy")
+        body.actor_agent_id = trusted_actor(cur, request, cid, body.actor_agent_id)
+        require_kind(cur, body.actor_agent_id, ("human",))
+        cur.execute(
+            "UPDATE containers SET worktrees_disabled=%s WHERE id=%s "
+            "RETURNING worktrees_disabled",
+            (body.disabled, cid),
+        )
+        row = cur.fetchone()
+        log_event(
+            cur,
+            cid,
+            "human",
+            body.actor_agent_id,
+            "container",
+            cid,
+            "worktree_routing_changed",
+            {"worktrees_disabled": body.disabled},
+        )
+        connection.commit()
+    return {
+        "container_id": cid,
+        "worktrees_disabled": bool(row["worktrees_disabled"]),
+    }
 
 
 @app.post("/api/containers/{cid}/wakes", status_code=200)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
+from collections import Counter
 from typing import Optional
 
 # Remote-runner spec §3.3c/§3.5: sandbox rows are reconciled by CONTAINER liveness.
@@ -23,6 +25,38 @@ from . import sandbox as _sandbox
 # Both checks are deferrals, not exemptions — past the grace, the existing
 # vanish/orphan-stop semantics apply unchanged.
 ORPHAN_BOOT_GRACE_SECS = 90.0
+
+
+def _checkout_key(row: dict) -> Optional[str]:
+    """Canonical checkout identity for safe restart-recovery snapshots."""
+    cwd = row.get("worktree") or row.get("base_cwd")
+    if not cwd:
+        return None
+    return os.path.normcase(os.path.realpath(os.fspath(cwd)))
+
+
+def _capture_recovered_diff(
+    row: dict,
+    checkout_users: Counter,
+    unknown_checkout_users: int,
+    services,
+):
+    """Capture only when this run is the checkout's sole open owner.
+
+    A notifier restart can leave a dead run beside a live replacement. With
+    worktrees disabled both rows point at the main checkout, so reading it while
+    the replacement is active would attach that replacement's edits to the dead
+    run. The running-runs response is the ownership boundary: when another open
+    row names the same canonical checkout, finishing the dead row without a
+    snapshot is safer than claiming shared mutable state as its result.
+    """
+    cwd = row.get("worktree") or row.get("base_cwd")
+    key = _checkout_key(row)
+    if key is not None and (
+        checkout_users[key] > 1 or unknown_checkout_users > 0
+    ):
+        return None
+    return services._capture_diff(cwd)
 
 
 def _age_secs(iso_ts) -> Optional[float]:
@@ -70,7 +104,14 @@ def reap_orphan_leases(api_base: str, cid: str, quiet: bool, services) -> None:
 
 
 def _reconcile_sandbox_run(
-    api_base: str, r: dict, sbx: str, *, quiet: bool = True, services
+    api_base: str,
+    r: dict,
+    sbx: str,
+    *,
+    checkout_users: Counter,
+    unknown_checkout_users: int,
+    quiet: bool = True,
+    services,
 ) -> int:
     """Remote-runner Task 5: reconcile ONE sandbox-backed 'running' row against its
     container's actual state (spec §3.5). Reuses the sweep's `_finish_run` transport
@@ -80,6 +121,7 @@ def _reconcile_sandbox_run(
     leaves a stopped container for a later sweep, never an unstamped run."""
     state = _sandbox.probe(sbx)
     run_id = r.get("run_id")
+    cwd = r.get("worktree") or r.get("base_cwd")
     # The row's per-wake log (§3.3d: written inside the container onto the WORKSPACE,
     # so the host path is readable here) — pass it through every finish exactly like
     # the normal reap path does, so an ADOPTED run's output is captured into
@@ -103,6 +145,9 @@ def _reconcile_sandbox_run(
         # finish the row so the agent stops reading as busy forever (#342 semantics).
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
+            _capture_recovered_diff(
+                r, checkout_users, unknown_checkout_users, services
+            ),
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_container_vanished",
@@ -113,7 +158,6 @@ def _reconcile_sandbox_run(
         return 1 if ok else 0                  # failed POST → retried next sweep
     # cwd for per-workspace config + api-config reap: same resolution the worktree
     # sweep uses — the run's recorded worktree (its spawn cwd) else its base_cwd.
-    cwd = r.get("worktree") or r.get("base_cwd")
     if state.running:
         if r.get("wake_kind") == "resident":
             # Resident lane un-deferral: a warm resident session is long-lived BY
@@ -136,16 +180,22 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
+    diff = _capture_recovered_diff(
+        r, checkout_users, unknown_checkout_users, services
+    )
     if state.oom_killed:
         ok = services._finish_run(
             api_base, run_id, "killed", state.exit_code, log_path,
+            diff,
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_oom",
                                     "detail": "out of memory — raise sandbox.memory"},
                                    ensure_ascii=False))
     else:
-        ok = services._finish_run(api_base, run_id, "exited", state.exit_code, log_path)
+        ok = services._finish_run(
+            api_base, run_id, "exited", state.exit_code, log_path, diff
+        )
     if not ok:
         # I5 (Task-5 review): the stamp did NOT land — removing now would destroy
         # the only evidence of the exit state AND leave the row 'running' forever
@@ -196,6 +246,15 @@ def reap_orphaned_runs(
         # pass below: an empty view from a dead API must never stop live containers.
         return 0
     runs = data.get("runs", [])
+    checkout_users = Counter(
+        key for row in runs if (key := _checkout_key(row)) is not None
+    )
+    # Rows from an older daemon (or malformed callers) may not identify their
+    # checkout. Treat them as possible owners of every checkout rather than
+    # attaching their live edits to a different run during a rolling upgrade.
+    unknown_checkout_users = sum(
+        1 for row in runs if _checkout_key(row) is None
+    )
 
     def alive(row):
         pid = row.get("pid")
@@ -221,7 +280,13 @@ def reap_orphaned_runs(
             continue
         try:
             finished = _reconcile_sandbox_run(
-                api_base, row, sbx, quiet=quiet, services=services
+                api_base,
+                row,
+                sbx,
+                checkout_users=checkout_users,
+                unknown_checkout_users=unknown_checkout_users,
+                quiet=quiet,
+                services=services,
             )
         except Exception:
             # a docker hiccup on ONE run must never abort the sweep for the rest
@@ -253,12 +318,33 @@ def reap_orphaned_runs(
             any(alive(row) for row in rows)
             or (agent_id, lane) in live_sandbox_lanes
         )
-        if live_sibling:
-            for row in dead:
-                services._finish_run(
-                    api_base, row.get("run_id"), "killed", -1, None
-                )
-        else:
+        finished = 0
+        all_finished = True
+        for row in dead:
+            diff = _capture_recovered_diff(
+                row, checkout_users, unknown_checkout_users, services
+            )
+            ok = services._finish_run(
+                api_base,
+                row.get("run_id"),
+                "killed",
+                -1,
+                row.get("log_path"),
+                diff,
+                kill_reason=json.dumps(
+                    {
+                        "run_id": str(row.get("run_id")),
+                        "agent_id": agent_id,
+                        "cause": "host_process_missing_after_notifier_restart",
+                        "detail": "host process missing after notifier restart",
+                    }
+                ),
+            )
+            if ok:
+                finished += 1
+            else:
+                all_finished = False
+        if not live_sibling and all_finished:
             services._post_json(
                 f"{api_base}/api/agents/{agent_id}/wake-ack",
                 {
@@ -267,13 +353,14 @@ def reap_orphaned_runs(
                     "lane": lane,
                 },
             )
-        reaped += len(dead)
+        reaped += finished
         if not quiet:
-            outcome = (
-                "finished orphans, kept lease (live sibling)"
-                if live_sibling
-                else "released lease"
-            )
+            if live_sibling:
+                outcome = "finished orphans, kept lease (live sibling)"
+            elif all_finished:
+                outcome = "finished orphans and released lease"
+            else:
+                outcome = "finish failed; kept lease for retry"
             print(
                 f"[notifier] swept {len(dead)} dead-pid orphaned "
                 f"{lane}-lane run(s) for {agent_id} ({outcome}) (#342)"

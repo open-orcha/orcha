@@ -133,6 +133,9 @@ def advance_live_resident(
                 "killed",
                 -1,
                 resident.get("log_path"),
+                services._capture_diff(
+                    resident.get("worktree") or resident.get("base_cwd")
+                ),
             )
             resident["current_run_id"] = None
         services._close_resident(api_base, resident, reason="hung")
@@ -230,6 +233,9 @@ def _handle_exited(
             "killed",
             process.returncode,
             resident.get("log_path"),
+            services._capture_diff(
+                resident.get("worktree") or resident.get("base_cwd")
+            ),
         )
     # I4 (resident lane): the docker client exited → the sandboxed session is
     # over; reap its container + api-config once the stamp landed (or when no

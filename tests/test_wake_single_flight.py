@@ -1872,6 +1872,7 @@ def test_checkpoint_respawn_budget_exhausted_is_reaped_as_runaway(monkeypatch, t
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
     monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
+    monkeypatch.setattr(notifier, "_worktree_is_dirty", lambda wt: False)
     monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
     monkeypatch.setattr(notifier, "spawn_headless",
                         lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))

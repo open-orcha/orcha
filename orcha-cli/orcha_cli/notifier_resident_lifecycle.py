@@ -46,6 +46,9 @@ def _close_resident(
             "exited",
             0,
             resident.get("log_path"),
+            compat._capture_diff(
+                resident.get("worktree") or resident.get("base_cwd")
+            ),
         )
     # I4 (resident lane): the warm session's container is spawned without --rm by
     # design — every close path must reap it (container + per-run api-config) or
