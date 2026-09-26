@@ -62,6 +62,21 @@ def checkout_owner_key(
     return f"{lane or 'work'}:{agent_id}:taskless"
 
 
+def retained_branch_exists(services, base_cwd, branch):
+    """Return whether a recorded worker branch still exists, or None when unknowable."""
+    run_git = getattr(services, "_run_git", None)
+    if run_git is None or not branch or not base_cwd:
+        return None
+    try:
+        return_code, _ = run_git(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=base_cwd,
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+    return return_code == 0
+
+
 def carry_previous_checkout(
     api_base,
     agent_id,
@@ -115,6 +130,15 @@ def carry_previous_checkout(
             base_cwd = prior_run.get("base_cwd") if prior_run else None
             handoff_branch = getattr(services, "_handoff_branch_changes", None)
             if branch and base_cwd and handoff_branch is not None:
+                if retained_branch_exists(services, base_cwd, branch) is False:
+                    # The run row still names the branch, but Orcha already
+                    # deleted it: a worker branch is only dropped once it holds
+                    # no commits beyond origin/main, and a worktree is only
+                    # retired once it is clean (or its uncommitted files were
+                    # already forcibly discarded). Either way nothing recoverable
+                    # remains, so a fresh run must start instead of failing the
+                    # wake forever on a stale record.
+                    return True
                 return handoff_branch(
                     base_cwd,
                     branch,

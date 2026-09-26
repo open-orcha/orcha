@@ -141,7 +141,7 @@ def _ack_delivery(
 
 
 def _held(candidate, context, quiet):
-    """Apply and eventually clear an agent's rate-limit hold-down."""
+    """Apply and eventually clear an agent's hold-down (rate limit or failed handoff)."""
     agent_id = candidate.get("agent_id")
     hold = context["agent_hold_until"].get(agent_id)
     if hold is None:
@@ -151,7 +151,7 @@ def _held(candidate, context, quiet):
             remaining = hold - context["hold_now"]
             print(
                 f"[notifier] skip {candidate.get('alias')} "
-                f"— rate-limit hold-down ({remaining:.0f}s left)"
+                f"— hold-down ({remaining:.0f}s left)"
             )
         return True
     context["agent_hold_until"].pop(agent_id, None)
@@ -202,6 +202,12 @@ def process_candidate(
         )
         if spawned is None:
             return None
+        if spawned.get("handoff_failed"):
+            # Hold the candidate down instead of re-attempting (and re-posting)
+            # the same failed checkout handoff on every scan tick.
+            context["agent_hold_until"][candidate["agent_id"]] = (
+                context["hold_now"] + notifier_wake_worker.HANDOFF_FAILURE_HOLD_SECS
+            )
         sent = spawned["sent"]
         command = spawned["command"]
         resume_rendered = spawned["resume_rendered"]

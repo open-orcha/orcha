@@ -40,6 +40,16 @@ def register_session_commands(
     )
     conv_guard.set_defaults(func=handlers["conv-guard"])
 
+    file_guard = sub.add_parser(
+        "file-guard",
+        help="PreToolUse/PostToolUse/SessionEnd hook entry — serialises Edit/Write/"
+        "MultiEdit/NotebookEdit per file across every agent sharing one checkout "
+        "(worktrees disabled). PreToolUse waits for another session's lock on the "
+        "same file (ORCHA_FILE_LOCK_WAIT_SECS, default 600) and denies only after "
+        "that budget; PostToolUse/SessionEnd release. ORCHA_FILE_LOCK=0 disables.",
+    )
+    file_guard.set_defaults(func=handlers["file-guard"])
+
     watch = sub.add_parser(
         "watch",
         help="background per-session poller (Orcha#33). Polls inbox + answered "

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import time
 
+from . import notifier_checkout_consent as _consent
 from . import notifier_resident_claude_feed as _feed_service
 from .notifier_routing_handoff import carry_previous_checkout
 
@@ -144,14 +145,7 @@ def _boot(
         )
         or {}
     ).get("turns", [])
-    resolved_through = max(
-        [
-            turn["seq"]
-            for turn in turns
-            if turn.get("role") == "agent"
-        ],
-        default=0,
-    )
+    resolved_through = _consent.resolved_through(turns)
     serviced = max(serviced, resolved_through)
     persona = (
         services._build_persona(
@@ -197,21 +191,37 @@ def _boot(
         _release_failed(services, api_base, candidate)
         return None
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
-    if not dry_run and not carry_previous_checkout(
-        api_base,
-        candidate["agent_id"],
-        run_cwd,
-        services,
-        source_cwd=routing_source_cwd,
-        conversation_id=conv_id,
-    ):
-        _release_failed(services, api_base, candidate)
-        if not quiet:
-            print(
-                f"[notifier] resident skip {candidate.get('agent_alias')} — "
-                "saved files could not be carried into the selected checkout"
-            )
-        return None
+
+    def _carry():
+        return carry_previous_checkout(
+            api_base,
+            candidate["agent_id"],
+            run_cwd,
+            services,
+            source_cwd=routing_source_cwd,
+            conversation_id=conv_id,
+        )
+
+    if not dry_run and not _carry():
+        # Ask the human (discard the old worktree, or re-enable worktrees) instead of
+        # silently retrying every tick; retry the carry right away on consent.
+        consented = _consent.handle_carry_failure(
+            services,
+            api_base,
+            conv_id,
+            candidate,
+            turns,
+            base_cwd=base_cwd,
+            quiet=quiet,
+        )
+        if not (consented and _carry()):
+            _release_failed(services, api_base, candidate)
+            if not quiet:
+                print(
+                    f"[notifier] resident skip {candidate.get('agent_alias')} — "
+                    "saved files could not be carried into the selected checkout"
+                )
+            return None
     token = (
         None
         if dry_run

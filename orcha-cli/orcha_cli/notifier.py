@@ -69,6 +69,7 @@ from .notifier_worktree_facade import (
     _ensure_worktree_exclude,
     _existing_snapshot_ref,
     _finish_run,
+    _discard_worktree,
     _handoff_branch_changes,
     _handoff_worktree_changes,
     _is_git_repo,

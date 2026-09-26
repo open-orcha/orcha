@@ -72,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
         "connect": cmd_connect,
         "poll-inbox": cmd_poll_inbox,
         "conv-guard": cmd_conv_guard,
+        "file-guard": cmd_file_guard,
         "watch": cmd_watch,
         "unwatch": cmd_unwatch,
         "rehydrate": cmd_rehydrate,

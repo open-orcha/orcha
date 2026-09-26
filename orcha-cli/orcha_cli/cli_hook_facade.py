@@ -7,6 +7,7 @@ import sys
 
 from . import (
     cli_bindings,
+    cli_file_lock,
     cli_hooks,
     cli_rehydrate,
     cli_session_hooks,
@@ -38,6 +39,7 @@ __all__ = [
     "_write_hook_config",
     "cmd_conv_guard",
     "cmd_enable_hook",
+    "cmd_file_guard",
     "cmd_poll_inbox",
     "cmd_reachability",
     "cmd_rehydrate",
@@ -123,6 +125,10 @@ def _conv_is_memory_write(tool_input: dict) -> bool:
 
 def cmd_conv_guard(_) -> None:
     cli_session_hooks.conversation_guard(_services())
+
+
+def cmd_file_guard(_) -> None:
+    cli_file_lock.file_guard(_services())
 
 
 def _fmt_rehydrate_brief(brief: dict) -> str:
