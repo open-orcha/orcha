@@ -93,6 +93,18 @@ def _advise_shared_checkout(api_base, candidate, run_task_id, live_workers, serv
     return siblings
 
 
+def _previous_checkout_hint(api_base, candidate, task_id, services):
+    """Best-effort path of the checkout whose files were not carried (for a notice)."""
+    try:
+        from .notifier_routing_handoff import previous_checkout
+
+        return previous_checkout(
+            api_base, candidate["agent_id"], services, task_id=task_id, lane="work"
+        ) or "(unknown)"
+    except Exception:  # noqa: BLE001 - the notice is informational only
+        return "(unknown)"
+
+
 def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
     """Provision isolation appropriate to the candidate's likely work."""
     # This is the final routing decision shared by every work-lane trigger.  A disabled project
@@ -279,7 +291,7 @@ def spawn(
         candidate, auto_tasks, live_workers, dry_run, services
     )
     run_cwd = worktree or headless_cwd
-    if not dry_run and not carry_previous_checkout(
+    carried = dry_run or carry_previous_checkout(
         api_base,
         candidate["agent_id"],
         run_cwd,
@@ -287,7 +299,32 @@ def spawn(
         task_id=run_task_id,
         lane="work",
         require_taskless=run_task_id is None,
-    ):
+    )
+    if not carried and candidate.get("worktrees_disabled"):
+        # The project chose the shared main checkout. Refusing to start because
+        # main holds unrelated changes would block every wake for good, so start
+        # there as-is and say once where the previous checkout's files still are.
+        if run_task_id and _due(
+            _HANDOFF_FAILURE_NOTICE_TS,
+            (candidate["agent_id"], run_task_id),
+            HANDOFF_FAILURE_NOTICE_INTERVAL_SECS,
+        ):
+            services._post_json(
+                f"{api_base}/api/tasks/{run_task_id}/messages",
+                {
+                    "author_agent_id": candidate["agent_id"],
+                    "body": (
+                        "Starting in the main checkout without carrying over the "
+                        "files saved in my previous checkout "
+                        f"`{_previous_checkout_hint(api_base, candidate, run_task_id, services)}` "
+                        "(the main checkout already holds unrelated changes). That "
+                        "checkout is preserved as-is; re-enable worktrees to continue "
+                        "from it instead."
+                    ),
+                },
+            )
+        carried = True
+    if not carried:
         if run_task_id and _due(
             _HANDOFF_FAILURE_NOTICE_TS,
             (candidate["agent_id"], run_task_id),

@@ -1206,7 +1206,7 @@ def test_ordinary_task_wake_handoff_failure_stops_before_spawn(monkeypatch):
         "headless_cwd": "/project/main",
         "context_task_id": "task-1",
         "pending_events": 1,
-        "worktrees_disabled": True,
+        "worktrees_disabled": False,
     }
 
     result = notifier_wake_worker.spawn(
@@ -2089,7 +2089,7 @@ def test_handoff_failure_notice_is_not_repeated_every_tick(monkeypatch):
         "headless_cwd": "/project/main",
         "context_task_id": "task-1",
         "pending_events": 1,
-        "worktrees_disabled": True,
+        "worktrees_disabled": False,
     }
     results = [
         notifier_wake_worker.spawn(
@@ -2718,3 +2718,50 @@ def test_wake_tick_recovers_from_a_crashing_candidate(monkeypatch, capsys):
     assert holds["a-1"] > time.time() + 200
     assert "wake error for crasher" in capsys.readouterr().err
     assert "UnicodeDecodeError" in capsys.readouterr().err or True
+
+
+def test_worktrees_disabled_starts_in_main_when_carry_is_refused(monkeypatch):
+    """A shared main checkout with unrelated changes must not block wakes forever."""
+    notifier_wake_worker.reset_notice_state()
+    monkeypatch.setattr(
+        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+    )
+    posts, spawned = [], []
+    services = _shared_checkout_services(posts, spawned)
+    services._get_json = lambda url: {
+        "runs": [{"task_id": "task-1", "lane": "work", "worktree": "/project/.orcha-worktrees/task-1", "base_cwd": "/project/main"}]
+    }
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "context_task_id": "task-1",
+        "pending_events": 1,
+        "worktrees_disabled": True,
+    }
+    for _ in range(2):
+        result = notifier_wake_worker.spawn(
+            "http://orcha",
+            candidate,
+            prompt="continue",
+            event="task_message",
+            dry_run=False,
+            quiet=True,
+            lease_ttl=120,
+            live_workers={},
+            services=services,
+        )
+        assert result["sent"] is True
+        assert "handoff_failed" not in result
+
+    assert spawned == ["/project/main", "/project/main"]
+    notices = [
+        body for url, body in posts
+        if url.endswith("/tasks/task-1/messages") and "without carrying" in body["body"]
+    ]
+    assert len(notices) == 1
+    assert "/project/.orcha-worktrees/task-1" in notices[0]["body"]
+    assert not any(
+        url.endswith("/wake-ack") and body.get("kind") == "worker_routing_handoff_failed"
+        for url, body in posts
+    )
