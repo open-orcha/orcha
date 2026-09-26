@@ -10,6 +10,30 @@ from typing import Optional
 from . import sandbox as _sandbox
 
 
+_CODEX_HOOK_TRUST_BYPASS: dict = {}
+
+
+def codex_supports_hook_trust_bypass(executable, services) -> bool:
+    """Probe (once per executable) whether `codex exec` accepts the hook-trust bypass."""
+    key = str(executable)
+    if key not in _CODEX_HOOK_TRUST_BYPASS:
+        supported = False
+        try:
+            result = services.subprocess.run(
+                [executable, "exec", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            supported = "--dangerously-bypass-hook-trust" in (
+                (getattr(result, "stdout", "") or "") + (getattr(result, "stderr", "") or "")
+            )
+        except Exception:
+            supported = False
+        _CODEX_HOOK_TRUST_BYPASS[key] = supported
+    return _CODEX_HOOK_TRUST_BYPASS[key]
+
+
 def spawn_headless(
     cwd: str,
     prompt: str,
@@ -55,6 +79,10 @@ def spawn_headless(
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
         ]
+        if codex_supports_hook_trust_bypass(executable, services):
+            # Project hooks (<repo>/.codex/hooks.json — the per-file edit lock) need
+            # persisted trust or this flag; a headless worker cannot answer the prompt.
+            argv.append("--dangerously-bypass-hook-trust")
         if model:
             argv += ["--model", model]
         if reasoning_effort:

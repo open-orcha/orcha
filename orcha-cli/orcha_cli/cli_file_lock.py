@@ -26,12 +26,19 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import time
 from typing import Any, Callable, Optional
 
-EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+# Claude Code edit tools carry one path; Codex edits arrive as one ``apply_patch``
+# call whose patch text names every touched file.
+EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"})
 PATH_KEYS = ("file_path", "notebook_path", "path")
+PATCH_FILE_RE = re.compile(
+    r"^\*\*\* (?:Update|Add|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$",
+    re.MULTILINE,
+)
 LOCK_SUBDIR = ("orcha", "file-locks")
 FALLBACK_SUBDIR = (".claude", ".orcha-file-locks")
 RELEASE_EVENTS = frozenset({"SessionEnd", "Stop"})
@@ -92,14 +99,38 @@ def lock_root(project_cwd) -> pathlib.Path:
     return pathlib.Path(project_cwd).joinpath(*FALLBACK_SUBDIR)
 
 
+def patch_paths(text: str) -> list[str]:
+    """Return every file an ``apply_patch`` document updates, adds, deletes or moves."""
+    found: list[str] = []
+    for match in PATCH_FILE_RE.finditer(text or ""):
+        path = match.group(1) or match.group(2)
+        if path and path not in found:
+            found.append(path)
+    return found
+
+
 def edited_paths(tool_name: str, tool_input: Any) -> list[str]:
-    """Return the file an edit tool is about to touch (empty for other tools)."""
+    """Return the files an edit tool is about to touch (empty for other tools)."""
     if tool_name not in EDIT_TOOLS or not isinstance(tool_input, dict):
         return []
     for key in PATH_KEYS:
         value = tool_input.get(key)
         if isinstance(value, str) and value.strip():
             return [value]
+    if tool_name == "apply_patch":
+        found: list[str] = []
+        for value in tool_input.values():
+            if isinstance(value, str) and "*** " in value:
+                for path in patch_paths(value):
+                    if path not in found:
+                        found.append(path)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str) and "*** " in item:
+                        for path in patch_paths(item):
+                            if path not in found:
+                                found.append(path)
+        return found
     return []
 
 
@@ -300,11 +331,12 @@ def file_guard(services) -> None:
             # Any new tool call by this session means its previous edit finished,
             # so leftovers from a failed edit (no PostToolUse) are dropped first.
             lock.release_all()
-            for path in paths:
+            for path in sorted(paths):
                 held, holder = lock.acquire(
                     path, project_cwd, wait=wait_secs(), stale=stale_secs()
                 )
                 if not held:
+                    lock.release_all()
                     who = (holder or {}).get("alias") or "another agent"
                     _deny(
                         f"{tool_name} on {path} is waiting on a file lock held by {who} "

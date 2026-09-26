@@ -211,3 +211,113 @@ def test_managed_hooks_register_file_guard_with_timeout(tmp_path):
     )
     # Idempotent.
     assert not cli_hooks.write_hook_config(claude_dir)
+
+
+# --- Codex workers: apply_patch carries every touched file in one call ---------
+
+CODEX_PATCH = """*** Begin Patch
+*** Update File: src/app.py
+@@
+-old
++new
+*** Add File: src/new_module.py
++print("hi")
+*** Delete File: src/obsolete.py
+*** Update File: src/renamed.py
+*** Move to: src/moved.py
+*** End Patch
+"""
+
+
+def test_apply_patch_paths_are_parsed_from_patch_text():
+    paths = cli_file_lock.edited_paths("apply_patch", {"input": CODEX_PATCH})
+    assert paths == [
+        "src/app.py",
+        "src/new_module.py",
+        "src/obsolete.py",
+        "src/renamed.py",
+        "src/moved.py",
+    ]
+    assert cli_file_lock.edited_paths("apply_patch", {"command": ["apply_patch", CODEX_PATCH]}) == paths
+    assert cli_file_lock.edited_paths("apply_patch", {"command": "ls"}) == []
+
+
+def test_codex_apply_patch_locks_every_file_and_waits_on_any_of_them(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli_file_lock, "lock_root", lambda cwd: tmp_path / "locks")
+    monkeypatch.setenv("ORCHA_FILE_LOCK_WAIT_SECS", "0.3")
+    monkeypatch.setattr(cli_file_lock, "POLL_SECS", 0.05)
+    # A Claude session holds one of the files the Codex patch touches.
+    assert _guard(monkeypatch, capsys, _payload("PreToolUse", session="claude", path="src/obsolete.py", cwd=tmp_path)) == ""
+
+    codex_pre = {
+        "hook_event_name": "PreToolUse",
+        "session_id": "codex",
+        "cwd": str(tmp_path),
+        "tool_name": "apply_patch",
+        "tool_input": {"input": CODEX_PATCH},
+    }
+    out = json.loads(_guard(monkeypatch, capsys, codex_pre))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # A denied multi-file acquire leaves nothing of the Codex session behind.
+    owners = sorted(json.loads(p.read_text())["owner"] for p in (tmp_path / "locks").glob("*.json"))
+    assert owners == ["claude"]
+
+    # Once the Claude session releases, the patch takes all five files at once.
+    assert _guard(monkeypatch, capsys, _payload("PostToolUse", session="claude", path="src/obsolete.py", cwd=tmp_path)) == ""
+    assert _guard(monkeypatch, capsys, codex_pre) == ""
+    assert len(_locks(tmp_path / "locks")) == 5
+    codex_post = dict(codex_pre, hook_event_name="PostToolUse", tool_response={})
+    assert _guard(monkeypatch, capsys, codex_post) == ""
+    assert _locks(tmp_path / "locks") == []
+
+
+def test_managed_hooks_register_codex_file_guard(tmp_path):
+    from orcha_cli import cli_hooks
+
+    assert cli_hooks.write_hook_config(tmp_path / ".claude")
+    codex = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    events = codex["hooks"]
+    assert events["PreToolUse"][0]["hooks"][0] == {
+        "type": "command",
+        "command": "orcha file-guard",
+        "timeout": 660,
+    }
+    assert events["PostToolUse"][0]["matcher"] == "apply_patch|Edit|Write"
+    assert events["SessionEnd"][0]["hooks"][0]["command"] == "orcha file-guard"
+    assert not cli_hooks.write_hook_config(tmp_path / ".claude")
+
+    # User-defined Codex hooks are preserved.
+    (tmp_path / ".codex" / "hooks.json").write_text(json.dumps({
+        "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "lint"}]}]}
+    }))
+    assert cli_hooks.write_codex_hook_config(tmp_path)
+    codex = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    assert [h["command"] for e in codex["hooks"]["PreToolUse"] for h in e["hooks"]] == ["lint", "orcha file-guard"]
+
+
+def test_codex_headless_gets_hook_trust_bypass_only_when_supported(monkeypatch):
+    from types import SimpleNamespace
+
+    from orcha_cli import notifier_headless
+
+    notifier_headless._CODEX_HOOK_TRUST_BYPASS.clear()
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(stdout="Options:\n  --dangerously-bypass-hook-trust\n", stderr="")
+
+    services = SimpleNamespace(subprocess=SimpleNamespace(run=run))
+    assert notifier_headless.codex_supports_hook_trust_bypass("/bin/codex", services)
+    assert notifier_headless.codex_supports_hook_trust_bypass("/bin/codex", services)
+    assert len(calls) == 1, "probe is cached per executable"
+
+    def old_run(argv, **kwargs):
+        return SimpleNamespace(stdout="Options:\n  --json\n", stderr="")
+
+    assert not notifier_headless.codex_supports_hook_trust_bypass(
+        "/bin/old-codex", SimpleNamespace(subprocess=SimpleNamespace(run=old_run))
+    )
+    assert not notifier_headless.codex_supports_hook_trust_bypass(
+        "/bin/broken", SimpleNamespace(subprocess=SimpleNamespace())
+    )

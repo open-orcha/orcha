@@ -25,6 +25,16 @@ missing.
   another session's lock on the same file, `ORCHA_FILE_LOCK_WAIT_SECS`, default
   600 s), PostToolUse and SessionEnd hooks; different files never wait on each
   other; `ORCHA_FILE_LOCK=0` disables. Locks live in `.git/orcha/file-locks`.
+  Codex workers are covered too: the same guard is registered in
+  `<project>/.codex/hooks.json` (Codex CLI ≥ 0.153 hooks), `apply_patch` calls
+  lock every file the patch touches, and headless Codex runs pass
+  `--dangerously-bypass-hook-trust` when the installed CLI supports it.
+- Conversation lane, worktrees disabled: when a resident cannot move into the
+  main checkout safely, Orcha now asks in the conversation instead of retrying
+  silently — reply **discard** to drop the previous worktree's uncommitted
+  changes and continue in main (committed work stays reachable under
+  `orcha-discarded/*`), or re-enable worktrees to keep everything. The question
+  is asked once; a "no" is answered once with the re-enable instruction.
 - Shared-checkout guardrail: when worktrees are disabled and another agent is
   already working on a different task in the same main checkout, the wake posts
   one heads-up to the task thread asking to enable worktrees (once per task per

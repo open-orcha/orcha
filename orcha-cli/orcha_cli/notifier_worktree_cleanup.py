@@ -433,6 +433,37 @@ def teardown_worktree(base_cwd, worktree, branch, services: Any) -> None:
         services._run_git(["branch", "-D", branch], cwd=base_cwd)
 
 
+def discard_worktree(base_cwd, worktree, branch, services: Any) -> bool:
+    """Drop a worktree's uncommitted work with the human's consent.
+
+    The worktree is force-removed. Its branch is deleted when it holds no commits
+    beyond origin/main, otherwise renamed under ``orcha-discarded/`` so committed
+    work stays reachable while the routing recovery no longer finds it (the
+    stream then starts clean in the selected checkout).
+    """
+    if not worktree:
+        return False
+    if pathlib.Path(worktree).exists():
+        services._run_git(
+            ["worktree", "remove", "--force", "--force", worktree], cwd=base_cwd
+        )
+    services._run_git(["worktree", "prune"], cwd=base_cwd)
+    if branch:
+        exists, _ = services._run_git(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=base_cwd
+        )
+        if exists == 0:
+            if branch_commit_count(base_cwd, branch, services) > 0:
+                from .notifier_checkout_consent import discard_branch_name
+
+                services._run_git(
+                    ["branch", "-m", branch, discard_branch_name(branch)], cwd=base_cwd
+                )
+            else:
+                services._run_git(["branch", "-D", branch], cwd=base_cwd)
+    return not pathlib.Path(worktree).exists()
+
+
 def is_git_repo(cwd, services: Any) -> bool:
     """Return whether a path belongs to a Git worktree."""
     return bool(cwd) and services._run_git(
