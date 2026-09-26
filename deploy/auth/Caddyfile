@@ -1,0 +1,81 @@
+# Auth perimeter (spec: docs/superpowers/specs/2026-07-30-auth-perimeter-design.md)
+# Browsers -> GitHub OAuth (oauth2-proxy). iOS app + agent API -> bearer lanes.
+# The portal itself never binds a public port.
+{
+    email {$ACME_EMAIL}
+}
+
+{$ORCHA_DOMAIN} {
+    # ── Bearer lane 1: exact team-token match skips OAuth entirely ────────
+    # Break-glass: works even if the portal's device-token validator is down.
+    # MUST stay ahead of the wildcard bearer lane below — handle blocks match
+    # in order, and the team token is also "Bearer *".
+    @team header Authorization "Bearer {$ORCHA_TEAM_TOKEN}"
+    handle @team {
+        reverse_proxy portal:8000 {
+            # The break-glass lane has NO user by definition — the portal treats a
+            # header-less request as trust-off (permissive body actor). Strip any
+            # client-forged identity header so this lane can never impersonate a
+            # member now that X-Auth-Request-User BINDS the actor on writes (the
+            # OAuth and device lanes are safe: forward_auth copy_headers always
+            # overwrites the header from the validator's response).
+            header_up -X-Auth-Request-User
+        }
+    }
+
+    # ── Bearer lane 2: any other bearer token is a per-DEVICE token ───────
+    # The portal validates it (202 + X-Auth-Request-User, see
+    # portal_backend/device_token_routes.py) and copy_headers carries the
+    # verified GitHub login upstream — phone requests are attributed to the
+    # human who paired the device. Invalid/revoked tokens get a plain 401,
+    # never the browser sign-in redirect (API clients need a clean status).
+    # Host-Caddy deployments (portal loopback-published) target
+    # 127.0.0.1:8001 instead of portal:8000 for both directives.
+    @bearer header Authorization "Bearer *"
+    handle @bearer {
+        forward_auth portal:8000 {
+            uri /api/auth/check
+            copy_headers X-Auth-Request-User
+            @error status 401
+            handle_response @error {
+                respond "unauthorized: invalid or revoked token" 401
+            }
+        }
+        reverse_proxy portal:8000
+    }
+
+    # ── OAuth plumbing (sign-in, callback, auth check) ────────────────────
+    handle /oauth2/* {
+        reverse_proxy oauth2-proxy:4180 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Uri {uri}
+        }
+    }
+
+    # ── Slack lane: unauthenticated-but-signed inbound webhooks ────────────
+    # Slack's servers POST here with NO Authorization header and NO browser session —
+    # they can't complete OAuth or carry a bearer token. The app-level Slack v0 HMAC
+    # signature check (slack_routes.verify_slack_signature) is the ONLY gate; this
+    # bypass just gets the request there instead of bouncing it into the oauth2-proxy
+    # sign-in redirect below, which would 401/redirect every Slack command and
+    # interaction. slack_routes itself still 401s a bad/missing/stale signature and
+    # 503s the whole surface unless SLACK_SIGNING_SECRET + SLACK_BOT_TOKEN are set, so
+    # this prefix is not an open door — it just lets the app's own gate run at all.
+    handle /api/slack/* {
+        reverse_proxy portal:8000
+    }
+
+    # ── Everything else: browser traffic behind forward_auth ──────────────
+    handle {
+        forward_auth oauth2-proxy:4180 {
+            uri /oauth2/auth
+            header_up X-Real-IP {remote_host}
+            copy_headers X-Auth-Request-User X-Auth-Request-Email
+            @error status 401
+            handle_response @error {
+                redir * /oauth2/sign_in?rd={scheme}://{host}{uri}
+            }
+        }
+        reverse_proxy portal:8000
+    }
+}

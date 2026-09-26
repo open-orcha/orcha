@@ -69,7 +69,12 @@ User arguments: `$ARGUMENTS`
    next check suggested in <interval>s (status=<status>)
    ```
 
-## Periodic loop pattern
+## Periodic loop pattern (legacy — prefer `/orcha-listen`)
+
+`/orcha-listen` (long-poll, server-pushed events) is the default loop primitive —
+pair it with `/loop` for the cheapest autonomous polling (`/loop /orcha-listen
+--alias <name>`). Use `/orcha-checkpoint` in a loop only as a fallback for when
+the server doesn't support `/wait`, or for an explicit one-shot status check.
 
 The checkpoint is a single iteration. To run it on a recurring schedule, pair with `/loop`:
 
@@ -78,7 +83,7 @@ The checkpoint is a single iteration. To run it on a recurring schedule, pair wi
 ```
 
 But since the right interval depends on status (idle=10s, working/waiting=30s), the
-recommended pattern is:
+fallback pattern is:
 
 ```
 /loop /orcha-checkpoint --alias <name> [--auto-close]

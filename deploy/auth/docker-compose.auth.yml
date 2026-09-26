@@ -1,0 +1,55 @@
+# Auth perimeter for one Orcha box (spec: docs/superpowers/specs/2026-07-30-auth-perimeter-design.md)
+#
+#   docker compose --env-file .env -f docker-compose.auth.yml up -d
+#
+# Joins the orcha stack's compose network (ORCHA_STACK_NETWORK, e.g.
+# orcha-myproj_default) so Caddy reaches the portal service directly; the
+# portal's own host port should be rebound to 127.0.0.1 (see
+# docker-compose.portal-local.yml and deploy/README.md).
+name: orcha-auth
+
+services:
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      ORCHA_DOMAIN: ${ORCHA_DOMAIN:?set ORCHA_DOMAIN in .env}
+      ORCHA_TEAM_TOKEN: ${ORCHA_TEAM_TOKEN:?set ORCHA_TEAM_TOKEN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [orcha, default]
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: github
+      OAUTH2_PROXY_CLIENT_ID: ${GITHUB_CLIENT_ID:?set GITHUB_CLIENT_ID in .env}
+      OAUTH2_PROXY_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?set GITHUB_CLIENT_SECRET in .env}
+      OAUTH2_PROXY_COOKIE_SECRET: "${COOKIE_SECRET:?missing COOKIE_SECRET in .env}"
+      # The team roster: comma-separated GitHub usernames.
+      OAUTH2_PROXY_GITHUB_USERS: ${ALLOWED_GITHUB_USERS:?set ALLOWED_GITHUB_USERS in .env}
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_REDIRECT_URL: https://${ORCHA_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      # Auth-only mode: Caddy proxies the portal; oauth2-proxy only answers
+      # /oauth2/* and the forward_auth check endpoint.
+      OAUTH2_PROXY_UPSTREAMS: static://202
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+    networks: [default]
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  orcha:
+    external: true
+    name: ${ORCHA_STACK_NETWORK:?set ORCHA_STACK_NETWORK in .env (e.g. orcha-myproj_default)}

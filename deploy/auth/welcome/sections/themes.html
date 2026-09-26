@@ -1,0 +1,397 @@
+<section id="themes" class="mk-section th-root" aria-labelledby="th-title">
+  <div class="th-wrap">
+    <header class="th-head">
+      <p class="th-eyebrow">— 05 / Make it yours</p>
+      <h2 id="th-title" class="th-h2">Three looks. Your <span class="th-h2-em">call</span>.</h2>
+      <p class="th-lede">
+        Theme is a per-user preference — pick one and it follows you, synced across the
+        web portal and the iOS app. It never touches how a teammate sees their portal.
+      </p>
+    </header>
+
+    <ul class="th-grid" role="list">
+      <!-- ================================================================
+           Theme preview cards. These three blocks depict the product's OWN
+           portal themes, so the exact portal palette (from portal
+           styles/tokens.css :root + responsive.css [data-skin="swiss"]) is
+           reproduced verbatim as raw hex, scoped to each .th-preview-* block.
+           This is the one place the marketing page is allowed to use non-token
+           hex: a faithful swatch of the real UI would be impossible otherwise.
+           Keep these values in sync with the portal token layer.
+           ================================================================ -->
+
+      <!-- Classic — dark terminal (tokens.css :root) -->
+      <li class="th-card th-preview-classic" tabindex="0" aria-label="Classic theme preview — dark terminal">
+        <div class="th-mini" aria-hidden="true">
+          <div class="th-rail">
+            <span class="th-mark"></span>
+            <span class="th-nav th-nav-on"></span>
+            <span class="th-nav"></span>
+            <span class="th-nav"></span>
+            <span class="th-nav th-nav-sm"></span>
+          </div>
+          <div class="th-stage">
+            <div class="th-topbar">
+              <span class="th-dot"></span>
+              <span class="th-crumb"></span>
+            </div>
+            <div class="th-thread">
+              <div class="th-bubble th-bubble-in">
+                <span class="th-line th-l1"></span>
+                <span class="th-line th-l2"></span>
+              </div>
+              <div class="th-bubble th-bubble-out">
+                <span class="th-line th-l3"></span>
+                <span class="th-line th-l1"></span>
+                <span class="th-line th-l2"></span>
+              </div>
+              <div class="th-chip">
+                <span class="th-chip-dot"></span>
+                <span class="th-chip-txt"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="th-meta">
+          <span class="th-name">Classic</span>
+          <span class="th-sub">Dark terminal · teal</span>
+        </div>
+      </li>
+
+      <!-- Swiss Light — editorial grid (responsive.css swiss + theme=light) -->
+      <li class="th-card th-preview-swiss-light" tabindex="0" aria-label="Swiss Light theme preview — editorial grid">
+        <div class="th-mini" aria-hidden="true">
+          <div class="th-rail">
+            <span class="th-mark"></span>
+            <span class="th-nav th-nav-on"></span>
+            <span class="th-nav"></span>
+            <span class="th-nav"></span>
+            <span class="th-nav th-nav-sm"></span>
+          </div>
+          <div class="th-stage">
+            <div class="th-topbar">
+              <span class="th-dot"></span>
+              <span class="th-crumb"></span>
+            </div>
+            <div class="th-thread">
+              <div class="th-bubble th-bubble-in">
+                <span class="th-line th-l1"></span>
+                <span class="th-line th-l2"></span>
+              </div>
+              <div class="th-bubble th-bubble-out">
+                <span class="th-line th-l3"></span>
+                <span class="th-line th-l1"></span>
+                <span class="th-line th-l2"></span>
+              </div>
+              <div class="th-chip">
+                <span class="th-chip-dot"></span>
+                <span class="th-chip-txt"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="th-meta">
+          <span class="th-name">Swiss Light</span>
+          <span class="th-sub">Editorial grid · indigo</span>
+        </div>
+      </li>
+
+      <!-- Swiss Dark — grid on near-black (responsive.css swiss + theme=dark) -->
+      <li class="th-card th-preview-swiss-dark" tabindex="0" aria-label="Swiss Dark theme preview — grid on near-black">
+        <div class="th-mini" aria-hidden="true">
+          <div class="th-rail">
+            <span class="th-mark"></span>
+            <span class="th-nav th-nav-on"></span>
+            <span class="th-nav"></span>
+            <span class="th-nav"></span>
+            <span class="th-nav th-nav-sm"></span>
+          </div>
+          <div class="th-stage">
+            <div class="th-topbar">
+              <span class="th-dot"></span>
+              <span class="th-crumb"></span>
+            </div>
+            <div class="th-thread">
+              <div class="th-bubble th-bubble-in">
+                <span class="th-line th-l1"></span>
+                <span class="th-line th-l2"></span>
+              </div>
+              <div class="th-bubble th-bubble-out">
+                <span class="th-line th-l3"></span>
+                <span class="th-line th-l1"></span>
+                <span class="th-line th-l2"></span>
+              </div>
+              <div class="th-chip">
+                <span class="th-chip-dot"></span>
+                <span class="th-chip-txt"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="th-meta">
+          <span class="th-name">Swiss Dark</span>
+          <span class="th-sub">Grid on near-black · indigo</span>
+        </div>
+      </li>
+    </ul>
+
+    <p class="th-note">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+      </svg>
+      <span>Set yours in <b>Settings &rarr; Appearance</b> · synced to iOS</span>
+    </p>
+  </div>
+
+  <style>
+    .th-root {
+      background: var(--canvas);
+      padding: 96px 24px;
+    }
+    .th-wrap { max-width: 1120px; margin: 0 auto; }
+
+    .th-head { max-width: 640px; margin: 0 auto 52px; text-align: center; }
+    .th-eyebrow {
+      margin: 0 0 14px;
+      font-family: var(--font-mono);
+      font-size: 12px; font-weight: 500; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--accent-text);
+    }
+    .th-h2 {
+      margin: 0 0 16px;
+      font-family: var(--font-serif); font-weight: 400;
+      font-size: clamp(30px, 4vw, 46px); line-height: 1.05;
+      letter-spacing: -.02em; color: var(--text-primary);
+    }
+    .th-h2-em { font-style: italic; color: var(--accent-text); }
+    .th-lede {
+      margin: 0 auto; max-width: 560px;
+      font-family: var(--font-sans); font-size: 16px; line-height: 1.55;
+      color: var(--text-secondary);
+    }
+
+    .th-grid {
+      list-style: none; margin: 0; padding: 0;
+      display: grid; gap: 20px;
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    /* ---- card shell (uses page tokens; the mini inside carries theme hex) ---- */
+    .th-card {
+      display: flex; flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-2xl);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      transition: transform .22s cubic-bezier(.2,.7,.3,1), box-shadow .22s ease, border-color .22s ease;
+    }
+    .th-card:hover, .th-card:focus-visible {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-float);
+      border-color: var(--border-strong);
+    }
+    .th-card:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+
+    /* ---- miniature portal window ------------------------------------------- */
+    .th-mini {
+      display: grid; grid-template-columns: 40px 1fr;
+      height: 210px;
+      /* bg + fg supplied per-theme below */
+    }
+    .th-rail {
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 12px 0;
+      border-right: 1px solid;
+    }
+    .th-mark { width: 18px; height: 18px; border-radius: 5px; }
+    .th-nav { width: 16px; height: 6px; border-radius: 3px; opacity: .55; }
+    .th-nav-sm { width: 12px; }
+    .th-nav-on { opacity: 1; }
+
+    .th-stage { display: flex; flex-direction: column; padding: 12px 13px; min-width: 0; }
+    .th-topbar { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; }
+    .th-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .th-crumb { height: 6px; width: 64px; border-radius: 3px; opacity: .6; }
+
+    .th-thread { display: flex; flex-direction: column; gap: 9px; }
+    .th-bubble {
+      display: flex; flex-direction: column; gap: 5px;
+      padding: 9px 10px; border-radius: 10px;
+      max-width: 82%;
+      transform-origin: left center;
+    }
+    .th-bubble-in { align-self: flex-start; border-top-left-radius: 3px; }
+    .th-bubble-out { align-self: flex-end; border-top-right-radius: 3px; transform-origin: right center; }
+    .th-line { height: 5px; border-radius: 3px; display: block; }
+    .th-l1 { width: 88px; }
+    .th-l2 { width: 54px; opacity: .7; }
+    .th-l3 { width: 104px; }
+
+    .th-chip {
+      display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+      margin-top: 2px; padding: 4px 8px; border-radius: 999px;
+      border: 1px solid;
+    }
+    .th-chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .th-chip-txt { display: block; height: 5px; width: 42px; border-radius: 3px; opacity: .85; }
+
+    /* ---- card footer label ------------------------------------------------- */
+    .th-meta {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 14px 16px 16px;
+      border-top: 1px solid var(--border);
+    }
+    .th-name {
+      font-family: var(--font-sans); font-weight: 700; font-size: 15px;
+      color: var(--text-primary);
+    }
+    .th-sub {
+      font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .02em;
+      color: var(--text-tertiary);
+    }
+
+    /* ==========================================================================
+       Per-theme palettes — RAW HEX from the real portal token layer.
+       Allowed here (and only here) because each block is a faithful swatch of
+       the product's own theme; page var() tokens can't express a foreign UI.
+       ========================================================================== */
+
+    /* Classic — portal tokens.css :root (dark, teal) */
+    .th-preview-classic .th-mini { background: #0a0d12; }
+    .th-preview-classic .th-rail { background: #111620; border-right-color: #232d3d; }
+    .th-preview-classic .th-mark { background: #1fc7cd; }
+    .th-preview-classic .th-nav { background: #8b98ae; }
+    .th-preview-classic .th-nav-on { background: #1fc7cd; }
+    .th-preview-classic .th-dot { background: #38d39a; }
+    .th-preview-classic .th-crumb { background: #5a6678; }
+    .th-preview-classic .th-bubble-in { background: #161d29; }
+    .th-preview-classic .th-bubble-out { background: rgba(31,199,205,.12); box-shadow: inset 0 0 0 1px rgba(31,199,205,.34); }
+    .th-preview-classic .th-line { background: #c4cedd; }
+    .th-preview-classic .th-bubble-out .th-line { background: #1fc7cd; }
+    .th-preview-classic .th-chip { background: rgba(245,177,61,.13); border-color: rgba(245,177,61,.34); }
+    .th-preview-classic .th-chip-dot { background: #f5b13d; }
+    .th-preview-classic .th-chip-txt { background: #f5b13d; }
+
+    /* Swiss Light — responsive.css swiss + theme=light (paper, indigo, sharp) */
+    .th-preview-swiss-light .th-mini { background: #f3f3f0; }
+    .th-preview-swiss-light .th-rail { background: #fbfbf9; border-right-color: #16161a; }
+    .th-preview-swiss-light .th-mark { background: #16161a; box-shadow: inset 0 0 0 1px rgba(27,77,255,.42); border-radius: 0; }
+    .th-preview-swiss-light .th-nav { background: #6a685f; border-radius: 0; }
+    .th-preview-swiss-light .th-nav-on { background: #1b4dff; }
+    .th-preview-swiss-light .th-dot { background: #157a4a; border-radius: 0; }
+    .th-preview-swiss-light .th-crumb { background: #9a988c; border-radius: 0; }
+    .th-preview-swiss-light .th-bubble { border-radius: 0; }
+    .th-preview-swiss-light .th-bubble-in { background: #ecebe4; box-shadow: inset 0 0 0 1px #16161a; }
+    .th-preview-swiss-light .th-bubble-out { background: rgba(27,77,255,.10); box-shadow: inset 0 0 0 1px #1b4dff; }
+    .th-preview-swiss-light .th-line { background: #3a3931; border-radius: 0; }
+    .th-preview-swiss-light .th-bubble-out .th-line { background: #1b4dff; }
+    .th-preview-swiss-light .th-chip { background: transparent; border-color: #16161a; border-radius: 0; }
+    .th-preview-swiss-light .th-chip-dot { background: #e5734d; border-radius: 0; }
+    .th-preview-swiss-light .th-chip-txt { background: #16161a; border-radius: 0; }
+
+    /* Swiss Dark — responsive.css swiss + theme=dark (near-black grid, indigo) */
+    .th-preview-swiss-dark .th-mini { background: #0e0e10; }
+    .th-preview-swiss-dark .th-rail { background: #151517; border-right-color: #3a3a40; }
+    .th-preview-swiss-dark .th-mark { background: #16161a; box-shadow: inset 0 0 0 1px rgba(90,114,255,.42); border-radius: 0; }
+    .th-preview-swiss-dark .th-nav { background: #a2a29a; border-radius: 0; }
+    .th-preview-swiss-dark .th-nav-on { background: #5a72ff; }
+    .th-preview-swiss-dark .th-dot { background: #42b877; border-radius: 0; }
+    .th-preview-swiss-dark .th-crumb { background: #6a6a64; border-radius: 0; }
+    .th-preview-swiss-dark .th-bubble { border-radius: 0; }
+    .th-preview-swiss-dark .th-bubble-in { background: #1c1c1f; box-shadow: inset 0 0 0 1px #3a3a40; }
+    .th-preview-swiss-dark .th-bubble-out { background: rgba(90,114,255,.13); box-shadow: inset 0 0 0 1px #5a72ff; }
+    .th-preview-swiss-dark .th-line { background: #c9c9c2; border-radius: 0; }
+    .th-preview-swiss-dark .th-bubble-out .th-line { background: #5a72ff; }
+    .th-preview-swiss-dark .th-chip { background: transparent; border-color: #4a4a52; border-radius: 0; }
+    .th-preview-swiss-dark .th-chip-dot { background: #ff7a52; border-radius: 0; }
+    .th-preview-swiss-dark .th-chip-txt { background: #c9c9c2; border-radius: 0; }
+
+    /* ---- hover / tap animation of the chat bubbles ------------------------- */
+    .th-bubble { transition: transform .3s cubic-bezier(.2,.7,.3,1); }
+    .th-card.th-live .th-bubble-in  { animation: th-pop-l .9s cubic-bezier(.2,.7,.3,1); }
+    .th-card.th-live .th-bubble-out { animation: th-pop-r .9s .12s cubic-bezier(.2,.7,.3,1) backwards; }
+    .th-card.th-live .th-chip       { animation: th-chip-in .5s .38s ease backwards; }
+    @keyframes th-pop-l {
+      0%   { transform: translateY(6px) scale(.96); opacity: .35; }
+      60%  { transform: translateY(-1px) scale(1.01); opacity: 1; }
+      100% { transform: none; opacity: 1; }
+    }
+    @keyframes th-pop-r {
+      0%   { transform: translateY(8px) scale(.95); opacity: .2; }
+      60%  { transform: translateY(-1px) scale(1.01); opacity: 1; }
+      100% { transform: none; opacity: 1; }
+    }
+    @keyframes th-chip-in {
+      0%   { transform: translateY(4px); opacity: 0; }
+      100% { transform: none; opacity: 1; }
+    }
+
+    /* ---- note row ---------------------------------------------------------- */
+    .th-note {
+      display: flex; align-items: center; justify-content: center; gap: 9px;
+      margin: 40px auto 0;
+      font-family: var(--font-sans); font-size: 14px;
+      color: var(--text-secondary);
+    }
+    .th-note svg { color: var(--accent-strong); flex: none; }
+    .th-note b { color: var(--text-primary); font-weight: 650; }
+
+    @media (max-width: 860px) {
+      .th-grid { grid-template-columns: 1fr; max-width: 420px; margin-inline: auto; }
+    }
+    @media (max-width: 640px) {
+      .th-root { padding: 72px 20px; }
+      .th-note { flex-direction: row; text-align: center; padding: 0 8px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .th-card { transition: border-color .2s ease; }
+      .th-card:hover, .th-card:focus-visible { transform: none; box-shadow: var(--shadow-card); }
+      .th-card.th-live .th-bubble-in,
+      .th-card.th-live .th-bubble-out,
+      .th-card.th-live .th-chip { animation: none; }
+    }
+  </style>
+
+  <script>
+    (function () {
+      var root = document.getElementById('themes');
+      if (!root) return;
+      var cards = root.querySelectorAll('.th-card');
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce) return;
+
+      function replay(card) {
+        // restart the CSS animation by toggling the class off/on
+        card.classList.remove('th-live');
+        // force reflow so the re-add re-triggers keyframes
+        void card.offsetWidth;
+        card.classList.add('th-live');
+      }
+
+      cards.forEach(function (card) {
+        card.addEventListener('mouseenter', function () { replay(card); });
+        card.addEventListener('focus', function () { replay(card); });
+        // touch: tap to animate without requiring hover
+        card.addEventListener('touchstart', function () { replay(card); }, { passive: true });
+      });
+
+      // A gentle first-run: animate each card once as it scrolls into view.
+      if ('IntersectionObserver' in window) {
+        var seen = new WeakSet();
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting && !seen.has(e.target)) {
+              seen.add(e.target);
+              var i = Array.prototype.indexOf.call(cards, e.target);
+              setTimeout(function () { replay(e.target); }, 140 * Math.max(0, i));
+            }
+          });
+        }, { threshold: 0.4 });
+        cards.forEach(function (c) { io.observe(c); });
+      }
+    })();
+  </script>
+</section>

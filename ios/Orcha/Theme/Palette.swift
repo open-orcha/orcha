@@ -39,6 +39,51 @@ struct Palette {
     let idleLine: Color
     let isDark: Bool
 
+    // Skin traits (portal [data-skin] parity). Classic keeps the shipped
+    // geometry; Swiss squares everything off and sets status text in mono.
+    var radiusCard: CGFloat = 12
+    var radiusButton: CGFloat = 12
+    var radiusTag: CGFloat = 5
+    var pillMono = false
+    var flatChrome = false   // Swiss: no brand radial glows behind content
+    var displayFamily: String?   // Swiss: bundled Space Grotesk; nil = SF
+
+    /// Minimalist only: bundled static Hanken Grotesk cuts keyed by the
+    /// PostScript name iOS needs for `Font.custom`/`UIFont(name:)`, chosen by
+    /// weight bucket. `hanken-grotesk-var.woff2` (the web's font) is a
+    /// variable font; on iOS `Font.custom(_:).weight()` does not drive the
+    /// `wght` axis — it only synthesizes faux-bold over whatever single
+    /// instance got registered — so registering the raw variable TTF the way
+    /// Swiss/Space Grotesk does would silently lose weight fidelity above the
+    /// font's default instance. Static cuts avoid that: each weight is its
+    /// own named font, selected here instead of relying on `.weight()`.
+    static let hankenGroteskFacesByWeight: [Font.Weight: String] = [
+        .regular: "Hanken Grotesk",
+        .medium: "Hanken Grotesk Medium",
+        .semibold: "Hanken Grotesk SemiBold",
+        .bold: "Hanken Grotesk Bold",
+        .heavy: "Hanken Grotesk Bold",   // no 800 cut shipped; Bold is closest, no synthetic double-bold
+    ]
+    var displayFacesByWeight: [Font.Weight: String]?   // Minimal: bundled Hanken Grotesk statics; nil = Swiss/SF path
+
+    /// UI font for the active skin: the bundled display family when the skin
+    /// sets one (Swiss = Space Grotesk, portal parity; Minimal = Hanken
+    /// Grotesk static cuts, web parity), else the system font. Mono call
+    /// sites keep `.system(design: .monospaced)` on both skins, the way
+    /// JetBrains Mono survives the web's Swiss. `Font.custom` scales with
+    /// Dynamic Type via `UIFontMetrics` the same as `.system`, so accessibility
+    /// text sizing keeps working on both display-family paths.
+    func uiFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        if let displayFacesByWeight {
+            let face = displayFacesByWeight[weight] ?? displayFacesByWeight[.regular] ?? "Hanken Grotesk"
+            return Font.custom(face, size: size)
+        } else if let displayFamily {
+            return Font.custom(displayFamily, size: size).weight(weight)
+        } else {
+            return .system(size: size, weight: weight)
+        }
+    }
+
     static let dark = Palette(
         bg: Color(hex: 0x0A0D12),
         surface: Color(hex: 0x111620),
@@ -113,13 +158,220 @@ struct Palette {
         isDark: false
     )
 
-    /// Resolve for an explicit theme mode; Auto resolves per system in views via
-    /// the environment (see `PaletteReader`).
-    static func current(_ mode: ThemeMode, systemDark: Bool = true) -> Palette {
-        switch mode {
-        case .auto: systemDark ? .dark : .light
-        case .dark: .dark
-        case .light: .light
+    /// Swiss skin (portal `[data-skin="swiss"]` tokens 1:1): warm near-blacks,
+    /// hairline borders, electric indigo — sharp corners + mono status chips.
+    static let swissDark: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0x0E0E10),
+            surface: Color(hex: 0x151517),
+            surface2: Color(hex: 0x1C1C1F),
+            surface3: Color(hex: 0x242428),
+            raised: Color(hex: 0x242428),
+            border: Color(hex: 0x3A3A40),
+            border2: Color(hex: 0x4A4A52),
+            text: Color(hex: 0xF2F2EE),
+            text2: Color(hex: 0xC9C9C2),
+            muted: Color(hex: 0xA2A29A),
+            faint: Color(hex: 0x6A6A64),
+            accent: Color(hex: 0x5A72FF),
+            accentInk: .white,
+            accentSoft: Color(hex: 0x5A72FF, alpha: 0.13),
+            accentLine: Color(hex: 0x5A72FF, alpha: 0.42),
+            ok: Color(hex: 0x42B877),
+            okSoft: Color(hex: 0x42B877, alpha: 0.15),
+            okLine: Color(hex: 0x42B877, alpha: 0.40),
+            info: Color(hex: 0x5A72FF),
+            infoSoft: Color(hex: 0x5A72FF, alpha: 0.15),
+            infoLine: Color(hex: 0x5A72FF, alpha: 0.40),
+            warn: Color(hex: 0xE0A13A),
+            warnSoft: Color(hex: 0xE0A13A, alpha: 0.16),
+            warnLine: Color(hex: 0xE0A13A, alpha: 0.46),
+            danger: Color(hex: 0xFF5A5F),
+            dangerSoft: Color(hex: 0xFF5A5F, alpha: 0.15),
+            dangerLine: Color(hex: 0xFF5A5F, alpha: 0.46),
+            violet: Color(hex: 0x9A7BFF),
+            violetSoft: Color(hex: 0x9A7BFF, alpha: 0.15),
+            violetLine: Color(hex: 0x9A7BFF, alpha: 0.40),
+            idle: Color(hex: 0x6A6A64),
+            idleSoft: Color(hex: 0x6A6A64, alpha: 0.16),
+            idleLine: Color(hex: 0x6A6A64, alpha: 0.34),
+            isDark: true
+        )
+        p.applySwissTraits()
+        return p
+    }()
+
+    /// Swiss light: paper surfaces with near-black hairlines — the editorial grid.
+    static let swissLight: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0xF3F3F0),
+            surface: Color(hex: 0xFBFBF9),
+            surface2: Color(hex: 0xECEBE4),
+            surface3: Color(hex: 0xE3E2DA),
+            raised: Color(hex: 0xFBFBF9),
+            border: Color(hex: 0x16161A),
+            border2: Color(hex: 0x16161A),
+            text: Color(hex: 0x16161A),
+            text2: Color(hex: 0x3A3931),
+            muted: Color(hex: 0x6A685F),
+            faint: Color(hex: 0x9A988C),
+            accent: Color(hex: 0x1B4DFF),
+            accentInk: .white,
+            accentSoft: Color(hex: 0x1B4DFF, alpha: 0.10),
+            accentLine: Color(hex: 0x1B4DFF, alpha: 0.42),
+            ok: Color(hex: 0x157A4A),
+            okSoft: Color(hex: 0x157A4A, alpha: 0.12),
+            okLine: Color(hex: 0x157A4A, alpha: 0.38),
+            info: Color(hex: 0x1B4DFF),
+            infoSoft: Color(hex: 0x1B4DFF, alpha: 0.10),
+            infoLine: Color(hex: 0x1B4DFF, alpha: 0.38),
+            warn: Color(hex: 0xB26B00),
+            warnSoft: Color(hex: 0xB26B00, alpha: 0.12),
+            warnLine: Color(hex: 0xB26B00, alpha: 0.42),
+            danger: Color(hex: 0xE5484D),
+            dangerSoft: Color(hex: 0xE5484D, alpha: 0.11),
+            dangerLine: Color(hex: 0xE5484D, alpha: 0.42),
+            violet: Color(hex: 0x6D4BD6),
+            violetSoft: Color(hex: 0x6D4BD6, alpha: 0.11),
+            violetLine: Color(hex: 0x6D4BD6, alpha: 0.38),
+            idle: Color(hex: 0x9A988C),
+            idleSoft: Color(hex: 0x9A988C, alpha: 0.16),
+            idleLine: Color(hex: 0x9A988C, alpha: 0.40),
+            isDark: false
+        )
+        p.applySwissTraits()
+        return p
+    }()
+
+    private mutating func applySwissTraits() {
+        radiusCard = 2
+        radiusButton = 2
+        radiusTag = 0
+        pillMono = true
+        flatChrome = true
+        displayFamily = "Space Grotesk"
+    }
+
+    /// Minimalist skin (portal `[data-skin="minimal"]` tokens 1:1, mig-045 web
+    /// parity): deep warm near-black / calm near-white surfaces, one champagne-
+    /// gold accent used sparingly, larger radii + hairline borders instead of
+    /// boxed shadows. UI face is the web's self-hosted Hanken Grotesk, bundled
+    /// as static TTF cuts converted from `hanken-grotesk-var.woff2` (font
+    /// parity with web) — see `displayFacesByWeight` on `uiFont`.
+    static let minimalDark: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0x141414),
+            surface: Color(hex: 0x1B1B1A),
+            surface2: Color(hex: 0x212120),
+            surface3: Color(hex: 0x282826),
+            raised: Color(hex: 0x212120),
+            border: Color(hex: 0x322F2B),
+            border2: Color(hex: 0x3D3934),
+            text: Color(hex: 0xF5F0E6),
+            text2: Color(hex: 0xCEC7B8),
+            muted: Color(hex: 0x958D7D),
+            faint: Color(hex: 0x696153),
+            accent: Color(hex: 0xE7C368),
+            accentInk: Color(hex: 0x221B10),
+            accentSoft: Color(hex: 0xE7C368, alpha: 0.12),
+            accentLine: Color(hex: 0xE7C368, alpha: 0.34),
+            ok: Color(hex: 0x6FB894),
+            okSoft: Color(hex: 0x6FB894, alpha: 0.12),
+            okLine: Color(hex: 0x6FB894, alpha: 0.30),
+            info: Color(hex: 0x7EA3C9),
+            infoSoft: Color(hex: 0x7EA3C9, alpha: 0.12),
+            infoLine: Color(hex: 0x7EA3C9, alpha: 0.30),
+            warn: Color(hex: 0xCC9F5A),
+            warnSoft: Color(hex: 0xCC9F5A, alpha: 0.13),
+            warnLine: Color(hex: 0xCC9F5A, alpha: 0.32),
+            danger: Color(hex: 0xC97A72),
+            dangerSoft: Color(hex: 0xC97A72, alpha: 0.12),
+            dangerLine: Color(hex: 0xC97A72, alpha: 0.30),
+            violet: Color(hex: 0xA693C4),
+            violetSoft: Color(hex: 0xA693C4, alpha: 0.12),
+            violetLine: Color(hex: 0xA693C4, alpha: 0.30),
+            idle: Color(hex: 0x6E6558),
+            idleSoft: Color(hex: 0x6E6558, alpha: 0.16),
+            idleLine: Color(hex: 0x6E6558, alpha: 0.30),
+            isDark: true
+        )
+        p.applyMinimalTraits()
+        return p
+    }()
+
+    /// Minimalist light: calm near-white surfaces, the gold accent darkened
+    /// for AA text/interactive contrast (same relationship the web skin uses
+    /// between `--gold` and `--accent-text`).
+    static let minimalLight: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0xFAF8F2),
+            surface: Color(hex: 0xFFFFFF),
+            surface2: Color(hex: 0xF6F3EC),
+            surface3: Color(hex: 0xF0EBE0),
+            raised: Color(hex: 0xFFFFFF),
+            border: Color(hex: 0xE7E0D2),
+            border2: Color(hex: 0xDCD3BF),
+            text: Color(hex: 0x1A1A1A),
+            text2: Color(hex: 0x423D33),
+            muted: Color(hex: 0x7C7264),
+            faint: Color(hex: 0xA49A89),
+            accent: Color(hex: 0x96721A),
+            accentInk: Color(hex: 0xFFFFFF),
+            accentSoft: Color(hex: 0x96721A, alpha: 0.10),
+            accentLine: Color(hex: 0x96721A, alpha: 0.32),
+            ok: Color(hex: 0x3F8462),
+            okSoft: Color(hex: 0x3F8462, alpha: 0.11),
+            okLine: Color(hex: 0x3F8462, alpha: 0.28),
+            info: Color(hex: 0x3F6C96),
+            infoSoft: Color(hex: 0x3F6C96, alpha: 0.10),
+            infoLine: Color(hex: 0x3F6C96, alpha: 0.26),
+            warn: Color(hex: 0x9C7218),
+            warnSoft: Color(hex: 0x9C7218, alpha: 0.12),
+            warnLine: Color(hex: 0x9C7218, alpha: 0.30),
+            danger: Color(hex: 0xA4483E),
+            dangerSoft: Color(hex: 0xA4483E, alpha: 0.10),
+            dangerLine: Color(hex: 0xA4483E, alpha: 0.26),
+            violet: Color(hex: 0x6F5A92),
+            violetSoft: Color(hex: 0x6F5A92, alpha: 0.11),
+            violetLine: Color(hex: 0x6F5A92, alpha: 0.26),
+            idle: Color(hex: 0x918879),
+            idleSoft: Color(hex: 0x918879, alpha: 0.13),
+            idleLine: Color(hex: 0x918879, alpha: 0.26),
+            isDark: false
+        )
+        p.applyMinimalTraits()
+        return p
+    }()
+
+    /// Web parity: larger radii (`.card` 18px, `.btn`/`.tag` 12px), pill text
+    /// stays normal case (only Swiss goes mono), flat elevation — no brand
+    /// radial glow and `box-shadow: none` on cards, same as the web's
+    /// `--shadow-sm` reduction + hairline-instead-of-boxed-border direction.
+    /// `displayFamily` stays nil — Minimal routes fonts through
+    /// `displayFacesByWeight` instead (see `uiFont`), since it needs distinct
+    /// bundled files per weight rather than one variable/`.weight()` pair.
+    private mutating func applyMinimalTraits() {
+        radiusCard = 18
+        radiusButton = 12
+        radiusTag = 12
+        pillMono = false
+        flatChrome = true
+        displayFamily = nil
+        displayFacesByWeight = Palette.hankenGroteskFacesByWeight
+    }
+
+    /// Resolve for an explicit theme mode + skin; Auto resolves per system in
+    /// views via the environment (see `OrchaThemed`).
+    static func current(_ mode: ThemeMode, skin: SkinMode = .classic, systemDark: Bool = true) -> Palette {
+        let dark = switch mode {
+        case .auto: systemDark
+        case .dark: true
+        case .light: false
+        }
+        return switch skin {
+        case .classic: dark ? .dark : .light
+        case .swiss: dark ? .swissDark : .swissLight
+        case .minimal: dark ? .minimalDark : .minimalLight
         }
     }
 }

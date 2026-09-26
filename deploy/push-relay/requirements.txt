@@ -1,0 +1,5 @@
+# Relay-only dependencies (deploy/push-relay/relay.py). The portal and the
+# boxes deliberately need NONE of these — only the relay signs and speaks APNs.
+pyjwt>=2.8            # ES256 provider JWTs
+cryptography>=42      # PyJWT's ES256 backend
+httpx[http2]>=0.27    # APNs requires HTTP/2

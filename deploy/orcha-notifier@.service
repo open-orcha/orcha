@@ -1,0 +1,34 @@
+[Unit]
+Description=Orcha notifier daemon for workspace %i (wakes idle agents)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/root/.orcha-daemon-env
+WorkingDirectory=/opt/orcha-work/%i
+# %i is the workspace dir name under $ORCHA_WORK_ROOT (provision-projects.sh's
+# slug) — same identity `cd <ws> && orcha notifier --ensure` uses today, just
+# resolved by systemd instead of the provisioner's shell loop. `--quiet`
+# matches the nohup path's flag; no `--ensure` here — this unit's own
+# Restart=on-failure IS the supervision, and plain `orcha notifier` already
+# writes the same pidfile (<ws>/.claude/.orcha-notifier.pid), heartbeat
+# (.orcha-notifier.hb), and container-wide claim (~/.orcha/notifier-<cid>.pid)
+# that --ensure reads — so a unit-launched daemon is indistinguishable from a
+# nohup-launched one to anything checking those files (see
+# orcha_cli/notifier_daemon_registry.py: daemon_running / daemon_pid_healthy).
+#
+# uv tool installs `orcha` to ~/.local/bin, which is NOT on systemd's default
+# PATH — resolve it absolutely rather than relying on PATH lookup (mirrors the
+# `export PATH="$HOME/.local/bin:$PATH"` workaround in provision-projects.sh).
+ExecStart=/root/.local/bin/orcha notifier --quiet
+Restart=on-failure
+RestartSec=10
+# MemoryMax=512M  # conservative per-daemon cap — intentionally NOT set by
+# default (the notifier itself is lightweight; it's the sandboxed agent runs
+# it spawns that carry the real memory cost, capped separately via
+# PROVISION_MEMORY/.claude/orcha.json sandbox.memory). Uncomment and tune
+# per-box if a runaway daemon process ever needs a hard ceiling.
+
+[Install]
+WantedBy=multi-user.target

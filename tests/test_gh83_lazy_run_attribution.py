@@ -94,8 +94,12 @@ async def test_accept_task_attributes_current_accepting_run(
 
 async def test_accept_task_does_not_overwrite_existing_run_task(
         client, make_agent, make_task, make_request, db, work_headers):
-    """If the token-bound run already has an explicit task link, accept-task must not move it to
-    the newly spawned task. Wrong attribution is worse than leaving the new task without this run."""
+    """ec197e8's no-overwrite guarantee, unchanged by GH #144: if the token-bound run already has an
+    explicit task PIN, accept-task must not MOVE the pin to the newly spawned task. The pin is the
+    single "current task" (activity label + GH #126 live-run guard), and silently moving it is worse
+    than the new task lacking a pin. (GH #144 makes the FEED many-to-many so the new task still
+    narrates — that additive behaviour is asserted in test_accept_task_multi_task_session_* below;
+    here we lock the PIN.)"""
     a = await make_agent("Requester", "lead")
     b = await make_agent("bb", "eng")
     existing = await make_task("existing task", "done", assignee_alias="bb")
@@ -115,12 +119,59 @@ async def test_accept_task_does_not_overwrite_existing_run_task(
                             json={"responder_agent_id": b["agent_id"], "note": "on it"},
                             headers=headers)
     assert acc.status_code == 200, acc.text
-    spawned = acc.json()["spawned_task_id"]
 
+    # The PIN is NOT moved: it stays on the task the session was already working.
     row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run_id,))[0]
     assert str(row["task_id"]) == existing["id"]
-    spawned_runs = await client.get(f"/api/tasks/{spawned}/runs")
-    assert run_id not in [run["run_id"] for run in spawned_runs.json()["runs"]]
+    # ...and the run still narrates on the original task's feed.
+    existing_runs = await client.get(f"/api/tasks/{existing['id']}/runs")
+    assert run_id in [run["run_id"] for run in existing_runs.json()["runs"]]
+
+
+async def test_accept_task_multi_task_session_feeds_both_tasks(
+        client, make_agent, make_task, make_request, db, work_headers):
+    """GH #144 headline fix: a continuous worker session that is already working task A then accepts
+    task B must narrate on BOTH task feeds. The PIN stays on A (no-overwrite guard), but B's run feed
+    must now include the run too — the one-task-only gap the single task_id column left open."""
+    a = await make_agent("Requester", "lead")
+    b = await make_agent("bb", "eng")
+    bid = b["agent_id"]
+    task_a = await make_task("task A", "done", assignee_alias="bb")
+    headers = await work_headers(bid)
+    token = headers["X-Orcha-Run-Token"]
+
+    # one continuous run, already pinned to task A
+    started = await client.post(f"/api/agents/{bid}/runs",
+                                json={"wake_kind": "ephemeral",
+                                      "token_id": token,
+                                      "task_id": task_a["id"]})
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run_id"]
+
+    # the SAME session hops onto a new task B by accepting a task request
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task=_task_payload(title="task B"))
+    acc = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                            json={"responder_agent_id": bid, "note": "on it"},
+                            headers=headers)
+    assert acc.status_code == 200, acc.text
+    task_b = acc.json()["spawned_task_id"]
+
+    # PIN stays on A (activity label / GH #126 guard never silently move)
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run_id,))[0]
+    assert str(row["task_id"]) == task_a["id"]
+
+    # FEED is many-to-many: the run narrates on BOTH task feeds (the GH #144 fix)
+    a_feed = await client.get(f"/api/tasks/{task_a['id']}/runs")
+    b_feed = await client.get(f"/api/tasks/{task_b}/runs")
+    assert run_id in [r["run_id"] for r in a_feed.json()["runs"]]
+    assert run_id in [r["run_id"] for r in b_feed.json()["runs"]]
+
+    # the per-agent ?task_id= feed (main.py:6170) is many-to-many too
+    a_agent = await client.get(f"/api/agents/{bid}/runs?task_id={task_a['id']}")
+    b_agent = await client.get(f"/api/agents/{bid}/runs?task_id={task_b}")
+    assert run_id in [r["run_id"] for r in a_agent.json()["runs"]]
+    assert run_id in [r["run_id"] for r in b_agent.json()["runs"]]
 
 
 async def test_accept_task_retry_attributes_respawned_taskless_run(
@@ -162,6 +213,52 @@ async def test_accept_task_retry_attributes_respawned_taskless_run(
     assert retry.json()["spawned_task_id"] == spawned
     row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run2,))[0]
     assert str(row["task_id"]) == spawned
+    # GH #144: the retry branch attributes the FEED too — run2 narrates on the spawned task.
+    feed = await client.get(f"/api/tasks/{spawned}/runs")
+    assert run2 in [r["run_id"] for r in feed.json()["runs"]]
+
+
+async def test_accept_task_retry_hop_adds_feed_membership_without_moving_pin(
+        client, make_agent, make_task, make_request, db, work_headers):
+    """GH #144 on the RETRY path: a session already pinned to task A that retries an
+    already-accepted request for task B must (a) keep its pin on A, and (b) still narrate on B's
+    feed. Exercises the explicit membership insert inside the retry branch (main.py accept-task
+    'already accepted' idempotency path)."""
+    a = await make_agent("Requester", "lead")
+    b = await make_agent("bb", "eng")
+    bid = b["agent_id"]
+    task_a = await make_task("task A", "done", assignee_alias="bb")
+
+    # first accept (from an earlier session) spawns task B and marks the request accepted
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task=_task_payload(title="task B"))
+    h1 = await work_headers(bid)
+    started1 = await client.post(f"/api/agents/{bid}/runs",
+                                 json={"wake_kind": "ephemeral", "token_id": h1["X-Orcha-Run-Token"]})
+    assert started1.status_code == 201, started1.text
+    acc1 = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                             json={"responder_agent_id": bid, "note": "on it"}, headers=h1)
+    assert acc1.status_code == 200, acc1.text
+    task_b = acc1.json()["spawned_task_id"]
+    await client.post(f"/api/runs/{started1.json()['run_id']}/finish", json={"status": "exited"})
+
+    # a NEW session is now working task A and retries the same (already-accepted) request
+    h2 = await work_headers(bid)
+    started2 = await client.post(f"/api/agents/{bid}/runs",
+                                 json={"wake_kind": "ephemeral", "token_id": h2["X-Orcha-Run-Token"],
+                                       "task_id": task_a["id"]})
+    assert started2.status_code == 201, started2.text
+    run2 = started2.json()["run_id"]
+    retry = await client.post(f"/api/requests/{req['request_id']}/accept-task",
+                              json={"responder_agent_id": bid, "note": "retry"}, headers=h2)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["already_accepted"] is True
+
+    # pin stays on A (no silent move); B's feed still gains the run
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run2,))[0]
+    assert str(row["task_id"]) == task_a["id"]
+    b_feed = await client.get(f"/api/tasks/{task_b}/runs")
+    assert run2 in [r["run_id"] for r in b_feed.json()["runs"]]
 
 
 async def test_accept_task_retry_does_not_attribute_completed_spawned_task(

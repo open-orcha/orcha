@@ -1,6 +1,6 @@
 [project]
 name = "orcha-cli"
-version = "0.4.0"
+version = "0.5.0"
 description = "Orcha: human-authoritative multi-agent orchestration via Claude Code skills"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,12 @@ build-backend = "hatchling.build"
 include = [
   "orcha_cli/**/*.py",
   "orcha_cli/templates/**",
+]
+# The built React bundle ships INSIDE the package (stacks serve it with no Node
+# toolchain). Git tracks it via a .gitignore negation (!.../static/dist/), but
+# hatchling's ignore handling drops it anyway — `artifacts` force-includes it.
+artifacts = [
+  "orcha_cli/templates/portal/static/dist/**",
 ]
 
 [tool.hatch.build.targets.wheel]

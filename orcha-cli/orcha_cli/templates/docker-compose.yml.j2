@@ -5,6 +5,7 @@ name: orcha-{{ project_name }}
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: orcha
       POSTGRES_PASSWORD: orcha
@@ -22,6 +23,7 @@ services:
       retries: 10
   portal:
     build: ./portal
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://orcha:orcha@db:5432/orcha   # 'db' = service name, inside the network
       MIGRATIONS_DIR: /app/migrations                        # R1: runner applies these on startup
@@ -48,6 +50,41 @@ services:
       # Docker. The host CLI discovers it before compose up and passes it here; the pairing
       # endpoint refuses with a clear warning when this is unavailable.
       ORCHA_PAIRING_HOST: ${ORCHA_PAIRING_HOST:-}
+      # GitHub dashboard: where the portal reads the GitHub App INSTALLATION token that the
+      # HOST-side refresh timer maintains at <project>/.orcha/github-token (deploy/
+      # github-token-refresh.*). Only this short-lived token ever reaches a container — the
+      # App's PEM stays on the host, always. Missing/empty file → GET /api/github/repos
+      # answers {"available": false} (the dashboard's graceful off state), never an error.
+      ORCHA_GITHUB_TOKEN_FILE: /app/stack-dir/github-token
+      # Multi-org: per-owner installation token map the same host timer writes at
+      # <project>/.orcha/github-tokens.json — JSON {"<owner-lowercase>": "<token>"} with
+      # one token per org/user the App is installed on. When present the portal lists
+      # repos across ALL installations (merged, deduped); missing/empty → the single
+      # token file above is used as before.
+      ORCHA_GITHUB_TOKENS_FILE: /app/stack-dir/github-tokens.json
+      # Collab v1: opt-in trust for the OAuth proxy's X-Auth-Request-User identity header
+      # (set to "1" ONLY when the portal is loopback-bound behind the cloud's GitHub OAuth
+      # proxy). Unset/empty for self-hosters → the header is ignored entirely. Passed
+      # through from the host env like ORCHA_LLM_API_KEY above.
+      ORCHA_TRUST_PROXY_USER: ${ORCHA_TRUST_PROXY_USER:-}
+      # Local run (deploy/local): a GitHub personal access token used only when
+      # neither App token source above resolves — lets a laptop stack reach the
+      # GitHub features with zero App registration. Also settable per-container
+      # from Settings → GitHub access (this env shadows the stored one).
+      ORCHA_GITHUB_PAT: ${ORCHA_GITHUB_PAT:-}
+      # Plan gating: "solo" (default — local/free tier; team surfaces render the
+      # upgrade card and member mutations 402) or "team" (hosted/paid). The
+      # upgrade URL is where solo's paywall entry points send people.
+      ORCHA_PLAN: ${ORCHA_PLAN:-}
+      ORCHA_UPGRADE_URL: ${ORCHA_UPGRADE_URL:-}
+      # Local-or-GitHub code source (Addendum 2): where the read-only project-root
+      # mount below lands inside the container. The repo binding sentinel "local"
+      # tells the browse/Code Space routes to read this tree via `git` instead of the
+      # GitHub API — zero setup, works even with no GitHub token at all.
+      ORCHA_LOCAL_REPO_DIR: /app/workspace
+      # ...and the project's real name for display (the mount path's basename is
+      # always just "workspace" inside the container).
+      ORCHA_LOCAL_REPO_NAME: {{ project_name }}
     ports: ["{{ api_port }}:8000"]
     volumes:
       - ./migrations:/app/migrations:ro   # R1: portal reads migrations to apply pending ones (no wipe)
@@ -62,6 +99,23 @@ services:
       # The CLI pre-creates the host dir before `compose up` so Linux doesn't bind-create it
       # as root (which would block user-space writes).
       - ../.claude/.orcha-attachments:/app/orcha-attachments
+      # GitHub dashboard: expose the host-refreshed App installation token (./github-token —
+      # this compose dir IS <project>/.orcha) to the portal. Deliberately a DIRECTORY mount of
+      # the always-present stack dir, NOT a single-file mount of the token, because a file
+      # mount fails two ways: (a) if the file is absent at `docker compose up`, Docker
+      # bind-creates an empty root-owned DIRECTORY named github-token on the host — poisoning
+      # every later refresh; (b) the refresh timer replaces the file atomically
+      # (write + rename), which changes the inode, and a single-file bind mount pins the OLD
+      # inode so the container would never see a refreshed token. Mounting the parent dir
+      # read-only avoids both: no file → the portal serves the graceful off state.
+      - ./:/app/stack-dir:ro
+      # Local-or-GitHub code source (Addendum 2): the project root itself, ONE level
+      # up from this .orcha/ compose dir — the repo binding sentinel "local" lets the
+      # browse/Code Space surfaces run `git -C $ORCHA_LOCAL_REPO_DIR` against this
+      # mount, no GitHub App/PAT required. Read-WRITE since Code Space editing
+      # (worktree PUT/commit): every write is drift-guarded server-side (base_hash)
+      # and path-restricted (no .git/, no escapes) — see code_workingtree_routes.py.
+      - ..:/app/workspace
     depends_on:
       db: { condition: service_healthy }
 

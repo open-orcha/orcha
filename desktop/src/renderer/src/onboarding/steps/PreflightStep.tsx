@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import type { InstallProgress, PreflightReport, PrereqProbe } from '../../../../shared/types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
-import { AlertCircle, Check, CheckCircle2, Circle, Copy, ExternalLink, Loader2 } from 'lucide-react'
+import ShowcaseCarousel from '../showcase/ShowcaseCarousel'
+import { AlertCircle, Check, Circle, Copy, ExternalLink, Loader2 } from 'lucide-react'
 
 const LINKS = {
   homebrew: 'https://brew.sh',
@@ -147,83 +148,104 @@ export default function PreflightStep({ onContinue }: { onContinue: () => void }
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-slide-in">
-      <h2 className="text-lg font-semibold">What Orcha needs</h2>
-      <p className="text-sm text-text/70">
-        Orcha needs these free tools on your Mac before it can run agents. Install any that aren’t
-        checked off, then click Re-check. Orcha installs its own helper for you.
-      </p>
+    <div className="onb-two-col grid grid-cols-1 items-center gap-10 lg:grid-cols-2">
+      <div className="flex flex-col gap-5 animate-slide-in">
+        <div className="flex flex-col gap-1">
+          <span className="onb-eyebrow">Setup</span>
+          <h2 className="onb-title text-2xl">What Orcha needs</h2>
+          <p className="onb-body">
+            A few free tools have to be on your Mac before agents can run. Install anything
+            that isn’t checked off, then click Re-check.
+          </p>
+        </div>
 
-      <Card className="flex flex-col gap-3 text-sm">
-        {checking && !probe ? (
-          <span className="flex items-center gap-2 text-text/70">
-            <Loader2 className="h-4 w-4 animate-spin text-accent" /> Checking what’s installed…
-          </span>
-        ) : (
-          REQUIREMENTS.map((r) => {
-            const ok = have(r.key)
-            return (
-              <div key={r.key} className="flex items-start gap-2">
-                {ok ? (
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
-                ) : (
-                  <Circle className="mt-0.5 h-4 w-4 shrink-0 text-text/30" />
-                )}
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className={ok ? 'text-text' : 'text-text/70'}>{r.label}</span>
-                  {!ok && r.commands && (
-                    <div className="flex flex-col gap-2">
-                      <span className="text-xs text-text/50">
-                        Run one of these in Terminal, then click Re-check:
-                      </span>
-                      {r.commands.map((c) => (
-                        <CommandLine key={c.name} {...c} />
-                      ))}
-                    </div>
+        <Card className="onb-checklist flex flex-col gap-4 p-5 text-[15px]">
+          {checking && !probe ? (
+            <span className="flex items-center gap-2 text-text/70">
+              <span className="onb-spin flex h-4 w-4 items-center justify-center">
+                <Loader2 className="h-4 w-4 text-accent" />
+              </span>
+              Checking what’s installed…
+            </span>
+          ) : (
+            REQUIREMENTS.map((r) => {
+              const ok = have(r.key)
+              return (
+                <div key={r.key} className="flex items-start gap-3">
+                  {ok ? (
+                    <span className="onb-check-pop onb-check-badge mt-0.5">
+                      <Check className="h-3.5 w-3.5" />
+                    </span>
+                  ) : (
+                    <Circle className="mt-0.5 h-5 w-5 shrink-0 text-text/30" />
                   )}
-                  {!ok && r.url && (
-                    <button
-                      type="button"
-                      className="flex w-fit items-center gap-1 text-xs text-accent hover:underline"
-                      onClick={() => void window.orchaDesktop.openExternal(r.url!)}
-                    >
-                      {r.how} <ExternalLink className="h-3 w-3" />
-                    </button>
-                  )}
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className={ok ? 'text-text' : 'text-text/70'}>{r.label}</span>
+                    {!ok && r.commands && (
+                      <div className="flex flex-col gap-2">
+                        <span className="text-xs text-text/50">
+                          Run one of these in Terminal, then click Re-check:
+                        </span>
+                        {r.commands.map((c) => (
+                          <CommandLine key={c.name} {...c} />
+                        ))}
+                      </div>
+                    )}
+                    {!ok && r.url && (
+                      <button
+                        type="button"
+                        className="flex w-fit items-center gap-1 text-xs text-accent hover:underline"
+                        onClick={() => void window.orchaDesktop.openExternal(r.url!)}
+                      >
+                        {r.how} <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )
-          })
+              )
+            })
+          )}
+        </Card>
+
+        {installing && (
+          <p className="flex items-center gap-2 text-sm text-text/70">
+            <span className="onb-spin flex h-4 w-4 items-center justify-center">
+              <Loader2 className="h-4 w-4 text-accent" />
+            </span>
+            Installing the Orcha helper…
+          </p>
         )}
-      </Card>
+        {installing && lastLine && (
+          <p className="truncate font-mono text-xs text-text/50" title={lastLine}>
+            {lastLine}
+          </p>
+        )}
+        {error && (
+          <p className="flex items-start gap-2 text-sm text-danger">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+          </p>
+        )}
+        {!ready && !checking && report?.docker !== 'ok' && report?.hint && (
+          <p className="text-sm text-text/70">{report.hint}</p>
+        )}
 
-      {installing && (
-        <p className="flex items-center gap-2 text-sm text-text/70">
-          <Loader2 className="h-4 w-4 animate-spin text-accent" /> Installing the Orcha helper…
-        </p>
-      )}
-      {installing && lastLine && (
-        <p className="truncate font-mono text-xs text-text/50" title={lastLine}>
-          {lastLine}
-        </p>
-      )}
-      {error && (
-        <p className="flex items-start gap-2 text-sm text-red-500">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
-        </p>
-      )}
-      {!ready && !checking && report?.docker !== 'ok' && report?.hint && (
-        <p className="text-sm text-text/70">{report.hint}</p>
-      )}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" disabled={checking || installing} onClick={check}>
+            Re-check
+          </Button>
+          <Button
+            data-onb-primary="true"
+            disabled={!ready || checking || installing}
+            onClick={() => void continueOn()}
+          >
+            {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Continue
+          </Button>
+        </div>
+      </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" disabled={checking || installing} onClick={check}>
-          Re-check
-        </Button>
-        <Button disabled={!ready || checking || installing} onClick={() => void continueOn()}>
-          {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Continue
-        </Button>
+      <div className="hidden lg:block">
+        <ShowcaseCarousel />
       </div>
     </div>
   )

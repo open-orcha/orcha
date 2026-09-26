@@ -23,8 +23,11 @@ export default function FolderStep({
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-slide-in">
-      <h2 className="text-lg font-semibold">Choose a project folder</h2>
+    <div className="mx-auto flex w-full max-w-[680px] flex-col gap-4 animate-slide-in">
+      <div className="flex flex-col gap-1">
+        <span className="onb-eyebrow">Source</span>
+        <h2 className="onb-title text-2xl">Choose a project folder</h2>
+      </div>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => void choose('existing')}>
           Choose existing folder…
@@ -47,7 +50,11 @@ export default function FolderStep({
         <Button variant="ghost" onClick={onBack}>
           Back
         </Button>
-        <Button disabled={!choice || !state} onClick={() => choice && state && onNext(choice, state)}>
+        <Button
+          data-onb-primary="true"
+          disabled={!choice || !state}
+          onClick={() => choice && state && onNext(choice, state)}
+        >
           Next
         </Button>
       </div>

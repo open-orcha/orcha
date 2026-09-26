@@ -184,8 +184,9 @@ async def test_stored_status_untouched_by_snapshot_and_reaper(
     # the conversation branch strictly on that column).
     db.execute("UPDATE agents SET status='working' WHERE id=%s", (aid,))
     db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '2000 seconds' WHERE id=%s", (aid,))
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds' "
-               "WHERE agent_id=%s", (aid,))
+    # GH #138: also backdate conv_last_woken_at (the reaper floors idle at claim time now).
+    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
+               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
 
     # Surfaced status reads idle (no live lease + no task) even before the reap.
     row = await _snapshot_agent(client, cid, aid)

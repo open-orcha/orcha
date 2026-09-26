@@ -22,7 +22,7 @@ async def _agent_model_in_payload(client, cid, alias):
 async def test_set_model_persists_and_flows_through_read_payload(client, container, make_agent):
     a = await make_agent("Switch", "eng")            # defaults to opus
     aid = a["agent_id"]
-    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-4-8"
+    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-5"
 
     r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-sonnet-5"})
     assert r.status_code == 200, r.text
@@ -43,20 +43,20 @@ async def test_unknown_model_rejected(client, container, make_agent):
 
 @pytest.mark.asyncio
 async def test_unknown_agent_404(client):
-    r = await client.post(f"/api/agents/{uuid.uuid4()}/model", json={"model": "claude-opus-4-8"})
+    r = await client.post(f"/api/agents/{uuid.uuid4()}/model", json={"model": "claude-opus-5"})
     assert r.status_code == 404, r.text
 
 
 @pytest.mark.asyncio
 async def test_bad_uuid_400(client):
-    r = await client.post("/api/agents/not-a-uuid/model", json={"model": "claude-opus-4-8"})
+    r = await client.post("/api/agents/not-a-uuid/model", json={"model": "claude-opus-5"})
     assert r.status_code == 400, r.text
 
 
 @pytest.mark.asyncio
 async def test_human_rejected(client, container, make_agent):
     h = await make_agent("Human", "human", kind="human")
-    r = await client.post(f"/api/agents/{h['agent_id']}/model", json={"model": "claude-opus-4-8"})
+    r = await client.post(f"/api/agents/{h['agent_id']}/model", json={"model": "claude-opus-5"})
     assert r.status_code == 400, r.text
     assert "humans carry no model" in r.text
 
@@ -71,30 +71,46 @@ async def test_model_changed_event_emitted(client, container, make_agent, db):
     assert rows and rows[0]["detail"]["model"] == "claude-haiku-4-5-20251001"
 
 
-# ---------- Fable 5 (limited-availability) + graceful fallback ----------
+# ---------- curated Claude/Codex models + graceful fallback ----------
 
 @pytest.mark.asyncio
-async def test_fable5_listed_and_selectable(client, container, make_agent):
-    """Fable 5 is in the curated list (offered through 2026-06-22) and settable per-agent."""
+async def test_new_models_listed_with_efforts_and_selectable(client, container, make_agent):
     r = await client.get("/api/models")
     models = r.json()["models"]
     ids = {m["id"] for m in models}
-    assert "claude-fable-5" in ids
+    assert {"claude-fable-5-1", "gpt-6-astra"} <= ids
     assert "gpt-5.5" in ids and "gpt-5.3-codex-spark" in ids
+    assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} <= ids
+    assert "gpt-5.6" not in ids
+    assert "gpt-5.6-tera" not in ids
     by_id = {m["id"]: m for m in models}
-    assert by_id["claude-fable-5"]["runtime"] == "claude"
+    assert by_id["claude-fable-5-1"] == {
+        "id": "claude-fable-5-1",
+        "name": "Fable 5.1",
+        "runtime": "claude",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+    }
+    assert by_id["gpt-6-astra"]["runtime"] == "codex"
+    assert by_id["gpt-6-astra"]["reasoning_efforts"] == [
+        "low", "medium", "high", "xhigh", "max",
+    ]
     assert by_id["gpt-5.5"]["runtime"] == "codex"
+    assert by_id["gpt-5.6-terra"]["reasoning_efforts"][-2:] == ["max", "ultra"]
+    assert by_id["gpt-5.6-luna"]["runtime"] == "codex"
     a = await make_agent("Faby", "eng")
-    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5"})
+    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5-1"})
     assert r.status_code == 200, r.text
-    assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5"
+    assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5-1"
+    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "gpt-6-astra"})
+    assert r.status_code == 200, r.text
+    assert await _agent_model_in_payload(client, container["id"], "Faby") == "gpt-6-astra"
 
 
 def test_resolve_model_falls_back_when_retired(monkeypatch):
     """A persisted choice no longer in the curated list resolves to the default — the spawn
     seam that gives ZERO breakage the moment Fable is removed from AVAILABLE_MODELS."""
     assert main.resolve_model("claude-fable-5") == "claude-fable-5"   # while listed
-    assert main.resolve_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert main.resolve_model("claude-opus-5") == "claude-opus-5"
     assert main.resolve_model(None) == main.DEFAULT_MODEL
     assert main.resolve_model("some-old-id") == main.DEFAULT_MODEL
     # simulate Fable retired: drop it from the curated id set
@@ -104,6 +120,9 @@ def test_resolve_model_falls_back_when_retired(monkeypatch):
 
 def test_resolve_model_runtime_matches_curated_runtime(monkeypatch):
     assert main.resolve_model_runtime("claude-fable-5") == "claude"
+    assert main.resolve_model_runtime("gpt-5.6-sol") == "codex"
+    assert main.resolve_model_runtime("gpt-5.6-terra") == "codex"
+    assert main.resolve_model_runtime("gpt-5.6-luna") == "codex"
     assert main.resolve_model_runtime("gpt-5.5") == "codex"
     assert main.resolve_model_runtime("some-old-id") == "claude"
     monkeypatch.setattr(main, "_MODEL_IDS", main._MODEL_IDS - {"gpt-5.5"})
@@ -144,7 +163,7 @@ async def test_persona_carries_resolved_model_for_live_terminal(client, containe
     aid = a["agent_id"]
     r = await client.get(f"/api/agents/{aid}/persona")
     assert r.status_code == 200, r.text
-    assert r.json()["model"] == "claude-opus-4-8"
+    assert r.json()["model"] == "claude-opus-5"
     assert r.json()["model_runtime"] == "claude"
 
     await client.post(f"/api/agents/{aid}/model", json={"model": "claude-fable-5"})
@@ -205,7 +224,7 @@ async def test_setting_same_model_does_not_reset_session(client, container, make
         (container["id"], aid, human["agent_id"], sid))
     conv_id = str(rows[0]["id"])
 
-    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-opus-4-8"})
+    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-opus-5"})
     assert r.json()["cold_reset_conversations"] == []
     after = db.execute("SELECT session_id FROM conversations WHERE id=%s", (conv_id,))
     assert str(after[0]["session_id"]) == sid       # untouched

@@ -1,0 +1,3 @@
+/* ORCHA CLOUD pairing entry points — the one page-scoped rule the vanilla
+ * shared components.css applied to the topbar pairing button. */
+.pair-top { flex: none; }

@@ -1,0 +1,727 @@
+<section id="control-room" class="mk-section cw-root" aria-labelledby="cw-title">
+  <header class="cw-head">
+    <div class="cw-eyebrow">— 01 / Deep dive</div>
+    <h2 class="cw-title" id="cw-title">The control room, <span class="cw-title-em">every morning</span>.</h2>
+    <p class="cw-sub">One dashboard for every agent, every task, and the queue of what
+    still needs you — nothing ships on an agent's say-so.</p>
+  </header>
+
+  <div class="cw-theater" id="cw-theater" tabindex="-1">
+    <div class="cw-chrome" aria-hidden="true">
+      <span class="cw-dot3"></span><span class="cw-dot3"></span><span class="cw-dot3"></span>
+      <span class="cw-url">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+        app.orcha.cloud/dashboard
+      </span>
+    </div>
+
+    <div class="cw-frame">
+      <div class="cw-stage" id="cw-stage" role="img" aria-label="Animated preview: the acme-health control room dashboard">
+
+        <!-- scene 1 · the full dashboard -->
+        <div class="cw-scene cw-on" data-scene="0">
+          <div class="cw-topbar">
+            <span class="cw-tb-title">Dashboard</span>
+            <span class="cw-grow"></span>
+            <span class="cw-pill cw-p-ok"><span class="cw-pdot"></span>NOTIFIER &#9632; Running</span>
+            <span class="cw-seg" aria-hidden="true">
+              <span class="cw-seg-o">Plan-only</span><span class="cw-seg-o">Build to PR</span><span class="cw-seg-o cw-seg-on">&#9632; Full</span>
+            </span>
+            <span class="cw-actas">ACTING AS <span class="cw-av cw-av-you">H</span> you</span>
+          </div>
+          <div class="cw-board">
+            <div class="cw-side" aria-hidden="true">
+              <div class="cw-brand">&#9670; ORCHESTRATION PORTAL</div>
+              <div class="cw-projsw">&#9632; acme-health &#9662;</div>
+              <div class="cw-navgrp">CONTROL ROOM</div>
+              <div class="cw-navrow cw-nav-on">Dashboard</div>
+              <div class="cw-navrow">Agents <span class="cw-navct">12</span></div>
+              <div class="cw-navrow">Tasks</div>
+              <div class="cw-navrow">Requests</div>
+              <div class="cw-navrow">Metrics</div>
+              <div class="cw-navrow">Settings</div>
+              <div class="cw-navgrp">LIVE</div>
+              <div class="cw-navrow">Run feed</div>
+              <div class="cw-needcard">
+                <span class="cw-needct" id="cw-needct-side">0</span> Needs you
+                <span class="cw-needlink">Open action queue &rarr;</span>
+              </div>
+            </div>
+            <div class="cw-main">
+              <div class="cw-pane cw-projcard" data-an="rise" style="--d:.1s">
+                <div class="cw-pc-top">
+                  <span class="cw-pc-name">acme-health <span class="cw-faint">/ Acme EHR</span></span>
+                  <span class="cw-chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5.5 2v3M10.5 2v3M2.5 6h11M4 4h8a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 12 14H4a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4 4z"/></svg>acme-labs/acme-ehr</span>
+                </div>
+                <div class="cw-pc-stats">
+                  <span><b>12</b> AGENTS</span><span><b>56</b> TASKS</span>
+                  <span><b>0</b> OPEN REQ</span><span class="cw-pc-run">&#9632; Running NOTIFIER</span>
+                </div>
+              </div>
+
+              <div class="cw-pane cw-needsrow" data-an="rise" style="--d:.2s">
+                <div class="cw-needs-h">Needs your attention <span class="cw-pill cw-p-idle" id="cw-needct-pill">[0]</span></div>
+                <p class="cw-needs-copy" id="cw-needs-copy">Plans to approve and tasks to verify &mdash; one click
+                from acting. Nothing ships on an agent's say-so.</p>
+                <p class="cw-needs-empty" id="cw-needs-empty">&check; Nothing needs you right now.</p>
+              </div>
+
+              <div class="cw-pane cw-agents" data-an="rise" style="--d:.3s">
+                <div class="cw-pane-h">Agents at a glance (12)</div>
+                <div class="cw-atable" role="table">
+                  <div class="cw-arow cw-ahead" role="row">
+                    <span>AGENT</span><span>STATUS</span><span>ACTIVITY</span><span>MODEL</span><span>WAKE</span><span>ACTIVE</span>
+                  </div>
+                  <div class="cw-arow" role="row">
+                    <span class="cw-who"><span class="cw-av cw-av-you">H</span>you</span>
+                    <span class="cw-pill cw-p-idle"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint">operator</span><span class="cw-faint">&mdash;</span><span class="cw-faint">&mdash;</span><span class="cw-faint">&mdash;</span>
+                  </div>
+                  <div class="cw-arow" role="row">
+                    <span class="cw-who"><span class="cw-av">S</span>sam-dev</span>
+                    <span class="cw-pill cw-p-idle"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint">collaborator</span><span class="cw-faint">&mdash;</span><span class="cw-faint">&mdash;</span><span class="cw-faint">&mdash;</span>
+                  </div>
+                  <div class="cw-arow cw-arow-atlas" role="row" id="cw-row-atlas">
+                    <span class="cw-who"><span class="cw-av cw-av-ag">A</span>Atlas</span>
+                    <span class="cw-pill cw-p-idle" id="cw-atlas-status"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint" id="cw-atlas-activity">orchestrator &middot; system architect</span>
+                    <span class="cw-mchip cw-mono">claude-fable-5</span>
+                    <span class="cw-wchip">on</span><span class="cw-faint">2h ago</span>
+                  </div>
+                  <div class="cw-arow" role="row">
+                    <span class="cw-who"><span class="cw-av cw-av-ag">F</span>Forge</span>
+                    <span class="cw-pill cw-p-idle"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint">backend engineer</span>
+                    <span class="cw-mchip cw-mono">claude-sonnet-5</span>
+                    <span class="cw-wchip">on</span><span class="cw-faint">1d ago</span>
+                  </div>
+                  <div class="cw-arow" role="row">
+                    <span class="cw-who"><span class="cw-av cw-av-ag">W</span>Warden</span>
+                    <span class="cw-pill cw-p-idle"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint">security &amp; compliance reviewer</span>
+                    <span class="cw-mchip cw-mono">claude-sonnet-5</span>
+                    <span class="cw-wchip">on</span><span class="cw-faint">1d ago</span>
+                  </div>
+                  <div class="cw-arow" role="row">
+                    <span class="cw-who"><span class="cw-av cw-av-ag">S</span>Sentry</span>
+                    <span class="cw-pill cw-p-idle"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint">QA &amp; release verification</span>
+                    <span class="cw-mchip cw-mono">claude-sonnet-5</span>
+                    <span class="cw-wchip">on</span><span class="cw-faint">3d ago</span>
+                  </div>
+                  <div class="cw-arow" role="row">
+                    <span class="cw-who"><span class="cw-av cw-av-ag">M</span>Muse</span>
+                    <span class="cw-pill cw-p-idle"><span class="cw-pdot"></span>IDLE</span>
+                    <span class="cw-faint">UX &amp; design system</span>
+                    <span class="cw-mchip cw-mono">claude-sonnet-5</span>
+                    <span class="cw-wchip">on</span><span class="cw-faint">4d ago</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="cw-live" data-an="rise" style="--d:.35s">
+              <div class="cw-pane-h">Live activity <span class="cw-pill cw-p-crm"><span class="cw-pdot"></span>live</span></div>
+              <div class="cw-feed" id="cw-feed">
+                <div class="cw-frow cw-faint">Awaiting the next wake&hellip;</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- scene 2 · a task dispatch lands -->
+        <div class="cw-scene" data-scene="1">
+          <div class="cw-board cw-board-compact">
+            <div class="cw-main">
+              <div class="cw-pane cw-needsrow cw-needsrow-hot" data-an="rise" style="--d:.1s">
+                <div class="cw-needs-h">Needs your attention <span class="cw-pill cw-p-warn" data-an="pop" style="--d:.5s">[1]</span></div>
+                <p class="cw-needs-copy">Plans to approve and tasks to verify &mdash; one click
+                from acting. Nothing ships on an agent's say-so.</p>
+              </div>
+              <div class="cw-pane cw-agents" data-an="rise" style="--d:.2s">
+                <div class="cw-pane-h">Agents at a glance (12)</div>
+                <div class="cw-atable" role="table">
+                  <div class="cw-arow cw-ahead" role="row">
+                    <span>AGENT</span><span>STATUS</span><span>ACTIVITY</span><span>MODEL</span><span>WAKE</span><span>ACTIVE</span>
+                  </div>
+                  <div class="cw-arow cw-arow-atlas" role="row">
+                    <span class="cw-who"><span class="cw-av cw-av-ag">A</span>Atlas</span>
+                    <span class="cw-pill cw-p-crm cw-late" data-an="pop" style="--d:.9s"><span class="cw-pdot"></span>&#9632; WORKING</span>
+                    <span class="cw-faint">dispatch received &middot; task 41</span>
+                    <span class="cw-mchip cw-mono">claude-fable-5</span>
+                    <span class="cw-wchip">on</span><span class="cw-faint">now</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="cw-live" data-an="rise" style="--d:.25s">
+              <div class="cw-pane-h">Live activity <span class="cw-pill cw-p-crm"><span class="cw-pdot"></span>live</span></div>
+              <div class="cw-feed">
+                <div class="cw-frow cw-late" data-an="slide" style="--d:1.3s"><span class="cw-fwho">Atlas</span><span class="cw-fop">POST</span><span class="cw-ftxt">&middot; plan posted for approval</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- scene 3 · the feed streams PR entries -->
+        <div class="cw-scene" data-scene="2">
+          <div class="cw-board cw-board-compact">
+            <div class="cw-live cw-live-full" data-an="rise" style="--d:.1s">
+              <div class="cw-pane-h">Live activity <span class="cw-pill cw-p-crm"><span class="cw-pdot"></span>live</span></div>
+              <div class="cw-feed cw-feed-tall">
+                <div class="cw-frow cw-late" data-an="slide" style="--d:.5s"><span class="cw-fwho">Forge</span><span class="cw-fop">POST</span><span class="cw-ftxt">&middot; PR opened: acme-labs/acme-ehr#41 &mdash; eligibility gate enforced on every PHI path&hellip;</span></div>
+                <div class="cw-frow cw-late" data-an="slide" style="--d:1.9s"><span class="cw-fwho">Warden</span><span class="cw-fop">POST</span><span class="cw-ftxt">&middot; review posted&hellip;</span></div>
+                <div class="cw-frow cw-late" data-an="slide" style="--d:3.3s"><span class="cw-fwho">Sentry</span><span class="cw-fop">POST</span><span class="cw-ftxt">&middot; suite green &mdash; 214 passed</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- scene 4 · closing still -->
+        <div class="cw-scene" data-scene="3">
+          <div class="cw-sc-close">
+            <div class="cw-close-in" data-an="rise" style="--d:.1s">
+              <span class="cw-check" data-an="pop" style="--d:.4s" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg>
+              </span>
+              <p class="cw-close-line">One control room. Every agent, task, and decision &mdash;
+              and the queue of what needs <b>YOU</b>.</p>
+              <p class="cw-close-sub cw-faint">Dispatch &rarr; agents move &rarr; you see everything.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cw-capbar">
+      <p class="cw-cap" id="cw-cap"><strong>Morning check-in.</strong> Twelve agents, one queue, nothing hidden.</p>
+      <span class="cw-count" id="cw-count">01 / 04</span>
+      <div class="cw-ctrl">
+        <button class="cw-cbtn" id="cw-prev" type="button" aria-label="Previous scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        </button>
+        <button class="cw-cbtn cw-play-t" id="cw-play" type="button" aria-label="Pause autoplay" aria-pressed="true">
+          <svg class="cw-ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 2.8v10.4c0 .6.65.97 1.17.66l8.2-5.2a.78.78 0 0 0 0-1.32l-8.2-5.2a.78.78 0 0 0-1.17.66z"/></svg>
+          <svg class="cw-ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1"/></svg>
+        </button>
+        <button class="cw-cbtn" id="cw-next" type="button" aria-label="Next scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <nav class="cw-dots" id="cw-dots" role="group" aria-label="Control room scenes"></nav>
+    <span class="cw-track" aria-hidden="true"><span class="cw-track-fill" id="cw-track-fill"></span></span>
+  </div>
+
+  <style>
+  /* CONTROL ROOM CINEMATIC (cw-) — chapter 1 of the deep-dive series. Same
+     scene-player mechanics as sections/demo.html's dm- cinematic, restyled
+     onto the real Dashboard screen: top chrome, left rail, project card,
+     needs-you strip, agent table, live feed. Theme-aware via var() tokens. */
+  .cw-root {
+    --cw-ok: var(--success-text);
+    --cw-ok-soft: color-mix(in srgb, var(--success) 14%, transparent);
+    --cw-warn: var(--warning-text);
+    --cw-warn-soft: color-mix(in srgb, var(--warning-text) 15%, transparent);
+    --cw-crm: var(--accent-text);
+    --cw-crm-soft: var(--gold-soft);
+    background: var(--canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+
+  .cw-head { max-width: 720px; margin: 0 auto 44px; text-align: center; }
+  .cw-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent-text);
+  }
+  .cw-title {
+    margin: 14px 0 14px;
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: clamp(30px, 4vw, 46px); line-height: 1.08;
+    letter-spacing: -.015em; color: var(--text-primary);
+  }
+  .cw-title-em { font-style: italic; color: var(--accent-text); }
+  .cw-sub {
+    font-size: 16px; line-height: 1.55; color: var(--text-secondary);
+    max-width: 620px; margin: 0 auto;
+  }
+
+  .cw-head, .cw-theater {
+    opacity: 0; transform: translateY(26px);
+    transition: opacity .9s cubic-bezier(.16,1,.3,1), transform .9s cubic-bezier(.16,1,.3,1);
+  }
+  .cw-theater { transition-delay: .1s; }
+  .cw-root.cw-in .cw-head, .cw-root.cw-in .cw-theater { opacity: 1; transform: none; }
+
+  .cw-theater {
+    max-width: 1000px; margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-3xl);
+    box-shadow: var(--shadow-float);
+    overflow: hidden;
+  }
+  .cw-theater:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+
+  .cw-chrome {
+    display: flex; align-items: center; gap: 7px;
+    padding: 12px 16px;
+    background: var(--surface-subtle); border-bottom: 1px solid var(--border);
+  }
+  .cw-dot3 { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .cw-url {
+    margin-left: 10px; display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 12px;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
+  }
+  .cw-url svg { width: 13px; height: 13px; color: var(--accent-strong); }
+
+  .cw-frame { display: block; }
+
+  .cw-stage {
+    position: relative; overflow: hidden;
+    min-height: 520px;
+    background:
+      radial-gradient(560px 300px at 84% -10%, var(--gold-soft), transparent 60%),
+      var(--surface);
+  }
+  .cw-scene {
+    position: absolute; inset: 0;
+    padding: 0;
+    opacity: 0; transform: translateX(26px);
+    transition: opacity .38s cubic-bezier(.16,1,.3,1), transform .38s cubic-bezier(.16,1,.3,1);
+    pointer-events: none; visibility: hidden;
+    overflow: auto;
+  }
+  .cw-scene.cw-on { opacity: 1; transform: none; visibility: visible; }
+  .cw-scene.cw-bye { opacity: 0; transform: translateX(-22px); visibility: visible; }
+
+  .cw-capbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 20px;
+    background: var(--surface-subtle); border-top: 1px solid var(--border);
+  }
+  .cw-cap { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-secondary); }
+  .cw-cap strong { color: var(--text-primary); font-weight: 700; }
+  .cw-cap { opacity: 1; transition: opacity .28s ease; }
+  .cw-cap.cw-swap { opacity: 0; }
+  .cw-count {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-tertiary); white-space: nowrap;
+  }
+  .cw-ctrl { display: flex; align-items: center; gap: 6px; }
+  .cw-cbtn {
+    all: unset; cursor: pointer; box-sizing: border-box;
+    width: 32px; height: 32px; border-radius: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); background: var(--surface);
+    border: 1px solid var(--border-strong);
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .cw-cbtn:hover { color: var(--text-primary); border-color: var(--accent-strong); }
+  .cw-cbtn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+  .cw-cbtn svg { width: 14px; height: 14px; }
+  .cw-cbtn.cw-play-t[aria-pressed="true"] { color: var(--accent-text); border-color: var(--accent-strong); background: var(--gold-soft); }
+  .cw-cbtn .cw-ic-pause { display: none; }
+  .cw-cbtn.cw-play-t[aria-pressed="true"] .cw-ic-pause { display: block; }
+  .cw-cbtn.cw-play-t[aria-pressed="true"] .cw-ic-play { display: none; }
+
+  .cw-dots {
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 14px 20px 6px;
+    background: var(--surface-subtle);
+  }
+  .cw-dot {
+    all: unset; cursor: pointer; position: relative;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--border-strong);
+    transition: background .2s ease, transform .2s ease;
+  }
+  .cw-dot:hover { background: var(--text-tertiary); transform: scale(1.15); }
+  .cw-dot:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+  .cw-dot[aria-current="true"] { background: var(--accent-strong); transform: scale(1.15); }
+  .cw-dot .cw-tip {
+    position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+    padding: 5px 9px; border-radius: 7px; white-space: nowrap;
+    background: var(--text-primary); color: var(--surface);
+    font-size: 11px; font-weight: 600; letter-spacing: -.005em;
+    opacity: 0; pointer-events: none; transition: opacity .15s ease;
+    box-shadow: var(--shadow-card); z-index: 5;
+  }
+  .cw-dot:hover .cw-tip, .cw-dot:focus-visible .cw-tip { opacity: 1; }
+
+  .cw-track {
+    display: block; height: 3px;
+    margin: 8px 20px 16px; border-radius: 99px;
+    background: var(--border); overflow: hidden;
+  }
+  .cw-track-fill {
+    display: block; height: 100%; width: 100%; border-radius: 99px;
+    background: var(--accent-strong);
+    transform: scaleX(0); transform-origin: left center;
+  }
+
+  /* shared atoms */
+  .cw-pane {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-xl); box-shadow: var(--shadow-card);
+  }
+  .cw-pane-h {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px; border-bottom: 1px solid var(--border);
+    font-size: 12.5px; font-weight: 700; color: var(--text-secondary);
+  }
+  .cw-grow { flex: 1; }
+  .cw-mono { font-family: var(--font-mono); }
+  .cw-faint { color: var(--text-tertiary); font-weight: 500; }
+
+  .cw-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 700; font-size: 11px; line-height: 1;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .cw-pill .cw-pdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .cw-p-crm  { color: var(--cw-crm);  background: var(--cw-crm-soft);  border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
+  .cw-p-crm .cw-pdot { animation: cw-pulse 2s infinite; }
+  .cw-p-ok   { color: var(--cw-ok);   background: var(--cw-ok-soft);   border-color: color-mix(in srgb, var(--success) 34%, transparent); }
+  .cw-p-warn { color: var(--cw-warn); background: var(--cw-warn-soft); border-color: color-mix(in srgb, var(--warning-text) 40%, transparent); }
+  .cw-p-idle { color: var(--text-tertiary); background: var(--surface-subtle); border-color: var(--border-strong); }
+  @keyframes cw-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .cw-av {
+    width: 22px; height: 22px; border-radius: 50%; flex: none;
+    display: grid; place-items: center;
+    font-size: 10px; font-weight: 800; color: var(--on-accent-strong);
+    background: linear-gradient(135deg, var(--gold), var(--accent-strong));
+  }
+  .cw-av-you { background: linear-gradient(135deg, var(--text-secondary), var(--text-primary)); }
+  .cw-av-ag { background: linear-gradient(135deg, var(--accent-strong), #9B78E6); }
+
+  .cw-close { position: absolute; }
+
+  /* choreography */
+  @keyframes cw-rise  { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: none; } }
+  @keyframes cw-slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+  @keyframes cw-pop   { from { opacity: 0; transform: scale(.64); } to { opacity: 1; transform: none; } }
+  @keyframes cw-fade  { from { opacity: 0; } to { opacity: 1; } }
+  .cw-scene.cw-play [data-an] { animation-delay: var(--d, 0s); animation-fill-mode: both; }
+  .cw-scene.cw-play [data-an="rise"]  { animation: cw-rise  .55s cubic-bezier(.16,1,.3,1) both; }
+  .cw-scene.cw-play [data-an="slide"] { animation: cw-slide .5s  cubic-bezier(.16,1,.3,1) both; }
+  .cw-scene.cw-play [data-an="pop"]   { animation: cw-pop   .42s cubic-bezier(.16,1,.3,1) both; }
+  .cw-scene.cw-play [data-an="fade"]  { animation: cw-fade  .5s  ease both; }
+  .cw-late { opacity: 0; visibility: hidden; }
+  .cw-scene.cw-play .cw-late { opacity: 1; visibility: visible; }
+
+  /* top chrome bar (scene 1 only) */
+  .cw-topbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+    background: var(--surface-subtle);
+  }
+  .cw-tb-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .cw-seg {
+    display: inline-flex; gap: 2px; padding: 2px;
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
+    font-size: 10.5px; font-weight: 600; color: var(--text-tertiary);
+  }
+  .cw-seg-o { padding: 4px 8px; border-radius: 6px; }
+  .cw-seg-on { background: var(--accent-strong); color: var(--on-accent-strong); }
+  .cw-actas {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-secondary); font-weight: 600;
+  }
+
+  /* board layout (sidebar + main + live) */
+  .cw-board { display: grid; grid-template-columns: 190px 1fr 220px; min-height: 476px; }
+  .cw-board-compact { grid-template-columns: 1fr 260px; padding: 22px 22px 40px; gap: 16px; min-height: 440px; align-items: start; }
+  .cw-side {
+    border-right: 1px solid var(--border); padding: 16px 12px;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .cw-brand { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; color: var(--accent-text); margin-bottom: 12px; }
+  .cw-projsw {
+    font-size: 11.5px; font-weight: 600; color: var(--text-primary);
+    background: var(--surface-subtle); border: 1px solid var(--border);
+    border-radius: 7px; padding: 6px 9px; margin-bottom: 14px;
+  }
+  .cw-navgrp {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--text-tertiary); margin: 12px 6px 6px;
+  }
+  .cw-navrow { padding: 6px 8px; border-radius: 6px; display: flex; justify-content: space-between; }
+  .cw-navrow.cw-nav-on { background: var(--gold-soft); color: var(--accent-text); font-weight: 700; }
+  .cw-navct { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10.5px; }
+  .cw-needcard {
+    margin-top: 18px; padding: 10px; border-radius: 9px;
+    background: var(--cw-warn-soft); border: 1px solid color-mix(in srgb, var(--warning-text) 40%, transparent);
+    font-size: 11px; color: var(--cw-warn); font-weight: 700; line-height: 1.5;
+  }
+  .cw-needlink { display: block; font-weight: 600; color: var(--text-secondary); margin-top: 4px; }
+
+  .cw-main { padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .cw-live {
+    border-left: 1px solid var(--border); padding: 18px 14px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .cw-live-full { border-left: none; flex: 1; }
+  .cw-live .cw-pane-h { padding: 0 0 10px; border-bottom: none; }
+
+  .cw-projcard { padding: 14px 16px; }
+  .cw-pc-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .cw-pc-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+  .cw-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary);
+    background: var(--surface-subtle); border: 1px solid var(--border);
+    border-radius: 7px; padding: 4px 8px;
+  }
+  .cw-chip svg { width: 11px; height: 11px; color: var(--accent-strong); }
+  .cw-pc-stats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 11px; color: var(--text-tertiary); }
+  .cw-pc-stats b { color: var(--text-primary); font-family: var(--font-mono); }
+  .cw-pc-run { color: var(--cw-ok); font-weight: 700; }
+
+  .cw-needsrow { padding: 12px 16px; }
+  .cw-needs-h { font-size: 12.5px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+  .cw-needs-copy { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
+  .cw-needs-empty { font-size: 12px; color: var(--cw-ok); font-weight: 700; margin-top: 6px; }
+  .cw-scene[data-scene="0"] .cw-needs-empty { display: block; }
+  .cw-scene[data-scene="0"] .cw-needs-copy { display: none; }
+  .cw-needsrow-hot .cw-needs-copy { color: var(--text-secondary); display: block; }
+
+  .cw-atable { display: flex; flex-direction: column; }
+  .cw-arow {
+    display: grid; grid-template-columns: 1.3fr .9fr 1.6fr 1fr .6fr .6fr;
+    align-items: center; gap: 8px;
+    padding: 8px 14px; border-bottom: 1px solid var(--border);
+    font-size: 11.5px; color: var(--text-secondary);
+  }
+  .cw-arow:last-child { border-bottom: 0; }
+  .cw-ahead {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--text-tertiary); background: var(--surface-subtle);
+  }
+  .cw-who { display: flex; align-items: center; gap: 7px; font-weight: 600; color: var(--text-primary); }
+  .cw-mchip {
+    font-size: 10px; color: var(--text-secondary);
+    background: var(--surface-subtle); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 6px; width: fit-content;
+  }
+  .cw-wchip {
+    font-size: 10px; font-weight: 700; color: var(--cw-ok);
+    background: var(--cw-ok-soft); border-radius: 999px; padding: 2px 8px; width: fit-content;
+  }
+  .cw-arow-atlas.cw-arow { background: color-mix(in srgb, var(--gold-soft) 60%, transparent); }
+
+  .cw-feed { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .cw-feed-tall { gap: 10px; }
+  .cw-frow {
+    font-size: 11.5px; line-height: 1.5; color: var(--text-secondary);
+    padding: 8px 10px; border-radius: 8px; background: var(--surface-subtle);
+    border: 1px solid var(--border);
+  }
+  .cw-fwho { font-weight: 700; color: var(--text-primary); margin-right: 4px; }
+  .cw-fop { font-family: var(--font-mono); font-size: 10px; color: var(--accent-text); margin-right: 4px; }
+  .cw-ftxt { color: var(--text-tertiary); }
+
+  /* scene 4 · closing */
+  .cw-sc-close { display: grid; place-items: center; height: 100%; min-height: 476px; padding: 40px; text-align: center; }
+  .cw-close-in { max-width: 460px; }
+  .cw-check {
+    display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 50%;
+    background: var(--cw-ok-soft); color: var(--cw-ok); border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+    margin-bottom: 16px;
+  }
+  .cw-check svg { width: 22px; height: 22px; }
+  .cw-close-line {
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: 21px; line-height: 1.35; letter-spacing: -.01em; color: var(--text-primary);
+  }
+  .cw-close-line b { font-style: italic; color: var(--accent-text); font-weight: 600; }
+  .cw-close-sub { font-size: 12px; margin-top: 12px; }
+
+  /* Responsive */
+  @media (max-width: 860px) {
+    .cw-board { grid-template-columns: 1fr; }
+    .cw-side { display: none; }
+    .cw-live { border-left: none; border-top: 1px solid var(--border); }
+  }
+  @media (max-width: 720px) {
+    .cw-scene { padding: 0; }
+    .cw-stage { min-height: 560px; }
+    .cw-board-compact { grid-template-columns: 1fr; }
+    .cw-capbar { flex-wrap: wrap; gap: 10px 14px; }
+    .cw-cap { flex: 1 1 100%; order: 3; font-size: 12.5px; }
+    .cw-count { order: 1; }
+    .cw-ctrl { order: 2; margin-left: auto; }
+    .cw-arow { grid-template-columns: 1.4fr 1fr 1fr; }
+    .cw-arow > span:nth-child(3), .cw-arow > span:nth-child(4), .cw-arow > span:nth-child(5) { display: none; }
+    .cw-ahead > span:nth-child(3), .cw-ahead > span:nth-child(4), .cw-ahead > span:nth-child(5) { display: none; }
+  }
+
+  /* Reduced motion — static representative stills; navigation stays manual */
+  @media (prefers-reduced-motion: reduce) {
+    .cw-head, .cw-theater { opacity: 1; transform: none; transition: none; }
+    .cw-scene { transition: none; }
+    .cw-pill.cw-p-crm .cw-pdot { animation: none; }
+    .cw-cbtn.cw-play-t { display: none; }
+  }
+  </style>
+
+  <script>
+  /* Control-room cinematic player — same IIFE scene-engine contract as
+     sections/demo.html's dm- player, renamed to cw-. Self-init guard lets
+     multiple chapter players coexist. QA hooks: ?cwstep=N, ?cwpaused=1. */
+  (function () {
+    "use strict";
+    if (window.__cwInit) { return; }
+    window.__cwInit = true;
+
+    var STEPS = [
+      { ms: 6600, cap: "<strong>Morning check-in.</strong> Twelve agents, one queue, nothing hidden.",
+        title: "Dashboard", aria: "The full acme-health dashboard with agents, tasks, and live activity" },
+      { ms: 5200, cap: "<strong>A task dispatch lands.</strong> Needs-you flips 0&rarr;1, Atlas starts working.",
+        title: "Dispatch lands", aria: "Atlas flipping from idle to working as a task dispatch arrives" },
+      { ms: 6800, cap: "<strong>The feed streams in.</strong> Forge opens a PR, Warden reviews, Sentry verifies green.",
+        title: "Live feed", aria: "The live activity feed streaming PR, review, and test entries" },
+      { ms: 5600, cap: "<strong>One control room.</strong> Every agent, task, and decision &mdash; and the queue of what needs you.",
+        title: "Close", aria: "A closing summary card for the control room chapter" }
+    ];
+    var N = STEPS.length;
+
+    var root    = document.getElementById("control-room");
+    var theater = document.getElementById("cw-theater");
+    var stage   = document.getElementById("cw-stage");
+    var scenes  = stage.querySelectorAll(".cw-scene");
+    var capEl   = document.getElementById("cw-cap");
+    var countEl = document.getElementById("cw-count");
+    var playBtn = document.getElementById("cw-play");
+    var trackFill = document.getElementById("cw-track-fill");
+    var dotsWrap = document.getElementById("cw-dots");
+
+    var dots = [];
+    for (var i = 0; i < N; i++) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "cw-dot";
+      b.setAttribute("aria-label", "Scene " + (i + 1) + ": " + STEPS[i].title);
+      var tip = document.createElement("span");
+      tip.className = "cw-tip";
+      tip.textContent = STEPS[i].title;
+      b.appendChild(tip);
+      dotsWrap.appendChild(b);
+      dots.push(b);
+    }
+
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var qs      = new URLSearchParams(location.search);
+
+    var cur = 0, elapsed = 0;
+    var userPaused = reduced || qs.get("cwpaused") === "1";
+    var inView = false;
+    var raf = null, lastT = 0;
+
+    function playing() { return !userPaused && !reduced && inView && !document.hidden; }
+    function pad(n) { return (n + 1 < 10 ? "0" : "") + (n + 1); }
+
+    function paintDots() {
+      for (var i = 0; i < N; i++) {
+        dots[i].setAttribute("aria-current", i === cur ? "true" : "false");
+      }
+    }
+
+    function setScene(i) {
+      var old = cur;
+      cur = ((i % N) + N) % N;
+      if (scenes[old] && old !== cur) {
+        scenes[old].classList.remove("cw-on", "cw-play");
+        scenes[old].classList.add("cw-bye");
+        (function (el) { setTimeout(function () { el.classList.remove("cw-bye"); }, 420); })(scenes[old]);
+      }
+      var sc = scenes[cur];
+      sc.classList.add("cw-on");
+      if (!reduced) {
+        sc.classList.remove("cw-play");
+        void sc.offsetWidth;
+        sc.classList.add("cw-play");
+      }
+      elapsed = 0;
+      trackFill.style.transform = reduced ? "scaleX(1)" : "scaleX(0)";
+      paintDots();
+      countEl.textContent = pad(cur) + " / " + pad(N - 1);
+      stage.setAttribute("aria-label", "Animated preview: " + STEPS[cur].aria);
+      capEl.classList.add("cw-swap");
+      setTimeout(function () { capEl.innerHTML = STEPS[cur].cap; capEl.classList.remove("cw-swap"); }, 160);
+    }
+
+    function tick(t) {
+      raf = null;
+      if (playing()) {
+        var dt = lastT ? Math.min(t - lastT, 100) : 0;
+        lastT = t;
+        elapsed += dt;
+        var p = elapsed / STEPS[cur].ms;
+        if (p >= 1) { setScene(cur + 1); }
+        else { trackFill.style.transform = "scaleX(" + p.toFixed(4) + ")"; }
+        raf = requestAnimationFrame(tick);
+      } else {
+        lastT = 0;
+      }
+    }
+
+    function sync() {
+      playBtn.setAttribute("aria-pressed", userPaused ? "false" : "true");
+      playBtn.setAttribute("aria-label", userPaused ? "Resume autoplay" : "Pause autoplay");
+      if (playing() && raf === null) raf = requestAnimationFrame(tick);
+    }
+
+    function jump(i) { userPaused = true; setScene(i); sync(); }
+
+    dots.forEach(function (b, i) {
+      b.addEventListener("click", function () { if (i !== cur) jump(i); else { setScene(i); sync(); } });
+    });
+    document.getElementById("cw-prev").addEventListener("click", function () { jump(cur - 1); });
+    document.getElementById("cw-next").addEventListener("click", function () { jump(cur + 1); });
+    playBtn.addEventListener("click", function () { userPaused = !userPaused; sync(); });
+    theater.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft")  { e.preventDefault(); jump(cur - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); jump(cur + 1); }
+    });
+
+    function onScreen(el, slack) {
+      var r = el.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      return r.top < vh * (slack || 1) && r.bottom > 0;
+    }
+    inView = onScreen(theater);
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        inView = entries[0].isIntersecting; sync();
+      }, { threshold: 0.3 }).observe(theater);
+    }
+    window.addEventListener("load", function () { inView = onScreen(theater); sync(); });
+    window.addEventListener("scroll", function () { inView = onScreen(theater); reveal(); sync(); }, { passive: true });
+    document.addEventListener("visibilitychange", sync);
+
+    function reveal() { if (onScreen(root, 0.92)) { root.classList.add("cw-in"); return true; } return false; }
+    if (reduced || !("IntersectionObserver" in window)) { root.classList.add("cw-in"); }
+    else if (!reveal()) {
+      var rev = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { root.classList.add("cw-in"); rev.disconnect(); }
+      }, { threshold: 0.12 });
+      rev.observe(root);
+      window.addEventListener("load", reveal, { once: true });
+    }
+
+    var s0 = parseInt(qs.get("cwstep") || "0", 10);
+    if (!(s0 >= 0 && s0 < N)) s0 = 0;
+    scenes[0].classList.remove("cw-on");
+    setScene(s0);
+    sync();
+  })();
+  </script>
+</section>

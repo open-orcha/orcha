@@ -1093,6 +1093,165 @@ def test_service_residents_defers_runtime_change_while_claude_turn_inflight(monk
     assert not any(u.endswith("/wake-ack") for u, _ in posts)     # no premature release
 
 
+def test_service_residents_recycles_idle_claude_resident_on_model_change(monkeypatch, tmp_path):
+    """GH#88: an agent's model changed within the SAME (claude) runtime while its resident was alive
+    and idle. set_agent_model already cleared the pinned session_id, so active-conversations reports
+    the NEW model + a NULL session — but the still-warm resident kept its OLD boot model baked into
+    the session. service_residents must retire the stale resident (releasing its lease) and cold-boot
+    a fresh one on the newly selected model before feeding the next human turn."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-sonnet-5", "model_runtime": "claude",
+            "session_id": None, "pending_human": True, "last_turn_seq": 3}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 3, "role": "human", "content": "fresh question"}])
+    old_proc = ResidentProc(pid=1111)
+    new_proc = ResidentProc(pid=2222)
+    killed = []
+    spawned = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc.pid))
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", new_proc))
+    # resident booted on Opus; runtime stays claude so the runtime-change branch never fires.
+    live = {"C1": _idle_resident(tmp_path, proc=old_proc, model="claude-opus-4-8",
+                                 session_id=None, session_pinned=False)}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    assert killed == [old_proc.pid]                                  # stale Opus resident checkpointed
+    assert old_proc.stdin.closed is True                            # EOF path fired before kill
+    assert any(u.endswith("/wake-ack") and b["kind"] == "resident_model_changed"
+               and b["release_lease"] is True for u, b in posts)
+    assert spawned and spawned[0][1]["model"] == "claude-sonnet-5"   # cold-booted on the NEW model
+    assert spawned[0][1]["resume_session_id"] is None               # cold boot, not --resume
+    assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
+    new_proc.stdin.seek(0)
+    sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
+    # GH #91/#90 (PR R5): delivered turns are lane-framed — compare against the wrapped shape
+    assert sent == notifier._wrap_conversation_turn("fresh question")   # delivered only to the fresh boot
+
+
+def test_service_residents_defers_model_change_while_claude_turn_inflight(monkeypatch, tmp_path):
+    """GH#88 safety: a same-runtime model switch must not SIGTERM a resident mid-answer. The old turn
+    finishes on the old model; the recycle happens on a later idle tick."""
+    log = tmp_path / "c.ndjson"
+    log.write_text('{"type":"assistant","message":{"content":[]}}\n')   # no terminal result yet
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-sonnet-5", "model_runtime": "claude",
+            "session_id": None, "pending_human": True, "last_turn_seq": 3}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 3, "role": "human", "content": "next turn"}])
+    killed = []
+    spawned = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc.pid))
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", ResidentProc()))
+    proc = ResidentProc(pid=1111)
+    live = {"C1": _idle_resident(tmp_path, proc=proc, model="claude-opus-4-8", log_path=log,
+                                 awaiting_result=True, awaiting_since=time.time(),
+                                 current_run_id="RUN-1", run_id="RUN-1", serviced_seq=2)}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    assert killed == [] and proc.killed is False                    # in-flight turn left alone
+    assert spawned == []                                            # no cold reboot yet
+    assert "C1" in live and live["C1"]["awaiting_result"] is True
+    assert any(u.endswith("/wake-renew") for u, _ in posts)         # old resident remains leased
+    assert not any(u.endswith("/wake-ack") and b["kind"] == "resident_model_changed"
+                   for u, b in posts)
+
+
+def test_service_residents_recycles_before_feeding_after_model_change_capture(monkeypatch, tmp_path):
+    """GH#88 race: if an old-model turn finishes and a newer human turn is already queued, capture
+    the old reply but cold-boot before feeding the queued turn."""
+    log = tmp_path / "c.ndjson"
+    log.write_text(
+        '{"type":"result","subtype":"success","num_turns":1,'
+        '"session_id":"old-session","result":"old answer"}\n'
+    )
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-sonnet-5", "model_runtime": "claude",
+            "session_id": None, "pending_human": True, "last_turn_seq": 5}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 5, "role": "human", "content": "next on new model"}])
+    old_proc = ResidentProc(pid=1111)
+    new_proc = ResidentProc(pid=2222)
+    killed = []
+    spawned = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc.pid))
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", new_proc))
+    live = {"C1": _idle_resident(tmp_path, proc=old_proc, model="claude-opus-4-8",
+                                 log_path=log, awaiting_result=True,
+                                 awaiting_since=time.time(), current_run_id="RUN-OLD",
+                                 run_id="RUN-OLD", serviced_seq=3)}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    assert any(u.endswith("/conversations/C1/turns")
+               and b["role"] == "agent" and b["content"] == "old answer"
+               for u, b in posts)
+    assert any(u.endswith("/runs/RUN-OLD/finish") for u, _ in posts)
+    assert killed == [old_proc.pid]
+    assert any(u.endswith("/wake-ack") and b["kind"] == "resident_model_changed"
+               and b["release_lease"] is True for u, b in posts)
+    assert spawned and spawned[0][1]["model"] == "claude-sonnet-5"
+    assert spawned[0][1]["resume_session_id"] is None
+    assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
+    new_proc.stdin.seek(0)
+    sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
+    assert sent == notifier._wrap_conversation_turn("next on new model")
+    assert old_proc.stdin.closed is True
+
+
+def test_service_residents_does_not_repin_old_session_when_model_switched_mid_turn(monkeypatch, tmp_path):
+    """GH#88 blocker (PR #100 round 1): a resident that COLD-booted (session_pinned=False) finishes a
+    turn just as the agent's model is switched (same claude runtime) — set_agent_model has already
+    NULLed the server session_id so active-conversations reports the NEW model + no session. The
+    capture path must NOT re-pin the OLD-model session id back onto the conversation (doing so would
+    undo the clear and make the switch stick to the old model). The old reply is still captured; the
+    resident then recycles + cold-boots on the new model before the queued turn is fed."""
+    log = tmp_path / "c.ndjson"
+    log.write_text(
+        '{"type":"result","subtype":"success","num_turns":1,'
+        '"session_id":"old-session","result":"old answer"}\n'
+    )
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-sonnet-5", "model_runtime": "claude",
+            "session_id": None, "pending_human": True, "last_turn_seq": 5}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 5, "role": "human", "content": "next on new model"}])
+    old_proc = ResidentProc(pid=1111)
+    new_proc = ResidentProc(pid=2222)
+    killed = []
+    spawned = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc.pid))
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "repr", new_proc))
+    # session_pinned=False → this is the vulnerable cold-boot capture path (the existing race test
+    # defaults session_pinned=True, so its capture pin block never runs and can't catch this).
+    live = {"C1": _idle_resident(tmp_path, proc=old_proc, model="claude-opus-4-8",
+                                 log_path=log, session_id=None, session_pinned=False,
+                                 cold=True, awaiting_result=True, awaiting_since=time.time(),
+                                 current_run_id="RUN-OLD", run_id="RUN-OLD", serviced_seq=3)}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    # old reply IS still captured to the thread...
+    assert any(u.endswith("/conversations/C1/turns")
+               and b["role"] == "agent" and b["content"] == "old answer"
+               for u, b in posts)
+    # ...but the old-model session id is NOT pinned back onto the conversation (the blocker fix).
+    assert not any(u.endswith("/conversations/C1/session") for u, _ in posts)
+    # and the resident recycles + cold-boots on the NEW model before feeding the queued turn.
+    assert killed == [old_proc.pid]
+    assert spawned and spawned[0][1]["model"] == "claude-sonnet-5"
+    assert spawned[0][1]["resume_session_id"] is None
+    assert live["C1"]["proc"] is new_proc and live["C1"]["model"] == "claude-sonnet-5"
+    new_proc.stdin.seek(0)
+    sent = json.loads(new_proc.stdin.read().decode())["message"]["content"][0]["text"]
+    assert sent == notifier._wrap_conversation_turn("next on new model")
+
+
 def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path):
     """#247 B3 (§5.2 warm-zone): an idle warm resident with queued NON-conversation events
     (pending_inbox>0) NO LONGER yields its lease (the A2 yield tore down the warm session, forcing a
@@ -1109,6 +1268,8 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 3, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
+            # GH #58: a pure FYI/taskless backlog — no task-bound rows → safe to drain in the sidecar.
+            "drain_taskbound": 0, "drain_ackable_ids": [201, 202, 203],
             # Gate P1b: directed messages have no other inbox surface — must reach the sidecar prompt.
             "inbox_messages": ["please review this notification"]}
     posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
@@ -1131,6 +1292,7 @@ def test_service_residents_spawns_drain_sidecar_when_idle(monkeypatch, tmp_path)
     assert "please review this notification" in spawns[0]["prompt"]
     assert live["C1"]["sidecar"]["proc"] is sidecar             # handle tracked on the resident
     assert live["C1"]["sidecar"]["ack_ts"] == 30.0             # P1a: spawn-time cursor mark stashed
+    assert live["C1"]["sidecar"]["ackable_ids"] == [201, 202, 203]   # GH #58: per-event handled-set stashed
     assert fed == []                                            # NOTHING injected into the warm session
     assert not any(u.endswith("/runs") for u, _ in posts)        # sidecar registers NO worker_run (§3)
     assert notifier._RESIDENT_DRAIN_YIELD["C1"][0] == 30.0       # attempt mark recorded (anti-thrash)
@@ -1159,6 +1321,36 @@ def test_service_residents_task_work_signal_skips_drain_sidecar(monkeypatch, tmp
     assert not sigs and not any(u.endswith("/wake-ack") for u, _ in posts)
     assert live["C1"].get("sidecar") is None
     assert "C1" not in notifier._RESIDENT_DRAIN_YIELD             # skip path is not a drain attempt
+
+
+def test_service_residents_yields_when_backlog_has_taskbound(monkeypatch, tmp_path):
+    """GH #58 (§5.2 safe-rows-only): if the queued backlog contains ANY task-bound / new-work /
+    directive row (drain_taskbound > 0), the resident must NOT spawn a warm-zone sidecar — it carries
+    no injected task protocol, so it would mis-handle that row. Instead it YIELDS the lease (the A2
+    idle-yield) so tick()'s next ephemeral, booted WITH that task's protocol, drains the whole backlog.
+    No sidecar is spawned; nothing is acked-handled this tick. Requires RESIDENT_WORK_TEARDOWN_ENABLED
+    (GH #91/#90's kill-switch for the whole warm-zone sidecar spawn-or-yield mechanism) since the gate
+    lives inside that flag now. Mutation tooth: drop the drain_taskbound gate and a sidecar spawns over
+    a task-bound row → this flips RED on the spawn / yield assertions."""
+    monkeypatch.setattr(notifier, "RESIDENT_WORK_TEARDOWN_ENABLED", True)
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 2, "inbox_ack_ts": 30.0, "model": "claude-opus-4-8",
+            # one task-bound row present alongside a taskless one → must yield, not sidecar-drain
+            "drain_taskbound": 1, "drain_ackable_ids": [202]}
+    posts, sigs, fed = _wire_drain(monkeypatch, active=[conv])
+    spawns = _stub_spawn(monkeypatch, proc=ResidentProc(pid=9999))
+    proc = ResidentProc()
+    live = {"C1": _idle_resident(tmp_path, proc=proc)}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert spawns == []                                          # NO warm-zone sidecar over a task-bound row
+    assert "C1" not in live                                      # resident torn down (lease yielded)
+    assert sigs and sigs[0][1] == notifier.signal.SIGTERM        # graceful-killed on the yield
+    ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert ack["kind"] == "resident_inbox_drain_yield" and ack["release_lease"] is True
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)   # nothing handled by the resident
 
 
 def test_service_residents_no_yield_when_inbox_empty(monkeypatch, tmp_path):
@@ -1398,14 +1590,15 @@ def test_service_residents_sidecar_running_preserves_single_embodiment(monkeypat
     assert not any(u.endswith("/runs") for u, _ in posts)        # sidecar opens NO worker_run (§3)
 
 
-def test_service_residents_reaps_finished_sidecar_parks_cursor(monkeypatch, tmp_path):
-    """#247 B3 §3(d) + Gate P1a: when the drain sidecar EXITS CLEANLY (rc 0), the tick clears its handle
-    (no worker_run to /finish — clean by construction) AND posts EXACTLY ONE wake-ack that PARKS the
-    wake cursor (delivered_ts=the stashed spawn-time ack_ts) with release_lease=False — so the drained
-    backlog stops re-surfacing as pending_inbox while the warm resident + lease are KEPT. One transition
-    per tick: it does NOT immediately spawn another drain. Mutation tooth: drop the success ack and the
-    cursor never advances → the warm resident re-sees the whole backlog on its real wake (this flips
-    RED on the wake-ack assertion)."""
+def test_service_residents_reaps_finished_sidecar_acks_handled(monkeypatch, tmp_path):
+    """#247 B3 §3(d) + GH #58: when the drain sidecar EXITS CLEANLY (rc 0), the tick clears its handle
+    (no worker_run to /finish — clean by construction) AND posts EXACTLY ONE /events/ack-handled with
+    the per-event ids the sidecar drained (the FYI/taskless ids stashed at spawn) — NOT the old
+    delivered_ts high-water park. The server records those acks and advances the cursor to the
+    contiguous floor, so the drained rows stop re-surfacing while a row the resident could not handle
+    stays pending. The warm resident + lease are KEPT (no wake-ack). One transition per tick: no
+    same-tick re-spawn. Mutation tooth: drop the success ack and the events never clear → the warm
+    resident re-sees the whole backlog on its real wake (this flips RED on the ack-handled assertion)."""
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
             "pending_inbox": 2, "inbox_ack_ts": 30.0}
@@ -1415,19 +1608,51 @@ def test_service_residents_reaps_finished_sidecar_parks_cursor(monkeypatch, tmp_
     dead_sidecar = ResidentProc(pid=9999, alive=False)               # exited cleanly (returncode 0)
     live = {"C1": _idle_resident(tmp_path, proc=proc,
                                  sidecar={"proc": dead_sidecar, "log_path": tmp_path / "d.log",
-                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0})}
+                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0,
+                                          "ackable_ids": [101, 102]})}
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
     assert live["C1"]["sidecar"] is None                          # handle cleared on exit (clean)
     assert "C1" in live and proc.killed is False                  # warm resident + lease KEPT
     assert spawns == []                                          # no same-tick re-spawn (one/tick)
-    acks = [b for u, b in posts if u.endswith("/wake-ack")]
-    assert len(acks) == 1                                        # P1a: EXACTLY one cursor-park ack
-    assert acks[0]["delivered_ts"] == 30.0                       # parked at the stashed spawn-time mark
-    assert acks[0]["release_lease"] is False                     # KEEP the warm lease (no A2 yield)
-    assert acks[0]["kind"] == "resident_drain_sidecar"
+    assert not any(u.endswith("/wake-ack") for u, _ in posts)    # GH #58: no delivered_ts park anymore
+    acks = [b for u, b in posts if u.endswith("/events/ack-handled")]
+    assert len(acks) == 1                                        # EXACTLY one per-event ack post
+    assert acks[0]["event_ids"] == [101, 102]                    # the stashed FYI/taskless ids
     assert not any(u.endswith("/runs") for u, _ in posts)        # nothing to finish (no run)
+
+
+def test_service_residents_reaps_finished_sidecars_sandbox_container(monkeypatch, tmp_path):
+    """I4 (Task-5 review): a SANDBOX-mode drain sidecar has NO run row (Kedar-locked) and its
+    container is label-EXEMPT from the reaper's orphan pass — so the completion path here is the
+    ONLY place its container + per-run api-config can ever be reclaimed. On sidecar exit the
+    handle's stashed sandbox_container_id must be removed (host-mode sidecars carry None → no-op)."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 2,
+            "pending_inbox": 0, "inbox_ack_ts": 30.0}
+    _wire_drain(monkeypatch, active=[conv])
+    removed, removed_cfg = [], []
+    monkeypatch.setattr(notifier._sandbox, "remove",
+                        lambda n, force=False: removed.append((n, force)))
+    monkeypatch.setattr(notifier._sandbox, "remove_api_config",
+                        lambda cwd, n: removed_cfg.append((str(cwd), n)))
+    dead_sidecar = ResidentProc(pid=9999, alive=False)               # exited cleanly
+    live = {"C1": _idle_resident(tmp_path, proc=ResidentProc(),
+                                 sidecar={"proc": dead_sidecar, "log_path": tmp_path / "d.log",
+                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0,
+                                          "ackable_ids": [],
+                                          "sandbox_container_id": "orcha-run-side1",
+                                          "base_cwd": str(tmp_path)})}
+
+    notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+
+    assert live["C1"]["sidecar"] is None                          # handle cleared as before
+    # FORCE-removed (pre-dogfood fix 2): a hard-cap-killed sidecar's container can
+    # still be RUNNING (client SIGKILL doesn't reach it) — plain rm would fail and,
+    # being row-less + orphan-exempt, the container would be immortal.
+    assert removed == [("orcha-run-side1", True)]
+    assert removed_cfg == [(str(tmp_path), "orcha-run-side1")]    # api-config reaped too
 
 
 def test_service_residents_kills_wedged_sidecar_keeps_resident(monkeypatch, tmp_path):
@@ -1446,7 +1671,8 @@ def test_service_residents_kills_wedged_sidecar_keeps_resident(monkeypatch, tmp_
     wedged = ResidentProc(pid=9999, alive=True)                      # still running, past deadline
     live = {"C1": _idle_resident(tmp_path, proc=proc,
                                  sidecar={"proc": wedged, "log_path": tmp_path / "d.log",
-                                          "hard_deadline": time.time() - 1, "ack_ts": 30.0})}
+                                          "hard_deadline": time.time() - 1, "ack_ts": 30.0,
+                                          "ackable_ids": [101, 102]})}
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
@@ -1454,6 +1680,7 @@ def test_service_residents_kills_wedged_sidecar_keeps_resident(monkeypatch, tmp_
     assert live["C1"]["sidecar"] is None                          # handle cleared after the kill
     assert "C1" in live and proc.killed is False                  # resident + lease KEPT (pid 4321 alive)
     assert not any(u.endswith("/wake-ack") for u, _ in posts)    # tooth 3: NO cursor ack on wedged-kill
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)   # GH #58: nothing acked-handled
 
 
 def test_service_residents_failed_sidecar_does_not_park_cursor(monkeypatch, tmp_path):
@@ -1473,7 +1700,8 @@ def test_service_residents_failed_sidecar_does_not_park_cursor(monkeypatch, tmp_
     failed_sidecar.returncode = 1                                    # ...but with a FAILURE code
     live = {"C1": _idle_resident(tmp_path, proc=proc,
                                  sidecar={"proc": failed_sidecar, "log_path": tmp_path / "d.log",
-                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0})}
+                                          "hard_deadline": time.time() + 1000, "ack_ts": 30.0,
+                                          "ackable_ids": [101, 102]})}
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
@@ -1481,6 +1709,7 @@ def test_service_residents_failed_sidecar_does_not_park_cursor(monkeypatch, tmp_
     assert "C1" in live and proc.killed is False                  # warm resident + lease KEPT
     assert spawns == []                                          # one transition per tick (no re-spawn)
     assert not any(u.endswith("/wake-ack") for u, _ in posts)    # tooth 3: NO cursor ack on a failed exit
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)   # GH #58: nothing acked-handled
 
 
 def test_service_residents_warm_zone_holds_to_1200s(monkeypatch, tmp_path):
@@ -1781,6 +2010,125 @@ def test_service_residents_conversation_end_tears_down_worktree(monkeypatch, tmp
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
     assert teardowns == [(str(tmp_path), "/wt/Vox", "orcha/resident-C1")]   # torn down on end
     assert live == {}
+
+
+def test_resume_error_in_log_detects_marker_from_offset(tmp_path):
+    """Sandbox-continuity fix: claude's --resume failure line (stderr, merged into the log) is
+    recognized — but ONLY at/after the boot's start offset, so an old boot's error in the
+    append-mode log never taints a healthy new boot."""
+    log = tmp_path / "r.log"
+    log.write_bytes(b"No conversation found with session ID: 1111\n")
+    assert notifier._resume_error_in_log(str(log), 0) is True
+    # scanning from PAST the old error (a later boot's slice) → clean
+    assert notifier._resume_error_in_log(str(log), log.stat().st_size) is False
+    assert notifier._resume_error_in_log(None, 0) is False
+    assert notifier._resume_error_in_log(str(tmp_path / "nope.log"), 0) is False
+
+
+def test_service_residents_cold_fallback_on_slow_warm_resume_error(monkeypatch, tmp_path):
+    """Sandbox-continuity fix: a sandboxed warm boot (docker start latency) can die AFTER the
+    ISS-61 died-fast window — the explicit no-conversation error in this boot's log slice must
+    still flag the conversation COLD, or every subsequent boot warm-resumes the same dead session
+    forever (one empty run per restart)."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": False, "last_turn_seq": 1}
+    _wire(monkeypatch, active=[conv])
+    notifier._RESIDENT_RESUME_FAILED.discard("C1")
+    log = tmp_path / "c.ndjson"
+    log.write_text("No conversation found with session ID: sess-9\n")
+    dead = ResidentProc()
+    dead.returncode = 0                         # claude exits 0 on this failure (live evidence)
+    live = {"C1": {"proc": dead, "agent_id": "A1", "conversation_id": "C1", "alias": "Vox",
+                   "log_path": log, "worktree": "/wt/Vox", "branch": "orcha/resident-C1",
+                   "base_cwd": str(tmp_path), "session_id": "sess-9", "session_pinned": True,
+                   "cold": False, "serviced_seq": 1, "current_run_id": None, "run_id": None,
+                   "awaiting_result": False, "turn_scan_offset": 0,
+                   "booted_ts": time.time() - (notifier.RESUME_FAIL_WINDOW_SECS + 30),  # SLOW death
+                   "lines_offset": 0, "lines_buf": b"", "lines_seq": 1, "last_activity_ts": time.time()}}
+    try:
+        notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+        assert "C1" in notifier._RESIDENT_RESUME_FAILED      # flagged → next boot COLD
+    finally:
+        notifier._RESIDENT_RESUME_FAILED.discard("C1")
+
+
+def test_service_residents_warm_empty_result_reboots_fresh_and_reservices_turn(monkeypatch, tmp_path):
+    """Sandbox-continuity fix: a WARM (--resume) turn that 'completes' with an EMPTY result is the
+    resume-failure signature (claude can't find the pinned session, emits an empty/error result,
+    exit 0 — the live empty-bubble evidence). The notifier must NOT post the empty reply; it drops
+    the pinned session, finishes the run 'killed', releases the lease with the human turn STILL
+    pending, retires the resident — and the SAME tick reboots FRESH (cold) and re-feeds the turn."""
+    notifier._RESIDENT_RESUME_FAILED.discard("C1")
+    log = tmp_path / "c.ndjson"
+    log.write_text('{"type":"result","subtype":"error_during_execution","num_turns":0,'
+                   '"session_id":"sess-9","result":null}\n')
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": "sess-9", "pending_human": True, "last_turn_seq": 1}
+    posts = _wire(monkeypatch, active=[conv],
+                  turns=[{"seq": 1, "role": "human", "content": "still unanswered"}])
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: None)
+    fresh = ResidentProc(pid=5555)
+    spawned = []
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append((a, k)) or (True, "r", fresh))
+    live = {"C1": {"proc": ResidentProc(), "agent_id": "A1", "conversation_id": "C1",
+                   "alias": "Vox", "log_path": log, "session_id": "sess-9",
+                   "session_pinned": True, "cold": False, "serviced_seq": 1,
+                   "current_run_id": "RUN-1", "run_id": "RUN-1",
+                   "awaiting_result": True, "awaiting_since": time.time(),
+                   "turn_scan_offset": 0, "lines_offset": 0, "lines_buf": b"", "lines_seq": 1,
+                   "booted_ts": time.time() - 120, "last_activity_ts": time.time()}}
+    try:
+        notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+        # the empty bubble was NEVER posted
+        assert not any(u.endswith("/conversations/C1/turns") for u, _ in posts)
+        # the dead warm turn's run finished 'killed' (not a fake success)
+        fin = next(b for u, b in posts if u.endswith("/runs/RUN-1/finish"))
+        assert fin["status"] == "killed"
+        # lease released via the resume_failed close
+        assert any(u.endswith("/wake-ack") and b["kind"] == "resident_resume_failed"
+                   and b["release_lease"] is True for u, b in posts)
+        # SAME tick: rebooted FRESH — cold (no --resume), persona re-injected...
+        assert spawned and spawned[0][1]["resume_session_id"] is None
+        assert spawned[0][1]["system_prompt"] == "PERSONA"
+        # ...and the still-unanswered human turn was re-fed to the fresh boot
+        fresh.stdin.seek(0)
+        sent = json.loads(fresh.stdin.read().decode())["message"]["content"][0]["text"]
+        assert sent == notifier._wrap_conversation_turn("still unanswered")
+        # retry-once: the cold boot consumed the flag (no warm→empty→warm loop)
+        assert "C1" not in notifier._RESIDENT_RESUME_FAILED
+        assert live["C1"]["proc"] is fresh and live["C1"]["cold"] is True
+    finally:
+        notifier._RESIDENT_RESUME_FAILED.discard("C1")
+
+
+def test_service_residents_cold_empty_result_stamps_error_turn_not_empty_bubble(monkeypatch, tmp_path):
+    """Chain terminator: a COLD boot whose turn ALSO comes up empty must not loop — it stamps a
+    NON-EMPTY error turn (the user sees an explanation, never a blank bubble) and finishes the
+    run normally, resolving the human turn."""
+    log = tmp_path / "c.ndjson"
+    log.write_text('{"type":"result","subtype":"error_during_execution","num_turns":0,'
+                   '"session_id":"sess-9","result":""}\n')
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": None, "pending_human": True, "last_turn_seq": 1}
+    posts = _wire(monkeypatch, active=[conv])
+    live = {"C1": {"proc": ResidentProc(), "agent_id": "A1", "conversation_id": "C1",
+                   "alias": "Vox", "log_path": log, "session_id": None,
+                   "session_pinned": False, "cold": True, "serviced_seq": 1,
+                   "current_run_id": "RUN-1", "run_id": "RUN-1",
+                   "awaiting_result": True, "awaiting_since": time.time(),
+                   "turn_scan_offset": 0, "lines_offset": 0, "lines_buf": b"", "lines_seq": 1,
+                   "booted_ts": time.time(), "last_activity_ts": time.time()}}
+
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+
+    turn_post = next(b for u, b in posts if u.endswith("/conversations/C1/turns"))
+    assert turn_post["content"].strip()                       # NEVER an empty bubble
+    assert "without producing a reply" in turn_post["content"]
+    assert any(u.endswith("/runs/RUN-1/finish") for u, _ in posts)
+    assert live["C1"]["awaiting_result"] is False             # turn resolved — chain ends
 
 
 def test_service_residents_cold_fallback_on_fast_warm_crash(monkeypatch, tmp_path):

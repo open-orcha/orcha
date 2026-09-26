@@ -1,0 +1,196 @@
+<section id="product" class="mk-section pr-root" aria-labelledby="pr-title">
+  <div class="pr-wrap">
+    <header class="pr-head">
+      <div class="pr-eyebrow">— 02 / Built for teams</div>
+      <h2 class="pr-title" id="pr-title">Everything you need to run agents you can <span class="pr-title-em">trust</span>.</h2>
+      <p class="pr-sub">Persistent Claude agents work in your repos — sandboxed, attributable,
+      and never merged without a human. The guardrails come standard.</p>
+    </header>
+
+    <ul class="pr-grid" role="list">
+      <li class="pr-card">
+        <span class="pr-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="4"/>
+            <rect x="8" y="8" width="8" height="8" rx="1.5"/>
+          </svg>
+        </span>
+        <h3 class="pr-name">Sandboxed runs</h3>
+        <p class="pr-desc">Every agent wake runs in a fresh Docker container — non-root, CPU and memory capped, and reaped after the run. If the sandbox can&rsquo;t start, nothing runs on the host.</p>
+      </li>
+
+      <li class="pr-card">
+        <span class="pr-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="5" r="2.4"/><path d="M6 7.4v9.2"/><circle cx="6" cy="19" r="2.4"/>
+            <path d="M11.5 5h3.2a2.5 2.5 0 0 1 2.5 2.5v9.1"/><circle cx="18" cy="19" r="2.4"/>
+          </svg>
+        </span>
+        <h3 class="pr-name">Bot-authored PRs</h3>
+        <p class="pr-desc">Agents branch, commit, push, and open pull requests as the GitHub App bot. Zero human credentials ever enter a container; installation tokens last one hour and auto-rotate.</p>
+      </li>
+
+      <li class="pr-card">
+        <span class="pr-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3 20 6.2v5.3c0 4.4-3.1 7.6-8 9.2-4.9-1.6-8-4.8-8-9.2V6.2z"/>
+            <path d="M8.6 12 11 14.3 15.6 9.4"/>
+          </svg>
+        </span>
+        <h3 class="pr-name">Human verification gate</h3>
+        <p class="pr-desc">Agents stop at needs_verification and never self-certify. A human reviews the work, and merge is always a human decision.</p>
+      </li>
+
+      <li class="pr-card">
+        <span class="pr-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/>
+            <path d="M16 6.2a3 3 0 0 1 0 5.6"/><path d="M17.5 14.4A5.5 5.5 0 0 1 20.5 19"/>
+          </svg>
+        </span>
+        <h3 class="pr-name">Team roles &amp; grants</h3>
+        <p class="pr-desc">Invite by GitHub username with owner, member, and viewer roles, plus fine-grained grants for keys, members, repos, autonomy, and reviewers. Members see only their projects.</p>
+      </li>
+
+      <li class="pr-card">
+        <span class="pr-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3.5" width="7" height="7" rx="1.6"/><rect x="14" y="3.5" width="7" height="7" rx="1.6"/>
+            <rect x="3" y="13.5" width="7" height="7" rx="1.6"/><rect x="14" y="13.5" width="7" height="7" rx="1.6"/>
+          </svg>
+        </span>
+        <h3 class="pr-name">Multi-project &amp; multi-org</h3>
+        <p class="pr-desc">A projects hub with per-project runtimes and GitHub repos, spanning multiple organizations. Each conversation gets its own git worktree, isolated from the rest.</p>
+      </li>
+
+      <li class="pr-card">
+        <span class="pr-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3.5 20.5h17"/><path d="M4 20.5V13m5 7.5V8.5m5 12V11m5 9.5V5.5"/>
+          </svg>
+        </span>
+        <h3 class="pr-name">Cost metrics</h3>
+        <p class="pr-desc">Per-run cost and duration on a /metrics dashboard. Every task is priced and timed, so you always know what an agent run costs before it becomes a habit.</p>
+      </li>
+    </ul>
+  </div>
+
+  <style>
+  /* =========================================================================
+     FEATURES GRID (pr-) — compact 2x3 card grid on the Quantal paper system.
+     Fraunces display heading; cards on --surface with --shadow-card, hover
+     lift. Tokens only (var()), no raw hex.
+     ========================================================================= */
+  .pr-root {
+    padding: 96px 24px;
+    background: var(--paper);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+  .pr-wrap { max-width: 1120px; margin: 0 auto; }
+
+  .pr-head { max-width: 720px; margin: 0 auto 48px; text-align: center; }
+  .pr-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent-text);
+  }
+  .pr-title {
+    margin: 14px 0 14px;
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: clamp(30px, 4vw, 46px); line-height: 1.08;
+    letter-spacing: -.015em; color: var(--text-primary);
+    text-wrap: balance;
+  }
+  .pr-title-em { font-style: italic; color: var(--accent-text); }
+  .pr-sub {
+    font-size: 16px; line-height: 1.55; color: var(--text-secondary);
+    max-width: 600px; margin: 0 auto;
+  }
+
+  .pr-grid {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  }
+  .pr-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-card);
+    padding: 26px 24px 28px;
+    transition: transform .2s cubic-bezier(.16,1,.3,1), box-shadow .2s ease, border-color .2s ease;
+  }
+  .pr-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-float);
+    border-color: var(--border-strong);
+  }
+  .pr-glyph {
+    display: inline-grid; place-items: center;
+    width: 44px; height: 44px; border-radius: var(--radius-xl);
+    background: var(--gold-soft); color: var(--accent-strong);
+    margin-bottom: 18px;
+  }
+  .pr-glyph svg { width: 22px; height: 22px; }
+  .pr-name {
+    font-size: 17px; font-weight: 700; letter-spacing: -.01em;
+    color: var(--text-primary); margin-bottom: 8px;
+  }
+  .pr-desc {
+    font-size: 14px; line-height: 1.55; color: var(--text-secondary); margin: 0;
+  }
+
+  /* reveal on scroll-in */
+  .pr-card {
+    opacity: 0; transform: translateY(22px);
+    transition: opacity .7s cubic-bezier(.16,1,.3,1), transform .7s cubic-bezier(.16,1,.3,1), box-shadow .2s ease, border-color .2s ease;
+  }
+  .pr-root.pr-in .pr-card { opacity: 1; transform: none; }
+  .pr-root.pr-in .pr-card:hover { transform: translateY(-4px); }
+  .pr-root.pr-in .pr-card:nth-child(2) { transition-delay: .06s; }
+  .pr-root.pr-in .pr-card:nth-child(3) { transition-delay: .12s; }
+  .pr-root.pr-in .pr-card:nth-child(4) { transition-delay: .18s; }
+  .pr-root.pr-in .pr-card:nth-child(5) { transition-delay: .24s; }
+  .pr-root.pr-in .pr-card:nth-child(6) { transition-delay: .30s; }
+
+  @media (max-width: 880px) {
+    .pr-grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  }
+  @media (max-width: 560px) {
+    .pr-root { padding: 72px 20px; }
+    .pr-grid { grid-template-columns: 1fr; }
+    .pr-head { margin-bottom: 36px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pr-card { opacity: 1; transform: none; transition: box-shadow .2s ease, border-color .2s ease; }
+    .pr-root.pr-in .pr-card:hover { transform: none; }
+  }
+  </style>
+
+  <script>
+  /* IntersectionObserver stagger-in; geometry fallback keeps cards visible. */
+  (function () {
+    "use strict";
+    var root = document.getElementById("product");
+    if (!root) return;
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function onScreen() {
+      var r = root.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      return r.top < vh * 0.92 && r.bottom > 0;
+    }
+    function reveal() { if (onScreen()) { root.classList.add("pr-in"); return true; } return false; }
+
+    if (reduced || !("IntersectionObserver" in window)) { root.classList.add("pr-in"); return; }
+    if (!reveal()) {
+      var obs = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { root.classList.add("pr-in"); obs.disconnect(); }
+      }, { threshold: 0.12 });
+      obs.observe(root);
+      window.addEventListener("load", reveal, { once: true });
+      window.addEventListener("scroll", function () { if (reveal()) {} }, { passive: true });
+    }
+  })();
+  </script>
+</section>

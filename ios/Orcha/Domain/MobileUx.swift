@@ -91,6 +91,46 @@ enum MobileUx {
         return agents.first { $0.id == id }?.alias
     }
 
+    // MARK: collab v1 — GitHub identity display
+
+    /// GitHub serves any user's avatar at this well-known URL — no API call needed
+    /// (web `ghAvatar` parity). Nil for a missing/blank login; the login is
+    /// percent-encoded to a strict alphanumeric+dash set (the GitHub username
+    /// alphabet) so a hostile value can't smuggle path segments.
+    static func githubAvatarURL(_ login: String?, sizePx: Int = 96) -> URL? {
+        guard let login = login?.trimmingCharacters(in: .whitespaces), !login.isEmpty else { return nil }
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-")
+        guard let encoded = login.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: "https://github.com/\(encoded).png?size=\(sizePx)")
+    }
+
+    /// The GitHub login behind an alias — ONLY when the alias resolves to a human
+    /// member (an AI agent never renders a GitHub face, whatever its alias).
+    static func humanLogin(alias: String?, in agents: [AgentDto]) -> String? {
+        guard let alias, let agent = agents.first(where: { $0.alias == alias }) else { return nil }
+        return agent.kind == "human" ? agent.githubLogin : nil
+    }
+
+    /// Whether an alias resolves to a human member (drives the round-avatar form
+    /// even for humans without a mapped GitHub login).
+    static func isHumanAlias(_ alias: String?, in agents: [AgentDto]) -> Bool {
+        guard let alias else { return false }
+        return agents.first { $0.alias == alias }?.kind == "human"
+    }
+
+    /// Collab v1 — the needs-you de-emphasis rule, EXACTLY the web's
+    /// (`home-state.js` renderQueue): a task with an owner-assigned reviewer is
+    /// SOMEONE's review. The assigned reviewer, any owner, or an anonymous viewer
+    /// (trust off — no identity resolved) sees the card normally; everyone else
+    /// gets it de-emphasized with a "review: <login>" tag. Returns the tag's
+    /// display name, or nil when the card renders normally.
+    static func reviewTag(for task: TaskDto, identity: ActingIdentity?) -> String? {
+        guard let reviewer = task.reviewer, let identity else { return nil }
+        guard identity.agentId != reviewer.agentId, identity.memberRole != "owner" else { return nil }
+        return reviewer.githubLogin ?? reviewer.alias ?? "someone"
+    }
+
     /// Web `isToHuman` (`app.js:247-256`): a request is "to the human" when it has no
     /// explicit target (routed to the picked human) OR its target resolves to a human agent.
     /// NO status filter — mirrors the Escalations chip exactly.

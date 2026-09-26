@@ -15,8 +15,13 @@ struct OrchaApiClient {
     /// closes, so the 20s `timeoutIntervalForResource` on `session` would kill it (Issue 3).
     private let streamSession: URLSession
     private let decoder = JSONDecoder()
+    /// Explicit credential override — used by the add-flow probe, where the token the
+    /// user just pasted isn't persisted (and so isn't in `BearerTokens`) yet. Nil for
+    /// the app-wide client: it resolves per request from the registry.
+    private let bearerOverride: String?
 
-    init() {
+    init(bearerToken: String? = nil) {
+        bearerOverride = bearerToken
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 20
@@ -85,6 +90,45 @@ struct OrchaApiClient {
         try await get(base, "/api/models")
     }
 
+    /// Collab v1 — who is the acting human on this project, per the trusted proxy
+    /// identity (device-token requests carry it too; identity_routes.py).
+    func me(_ base: String, _ cid: String) async throws -> MeResponse {
+        try await get(base, "/api/me" + query(["cid": cid]))
+    }
+
+    /// Collab v1 — the project's human roster (`restricted:true` = own row only).
+    func members(_ base: String, _ cid: String) async throws -> MembersResponse {
+        try await get(base, "/api/containers/\(cid)/members")
+    }
+
+    /// mig 040 — the signed-in user's cosmetic prefs bag, or nil (the deliberate
+    /// self-host / trust-off / unmapped "stay local-only" signal — a 200, not an error).
+    func getPrefs(_ base: String) async throws -> [String: Any]? {
+        let (data, _) = try await raw(base, "/api/prefs")
+        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return obj?["prefs"] as? [String: Any]
+    }
+
+    /// mig 040 — whole-bag replace of the signed-in user's cosmetic prefs.
+    func putPrefs(_ base: String, _ prefs: [String: Any]) async throws {
+        _ = try await send(base, "/api/prefs", method: "PUT", ["prefs": prefs])
+    }
+
+    /// The GitHub App installation's repo list for the Connect-repo sheet
+    /// (portal `home-github.js` parity). `available:false` rides a 200 — a
+    /// graceful off state, never thrown. `cid` scopes the listing to the selected
+    /// project so the server can fall back to that project's saved PAT (the React
+    /// client sends it too); without it a PAT-only local project lists nothing.
+    func githubRepos(_ base: String, cid: String? = nil) async throws -> GithubReposResponse {
+        try await get(base, githubReposPath(cid: cid))
+    }
+
+    /// `/api/github/repos` (+ `?cid=` when a project is selected) — split out so the
+    /// query contract is unit-testable without a network.
+    func githubReposPath(cid: String?) -> String {
+        "/api/github/repos" + query(["cid": cid])
+    }
+
     func conversation(_ base: String, _ aid: String, limit: Int? = nil) async throws -> ConversationResponse {
         try await get(base, "/api/agents/\(aid)/conversation" + query(["limit": limit.map(String.init)]))
     }
@@ -111,10 +155,13 @@ struct OrchaApiClient {
         AsyncThrowingStream { continuation in
             let work = Task {
                 do {
-                    var request = URLRequest(url: try url(base, "/api/agents/\(aid)/runs/\(runId)/stream"))
+                    var request = try makeRequest(base, "/api/agents/\(aid)/runs/\(runId)/stream")
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     let (bytes, response) = try await streamSession.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                    if Self.perimeterIntercepted(status: http.statusCode, contentType: http.value(forHTTPHeaderField: "Content-Type"), body: Data()) {
+                        throw OrchaAuthRequiredError()
+                    }
                     guard (200..<300).contains(http.statusCode) else {
                         throw OrchaApiError(status: http.statusCode, body: "")
                     }
@@ -161,6 +208,16 @@ struct OrchaApiClient {
         try await post(base, "/api/tasks/\(tid)/verify", ["approve": approve, "feedback": feedback, "actor_agent_id": actor])
     }
 
+    /// Collab v1 — name the human who should verify this task (nil = anyone; the
+    /// absent key clears it, matching the server's Optional default). Owner-or-
+    /// `assign_reviewers` gated server-side; advisory — /verify stays permissive.
+    func setTaskReviewer(_ base: String, _ tid: String, actor: String, reviewerAgentId: String?) async throws {
+        _ = try await send(base, "/api/tasks/\(tid)/reviewer", method: "PUT", [
+            "actor_agent_id": actor,
+            "reviewer_agent_id": reviewerAgentId,
+        ])
+    }
+
     func decidePlan(_ base: String, _ tid: String, actor: String, approve: Bool, reason: String?, target: String?) async throws {
         try await post(base, "/api/decisions", [
             "subject_type": "plan_approval",
@@ -189,6 +246,13 @@ struct OrchaApiClient {
     /// GH #148 — the autonomy gearbox (`plan` | `pr` | `full`). Human-gated on the server.
     func setAutonomy(_ base: String, _ cid: String, actor: String, level: String) async throws {
         try await post(base, "/api/containers/\(cid)/autonomy", ["level": level, "actor_agent_id": actor])
+    }
+
+    /// Bind (`repo` = "owner/name") or unbind (`repo` = nil) the container's GitHub repo.
+    /// A nil repo makes `send` drop the key entirely — the server's schema defaults the
+    /// absent field to null, so `{}` and `{"repo": null}` both unbind (github_routes.py).
+    func setGithubRepo(_ base: String, _ cid: String, repo: String?) async throws -> GithubBindingResponse {
+        try await putDecoding(base, "/api/containers/\(cid)/github", ["repo": repo])
     }
 
     /// Flow 07a: returns the routed outcome so the UI can tell a real wake
@@ -272,14 +336,47 @@ struct OrchaApiClient {
 
     // MARK: plumbing
 
-    private func url(_ base: String, _ path: String) throws -> URL {
+    /// Every request is built here so the bearer credential (cloud auth perimeter's
+    /// iOS/API lane) rides on ALL calls — reads, writes, and streams alike — whenever
+    /// the target base URL has a token.
+    private func makeRequest(_ base: String, _ path: String) throws -> URLRequest {
         guard let url = URL(string: base + path) else { throw URLError(.badURL) }
-        return url
+        var request = URLRequest(url: url)
+        if let token = bearerOverride ?? BearerTokens.token(for: base) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    /// The auth perimeter never answers portal JSON when the bearer credential is
+    /// missing or wrong — the request falls through to the browser OAuth lane and
+    /// comes back as a 401, or (after URLSession follows the sign-in redirects) an
+    /// HTML page. Surface that as "needs an access token", never as a decode error.
+    /// Portal-level errors (403 authority, 404, 409, 422 — all JSON) pass through.
+    static func perimeterIntercepted(status: Int, contentType: String?, body: Data) -> Bool {
+        if status == 401 { return true }
+        if contentType?.lowercased().contains("text/html") == true { return true }
+        let head = String(decoding: body.prefix(64), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return head.hasPrefix("<!doctype html") || head.hasPrefix("<html")
+    }
+
+    private static func checkPerimeter(_ http: HTTPURLResponse, _ data: Data) throws {
+        if perimeterIntercepted(
+            status: http.statusCode,
+            contentType: http.value(forHTTPHeaderField: "Content-Type"),
+            body: data
+        ) {
+            throw OrchaAuthRequiredError()
+        }
     }
 
     /// Build a `?a=1&b=2` suffix, dropping nil values and percent-encoding each value
     /// (ISO cursors carry `:`/`+` — over-encode to a conservative unreserved set).
-    private func query(_ items: [String: String?]) -> String {
+    /// `internal` (not `private`): the per-feature `OrchaApiClient+*` extensions
+    /// (github hub pagination/filter params) build query strings too.
+    func query(_ items: [String: String?]) -> String {
         let pairs = items
             .sorted { $0.key < $1.key }
             .compactMap { key, value -> String? in
@@ -291,27 +388,31 @@ struct OrchaApiClient {
     }
 
     private func raw(_ base: String, _ path: String) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(from: url(base, path))
+        let (data, response) = try await session.data(for: makeRequest(base, path))
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        try Self.checkPerimeter(http, data)
         guard (200..<300).contains(http.statusCode) else {
             throw OrchaApiError(status: http.statusCode, body: String(decoding: data.prefix(300), as: UTF8.self))
         }
         return (data, http)
     }
 
-    private func get<T: Decodable>(_ base: String, _ path: String) async throws -> T {
+    // `internal` (not `private`): the per-feature `OrchaApiClient+*` extensions live in
+    // their own files and reach these two plumbing helpers to add endpoints (github hub).
+    func get<T: Decodable>(_ base: String, _ path: String) async throws -> T {
         let (data, _) = try await raw(base, path)
         return try decoder.decode(T.self, from: data)
     }
 
     private func send(_ base: String, _ path: String, method: String, _ body: [String: Any?]) async throws -> Data {
-        var request = URLRequest(url: try url(base, path))
+        var request = try makeRequest(base, path)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let cleaned = body.compactMapValues { $0 }
         request.httpBody = try JSONSerialization.data(withJSONObject: cleaned)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        try Self.checkPerimeter(http, data)
         guard (200..<300).contains(http.statusCode) else {
             throw OrchaApiError(status: http.statusCode, body: String(decoding: data.prefix(300), as: UTF8.self))
         }
@@ -322,13 +423,18 @@ struct OrchaApiClient {
         _ = try await send(base, path, method: "POST", body)
     }
 
-    private func postDecoding<T: Decodable>(_ base: String, _ path: String, _ body: [String: Any?]) async throws -> T {
+    func postDecoding<T: Decodable>(_ base: String, _ path: String, _ body: [String: Any?]) async throws -> T {
         let data = try await send(base, path, method: "POST", body)
         return try decoder.decode(T.self, from: data)
     }
 
     private func patch(_ base: String, _ path: String, _ body: [String: Any?]) async throws {
         _ = try await send(base, path, method: "PATCH", body)
+    }
+
+    private func putDecoding<T: Decodable>(_ base: String, _ path: String, _ body: [String: Any?]) async throws -> T {
+        let data = try await send(base, path, method: "PUT", body)
+        return try decoder.decode(T.self, from: data)
     }
 }
 
@@ -338,13 +444,21 @@ private extension CharacterSet {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 }
 
+/// The auth perimeter intercepted the request (bearer missing or rejected): the
+/// caller needs a — correct — access token, not a different address.
+struct OrchaAuthRequiredError: LocalizedError, Equatable {
+    var errorDescription: String? {
+        "This Orcha requires a team access token. Add or update it under Settings → Containers."
+    }
+}
+
 struct OrchaApiError: LocalizedError {
     let status: Int
     let body: String
 
     var errorDescription: String? {
         switch status {
-        case 403: "This action is not allowed for the paired human."
+        case 403: "You don't have access to do this in this project."
         case 409: "Orcha rejected this action because the item changed. Refresh and try again."
         case 422: "Orcha needs more information for this action."
         default: "Orcha answered with an error (\(status))."

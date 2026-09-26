@@ -27,7 +27,18 @@ User arguments: `$ARGUMENTS`
 
 3. **Read `.claude/orcha.json`** for `api_base_url`.
 
-4. **POST** the done signal. This is a WORK-lane endpoint: if `$ORCHA_RUN_TOKEN` is set in the env, pass it as the `X-Orcha-Run-Token` header so the server's work-lane gate accepts it; when it is UNSET (a human/no-token caller), OMIT the header (a bare call correctly 403s on this gated endpoint). Use the shell-safe expansion so an unset var adds nothing:
+4. **PR attribution check** (only when this task's work lives on a git branch / opened a PR — skip otherwise). Agent-opened PRs are authored by the app bot, so the triggering human must be attributed explicitly (docs/agent-prs.md). Fetch the requester:
+   ```bash
+   curl -fsS "<api_base_url>/api/agents/<agent_id>/protocol?task_id=<task_id>"
+   ```
+   and read `requested_by` (`{alias, github_login, git_email}`). Then verify BOTH, fixing whichever is missing before marking done:
+   - **PR body first line** must be this blockquote (then a blank line):
+     `> 🧑 Triggered by @<github_login> via Orcha task <task_id>`
+     If `github_login` is null, use the alias with no @: `> 🧑 Triggered by <alias> via Orcha task <task_id>`. Never drop the line or the task id. Fix with `gh pr edit <num> --body "..."` (prepend, keep the rest).
+   - **Co-authored-by trailer** on the branch's final commit:
+     `Co-authored-by: <alias> <git_email>` — when `git_email` is null use `<github_login>@users.noreply.github.com`; when both are null, skip the trailer (the body line still carries attribution). Fix with `git commit --amend` (trailers go after a blank line) and `git push --force-with-lease` — amending your own un-merged PR branch is safe; NEVER amend anything already on the default branch.
+
+5. **POST** the done signal. This is a WORK-lane endpoint: if `$ORCHA_RUN_TOKEN` is set in the env, pass it as the `X-Orcha-Run-Token` header so the server's work-lane gate accepts it; when it is UNSET (a human/no-token caller), OMIT the header (a bare call correctly 403s on this gated endpoint). Use the shell-safe expansion so an unset var adds nothing:
    ```bash
    curl -fsS -X POST "<api_base_url>/api/tasks/<task_id>/done" \
      -H 'Content-Type: application/json' \
@@ -36,7 +47,7 @@ User arguments: `$ARGUMENTS`
    ```
    Response: `{"task_id": "...", "status": "needs_verification"}`
 
-5. **Snapshot your memory digest** (Epic C / D3 — the `/orcha-done` cadence trigger). Finishing a task is the natural "captured a unit of work" boundary, so persist your reasoning now so a future re-binding tab rehydrates it. Compose a tight digest from THIS conversation and POST it:
+6. **Snapshot your memory digest** (Epic C / D3 — the `/orcha-done` cadence trigger). Finishing a task is the natural "captured a unit of work" boundary, so persist your reasoning now so a future re-binding tab rehydrates it. Compose a tight digest from THIS conversation and POST it:
    ```bash
    curl -fsS -X POST "<api_base_url>/api/agents/<agent_id>/digest" \
      -H 'Content-Type: application/json' \
@@ -44,14 +55,14 @@ User arguments: `$ARGUMENTS`
    ```
    Keep it reasoning-focused; do NOT copy durable project facts here (those belong to Claude Code file-memory — non-overlapping, no sync). For any loose end that depends on external state (GitHub PR/issue status, Orcha task/request status, who owes what, review state), store the query to re-run ("check PR #123 status") rather than a frozen verdict ("PR #123 is still in review"). A future wake must re-check the source of truth before acting or deciding there is nothing to do. This is a best-effort step: if it fails, report it but still complete `/orcha-done`. (Standalone equivalent: `/orcha-snapshot --alias <alias>`.)
 
-6. **Before yielding, check the inbox** (Orcha#1 — idle-agent inbox handling). Now that you've just gone idle, immediately call:
+7. **Before yielding, check the inbox** (Orcha#1 — idle-agent inbox handling). Now that you've just gone idle, immediately call:
    ```bash
    curl -fsS "<api_base_url>/api/agents/<agent_id>/inbox"
    curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
    ```
    Count `open_requests` (incoming) and `outgoing_requests` (answered). Use these counts in the report below so the user knows there's pending request work before they go to /orcha-next.
 
-7. **Report** clearly:
+8. **Report** clearly:
    ```
    ✓ Task <short-id> marked needs_verification.
    A human must approve via /orcha-verify <task_id>  (or /orcha-verify <task_id> --reject "feedback...")

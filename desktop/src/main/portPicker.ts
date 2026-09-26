@@ -36,15 +36,22 @@ export async function dockerPublishedPorts(exec: Exec = dockerExec): Promise<Set
   }
 }
 
-/** Probe whether a TCP port is free on the host. Binds 0.0.0.0 (the address Docker
- *  publishes on) so the probe sees the same conflicts Docker would. */
+/** Probe whether a TCP port is free on the host. Binds BOTH 0.0.0.0 (the address
+ *  Docker publishes on) AND 127.0.0.1: on macOS a 0.0.0.0 bind can SUCCEED while a
+ *  different process holds the same port on loopback only — which is exactly how
+ *  the per-project terminal bridges listen. Probing only 0.0.0.0 handed a new
+ *  project a bridge port another project's bridge already owned; the new bridge
+ *  then died on the real bind and terminal pairing failed with "Not permitted"
+ *  (the foreign bridge answered instead). */
 export function probeHostPort(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const s = net.createServer()
-    s.once('error', () => resolve(false))
-    s.once('listening', () => s.close(() => resolve(true)))
-    s.listen(port, '0.0.0.0')
-  })
+  const bindable = (host: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      const s = net.createServer()
+      s.once('error', () => resolve(false))
+      s.once('listening', () => s.close(() => resolve(true)))
+      s.listen(port, host)
+    })
+  return bindable('0.0.0.0').then((ok) => (ok ? bindable('127.0.0.1') : false))
 }
 
 export interface PickFreePortOpts {

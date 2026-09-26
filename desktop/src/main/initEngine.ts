@@ -17,6 +17,8 @@ export interface EngineFs {
   mkdirp(p: string): void
   chmod(p: string, mode: number): void
   exists(p: string): boolean
+  /** Names in a directory; [] when the dir is missing/unreadable. */
+  readDir(p: string): string[]
 }
 
 export type FetchJson = (url: string, init?: { method?: string; body?: unknown }) => Promise<unknown>
@@ -39,6 +41,10 @@ export interface EngineDeps {
   startWorker?: StartWorker
   waitPortalTimeoutMs?: number
   waitPortalPollMs?: number
+  /** Host GitHub token (from `gh auth token`) to hand the compose-up call, one-shot — NEVER
+   *  persisted to .env or any file, NEVER logged. Parity with the CLI's `orcha up`, which
+   *  does the same host-side lookup. Optional so unit tests can omit it. */
+  ghAuthToken?: () => Promise<string | null>
 }
 
 const STDERR_TAIL = 500
@@ -51,10 +57,11 @@ function fail(step: ProvisionStep, code: BridgeError['code'], detail: string): n
   throw { code, detail } as unknown as BridgeError
 }
 
-/** docker compose -f <composeFile> <args...> from the project's .orcha dir. */
-async function compose(exec: Exec, orchaDir: string, args: string[]): Promise<string> {
+/** docker compose -f <composeFile> <args...> from the project's .orcha dir. `extraEnv`
+ *  (e.g. a one-shot ORCHA_GITHUB_PAT) flows straight to the exec, never touching a file. */
+async function compose(exec: Exec, orchaDir: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<string> {
   const file = path.join(orchaDir, 'docker-compose.yml')
-  const res = await exec('docker', ['compose', '-f', file, ...args])
+  const res = await exec('docker', ['compose', '-f', file, ...args], extraEnv)
   return res.stdout
 }
 
@@ -102,6 +109,28 @@ export async function provision(
     }
   }
 
+  // Downgrade guard (parity with the CLI's `orcha upgrade`): the migration chain is a
+  // monotonic stamp on BOTH sides — the app's bundled templates and the stack's
+  // .orcha/migrations copy. An older app whose tip is below the stack's would re-copy
+  // older templates over a newer portal (silent downgrade). Refuse before any writes.
+  if (opts.mode === 'upgrade') {
+    const tip = (dir: string): number =>
+      deps.fs
+        .readDir(dir)
+        .reduce((t, n) => Math.max(t, Number(/^(\d+)_.*\.sql$/.exec(n)?.[1] ?? 0)), 0)
+    const cliTip = tip(path.join(deps.templatesRoot(), 'migrations'))
+    const stackTip = tip(path.join(orchaDir, 'migrations'))
+    if (cliTip < stackTip) {
+      fail(
+        'render-compose',
+        'PROVISION_FAILED',
+        `This project is on a NEWER Orcha than this app (project migrations reach ` +
+          `${String(stackTip).padStart(3, '0')}, the app ships ${String(cliTip).padStart(3, '0')}). ` +
+          `Upgrading now would downgrade the portal — update the Orcha app first, then retry.`
+      )
+    }
+  }
+
   // 1. render compose
   emit('render-compose', 'start')
   const rendered = renderCompose(deps.readComposeTemplate(), { projectName, dbPort, apiPort, bridgePort })
@@ -145,10 +174,18 @@ export async function provision(
   fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n')
   emit('copy-templates', 'ok')
 
-  // 3. compose up -d --build (stream stdout lines)
+  // 3. compose up -d --build (stream stdout lines). Parity with the CLI's `orcha up`: when
+  //    the host hasn't set ORCHA_GITHUB_PAT itself, pull one from `gh auth token` (host-side,
+  //    already-logged-in gh CLI) and pass it to JUST this compose invocation — never written
+  //    to .orcha/.env or any other file, never logged (only the resolved boolean matters here).
   emit('compose-up', 'start')
+  let composeEnv: NodeJS.ProcessEnv | undefined
+  if (!process.env.ORCHA_GITHUB_PAT && deps.ghAuthToken) {
+    const token = await deps.ghAuthToken().catch(() => null)
+    if (token) composeEnv = { ORCHA_GITHUB_PAT: token }
+  }
   try {
-    const out = await compose(deps.exec, orchaDir, ['up', '-d', '--build'])
+    const out = await compose(deps.exec, orchaDir, ['up', '-d', '--build'], composeEnv)
     for (const line of out.split('\n').filter(Boolean)) emit('compose-up', 'log', { line })
     emit('compose-up', 'ok')
   } catch (err) {

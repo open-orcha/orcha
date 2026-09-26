@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh workspace GitHub tokens every 40 minutes (tokens live 60)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=40min
+
+[Install]
+WantedBy=timers.target

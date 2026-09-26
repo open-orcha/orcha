@@ -206,6 +206,71 @@ async def test_prompt_event_wakes_agent_and_carries_message(client, container, m
     assert evt["event"] == "prompt" and evt["message"] == "re-check the failing test"
 
 
+# ---------- GH #138: conversation_turn as a safety-net directed message ----------
+
+@pytest.mark.asyncio
+async def test_conversation_turn_surfaces_alongside_a_work_wake(client, container, make_agent, db):
+    """GH #138 safety net: a lingering unanswered chat message must not go unseen forever if the
+    resident's own retry never fires — when this agent wakes on the WORK lane for an unrelated
+    reason (here, a `prompt`), the chat content rides along in prompt_messages too."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
+                ts=1000.0, payload={"conversation_id": "c1", "content": "are you still there?"})
+    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    assert r.status_code == 201, r.text
+
+    _, cand = await _scan(client, container["id"], aid)
+    assert cand["should_wake"] is True
+    assert "re-check the failing test" in cand["prompt_messages"]
+    chat = next((m for m in cand["prompt_messages"] if "are you still there?" in m), None)
+    assert chat is not None, f"conversation_turn content missing from {cand['prompt_messages']}"
+    assert "still waiting on a reply" in chat
+
+
+@pytest.mark.asyncio
+async def test_conversation_turn_alone_does_not_wake_work_lane(client, container, make_agent, db):
+    """GH #91/#90 (unchanged by #138): a bare, unanswered chat message is the CONVERSATION lane's
+    own surface — it must NOT by itself wake a WORK embodiment. The safety net only rides along
+    when the agent wakes for some OTHER reason; it never becomes a spurious wake source itself."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
+                ts=1000.0, payload={"conversation_id": "c1", "content": "hello?"})
+
+    _, cand = await _scan(client, container["id"], aid)
+    assert cand["should_wake"] is False
+    assert cand["pending_events"] == 0
+    assert cand["prompt_messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_turn_consumed_by_conv_lane_never_rides_a_work_wake(
+        client, container, make_agent, db):
+    """A chat turn the CONVERSATION lane already serviced (conv_delivered_ts >= its ts) must NOT
+    be re-injected into a later work wake as "unanswered" — the GH #138 safety net is only for
+    turns the conversation lane never consumed. Regression: an answered chat question rode along
+    a request_answered work wake and the worker re-answered it instead of the wake's real work."""
+    b = await make_agent("B")
+    aid = b["agent_id"]
+    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
+                ts=1000.0, payload={"conversation_id": "c1", "content": "already answered chat"})
+    # the conversation lane consumed the turn: its ack advanced conv_delivered_ts to the turn's ts
+    r = await client.post(f"/api/agents/{aid}/wake-ack",
+                          json={"kind": "ephemeral", "event": "conversation_turn",
+                                "lane": "conversation", "delivered_ts": 1000.0})
+    assert r.status_code == 200, r.text
+    # an unrelated WORK wake fires later
+    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    assert r.status_code == 201, r.text
+
+    _, cand = await _scan(client, container["id"], aid)
+    assert cand["should_wake"] is True
+    assert "re-check the failing test" in cand["prompt_messages"]
+    assert not any("already answered chat" in m for m in cand["prompt_messages"]), \
+        f"consumed conversation_turn re-injected into a work wake: {cand['prompt_messages']}"
+
+
 @pytest.mark.asyncio
 async def test_prompt_records_sender_and_validates(client, container, make_agent):
     a = await make_agent("A")
@@ -770,6 +835,29 @@ def test_build_wake_prompt_handles_multiple_directed_messages():
     assert '(prompt 1) "first ask"' in p and '(prompt 2) "second ask"' in p
 
 
+def test_build_wake_prompt_stable_instructions_form_consistent_prefix():
+    """GH #34: the fixed operating instructions (steps 1-3) are the same text every wake for a
+    given agent/branch — only the trailing '[orcha wake] ...' summary (count/manifest/directed
+    message) is unique per wake. The instructions must render FIRST so two consecutive wakes
+    share a real string prefix, instead of the always-different manifest breaking it at byte 0."""
+    p1 = notifier.build_wake_prompt(
+        {"alias": "Forge", "pending_events": 1,
+         "notifications": [{"rank": 1, "rank_label": "request_in", "surface": "request:R-1",
+                             "actor_alias": "Kedar", "preview": "first wake's ask"}]})
+    p2 = notifier.build_wake_prompt(
+        {"alias": "Forge", "pending_events": 3,
+         "notifications": [{"rank": 1, "rank_label": "task", "surface": "task:T-9",
+                             "actor_alias": "Helm", "preview": "second wake's completely different ask"}]})
+    assert p1 != p2   # the manifests really do differ...
+    assert p1.startswith("You are a ONE-SHOT headless worker")
+    assert p2.startswith("You are a ONE-SHOT headless worker")
+    volatile_marker = "[orcha wake] Forge:"
+    stable_end = p1.index(volatile_marker)
+    assert p2.index(volatile_marker) == stable_end       # ...at the identical offset
+    assert p1[:stable_end] == p2[:stable_end]             # ...and everything before it matches
+    assert "ONE-SHOT" in p1[:stable_end] and "needs_verification" in p1[:stable_end]
+
+
 def test_sidecar_drain_prompt_surfaces_directed_messages():
     """#247 B3 Gate P1b: `prompt`/`task_message`/`task_assigned` events have NO inbox surface — the
     drain sidecar must be FED their content (else acking the cursor silently drops them). The lean
@@ -877,6 +965,112 @@ def test_format_persona_always_injects_human_comms_guardrail():
     assert "No bare UUIDs" in out
 
 
+def test_format_persona_always_injects_multi_human_steering():
+    """Project-runtime epic: every wake that boots AS an agent carries the multi-human
+    conflict rules — owner > member, DoD > chat, explicit overrides, escalate genuine
+    contradictions via a request to the owner rather than silently picking a side."""
+    out = notifier.format_persona({"system_prompt": "You are Tim."}, None)
+    assert "Multi-human steering" in out
+    assert "owner's instructions outrank a member's" in out
+    assert "definition-of-done outranks chat steering" in out
+    assert "following X's direction over Y's earlier note" in out
+    assert "file an Orcha request addressed to the owner" in out
+    assert "pause that thread of work" in out
+    assert "Chat guidance is advisory" in out
+    # like the comms guardrail, it rides on the PERSONA — never on a persona-less render
+    assert "Multi-human steering" not in notifier.format_persona(
+        None, {"digest": {"current_focus": "X"}})
+
+
+def test_multi_human_steering_rides_conversation_lane_too():
+    """The conversation responder gets the same conflict rules — chat is exactly where
+    contradictory human steering shows up first."""
+    out = notifier.format_persona(
+        {"system_prompt": "You are Tim."}, None, lane="conversation")
+    assert "Multi-human steering" in out
+    assert "conversation responder" in out
+    # steering block stays in the stable prefix: ahead of the volatile digest sections
+    out2 = notifier.format_persona(
+        {"system_prompt": "You are Tim."},
+        {"digest": {"current_focus": "wake epic"}})
+    assert out2.index("Multi-human steering") < out2.index("Where you left off")
+
+
+# ---------- Agent→PR: repo-workflow guidance (docs/agent-prs.md) ----------
+
+def _repo_workspace(root):
+    """A workspace that looks repo-credentialed: git checkout + rotating token file."""
+    (root / ".git").mkdir()
+    (root / ".orcha").mkdir()
+    (root / ".orcha" / "github-token").write_text("ghs_fake")
+    return root
+
+
+def test_format_persona_repo_workflow_rides_on_credentialed_workspace(tmp_path):
+    """Agent→PR (docs/agent-prs.md): a workspace with a cloned repo + bot token gets the
+    standing branch→PR contract — never the default branch, orcha/<task-slug> branches,
+    push, `gh pr create`, and merge stays human."""
+    ws = _repo_workspace(tmp_path)
+    out = notifier.format_persona({"system_prompt": "You are Tim."}, None, workdir=str(ws))
+    assert "Working with the repository" in out
+    assert "NEVER commit to the default branch" in out
+    assert "orcha/<task-slug>" in out
+    assert "git push -u origin" in out
+    assert "gh pr create" in out
+    assert "Merging is ALWAYS a human decision" in out
+    assert "a human reviews it" in out
+
+
+def test_format_persona_repo_workflow_gated_out_without_credentials(tmp_path):
+    """The block is workspace-gated: bare dir, repo-without-token (plain local project),
+    and token-without-repo (unbound provisioned workspace) all render WITHOUT it."""
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    out = notifier.format_persona({"system_prompt": "P"}, None, workdir=str(bare))
+    assert "Working with the repository" not in out
+
+    repo_only = tmp_path / "repo-only"
+    repo_only.mkdir()
+    (repo_only / ".git").mkdir()
+    out = notifier.format_persona({"system_prompt": "P"}, None, workdir=str(repo_only))
+    assert "Working with the repository" not in out
+
+    token_only = tmp_path / "token-only"
+    token_only.mkdir()
+    (token_only / ".orcha").mkdir()
+    (token_only / ".orcha" / "github-token").write_text("ghs_fake")
+    out = notifier.format_persona({"system_prompt": "P"}, None, workdir=str(token_only))
+    assert "Working with the repository" not in out
+
+    # like the other standing blocks it rides the PERSONA, never a persona-less render
+    full = tmp_path / "full"
+    full.mkdir()
+    ws = _repo_workspace(full)
+    persona_less = notifier.format_persona(None, {"digest": {"current_focus": "X"}},
+                                           workdir=str(ws))
+    assert "Working with the repository" not in persona_less
+
+
+def test_format_persona_repo_workflow_defaults_to_cwd(tmp_path, monkeypatch):
+    """No workdir arg → the gate checks cwd, which is the workspace root for the daemon
+    (provision-projects.sh starts the notifier with `cd <ws>`)."""
+    _repo_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    out = notifier.format_persona({"system_prompt": "P"}, None)
+    assert "Working with the repository" in out
+
+
+def test_format_persona_repo_workflow_stays_in_stable_prefix(tmp_path):
+    """GH #34: the block is stable per-workspace, so it renders with the other standing
+    sections — after multi-human steering, ahead of the volatile digest tail."""
+    ws = _repo_workspace(tmp_path)
+    out = notifier.format_persona({"system_prompt": "P"},
+                                  {"digest": {"current_focus": "wake epic"}},
+                                  workdir=str(ws))
+    assert out.index("Multi-human steering") < out.index("Working with the repository")
+    assert out.index("Working with the repository") < out.index("Where you left off")
+
+
 def test_format_persona_surfaces_audience_register_ahead_of_facts():
     """#325: the digest's `audience` slice renders as 'Who you're talking to', and lands
     BEFORE the 'Where you left off' facts so the conversational register frames the work."""
@@ -897,6 +1091,46 @@ def test_format_persona_omits_audience_section_when_absent():
         {"digest": {"current_focus": "wake epic"}})
     assert "Who you're talking to" not in out
     assert "Current focus: wake epic" in out
+
+
+# ---------- GH #34 (scoped): stable-prefix ordering ----------
+
+def test_format_persona_stable_sections_form_consistent_prefix():
+    """GH #34: persona/guardrail/task-body/protocol never change between two wakes of the same
+    agent on the same task — only the digest does. So the text UP THROUGH the protocol section
+    must come out byte-identical regardless of what the digest says, i.e. it is a real shared
+    string prefix of both renders (a provider-side cache hits on a stable prefix, not the whole
+    string)."""
+    persona = {"system_prompt": "You are Tim."}
+    protocol = {"task_id": "t-1", "title": "Ship the thing", "description": "Do the work",
+                "definition_of_done": "Tests green",
+                "protocol": {"notes": "Report back when done"}}
+    out1 = notifier.format_persona(persona, {"digest": {"current_focus": "wake N"}}, protocol)
+    out2 = notifier.format_persona(persona, {"digest": {"current_focus": "wake N+1",
+                                                          "decisions": ["a brand-new decision"]}},
+                                   protocol)
+    assert out1 != out2   # the digests really do differ...
+    stable_end = out1.index("## Where you left off")
+    assert out2.index("## Where you left off") == stable_end   # ...at the identical offset
+    assert out1[:stable_end] == out2[:stable_end]               # ...and everything before it matches
+    # sanity: the shared prefix actually carries the stable sections, not just whitespace
+    assert "You are Tim." in out1[:stable_end]
+    assert "## Your task" in out1[:stable_end]
+    assert "## Standing protocol" in out1[:stable_end]
+
+
+def test_format_persona_resume_context_renders_after_protocol_grouped_with_digest():
+    """GH #34: the self-wake resume context (GH #122) is at least as volatile as the digest — a
+    fresh wait-point most times it fires — so it must render AFTER the protocol section, grouped
+    with the digest at the volatile tail, not spliced between the task body and the protocol."""
+    persona = {"system_prompt": "You are Tim."}
+    protocol = {"task_id": "t-1", "title": "Ship the thing", "description": "Do the work",
+                "protocol": {"notes": "Report back"}, "resume_context": "waiting on CI"}
+    out = notifier.format_persona(persona, {"digest": {"current_focus": "wake epic"}},
+                                  protocol, render_resume=True)
+    assert out.index("## Your task") < out.index("## Standing protocol")
+    assert out.index("## Standing protocol") < out.index("Resuming — you scheduled this wake")
+    assert out.index("Resuming — you scheduled this wake") < out.index("## Where you left off")
 
 
 def test_spawn_headless_injects_persona_and_alias(monkeypatch, tmp_path):
@@ -1238,6 +1472,9 @@ def test_ensure_daemon_refuses_cross_worktree_duplicate(monkeypatch, tmp_path):
     # shelling out to a real `ps` (whose subprocess.run would also trip the Popen spy below).
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 77777)
     monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: pid == 77777)
+    # ISS-22 r3: the SERVING-lane claim check goes through _daemon_pid_healthy now
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == 77777)
     spawned = []
     monkeypatch.setattr(notifier.subprocess, "Popen",
                         lambda *a, **k: spawned.append(a))
@@ -1375,6 +1612,13 @@ def test_claim_container_atomic_single_winner(monkeypatch, tmp_path):
     # (not a "notifier") on our own pid and reject it as foreign, so the loser would wrongly re-win.
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == notifier.os.getpid())
     monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: pid == notifier.os.getpid())
+    # ISS-22 r3: the loser's claim vet goes through `daemon_running_for_container`, whose
+    # SERVING-lane check is `_daemon_pid_healthy` now. Left unmocked, the real check reads
+    # pytest (no heartbeat, not a "notifier" in ps) as a WEDGED daemon and — because
+    # `_daemon_pid_live` is mocked live above — `_terminate_and_wait` SIGTERMs the claim's
+    # pid, which is pytest's own: the whole test session self-terminates (exit 143).
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == notifier.os.getpid())
     won1, holder1 = notifier._claim_container("cid-1")
     assert won1 is True and holder1 is None                  # first claimer wins
     won2, holder2 = notifier._claim_container("cid-1")
@@ -1392,6 +1636,13 @@ def test_stop_daemon_clears_container_claim(monkeypatch, tmp_path):
     killed = []
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 88888 and 88888 not in killed)
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
+    # ISS-22 r3: `daemon_running` now health-vets the pidfile pid via `_daemon_pid_healthy`
+    # (heartbeat-primary, fail-closed). Left unmocked, the real check reads fake pid 88888
+    # as a WEDGED daemon, so `daemon_running` reaps it itself and returns None — and
+    # stop_daemon reports False ("nothing to stop"). Model the docstring's premise — a
+    # genuinely RUNNING daemon — so the test still proves stop_daemon's own teardown path.
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == 88888 and 88888 not in killed)
     assert notifier.stop_daemon(wt, quiet=True) is True
     assert not (gdir / "notifier-cid-1.pid").exists()
 
@@ -1491,6 +1742,9 @@ def test_stop_daemon_stops_cross_worktree_daemon(monkeypatch, tmp_path):
     (gdir / "notifier-cid-1.pid").write_text(f"77777\n{wt_a}")   # A's daemon, alive
     killed = []
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 77777 and 77777 not in killed)
+    # ISS-22 r3: serving-lane lookup (daemon_running_for_container) vets health first
+    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
+                        lambda pid, cid=None, cwd=None: pid == 77777 and 77777 not in killed)
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
     assert notifier.stop_daemon(wt_b, quiet=True) is True        # B has NO per-cwd pidfile
     assert killed == [77777], "the A-started daemon must be SIGTERMed exactly once (it exits, no SIGKILL)"

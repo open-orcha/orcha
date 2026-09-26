@@ -57,6 +57,25 @@ export function loginShellPath(): string | null {
   }
 }
 
+/** Strip every env var that would override the user's Claude Code SUBSCRIPTION auth before
+ *  spawning a host process that leads to a `claude` run (the notifier daemon, `orcha up`,
+ *  anything downstream of it). ANTHROPIC_API_KEY (and ORCHA_LLM_API_KEY, and any
+ *  CLAUDE_CODE_* var) takes precedence over a logged-in Claude Code session — if the
+ *  LAUNCHING shell happened to have one set (e.g. exported in .zshrc for an unrelated
+ *  script), every agent run silently fails "Invalid API key" even though the user is
+ *  properly subscribed. Local runs are subscription-first: a deliberate key comes from the
+ *  stack's own .env / Settings (read explicitly by whatever needs it), never from ambient
+ *  env inheritance. Pure — returns a new object, never mutates `env`. */
+export function scrubWorkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env }
+  delete next.ANTHROPIC_API_KEY
+  delete next.ORCHA_LLM_API_KEY
+  for (const key of Object.keys(next)) {
+    if (key.startsWith('CLAUDE_CODE_')) delete next[key]
+  }
+  return next
+}
+
 export interface WorkerProbe {
   orchaFound: boolean
   claudeFound: boolean
@@ -134,10 +153,13 @@ export const nodeHostWorkerDeps: HostWorkerDeps = {
     }),
   orchaUp: (folder, pathEnv) =>
     new Promise((resolve, reject) => {
+      // scrubWorkerEnv: this daemon freezes its env for every agent worker it later spawns
+      // (see hostToolPath's doc comment) — an inherited ANTHROPIC_API_KEY here breaks every
+      // subsequent run for the lifetime of the daemon, not just this one `orcha up`.
       execFile(
         'orcha',
         ['up'],
-        { cwd: folder, env: { ...process.env, PATH: pathEnv }, encoding: 'utf8' },
+        { cwd: folder, env: { ...scrubWorkerEnv(process.env), PATH: pathEnv }, encoding: 'utf8' },
         (err, _stdout, stderr) => (err ? reject(Object.assign(err, { stderr })) : resolve())
       )
     })

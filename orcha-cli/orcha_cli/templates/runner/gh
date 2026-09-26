@@ -1,0 +1,21 @@
+#!/bin/sh
+# Orcha runner: always-fresh GitHub auth for the sandboxed `gh` CLI.
+#
+# The host rotates a 1-hour GitHub App installation token into
+# <workspace-root>/.orcha/github-token (deploy/github-token-refresh.sh). The
+# sandbox mounts the workspace PATH-IDENTICALLY and stamps the root as
+# ORCHA_WORKSPACE_ROOT, so this wrapper reads
+# $ORCHA_WORKSPACE_ROOT/.orcha/github-token; without the env (host mode, or a
+# manual container) it walks UP from $PWD until it finds .orcha/github-token —
+# a worktree cwd resolves to the root's token either way. It shadows the real
+# /usr/bin/gh via PATH order (/usr/local/bin first) and re-reads the token on
+# EVERY invocation, so even a long resident session never holds a stale token.
+# Missing/unreadable file -> GH_TOKEN is empty and gh reports its normal
+# unauthenticated error. POSIX sh only; the token is never placed in argv.
+d="${ORCHA_WORKSPACE_ROOT:-$PWD}"
+while [ -n "$d" ] && [ "$d" != "/" ] && [ ! -f "$d/.orcha/github-token" ]; do
+    d=$(dirname "$d")
+done
+GH_TOKEN="$(cat "$d/.orcha/github-token" 2>/dev/null)"
+export GH_TOKEN
+exec /usr/bin/gh "$@"
