@@ -16,6 +16,30 @@ backing service (FastAPI + Postgres), and the slash-command skill templates
 that ship with it. End users don't read this repo; they install it once and run
 `orcha init` in their own projects.
 
+## Status (last updated 2026-08-26)
+
+- **The hosted dogfood deployment (orcha.nursoftai.com) is decommissioned** —
+  its DB and secrets were backed up offline; rebuilding it (or any new box) is
+  fully documented in [`docs/deploy-new-box-runbook.md`](docs/deploy-new-box-runbook.md).
+- **Local-first is the primary mode**: the free solo tier runs the complete
+  cloud portal on a laptop — local git code source, PAT/`gh` GitHub access,
+  Code Space (line threads, worktree Changes, file history, symbol index with
+  background warmer), roster suggestions, Gold skin. See
+  [`deploy/local/README.md`](deploy/local/README.md) and the desktop app.
+- **Plan gating**: `ORCHA_PLAN` — `solo` (default, free) vs `team` (hosted/paid:
+  members, invites, roles). Migration chain tip: **048** (wake circuit breaker).
+- **Reliability**: no-progress wake circuit breaker (server-side, DB-backed,
+  3/6/10-strike ladder) + the ported open-orcha directive-consumption fixes —
+  see `docs/` and the 048 migration header for the incident that motivated them.
+- **Metrics**: per-agent spend drilldown (in/out/cached tokens, per-task, $) and
+  rule-based reduce-spending insights, including subscription-billed loop
+  detection (runs with ~$0 recorded).
+
+> **Deploying Orcha Cloud on your own VM (BYOC)?** Start with
+> [`docs/byoc-guide.md`](docs/byoc-guide.md) — the complete guide: tiers,
+> architecture, the automated-vs-manual matrix, the full setup walkthrough,
+> operations, and the honest security posture.
+
 ---
 
 ## Tech stack
@@ -354,6 +378,15 @@ left agents idle while requests piled up. Now:
 
 ```bash
 # inside the agent's Claude Code session, after /orcha-register-agent <alias>:
+/loop /orcha-listen --alias <alias>                # recommended — long-poll, ~zero LLM cost while idle
+```
+
+`/orcha-listen` is the default loop primitive — see the "Server-sent events"
+section below. `/orcha-checkpoint` (fixed-interval polling) is a **legacy
+fallback** for when the server doesn't support `/wait`, or for an explicit
+one-shot status check:
+
+```bash
 /loop /orcha-checkpoint --alias <alias>            # self-paced
 # or fixed cadence:
 /loop 30 /orcha-checkpoint --alias <alias> --auto-close
@@ -374,7 +407,7 @@ polling avoids interrupting tasks.
 
 #### Background watcher + PostToolUse drain (Orcha#33)
 
-The `/loop /orcha-checkpoint` and `/orcha-listen` patterns work great when the
+The `/loop /orcha-listen` and `/loop /orcha-checkpoint` patterns work great when the
 agent has yielded back to Claude Code, but a deeply working agent (mid-`/orcha-next`
 → code → `/orcha-done`) can go minutes without checking the inbox — and
 `/loop` itself sometimes drifts. To close that gap, `orcha init` and

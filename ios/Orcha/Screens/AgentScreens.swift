@@ -141,11 +141,11 @@ struct AgentDetailScreen: View {
     private func header(_ agent: AgentDto) -> some View {
         OrchaCard {
             HStack(spacing: 12) {
-                AgentAvatar(alias: agent.alias, human: agent.kind == "human", size: 56)
+                AgentAvatar(alias: agent.alias, human: agent.kind == "human", githubLogin: agent.githubLogin, size: 56)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.alias).font(.system(size: 20, weight: .heavy)).foregroundStyle(p.text)
-                    Text(agent.role ?? (agent.kind == "human" ? "Human authority" : "agent"))
-                        .font(.system(size: 13)).foregroundStyle(p.muted).lineLimit(1)
+                    Text(agent.alias).font(p.uiFont(20, .heavy)).foregroundStyle(p.text)
+                    Text(humanSubtitle(agent))
+                        .font(p.uiFont(13)).foregroundStyle(p.muted).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 StatusPill(status: agent.status ?? agent.kind, domain: .agent)
@@ -159,6 +159,15 @@ struct AgentDetailScreen: View {
             }
         }
         .opacity(dead ? 0.55 : 1)
+    }
+
+    /// Collab v1 — a human member reads as their GitHub identity + role.
+    private func humanSubtitle(_ agent: AgentDto) -> String {
+        guard agent.kind == "human" else { return agent.role ?? "agent" }
+        var parts: [String] = []
+        if let login = agent.githubLogin { parts.append("@\(login)") }
+        parts.append(agent.memberRole.map { $0.capitalized } ?? "Human authority")
+        return parts.joined(separator: " · ")
     }
 
     // MARK: Now (flow 09 §4)
@@ -187,9 +196,9 @@ struct AgentDetailScreen: View {
             NavigationLink(value: WorkspaceRoute.task(tid)) {
                 OrchaCard {
                     HStack(spacing: 8) {
-                        Text("▸").font(.system(size: 15, weight: .heavy)).foregroundStyle(p.accent)
+                        Text("▸").font(p.uiFont(15, .heavy)).foregroundStyle(p.accent)
                         Text(title ?? tid)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(p.uiFont(15, .semibold))
                             .foregroundStyle(p.text)
                             .lineLimit(2)
                     }
@@ -215,7 +224,7 @@ struct AgentDetailScreen: View {
                         StatusPill(status: "running", domain: .run)
                         MetaTag(text: run.wakeKind ?? "headless")
                         Spacer()
-                        Text("streaming").font(.system(size: 11, weight: .bold)).foregroundStyle(p.accent)
+                        Text("streaming").font(p.uiFont(11, .bold)).foregroundStyle(p.accent)
                     }
                 }
             }
@@ -226,23 +235,27 @@ struct AgentDetailScreen: View {
     // MARK: Controls (flow 09 §5 — human authority; AI only, disabled once retired)
 
     private func controls(_ agent: AgentDto) -> some View {
-        VStack(spacing: 10) {
+        // Collab v1: honest grant gating — the same gates the server enforces
+        // (model/effort = manage_agents, auto-wake = manage_autonomy).
+        let canAgents = model.access.canManage(Grant.manageAgents)
+        let canAutonomy = model.access.canManage(Grant.manageAutonomy)
+        return VStack(spacing: 10) {
             SectionH(title: "Controls", count: "human authority")
             OrchaCard {
                 controlRow(
-                    title: "Model", sub: "Applies at the next wake",
+                    title: "Model", sub: canAgents ? "Applies at the next wake" : "Needs the 'manage agents' permission",
                     tag: MetaTag(text: agent.model ?? "default", mono: true),
-                    enabled: !dead
+                    enabled: !dead && canAgents
                 ) { showModelPicker = true }
                 controlRow(
-                    title: "Auto-wake", sub: "Clock-driven wakes while idle",
+                    title: "Auto-wake", sub: canAutonomy ? "Clock-driven wakes while idle" : "Needs the 'manage autonomy' permission",
                     tag: MetaTag(text: agent.autoWakeIntervalSecs.map(cadence) ?? "Off"),
-                    enabled: !dead
+                    enabled: !dead && canAutonomy
                 ) { showWakePicker = true }
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Wake daemon").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.text)
-                        Text("Managed from the laptop").font(.system(size: 13)).foregroundStyle(p.muted)
+                        Text("Wake daemon").font(p.uiFont(15, .semibold)).foregroundStyle(p.text)
+                        Text("Managed from the laptop").font(p.uiFont(13)).foregroundStyle(p.muted)
                     }
                     Spacer()
                     MetaTag(text: agent.wakeEnabled == false ? "off" : "on")
@@ -257,8 +270,8 @@ struct AgentDetailScreen: View {
         Button(action: enabled ? action : {}) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(p.text)
-                    Text(sub).font(.system(size: 13)).foregroundStyle(p.muted)
+                    Text(title).font(p.uiFont(15, .semibold)).foregroundStyle(p.text)
+                    Text(sub).font(p.uiFont(13)).foregroundStyle(p.muted)
                 }
                 Spacer()
                 tag
@@ -279,7 +292,7 @@ struct AgentDetailScreen: View {
                 SectionH(title: "Persona")
                 if let full, !full.isEmpty {
                     Button(personaOpen ? "collapse" : "expand") { personaOpen.toggle() }
-                        .font(.system(size: 11, weight: .bold))
+                        .font(p.uiFont(11, .bold))
                         .foregroundStyle(p.accent)
                 }
             }
@@ -290,7 +303,7 @@ struct AgentDetailScreen: View {
                         .foregroundStyle(p.text2)
                 } else {
                     Text(preview)
-                        .font(.system(size: 13))
+                        .font(p.uiFont(13))
                         .foregroundStyle(p.text2)
                         .lineLimit(2)
                 }
@@ -306,19 +319,19 @@ struct AgentDetailScreen: View {
             SectionH(title: "Memory", count: MobileUx.agoLabel(d.createdAt) ?? "")
             OrchaCard {
                 if let focus = d.currentFocus, !focus.isEmpty {
-                    Text("FOCUS").font(.system(size: 11, weight: .bold)).tracking(0.6).foregroundStyle(p.accent)
-                    Text(focus).font(.system(size: 13)).foregroundStyle(p.text)
+                    Text("FOCUS").font(p.uiFont(11, .bold)).tracking(0.6).foregroundStyle(p.accent)
+                    Text(focus).font(p.uiFont(13)).foregroundStyle(p.text)
                 }
                 if !d.decisions.isEmpty {
-                    Text("DECISIONS · \(d.decisions.count)").font(.system(size: 11, weight: .bold)).tracking(0.6).foregroundStyle(p.muted)
+                    Text("DECISIONS · \(d.decisions.count)").font(p.uiFont(11, .bold)).tracking(0.6).foregroundStyle(p.muted)
                     ForEach(Array(d.decisions.prefix(3).enumerated()), id: \.offset) { _, item in
-                        Text("• \(item.text)").font(.system(size: 13)).foregroundStyle(p.text2)
+                        Text("• \(item.text)").font(p.uiFont(13)).foregroundStyle(p.text2)
                     }
                 }
                 if !d.openThreads.isEmpty {
-                    Text("OPEN THREADS · \(d.openThreads.count)").font(.system(size: 11, weight: .bold)).tracking(0.6).foregroundStyle(p.muted)
+                    Text("OPEN THREADS · \(d.openThreads.count)").font(p.uiFont(11, .bold)).tracking(0.6).foregroundStyle(p.muted)
                     ForEach(Array(d.openThreads.prefix(3).enumerated()), id: \.offset) { _, item in
-                        Text("• \(item.text)").font(.system(size: 13)).foregroundStyle(p.text2)
+                        Text("• \(item.text)").font(p.uiFont(13)).foregroundStyle(p.text2)
                     }
                 }
             }
@@ -335,7 +348,7 @@ struct AgentDetailScreen: View {
             OrchaCard {
                 KVRow(key: "Incoming open", value: "\(extras.inboxCount ?? 0)")
                 if let preview = extras.inboxPreview {
-                    Text("“\(preview)”").font(.system(size: 13)).foregroundStyle(p.muted).lineLimit(1)
+                    Text("“\(preview)”").font(p.uiFont(13)).foregroundStyle(p.muted).lineLimit(1)
                 }
                 KVRow(key: "Outgoing open / answered", value: "\(extras.outboxOpen ?? 0) / \(extras.outboxAnswered ?? 0)")
             }
@@ -365,7 +378,9 @@ struct AgentDetailScreen: View {
     @ToolbarContentBuilder
     private var toolbarMenu: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            if let agent, agent.kind == "ai", !dead {
+            // Collab v1: rename/retire are manage_agents writes — hidden when the
+            // acting member doesn't hold the gate (server enforces regardless).
+            if let agent, agent.kind == "ai", !dead, model.access.canManage(Grant.manageAgents) {
                 Menu {
                     Button("Rename") { newAlias = agent.alias; renaming = true }
                     Button("Retire agent…", role: .destructive) { confirmRetire = true }
@@ -399,7 +414,7 @@ private struct KitButtonLabel: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 15, weight: .bold))
+            .font(p.uiFont(15, .bold))
             .foregroundStyle(role == .primary ? p.accentInk : p.accent)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
@@ -427,11 +442,11 @@ struct ModelPickerSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("MODEL").font(.system(size: 11, weight: .bold)).tracking(0.8).foregroundStyle(p.accent)
-                        Text("Applies at the next wake.").font(.system(size: 13)).foregroundStyle(p.muted)
+                        Text("MODEL").font(p.uiFont(11, .bold)).tracking(0.8).foregroundStyle(p.accent)
+                        Text("Applies at the next wake.").font(p.uiFont(13)).foregroundStyle(p.muted)
                         ForEach(groups, id: \.0) { group, rows in
                             SectionH(title: group)
                             ForEach(rows) { m in
@@ -440,7 +455,7 @@ struct ModelPickerSheet: View {
                                         Image(systemName: picked == m.id ? "largecircle.fill.circle" : "circle")
                                             .foregroundStyle(picked == m.id ? p.accent : p.border2)
                                         VStack(alignment: .leading, spacing: 1) {
-                                            Text(m.name ?? m.id).font(.system(size: 15, weight: .semibold)).foregroundStyle(p.text)
+                                            Text(m.name ?? m.id).font(p.uiFont(15, .semibold)).foregroundStyle(p.text)
                                             Text(m.id).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(p.muted)
                                         }
                                         Spacer()
@@ -485,12 +500,12 @@ struct AutoWakeSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrchaThemed(mode: model.themeMode) {
+            OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("AUTO-WAKE").font(.system(size: 11, weight: .bold)).tracking(0.8).foregroundStyle(p.accent)
+                        Text("AUTO-WAKE").font(p.uiFont(11, .bold)).tracking(0.8).foregroundStyle(p.accent)
                         Text("Wakes the agent on a clock while idle. Off relies on events only.")
-                            .font(.system(size: 13)).foregroundStyle(p.muted)
+                            .font(p.uiFont(13)).foregroundStyle(p.muted)
                         HStack(spacing: 8) {
                             ForEach(presets, id: \.0) { label, secs in
                                 PillChip(label: label, selected: picked == secs) { picked = secs }
@@ -515,12 +530,10 @@ struct AutoWakeSheet: View {
 struct ConversationScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let agentId: String
 
     @State private var draft = ""
     @State private var confirmEnd = false
-    @State private var pulse = false
     /// Issue 4 — client-side reveal window over the already-fetched turns (web parity:
     /// start at the last 10, +20 per "Load earlier" tap). No refetch; the fetch window is 80.
     @State private var revealed = 10
@@ -588,7 +601,7 @@ struct ConversationScreen: View {
                     if model.turns.count > revealed {
                         Button { revealed += Self.revealStep } label: {
                             Text("Load earlier messages")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(p.uiFont(12, .bold))
                                 .foregroundStyle(p.accent)
                                 .frame(maxWidth: .infinity)
                         }
@@ -600,20 +613,30 @@ struct ConversationScreen: View {
                             Text("No conversation yet. Send a message to wake \(agent?.alias ?? "the agent").")
                                 .foregroundStyle(p.muted)
                         }
-                        HStack(spacing: 8) {
-                            ForEach(hints, id: \.self) { hint in
-                                PillChip(label: hint, selected: false) { draft = hint }
+                        // The hint chips feed the composer — hidden for read-only
+                        // roles right along with it (collab v1).
+                        if model.access.canWrite {
+                            HStack(spacing: 8) {
+                                ForEach(hints, id: \.self) { hint in
+                                    PillChip(label: hint, selected: false) { draft = hint }
+                                }
                             }
                         }
                     }
                     turnRows
-                    if working {
-                        Text("\(agent?.alias ?? "The agent") is working…")
-                            .font(.system(size: 13))
+                    if model.sendFlow.showsPendingBubble {
+                        pendingBubble
+                    }
+                    // One status row at a time: awaiting-reply (just sent) is the most
+                    // specific, then the overdue note, then the ambient "working" pulse.
+                    if model.sendFlow.showsAwaitingReply {
+                        PulsingNoteRow(text: awaitingReplyCopy)
+                    } else if model.sendFlow.showsOverdueNote {
+                        Text("No reply yet — \(agent?.alias ?? "the agent") may still be starting up. Pull down to refresh.")
+                            .font(p.uiFont(13))
                             .foregroundStyle(p.muted)
-                            .opacity(!reduceMotion && pulse ? 0.4 : 1)
-                            .animation(.easeInOut(duration: 1).repeatForever(autoreverses: true), value: pulse)
-                            .onAppear { if !reduceMotion { pulse = true } }
+                    } else if working {
+                        PulsingNoteRow(text: "\(agent?.alias ?? "The agent") is working…")
                     }
                     if let error = model.error {
                         Banner(kind: .danger, text: error)
@@ -622,9 +645,13 @@ struct ConversationScreen: View {
                 }
                 .padding(16)
             }
-            // Scroll to bottom on a NEW/sent turn (newest seq changes) or when the keyboard
-            // opens — never on a "Load earlier" reveal (which only widens the top).
+            // Scroll to bottom on a NEW/sent turn (newest seq changes), on any send-flow
+            // step (pending bubble / indicator appearing), or when the keyboard opens —
+            // never on a "Load earlier" reveal (which only widens the top).
             .onChange(of: model.turns.last?.seq) {
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: model.sendFlow.phase) {
                 withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -659,24 +686,126 @@ struct ConversationScreen: View {
             Bubble(.system, turn.content, tasks: tasks, onTapTask: { linkedTaskId = $0 })
         } else if mine {
             Bubble(.mine, turn.content, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 })
+        } else if ChatSendFlow.isBlankReply(turn.content) {
+            // A blank agent turn (the session restarted mid-reply and no output was
+            // captured) must never render as an empty bubble — show a muted notice.
+            emptyReplyNotice(turn, alias: alias)
         } else {
-            Bubble(.theirs, turn.content, author: alias, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 }) {
+            // Web parity: agent turn content renders as chat-scale markdown
+            // (headings, bold/italic, code, lists, links, rules).
+            Bubble(.theirs, turn.content, author: alias, time: MobileUx.agoLabel(turn.createdAt), tasks: tasks, onTapTask: { linkedTaskId = $0 }, markdown: true) {
                 if let rid = turn.runId {
-                    NavigationLink(value: WorkspaceRoute.run(RunDto(runId: rid, agentId: agentId, agentAlias: alias, status: "exited"))) {
-                        Text("Open work log →")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(p.accent)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 4)
+                    workLogLink(rid, alias: alias)
                 }
             }
         }
     }
 
+    /// The "theirs"-side muted notice replacing a blank agent bubble.
+    private func emptyReplyNotice(_ turn: TurnDto, alias: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No reply captured — \(alias)'s session may have restarted.")
+                    .font(p.uiFont(12))
+                    .foregroundStyle(p.muted)
+                if let time = MobileUx.agoLabel(turn.createdAt) {
+                    Text(time)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(p.faint)
+                }
+                if let rid = turn.runId {
+                    workLogLink(rid, alias: alias)
+                }
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(p.border2, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .allowsHitTesting(false)
+            )
+            Spacer(minLength: 60)
+        }
+    }
+
+    /// The existing run-log link, shared by real replies and the blank-reply notice.
+    private func workLogLink(_ runId: String, alias: String) -> some View {
+        NavigationLink(value: WorkspaceRoute.run(RunDto(runId: runId, agentId: agentId, agentAlias: alias, status: "exited"))) {
+            Text("Open work log →")
+                .font(p.uiFont(11, .bold))
+                .foregroundStyle(p.accent)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 4)
+    }
+
+    // MARK: optimistic send (pending bubble + awaiting-reply copy)
+
+    private var awaitingReplyCopy: String {
+        let alias = agent?.alias ?? "the agent"
+        return model.sendFlow.isFirstTurn
+            ? "Starting \(alias)'s session — the first reply can take a minute."
+            : "\(alias) is waking…"
+    }
+
+    /// The composed message, rendered the moment the send begins: "sending…" while the
+    /// POST is in flight (and until the poll echoes the real turn back — which then
+    /// replaces this bubble), or "tap to retry" when the POST failed. Never both this
+    /// and the echoed turn: `ChatSendFlow.observe` dedupes by content + seq recency.
+    private var pendingBubble: some View {
+        let flow = model.sendFlow
+        return Bubble(.mine, flow.content) {
+            if flow.isFailed {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Not sent — tap to retry")
+                        .font(p.uiFont(11, .bold))
+                    if let reason = flow.failureReason {
+                        Text(reason)
+                            .font(p.uiFont(10.5))
+                            .opacity(0.75)
+                    }
+                }
+                .foregroundStyle(p.accentInk)
+                .padding(.top, 2)
+            } else {
+                Text("sending…")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(p.accentInk.opacity(0.55))
+            }
+        }
+        .opacity(flow.isFailed ? 1 : 0.75)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard model.sendFlow.isFailed, let restored = model.takeFailedSendContent() else { return }
+            draft = draft.isEmpty ? restored : restored + "\n\n" + draft
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            flow.isFailed
+                ? "Message not sent: \(flow.content)"
+                : "Sending message: \(flow.content)"
+        )
+        .accessibilityHint(flow.isFailed ? "Double-tap to restore the message so you can send it again." : "")
+        .accessibilityAddTraits(flow.isFailed ? .isButton : [])
+    }
+
     // MARK: composer
 
+    /// Collab v1: a read-only role (viewer / trusted non-member) gets the honest
+    /// note instead of the composer — the server would 403 the turn anyway.
+    @ViewBuilder
     private var composer: some View {
+        if let reason = model.access.writeDenialReason {
+            Banner(kind: .info, text: reason)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(p.bg)
+        } else {
+            composerField
+        }
+    }
+
+    private var composerField: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Chat with \(agent?.alias ?? "the agent")…", text: $draft, axis: .vertical)
                 .lineLimit(1...4)
@@ -684,28 +813,41 @@ struct ConversationScreen: View {
                 .padding(.vertical, 9)
                 .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
+            DictationMicButton(text: $draft)
             Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 draft = ""
                 Task { await model.sendTurn(agentId, content: text) }
             } label: {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(p.accentInk)
-                    .frame(width: 40, height: 40)
-                    .background(p.accent, in: Circle())
+                Group {
+                    if model.sendFlow.isSending {
+                        ProgressView()
+                            .tint(p.accentInk)
+                    } else {
+                        Image(systemName: "paperplane.fill")
+                            .font(p.uiFont(16, .semibold))
+                            .foregroundStyle(p.accentInk)
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .background(p.accent, in: Circle())
             }
             .buttonStyle(.plain)
-            .opacity(canSend ? 1 : 0.45)
+            .opacity(canSend || model.sendFlow.isSending ? 1 : 0.45)
             .disabled(!canSend)
+            .accessibilityLabel(model.sendFlow.isSending ? "Sending" : "Send")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(p.bg)
     }
 
+    /// Send gate: non-empty draft, no global action in flight, and the send machine
+    /// allows re-entry (never mid-POST, never over an unretried failed bubble).
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInFlight
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.actionInFlight
+            && model.sendFlow.canBegin
     }
 
     // MARK: day dividers
@@ -734,5 +876,24 @@ struct ConversationScreen: View {
             rows.append(.turn(turn))
         }
         return rows
+    }
+}
+
+/// A muted, gently pulsing status line under the transcript (awaiting-reply /
+/// agent-working). Owns its pulse state so each appearance animates afresh;
+/// Reduce Motion renders it static. VoiceOver reads the text as-is.
+private struct PulsingNoteRow: View {
+    @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let text: String
+    @State private var pulse = false
+
+    var body: some View {
+        Text(text)
+            .font(p.uiFont(13))
+            .foregroundStyle(p.muted)
+            .opacity(!reduceMotion && pulse ? 0.4 : 1)
+            .animation(.easeInOut(duration: 1).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { if !reduceMotion { pulse = true } }
     }
 }

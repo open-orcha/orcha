@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh GitHub App installation tokens into Orcha workspaces
+
+[Service]
+Type=oneshot
+Environment=ORCHA_WORKSPACES=/opt/orcha-work/dogfood
+ExecStart=/bin/sh /opt/orcha-cloud/deploy/github-token-refresh.sh

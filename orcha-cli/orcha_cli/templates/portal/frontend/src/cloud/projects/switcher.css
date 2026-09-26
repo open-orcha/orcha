@@ -1,0 +1,13 @@
+/* ProjectSwitcher — topbar adaptations over shell.css's vanilla rules.
+   shell.css styles .proj-switch as a full-width sidebar block (its vanilla
+   home under the brand); in the Cloud topbar it must size to content like the
+   neighboring chips. The .pmenu.float / .pm-row menu styles apply untouched. */
+.topbar .proj-switch { width: auto; max-width: 230px; margin: 0; flex: none; }
+
+/* Needs-you badge on a menu row — the hub card's .needs pill (projects.css is
+   .pcard-scoped), restated for the switcher menu. */
+.pmenu .pm-row .needs {
+  flex: none; font-size: 10.5px; font-weight: 700; padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line);
+}

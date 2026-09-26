@@ -1,0 +1,632 @@
+<section id="demo-team-mobile" class="mk-section mw-root" aria-labelledby="mw-title">
+  <header class="mw-head">
+    <div class="mw-eyebrow">— 05 / Deep dive · Team &amp; mobile</div>
+    <h2 class="mw-title" id="mw-title">Invite the team. <span class="mw-title-em">Take it with you.</span></h2>
+    <p class="mw-sub">Owners invite collaborators by GitHub username and grant roles; the whole
+    workspace — chat, tasks, verification — travels to the native iOS app.</p>
+  </header>
+
+  <div class="mw-theater" id="mw-theater" tabindex="-1">
+    <div class="mw-chrome" aria-hidden="true">
+      <span class="mw-dot3"></span><span class="mw-dot3"></span><span class="mw-dot3"></span>
+      <span class="mw-url">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4L8 1.5z"/></svg>
+        app.orcha.cloud/settings
+      </span>
+    </div>
+
+    <div class="mw-frame">
+      <div class="mw-stage" id="mw-stage" role="img" aria-label="Animated preview: inviting a collaborator and pairing the mobile app">
+
+        <!-- scene 1 · Settings → Collaboration, members list -->
+        <div class="mw-scene mw-on" data-scene="0">
+          <div class="mw-sc-members">
+            <div class="mw-pane mw-tabs" data-an="rise" style="--d:.1s">
+              <span class="mw-tab">Workspace</span>
+              <span class="mw-tab mw-tab-on">Collaboration</span>
+              <span class="mw-tab">Appearance</span>
+            </div>
+            <div class="mw-pane mw-mempanel" data-an="rise" style="--d:.2s">
+              <div class="mw-pane-h">Who&rsquo;s on this project</div>
+              <p class="mw-blurb">Members map verified GitHub identities to this workspace; owners
+              can invite collaborators, change roles, and assign task reviewers.</p>
+              <div class="mw-mrow">
+                <span class="mw-av mw-av-you">H</span>
+                <span class="mw-mgrow"><b>you</b><span class="mw-faint mw-mono">owner</span></span>
+                <span class="mw-pill mw-p-crm">owner</span>
+              </div>
+              <div class="mw-mrow">
+                <span class="mw-av">S</span>
+                <span class="mw-mgrow"><b>sam-dev</b><span class="mw-faint mw-mono">owner</span></span>
+                <span class="mw-pill mw-p-crm">owner</span>
+              </div>
+              <div class="mw-invite">
+                <span class="mw-atsign">@</span>
+                <span class="mw-inputtxt mw-faint">GitHub username to invite&hellip;</span>
+                <span class="mw-roleselect mw-mono">member <svg viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1l4 4 4-4"/></svg></span>
+                <span class="mw-invbtn">+ Invite</span>
+              </div>
+              <p class="mw-fineprint">Invited members appear as pending until they first sign in.
+              The cloud front door (perimeter allowlist) follows this roster.</p>
+            </div>
+          </div>
+          <p class="mw-note">Members map verified GitHub identities — <b>owners hold the grants</b>.</p>
+        </div>
+
+        <!-- scene 2 · invite jamie-ml, pending → active -->
+        <div class="mw-scene" data-scene="1">
+          <div class="mw-sc-members">
+            <div class="mw-pane mw-mempanel mw-mempanel-sm" data-an="rise" style="--d:.1s">
+              <div class="mw-pane-h">Who&rsquo;s on this project</div>
+              <div class="mw-invite">
+                <span class="mw-atsign">@</span>
+                <span class="mw-inputtxt"><span class="mw-btype">jamie-ml</span></span>
+                <span class="mw-roleselect mw-mono">member <svg viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1l4 4 4-4"/></svg></span>
+                <span class="mw-invbtn mw-late" data-an="press" style="--d:1.9s">+ Invite</span>
+              </div>
+              <div class="mw-mrow mw-late" data-an="slide" style="--d:2.3s">
+                <span class="mw-av">J</span>
+                <span class="mw-mgrow"><b>jamie-ml</b><span class="mw-faint mw-mono">invited by GitHub username</span></span>
+                <span class="mw-stack">
+                  <span class="mw-pill mw-p-idle" data-an="gone" style="--d:4.6s">pending</span>
+                  <span class="mw-pill mw-p-ok mw-swap-in" data-an="pop" style="--d:4.7s">member</span>
+                </span>
+              </div>
+              <div class="mw-mrow">
+                <span class="mw-av mw-av-you">H</span>
+                <span class="mw-mgrow"><b>you</b><span class="mw-faint mw-mono">owner</span></span>
+                <span class="mw-pill mw-p-crm">owner</span>
+              </div>
+              <div class="mw-mrow">
+                <span class="mw-av">S</span>
+                <span class="mw-mgrow"><b>sam-dev</b><span class="mw-faint mw-mono">owner</span></span>
+                <span class="mw-pill mw-p-crm">owner</span>
+              </div>
+            </div>
+          </div>
+          <p class="mw-note">Invite by <b>GitHub username</b>. Roles + fine-grained grants — keys, members, repos, autonomy, reviewers.</p>
+        </div>
+
+        <!-- scene 3 · phone pairing, QR -->
+        <div class="mw-scene" data-scene="2">
+          <div class="mw-sc-pair">
+            <div class="mw-pane mw-pairpanel" data-an="rise" style="--d:.1s">
+              <div class="mw-pane-h">Pair the Orcha mobile app with this workspace</div>
+              <div class="mw-pairbody">
+                <svg class="mw-qr" viewBox="0 0 74 74" role="img" aria-label="Branded pairing QR code">
+                  <rect x="0" y="0" width="74" height="74" rx="9" fill="var(--surface)"></rect>
+                  <g fill="var(--mw-ink)">
+                    <rect x="6" y="6" width="18" height="18" rx="4"></rect>
+                    <rect x="50" y="6" width="18" height="18" rx="4"></rect>
+                    <rect x="6" y="50" width="18" height="18" rx="4"></rect>
+                  </g>
+                  <g fill="var(--surface)">
+                    <rect x="10" y="10" width="10" height="10" rx="2.5"></rect>
+                    <rect x="54" y="10" width="10" height="10" rx="2.5"></rect>
+                    <rect x="10" y="54" width="10" height="10" rx="2.5"></rect>
+                  </g>
+                  <g fill="var(--mw-ink)">
+                    <rect x="13" y="13" width="4" height="4" rx="1"></rect>
+                    <rect x="57" y="13" width="4" height="4" rx="1"></rect>
+                    <rect x="13" y="57" width="4" height="4" rx="1"></rect>
+                    <rect x="30" y="8"  width="4" height="4" rx="1"></rect>
+                    <rect x="38" y="8"  width="4" height="4" rx="1"></rect>
+                    <rect x="30" y="30" width="4" height="4" rx="1"></rect>
+                    <rect x="16" y="30" width="4" height="4" rx="1"></rect>
+                    <rect x="52" y="30" width="4" height="4" rx="1"></rect>
+                    <rect x="44" y="44" width="4" height="4" rx="1"></rect>
+                    <rect x="30" y="52" width="4" height="4" rx="1"></rect>
+                    <rect x="52" y="46" width="4" height="4" rx="1"></rect>
+                  </g>
+                  <circle cx="37" cy="37" r="7" fill="var(--surface)"></circle>
+                  <circle cx="37" cy="37" r="4.4" fill="var(--gold)"></circle>
+                </svg>
+                <span class="mw-arrow" aria-hidden="true">
+                  <svg viewBox="0 0 24 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M0 5h21M15 1l6 4-6 4"/></svg>
+                </span>
+                <div class="mw-phchip">
+                  <span class="mw-phchip-bezel"><span class="mw-phchip-screen mw-late" data-an="pop" style="--d:2.3s"><svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.6 9.6 3.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>
+                  <span class="mw-phchip-label mw-faint mw-mono">paired</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="mw-note">One scan, <b>GitHub-authenticated</b> — the app mirrors this workspace.</p>
+        </div>
+
+        <!-- scene 4 · phone: push, tap, verify -->
+        <div class="mw-scene" data-scene="3">
+          <div class="mw-sc-phone">
+            <div class="mw-phone">
+              <div class="mw-ph-bezel">
+                <div class="mw-ph-screen">
+                  <span class="mw-ph-island" aria-hidden="true"></span>
+                  <div class="mw-ph-stack">
+                    <div class="mw-ph-push mw-late" data-an="drop" style="--d:.2s">
+                      <span class="mw-ph-push-ico" aria-hidden="true">
+                        <svg viewBox="0 0 14 14"><path d="M7 1.4 2 3.6v3.2c0 3 2.1 5 5 5.8 2.9-.8 5-2.8 5-5.8V3.6L7 1.4Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+                      </span>
+                      <span class="mw-ph-push-body">
+                        <span class="mw-ph-push-h"><b>Orcha</b><span class="mw-ph-push-time">now</span></span>
+                        <span class="mw-ph-push-txt">Needs you: verify task 41</span>
+                      </span>
+                    </div>
+                    <div class="mw-ph-card mw-swap-in" data-an="fade" style="--d:2.6s">
+                      <div class="mw-ph-card-h">
+                        <span class="mw-mono">task 41</span>
+                        <span class="mw-pill mw-p-warn mw-stack"><span data-an="gone" style="--d:4.6s"><span class="mw-pdot"></span>needs_verification</span><span class="mw-p-ok mw-swap-in" data-an="pop" style="--d:4.7s">✓ verified</span></span>
+                      </div>
+                      <p class="mw-ph-card-t">eligibility gate enforced on every PHI path</p>
+                      <div class="mw-ph-diff">
+                        <span class="mw-ph-diff-add">+ tenant status checked pre-route</span>
+                        <span class="mw-ph-diff-del">&minus; raw data router bypassed gate</span>
+                      </div>
+                      <span class="mw-ph-verifybtn mw-stack">
+                        <span data-an="gone" style="--d:4.5s">Verify</span>
+                        <span class="mw-swap-in" data-an="fade" style="--d:4.65s">
+                          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.6 3.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                          Verified
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <span class="mw-ph-home" aria-hidden="true"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="mw-note">Tap the push, read the diff, <b>verify from the phone</b> — the gate travels with you.</p>
+        </div>
+
+        <!-- scene 5 · closing -->
+        <div class="mw-scene" data-scene="4">
+          <div class="mw-sc-close">
+            <div class="mw-close-in" data-an="rise" style="--d:.1s">
+              <span class="mw-check" data-an="pop" style="--d:.4s" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 6 12l7.5-8"/></svg>
+              </span>
+              <p class="mw-close-line">Your whole team, web and pocket.</p>
+              <p class="mw-close-sub mw-faint">Same queue, same gates, same theme.</p>
+            </div>
+          </div>
+          <p class="mw-note">Invite by GitHub username, pair by QR — <b>one workspace, everywhere you work</b>.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mw-capbar">
+      <p class="mw-cap" id="mw-cap"><strong>Who&rsquo;s on this project.</strong> Owners invite collaborators by GitHub username.</p>
+      <span class="mw-count" id="mw-count">01 / 05</span>
+      <div class="mw-ctrl">
+        <button class="mw-cbtn" id="mw-prev" type="button" aria-label="Previous scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        </button>
+        <button class="mw-cbtn mw-play-t" id="mw-play" type="button" aria-label="Pause autoplay" aria-pressed="true">
+          <svg class="mw-ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 2.8v10.4c0 .6.65.97 1.17.66l8.2-5.2a.78.78 0 0 0 0-1.32l-8.2-5.2a.78.78 0 0 0-1.17.66z"/></svg>
+          <svg class="mw-ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1"/></svg>
+        </button>
+        <button class="mw-cbtn" id="mw-next" type="button" aria-label="Next scene">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <nav class="mw-dots" id="mw-dots" role="group" aria-label="Demo scenes"></nav>
+    <span class="mw-track" aria-hidden="true"><span class="mw-track-fill" id="mw-track-fill"></span></span>
+  </div>
+
+  <style>
+  /* =========================================================================
+     TEAM & MOBILE CINEMATIC (mw-) — chapter 5. Follows the dm-scene player
+     pattern from sections/demo.html: IIFE, data-scene elements, dot stepper,
+     IntersectionObserver autoplay, click-to-jump, prefers-reduced-motion.
+     Scoped entirely under .mw-root; tokens only, no bare element selectors.
+     ========================================================================= */
+  .mw-root {
+    --mw-ok: var(--success-text);
+    --mw-ok-soft: color-mix(in srgb, var(--success) 14%, transparent);
+    --mw-warn: var(--warning-text);
+    --mw-warn-soft: color-mix(in srgb, var(--warning-text) 15%, transparent);
+    --mw-crm: var(--accent-text);
+    --mw-crm-soft: var(--gold-soft);
+    --mw-ink: #17130E; /* fixed phone-chrome dark, both page themes */
+    padding: 96px 24px;
+    background: var(--paper);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+
+  .mw-head { max-width: 720px; margin: 0 auto 44px; text-align: center; }
+  .mw-eyebrow {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--accent-text);
+  }
+  .mw-title {
+    margin: 14px 0 14px; font-family: var(--font-serif); font-weight: 400;
+    font-size: clamp(30px, 4vw, 46px); line-height: 1.08; letter-spacing: -.015em;
+    color: var(--text-primary);
+  }
+  .mw-title-em { font-style: italic; color: var(--accent-text); }
+  .mw-sub { font-size: 16px; line-height: 1.55; color: var(--text-secondary); max-width: 620px; margin: 0 auto; }
+
+  .mw-head, .mw-theater {
+    opacity: 0; transform: translateY(26px);
+    transition: opacity .9s cubic-bezier(.16,1,.3,1), transform .9s cubic-bezier(.16,1,.3,1);
+  }
+  .mw-theater { transition-delay: .1s; }
+  .mw-root.mw-in .mw-head, .mw-root.mw-in .mw-theater { opacity: 1; transform: none; }
+
+  .mw-theater {
+    max-width: 960px; margin: 0 auto; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius-3xl);
+    box-shadow: var(--shadow-float); overflow: hidden;
+  }
+  .mw-theater:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+
+  .mw-chrome {
+    display: flex; align-items: center; gap: 7px; padding: 12px 16px;
+    background: var(--surface-subtle); border-bottom: 1px solid var(--border);
+  }
+  .mw-dot3 { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .mw-url {
+    margin-left: 10px; display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 4px 12px; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
+  }
+  .mw-url svg { width: 13px; height: 13px; color: var(--accent-strong); }
+  .mw-frame { display: block; }
+
+  .mw-stage {
+    position: relative; overflow: hidden; min-height: 452px;
+    background: radial-gradient(560px 300px at 84% -10%, var(--gold-soft), transparent 60%), var(--surface);
+  }
+  .mw-scene {
+    position: absolute; inset: 0; padding: 30px 34px 60px;
+    opacity: 0; transform: translateX(26px);
+    transition: opacity .38s cubic-bezier(.16,1,.3,1), transform .38s cubic-bezier(.16,1,.3,1);
+    pointer-events: none; visibility: hidden;
+  }
+  .mw-scene.mw-on { opacity: 1; transform: none; visibility: visible; }
+  .mw-scene.mw-bye { opacity: 0; transform: translateX(-22px); visibility: visible; }
+
+  .mw-capbar {
+    display: flex; align-items: center; gap: 14px; padding: 13px 20px;
+    background: var(--surface-subtle); border-top: 1px solid var(--border);
+  }
+  .mw-cap { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-secondary); opacity: 1; transition: opacity .28s ease; }
+  .mw-cap strong { color: var(--text-primary); font-weight: 700; }
+  .mw-cap.mw-swap { opacity: 0; }
+  .mw-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+  .mw-ctrl { display: flex; align-items: center; gap: 6px; }
+  .mw-cbtn {
+    all: unset; cursor: pointer; box-sizing: border-box; width: 32px; height: 32px; border-radius: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); background: var(--surface); border: 1px solid var(--border-strong);
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .mw-cbtn:hover { color: var(--text-primary); border-color: var(--accent-strong); }
+  .mw-cbtn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+  .mw-cbtn svg { width: 14px; height: 14px; }
+  .mw-cbtn.mw-play-t[aria-pressed="true"] { color: var(--accent-text); border-color: var(--accent-strong); background: var(--gold-soft); }
+  .mw-cbtn .mw-ic-pause { display: none; }
+  .mw-cbtn.mw-play-t[aria-pressed="true"] .mw-ic-pause { display: block; }
+  .mw-cbtn.mw-play-t[aria-pressed="true"] .mw-ic-play { display: none; }
+
+  .mw-dots { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 14px 20px 6px; background: var(--surface-subtle); }
+  .mw-dot {
+    all: unset; cursor: pointer; position: relative; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--border-strong); transition: background .2s ease, transform .2s ease;
+  }
+  .mw-dot:hover { background: var(--text-tertiary); transform: scale(1.15); }
+  .mw-dot:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+  .mw-dot[aria-current="true"] { background: var(--accent-strong); transform: scale(1.15); }
+  .mw-dot .mw-tip {
+    position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+    padding: 5px 9px; border-radius: 7px; white-space: nowrap;
+    background: var(--text-primary); color: var(--surface); font-size: 11px; font-weight: 600;
+    letter-spacing: -.005em; opacity: 0; pointer-events: none; transition: opacity .15s ease;
+    box-shadow: var(--shadow-card); z-index: 5;
+  }
+  .mw-dot:hover .mw-tip, .mw-dot:focus-visible .mw-tip { opacity: 1; }
+
+  .mw-track { display: block; height: 3px; margin: 8px 20px 16px; border-radius: 99px; background: var(--border); overflow: hidden; }
+  .mw-track-fill { display: block; height: 100%; width: 100%; border-radius: 99px; background: var(--accent-strong); transform: scaleX(0); transform-origin: left center; }
+
+  /* ---- shared atoms -------------------------------------------------------- */
+  .mw-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-card); }
+  .mw-pane-h { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 700; color: var(--text-secondary); }
+  .mw-mono { font-family: var(--font-mono); }
+  .mw-faint { color: var(--text-tertiary); font-weight: 500; }
+  .mw-blurb { margin: 0; padding: 10px 14px 4px; font-size: 12px; line-height: 1.5; color: var(--text-tertiary); }
+  .mw-fineprint { margin: 4px 14px 12px; font-size: 10.5px; line-height: 1.5; color: var(--text-tertiary); }
+
+  .mw-pill {
+    display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 11px; line-height: 1;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .mw-pill .mw-pdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: mw-pulse 2s infinite; }
+  .mw-p-crm  { color: var(--mw-crm);  background: var(--mw-crm-soft);  border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
+  .mw-p-ok   { color: var(--mw-ok);   background: var(--mw-ok-soft);   border-color: color-mix(in srgb, var(--success) 34%, transparent); }
+  .mw-p-warn { color: var(--mw-warn); background: var(--mw-warn-soft); border-color: color-mix(in srgb, var(--warning-text) 40%, transparent); }
+  .mw-p-idle { color: var(--text-tertiary); background: var(--surface-subtle); border-color: var(--border-strong); }
+  @keyframes mw-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .mw-av {
+    width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 11px; font-weight: 800; color: var(--on-accent-strong);
+    background: linear-gradient(135deg, var(--gold), var(--accent-strong));
+  }
+  .mw-av-you { background: linear-gradient(135deg, var(--text-secondary), var(--text-primary)); }
+
+  .mw-note { position: absolute; left: 34px; right: 34px; bottom: 20px; font-size: 11.5px; line-height: 1.5; color: var(--text-tertiary); text-align: center; }
+  .mw-note b { color: var(--text-secondary); font-weight: 700; }
+
+  .mw-stack { position: relative; display: inline-grid; }
+  .mw-stack > * { grid-area: 1 / 1; }
+
+  @keyframes mw-rise  { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: none; } }
+  @keyframes mw-slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+  @keyframes mw-pop   { from { opacity: 0; transform: scale(.64); } to { opacity: 1; transform: none; } }
+  @keyframes mw-fade  { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes mw-gone  { to { opacity: 0; transform: scale(.86); visibility: hidden; } }
+  @keyframes mw-press { 0%,100% { transform: none; } 45% { transform: scale(.95); filter: brightness(1.06); } }
+  @keyframes mw-drop  { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: none; } }
+  .mw-scene.mw-play [data-an] { animation-delay: var(--d, 0s); animation-fill-mode: both; }
+  .mw-scene.mw-play [data-an="rise"]  { animation: mw-rise  .55s cubic-bezier(.16,1,.3,1) both; }
+  .mw-scene.mw-play [data-an="slide"] { animation: mw-slide .5s  cubic-bezier(.16,1,.3,1) both; }
+  .mw-scene.mw-play [data-an="pop"]   { animation: mw-pop   .42s cubic-bezier(.16,1,.3,1) both; }
+  .mw-scene.mw-play [data-an="fade"]  { animation: mw-fade  .5s  ease both; }
+  .mw-scene.mw-play [data-an="gone"]  { animation: mw-gone  .4s  ease both; }
+  .mw-scene.mw-play [data-an="press"] { animation: mw-press .5s  ease both; }
+  .mw-scene.mw-play [data-an="drop"]  { animation: mw-drop  .5s  cubic-bezier(.16,1,.3,1) both; }
+  .mw-swap-in { opacity: 0; visibility: hidden; }
+  .mw-scene.mw-play .mw-swap-in { opacity: 1; visibility: visible; }
+
+  /* ---- scene 1/2 · members -------------------------------------------------- */
+  .mw-sc-members { display: grid; place-items: center; height: 100%; padding-bottom: 40px; }
+  .mw-tabs { width: min(430px, 100%); display: flex; gap: 4px; padding: 8px; margin-bottom: 8px; }
+  .mw-tab { flex: 1; text-align: center; padding: 7px 0; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--text-tertiary); }
+  .mw-tab-on { color: var(--accent-text); background: var(--gold-soft); }
+  .mw-mempanel { width: min(430px, 100%); }
+  .mw-mempanel-sm { width: min(400px, 100%); }
+  .mw-mrow { display: flex; align-items: center; gap: 10px; margin: 8px 14px; padding: 9px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .mw-mgrow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mw-mgrow b { font-size: 12.5px; color: var(--text-primary); font-weight: 700; }
+  .mw-mgrow .mw-faint { font-size: 10.5px; }
+  .mw-invite {
+    display: flex; align-items: center; gap: 8px; margin: 6px 14px 10px; padding: 8px 10px;
+    background: var(--surface-subtle); border: 1px solid var(--border-strong); border-radius: 10px;
+  }
+  .mw-atsign { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 13px; }
+  .mw-inputtxt { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); overflow: hidden; white-space: nowrap; }
+  .mw-scene.mw-play .mw-btype { display: inline-block; width: 0; overflow: hidden; vertical-align: bottom; animation: mw-type 1s steps(8, end) .4s forwards; }
+  @keyframes mw-type { from { width: 0; } to { width: 8ch; } }
+  .mw-roleselect { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; flex: none; }
+  .mw-roleselect svg { width: 8px; height: 5px; color: var(--text-tertiary); }
+  .mw-invbtn { flex: none; background: var(--accent-strong); color: var(--on-accent-strong); font-size: 11.5px; font-weight: 700; padding: 6px 12px; border-radius: 8px; }
+
+  /* ---- scene 3 · pairing ----------------------------------------------------- */
+  .mw-sc-pair { display: grid; place-items: center; height: 100%; padding-bottom: 40px; }
+  .mw-pairpanel { width: min(480px, 100%); }
+  .mw-pairbody { display: flex; align-items: center; justify-content: center; gap: 22px; padding: 26px 18px; }
+  .mw-qr { width: 96px; height: 96px; border-radius: 12px; box-shadow: var(--shadow-card); flex: none; }
+  .mw-arrow { color: var(--border-strong); flex: none; }
+  .mw-arrow svg { width: 26px; height: 11px; }
+  .mw-phchip { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: none; }
+  .mw-phchip-bezel { width: 46px; height: 78px; border-radius: 14px; background: var(--mw-ink); display: grid; place-items: center; box-shadow: var(--shadow-card); }
+  .mw-phchip-screen { width: 22px; height: 22px; border-radius: 50%; background: var(--mw-ok-soft); color: var(--mw-ok); display: grid; place-items: center; }
+  .mw-phchip-screen svg { width: 13px; height: 13px; }
+  .mw-phchip-label { font-size: 10.5px; }
+
+  /* ---- scene 4 · phone push + verify ----------------------------------------- */
+  .mw-sc-phone { display: grid; place-items: center; height: 100%; padding-bottom: 40px; }
+  .mw-phone { flex: none; }
+  .mw-ph-bezel { width: 216px; padding: 7px; border-radius: 32px; background: var(--mw-ink); border: 1px solid var(--border-strong); box-shadow: var(--shadow-float); }
+  .mw-ph-screen { position: relative; width: 202px; height: 300px; overflow: hidden; border-radius: 25px; background: var(--surface); }
+  .mw-ph-island { position: absolute; left: 50%; top: 8px; z-index: 3; width: 66px; height: 17px; border-radius: 99px; background: var(--mw-ink); transform: translateX(-50%); }
+  .mw-ph-stack { position: absolute; inset: 0; padding: 30px 10px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .mw-ph-push {
+    display: flex; align-items: flex-start; gap: 7px; background: var(--surface-subtle);
+    border: 1px solid var(--border); border-radius: 12px; padding: 8px 9px;
+  }
+  .mw-ph-push-ico { width: 18px; height: 18px; flex: none; border-radius: 5px; display: grid; place-items: center; background: var(--accent-strong); color: var(--on-accent-strong); }
+  .mw-ph-push-ico svg { width: 10px; height: 10px; }
+  .mw-ph-push-body { flex: 1; min-width: 0; }
+  .mw-ph-push-h { display: flex; align-items: center; gap: 5px; }
+  .mw-ph-push-h b { font-size: 9.5px; font-weight: 700; color: var(--text-primary); }
+  .mw-ph-push-time { margin-left: auto; font-size: 8px; color: var(--text-tertiary); }
+  .mw-ph-push-txt { display: block; font-size: 9.5px; line-height: 1.35; color: var(--text-secondary); margin-top: 1px; }
+  .mw-ph-card { background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .mw-ph-card-h { display: flex; align-items: center; justify-content: space-between; font-size: 9.5px; color: var(--text-tertiary); }
+  .mw-ph-card-t { margin: 0; font-size: 10.5px; font-weight: 650; color: var(--text-primary); line-height: 1.35; }
+  .mw-ph-diff { display: flex; flex-direction: column; gap: 3px; }
+  .mw-ph-diff span { font-family: var(--font-mono); font-size: 8.5px; border-radius: 5px; padding: 3px 6px; }
+  .mw-ph-diff-add { color: var(--mw-ok); background: var(--mw-ok-soft); }
+  .mw-ph-diff-del { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mw-ph-verifybtn { display: block; text-align: center; background: var(--accent-strong); color: var(--on-accent-strong); font-size: 10.5px; font-weight: 700; padding: 7px; border-radius: 9px; }
+  .mw-ph-home { position: absolute; left: 50%; bottom: 7px; z-index: 3; width: 60px; height: 3px; border-radius: 99px; background: color-mix(in srgb, var(--surface) 60%, transparent); transform: translateX(-50%); }
+
+  /* ---- scene 5 · closing ------------------------------------------------------ */
+  .mw-sc-close { display: grid; place-items: center; height: 100%; padding-bottom: 40px; text-align: center; }
+  .mw-close-in { max-width: 420px; }
+  .mw-check {
+    display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 50%;
+    background: var(--mw-ok-soft); color: var(--mw-ok); border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+    margin-bottom: 16px;
+  }
+  .mw-check svg { width: 22px; height: 22px; }
+  .mw-close-line { font-family: var(--font-serif); font-weight: 400; font-size: 21px; line-height: 1.3; letter-spacing: -.01em; color: var(--text-primary); }
+  .mw-close-sub { font-size: 12px; margin-top: 10px; }
+
+  @media (max-width: 720px) {
+    .mw-root { padding: 72px 14px; }
+    .mw-scene { padding: 22px 16px 56px; }
+    .mw-stage { min-height: 476px; }
+    .mw-capbar { flex-wrap: wrap; gap: 10px 14px; }
+    .mw-cap { flex: 1 1 100%; order: 3; font-size: 12.5px; }
+    .mw-count { order: 1; }
+    .mw-ctrl { order: 2; margin-left: auto; }
+    .mw-note { left: 16px; right: 16px; bottom: 14px; font-size: 11px; }
+    .mw-pairbody { flex-wrap: wrap; gap: 14px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mw-head, .mw-theater { opacity: 1; transform: none; transition: none; }
+    .mw-scene { transition: none; }
+    .mw-pill.mw-p-crm .mw-pdot { animation: none; }
+    .mw-cbtn.mw-play-t { display: none; }
+  }
+  </style>
+
+  <script>
+  /* =========================================================================
+     Team & mobile cinematic player — same mechanics as sections/demo.html's
+     dm-scene engine, scoped to #demo-team-mobile / .mw- classes. Self-init
+     guard lets multiple chapter players coexist on one page.
+     ========================================================================= */
+  (function () {
+    "use strict";
+    if (window.__mwInit) return; window.__mwInit = true;
+
+    var STEPS = [
+      { ms: 6600, cap: "<strong>Who&rsquo;s on this project.</strong> Owners invite collaborators by GitHub username.",
+        title: "Members", aria: "The Collaboration settings tab listing project members and an invite row" },
+      { ms: 6600, cap: "<strong>Invite by GitHub username.</strong> Roles + fine-grained grants — keys, members, repos, autonomy, reviewers.",
+        title: "Invite", aria: "Inviting jamie-ml, the row appearing pending then flipping to member" },
+      { ms: 6400, cap: "<strong>Pair the phone.</strong> One scan, GitHub-authenticated — the app mirrors this workspace.",
+        title: "Pair", aria: "A QR pairing card and a phone confirming it paired" },
+      { ms: 7400, cap: "<strong>Verify from the phone.</strong> A push for needs_verification, then the diff and the verify button.",
+        title: "Verify on mobile", aria: "A phone push notification leading to a task detail and a verify action" },
+      { ms: 6000, cap: "<strong>Same queue, same gates, same theme.</strong> Your whole team, web and pocket.",
+        title: "Close", aria: "A closing card summarizing the team and mobile workflow" }
+    ];
+    var N = STEPS.length;
+
+    var root    = document.getElementById("demo-team-mobile");
+    var theater = document.getElementById("mw-theater");
+    var stage   = document.getElementById("mw-stage");
+    var scenes  = stage.querySelectorAll(".mw-scene");
+    var capEl   = document.getElementById("mw-cap");
+    var countEl = document.getElementById("mw-count");
+    var playBtn = document.getElementById("mw-play");
+    var trackFill = document.getElementById("mw-track-fill");
+    var dotsWrap = document.getElementById("mw-dots");
+
+    var dots = [];
+    for (var i = 0; i < N; i++) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "mw-dot";
+      b.setAttribute("aria-label", "Scene " + (i + 1) + ": " + STEPS[i].title);
+      var tip = document.createElement("span");
+      tip.className = "mw-tip";
+      tip.textContent = STEPS[i].title;
+      b.appendChild(tip);
+      dotsWrap.appendChild(b);
+      dots.push(b);
+    }
+
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var qs = new URLSearchParams(location.search);
+
+    var cur = 0, elapsed = 0;
+    var userPaused = reduced || qs.get("mwpaused") === "1";
+    var inView = false;
+    var raf = null, lastT = 0;
+
+    function playing() { return !userPaused && !reduced && inView && !document.hidden; }
+    function pad(n) { return (n + 1 < 10 ? "0" : "") + (n + 1); }
+
+    function paintDots() {
+      for (var i = 0; i < N; i++) dots[i].setAttribute("aria-current", i === cur ? "true" : "false");
+    }
+
+    function setScene(i) {
+      var old = cur;
+      cur = ((i % N) + N) % N;
+      if (scenes[old] && old !== cur) {
+        scenes[old].classList.remove("mw-on", "mw-play");
+        scenes[old].classList.add("mw-bye");
+        (function (el) { setTimeout(function () { el.classList.remove("mw-bye"); }, 420); })(scenes[old]);
+      }
+      var sc = scenes[cur];
+      sc.classList.add("mw-on");
+      if (!reduced) {
+        sc.classList.remove("mw-play");
+        void sc.offsetWidth;
+        sc.classList.add("mw-play");
+      }
+      elapsed = 0;
+      trackFill.style.transform = reduced ? "scaleX(1)" : "scaleX(0)";
+      paintDots();
+      countEl.textContent = pad(cur) + " / " + pad(N - 1);
+      stage.setAttribute("aria-label", "Animated preview: " + STEPS[cur].aria);
+      capEl.classList.add("mw-swap");
+      setTimeout(function () { capEl.innerHTML = STEPS[cur].cap; capEl.classList.remove("mw-swap"); }, 160);
+    }
+
+    function tick(t) {
+      raf = null;
+      if (playing()) {
+        var dt = lastT ? Math.min(t - lastT, 100) : 0;
+        lastT = t;
+        elapsed += dt;
+        var p = elapsed / STEPS[cur].ms;
+        if (p >= 1) { setScene(cur + 1); }
+        else { trackFill.style.transform = "scaleX(" + p.toFixed(4) + ")"; }
+        raf = requestAnimationFrame(tick);
+      } else {
+        lastT = 0;
+      }
+    }
+
+    function sync() {
+      playBtn.setAttribute("aria-pressed", userPaused ? "false" : "true");
+      playBtn.setAttribute("aria-label", userPaused ? "Resume autoplay" : "Pause autoplay");
+      if (playing() && raf === null) raf = requestAnimationFrame(tick);
+    }
+
+    function jump(i) { userPaused = true; setScene(i); sync(); }
+
+    dots.forEach(function (b, i) {
+      b.addEventListener("click", function () { if (i !== cur) jump(i); else { setScene(i); sync(); } });
+    });
+    document.getElementById("mw-prev").addEventListener("click", function () { jump(cur - 1); });
+    document.getElementById("mw-next").addEventListener("click", function () { jump(cur + 1); });
+    playBtn.addEventListener("click", function () { userPaused = !userPaused; sync(); });
+    theater.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft")  { e.preventDefault(); jump(cur - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); jump(cur + 1); }
+    });
+
+    function onScreen(el, slack) {
+      var r = el.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      return r.top < vh * (slack || 1) && r.bottom > 0;
+    }
+    inView = onScreen(theater);
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) { inView = entries[0].isIntersecting; sync(); }, { threshold: 0.3 }).observe(theater);
+    }
+    window.addEventListener("load", function () { inView = onScreen(theater); sync(); });
+    window.addEventListener("scroll", function () { inView = onScreen(theater); reveal(); sync(); }, { passive: true });
+    document.addEventListener("visibilitychange", sync);
+
+    function reveal() { if (onScreen(root, 0.92)) { root.classList.add("mw-in"); return true; } return false; }
+    if (reduced || !("IntersectionObserver" in window)) { root.classList.add("mw-in"); }
+    else if (!reveal()) {
+      var rev = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { root.classList.add("mw-in"); rev.disconnect(); }
+      }, { threshold: 0.12 });
+      rev.observe(root);
+      window.addEventListener("load", reveal, { once: true });
+    }
+
+    var s0 = parseInt(qs.get("mwstep") || "0", 10);
+    if (!(s0 >= 0 && s0 < N)) s0 = 0;
+    scenes[0].classList.remove("mw-on");
+    setScene(s0);
+    sync();
+  })();
+  </script>
+</section>

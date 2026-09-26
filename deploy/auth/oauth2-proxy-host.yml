@@ -1,0 +1,13 @@
+# Overlay for boxes with a HOST (systemd) Caddy owning 80/443 — e.g. a server
+# already fronting other sites. Publishes oauth2-proxy on loopback so the host
+# Caddy can forward_auth to 127.0.0.1:4180; run ONLY the oauth2-proxy service:
+#
+#   docker compose --env-file .env -f docker-compose.auth.yml \
+#     -f oauth2-proxy-host.yml up -d oauth2-proxy
+#
+# The host Caddy then gets the orcha site block (bearer lane + forward_auth) —
+# see the deployed example in deploy/README.md's host-caddy section.
+services:
+  oauth2-proxy:
+    ports:
+      - "127.0.0.1:4180:4180"

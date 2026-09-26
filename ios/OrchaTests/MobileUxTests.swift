@@ -194,6 +194,20 @@ private let fixedNow = Date(timeIntervalSince1970: 1_751_400_000)
         #expect(p.token == nil)
     }
 
+    // Cloud-first scheme default: a bare domain is the deployed portal → https;
+    // an IP, bare hostname, explicit port, or typed scheme keeps self-host http.
+    @Test func bareDomainDefaultsToHttps() throws {
+        #expect(try OrchaServerAddress.parse("orcha.nursoftai.com").baseUrl == "https://orcha.nursoftai.com")
+        #expect(try OrchaServerAddress.parse("orcha.nursoftai.com/portal").baseUrl == "https://orcha.nursoftai.com")
+    }
+
+    @Test func selfHostShapesKeepHttp() throws {
+        #expect(try OrchaServerAddress.parse("orcha.nursoftai.com:8001").baseUrl == "http://orcha.nursoftai.com:8001")
+        #expect(try OrchaServerAddress.parse("192.168.1.24").baseUrl == "http://192.168.1.24")
+        #expect(try OrchaServerAddress.parse("my-mac").baseUrl == "http://my-mac")
+        #expect(try OrchaServerAddress.parse("http://orcha.nursoftai.com").baseUrl == "http://orcha.nursoftai.com")
+    }
+
     @Test func rejectsForeignQrAndLocalhost() {
         #expect(throws: OrchaServerAddress.AddressError.self) {
             _ = try OrchaServerAddress.parse(#"{"kind":"some-other-qr","baseUrl":"x"}"#)

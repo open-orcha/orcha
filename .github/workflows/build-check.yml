@@ -1,11 +1,11 @@
 name: build-check
 
+# Runs on EVERY pull request (no path filter): `build` is a required status
+# check on main, and a path-filtered workflow never reports on PRs outside its
+# paths — the required check would sit "Expected" forever and block the merge.
+# The job is ~1 minute, so always-run is a cheap price for a sound gate.
 on:
   pull_request:
-    paths:
-      - "orcha-cli/**"
-      - "packaging/**"
-      - ".github/workflows/build-check.yml"
 
 concurrency:
   group: build-check-${{ github.ref }}
@@ -13,8 +13,10 @@ concurrency:
 
 jobs:
   build:
-    # GitHub-hosted runner: free + unlimited minutes for public repos.
+    # GitHub-hosted runner. This repo is PRIVATE, so Actions minutes are billed —
+    # timeout-minutes hard-stops a wedged build instead of idling on paid time.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 

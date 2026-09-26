@@ -33,18 +33,18 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional
 
-# llm_util is the SINGLE git source (orcha_cli/llm_util.py). The host daemon imports it as
-# `orcha_cli.llm_util`; the portal container gets a top-level copy alongside main.py (see
-# __main__._install_llm_util / _PORTAL_SHARED_MODULES), so `import llm_util` works there. Guarded both ways and
-# bound to None if absent — the write-side dedup + the deterministic boot trim never need it,
-# so curation degrades gracefully (the LLM summary just falls back to an honest breadcrumb).
-try:  # host daemon
-    from orcha_cli import llm_util as _llm_util  # type: ignore
-except ImportError:  # portal container (top-level copy) or missing
-    try:
-        import llm_util as _llm_util  # type: ignore
-    except ImportError:
-        _llm_util = None  # type: ignore
+try:
+    from orcha_cli.digest_recalibrate import recalibrate_digest
+    from orcha_cli.digest_summary import (
+        _llm_util,
+        summarize_with_client as _summarize_with_client,
+    )
+except ImportError:  # portal container: shared modules are copied beside main.py
+    from digest_recalibrate import recalibrate_digest  # type: ignore
+    from digest_summary import (  # type: ignore
+        _llm_util,
+        summarize_with_client as _summarize_with_client,
+    )
 
 # --- planned sizes (Kedar-approved #287 Q2: deliberately generous = conservative) ---
 DEFAULT_KEEP = {"decisions": 15, "learnings": 15, "open_threads": 10}
@@ -55,6 +55,11 @@ _SUMMARY_MARK = ("[older context auto-summarised for brevity — machine-written
                  "verbatim words; full history via GET /api/agents/{aid}/rehydrate]")
 
 _LIST_FIELDS = ("decisions", "learnings", "open_threads")
+
+
+def llm_summarizer(field: str, tail: list) -> Optional[str]:
+    """Compatibility seam for callers that replace this module's LLM client."""
+    return _summarize_with_client(_llm_util, field, tail)
 
 
 # ------------------------------------------------------------------- entry helpers
@@ -222,47 +227,3 @@ def curate_injected_digest(envelope, *, summarizer: Optional[Callable] = None) -
     out = dict(envelope)
     out["digest"] = curate_inner(inner, summarizer=summarizer)
     return out
-
-
-# ---------------------------------------------------------------- LLM summariser
-
-
-_SUMMARY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string",
-                    "description": "One or two terse sentences capturing the gist of the older "
-                                   "entries, in the agent's third-person voice. No invented detail."},
-    },
-    "required": ["summary"],
-}
-
-_SUMMARY_SYSTEM = (
-    "You compress an autonomous software agent's OLDER memory-digest entries into one or two "
-    "short sentences so they still fit inside a wake prompt. Preserve the substance — decisions "
-    "made, lessons learned, threads left open — in the agent's own terse third-person voice. "
-    "Do NOT invent anything that is not present in the entries. Be brief."
-)
-
-
-def _entries_to_text(entries: list) -> str:
-    return "\n".join(f"- {_entry_text(e)}" for e in entries)
-
-
-def llm_summarizer(field: str, tail: list) -> Optional[str]:
-    """Default boot-copy summariser backed by llm_util (cheap model). Returns a one-line summary
-    string, or None on any error / no client (the caller then uses the deterministic omission
-    breadcrumb). NEVER raises — continuity must survive a flaky LLM."""
-    if _llm_util is None or not tail:
-        return None
-    try:
-        result = _llm_util.classify(
-            "digest_summary",
-            system=_SUMMARY_SYSTEM,
-            user=f"Older '{field}' entries (oldest first):\n{_entries_to_text(tail)}",
-            schema=_SUMMARY_SCHEMA,
-        )
-        s = (result or {}).get("summary")
-        return s.strip() if isinstance(s, str) and s.strip() else None
-    except Exception:
-        return None

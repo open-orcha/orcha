@@ -1,0 +1,12 @@
+# Overlay for the ORCHA STACK compose (not the auth stack): rebinds the
+# portal's published port to loopback so the only public entrance is Caddy.
+#
+#   cd <project>/.orcha
+#   docker compose -f docker-compose.yml \
+#     -f <this repo>/deploy/auth/docker-compose.portal-local.yml up -d portal
+#
+# (Adjust 8000 if the stack was rendered with a different portal_port.)
+services:
+  portal:
+    ports: !override
+      - "127.0.0.1:8000:8000"

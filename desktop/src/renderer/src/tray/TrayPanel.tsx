@@ -93,7 +93,7 @@ export default function TrayPanel() {
                   count > 0 && 'bg-card'
                 )}
                 disabled={!s.running || s.apiPort === null}
-                onClick={() => void window.orchaDesktop.openPortal(s.project)}
+                onClick={() => void window.orchaDesktop.portalShow(s.project)}
               >
                 <span
                   className={cn(
@@ -112,7 +112,7 @@ export default function TrayPanel() {
                     <li key={`${i.kind}:${i.id}`}>
                       <button
                         className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-card"
-                        onClick={() => void window.orchaDesktop.openPortal(i.project, i.path)}
+                        onClick={() => void window.orchaDesktop.portalShow(i.project, i.path)}
                       >
                         <Badge>{KIND_LABELS[i.kind]}</Badge>
                         <span className="truncate text-text/80">{i.title}</span>
@@ -142,7 +142,7 @@ export default function TrayPanel() {
           size="sm"
           className="flex-1"
           disabled={!mostUrgent || !mostUrgent.running || mostUrgent.apiPort === null}
-          onClick={() => mostUrgent && void window.orchaDesktop.openPortal(mostUrgent.project)}
+          onClick={() => mostUrgent && void window.orchaDesktop.portalShow(mostUrgent.project)}
         >
           Open portal
         </Button>

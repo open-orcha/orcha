@@ -1,0 +1,49 @@
+/* Connect-repo picker (ConnectRepoModal) + the RepoBadge chip — token-driven
+   only, matching the pair-modal/settings-card idiom already in the codebase. */
+
+.cr-modal { width: min(560px, 92vw); max-height: 82vh; display: flex; flex-direction: column; }
+.cr-body { display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+
+.cr-section-h { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--faint); margin-bottom: 8px; }
+
+.cr-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+
+.cr-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px;
+  border-radius: 11px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer;
+  font: inherit; color: var(--text); transition: background .12s, border-color .12s; }
+.cr-row:hover:not(:disabled) { background: var(--hover); border-color: var(--border-2); }
+.cr-row:disabled { cursor: default; opacity: .7; }
+.cr-row.on { border-color: var(--accent-line); background: var(--accent-soft); }
+
+.cr-row-ico { width: 17px; height: 17px; flex: none; color: var(--muted); }
+.cr-row.on .cr-row-ico { color: var(--accent); }
+.cr-row-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.cr-row-name { font-weight: 620; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-row-caption { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-row-tag { flex: none; font-size: 10.5px; font-weight: 600; color: var(--faint); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 8px; }
+.cr-row-current { flex: none; font-size: 11px; font-weight: 650; color: var(--accent); }
+.cr-row-busy { flex: none; font-size: 11px; color: var(--faint); font-style: italic; }
+
+.cr-empty { padding: 12px 2px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.cr-empty p { margin: 0 0 6px; }
+.cr-empty p:last-child { margin-bottom: 0; }
+.cr-hint { font-size: 11.5px; color: var(--faint); }
+.cr-hint a { color: var(--accent); }
+
+/* ---- RepoBadge (bound-repo indicator: GitHub header / project cards) ----- */
+.repo-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.repo-badge a { display: inline-flex; align-items: center; gap: 5px; color: inherit; }
+.repo-badge a:hover { color: var(--accent); }
+.repo-badge svg { width: 14px; height: 14px; flex: none; }
+.repo-badge.local .repo-badge-name { color: var(--text-2); font-weight: 560; }
+.repo-badge-chip { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 999px; padding: 1px 7px; }
+/* local-binding + GitHub-origin fall-through: the detected origin repo, shown as a
+   subdued suffix on the Local badge — both truths visible, neither shouting. */
+.repo-badge-origin { flex: none; font-size: 11px; color: var(--faint); }
+
+/* ---- GitHub hub degradation callout (local_source) ------------------------ */
+.gh-local-callout .sc-acts { margin-top: 12px; }

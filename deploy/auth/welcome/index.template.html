@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Pre-paint theme resolver — MUST run first, before any CSS, so the correct
+     token set is stamped on <html> with no flash of the wrong theme.
+     Order: URL hint (#light/#dark or ?theme=…) → localStorage 'mk-theme' →
+     prefers-color-scheme (light → light; else dark, the default brand look). -->
+<script>
+(function () {
+  try {
+    var t = null;
+    var h = (location.hash || "").toLowerCase();
+    var q = new URLSearchParams(location.search).get("theme");
+    if (h === "#light" || q === "light") t = "light";
+    else if (h === "#dark" || q === "dark") t = "dark";
+    if (!t) { try { t = localStorage.getItem("mk-theme"); } catch (e) {} }
+    if (t !== "light" && t !== "dark") {
+      t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+    }
+    var r = document.documentElement;
+    r.setAttribute("data-theme", t);
+    r.style.colorScheme = t;
+  } catch (e) {
+    document.documentElement.setAttribute("data-theme", "dark");
+  }
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orcha — AI agents that ship. Humans who decide.</title>
+<meta name="description" content="Open-source multi-agent orchestration. Persistent Claude agents work in your repos, open pull requests as a bot, and stop at needs-verification — a human always makes the merge call. Self-host, bring your own cloud, or Orcha Cloud.">
+
+<!-- Open Graph / social -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Orcha">
+<meta property="og:title" content="Orcha — AI agents that ship. Humans who decide.">
+<meta property="og:description" content="Open-source multi-agent orchestration. Sandboxed agents open bot-authored pull requests; a human holds the merge gate. Runs anywhere Docker runs.">
+<meta property="og:url" content="https://app.orcha.cloud/welcome">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Orcha — AI agents that ship. Humans who decide.">
+<meta name="twitter:description" content="Open-source multi-agent orchestration. Sandboxed agents, bot-authored PRs, and a human merge gate.">
+
+<!-- Existing brand favicon (Orcha wordmark) — preserved verbatim -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20100%20100%22%3E%0A%20%20%3Crect%20width%3D%22100%22%20height%3D%22100%22%20rx%3D%2222%22%20fill%3D%22%230b1216%22/%3E%0A%20%20%3Cpath%20d%3D%22M27%2C83%20C28%2C55%2033%2C32%2045.5%2C22.5%20C51.5%2C18%2057.5%2C19.5%2060%2C27%20C64.5%2C46%2070.5%2C67%2073%2C83%20Z%22%20fill%3D%22%23f3fbfb%22/%3E%0A%20%20%3Cg%20stroke%3D%22%2306171c%22%20stroke-width%3D%222.4%22%20stroke-linecap%3D%22round%22%3E%0A%20%20%20%20%3Cline%20x1%3D%2249%22%20y1%3D%2238%22%20x2%3D%2240%22%20y2%3D%2262%22/%3E%3Cline%20x1%3D%2249%22%20y1%3D%2238%22%20x2%3D%2256%22%20y2%3D%2262%22/%3E%3Cline%20x1%3D%2249%22%20y1%3D%2238%22%20x2%3D%2250%22%20y2%3D%2274%22/%3E%3C/g%3E%0A%20%20%3Cg%20fill%3D%22%2306171c%22%3E%3Ccircle%20cx%3D%2239%22%20cy%3D%2264%22%20r%3D%224%22/%3E%3Ccircle%20cx%3D%2257%22%20cy%3D%2264%22%20r%3D%224%22/%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2276%22%20r%3D%224%22/%3E%3C/g%3E%0A%20%20%3Ccircle%20cx%3D%2249%22%20cy%3D%2235%22%20r%3D%226%22%20fill%3D%22%231fc7cd%22/%3E%0A%20%20%3Cpath%20d%3D%22M13%2C86%20C28%2C82%2038%2C82%2050%2C82.5%20C62%2C82%2072%2C82%2087%2C86%22%20stroke%3D%22%231fc7cd%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22/%3E%0A%3C/svg%3E">
+
+<style>
+/* ==========================================================================
+   Orcha marketing landing — SHELL (nav · hero · footer · shared runtime).
+   Self-hosted fonts, tokens ported from the Quantal Health design system.
+   Everything is self-contained: no external network requests.
+   Section fragments (demo/product/mobile/deploy/themes/opensource) are inlined
+   by build.py at their @section markers; they read ONLY these tokens.
+   ========================================================================== */
+
+/* ---- self-hosted fonts (variable; one file per family, whole weight axis) -- */
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/welcome/fonts/fraunces-var.woff2") format("woff2");
+}
+/* Fraunces ITALIC (ital axis) — real italic for the display-heading accent
+   words. If this file ever fails to load, the browser falls back to a synthetic
+   italic of the normal face, which still reads correctly — never breaks. */
+@font-face {
+  font-family: "Fraunces";
+  font-style: italic;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/welcome/fonts/fraunces-italic-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/welcome/fonts/hanken-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("/welcome/fonts/geistmono-var.woff2") format("woff2");
+}
+
+/* ==========================================================================
+   DESIGN TOKENS — every fragment reads these via var(). Two complete sets:
+   :root carries the DARK set (dark is the default brand look — a warm near-black
+   editorial page with champagne-gold accents); html[data-theme="light"] flips
+   every value to the cream/ink light set. The token NAMES are identical across
+   both modes, so fragments never branch on theme — they just consume tokens.
+   The pre-paint <script> at the top of <head> stamps data-theme before paint.
+   ========================================================================== */
+
+/* ---- DARK set (default) --------------------------------------------------- */
+:root {
+  --canvas:#171310; --surface:#1F1A15; --surface-subtle:#241E18; --paper:#26201A;
+  --ink:#F1E9DB;
+  --text-primary:#F1E9DB; --text-secondary:#B3A896; --text-tertiary:#877C6B;
+  --border:#362E24; --border-strong:#4A4033;
+  /* champagne gold — the brand accent (renamed from --navy*) */
+  --gold:#E7C368; --gold-press:#D4AF4F; --gold-soft:rgba(231,195,104,.12);
+  --accent-strong:#E7C368; --accent-strong-press:#D4AF4F; --on-accent-strong:#221B10;
+  /* gold buttons carry INK text (--on-accent-strong), never white. --accent-text
+     is the gold used as TEXT (eyebrows, links, prompts) — legible per mode. */
+  --accent-text:#E7C368;
+  /* semantic status — AA-legible on the dark surfaces */
+  --success:#34D399; --success-text:#4ADE80; --warning-text:#FBBF24;
+  --danger:#FF6B6B;
+  --font-serif:"Fraunces","Newsreader",Georgia,serif;
+  --font-sans:"Hanken Grotesk",system-ui,-apple-system,sans-serif;
+  --font-mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --shadow-card:0 1px 2px rgb(0 0 0 / .32), 0 10px 28px -14px rgb(0 0 0 / .60);
+  --shadow-float:0 30px 70px -28px rgb(0 0 0 / .72);
+  --radius-xl:.875rem; --radius-2xl:1.25rem; --radius-3xl:1.75rem;
+  color-scheme: dark;
+}
+
+/* ---- LIGHT set (override) ------------------------------------------------- */
+html[data-theme="light"] {
+  --canvas:#F6F1E7; --surface:#FFFFFF; --surface-subtle:#FAF6ED; --paper:#F0E9DB;
+  --ink:#201A12;
+  --text-primary:#201A12; --text-secondary:#5C5346; --text-tertiary:#6F6656;
+  --border:#E4DCCB; --border-strong:#CFC5AE;
+  /* --gold here is decorative (dots, rules, glyph fills); --accent-strong stays
+     the bright champagne for BUTTON fills (ink text keeps AA); --accent-text is
+     a darkened gold so accent-COLORED text clears AA on cream/paper/white. */
+  --gold:#B8891F; --gold-press:#96700F; --gold-soft:rgba(184,137,31,.12);
+  --accent-strong:#E7C368; --accent-strong-press:#D4AF4F; --on-accent-strong:#221B10;
+  --accent-text:#7A5E12;
+  --success:#10B981; --success-text:#0F7A4A; --warning-text:#8A5A00;
+  --danger:#C43C3C;
+  --shadow-card:0 1px 2px rgb(32 26 18 / .05), 0 8px 24px -12px rgb(32 26 18 / .12);
+  --shadow-float:0 24px 60px -24px rgb(32 26 18 / .22);
+  color-scheme: light;
+}
+
+/* ---- reset / base --------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+html { scroll-padding-top: 76px; } /* clears the sticky nav on anchor jumps */
+body {
+  background: var(--canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+img, svg { display: block; max-width: 100%; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+::selection { background: var(--gold); color: var(--on-accent-strong); }
+
+/* content column */
+.mk-wrap { width: 100%; max-width: 1120px; margin-inline: auto; padding-inline: 24px; }
+
+/* typography defaults */
+.mk-serif { font-family: var(--font-serif); font-weight: 400; letter-spacing: -.02em; line-height: 1.05; }
+.mk-mono  { font-family: var(--font-mono); }
+/* italic serif flourish — the accent word in a display heading (gold + italic) */
+.mk-italic { font-family: var(--font-serif); font-style: italic; color: var(--accent-text); }
+/* eyebrow labels — small mono uppercase, wide tracking, champagne accent text */
+.mk-eyebrow {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px; font-weight: 500; line-height: 1;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent-text);
+}
+.mk-eyebrow .mk-eyebrow-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); flex: none; }
+
+/* section rhythm — fragments carry .mk-section; shell sets the vertical rhythm */
+.mk-section { padding-block: 96px; scroll-margin-top: 72px; position: relative; }
+.mk-section-alt { background: var(--paper); }
+
+/* ---- buttons -------------------------------------------------------------- */
+.mk-btn, .mk-btn-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  font-family: var(--font-sans); font-size: 15px; font-weight: 600; line-height: 1;
+  letter-spacing: .01em;
+  padding: 13px 24px; border-radius: 999px;   /* PILL */
+  border: 1px solid transparent; cursor: pointer; white-space: nowrap;
+  transition: transform .06s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease, color .16s ease;
+}
+/* primary — champagne-gold pill with ink text, slight letterspacing */
+.mk-btn {
+  background: var(--accent-strong); color: var(--on-accent-strong);
+  letter-spacing: .02em;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .28);
+}
+.mk-btn:hover { background: var(--accent-strong-press); transform: translateY(-1px); box-shadow: var(--shadow-card); }
+.mk-btn:active { transform: translateY(0); }
+/* ghost — warm thin border, quiet fill */
+.mk-btn-ghost {
+  background: var(--surface); color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.mk-btn-ghost:hover { border-color: var(--accent-text); color: var(--text-primary); transform: translateY(-1px); box-shadow: var(--shadow-card); }
+.mk-btn-ghost:active { transform: translateY(0); }
+.mk-btn svg, .mk-btn-ghost svg { width: 18px; height: 18px; }
+
+/* focus-visible rings — consistent 2px gold everywhere */
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent-strong); outline-offset: 2px; border-radius: 6px;
+}
+
+/* ==========================================================================
+   NAV — sticky, backdrop-blur over canvas, hairline appears on scroll
+   ========================================================================== */
+.mk-nav {
+  position: sticky; top: 0; z-index: 100;
+  /* 90% (was 82%): the hero's ambient wash refracted through the blur as a
+     visible smudge blob beside the wordmark — firmer glass kills it. */
+  background: color-mix(in srgb, var(--canvas) 90%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border-bottom: 1px solid transparent;
+  transition: border-color .25s ease, box-shadow .25s ease, background .25s ease;
+}
+.mk-nav.is-scrolled {
+  border-bottom-color: var(--border);
+  box-shadow: 0 1px 0 rgb(26 20 20 / .02), 0 8px 24px -20px rgb(26 20 20 / .25);
+  background: color-mix(in srgb, var(--canvas) 95%, transparent);
+}
+.mk-nav-inner {
+  display: flex; align-items: center; gap: 20px;
+  height: 60px;
+}
+/* wordmark */
+.mk-wordmark {
+  display: inline-flex; align-items: baseline; gap: 1px;
+  font-family: var(--font-serif); font-weight: 600; font-size: 22px;
+  letter-spacing: -.02em; color: var(--text-primary);
+  flex: none;
+}
+.mk-wordmark .mk-brand-dot { color: var(--gold); }
+
+/* tabs */
+.mk-tabs {
+  display: flex; align-items: center; gap: 2px;
+  margin-inline: auto;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  min-width: 0;
+}
+.mk-tabs::-webkit-scrollbar { display: none; }
+.mk-tab {
+  position: relative; flex: none;
+  padding: 8px 12px; border-radius: 8px;
+  font-size: 14px; font-weight: 500; color: var(--text-secondary);
+  transition: color .16s ease, background .16s ease;
+}
+.mk-tab:hover { color: var(--text-primary); background: color-mix(in srgb, var(--paper) 70%, transparent); }
+.mk-tab.is-active { color: var(--text-primary); }
+.mk-tab.is-active::after {
+  content: ""; position: absolute; left: 12px; right: 12px; bottom: 3px;
+  height: 2px; border-radius: 2px; background: var(--gold);
+}
+
+.mk-nav-right { flex: none; display: flex; align-items: center; gap: 8px; }
+/* sign-in is deliberately de-emphasized — ghost, quiet, pill */
+.mk-signin {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 15px; border-radius: 999px;
+  font-size: 14px; font-weight: 600; color: var(--text-secondary);
+  border: 1px solid var(--border-strong); background: transparent;
+  transition: color .16s ease, border-color .16s ease, background .16s ease;
+}
+.mk-signin:hover { color: var(--text-primary); border-color: var(--accent-text); background: var(--surface); }
+
+/* theme toggle — sun/moon swap, warm hairline pill; sits right of sign-in */
+.mk-theme-toggle {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: none;
+  width: 36px; height: 36px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong); background: transparent;
+  transition: color .16s ease, border-color .16s ease, background .16s ease;
+}
+.mk-theme-toggle:hover { color: var(--accent-text); border-color: var(--accent-text); background: var(--surface); }
+.mk-theme-toggle:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.mk-theme-toggle svg { width: 17px; height: 17px; }
+/* show the moon (switch-to-dark) in light mode, the sun (switch-to-light) in dark */
+.mk-theme-toggle .mk-ic-sun { display: block; }
+.mk-theme-toggle .mk-ic-moon { display: none; }
+html[data-theme="light"] .mk-theme-toggle .mk-ic-sun { display: none; }
+html[data-theme="light"] .mk-theme-toggle .mk-ic-moon { display: block; }
+
+/* ==========================================================================
+   HERO — compact; the demo below is the star
+   ========================================================================== */
+.mk-hero { position: relative; overflow: hidden; padding-block: 84px 72px; }
+/* ambient background: paper-tone radial washes + faint dotted grid */
+.mk-hero-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.mk-hero-bg::before {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(760px 460px at 82% -12%, var(--gold-soft), transparent 60%),
+    radial-gradient(680px 560px at -8% 108%, color-mix(in srgb, var(--paper) 70%, transparent), transparent 55%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-subtle) 55%, var(--canvas)) 0%, var(--canvas) 62%);
+}
+.mk-hero-bg::after {
+  content: ""; position: absolute; inset: 0;
+  background-image: radial-gradient(color-mix(in srgb, var(--border-strong) 60%, transparent) 1px, transparent 1px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(680px 480px at 50% 34%, #000 0%, transparent 78%);
+  mask-image: radial-gradient(680px 480px at 50% 34%, #000 0%, transparent 78%);
+  opacity: .7;
+}
+.mk-hero-inner { position: relative; z-index: 1; max-width: 760px; }
+.mk-hero h1 {
+  font-family: var(--font-serif); font-weight: 400;
+  font-size: clamp(40px, 6vw, 68px); line-height: 1.03; letter-spacing: -.02em;
+  color: var(--text-primary);
+  margin-top: 20px;
+  text-wrap: balance;
+}
+/* the accent word — real Fraunces italic in champagne gold (editorial flourish) */
+.mk-hero h1 .mk-hero-accent {
+  font-style: italic; color: var(--accent-text); white-space: nowrap;
+}
+.mk-hero-sub {
+  margin-top: 22px; max-width: 620px;
+  font-size: clamp(17px, 2vw, 19px); line-height: 1.55; color: var(--text-secondary);
+}
+.mk-hero-ctas { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
+.mk-hero-ticker {
+  margin-top: 26px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--text-tertiary);
+  letter-spacing: .01em;
+}
+.mk-hero-ticker .mk-tick { display: inline-flex; align-items: center; gap: 8px; }
+.mk-hero-ticker .mk-tick::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--gold); flex: none;
+}
+.mk-hero-ticker .mk-tick-sep { color: var(--border-strong); }
+
+/* ==========================================================================
+   FOOTER
+   ========================================================================== */
+/* The footer is a deep warm-ink band in BOTH modes (an editorial anchor); it
+   uses fixed near-black-brown values rather than tokens so it never inverts
+   when the page flips to light. Champagne gold picks out the wordmark dot. */
+.mk-footer {
+  background: #14100C; color: #F1E9DB;
+  padding-block: 68px 40px;
+}
+.mk-footer a { color: rgb(241 233 219 / .78); transition: color .16s ease; }
+.mk-footer a:hover { color: #F1E9DB; }
+.mk-footer-cols {
+  display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 40px 32px;
+  padding-bottom: 44px; border-bottom: 1px solid rgb(241 233 219 / .12);
+}
+.mk-footer-brand .mk-wordmark { color: #F1E9DB; font-size: 24px; }
+.mk-footer-brand .mk-brand-dot { color: var(--gold); }
+.mk-footer-tagline {
+  margin-top: 14px; max-width: 320px;
+  font-size: 14px; line-height: 1.55; color: rgb(241 233 219 / .62);
+}
+.mk-footer-col h4 {
+  font-family: var(--font-mono);
+  font-size: 12px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--gold); margin-bottom: 16px;
+}
+.mk-footer-col ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+.mk-footer-col a { font-size: 14.5px; }
+.mk-footer-signin {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 14.5px; font-weight: 600; color: #F1E9DB !important;
+}
+.mk-footer-signin svg { width: 16px; height: 16px; }
+.mk-footer-bottom {
+  padding-top: 24px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 13px; color: rgb(241 233 219 / .5);
+}
+.mk-footer-bottom .mk-mono { font-family: var(--font-mono); font-size: 12px; }
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+@media (max-width: 860px) {
+  .mk-section { padding-block: 72px; }
+  .mk-hero { padding-block: 56px 52px; }
+  .mk-footer-cols { grid-template-columns: 1fr 1fr; }
+  .mk-footer-brand { grid-column: 1 / -1; }
+}
+@media (max-width: 640px) {
+  .mk-wrap { padding-inline: 18px; }
+  .mk-nav-inner { gap: 12px; }
+  /* tabs stay a horizontal scroll row (no hamburger) */
+  .mk-tabs { margin-inline: 0; justify-content: flex-start; flex: 1; }
+  .mk-tab { padding: 8px 10px; }
+  .mk-signin span.mk-signin-label { display: none; }
+  .mk-signin { padding: 8px 11px; }
+  .mk-hero-ctas .mk-btn, .mk-hero-ctas .mk-btn-ghost { flex: 1 1 auto; }
+  .mk-footer-cols { grid-template-columns: 1fr; gap: 32px; }
+}
+
+/* reduced motion — kill smooth scroll + entrance transitions globally */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition-duration: .001ms !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ========================= NAV ========================= -->
+<nav class="mk-nav" id="mk-nav" aria-label="Primary">
+  <div class="mk-wrap mk-nav-inner">
+    <a class="mk-wordmark" href="#top" aria-label="Orcha — home">Orcha<span class="mk-brand-dot">.</span></a>
+
+    <div class="mk-tabs" role="list" aria-label="Sections">
+      <a class="mk-tab" role="listitem" href="#demo" data-spy="demo">Demo</a>
+      <a class="mk-tab" role="listitem" href="#product" data-spy="product">Product</a>
+      <a class="mk-tab" role="listitem" href="#mobile" data-spy="mobile">Mobile</a>
+      <a class="mk-tab" role="listitem" href="#deploy" data-spy="deploy">Deploy</a>
+      <a class="mk-tab" role="listitem" href="#themes" data-spy="themes">Themes</a>
+      <a class="mk-tab" role="listitem" href="#opensource" data-spy="opensource">Open&nbsp;Source</a>
+    </div>
+
+    <div class="mk-nav-right">
+      <a class="mk-signin" href="/oauth2/start?rd=%2F">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="mk-signin-label">Sign in</span>
+      </a>
+      <button class="mk-theme-toggle" id="mk-theme-toggle" type="button" aria-label="Switch to light theme">
+        <!-- sun = shown in DARK (click → go light); moon = shown in LIGHT (click → go dark) -->
+        <svg class="mk-ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="mk-ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ========================= HERO ========================= -->
+<header class="mk-hero" id="top">
+  <div class="mk-hero-bg" aria-hidden="true"></div>
+  <div class="mk-wrap mk-hero-inner">
+    <span class="mk-eyebrow"><span class="mk-eyebrow-dot"></span>Open-source agent orchestration</span>
+    <h1>
+      AI agents that <span class="mk-hero-accent">ship</span>.<br>
+      Humans who decide.
+    </h1>
+    <p class="mk-hero-sub">
+      Orcha runs persistent Claude agents inside your repositories. They branch, commit, and open pull requests
+      as a bot — then stop at <span class="mk-mono">needs&#8209;verification</span>. The merge is always yours to make.
+    </p>
+    <div class="mk-hero-ctas">
+      <a class="mk-btn" href="#demo">
+        Watch how it works
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l5 5 5-5"/></svg>
+      </a>
+      <a class="mk-btn-ghost" href="https://github.com/open-orcha/orcha" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+    <p class="mk-hero-ticker" aria-label="What Orcha does">
+      <span class="mk-tick">sandboxed runs</span>
+      <span class="mk-tick-sep" aria-hidden="true">/</span>
+      <span class="mk-tick">bot-authored PRs</span>
+      <span class="mk-tick-sep" aria-hidden="true">/</span>
+      <span class="mk-tick">human merge gate</span>
+    </p>
+  </div>
+</header>
+
+<main>
+
+<!-- ================= SECTION FRAGMENTS (assembled by build.py) ================= -->
+<!-- @section:demo -->
+<!-- @section:demo-fleet -->
+<!-- @section:demo-control-room -->
+<!-- @section:demo-agent-chat -->
+<!-- @section:demo-task-verify -->
+<!-- @section:demo-requests-metrics -->
+<!-- @section:demo-team-mobile -->
+<!-- @section:product -->
+<!-- @section:mobile -->
+<!-- @section:deploy -->
+<!-- @section:themes -->
+<!-- @section:opensource -->
+
+</main>
+
+<!-- ========================= FOOTER ========================= -->
+<footer class="mk-footer">
+  <div class="mk-wrap">
+    <div class="mk-footer-cols">
+      <div class="mk-footer-brand">
+        <a class="mk-wordmark" href="#top" aria-label="Orcha — home">Orcha<span class="mk-brand-dot">.</span></a>
+        <p class="mk-footer-tagline">
+          Open-source multi-agent orchestration. Persistent agents work in your repos; you hold the pen on every decision that matters.
+        </p>
+      </div>
+
+      <div class="mk-footer-col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#demo">How it works</a></li>
+          <li><a href="#product">Product</a></li>
+          <li><a href="#mobile">iOS app</a></li>
+          <li><a href="#deploy">Ways to run</a></li>
+          <li><a href="#themes">Themes</a></li>
+        </ul>
+      </div>
+
+      <div class="mk-footer-col">
+        <h4>Open source</h4>
+        <ul>
+          <li><a href="https://github.com/open-orcha/orcha" rel="noopener">github.com/open-orcha/orcha</a></li>
+          <li><a href="https://github.com/open-orcha/orcha#readme" rel="noopener">Self-host guide</a></li>
+          <li><a href="https://github.com/open-orcha/orcha#readme" rel="noopener">Bring your own cloud</a></li>
+          <li><a href="#opensource">Three ways to run</a></li>
+          <li>
+            <a class="mk-footer-signin" href="/oauth2/start?rd=%2F">
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+              Sign in with GitHub
+            </a>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="mk-footer-bottom">
+      <span class="mk-mono">Powered by open-source Orcha · sandboxed agents · human final call</span>
+      <span>© 2026 Quantal Labs</span>
+    </div>
+  </div>
+</footer>
+
+<!-- ========================= SHARED JS RUNTIME ========================= -->
+<script>
+(function () {
+  "use strict";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---- theme toggle: flip data-theme + persist 'mk-theme' --------------- */
+  (function themeToggle() {
+    var btn = document.getElementById("mk-theme-toggle");
+    var root = document.documentElement;
+    function label() {
+      // the button switches TO the other theme; label reflects the destination
+      var isLight = root.getAttribute("data-theme") === "light";
+      if (btn) btn.setAttribute("aria-label", isLight ? "Switch to dark theme" : "Switch to light theme");
+    }
+    label();
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+      root.setAttribute("data-theme", next);
+      root.style.colorScheme = next;
+      try { localStorage.setItem("mk-theme", next); } catch (e) {}
+      label();
+    });
+  })();
+
+  /* ---- tiny IntersectionObserver helper fragments MAY use --------------- */
+  window.OrchaMk = {
+    // onVisible(el, cb, opts): calls cb(entry) the first time `el` crosses the
+    // threshold. Returns a disconnect() fn. Fragments must also work WITHOUT
+    // this (they can create their own observers / render statically).
+    onVisible: function (el, cb, opts) {
+      if (!el) return function () {};
+      opts = opts || {};
+      var once = opts.once !== false; // default: fire once
+      if (!("IntersectionObserver" in window)) { try { cb({ target: el, isIntersecting: true }); } catch (e) {} return function () {}; }
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) { try { cb(entry); } catch (e) {} if (once) io.unobserve(entry.target); }
+        });
+      }, { threshold: opts.threshold != null ? opts.threshold : 0.35, rootMargin: opts.rootMargin || "0px" });
+      io.observe(el);
+      return function () { io.disconnect(); };
+    },
+    reducedMotion: reduce
+  };
+
+  /* ---- smooth-scroll for in-page anchors (respects reduced motion) ------ */
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest('a[href^="#"]');
+    if (!a) return;
+    var id = a.getAttribute("href");
+    if (id === "#" || id.length < 2) return;
+    var target = document.querySelector(id);
+    if (!target) return;
+    e.preventDefault();
+    target.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    // a clicked tab highlights NOW — and holds through the smooth scroll so the
+    // spy doesn't flicker across the sections the scroll passes over
+    if (a.hasAttribute("data-spy")) {
+      setActive(a.getAttribute("data-spy"));
+      spyLockUntil = Date.now() + (reduce ? 150 : 900);
+    }
+    // move focus for a11y without a second jump
+    target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+    if (history.replaceState) history.replaceState(null, "", id);
+  });
+
+  /* ---- nav: hairline + shadow once the page scrolls --------------------- */
+  var nav = document.getElementById("mk-nav");
+  function onScroll() {
+    if (!nav) return;
+    if (window.scrollY > 8) nav.classList.add("is-scrolled");
+    else nav.classList.remove("is-scrolled");
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  /* ---- scroll-spy: highlight the active tab ----------------------------- */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".mk-tab[data-spy]"));
+  var byId = {};
+  tabs.forEach(function (t) { byId[t.getAttribute("data-spy")] = t; });
+  var sections = tabs.map(function (t) { return document.getElementById(t.getAttribute("data-spy")); }).filter(Boolean);
+
+  function setActive(id) {
+    tabs.forEach(function (t) {
+      var on = t.getAttribute("data-spy") === id;
+      t.classList.toggle("is-active", on);
+      if (on) t.setAttribute("aria-current", "true"); else t.removeAttribute("aria-current");
+    });
+    // keep the active tab visible in the horizontal scroll row on mobile
+    var active = byId[id];
+    if (active && active.scrollIntoView) {
+      // only nudge horizontally; guard against layout thrash on desktop
+      var tabsRow = active.parentNode;
+      if (tabsRow && tabsRow.scrollWidth > tabsRow.clientWidth) {
+        var left = active.offsetLeft - (tabsRow.clientWidth - active.clientWidth) / 2;
+        tabsRow.scrollTo ? tabsRow.scrollTo({ left: left, behavior: reduce ? "auto" : "smooth" }) : (tabsRow.scrollLeft = left);
+      }
+    }
+  }
+
+  // Position-based spy. (The old IntersectionObserver version used a -45% root
+  // band with 0.15+ ratio thresholds — a tall section can never fill 15% of a
+  // thin center band, so after the initial callback no threshold ever crossed
+  // again and no tab highlighted. Scroll position has no such failure mode.)
+  var spyLockUntil = 0;
+  function spyUpdate() {
+    if (!sections.length || Date.now() < spyLockUntil) return;
+    var navH = nav ? nav.offsetHeight : 60;
+    var pos = window.scrollY + navH + 90;
+    var best = null;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].offsetTop <= pos) best = sections[i].id;
+    }
+    // pinned to the bottom → the last section wins even when it's short
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+      best = sections[sections.length - 1].id;
+    }
+    setActive(best); // null (still in the hero) clears every tab
+  }
+  var spyTick = false;
+  window.addEventListener("scroll", function () {
+    if (spyTick) return;
+    spyTick = true;
+    requestAnimationFrame(function () { spyTick = false; spyUpdate(); });
+  }, { passive: true });
+  window.addEventListener("resize", spyUpdate, { passive: true });
+  spyUpdate();
+})();
+</script>
+
+</body>
+</html>

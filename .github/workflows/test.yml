@@ -13,7 +13,10 @@ concurrency:
 jobs:
   pytest:
     # GitHub-hosted runner: free + unlimited minutes for public repos.
+    # timeout-minutes is still a hard stop so a hung/killed session can't idle out
+    # the 6h default.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     # Postgres as a service container (Linux-only, which is fine here). The test
     # suite (tests/conftest.py) reads these URLs, creates a dedicated orcha_test
@@ -50,13 +53,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r tests/requirements.txt \
                       -r orcha-cli/orcha_cli/templates/portal/requirements.txt \
-                      pytest-cov
+                      pytest-cov pytest-timeout
 
+      # --timeout: per-test cap so one hung test fails alone instead of eating
+      # the whole job (the longest legitimate tests — the provision.sh harness,
+      # daemon grace loops — stay well under 180s). no:cacheprovider: the runner
+      # is ephemeral, so the .pytest_cache write is pure waste.
       - name: Run state-machine tests + coverage gate (>=70% of main.py)
         run: |
-          pytest --cov=main --cov-report=term-missing --cov-fail-under=70
+          pytest --cov=main --cov-report=term-missing --cov-fail-under=70 \
+                 --timeout=180 -p no:cacheprovider
 
+      # Reuse the .coverage file from the test step — do NOT re-run the suite
+      # (a second full pytest pass here doubled the billed runtime of every job).
       - name: Coverage summary (PR)
         if: always()
         run: |
-          pytest --cov=main --cov-report=term | tail -5 >> "$GITHUB_STEP_SUMMARY" || true
+          coverage report | tail -5 >> "$GITHUB_STEP_SUMMARY" || true
+
+  frontend:
+    # React portal: typecheck + component tests + a production build, so a PR
+    # can't land a frontend that doesn't compile or ship a broken bundle.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orcha-cli/orcha_cli/templates/portal/frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: orcha-cli/orcha_cli/templates/portal/frontend/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Vitest
+        run: npx vitest run
+
+      - name: Build (tsc + vite)
+        run: npm run build

@@ -51,4 +51,39 @@ describe('ConfirmResetModal', () => {
     expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument()
     expect(screen.getByText(/agents, tasks, requests/i)).toBeInTheDocument()
   })
+
+  it('shows a progress state (Deleting…) and disables Cancel + input while busy', () => {
+    render(
+      <ConfirmResetModal project="orcha-foo" busy={true} onCancel={vi.fn()} onConfirm={vi.fn()} />
+    )
+    expect(screen.getByRole('button', { name: /deleting/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeDisabled()
+    expect(screen.getByLabelText(/confirm project name/i)).toBeDisabled()
+  })
+
+  it('surfaces an error and stays open (does not call onCancel itself)', () => {
+    const onCancel = vi.fn()
+    render(
+      <ConfirmResetModal
+        project="orcha-foo"
+        busy={false}
+        error="docker: compose down failed"
+        onCancel={onCancel}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(/compose down failed/i)
+    expect(onCancel).not.toHaveBeenCalled()
+    // The form is still usable — the confirm button re-enables once the name is retyped.
+    expect(screen.getByRole('button', { name: /delete everything/i })).toBeDisabled()
+  })
+
+  it('does not gate on the wrong name — a similar-but-different project stays disabled', async () => {
+    const user = userEvent.setup()
+    render(
+      <ConfirmResetModal project="orcha-foo" busy={false} onCancel={vi.fn()} onConfirm={vi.fn()} />
+    )
+    await user.type(screen.getByLabelText(/confirm project name/i), 'orcha-foo-bar')
+    expect(screen.getByRole('button', { name: /delete everything/i })).toBeDisabled()
+  })
 })

@@ -116,6 +116,29 @@ async def test_worker_run_process_metadata_round_trips(client, make_agent):
     assert listed["conversation_ack_ts"] == 77.0
 
 
+async def test_run_record_accepts_sandbox_container_id(client, make_agent):
+    """Remote-runner Task 4: a sandbox wake stamps its docker container name on the run row
+    so a restarted daemon can re-adopt live runs by label and metering can attribute
+    container runtime. Non-sandbox runs leave it NULL."""
+    a = await make_agent("W", "eng")
+    aid = a["agent_id"]
+    r = await client.post(f"/api/agents/{aid}/runs", json={
+        "wake_kind": "sandbox", "wake_event": "task_dispatch",
+        "sandbox_container_id": "orcha-run-abc123def456",
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["sandbox_container_id"] == "orcha-run-abc123def456"
+
+    # the list view surfaces it too
+    listed = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"][0]
+    assert listed["sandbox_container_id"] == "orcha-run-abc123def456"
+
+    # a plain (non-sandbox) run leaves it NULL
+    r2 = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral"})
+    assert r2.status_code == 201
+    assert r2.json()["sandbox_container_id"] is None
+
+
 async def test_finish_unknown_run_404(client):
     r = await client.post(f"/api/runs/{uuid.uuid4()}/finish", json={"status": "exited"})
     assert r.status_code == 404, r.text

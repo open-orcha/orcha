@@ -46,183 +46,25 @@ import datetime as _dt
 import json
 import math
 import pathlib
-import re
 import sys
 import urllib.error
 import urllib.request
 
+# Direct script execution starts with tools/efficiency on sys.path, so add the
+# repository root before importing sibling modules through their package path.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+from tools.efficiency.continuity_fixtures import CONTINUITY_FIXTURES
+from tools.efficiency.continuity_score import _fact_texts, _tokens, score_boot
+
 # Results land beside the #289 cost baselines (the dir is gitignored — machine-specific runs).
 RESULT_DIR = pathlib.Path(__file__).resolve().parent / "baselines" / "continuity"
 # Import the REAL boot-text renderer so the eval measures what ships, not a copy.
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT / "orcha-cli"))
 try:
     from orcha_cli.notifier import format_persona
 except Exception as e:  # pragma: no cover - import wiring, surfaced loudly
     sys.exit(f"cannot import orcha_cli.notifier.format_persona (run from the repo): {e}")
-
-
-# ---------------------------------------------------------------------------
-# Golden fixtures — representative agent working-states a wake must carry forward.
-# Each fixture's digest items ARE the ground-truth facts that must survive into the boot.
-# Item texts use distinctive tokens so coincidental matches in the persona can't mask a drop.
-# ---------------------------------------------------------------------------
-_PERSONA = {"system_prompt": "You are Probe, a backend reviewer for the Orcha control project."}
-
-CONTINUITY_FIXTURES = [
-    {
-        "name": "rich",  # the common case: focus + several decisions/learnings/threads
-        "persona": _PERSONA,
-        "digest": {
-            "current_focus": "Driving PR qz-4417 through Gate after the keyset-pagination rework.",
-            "decisions": [
-                {"text": "Chose compound (snapshot_ts, id) keyset over bare ts to stop co-timestamp page drops."},
-                {"text": "Overruled the retired-postman block per CLAUDE.md; Swagger is the contract."},
-            ],
-            "learnings": [
-                {"text": "Assignee lives in the assignees array, never assignee_id — parsing the latter yields false None."},
-                {"text": "Clear __pycache__ after mutation-testing or stale bytecode masks the RED."},
-            ],
-            "open_threads": [
-                {"text": "PR qz-4417 sits at Gate 2nd-pass; on CLEAN it forwards to merge-into-mainline."},
-                {"text": "Task tk-9920 stays needs_verification until a human verifies — never self-certify."},
-            ],
-        },
-    },
-    {
-        "name": "focus_only",  # minimal but real — a single loose end
-        "persona": _PERSONA,
-        "digest": {
-            "current_focus": "Half-way through wiring the wb-3001 fail-open spawn guard; tests not yet written.",
-            "decisions": [],
-            "learnings": [],
-            "open_threads": [],
-        },
-    },
-    {
-        "name": "reaped_fallback",  # the machine-synthesised pre-kill digest (digest_synth.py)
-        "persona": _PERSONA,
-        "digest": {
-            "current_focus": "[auto-synthesised on reap] Last worked on: rebasing branch bx-7782 onto mainline.",
-            "decisions": [],
-            "learnings": [],
-            "open_threads": [
-                {"text": "[auto-synthesised on reap] Resident session ended (reaped); continuity below is partial."},
-                {"text": "Unanswered human message at reap: can you confirm the qm-5510 cutover window?"},
-            ],
-        },
-    },
-    {
-        "name": "many_items",  # stress: lots of small facts, the kind a curation pass would trim
-        "persona": _PERSONA,
-        "digest": {
-            "current_focus": "Sweeping the dispatch backlog; eight ready rows triaged.",
-            "decisions": [{"text": f"Backlog row rk-{i:04d} classified as {kind}."}
-                          for i, kind in enumerate(
-                              ["queued", "eval-gated", "human-input", "done", "queued",
-                               "eval-gated", "human-input", "done"], start=1)],
-            "learnings": [{"text": f"Endpoint ep-{i:03d} returns the typed shape, not a bare dict."}
-                          for i in range(1, 6)],
-            "open_threads": [{"text": f"Follow up on thread th-{i:03d} once the merge lands."}
-                             for i in range(1, 4)],
-        },
-    },
-    {
-        "name": "unicode_and_long",  # em-dashes, unicode, and a long item — escaping must not eat content
-        "persona": _PERSONA,
-        "digest": {
-            "current_focus": "Adjudicating the spec↔build drift on §4 — the digest path diverged from _build_persona.",
-            "decisions": [
-                {"text": "Endorsed the doc-only amendment — heartbeat moves off rung T0→T1 (no #266 test change), "
-                         "because the lease-yield path is orthogonal to the wake-rank ladder and a code change there "
-                         "would reopen a settled review with zero behavioural delta."},
-            ],
-            "learnings": [
-                {"text": "café-naïve unicode round-trips through JSONB intact when ensure_ascii is False."},
-            ],
-            "open_threads": [
-                {"text": "Carry the §3 one-embodiment flag forward to the next reviewer — résumé of the concern is in the thread."},
-            ],
-        },
-    },
-    {
-        "name": "empty",  # zero-fact digest — a vacuous but defined boundary (score is 1.0, nothing to lose)
-        "persona": _PERSONA,
-        "digest": {"current_focus": None, "decisions": [], "learnings": [], "open_threads": []},
-    },
-]
-
-
-# ---------------------------------------------------------------------------
-# Scorer — pure, deterministic, importable + unit-tested.
-# ---------------------------------------------------------------------------
-_FIELDS = ("current_focus", "decisions", "learnings", "open_threads")
-_WORD = re.compile(r"[a-z0-9]+")
-
-
-def _tokens(text: str) -> set[str]:
-    """Lowercased alphanumeric word-tokens. Robust to JSON escaping / reordering: the renderer
-    json.dumps the list values, but the words inside each fact survive verbatim."""
-    return set(_WORD.findall((text or "").lower()))
-
-
-def _fact_texts(digest: dict) -> list[tuple[str, str]]:
-    """Flatten a digest into (field, text) atomic facts — the things a boot must carry forward.
-    `current_focus` is one fact (if non-empty); each decisions/learnings/open_threads ENTRY is a
-    fact. Entries may be {"text": ...} dicts (the stored shape) or bare strings."""
-    facts: list[tuple[str, str]] = []
-    focus = (digest or {}).get("current_focus")
-    if isinstance(focus, str) and focus.strip():
-        facts.append(("current_focus", focus))
-    for field in ("decisions", "learnings", "open_threads"):
-        for item in (digest or {}).get(field) or []:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("ref") or ""
-            else:
-                text = str(item)
-            if text and text.strip():
-                facts.append((field, text))
-    return facts
-
-
-def _fact_recall(fact_text: str, boot_tokens: set[str]) -> float:
-    """Fraction of a fact's word-tokens present in the boot. 1.0 = fully carried forward;
-    0.0 = dropped; partial = paraphrased/truncated. Token-with-no-words → vacuously 1.0."""
-    ft = _tokens(fact_text)
-    if not ft:
-        return 1.0
-    return len(ft & boot_tokens) / len(ft)
-
-
-def score_boot(digest: dict, boot_text: str | None) -> dict:
-    """Score one boot. Returns continuity_score (mean per-fact recall, each fact equal weight),
-    a per-field breakdown, fact count, and the boot size (chars + a documented ~chars/4 token
-    estimate). A digest with no facts scores 1.0 (nothing to lose) so empty boots aren't punished.
-    """
-    boot_text = boot_text or ""
-    boot_tokens = _tokens(boot_text)
-    facts = _fact_texts(digest)
-
-    per_field: dict[str, dict] = {}
-    recalls: list[float] = []
-    for field in _FIELDS:
-        field_recalls = [_fact_recall(t, boot_tokens) for f, t in facts if f == field]
-        if field_recalls:
-            per_field[field] = {
-                "facts": len(field_recalls),
-                "recall": sum(field_recalls) / len(field_recalls),
-            }
-            recalls.extend(field_recalls)
-
-    score = sum(recalls) / len(recalls) if recalls else 1.0
-    chars = len(boot_text)
-    return {
-        "continuity_score": round(score, 4),
-        "facts": len(facts),
-        "per_field": per_field,
-        "boot_chars": chars,
-        "boot_tokens_est": math.ceil(chars / 4),  # ~4 chars/token heuristic; honest proxy, no tokenizer dep
-    }
 
 
 # ---------------------------------------------------------------------------

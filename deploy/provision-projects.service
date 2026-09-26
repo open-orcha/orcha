@@ -1,0 +1,6 @@
+[Unit]
+Description=Provision runtimes (workspace + notifier) for portal-created Orcha projects
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/orcha-cloud/deploy/provision-projects.sh

@@ -20,9 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.NoPhotography
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +47,7 @@ import com.google.mlkit.vision.common.InputImage
 import io.openorcha.mobile.ui.components.NeutralButton
 import io.openorcha.mobile.ui.components.PrimaryButton
 import io.openorcha.mobile.ui.components.StateLayout
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
 /* =============================================================================
@@ -143,28 +141,28 @@ fun ScannerScreen(
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
                     TextButton(onClick = onManualEntry) {
-                        Text("Can't scan? Enter manually", color = p.accent, fontWeight = FontWeight.W700)
+                        Text("Can't scan? Enter the address", color = p.accent, fontWeight = FontWeight.W700)
                     }
                 }
             }
             denied -> StateLayout(
                 title = "Camera access needed",
-                sub = "Orcha uses the camera only to read the pairing QR from your portal. Grant access, or type the address instead.",
+                sub = "Orcha uses the camera only to read the pairing QR from your portal. Grant access in Settings, or type the address instead.",
                 danger = true,
-                glyph = { Icon(Icons.Rounded.NoPhotography, null, tint = p.danger, modifier = Modifier.size(34.dp)) },
+                glyph = { Icon(OrchaIcons.NoPhotography, null, tint = p.danger, modifier = Modifier.size(34.dp)) },
             ) {
                 PrimaryButton("Open Settings", {
                     context.startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
                     )
                 })
-                NeutralButton("Enter code manually", onManualEntry)
+                NeutralButton("Enter the address instead", onManualEntry)
             }
             else -> StateLayout(title = "Requesting camera…", sub = null)
         }
         IconButton(
             onClick = onBack,
             modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
-        ) { Icon(Icons.Rounded.Close, "Close", tint = Color.White) }
+        ) { Icon(OrchaIcons.Close, "Close", tint = Color.White) }
     }
 }

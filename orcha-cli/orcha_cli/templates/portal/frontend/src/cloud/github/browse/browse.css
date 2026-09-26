@@ -1,0 +1,88 @@
+/* Repo file browser (RepoBrowser) styles — an IDE-style three-part surface
+   mounted under GitHubPage's ?browse=1 view. Token-driven only (var(--surface-
+   2/-3/--border/...)) so classic, swiss, minimal, and gold all read correctly — no
+   hex literals anywhere in this file. Reuses the shared .dfv-* tree idiom
+   (static/styles/open-base.css) for the directory tree so it matches
+   FilesChanged's look exactly; syntax token colors reuse the diff color
+   variables (--diff-add/--diff-hunk/--accent/--violet) already defined in
+   tokens.css rather than inventing a second palette. */
+
+.rb-wrap { display: flex; align-items: stretch; gap: 0; min-height: 420px; max-height: 72vh;
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+
+/* ---- left: search + tree --------------------------------------------------- */
+.rb-side { width: 280px; min-width: 200px; max-width: 360px; flex: none;
+  display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--surface-2); }
+
+.rb-search { flex: none; border-bottom: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.rb-search-tabs { display: flex; gap: 4px; }
+.rb-search-tab { flex: 1; border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 12px; font-weight: 600; padding: 5px 8px; border-radius: 7px; cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s; }
+.rb-search-tab:hover { color: var(--text); }
+.rb-search-tab.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.rb-search-in { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 12.5px; outline: none; }
+.rb-search-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.rb-search-in::placeholder { color: var(--faint); }
+
+.rb-tree-scroll { flex: 1; overflow: auto; padding-bottom: 6px; }
+
+/* tree rows reuse .dfv-r/.dfv-dir/.dfv-f/.dfv-nm/.dfv-i/.dfv-c from the shared
+   stylesheet verbatim (no redeclaration) — .rb-dfv-tree only tweaks overflow. */
+.rb-dfv-tree { overflow: visible; }
+.rb-dir-loading { font-size: 11.5px; padding: 3px 8px; }
+.rb-dir-retry { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.rb-dir-retry:hover, .rb-dir-retry:focus-visible { color: var(--text-2); }
+
+/* ---- search results -------------------------------------------------------- */
+.rb-search-note { font-size: 11.5px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.rb-result-name { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px;
+  color: var(--text-2); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-result-name:hover { background: var(--hover); color: var(--text); }
+.rb-result-name .dfv-i { flex: none; color: var(--faint); }
+.rb-result-file { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.rb-result-path { display: flex; align-items: center; gap: 6px; padding: 6px 10px 3px; font-size: 12px;
+  font-weight: 600; color: var(--text); cursor: pointer; }
+.rb-result-path:hover { color: var(--accent); }
+.rb-result-path .dfv-i { flex: none; color: var(--faint); }
+.rb-result-match { display: flex; gap: 8px; padding: 2px 10px 2px 26px; font-size: 11.5px; cursor: pointer;
+  color: var(--muted); overflow: hidden; }
+.rb-result-match:hover { background: var(--hover); color: var(--text); }
+.rb-result-line { flex: none; color: var(--faint); min-width: 2.5ch; text-align: right; }
+.rb-result-text { overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+
+/* ---- right: content pane ---------------------------------------------------- */
+.rb-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; background: var(--surface); }
+.rb-empty-pane { padding: 24px; font-size: 13px; text-align: center; }
+
+.rb-file-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; font-size: 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.rb-ref-chip { flex: none; }
+.rb-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-2); font-weight: 600; }
+.rb-file-size { flex: none; font-size: 11px; }
+
+.rb-truncated-note, .rb-binary { padding: 10px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.rb-truncated-note a, .rb-binary a { color: var(--accent); text-decoration: none; }
+.rb-truncated-note a:hover, .rb-binary a:hover { text-decoration: underline; }
+
+.rb-code { font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.6; }
+.rb-line { display: flex; }
+.rb-line:hover { background: var(--hover); }
+.rb-line[data-browse-line] { scroll-margin: 60px; }
+.rb-lineno { flex: none; width: 4.5ch; text-align: right; padding-right: 12px; color: var(--faint);
+  -webkit-user-select: none; user-select: none; }
+.rb-line-text { flex: 1; min-width: 0; white-space: pre; padding-right: 12px; }
+
+/* syntax token colors — reuse the diff palette rather than a new one */
+.rb-tok-comment { color: var(--faint); font-style: italic; }
+.rb-tok-string  { color: var(--diff-add); }
+.rb-tok-number  { color: var(--violet); }
+.rb-tok-keyword { color: var(--diff-hunk); font-weight: 600; }
+
+@media (max-width: 860px) {
+  .rb-wrap { flex-direction: column; max-height: none; }
+  .rb-side { width: 100%; max-width: none; max-height: 260px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .rb-main { max-height: 480px; }
+}

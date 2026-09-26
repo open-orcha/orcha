@@ -662,7 +662,11 @@ def test_taskless_ephemeral_wake_uses_work_lane(monkeypatch):
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert claim["lane"] == "work"
     assert run["lane"] == "work"
-    assert ack["lane"] == "work" and ack["delivered_ts"] == 5.0
+    # GH #58: spawn no longer high-waters the cursor — delivered_ts stays None on the wake-ack
+    # (the tracked worker acks its handled-set at completion via /events/ack-handled, and the
+    # single-flight lease suppresses re-wakes while it runs). The lane routing is the guard here.
+    assert ack["lane"] == "work" and ack["delivered_ts"] is None
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)
     assert live[cand["agent_id"]]["lane"] == "work"
     assert spawned[0]["conversation"] is False
 
@@ -743,6 +747,35 @@ def test_tick_auto_start_task_takes_precedence_over_wake_task_id(monkeypatch):
     assert run["task_id"] == "TASK-AUTO"
 
 
+def test_tick_persona_and_run_keyed_off_context_task_not_wake_task_id(monkeypatch):
+    """GH #58 (R2 fix): when the server says the run-context is task B (context_task_id) while a
+    DIFFERENT in_progress task A is the directed wake_task_id, the worker must boot under B's protocol
+    and the run must be attributed to B — NOT A. Keying persona/attribution off wake_task_id alone
+    (the bug) booted B's worker under A's protocol and logged the run on A's thread."""
+    cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
+            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "pending_events": 1, "auto_start_task_ids": ["TASK-B"],
+            "wake_task_id": "TASK-A", "context_task_id": "TASK-B",
+            "reason": "wake", "latest_event": "task_assigned", "max_event_ts": 5.0,
+            "headless_flags": None}
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    persona_task_ids = []
+    monkeypatch.setattr(notifier, "_build_persona",
+                        lambda *a, **k: persona_task_ids.append(k.get("task_id")) or None)
+    monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (True, "cmd", FakeProc(pid=7)))
+    posts = []
+    monkeypatch.setattr(notifier, "_post_json",
+                        lambda url, body, **k: posts.append((url, body)) or
+                        ({"claimed": True} if "wake-claim" in url else {"run_id": "R"} if url.endswith("/runs") else {}))
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True,
+                  live_workers={})
+    assert persona_task_ids == ["TASK-B"]        # protocol keyed off the context task, not wake_task_id
+    run = next(b for u, b in posts if u.endswith("/runs"))
+    assert run["task_id"] == "TASK-B"            # run attributed to the context task
+
+
 def test_hardcap_floored_independent_of_small_lease_ttl(monkeypatch):
     """ISS-31 + wake-latency: a small lease_ttl (e.g. a stale 300s daemon launch) must NOT lower
     the worker hard cap — `hard_deadline` is floored at HARD_CAP_MIN_SECS so a still-progressing
@@ -819,11 +852,13 @@ def test_reap_releases_lease_for_exited_worker(monkeypatch):
     notifier.reap_workers("http://x", live, quiet=True)
 
     assert live == {}                                        # stopped tracking it
-    assert len(posts) == 1
-    url, body = posts[0]
-    assert url.endswith("/api/agents/agent-X/wake-ack")
-    assert body["release_lease"] is True                     # lease released, not TTL-held
-    assert body["kind"] == "released"                        # clean exit, not a kill
+    # GH #58: a CLEAN exit (rc 0) first acks the run's handled-set (empty here — no ids tracked),
+    # then releases the lease via wake-ack. Two posts in that order.
+    ack_handled = next(b for url, b in posts if url.endswith("/events/ack-handled"))
+    assert ack_handled["event_ids"] == []                    # nothing to ack, but the seam still fires
+    ack = next(b for url, b in posts if url.endswith("/wake-ack"))
+    assert ack["release_lease"] is True                      # lease released, not TTL-held
+    assert ack["kind"] == "released"                         # clean exit, not a kill
 
 
 def test_reap_finishes_run_with_captured_output(monkeypatch, tmp_path):
@@ -986,6 +1021,33 @@ def test_stalled_worker_killed_and_marked_failed(monkeypatch, tmp_path):
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert ack["kind"] == "worker_stalled_killed" and ack["release_lease"] is True
     assert any(u.endswith("/runs/R/finish") for u, _ in posts)   # run marked killed
+
+
+def test_codex_silent_after_completed_item_is_not_stall_killed(monkeypatch, tmp_path):
+    """A Codex worker can be alive and quiet after an item.completed event while the turn is still
+    open. The stall watchdog must wait for a terminal turn event or the hard cap, not SIGTERM it at
+    the two-minute log-silence threshold."""
+    posts, sigs = [], []
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)))
+    monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
+    log = tmp_path / "codex-between-steps.log"
+    log.write_text(
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"web_search","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"web_search","status":"completed"}}\n'
+    )
+    proc = FakeProc(exited=False)
+    live = {"agent-X": {"proc": proc, "hard_deadline": time.time() + 1200,
+                        "last_size": log.stat().st_size,
+                        "last_progress_ts": time.time() - 200,
+                        "run_id": "R", "log_path": str(log), "worktree": None,
+                        "respawn_ctx": {"model_runtime": "codex"}}}
+
+    notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
+
+    assert "agent-X" in live and not sigs
+    assert not [u for u, _ in posts if u.endswith("/wake-ack") or u.endswith("/finish")]
 
 
 # ---------- #270: watchdog kill diagnostics + worktree preservation ----------
@@ -1297,8 +1359,9 @@ def test_worker_is_live_handles_no_id_tool_shape(tmp_path):
 def test_worker_is_live_codex_runtime(tmp_path):
     """GH#61 unit: with runtime="codex", _worker_is_live reads the `codex exec --json` schema, not
     Claude stream-json. It is True for an in-flight command (item.started with no item.completed),
-    the legacy `*_begin`/`*_end` shape with an unmatched begin, and a rate-limit/backoff tail; it is
-    False once every command completed, for an idle agent_message, and for opaque/missing logs."""
+    a quiet unfinished turn after an item.completed event, the legacy `*_begin`/`*_end` shape with
+    an unmatched begin, and a rate-limit/backoff tail; it is False once a turn completed, for a
+    plain non-retry error, and for opaque/missing logs."""
     def _log(name, text):
         p = tmp_path / name
         p.write_text(text)
@@ -1324,11 +1387,20 @@ def test_worker_is_live_codex_runtime(tmp_path):
         '{"type":"error","msg":{"type":"stream_error","message":"429 Too Many Requests, retrying"}}\n')
     assert notifier._worker_is_live(rl, runtime="codex") is True
 
-    # every command completed, tail ends idle → NOT live (the dead-Codex teeth case)
+    # A completed item is not a completed turn. Codex can go quiet here while the model is thinking
+    # over the tool result or composing the next step, so the stall watchdog must leave it alone.
+    between_steps = _log("cbs.log",
+        '{"type":"turn.started"}\n'
+        '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+    assert notifier._worker_is_live(between_steps, runtime="codex") is True
+
+    # every command completed and the turn ended → NOT live (the dead-Codex teeth case)
     done = _log("cd.log",
         '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
         '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
-        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n')
+        '{"type":"item.completed","item":{"id":"i2","type":"agent_message","status":"completed"}}\n'
+        '{"type":"turn.completed"}\n')
     assert notifier._worker_is_live(done, runtime="codex") is False
 
     # a plain error WITHOUT retry/429 semantics is a dead worker, not a sleeping one
@@ -1346,7 +1418,8 @@ def test_worker_is_live_codex_runtime(tmp_path):
         '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
         '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
         '{"type":"item.updated","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
-        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"turn.completed"}\n')
     assert notifier._worker_is_live(updated_done, runtime="codex") is False
     # …but the SAME repeated-update stream with no terminal event is still in flight → live (the
     # id-pairing signal, not the count, carries it).
@@ -1360,7 +1433,8 @@ def test_worker_is_live_codex_runtime(tmp_path):
     # in progress — it finished. A bare `retries` field must no longer read as a live 429.
     retries_done = _log("crd.log",
         '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"},'
-        '"msg":{"type":"agent_message","retries":2}}\n')
+        '"msg":{"type":"agent_message","retries":2}}\n'
+        '{"type":"turn.completed"}\n')
     assert notifier._worker_is_live(retries_done, runtime="codex") is False
     # an explicit `retry_after` backoff IS a live, mid-429 worker.
     retry_after = _log("cra.log",
@@ -1995,9 +2069,9 @@ def test_codex_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeyp
 
 def test_codex_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch, tmp_path):
     """GH#61 teeth: the Codex exemption is liveness-gated like the Claude one. A Codex worker whose
-    last command already COMPLETED (no in-flight item) is idle/done, not alive — it must still be
-    hard-killed past the cap, and the kill diagnostic must record the codex runtime + a False
-    liveness verdict (proving the runtime-aware probe ran and saw no in-flight work)."""
+    tail ends in a plain non-retry error is not alive — it must still be hard-killed past the cap,
+    and the kill diagnostic must record the codex runtime + a False liveness verdict (proving the
+    runtime-aware probe ran and saw no in-flight work)."""
     posts, sigs, spawned = [], [], []
     monkeypatch.setattr(notifier, "_post_json", lambda u, b, **k: posts.append((u, b)))
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
@@ -2008,10 +2082,11 @@ def test_codex_stalled_dead_worker_past_cap_is_killed_not_respawned(monkeypatch,
                         lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
 
     log = tmp_path / "w.log"
-    # the command STARTED then COMPLETED — nothing in flight → not live.
+    # The command completed, then Codex emitted a real error with no retry/backoff semantics.
     log.write_text(
         '{"type":"item.started","item":{"id":"i1","type":"command_execution","status":"in_progress"}}\n'
-        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n')
+        '{"type":"item.completed","item":{"id":"i1","type":"command_execution","status":"completed"}}\n'
+        '{"type":"error","msg":{"type":"fatal","message":"unexpected EOF"}}\n')
     live = _stalled_respawn_entry(FakeProc(pid=4321, exited=False), log, model_runtime="codex")
 
     notifier.reap_workers("http://x", live, quiet=True, stall_secs=120)
@@ -2212,3 +2287,108 @@ def test_silent_worker_with_no_deltas_still_stall_killed(monkeypatch, tmp_path):
     assert sigs and sigs[0] == (4321, signal.SIGTERM) and live == {}
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
     assert ack["kind"] == "worker_stalled_killed"
+
+
+# ---------- GH #58 (review fix): non-reaped deliveries ack only delivery-safe events ----------
+#
+# A reaped ephemeral worker (tracked in live_workers) defers its ack to reap_workers, which posts
+# the handled-set to /events/ack-handled (contiguous floor) on a CLEAN exit. The non-reaped paths
+# (`--once` with no reaper, and tmux sends) used to BLANKET high-water delivered_ts to ack_through_ts
+# (|| max_event_ts) at spawn — skipping past rows wake_scan deliberately left UN-handled (a cross-task
+# task_bound, a NEW_WORK / DIRECTIVE). They must post only the delivery-safe subset and never
+# high-water the cursor at spawn. In particular, a task DIRECTIVE stays pending until a confirmed
+# clean completion or a terminal task seam; merely delivering it cannot prove the run succeeded.
+
+def _drain_cand(**over):
+    """A candidate carrying a backlog whose handled-set is a STRICT SUBSET of pending (the bug
+    shape): 3 pending rows but only ids [11, 12] are run-handleable; the rest must re-surface."""
+    c = {"agent_id": "00000000-0000-0000-0000-0000000000d1", "alias": "Drain",
+         "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+         "pending_events": 3, "auto_start_task_ids": [], "reason": "wake",
+         "latest_event": "request_answered", "max_event_ts": 9.0, "ack_through_ts": 9.0,
+         "handled_event_ids": [11, 12], "delivery_handled_event_ids": [11],
+         "headless_flags": None}
+    c.update(over)
+    return c
+
+
+def test_tmux_delivery_keeps_directive_pending(monkeypatch):
+    """A live-terminal send is non-reaped. It may acknowledge delivery-safe id 11, but must keep
+    directive id 12 pending because a later failed or rate-limited run still needs to retry it."""
+    cand = _drain_cand(tmux_target="sess:0.0")
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "tmux")
+    monkeypatch.setattr(notifier, "send_tmux", lambda target, prompt, dry: (True, "tmux cmd"))
+    posts = []
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
+
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+
+    ack_handled = next(b for u, b in posts if u.endswith("/events/ack-handled"))
+    assert ack_handled["event_ids"] == [11]
+    wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert wake_ack["delivered_ts"] is None                # cursor NOT high-watered at spawn
+    assert wake_ack["kind"] == "tmux"
+    # the regression: no wake-ack on this path may carry the old high-water (ack_through_ts / max_ts)
+    assert all(b.get("delivered_ts") != 9.0 for u, b in posts if u.endswith("/wake-ack"))
+
+
+def test_once_ephemeral_delivery_keeps_directive_pending(monkeypatch):
+    """`orcha notifier --once` has no reaper, so delivery may acknowledge id 11 but cannot consume
+    directive id 12 before the fire-and-forget worker's outcome is known."""
+    cand = _drain_cand()
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "decide_wake_tier", lambda c, triage_fn=None: {"tier": "full"})
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    posts = []
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        return {"claimed": True, "wake_lease_until": "x"} if "wake-claim" in url else {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "cmd", FakeProc(pid=4321)))
+
+    # live_workers omitted → None → the --once path (no reaper to /finish a run)
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+
+    ack_handled = next(b for u, b in posts if u.endswith("/events/ack-handled"))
+    assert ack_handled["event_ids"] == [11]
+    wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert wake_ack["delivered_ts"] is None
+    assert all(b.get("delivered_ts") != 9.0 for u, b in posts if u.endswith("/wake-ack"))
+
+
+def test_daemon_ephemeral_defers_ack_to_reaper_not_at_spawn(monkeypatch):
+    """The REAPED daemon path (live_workers tracks the spawned worker) must NOT ack at spawn — the
+    reaper posts /events/ack-handled on the worker's clean exit, so a spawn-then-crash re-surfaces the
+    backlog. At spawn it only stamps wake-ack with delivered_ts None (lease/cooldown), no high-water."""
+    cand = _drain_cand(latest_event="request_answered", pending_events=1)   # single no-code → no worktree
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "decide_wake_tier", lambda c, triage_fn=None: {"tier": "full"})
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_provision_worktree", lambda *a, **k: (None, None))
+    posts = []
+
+    def _post(url, body, **k):
+        posts.append((url, body))
+        if "wake-claim" in url:
+            return {"claimed": True, "wake_lease_until": "x"}
+        if url.endswith("/runs"):
+            return {"run_id": "RUN-1", "status": "running"}
+        return {}
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: (True, "cmd", FakeProc(pid=4321)))
+    live = {}
+
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True,
+                  live_workers=live, base_cwd="/proj")
+
+    # reaped path: the ack is deferred to reap_workers — NOTHING posted to ack-handled at spawn
+    assert not any(u.endswith("/events/ack-handled") for u, _ in posts)
+    wake_ack = next(b for u, b in posts if u.endswith("/wake-ack"))
+    assert wake_ack["delivered_ts"] is None                # no high-water; reaper advances the floor
+    assert cand["agent_id"] in live                        # tracked so the reaper can finish + ack it

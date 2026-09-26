@@ -3,12 +3,12 @@ import type { InstallProgress } from '../../../shared/types'
 import { Button } from '../ui/Button'
 import { AlertCircle, Loader2 } from 'lucide-react'
 
-/** When a Mac already has a workspace, the app skips onboarding and lands straight in the manager
- *  — so a missing Orcha CLI helper (e.g. after a reinstall that removed it, or a first install on
- *  a Mac that already had stacks) would otherwise go unnoticed and agents silently wouldn't
- *  launch. This banner probes for the helper on mount and, when it's gone, offers a one-click
- *  reinstall through the very same install path onboarding uses. It self-hides when the helper is
- *  present, so it never nags a healthy install. */
+/** When a Mac already has a workspace, the app skips onboarding and lands straight in the
+ *  projects home — so a missing Orcha CLI helper (e.g. after a reinstall that removed it, or a
+ *  first install on a Mac that already had stacks) would otherwise go unnoticed and agents
+ *  silently wouldn't launch. This banner probes for the helper on mount and, when it's gone,
+ *  offers a one-click reinstall through the very same install path onboarding uses. It
+ *  self-hides when the helper is present, so it never nags a healthy install. */
 export default function HelperMissingBanner() {
   const [missing, setMissing] = useState(false)
   const [installing, setInstalling] = useState(false)

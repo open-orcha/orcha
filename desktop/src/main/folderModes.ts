@@ -6,6 +6,7 @@ import { sanitizeName } from './templates'
 /** Inspect a folder to decide init vs reconnect and surface a default name. */
 export function inspectFolder(folder: string): FolderState {
   const initialized = existsSync(path.join(folder, '.orcha', 'docker-compose.yml'))
+  const isGitRepo = existsSync(path.join(folder, '.git'))
   let writable = false
   try {
     accessSync(folder, constants.W_OK)
@@ -13,7 +14,7 @@ export function inspectFolder(folder: string): FolderState {
   } catch {
     writable = false
   }
-  return { initialized, writable, suggestedName: sanitizeName(path.basename(folder)) }
+  return { initialized, writable, suggestedName: sanitizeName(path.basename(folder)), isGitRepo }
 }
 
 /** Create a new blank directory under parent. Throws if it already exists non-empty. */

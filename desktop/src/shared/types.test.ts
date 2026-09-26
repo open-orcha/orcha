@@ -32,7 +32,12 @@ describe('shared onboarding types', () => {
       'provision',
       'openOnboardingPortal',
       'onProvisionProgress',
-      'onNavigate'
+      'onNavigate',
+      'githubStatus',
+      'githubRepos',
+      'suggestCloneDest',
+      'pickCloneDest',
+      'cloneAndProvision'
     ]
     expect(keys.length).toBeGreaterThan(0)
   })

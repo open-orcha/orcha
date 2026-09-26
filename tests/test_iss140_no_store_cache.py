@@ -48,6 +48,33 @@ async def test_assets_stay_cacheable(client):
         "static assets must remain cacheable — middleware scope is too broad"
 
 
+async def test_unversioned_css_revalidates(client):
+    """The shared stylesheets live at URLs that never change across releases
+    (/assets/styles.css + the /assets/styles/*.css it @imports). A heuristic-cached
+    copy from an older portal on the same origin (a re-used localhost port) skins a
+    newer dist with stale CSS — components whose classes postdate the cache render
+    unstyled. `no-cache` keeps them cacheable but forces the ETag revalidation."""
+    for path in ("/assets/styles.css", "/assets/styles/shell.css"):
+        r = await client.get(path)
+        assert r.status_code == 200, f"{path}: {r.status_code}"
+        assert r.headers.get("cache-control") == "no-cache", \
+            f"{path} must be no-cache (revalidate), got {r.headers.get('cache-control')!r}"
+
+
+async def test_hashed_dist_bundle_not_forced_to_revalidate(client):
+    """The Vite bundle is content-hashed — its URLs change when its bytes change, so
+    it must stay on the cache-friendly default (no forced revalidation)."""
+    import re
+    r = await client.get("/")
+    m = re.search(r"assets/(index-[A-Za-z0-9_-]+\.css)", r.text)
+    if not m:  # dist bundle not present in this checkout — nothing to assert
+        return
+    r = await client.get(f"/assets/dist/assets/{m.group(1)}")
+    assert r.status_code == 200
+    assert r.headers.get("cache-control") not in ("no-cache", "no-store"), \
+        "hashed bundle assets must not be forced to revalidate"
+
+
 async def test_middleware_is_the_mechanism():
     """Mutation anchor: the no-store behaviour comes from the documented middleware, not
     an accidental default. If the middleware is removed, the HTML/API tests above fail."""

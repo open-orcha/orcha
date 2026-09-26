@@ -1,7 +1,8 @@
 """POST /api/containers/{cid}/reset — destructive in-place wipe (Tim's reset task).
 
 Wipes ALL container-scoped data (agents, tasks, requests, conversations, worker runs,
-memory digests, events) and recreates a single empty root task, KEEPING the containers
+memory digests, events, device tokens, code threads, wake backoff, push outbox, roster
+analysis) and recreates a single empty root task, KEEPING the containers
 row so current_container_id stays valid. Doubly gated: human actor + typed confirm
 (confirm == container name). In-app counterpart to the CLI `init --force --reset-data`
 (which instead drops the Postgres volume).
@@ -19,7 +20,7 @@ async def _seed(client, db, container, make_agent, make_task, make_request):
     aid = ai["agent_id"]
 
     task = await make_task("do a thing", "it is done", assignee_alias="Worker")
-    await make_request(aid, "ping?", target_alias="Kedar")
+    req = await make_request(aid, "ping?", target_alias="Kedar")
 
     # conversation + turn, worker_run + line, memory digest — via direct SQL (no API path
     # needed here; we only care that reset clears them).
@@ -35,6 +36,30 @@ async def _seed(client, db, container, make_agent, make_task, make_request):
     db.execute(
         "INSERT INTO agent_memory_digests (container_id, agent_id, snapshot_ts, current_focus) "
         "VALUES (%s,%s,0,'d')", (cid, aid))
+    # Cloud-unification tables (migs 038-048). device_tokens + code_threads reference
+    # agents/requests WITHOUT cascade, so a reset that forgets them dies on
+    # `DELETE FROM requests` / `DELETE FROM agents` with a ForeignKeyViolation — this
+    # fixture is the regression guard for exactly that.
+    db.execute(
+        "INSERT INTO device_tokens (container_id, agent_id, token_hash, label) "
+        "VALUES (%s,%s,%s,'phone')", (cid, human["agent_id"], f"hash-{cid}"))
+    thread = db.execute(
+        "INSERT INTO code_threads (container_id, repo, ref, sha, path, start_line, end_line, "
+        "kind, created_by_agent_id, tagged_agent_id, request_id) "
+        "VALUES (%s,'o/n','main','abc123','src/a.py',1,2,'question',%s,%s,%s) RETURNING id",
+        (cid, human["agent_id"], aid, req["id"]))[0]["id"]
+    db.execute(
+        "INSERT INTO code_thread_messages (thread_id, author_agent_id, is_human, body) "
+        "VALUES (%s,%s,true,'why?')", (thread, human["agent_id"]))
+    db.execute(
+        "INSERT INTO wake_backoff (container_id, agent_id, wake_key, strikes) VALUES (%s,%s,'k',1)",
+        (cid, aid))
+    db.execute(
+        "INSERT INTO push_outbox (container_id, kind, ref_id, title) VALUES (%s,'task_verify',%s,'t')",
+        (cid, task["id"]))
+    db.execute(
+        "INSERT INTO roster_analysis (container_id, summary, suggestions, source) "
+        "VALUES (%s,'s','[]'::jsonb,'llm')", (cid,))
     return {"human": human, "ai": ai, "cid": cid, "aid": aid, "task": task}
 
 
@@ -47,6 +72,18 @@ def _counts(db, cid):
     runs = db.execute("SELECT count(*) c FROM worker_runs", ())[0]["c"]
     digests = db.execute("SELECT count(*) c FROM agent_memory_digests WHERE container_id=%s", (cid,))[0]["c"]
     return agents, tasks, requests, convs, runs, digests
+
+
+def _unification_counts(db, cid):
+    """Remaining rows in the cloud-unification tables (all container-scoped)."""
+    return {
+        t: db.execute(f"SELECT count(*) c FROM {t} WHERE container_id=%s", (cid,))[0]["c"]
+        for t in ("device_tokens", "code_threads", "wake_backoff", "push_outbox", "roster_analysis")
+    } | {
+        "code_thread_messages": db.execute(
+            "SELECT count(*) c FROM code_thread_messages WHERE thread_id IN "
+            "(SELECT id FROM code_threads WHERE container_id=%s)", (cid,))[0]["c"],
+    }
 
 
 @pytest.mark.asyncio
@@ -71,11 +108,15 @@ async def test_reset_wipes_everything_and_recreates_root(
     assert body["deleted"]["worker_runs"] == 1
     assert body["deleted"]["worker_run_lines"] == 1
     assert body["deleted"]["agent_memory_digests"] == 1
+    for table in ("device_tokens", "code_threads", "code_thread_messages",
+                  "wake_backoff", "push_outbox", "roster_analysis"):
+        assert body["deleted"][table] == 1, table
 
     # after: container row KEPT, all scoped data gone
     assert db.execute("SELECT count(*) c FROM containers WHERE id=%s", (cid,))[0]["c"] == 1
     agents, tasks, requests, convs, runs, digests = _counts(db, cid)
     assert (agents, requests, convs, runs, digests) == (0, 0, 0, 0, 0)
+    assert all(n == 0 for n in _unification_counts(db, cid).values()), _unification_counts(db, cid)
 
     # exactly one task remains: the fresh, empty, ready root
     rows = db.execute("SELECT id, is_root, status FROM tasks WHERE container_id=%s", (cid,))

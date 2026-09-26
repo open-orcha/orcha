@@ -1,0 +1,6 @@
+[Unit]
+Description=Sync Orcha portal members into the OAuth allowlist
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/orcha-cloud/deploy/sync-members.sh

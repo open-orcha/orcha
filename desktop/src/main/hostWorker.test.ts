@@ -1,5 +1,37 @@
 import { describe, it, expect, vi } from 'vitest'
-import { hostToolPath, workerStartResult, startHostWorker, type HostWorkerDeps } from './hostWorker'
+import { hostToolPath, scrubWorkerEnv, workerStartResult, startHostWorker, type HostWorkerDeps } from './hostWorker'
+
+describe('scrubWorkerEnv', () => {
+  it('deletes ANTHROPIC_API_KEY, ORCHA_LLM_API_KEY, and every CLAUDE_CODE_* key', () => {
+    const env = {
+      ANTHROPIC_API_KEY: 'sk-ant-shell-leftover',
+      ORCHA_LLM_API_KEY: 'llm-key',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_SOMETHING_ELSE: 'x',
+      PATH: '/usr/bin',
+      HOME: '/Users/x'
+    }
+    const scrubbed = scrubWorkerEnv(env)
+    expect(scrubbed.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(scrubbed.ORCHA_LLM_API_KEY).toBeUndefined()
+    expect(scrubbed.CLAUDE_CODE_USE_BEDROCK).toBeUndefined()
+    expect(scrubbed.CLAUDE_CODE_SOMETHING_ELSE).toBeUndefined()
+    // unrelated vars survive untouched.
+    expect(scrubbed.PATH).toBe('/usr/bin')
+    expect(scrubbed.HOME).toBe('/Users/x')
+  })
+
+  it('does not mutate the input object', () => {
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-x', PATH: '/usr/bin' }
+    scrubWorkerEnv(env)
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-x')
+  })
+
+  it('is a no-op on an env with none of the dangerous keys', () => {
+    const env = { PATH: '/usr/bin', HOME: '/Users/x' }
+    expect(scrubWorkerEnv(env)).toEqual(env)
+  })
+})
 
 describe('hostToolPath', () => {
   it('includes brew, pipx, npm-global and Claude Code locations, de-duped', () => {

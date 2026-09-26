@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { provision, type EngineDeps } from './initEngine'
 import type { ProgressEvent, ProvisionStep } from '../shared/types'
 
-/** A fake fs that records writes and lets us seed reads. */
-function fakeFs(seed: Record<string, string> = {}) {
+/** A fake fs that records writes and lets us seed reads. `dirs` seeds readDir
+ *  listings (e.g. migration dirs for the downgrade guard). */
+function fakeFs(seed: Record<string, string> = {}, dirs: Record<string, string[]> = {}) {
   const files = new Map<string, string>(Object.entries(seed))
   return {
     files,
@@ -16,7 +17,8 @@ function fakeFs(seed: Record<string, string> = {}) {
     copyTree: vi.fn(),
     mkdirp: vi.fn(),
     chmod: vi.fn(),
-    exists: vi.fn((p: string) => files.has(p))
+    exists: vi.fn((p: string) => files.has(p)),
+    readDir: vi.fn((p: string) => dirs[p] ?? [])
   }
 }
 
@@ -151,6 +153,49 @@ describe('provision — upgrade mode', () => {
     expect(skipped).toEqual(expect.arrayContaining(['create-container', 'register-human']))
     expect((d.findFreePort as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled() // ports preserved
   })
+
+  it('refuses to downgrade: stack migration tip above the bundled templates aborts before any write', async () => {
+    const fs = fakeFs(
+      {
+        '/proj/.claude/orcha.json': JSON.stringify({
+          project_name: 'demo',
+          api_port: 8001,
+          db_port: 5433,
+          bridge_port: 8766
+        })
+      },
+      {
+        '/tpl/migrations': ['001_init.sql', '026_old_tip.sql'],
+        '/proj/.orcha/migrations': ['001_init.sql', '048_wake_backoff.sql']
+      }
+    )
+    const d = deps({ fs })
+    await expect(
+      provision({ folder: '/proj', mode: 'upgrade' }, () => {}, d)
+    ).rejects.toMatchObject({ code: 'PROVISION_FAILED' })
+    expect(fs.writeFile).not.toHaveBeenCalled() // refused BEFORE rendering compose
+    expect(fs.copyTree).not.toHaveBeenCalled()
+  })
+
+  it('equal or newer bundled templates pass the guard (upgrade proceeds)', async () => {
+    const fs = fakeFs(
+      {
+        '/proj/.claude/orcha.json': JSON.stringify({
+          project_name: 'demo',
+          api_port: 8001,
+          db_port: 5433,
+          bridge_port: 8766
+        })
+      },
+      {
+        '/tpl/migrations': ['048_wake_backoff.sql'],
+        '/proj/.orcha/migrations': ['048_wake_backoff.sql']
+      }
+    )
+    const d = deps({ fs })
+    await provision({ folder: '/proj', mode: 'upgrade' }, () => {}, d)
+    expect(fs.copyTree).toHaveBeenCalled()
+  })
 })
 
 describe('provision — reset mode', () => {
@@ -178,5 +223,58 @@ describe('provision — non-fatal steps', () => {
       .mockRejectedValueOnce(new Error('boom')) // human
     const res = await provision({ folder: '/proj', mode: 'init', name: 'demo' }, () => {}, d)
     expect(res.warnings.some((w) => /human/i.test(w))).toBe(true)
+  })
+})
+
+describe('provision — gh token injection at compose-up (parity with `orcha up`)', () => {
+  const origPat = process.env.ORCHA_GITHUB_PAT
+
+  afterEach(() => {
+    if (origPat === undefined) delete process.env.ORCHA_GITHUB_PAT
+    else process.env.ORCHA_GITHUB_PAT = origPat
+  })
+
+  it('passes the resolved gh token as extraEnv on the compose up call when ORCHA_GITHUB_PAT is unset', async () => {
+    delete process.env.ORCHA_GITHUB_PAT
+    const ghAuthToken = vi.fn().mockResolvedValue('gho_from_host')
+    const d = deps({ ghAuthToken })
+    ;(d.fetchJson as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ container_id: 'c1' })
+      .mockResolvedValueOnce({ agent_id: 'h1' })
+    await provision({ folder: '/proj', mode: 'init', name: 'demo' }, () => {}, d)
+    expect(ghAuthToken).toHaveBeenCalled()
+    const calls = (d.exec as ReturnType<typeof vi.fn>).mock.calls as Array<[string, string[], NodeJS.ProcessEnv?]>
+    const upCall = calls.find(([, args]) => args.includes('up'))
+    expect(upCall?.[2]).toEqual({ ORCHA_GITHUB_PAT: 'gho_from_host' })
+  })
+
+  it('does not call ghAuthToken (or pass extraEnv) when ORCHA_GITHUB_PAT is already set', async () => {
+    process.env.ORCHA_GITHUB_PAT = 'preset-token'
+    const ghAuthToken = vi.fn().mockResolvedValue('gho_from_host')
+    const d = deps({ ghAuthToken })
+    ;(d.fetchJson as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ container_id: 'c1' })
+      .mockResolvedValueOnce({ agent_id: 'h1' })
+    await provision({ folder: '/proj', mode: 'init', name: 'demo' }, () => {}, d)
+    expect(ghAuthToken).not.toHaveBeenCalled()
+    const calls = (d.exec as ReturnType<typeof vi.fn>).mock.calls as Array<[string, string[], NodeJS.ProcessEnv?]>
+    const upCall = calls.find(([, args]) => args.includes('up'))
+    expect(upCall?.[2]).toBeUndefined()
+  })
+
+  it('does not pass extraEnv when gh has no token (null) or the dep is omitted', async () => {
+    delete process.env.ORCHA_GITHUB_PAT
+    const ghAuthToken = vi.fn().mockResolvedValue(null)
+    const d = deps({ ghAuthToken })
+    ;(d.fetchJson as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ container_id: 'c1' })
+      .mockResolvedValueOnce({ agent_id: 'h1' })
+    await provision({ folder: '/proj', mode: 'init', name: 'demo' }, () => {}, d)
+    const calls = (d.exec as ReturnType<typeof vi.fn>).mock.calls as Array<[string, string[], NodeJS.ProcessEnv?]>
+    const upCall = calls.find(([, args]) => args.includes('up'))
+    expect(upCall?.[2]).toBeUndefined()
   })
 })

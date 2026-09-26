@@ -1,0 +1,334 @@
+<section id="opensource" class="mk-section os-root" aria-labelledby="os-title">
+  <div class="os-band">
+    <div class="os-grid">
+      <!-- ---- left: copy + CTAs ------------------------------------------- -->
+      <div class="os-copy">
+        <p class="os-eyebrow">— 06 / Open core</p>
+        <h2 id="os-title" class="os-h2">Built in the <span class="os-h2-em">open</span></h2>
+        <p class="os-lede">
+          The orchestrator, the portal, the sandbox runner, and the iOS app are open
+          source at
+          <a class="os-inline-link" href="https://github.com/open-orcha/orcha" rel="noopener">github.com/open-orcha/orcha</a>.
+          Self-host the whole thing, free — the local runner runs anywhere Docker runs,
+          on your keys and your machine. The cloud glue — the managed auth perimeter and
+          provisioning — is the part we operate for you.
+        </p>
+
+        <div class="os-cta-row">
+          <a class="os-btn os-btn-primary" href="https://github.com/open-orcha/orcha" rel="noopener">
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+            </svg>
+            Star open-orcha/orcha
+          </a>
+          <a class="os-btn os-btn-ghost" href="https://github.com/open-orcha/orcha" rel="noopener">
+            Explore the docs
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M7 17 17 7"/><path d="M8 7h9v9"/>
+            </svg>
+          </a>
+        </div>
+
+        <ul class="os-stats" role="list">
+          <li class="os-stat">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>
+            </svg>
+            MIT-licensed core
+          </li>
+          <li class="os-stat">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>
+            </svg>
+            Runs on Docker
+          </li>
+          <li class="os-stat">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>
+            </svg>
+            Web + iOS clients
+          </li>
+        </ul>
+      </div>
+
+      <!-- ---- right: terminal card --------------------------------------- -->
+      <div class="os-term-wrap">
+        <div class="os-term" role="img" aria-label="Terminal: git clone https://github.com/open-orcha/orcha then orcha up, booting the portal on port 8000, building the sandbox image, and bringing the notifier live.">
+          <div class="os-term-bar">
+            <span class="os-tl os-tl-r"></span>
+            <span class="os-tl os-tl-y"></span>
+            <span class="os-tl os-tl-g"></span>
+            <span class="os-term-title">orcha — zsh</span>
+          </div>
+          <div class="os-term-body">
+            <pre class="os-term-out" aria-hidden="true"><span class="os-prompt">$ </span><span class="os-typed"></span><span class="os-cursor" aria-hidden="true"></span>
+<span class="os-log"></span></pre>
+          </div>
+        </div>
+        <p class="os-term-cap">One command from clone to a portal on <code>localhost:8000</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .os-root {
+      padding: 96px 24px;
+      background: transparent;
+    }
+    /* highlight band on warm --paper */
+    .os-band {
+      max-width: 1120px; margin: 0 auto;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-3xl);
+      padding: clamp(32px, 5vw, 64px);
+      box-shadow: var(--shadow-card);
+    }
+    .os-grid {
+      display: grid; gap: 48px;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+    }
+
+    /* ---- copy -------------------------------------------------------------- */
+    .os-eyebrow {
+      margin: 0 0 14px;
+      font-family: var(--font-mono);
+      font-size: 12px; font-weight: 500; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--accent-text);
+    }
+    .os-h2 {
+      margin: 0 0 18px;
+      font-family: var(--font-serif); font-weight: 400;
+      font-size: clamp(30px, 4vw, 46px); line-height: 1.04;
+      letter-spacing: -.02em; color: var(--text-primary);
+    }
+    .os-h2-em { font-style: italic; color: var(--accent-text); }
+    .os-lede {
+      margin: 0 0 28px; max-width: 30rem;
+      font-family: var(--font-sans); font-size: 16px; line-height: 1.6;
+      color: var(--text-secondary);
+    }
+    .os-inline-link {
+      color: var(--accent-text); font-weight: 600;
+      text-decoration: underline; text-decoration-color: var(--gold-soft);
+      text-underline-offset: 3px; text-decoration-thickness: 2px;
+    }
+    .os-inline-link:hover { text-decoration-color: var(--accent-text); }
+
+    .os-cta-row { display: flex; flex-wrap: wrap; gap: 12px; }
+    .os-btn {
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 12px 18px; border-radius: 10px;
+      font-family: var(--font-sans); font-size: 15px; font-weight: 650;
+      text-decoration: none; cursor: pointer;
+      transition: transform .08s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease;
+    }
+    .os-btn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+    .os-btn-primary {
+      background: var(--accent-strong); color: var(--on-accent-strong);
+      border: 1px solid var(--accent-strong);
+    }
+    .os-btn-primary:hover {
+      background: var(--accent-strong-press); border-color: var(--accent-strong-press);
+      transform: translateY(-1px); box-shadow: var(--shadow-card);
+    }
+    .os-btn-ghost {
+      background: var(--surface); color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+    }
+    .os-btn-ghost:hover { border-color: var(--text-secondary); transform: translateY(-1px); }
+
+    .os-stats {
+      list-style: none; margin: 26px 0 0; padding: 0;
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .os-stat {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 12px; border-radius: 999px;
+      background: var(--surface); border: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 12px; letter-spacing: .01em;
+      color: var(--text-secondary);
+    }
+    .os-stat svg { color: var(--accent-strong); flex: none; }
+
+    /* ---- terminal card ----------------------------------------------------- */
+    .os-term-wrap { min-width: 0; }
+    .os-term {
+      background: #0d1117; /* faithful dark terminal chrome — a literal terminal,
+                              not a theme surface; scoped to this card. */
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-float);
+      overflow: hidden;
+    }
+    .os-term-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 14px;
+      background: #161b22;
+      border-bottom: 1px solid #21262d;
+    }
+    .os-tl { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+    .os-tl-r { background: #ff5f56; }
+    .os-tl-y { background: #ffbd2e; }
+    .os-tl-g { background: #27c93f; }
+    .os-term-title {
+      margin-left: 8px;
+      font-family: var(--font-mono); font-size: 12px; color: #8b949e;
+    }
+    .os-term-body {
+      padding: 18px 18px 22px;
+      min-height: 240px;
+      overflow-x: auto;
+    }
+    .os-term-out {
+      margin: 0;
+      font-family: var(--font-mono);
+      font-size: 13px; line-height: 1.72;
+      color: #c9d1d9;
+      white-space: pre;
+    }
+    .os-prompt { color: #27c93f; }
+    .os-typed { color: #e6edf3; }
+    .os-cursor {
+      display: inline-block; width: 8px; height: 15px;
+      margin-left: 1px; vertical-align: text-bottom;
+      background: #58e08a;
+      animation: os-blink 1.05s step-end infinite;
+    }
+    .os-cursor.os-hide { display: none; }
+    @keyframes os-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+
+    .os-log { color: #8b949e; }
+    .os-log .ln { display: block; opacity: 0; }
+    .os-log .ln.on { opacity: 1; }
+    .os-ok { color: #58e08a; }
+    .os-dim { color: #6e7681; }
+    .os-info { color: #79c0ff; }
+    .os-warn { color: #e3b341; }
+
+    .os-term-cap {
+      margin: 16px 2px 0;
+      font-family: var(--font-sans); font-size: 13px; color: var(--text-tertiary);
+    }
+    .os-term-cap code {
+      font-family: var(--font-mono); font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    @media (max-width: 900px) {
+      .os-grid { grid-template-columns: 1fr; gap: 36px; }
+      .os-term-wrap { order: 2; }
+    }
+    @media (max-width: 640px) {
+      .os-root { padding: 72px 20px; }
+      .os-band { padding: 28px 20px; }
+      .os-btn { flex: 1 1 auto; justify-content: center; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .os-cursor { animation: none; }
+      .os-log .ln { opacity: 1; }
+    }
+  </style>
+
+  <script>
+    (function () {
+      var root = document.getElementById('opensource');
+      if (!root) return;
+      var term    = root.querySelector('.os-term-body');
+      var typedEl = root.querySelector('.os-typed');
+      var cursor  = root.querySelector('.os-cursor');
+      var logEl   = root.querySelector('.os-log');
+      if (!term || !typedEl || !logEl) return;
+
+      var CMD = 'git clone https://github.com/open-orcha/orcha && orcha up';
+
+      // Realistic-but-honest boot log. HTML strings (trusted, authored here).
+      var LOG = [
+        "<span class='os-dim'>Cloning into 'orcha'… done.</span>",
+        "<span class='os-dim'>orcha up — starting local runtime</span>",
+        "  <span class='os-ok'>✓</span> sandbox image built <span class='os-dim'>(orcha/sandbox:local)</span>",
+        "  <span class='os-ok'>✓</span> database ready <span class='os-dim'>postgres · migrations applied</span>",
+        "  <span class='os-ok'>✓</span> notifier live <span class='os-dim'>· push relay connected</span>",
+        "  <span class='os-ok'>✓</span> portal ready <span class='os-info'>http://localhost:8000</span>",
+        "",
+        "<span class='os-ok'>ready.</span> <span class='os-dim'>agents stop at</span> <span class='os-warn'>needs_verification</span> <span class='os-dim'>— you merge.</span>"
+      ];
+
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      // Build the log line spans up front (hidden), reveal them in sequence.
+      function buildLog() {
+        logEl.innerHTML = LOG.map(function (h) {
+          return "<span class='ln'>" + (h || "&nbsp;") + "</span>";
+        }).join("");
+        return logEl.querySelectorAll('.ln');
+      }
+
+      if (reduce) {
+        // Static, complete state — no typing, no blink.
+        typedEl.textContent = CMD;
+        if (cursor) cursor.classList.add('os-hide');
+        var linesR = buildLog();
+        linesR.forEach(function (ln) { ln.classList.add('on'); });
+        return;
+      }
+
+      var lines = buildLog();
+      var timers = [];
+      var started = false;
+
+      function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+      function at(ms, fn) { timers.push(setTimeout(fn, ms)); }
+
+      function run() {
+        clearTimers();
+        typedEl.textContent = '';
+        if (cursor) cursor.classList.remove('os-hide');
+        lines.forEach(function (ln) { ln.classList.remove('on'); });
+
+        // 1) type the command char-by-char
+        var i = 0;
+        var typeDelay = 34;
+        function typeStep() {
+          if (i <= CMD.length) {
+            typedEl.textContent = CMD.slice(0, i);
+            i++;
+            at(typeDelay + Math.random() * 26, typeStep);
+          } else {
+            // 2) enter pressed → reveal log lines with staggered pacing
+            var t = 260;
+            lines.forEach(function (ln, idx) {
+              var gap = (idx === 0) ? 260 : (ln.textContent.trim() === '' ? 90 : 300 + Math.random() * 180);
+              t += gap;
+              at(t, function () { ln.classList.add('on'); });
+            });
+            // 3) hold on the finished screen, then loop
+            at(t + 3600, run);
+          }
+        }
+        at(420, typeStep);
+      }
+
+      function start() {
+        if (started) return;
+        started = true;
+        run();
+      }
+      function stop() { started = false; clearTimers(); }
+
+      if ('IntersectionObserver' in window) {
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) start();
+            else stop();
+          });
+        }, { threshold: 0.35 });
+        io.observe(root.querySelector('.os-term'));
+      } else {
+        start();
+      }
+    })();
+  </script>
+</section>

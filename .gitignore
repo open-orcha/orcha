@@ -256,3 +256,15 @@ docs/_local/*
 # #289 control-project token baselines + #284 continuity-eval results (machine/run-specific)
 tools/efficiency/baselines/*.json
 tools/efficiency/baselines/**/*.json
+
+# --- Orcha Cloud deploy secrets (never committed) ---
+deploy/auth/.env
+deploy/auth/github-app.pem
+deploy/auth/github-app.json
+deploy/auth/github-app.webhook-secret
+ios/project.local.yml
+ios/dd/
+
+# portal React app: template-shipped source + built bundle (see frontend/README)
+!orcha-cli/orcha_cli/templates/portal/static/dist/
+!orcha-cli/orcha_cli/templates/portal/frontend/src/**

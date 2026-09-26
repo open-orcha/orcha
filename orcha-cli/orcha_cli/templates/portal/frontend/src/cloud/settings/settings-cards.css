@@ -1,0 +1,44 @@
+/* ORCHA CLOUD settings sections — the page-scoped rules the vanilla
+ * pages/settings.css applied to the classes these sections render
+ * (.set-card lead + the sc-* banner/row/hint/acts/result family), carried
+ * VERBATIM so a cloud section renders identically wherever the open
+ * SettingsPage's inline copy of the same rules is absent. Identical
+ * declarations are idempotent when both are present. */
+
+.set-card .card-b { padding: 18px 20px; }
+.set-card .lead { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: -2px 0 16px; }
+
+/* status banner (ok / warn / err / muted) — built from the same soft tokens
+   used by .attn-card / callouts so it stays theme-correct. */
+.sc-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 16px; }
+.sc-banner .bt { display: flex; align-items: center; gap: 9px; font-size: 13px; line-height: 1.45; }
+.sc-banner .bt svg { width: 17px; height: 17px; flex: none; }
+.sc-banner.ok   { background: var(--ok-soft);   border-color: var(--ok-line); }
+.sc-banner.ok .bt svg   { color: var(--ok); }
+.sc-banner.warn { background: var(--warn-soft); border-color: var(--warn-line); }
+.sc-banner.warn .bt svg { color: var(--warn); }
+.sc-banner.err  { background: var(--danger-soft); border-color: var(--danger-line); }
+.sc-banner.err .bt svg  { color: var(--danger); }
+.sc-banner.muted .bt { color: var(--muted); }
+.sc-banner .masked { margin-left: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
+  color: var(--text-2); background: var(--surface-3); border: 1px solid var(--border); border-radius: 7px; padding: 3px 8px; }
+
+.sc-row { display: flex; gap: 8px; align-items: stretch; }
+.sc-inp { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 10px;
+  color: var(--text); font: 13px "JetBrains Mono", ui-monospace, monospace; padding: 10px 12px; outline: none; }
+.sc-inp::placeholder { color: var(--faint); font-family: Inter, system-ui, sans-serif; }
+.sc-inp:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+.sc-row .iconbtn { flex: none; }
+
+.sc-hint { font-size: 11.5px; color: var(--faint); min-height: 16px; margin: 7px 2px 0; line-height: 1.4; }
+.sc-hint code { font-size: 11px; }
+.sc-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+.sc-result { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.4; border: 1px solid var(--border); }
+.sc-result svg { width: 16px; height: 16px; flex: none; }
+.sc-result.ok  { background: var(--ok-soft);     border-color: var(--ok-line); }
+.sc-result.ok svg  { color: var(--ok); }
+.sc-result.err { background: var(--danger-soft); border-color: var(--danger-line); }
+.sc-result.err svg { color: var(--danger); }

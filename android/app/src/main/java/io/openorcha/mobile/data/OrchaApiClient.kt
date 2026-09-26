@@ -2,47 +2,34 @@ package io.openorcha.mobile.data
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.HttpTimeoutConfig
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
-import io.ktor.client.request.patch
-import io.ktor.client.request.post
-import io.ktor.client.request.prepareGet
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
-import io.ktor.serialization.kotlinx.json.json
-import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.Json
 
+/** Exposes the OpenAPI-backed operations used by the Android application. */
 class OrchaApiClient {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-        explicitNulls = false
-    }
-
-    private val client = HttpClient(OkHttp) {
-        install(ContentNegotiation) { json(json) }
-        install(HttpTimeout) {
-            requestTimeoutMillis = 10_000
-            connectTimeoutMillis = 3_000
-            socketTimeoutMillis = 10_000
-        }
-    }
+    // internal (not private): GitHubHubApi.kt adds inline reified GET/POST extensions
+    // to this client from the same package without inflating this file.
+    internal val client = createOrchaHttpClient()
+    internal val transport = OrchaJsonTransport(client)
 
     suspend fun listContainers(baseUrl: String): ContainersResponse = withTimeout(6_000) {
         client.get("${baseUrl.endpoint()}/api/containers").body()
+    }
+
+    /**
+     * Device-token auth: [listContainers] with an explicit bearer token that ISN'T
+     * (yet) registered in [BearerTokens] -- the pairing probe/retry path. A
+     * protected deployment answers with a clean 401 (see [isAuthRequired]),
+     * distinguishing "reachable, sign-in required" from a genuine network failure.
+     * `overrideToken` always wins over anything already registered for this host
+     * (see [bearerOverride]). Named apart from the view-model's own
+     * `probeContainers()` (the home-card health probe) -- an unrelated concept.
+     */
+    suspend fun listContainersWithBearer(baseUrl: String, overrideToken: String): ContainersResponse = withTimeout(6_000) {
+        client.get("${baseUrl.endpoint()}/api/containers") { bearerOverride(overrideToken) }.body()
     }
 
     suspend fun getSnapshot(
@@ -57,6 +44,12 @@ class OrchaApiClient {
         ).joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
         client.get("${baseUrl.endpoint()}/api/containers/$containerId$window").body()
     }
+
+    /** [listContainersWithBearer]'s snapshot counterpart -- same override-token contract. */
+    suspend fun getSnapshotWithBearer(baseUrl: String, containerId: String, overrideToken: String): ContainerSnapshot =
+        withTimeout(10_000) {
+            client.get("${baseUrl.endpoint()}/api/containers/$containerId") { bearerOverride(overrideToken) }.body()
+        }
 
     /** Keyset-paged thread fetch: newest page first; older pages via before/before_id. */
     suspend fun getTaskMessages(
@@ -153,20 +146,8 @@ class OrchaApiClient {
      * global 10s request cap would otherwise kill a stream that never ends; no coroutine
      * withTimeout may wrap this call (that was the old getRunStreamText bug).
      */
-    fun streamRun(baseUrl: String, agentId: String, runId: String): Flow<RunStreamEvent> = flow {
-        client.prepareGet("${baseUrl.endpoint()}/api/agents/$agentId/runs/$runId/stream") {
-            timeout {
-                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                socketTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-            }
-        }.execute { response ->
-            val channel = response.bodyAsChannel()
-            while (true) {
-                val raw = channel.readUTF8Line() ?: break
-                RunStream.parse(raw)?.let { emit(it) }
-            }
-        }
-    }
+    fun streamRun(baseUrl: String, agentId: String, runId: String): Flow<RunStreamEvent> =
+        streamRun(client, baseUrl.endpoint(), agentId, runId)
 
     suspend fun stopRun(baseUrl: String, runId: String, actorId: String): GenericIdResponse =
         postJson("${baseUrl.endpoint()}/api/runs/$runId/stop", WorkerRunStopBody(actorId))
@@ -272,24 +253,11 @@ class OrchaApiClient {
     suspend fun setAutonomy(baseUrl: String, containerId: String, level: String, actorId: String): AutonomyResponse =
         postJson("${baseUrl.endpoint()}/api/containers/$containerId/autonomy", AutonomyUpdateBody(level, actorId))
 
-    private suspend inline fun <reified T : Any, reified R> postJson(url: String, payload: T): R = withTimeout(10_000) {
-        val response: HttpResponse = client.post(url) {
-            contentType(ContentType.Application.Json)
-            setBody(payload)
-        }
-        response.body()
-    }
+    private suspend inline fun <reified T : Any, reified R> postJson(url: String, payload: T): R =
+        transport.post(url, payload)
 
-    private suspend inline fun <reified T : Any, reified R> patchJson(url: String, payload: T): R = withTimeout(10_000) {
-        val response: HttpResponse = client.patch(url) {
-            contentType(ContentType.Application.Json)
-            setBody(payload)
-        }
-        response.body()
-    }
-
-    private fun String.endpoint(): String = OrchaServerAddress.normalize(this)
-    private fun String?.blankToNull(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
+    private suspend inline fun <reified T : Any, reified R> patchJson(url: String, payload: T): R =
+        transport.patch(url, payload)
 
     companion object {
         /** Task-thread keyset page size (issue 4; the thread fetch was the one unbounded call). */

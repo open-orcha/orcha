@@ -1,0 +1,74 @@
+<section id="demo" class="mk-section dm-root" aria-labelledby="dm-title">
+  <header class="dm-head">
+    <div class="dm-eyebrow">— 01 / Product demo</div>
+    <h2 class="dm-title" id="dm-title">One task, <span class="dm-title-em">end to end</span>.</h2>
+    <p class="dm-sub">Dispatch from anywhere, watch it run in a sandbox, read the diff,
+    bring in a reviewer, and merge — a human holds the pen on every decision that matters.
+    Six chapters below, each a real-screen recreation of one persona's workflow.</p>
+    <nav class="dm-chapternav" aria-label="Demo chapters">
+      <a class="dm-chip" href="#demo-fleet">Overview</a>
+      <a class="dm-chip" href="#control-room">Control room</a>
+      <a class="dm-chip" href="#agent-chat">Chat</a>
+      <a class="dm-chip" href="#task-verify">The gate</a>
+      <a class="dm-chip" href="#demo-requests-metrics">Requests &amp; cost</a>
+      <a class="dm-chip" href="#demo-team-mobile">Team &amp; mobile</a>
+    </nav>
+  </header>
+
+  <style>
+  /* =========================================================================
+     DEMO CHAPTER SHELL (dm-) — heading + chapter nav only. The six chapter
+     cinematics (fleet/control-room/agent-chat/task-verify/requests-metrics/
+     team-mobile) are separate top-level <section> fragments assembled by
+     build.py immediately after this one; each owns its own prefix, player,
+     and styling. This shell carries no player of its own.
+     ========================================================================= */
+  .dm-root {
+    padding: 96px 24px 44px;
+    background: var(--canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+  .dm-head { max-width: 720px; margin: 0 auto; text-align: center; }
+  .dm-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent-text);
+  }
+  .dm-title {
+    margin: 14px 0 14px;
+    font-family: var(--font-serif); font-weight: 400;
+    font-size: clamp(30px, 4vw, 46px); line-height: 1.08;
+    letter-spacing: -.015em; color: var(--text-primary);
+  }
+  .dm-title-em { font-style: italic; color: var(--accent-text); }
+  .dm-sub {
+    font-size: 16px; line-height: 1.55; color: var(--text-secondary);
+    max-width: 620px; margin: 0 auto;
+  }
+  .dm-chapternav {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 8px; margin: 28px auto 0; max-width: 640px;
+  }
+  .dm-chip {
+    display: inline-flex; align-items: center;
+    font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+    letter-spacing: .01em; color: var(--text-secondary);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 14px;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .dm-chip:hover { color: var(--text-primary); border-color: var(--accent-strong); background: var(--gold-soft); }
+  .dm-chip:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+
+  @media (max-width: 720px) {
+    .dm-root { padding: 72px 14px 32px; }
+    .dm-chapternav { gap: 6px; }
+    .dm-chip { font-size: 11.5px; padding: 6px 11px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dm-chip { transition: none; }
+  }
+  </style>
+</section>
