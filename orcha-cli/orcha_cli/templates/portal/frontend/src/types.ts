@@ -81,6 +81,7 @@ export interface Task {
 export interface Run {
   run_id?: string;
   id?: string;
+  task_id?: string | null;
   status: string;
   exit_code?: number | null;
   wake_kind?: string | null;
@@ -90,9 +91,13 @@ export interface Run {
   ended?: string | null;
   kill_reason?: string | null;
   diff?: string | null;
+  snapshot_ref?: string | null;
   output?: string | null;
   agent_id?: string | null;
   agent?: string | null;
+  worktree?: string | null;
+  branch?: string | null;
+  base_cwd?: string | null;
 }
 
 export interface OrchaRequest {

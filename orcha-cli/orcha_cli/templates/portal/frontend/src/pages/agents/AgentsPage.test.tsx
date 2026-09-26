@@ -34,7 +34,7 @@ function jsonRes(data: unknown) {
   return { ok: true, status: 200, json: async () => data } as Response;
 }
 
-function stubFetch(efforts: { id: string; name: string }[] = []) {
+function stubFetch(efforts: { id: string; name: string }[] = [], runs: unknown[] = []) {
   calls = [];
   global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
@@ -44,7 +44,7 @@ function stubFetch(efforts: { id: string; name: string }[] = []) {
     if (url === "/api/models") return jsonRes({ models: [] }); // keep the seeded curated list
     if (url === "/api/reasoning-efforts") return jsonRes({ efforts }); // stubbed per-test; [] keeps the seeded curated list
     if (url.includes("/digest")) return jsonRes({ digest: null });
-    if (url.includes("/runs")) return jsonRes({ runs: [] });
+    if (url.includes("/runs")) return jsonRes({ runs });
     if (url.includes("/conversation")) return jsonRes({ conversation: null, turns: [] });
     if (url.includes("/persona")) return jsonRes({ system_prompt: "full prompt" });
     return jsonRes({});
@@ -151,6 +151,20 @@ describe("AgentsPage (vanilla agents.html parity)", () => {
     expect(pair.title).toBe("Pair in a live terminal as forge");
     expect(pair.textContent).toContain("Pair in terminal");
     expect(screen.queryByText("Classic portal")).toBeNull(); // the vanilla-page pointer is deleted
+  });
+
+  it("links a task-backed agent run to its read-only Code Space", async () => {
+    stubFetch([], [{
+      run_id: "run-1",
+      task_id: "task-1",
+      agent_id: "a1",
+      status: "exited",
+      branch: "orcha/task-1",
+      diff: "",
+    }]);
+    mount();
+    const link = await screen.findByRole("link", { name: "Open code space" });
+    expect(link).toHaveAttribute("href", "/code?task=task-1&view=diff&run=run-1");
   });
 
   describe("reasoning-effort control (GH #51)", () => {

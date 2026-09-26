@@ -22,6 +22,7 @@ export default function App() {
   // any click here), mirrored via onPortalActive; we also keep the live Stack object (not
   // just its project id) so TopBar can show a name + running dot without a second fetch.
   const [activeProject, setActiveProject] = useState<string | null>(null)
+  const [portalFullWindow, setPortalFullWindow] = useState(false)
   const [stacks, setStacks] = useState<Stack[]>([])
 
   const refreshStacks = useCallback(async () => {
@@ -60,7 +61,10 @@ export default function App() {
 
   // Main is the source of truth for which portal view is showing (tray/notification/deep
   // link can change it without a click in this window).
-  useEffect(() => window.orchaDesktop.onPortalActive(({ project }) => setActiveProject(project)), [])
+  useEffect(() => window.orchaDesktop.onPortalActive(({ project, fullWindow }) => {
+    setActiveProject(project)
+    setPortalFullWindow(!!fullWindow)
+  }), [])
 
   // File→Add Project (main) asks us to switch. Main already hides any embedded portal view
   // before sending this (wizard/home = no view visible), so just follow its lead here too.
@@ -70,6 +74,7 @@ export default function App() {
         if (target === 'onboarding') {
           setWizardVariant(variant ?? 'add-project')
           setActiveProject(null)
+          setPortalFullWindow(false)
         }
         setMode(target)
       }),
@@ -94,7 +99,7 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      {mode === 'manager' && activeStack && <TopBar stack={activeStack} onBack={showHome} />}
+      {mode === 'manager' && activeStack && !portalFullWindow && <TopBar stack={activeStack} onBack={showHome} />}
       <div className="min-w-0 flex-1">
         {mode === 'onboarding' ? (
           <OnboardingWizard

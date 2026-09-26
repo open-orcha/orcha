@@ -9,7 +9,7 @@ import App from './App'
 let navigateListener: ((nav: { target: 'onboarding' | 'manager'; variant?: string }) => void) | null = null
 /** Captured onPortalActive listener so tests can simulate main's "which portal view is
  *  showing" broadcast (tray/notification/deep-link can change it without a click here). */
-let portalActiveListener: ((active: { project: string | null }) => void) | null = null
+let portalActiveListener: ((active: { project: string | null; fullWindow?: boolean }) => void) | null = null
 
 function stub(stacks: unknown[], portalGetImpl?: (apiPort: number, path: string) => unknown) {
   navigateListener = null
@@ -140,6 +140,18 @@ describe('App single-window host', () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /projects/i }))
     expect(window.orchaDesktop.portalHide).toHaveBeenCalled()
+  })
+
+  it('hides the native project bar while task Code Space owns the full window', async () => {
+    stub([runningStack])
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Projects' })).toBeInTheDocument())
+
+    portalActiveListener?.({ project: 'orcha-x', fullWindow: true })
+    await waitFor(() => expect(screen.queryByTestId('topbar')).not.toBeInTheDocument())
+
+    portalActiveListener?.({ project: 'orcha-x', fullWindow: false })
+    await waitFor(() => expect(screen.getByTestId('topbar')).toBeInTheDocument())
   })
 
   it('File→Add Project (main-process menu IPC) switches straight into the wizard', async () => {

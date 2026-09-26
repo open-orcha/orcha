@@ -131,6 +131,12 @@ describe("TasksPage", () => {
     expect(row?.className).toContain("sel");
   });
 
+  it("offers a task-level Code Space action that carries task context", async () => {
+    renderPage("/tasks?task=t1");
+    const link = await screen.findByRole("link", { name: "Open code space" });
+    expect(link).toHaveAttribute("href", "/code?task=t1&view=diff");
+  });
+
   it("verify gate posts the exact vanilla body on Accept", async () => {
     renderPage("/tasks?task=t1");
     await waitFor(() => expect(document.querySelector("#gate-t1")).toBeTruthy());

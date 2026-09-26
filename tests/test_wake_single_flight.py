@@ -880,6 +880,50 @@ def test_reap_finishes_run_with_captured_output(monkeypatch, tmp_path):
     assert live == {}
 
 
+def test_reap_captures_snapshot_when_running_worker_accepts_task(monkeypatch, tmp_path):
+    """A task accepted during the run must update the reaper's launch-time task decision."""
+    log = tmp_path / "accepted-task.log"
+    log.write_text('{"type":"assistant","message":"done"}\n')
+    posts = []
+    captured = []
+    monkeypatch.setattr(
+        notifier,
+        "_get_json",
+        lambda url, **kwargs: {
+            "runs": [{"run_id": "RUN-LATE-TASK", "task_id": "TASK-ACCEPTED"}]
+        },
+    )
+    monkeypatch.setattr(
+        notifier, "_post_json", lambda url, body, **kwargs: posts.append((url, body)) or {}
+    )
+    monkeypatch.setattr(notifier, "_capture_diff", lambda worktree: "captured diff")
+    monkeypatch.setattr(
+        notifier,
+        "_capture_snapshot",
+        lambda worktree, run_id: captured.append((worktree, run_id)) or "snapshot-ref",
+    )
+    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *args: None)
+    live = {
+        "agent-X": {
+            "proc": FakeProc(exited=True),
+            "deadline": time.time() + 100,
+            "run_id": "RUN-LATE-TASK",
+            "log_path": str(log),
+            "worktree": str(tmp_path),
+            "base_cwd": str(tmp_path),
+            "branch": "orcha/late-task",
+            "task_bound": False,
+        }
+    }
+
+    notifier.reap_workers("http://x", live, quiet=True)
+
+    assert captured == [(str(tmp_path), "RUN-LATE-TASK")]
+    finish = next(body for url, body in posts if url.endswith("/runs/RUN-LATE-TASK/finish"))
+    assert finish["snapshot_ref"] == "snapshot-ref"
+    assert finish["diff"] == "captured diff"
+
+
 def test_reap_keeps_lease_for_live_worker(monkeypatch):
     """A still-running worker keeps its lease (single-flight holds) AND the daemon RENEWS it each
     tick (wake-latency fix) so the short lease doesn't lapse mid-run."""

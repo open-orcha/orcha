@@ -5,6 +5,28 @@ from __future__ import annotations
 import json
 
 
+def _current_run_task_id(api_base, aid, worker, services):
+    """Resolve task binding again because a worker can accept a task after launch."""
+    launch_task_id = (worker.get("respawn_ctx") or {}).get("task_id")
+    if worker.get("task_bound", bool(worker.get("task_worktree"))):
+        return launch_task_id
+    run_id = worker.get("run_id")
+    if not run_id or not worker.get("worktree"):
+        return None
+    payload = services._get_json(
+        f"{api_base}/api/agents/{aid}/runs?limit=20", timeout=2.0
+    ) or {}
+    matching_run = next(
+        (
+            run
+            for run in payload.get("runs", [])
+            if str(run.get("run_id") or run.get("id")) == str(run_id)
+        ),
+        None,
+    )
+    return (matching_run or {}).get("task_id")
+
+
 def _save_task_result(api_base, aid, worker, diff, failed_drains, services):
     task_id = (worker.get("respawn_ctx") or {}).get("task_id")
     sha = services._checkpoint_task_worktree(
@@ -58,8 +80,10 @@ def handle_exited(
     if runtime == services.RUNTIME_CODEX:
         status = services._codex_exit_status(worker.get("log_path"), proc.returncode)
     is_task_worktree = bool(worker.get("task_worktree"))
-    is_task_bound = bool(worker.get("task_bound", is_task_worktree))
-    task_id = (worker.get("respawn_ctx") or {}).get("task_id")
+    task_id = _current_run_task_id(api_base, aid, worker, services)
+    is_task_bound = bool(task_id) or bool(
+        worker.get("task_bound", is_task_worktree)
+    )
     if is_task_bound and status in ("rate_limited", "failed"):
         services._drain_task_failure(
             api_base,
@@ -79,6 +103,11 @@ def handle_exited(
             drain_desc="drained",
         )
         return
+    snapshot_ref = (
+        services._capture_snapshot(worker.get("worktree"), worker.get("run_id"))
+        if is_task_bound
+        else None
+    )
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -86,6 +115,7 @@ def handle_exited(
         proc.returncode,
         worker.get("log_path"),
         diff,
+        snapshot_ref=snapshot_ref,
     ):
         services._reap_sandbox_artifacts(worker)  # I4: clean completion — reap once stamped
     if is_task_worktree:
@@ -126,6 +156,9 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     lane = worker.get("lane", "work")
     services._kill_worker(proc, graceful=True)
     diff = services._capture_diff(worker.get("worktree"))
+    snapshot_ref = services._capture_snapshot(
+        worker.get("worktree"), worker.get("run_id")
+    )
     diag = {
         "run_id": str(worker.get("run_id")),
         "agent_id": aid,
@@ -139,6 +172,7 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
         proc.returncode,
         worker.get("log_path"),
         diff,
+        snapshot_ref=snapshot_ref,
         kill_reason=json.dumps(diag),
     ):
         # I4 (force-rm: takes a still-stopping container down with it, post-stamp)

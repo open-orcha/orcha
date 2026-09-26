@@ -69,7 +69,8 @@ def local_repo(tmp_path, monkeypatch):
     monkeypatched to point at it for the duration of the test."""
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    _git(repo_dir, "init", "-q", "-b", "main")
+    _git(repo_dir, "init", "-q")
+    _git(repo_dir, "symbolic-ref", "HEAD", "refs/heads/main")
     _git(repo_dir, "config", "user.email", "test@example.com")
     _git(repo_dir, "config", "user.name", "Test")
 
@@ -89,6 +90,15 @@ async def _bind_local(client, cid):
     r = await client.put(f"/api/containers/{cid}/github", json={"repo": "local"})
     assert r.status_code == 200, r.text
     return r
+
+
+async def _start_run(client, agent_id):
+    response = await client.post(
+        f"/api/agents/{agent_id}/runs",
+        json={"wake_kind": "ephemeral", "wake_event": "test"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["run_id"]
 
 
 # ============================ local_git module — unit level =======================
@@ -158,6 +168,69 @@ def test_file_bytes_text_and_binary(local_repo):
 def test_file_bytes_missing_path_returns_none(local_repo):
     sha = local_git.resolve_ref()
     assert local_git.file_bytes(sha, "nope.txt") is None
+
+
+async def test_run_snapshot_routes_stay_pinned_after_branch_moves(
+    client, container, local_repo, make_agent,
+):
+    agent = await make_agent("snapshot-reader")
+    run_id = await _start_run(client, agent["agent_id"])
+    frozen_ref = local_git.resolve_ref()
+    finished = await client.post(
+        f"/api/runs/{run_id}/finish",
+        json={
+            "status": "exited",
+            "exit_code": 0,
+            "snapshot_ref": frozen_ref,
+            "diff": "first captured diff",
+        },
+    )
+    assert finished.status_code == 200, finished.text
+
+    (local_repo / "README.md").write_text("later branch state\n")
+    _git(local_repo, "add", "README.md")
+    _git(local_repo, "commit", "-q", "-m", "move branch")
+    later_ref = local_git.resolve_ref()
+    repeated = await client.post(
+        f"/api/runs/{run_id}/finish",
+        json={
+            "status": "exited",
+            "exit_code": 0,
+            "snapshot_ref": later_ref,
+            "diff": "later retry diff",
+        },
+    )
+    assert repeated.status_code == 200, repeated.text
+
+    runs = await client.get(f"/api/agents/{agent['agent_id']}/runs")
+    assert runs.status_code == 200, runs.text
+    stored = next(run for run in runs.json()["runs"] if run["run_id"] == run_id)
+    assert stored["snapshot_ref"] == frozen_ref
+    assert stored["diff"] == "first captured diff"
+
+    tree = await client.get(
+        f"/api/containers/{container['id']}/runs/{run_id}/snapshot/tree"
+    )
+    assert tree.status_code == 200, tree.text
+    assert tree.json()["ref"] == frozen_ref
+    file_response = await client.get(
+        f"/api/containers/{container['id']}/runs/{run_id}/snapshot/file",
+        params={"path": "README.md"},
+    )
+    assert file_response.status_code == 200, file_response.text
+    assert file_response.json()["content"] == "hello local\n"
+
+
+async def test_run_snapshot_routes_never_fall_back_for_legacy_run(
+    client, container, local_repo, make_agent,
+):
+    agent = await make_agent("legacy-reader")
+    run_id = await _start_run(client, agent["agent_id"])
+    response = await client.get(
+        f"/api/containers/{container['id']}/runs/{run_id}/snapshot/tree"
+    )
+    assert response.status_code == 409
+    assert "predates immutable code snapshots" in response.text
 
 
 def test_file_bytes_rejects_path_traversal(local_repo):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
+from collections import Counter
 from typing import Optional
 
 # Remote-runner spec §3.3c/§3.5: sandbox rows are reconciled by CONTAINER liveness.
@@ -69,8 +71,56 @@ def reap_orphan_leases(api_base: str, cid: str, quiet: bool, services) -> None:
             )
 
 
+def _checkout_key(row: dict) -> Optional[str]:
+    """Return a canonical identity for a run's mutable checkout."""
+    worktree = row.get("worktree") or row.get("base_cwd")
+    if not worktree:
+        return None
+    return os.path.normcase(os.path.realpath(os.fspath(worktree)))
+
+
+def _capture_task_run_state(
+    row: dict, checkout_users: Counter, services
+) -> tuple:
+    """Recover honest, immutable review data for a task-bound run.
+
+    A checkpoint can freeze a snapshot and then lose its finish response before
+    starting a replacement in the same checkout. Prefer that existing snapshot
+    and derive its diff from the same commit. If no snapshot exists, never read
+    a checkout shared by another open run: its current files may belong to the
+    replacement, not the dead run being recovered.
+    """
+    worktree = row.get("worktree") or row.get("base_cwd")
+    if not row.get("task_id") or not worktree:
+        return None, None
+    snapshot_ref = services._existing_snapshot_ref(
+        worktree, row.get("run_id")
+    )
+    if snapshot_ref:
+        return (
+            services._capture_snapshot_diff(worktree, snapshot_ref),
+            snapshot_ref,
+        )
+    checkout_key = _checkout_key(row)
+    if checkout_key is not None and checkout_users[checkout_key] > 1:
+        return None, None
+    snapshot_ref = services._capture_snapshot(worktree, row.get("run_id"))
+    if snapshot_ref:
+        return (
+            services._capture_snapshot_diff(worktree, snapshot_ref),
+            snapshot_ref,
+        )
+    return services._capture_diff(worktree), None
+
+
 def _reconcile_sandbox_run(
-    api_base: str, r: dict, sbx: str, *, quiet: bool = True, services
+    api_base: str,
+    r: dict,
+    sbx: str,
+    *,
+    checkout_users: Counter,
+    quiet: bool = True,
+    services,
 ) -> int:
     """Remote-runner Task 5: reconcile ONE sandbox-backed 'running' row against its
     container's actual state (spec §3.5). Reuses the sweep's `_finish_run` transport
@@ -101,8 +151,12 @@ def _reconcile_sandbox_run(
         # container gone without a trace (removed out-of-band; the C2 daemon gate in
         # the caller already ruled out "docker down", so None here means GONE) —
         # finish the row so the agent stops reading as busy forever (#342 semantics).
+        diff, snapshot_ref = _capture_task_run_state(
+            r, checkout_users, services
+        )
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
+            diff, snapshot_ref=snapshot_ref,
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_container_vanished",
@@ -136,16 +190,21 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
+    diff, snapshot_ref = _capture_task_run_state(r, checkout_users, services)
     if state.oom_killed:
         ok = services._finish_run(
             api_base, run_id, "killed", state.exit_code, log_path,
+            diff, snapshot_ref=snapshot_ref,
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_oom",
                                     "detail": "out of memory — raise sandbox.memory"},
                                    ensure_ascii=False))
     else:
-        ok = services._finish_run(api_base, run_id, "exited", state.exit_code, log_path)
+        ok = services._finish_run(
+            api_base, run_id, "exited", state.exit_code, log_path,
+            diff, snapshot_ref=snapshot_ref,
+        )
     if not ok:
         # I5 (Task-5 review): the stamp did NOT land — removing now would destroy
         # the only evidence of the exit state AND leave the row 'running' forever
@@ -196,6 +255,9 @@ def reap_orphaned_runs(
         # pass below: an empty view from a dead API must never stop live containers.
         return 0
     runs = data.get("runs", [])
+    checkout_users = Counter(
+        key for row in runs if (key := _checkout_key(row)) is not None
+    )
 
     def alive(row):
         pid = row.get("pid")
@@ -221,7 +283,12 @@ def reap_orphaned_runs(
             continue
         try:
             finished = _reconcile_sandbox_run(
-                api_base, row, sbx, quiet=quiet, services=services
+                api_base,
+                row,
+                sbx,
+                checkout_users=checkout_users,
+                quiet=quiet,
+                services=services,
             )
         except Exception:
             # a docker hiccup on ONE run must never abort the sweep for the rest
@@ -255,18 +322,40 @@ def reap_orphaned_runs(
         )
         if live_sibling:
             for row in dead:
+                diff, snapshot_ref = _capture_task_run_state(
+                    row, checkout_users, services
+                )
                 services._finish_run(
-                    api_base, row.get("run_id"), "killed", -1, None
+                    api_base, row.get("run_id"), "killed", -1,
+                    row.get("log_path"), diff, snapshot_ref=snapshot_ref,
                 )
         else:
-            services._post_json(
-                f"{api_base}/api/agents/{agent_id}/wake-ack",
-                {
-                    "kind": "orphan_run_sweep",
-                    "release_lease": True,
-                    "lane": lane,
-                },
-            )
+            # The lane release bulk-orphans still-running rows, so task runs must
+            # first land their diff and immutable snapshot through /finish. If a
+            # finish fails, keep the lease and retry next sweep rather than erase
+            # the only opportunity to capture the reviewed filesystem state.
+            task_finishes_ok = True
+            for row in dead:
+                if not row.get("task_id"):
+                    continue
+                diff, snapshot_ref = _capture_task_run_state(
+                    row, checkout_users, services
+                )
+                task_finishes_ok = bool(
+                    services._finish_run(
+                        api_base, row.get("run_id"), "killed", -1,
+                        row.get("log_path"), diff, snapshot_ref=snapshot_ref,
+                    )
+                ) and task_finishes_ok
+            if task_finishes_ok:
+                services._post_json(
+                    f"{api_base}/api/agents/{agent_id}/wake-ack",
+                    {
+                        "kind": "orphan_run_sweep",
+                        "release_lease": True,
+                        "lane": lane,
+                    },
+                )
         reaped += len(dead)
         if not quiet:
             outcome = (

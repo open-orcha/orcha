@@ -25,6 +25,7 @@ import { adminOsascriptArgs, planInstall, runInstall } from './installers'
 import { ghAuthToken, ghIsAuthenticated, ghListRepos, defaultClonesParent, resolveCloneDest } from './githubSource'
 import { validateRepoUrl } from '../shared/repoUrl'
 import { computeViewBounds } from './viewBounds'
+import { isTaskCodeSpaceUrl } from './portalPresentation'
 import { readAppearance, writeAppearance, isEmpty, type Appearance } from './appearanceStore'
 import { buildReadAppearanceScript, buildApplyAppearanceScript } from './appearanceScripts'
 import type {
@@ -340,6 +341,9 @@ const portalViews = new Map<string, WebContentsView>()
  *  own content (home/manager or the wizard) is showing. Used to restore the previous
  *  portal after a temporary hide (e.g. opening the add-project wizard). */
 let activeProject: string | null = null
+/** Task-linked Code Space is the one portal route allowed to cover the native
+ * desktop project bar as well as the portal's own shell. */
+let activePortalFullWindow = false
 let tray: TrayController | null = null
 let poller: AttentionPoller | null = null
 
@@ -348,6 +352,9 @@ function createManagerWindow(): void {
     width: 1100,
     height: 760,
     title: 'Orcha',
+    // Explicit for GH #249: the task Code Space may use native macOS full
+    // screen (green button / Ctrl+Cmd+F), not Electron's simulated mode.
+    fullscreenable: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -370,6 +377,7 @@ function createManagerWindow(): void {
     managerWindow = null
     portalViews.clear()
     activeProject = null
+    activePortalFullWindow = false
   })
 }
 
@@ -381,7 +389,7 @@ function resizeActivePortalView(): void {
   const view = portalViews.get(activeProject)
   if (!view) return
   const [width, height] = managerWindow.getContentSize()
-  view.setBounds(computeViewBounds({ width, height }))
+  view.setBounds(computeViewBounds({ width, height }, activePortalFullWindow ? 0 : undefined))
 }
 
 // ---- Appearance sync across embedded portal views -----------------------------------
@@ -501,6 +509,14 @@ function getOrCreatePortalView(stack: Stack): WebContentsView {
     return { action: 'deny' }
   })
   view.webContents.on('dom-ready', () => void syncAppearanceOnDomReady(view, stack.project))
+  const updatePresentation = (_event: Electron.Event, url: string): void => {
+    if (activeProject !== stack.project) return
+    activePortalFullWindow = isTaskCodeSpaceUrl(url)
+    resizeActivePortalView()
+    sendToManager('orcha:portalActive', { project: stack.project, fullWindow: activePortalFullWindow })
+  }
+  view.webContents.on('did-navigate', updatePresentation)
+  view.webContents.on('did-navigate-in-page', updatePresentation)
   portalViews.set(stack.project, view)
   return view
 }
@@ -526,7 +542,9 @@ function showPortalView(stack: Stack, path = '/'): void {
     managerWindow.contentView.addChildView(view)
   }
   const [width, height] = managerWindow.getContentSize()
-  view.setBounds(computeViewBounds({ width, height }))
+  const destination = path !== '/' ? `http://localhost:${stack.apiPort}${path}` : view.webContents.getURL()
+  activePortalFullWindow = isTaskCodeSpaceUrl(destination)
+  view.setBounds(computeViewBounds({ width, height }, activePortalFullWindow ? 0 : undefined))
   view.setVisible(true)
   activeProject = stack.project
 
@@ -535,7 +553,7 @@ function showPortalView(stack: Stack, path = '/'): void {
   if (isNewView || path !== '/') {
     void view.webContents.loadURL(`http://localhost:${stack.apiPort}${path}`)
   }
-  sendToManager('orcha:portalActive', { project: stack.project })
+  sendToManager('orcha:portalActive', { project: stack.project, fullWindow: activePortalFullWindow })
 }
 
 /** Hide whichever portal view is showing, returning to the renderer's own content
@@ -545,8 +563,9 @@ function hidePortalView(): void {
   if (activeProject !== null) {
     portalViews.get(activeProject)?.setVisible(false)
     activeProject = null
+    activePortalFullWindow = false
   }
-  sendToManager('orcha:portalActive', { project: null })
+  sendToManager('orcha:portalActive', { project: null, fullWindow: false })
 }
 
 /** Open-or-focus: reuse the existing manager window when it's still alive. */

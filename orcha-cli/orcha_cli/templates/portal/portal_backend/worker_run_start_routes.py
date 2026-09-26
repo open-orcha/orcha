@@ -176,7 +176,7 @@ def list_container_running_runs(cid: str):
         # sweep's finish CAPTURE the adopted run's stream-json output (the run wrote it to
         # the workspace all along) — without it a re-adopted run finishes output=NULL.
         cur.execute(
-            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
+            """SELECT wr.run_id, wr.agent_id, wr.task_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
                       wr.started_at, wr.sandbox_container_id, wr.worktree, wr.base_cwd,
                       wr.log_path
                  FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
@@ -192,6 +192,7 @@ def list_container_running_runs(cid: str):
             {
                 "run_id": str(row["run_id"]),
                 "agent_id": str(row["agent_id"]),
+                "task_id": str(row["task_id"]) if row["task_id"] else None,
                 "pid": row["pid"],
                 "wake_kind": row["wake_kind"],
                 "wake_event": row["wake_event"],

@@ -82,6 +82,11 @@ class WorkerRunFinish(BaseModel):
         default=None,
         description="ISS-8: net `git diff` vs origin/main from the worker's isolated worktree",
     )
+    snapshot_ref: Optional[str] = Field(
+        default=None,
+        pattern="^[0-9a-f]{40}$",
+        description="GH #249: immutable local Git commit for this run's exact files",
+    )
     kill_reason: Optional[str] = Field(
         default=None,
         description="#270: structured watchdog diagnostic (JSON) when the stall/hard-cap reaper kills a worker — explains WHY it was reaped",
