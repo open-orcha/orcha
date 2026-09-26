@@ -72,7 +72,9 @@ def handle_exited(
     """Finalize a child process which has already exited."""
     proc = worker["proc"]
     lane = worker.get("lane", "work")
-    diff = services._capture_diff(worker.get("worktree"))
+    diff = services._capture_diff(
+        worker.get("worktree") or worker.get("base_cwd")
+    )
     runtime = services._normalize_runtime(
         (worker.get("respawn_ctx") or {}).get("model_runtime")
     )
@@ -122,8 +124,14 @@ def handle_exited(
         _save_task_result(api_base, aid, worker, diff, failed_drains, services)
         _release_worker(api_base, aid, worker, lane, "released", services, task=True)
     else:
-        services._teardown_worktree(
-            worker.get("base_cwd"), worker.get("worktree"), worker.get("branch")
+        cleanup = (
+            services._safe_teardown_worktree(
+                worker.get("base_cwd"),
+                worker.get("worktree"),
+                worker.get("branch"),
+            )
+            if worker.get("worktree")
+            else "noop"
         )
         _release_worker(api_base, aid, worker, lane, "released", services)
     if proc.returncode == 0:
@@ -136,7 +144,11 @@ def handle_exited(
         disposition = (
             "task worktree preserved"
             if is_task_worktree
-            else "worktree torn down"
+            else (
+                "dirty worktree preserved"
+                if cleanup == "preserved-dirty"
+                else "clean worktree retired"
+            )
         )
         print(
             f"[notifier] worker for {aid} (pid {proc.pid}, rc={proc.returncode}) "
@@ -155,10 +167,9 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     proc = worker["proc"]
     lane = worker.get("lane", "work")
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(worker.get("worktree"))
-    snapshot_ref = services._capture_snapshot(
-        worker.get("worktree"), worker.get("run_id")
-    )
+    source_cwd = worker.get("worktree") or worker.get("base_cwd")
+    diff = services._capture_diff(source_cwd)
+    snapshot_ref = services._capture_snapshot(source_cwd, worker.get("run_id"))
     diag = {
         "run_id": str(worker.get("run_id")),
         "agent_id": aid,

@@ -8,13 +8,7 @@ LIVE_RUN_OUTPUT_CAP = 200_000
 
 def safe_teardown_worktree(base_cwd, worktree, branch):
     """Remove a clean live worktree while preserving uncommitted human work."""
-    if not worktree:
-        return "noop"
-    rc, output = notifier._run_git(["status", "--porcelain"], cwd=worktree)
-    if rc == 0 and output.strip():
-        return "preserved-dirty"
-    notifier._teardown_worktree(base_cwd, worktree, branch)
-    return "removed"
+    return notifier._safe_teardown_worktree(base_cwd, worktree, branch)
 
 
 def mint_live_token(api_base, aid):
@@ -70,7 +64,16 @@ def release_live_lease(api_base, aid):
     )
 
 
-def start_live_run(api_base, aid, wake_event="live_terminal", pid=None, token_id=None):
+def start_live_run(
+    api_base,
+    aid,
+    wake_event="live_terminal",
+    pid=None,
+    token_id=None,
+    worktree=None,
+    branch=None,
+    base_cwd=None,
+):
     """Create a best-effort worker-run audit record."""
     run = notifier._post_json(
         f"{api_base}/api/agents/{aid}/runs",
@@ -80,6 +83,9 @@ def start_live_run(api_base, aid, wake_event="live_terminal", pid=None, token_id
             "lane": "work",
             "pid": pid,
             "token_id": token_id,
+            "worktree": worktree,
+            "branch": branch,
+            "base_cwd": base_cwd,
         },
     )
     return (run or {}).get("run_id")

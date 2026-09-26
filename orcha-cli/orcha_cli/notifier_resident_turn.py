@@ -43,6 +43,9 @@ def capture_result(
             "killed",
             0,
             resident.get("log_path"),
+            services._capture_diff(
+                resident.get("worktree") or resident.get("base_cwd")
+            ),
         )
         resident["current_run_id"] = None
         services._close_resident(api_base, resident, reason="resume_failed")
@@ -82,6 +85,9 @@ def capture_result(
         "exited",
         0,
         resident.get("log_path"),
+        services._capture_diff(
+            resident.get("worktree") or resident.get("base_cwd")
+        ),
     )
     model_switched = (
         services._resident_runtime(resident) == services.RUNTIME_CLAUDE
@@ -155,7 +161,9 @@ def stop_turn(
         "killed",
         process.returncode,
         resident.get("log_path"),
-        services._capture_diff(resident.get("worktree")),
+        services._capture_diff(
+            resident.get("worktree") or resident.get("base_cwd")
+        ),
         kill_reason=json.dumps(
             {
                 "cause": "human_stop",

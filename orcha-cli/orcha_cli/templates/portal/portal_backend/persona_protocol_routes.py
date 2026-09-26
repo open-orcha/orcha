@@ -41,7 +41,10 @@ def get_persona(aid: str):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
         cur.execute(
-            "SELECT alias, role, kind, model, system_prompt FROM agents WHERE id=%s",
+            """SELECT a.alias, a.role, a.kind, a.model, a.system_prompt,
+                      c.worktrees_disabled
+                 FROM agents a JOIN containers c ON c.id = a.container_id
+                WHERE a.id=%s""",
             (aid,),
         )
         row = cur.fetchone()
@@ -57,6 +60,9 @@ def get_persona(aid: str):
         "model": model,
         "model_runtime": model_runtime,
         "system_prompt": row["system_prompt"],
+        # The live-terminal bridge reads persona before it chooses a cwd, so it shares the same
+        # persisted project routing preference as notifier-managed wakes and conversations.
+        "worktrees_disabled": bool(row["worktrees_disabled"]),
     }
 
 

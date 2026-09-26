@@ -21,6 +21,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON } from "../../api/client";
+import { MessageComposer } from "../../components/MessageComposer";
 import { usePairing } from "../../components/terminal/TerminalPane";
 import { Avatar, Icon, Md, useToast } from "../../components/ui";
 import { relTime } from "../../lib/format";
@@ -77,8 +78,6 @@ const SKILLS = [
 const ACCEPT_EXT = ["png", "jpg", "jpeg", "gif", "webp", "pdf", "txt", "md", "csv", "log", "json"];
 const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp"];
 const extOf = (n: unknown) => (String(n || "").split(".").pop() || "").toLowerCase();
-const CLIP_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 const FILE_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
 function fmtSize(n: unknown): string {
@@ -270,7 +269,6 @@ export function Conversation({ agent }: { agent: Agent }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
   // `sending` mirrored in a ref so a second Enter/click in the SAME tick (before
   // React re-renders) is still a no-op — the vanilla in-flight guard, race-proof.
   const sendingRef = useRef(false);
@@ -560,16 +558,12 @@ export function Conversation({ agent }: { agent: Agent }) {
     setSlashClosed(true);
     taRef.current?.focus();
   };
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const onComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (slashOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashItems.length); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashItems.length) % slashItems.length); return; }
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(slashItems[slashIdx % slashItems.length]); return; }
       if (e.key === "Escape") { setSlashClosed(true); return; }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void send();
     }
   };
 
@@ -779,8 +773,30 @@ export function Conversation({ agent }: { agent: Agent }) {
           <Icon name="shield" cls="" />
           <span>{locked ? agent.alias + " is in a live terminal — conversation paused." : ""}</span>
         </div>
-        <div className="conv-composer">
-          {slashOpen && (
+        <MessageComposer
+          className="conv-composer"
+          textareaClassName="conv-in"
+          attachClassName="conv-attach"
+          value={draft}
+          onValueChange={(value) => {
+            setDraft(value);
+            setSlashClosed(false);
+            setSlashIdx(0);
+          }}
+          onSend={send}
+          onFiles={uploadConvFiles}
+          placeholder={`Message ${agent.alias} — type / for skills…`}
+          ariaLabel={`Message ${agent.alias}`}
+          textareaId="convInput"
+          attachButtonId="convAttach"
+          fileInputId="convAttachInput"
+          sendButtonId="convSend"
+          disabled={locked}
+          sending={sending}
+          textareaRef={(node) => { taRef.current = node; }}
+          onTextareaKeyDown={onComposerKeyDown}
+          onTextareaBlur={() => setTimeout(() => setSlashClosed(true), 120)}
+          overlay={slashOpen ? (
             <div className="slash" id="convSlash">
               {slashItems.map((s, i) => (
                 <div
@@ -795,66 +811,8 @@ export function Conversation({ agent }: { agent: Agent }) {
                 </div>
               ))}
             </div>
-          )}
-          <button
-            type="button"
-            className="conv-attach"
-            id="convAttach"
-            title="Attach files (or drag-drop / paste)"
-            aria-label="Attach files"
-            disabled={locked}
-            onClick={() => fileRef.current?.click()}
-            dangerouslySetInnerHTML={{ __html: CLIP_ICON }}
-          />
-          <input
-            ref={fileRef}
-            id="convAttachInput"
-            type="file"
-            multiple
-            accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.log,.json"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              uploadConvFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <textarea
-            ref={taRef}
-            id="convInput"
-            className="conv-in"
-            rows={1}
-            placeholder={`Message ${agent.alias} — type / for skills…`}
-            value={draft}
-            disabled={locked}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setSlashClosed(false);
-              setSlashIdx(0);
-            }}
-            onKeyDown={onKeyDown}
-            onBlur={() => setTimeout(() => setSlashClosed(true), 120)}
-            onPaste={(e) => {
-              const items = e.clipboardData && e.clipboardData.files;
-              if (items && items.length) uploadConvFiles(items); // pasted image/file → stage (don't block text paste)
-            }}
-          />
-          {/* in-flight affordance: down + spinner while the POST runs; `sending`
-              in the disabled expr keeps the button down across presence repaints
-              (the vanilla applyLock dup vector). */}
-          <button className={"btn approve" + (sending ? " busy" : "")} id="convSend" disabled={locked || sending} onClick={() => void send()}>
-            {sending ? (
-              <>
-                <span className="spin" />
-                Sending
-              </>
-            ) : (
-              <>
-                <Icon name="arrow" cls="" />
-                Send
-              </>
-            )}
-          </button>
-        </div>
+          ) : undefined}
+        />
         <div className="conv-tray" id="convTray">
           {staged.map((s) => (
             <span key={s.key} className={"att-chip" + (s.status === "uploading" ? " uploading" : s.status === "failed" ? " failed" : "")}>

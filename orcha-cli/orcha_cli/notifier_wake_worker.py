@@ -5,15 +5,21 @@ from __future__ import annotations
 import sys
 import time
 
+from .notifier_routing_handoff import carry_previous_checkout
+
 
 def _worktree_for(candidate, auto_tasks, live_workers, dry_run, services):
     """Provision isolation appropriate to the candidate's likely work."""
+    # This is the final routing decision shared by every work-lane trigger.  A disabled project
+    # never creates OR selects a task/agent worktree; run_cwd below therefore falls back to the
+    # registered main checkout.  Existing worktrees are deliberately left untouched.
+    if candidate.get("worktrees_disabled"):
+        return None, None, False
     headless_cwd = candidate.get("headless_cwd")
     noncode_events = ("request_answered", "request_closed")
-    single_noncode = (
-        (candidate.get("pending_events") or 0) <= 1
-        and candidate.get("latest_event") in noncode_events
-    )
+    single_noncode = (candidate.get("pending_events") or 0) <= 1 and candidate.get(
+        "latest_event"
+    ) in noncode_events
     code_wake = (
         bool(auto_tasks)
         or bool(candidate.get("wake_task_id"))
@@ -73,6 +79,9 @@ def _worker_state(
         "task_worktree": task_worktree,
         "handled_event_ids": handled,
         "event": event,
+        # Checkpoint respawns re-read the persisted project setting, but this value is the
+        # fail-safe when the API is temporarily unavailable during that hand-off.
+        "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
     }
     return {
         "proc": process,
@@ -109,6 +118,7 @@ def _worker_state(
         "respawn_ctx": respawn,
         "run_token": token,
         "lane": "work",
+        "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
     }
 
 
@@ -145,10 +155,7 @@ def spawn(
         if not (claim and claim.get("claimed")):
             reason = (claim or {}).get("reason", "claim failed (unreachable)")
             if not quiet:
-                print(
-                    f"[notifier] skip {candidate['alias']} "
-                    f"— single-flight: {reason}"
-                )
+                print(f"[notifier] skip {candidate['alias']} — single-flight: {reason}")
             return None
 
     auto_tasks = candidate.get("auto_start_task_ids") or []
@@ -187,6 +194,47 @@ def spawn(
         candidate, auto_tasks, live_workers, dry_run, services
     )
     run_cwd = worktree or headless_cwd
+    if not dry_run and not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        task_id=run_task_id,
+        lane="work",
+        require_taskless=run_task_id is None,
+    ):
+        if run_task_id:
+            services._post_json(
+                f"{api_base}/api/tasks/{run_task_id}/messages",
+                {
+                    "author_agent_id": candidate["agent_id"],
+                    "body": (
+                        "Run start paused because Orcha could not safely carry the "
+                        "saved files into the checkout selected by the project setting. "
+                        "Both checkouts remain preserved, and no worker was started."
+                    ),
+                },
+            )
+        services._post_json(
+            f"{api_base}/api/agents/{candidate['agent_id']}/wake-ack",
+            {
+                "kind": "worker_routing_handoff_failed",
+                "release_lease": True,
+                "lane": lane,
+            },
+        )
+        if not quiet:
+            print(
+                f"[notifier] wake for {candidate.get('alias')} paused: saved files "
+                "could not be carried into the selected checkout",
+                file=sys.stderr,
+            )
+        return {
+            "sent": False,
+            "command": "checkout handoff failed",
+            "resume_rendered": resume_rendered,
+            "lane": lane,
+        }
     token = (
         None
         if dry_run

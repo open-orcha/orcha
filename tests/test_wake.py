@@ -898,6 +898,17 @@ def test_select_transport_falls_back_to_ephemeral(monkeypatch):
     assert notifier.select_transport({"headless_cwd": "/p"}) == "ephemeral"
 
 
+def test_select_transport_disabled_worktrees_never_uses_existing_tmux(monkeypatch):
+    """Only a fresh headless run can guarantee the project main checkout as its cwd."""
+    monkeypatch.setattr(notifier, "tmux_pane_live", lambda target: True)
+    candidate = {
+        "tmux_target": "m:0.0",
+        "headless_cwd": "/project/main",
+        "worktrees_disabled": True,
+    }
+    assert notifier.select_transport(candidate) == "ephemeral"
+
+
 def test_select_transport_unreachable_when_no_route(monkeypatch):
     monkeypatch.setattr(notifier, "tmux_pane_live", lambda t: False)
     assert notifier.select_transport({"tmux_target": None, "headless_cwd": None}) == "unreachable"

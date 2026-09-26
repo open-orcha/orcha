@@ -28,7 +28,9 @@ def advance_codex_resident(
             "killed",
             proc.returncode,
             resident.get("log_path"),
-            compat._capture_diff(resident.get("worktree")),
+            compat._capture_diff(
+                resident.get("worktree") or resident.get("base_cwd")
+            ),
         )
         compat._safe_teardown_worktree(
             resident.get("base_cwd"),
@@ -90,7 +92,9 @@ def advance_codex_resident(
         "killed",
         proc.returncode,
         resident.get("log_path"),
-        compat._capture_diff(resident.get("worktree")),
+        compat._capture_diff(
+            resident.get("worktree") or resident.get("base_cwd")
+        ),
     )
     compat._post_json(
         f"{api_base}/api/agents/{agent_id}/wake-ack",
@@ -139,7 +143,9 @@ def _stop_turn(
         "killed",
         proc.returncode,
         resident.get("log_path"),
-        compat._capture_diff(resident.get("worktree")),
+        compat._capture_diff(
+            resident.get("worktree") or resident.get("base_cwd")
+        ),
         kill_reason=json.dumps(
             {
                 "cause": "human_stop",

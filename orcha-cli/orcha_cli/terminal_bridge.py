@@ -118,8 +118,10 @@ async def _expire_warm(session, quiet=True):
     return await _bridge_warm().expire_warm(_bridge(), session, quiet=quiet)
 
 
-def _retire_warm(session, quiet=True):
-    return _bridge_warm().retire_warm(_bridge(), session, quiet=quiet)
+def _retire_warm(session, quiet=True, teardown_worktree=True):
+    return _bridge_warm().retire_warm(
+        _bridge(), session, quiet=quiet, teardown_worktree=teardown_worktree
+    )
 
 
 def _retire_all_warm():

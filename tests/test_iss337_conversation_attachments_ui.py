@@ -23,18 +23,26 @@ def _conv() -> str:
     return (SRC / "pages" / "agents" / "Conversation.tsx").read_text()
 
 
+def _composer() -> str:
+    return (SRC / "components" / "MessageComposer.tsx").read_text()
+
+
 # ---------- static guards: composer affordance ----------
 
 def test_conversation_composer_has_attachment_affordance():
     js = _conv()
-    # paperclip button + hidden file input + staging tray in the composer
-    assert 'id="convAttach"' in js and 'id="convAttachInput"' in js, "no attach button / file input in the composer"
+    composer = _composer()
+    # The Conversation supplies stable ids and its upload callback to the shared
+    # paperclip + hidden-file-input implementation; the staging tray stays local.
+    assert 'attachButtonId="convAttach"' in js and 'fileInputId="convAttachInput"' in js, \
+        "no attach button / file input ids on the shared composer"
     assert 'id="convTray"' in js, "no staging tray in the composer"
-    assert 'type="file"' in js and 'accept=".png' in js, "file input missing the type-allowlist accept"
+    assert 'type="file"' in composer and 'DEFAULT_ACCEPT = ".png' in composer, \
+        "shared file input missing the type-allowlist accept"
     # wired on the composer (paperclip click / drag-drop / paste)
-    assert "uploadConvFiles" in js, "attach controls not wired to the upload path"
+    assert "onFiles={uploadConvFiles}" in js, "attach controls not wired to the upload path"
     assert "onDragEnter" in js and "onDragOver" in js and "onDrop" in js, "no drag-drop wiring"
-    assert "onPaste" in js, "no paste-to-attach wiring"
+    assert "onPaste" in composer and "onFiles(files)" in composer, "no paste-to-attach wiring"
 
 
 # ---------- static guards: upload is conversation-scoped + get-or-create first ----------

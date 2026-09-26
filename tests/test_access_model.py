@@ -155,6 +155,11 @@ async def test_repo_autonomy_agents_reviewer_grants(
     )
     assert r.status_code == 403, r.text
     r = await client.post(
+        f"/api/containers/{cid}/worktrees",
+        json={"disabled": True, "actor_agent_id": hubot}, headers=HUBOT,
+    )
+    assert r.status_code == 403 and "manage_autonomy" in r.text
+    r = await client.post(
         f"/api/containers/{cid}/status",
         json={"status": "paused", "actor_agent_id": hubot}, headers=HUBOT,
     )
@@ -204,6 +209,10 @@ async def test_repo_autonomy_agents_reviewer_grants(
     assert (await client.post(
         f"/api/containers/{cid}/autonomy",
         json={"level": "full", "actor_agent_id": hubot}, headers=HUBOT,
+    )).status_code == 200
+    assert (await client.post(
+        f"/api/containers/{cid}/worktrees",
+        json={"disabled": True, "actor_agent_id": hubot}, headers=HUBOT,
     )).status_code == 200
     assert (await client.post(
         f"/api/containers/{cid}/agents",
