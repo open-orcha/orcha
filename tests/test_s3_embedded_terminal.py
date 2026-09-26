@@ -170,11 +170,13 @@ def test_iss69_contention_ux_names_holder_and_handles_yield():
 
 def test_conversation_locks_while_agent_in_live_terminal():
     conv = (FRONTEND / "pages" / "agents" / "Conversation.tsx").read_text()
+    composer = (FRONTEND / "components" / "MessageComposer.tsx").read_text()
     # locked while a live lease is held — by another embodiment OR our own CONNECTED pair session
     assert 'leaseOf(agent) === "live"' in conv and "(pairing.paired && pairing.termConnected)" in conv, \
         "lock not driven by live lease / our connected pair"
     assert "disabled={locked}" in conv, "composer not disabled while locked"
-    assert conv.count("disabled={locked}") >= 2, "both the input and Send must lock"
+    assert composer.count("disabled={disabled}") >= 2, "shared composer input / attachment controls do not lock"
+    assert "disabled={disabled || sending}" in composer, "shared composer Send control does not lock"
     assert "conversation paused" in conv, "no lock banner copy"
     # the lock CSS must gate on the VISIBLE banner — a sibling selector matches a [hidden]
     # .conv-lock too, so without :not([hidden]) every UNLOCKED composer would be dead (P1).

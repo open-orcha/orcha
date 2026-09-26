@@ -25,6 +25,7 @@ import { resultText } from "../../lib/resultText";
 import { isActingOwner, reviewerLabel, reviewerRef, reviewerSupported } from "../../lib/reviewer";
 import { leaseOf, statusClass } from "../../lib/status";
 import { Avatar, Icon, KindBadge, Linkified, Modal, useToast } from "../../components/ui";
+import { MessageComposer } from "../../components/MessageComposer";
 import {
   actingHuman,
   agentByAlias,
@@ -181,12 +182,6 @@ const FileIcon = () => (
     <path d="M14 2v6h6" />
   </svg>
 );
-const ClipIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-  </svg>
-);
-
 interface StagedAtt {
   key: number;
   name: string;
@@ -764,11 +759,12 @@ function ThreadCard({
   const toast = useToast();
   const [shown, setShown] = useState(THREAD_SHOWN);
   const [text, setText] = useState("");
+  const [posting, setPosting] = useState(false);
   const [staged, setStaged] = useState<StagedAtt[]>([]);
   const [dragover, setDragover] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const seqRef = useRef(0);
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const postingRef = useRef(false);
 
   useEffect(() => {
     if (!lightbox) return;
@@ -825,6 +821,7 @@ function ThreadCard({
   };
 
   const postMsg = async () => {
+    if (postingRef.current) return;
     const v = text.trim();
     const done = staged.filter((s) => s.status === "done");
     const pending = staged.some((s) => s.status === "uploading");
@@ -839,20 +836,37 @@ function ThreadCard({
       return;
     }
     const atts = done.map((s) => ({ id: s.ref!.id, name: s.ref!.name }));
-    const r = await post("/api/tasks/" + encodeURIComponent(t.id) + "/messages", {
-      body: v,
-      author_agent_id: h.id,
-      attachments: atts.length ? atts : undefined,
-    });
-    if (r.ok) {
-      toast("Comment posted", "ok");
-      setText("");
-      setStaged([]);
-      void refresh();
-    } else {
-      // VB4: the 422 body-cap (and any other rejection) surfaces its explicit detail.
-      const det = detailText(r.d);
-      toast("Failed (" + r.status + ")" + (det ? ": " + det : ""), "danger");
+    // Match the Conversation composer: move the submitted draft out of the
+    // editable controls before awaiting the network. A person can immediately
+    // begin a follow-up without the older request later clearing that new work.
+    const submittedStaged = staged;
+    setText("");
+    setStaged([]);
+    postingRef.current = true;
+    setPosting(true);
+    try {
+      const r = await post("/api/tasks/" + encodeURIComponent(t.id) + "/messages", {
+        body: v,
+        author_agent_id: h.id,
+        attachments: atts.length ? atts : undefined,
+      });
+      if (r.ok) {
+        toast("Comment posted", "ok");
+        void refresh();
+      } else {
+        setText((current) => current.trim() ? current : v);
+        setStaged((current) => current.length ? current : submittedStaged);
+        // VB4: the 422 body-cap (and any other rejection) surfaces its explicit detail.
+        const det = detailText(r.d);
+        toast("Failed (" + r.status + ")" + (det ? ": " + det : ""), "danger");
+      }
+    } catch {
+      setText((current) => current.trim() ? current : v);
+      setStaged((current) => current.length ? current : submittedStaged);
+      toast("Couldn't reach the portal — your comment is still in the composer.", "danger");
+    } finally {
+      postingRef.current = false;
+      setPosting(false);
     }
   };
 
@@ -952,47 +966,25 @@ function ThreadCard({
             if (e.dataTransfer?.files?.length) uploadFiles(e.dataTransfer.files);
           }}
         >
-          <div className="reply-row">
-            {h ? <Avatar alias={h.alias} kind="human" size="sm" /> : null}
-            <button
-              type="button"
-              className="attach-btn"
-              id="attachBtn"
-              title="Attach files (or drag-drop / paste)"
-              aria-label="Attach files"
-              disabled={locked}
-              onClick={() => fileRef.current?.click()}
-            >
-              <ClipIcon />
-            </button>
-            <input
-              ref={fileRef}
-              id="attachInput"
-              type="file"
-              multiple
-              accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.log,.json"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                uploadFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <input
-              id="reply"
-              className="reply-in"
-              placeholder="Add a comment… (drag, paste or attach files)"
-              value={text}
-              disabled={locked}
-              onChange={(e) => setText(e.target.value)}
-              onPaste={(e) => {
-                const items = e.clipboardData?.files;
-                if (items && items.length) uploadFiles(items); // pasted image/file → stage
-              }}
-            />
-            <button className="btn subtle" id="replyBtn" data-task={t.id} disabled={locked} onClick={() => void postMsg()}>
-              Post
-            </button>
-          </div>
+          <MessageComposer
+            className="task-thread-composer"
+            value={text}
+            onValueChange={setText}
+            onSend={() => void postMsg()}
+            onFiles={uploadFiles}
+            placeholder="Add a comment… (drag, paste or attach files)"
+            ariaLabel="Task thread comment"
+            textareaId="reply"
+            attachButtonId="attachBtn"
+            fileInputId="attachInput"
+            sendButtonId="replyBtn"
+            sendButtonData={{ "data-task": t.id }}
+            disabled={locked}
+            sending={posting}
+            sendLabel="Post"
+            sendingLabel="Posting"
+            leading={h ? <Avatar alias={h.alias} kind="human" size="sm" /> : null}
+          />
           <div id="attachTray" className="attach-tray">
             {staged.map((s) => (
               <span key={s.key} className={"att-chip" + (s.status === "uploading" ? " uploading" : s.status === "failed" ? " failed" : "")}>
