@@ -27,6 +27,10 @@ missing.
   `git status` instead of one `git diff` per ignored file (36k subprocesses on a
   checkout with a virtualenv), and a crashing candidate/conversation now releases
   its lease, is held down for 5 min, and is logged even in quiet mode.
+- With worktrees disabled, a task wake whose previous worktree cannot be carried
+  into the (dirty) main checkout now starts in main anyway and posts once where
+  the previous checkout's files still are, instead of pausing every wake for
+  good. With worktrees enabled the carry still fails closed.
 
 ### Added
 - `orcha file-guard` — per-file edit lock for agents that share one checkout
