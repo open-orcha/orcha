@@ -9,6 +9,8 @@ import pathlib
 import tempfile
 from typing import Any
 
+NESTED_WORKTREES_PREFIX = ".orcha-worktrees/"
+
 DIFF_EXCLUDES = (
     ".",
     ":(exclude).claude/orcha.json",
@@ -329,7 +331,13 @@ def _status_paths(cwd, services: Any):
         if entry[0] in "RC":
             # Rename/copy entries carry the original path as the next NUL field.
             index += 1
-    return paths
+    # Older Git (e.g. 2.39 on Debian) still reports a nested linked worktree as
+    # "!! .orcha-worktrees/<name>/" despite the exclude pathspec above.
+    return {
+        path
+        for path in paths
+        if not path.startswith(NESTED_WORKTREES_PREFIX)
+    }
 
 
 def _patch_paths(patch: str):
