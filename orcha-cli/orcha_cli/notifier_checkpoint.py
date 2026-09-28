@@ -25,6 +25,7 @@ def checkpoint_and_respawn(
     services._kill_worker(process, graceful=True)
     source_cwd = worktree or base_cwd
     diff = services._capture_diff(source_cwd)
+    snapshot_ref = services._capture_snapshot(source_cwd, worker.get("run_id"))
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -32,6 +33,7 @@ def checkpoint_and_respawn(
         0,
         worker.get("log_path"),
         diff,
+        snapshot_ref=snapshot_ref,
     ):
         # I4: the OLD wake's container, once stamped
         services._reap_sandbox_artifacts(worker)

@@ -63,8 +63,11 @@ from .notifier_wake_facade import (
 from .notifier_worktree_facade import (
     _branch_commit_count,
     _capture_diff,
+    _capture_snapshot,
+    _capture_snapshot_diff,
     _drain_pending_revokes,
     _ensure_worktree_exclude,
+    _existing_snapshot_ref,
     _finish_run,
     _discard_worktree,
     _handoff_branch_changes,

@@ -22,8 +22,8 @@ from portal_backend.worker_run_support import (
 @app.post("/api/runs/{run_id}/finish", status_code=200)
 def finish_worker_run(run_id: str, body: WorkerRunFinish):
     """A2: the notifier finishes a run on reap — exited (clean) or killed (ISS-15 watchdog),
-    with the captured stream-json output. Idempotent-ish: finishing an already-finished run
-    just overwrites the terminal fields."""
+    with the captured stream-json output. Repeated delivery may refresh terminal metadata, but
+    the first immutable snapshot and its matching diff remain the run's review state."""
     if not valid_uuid(run_id):
         raise HTTPException(400, "run_id is not a valid UUID")
     if body.status not in ("exited", "killed", "rate_limited", "failed"):
@@ -52,7 +52,14 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
         cur.execute(
             """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
                       task_id=COALESCE(task_id, %s),
-                      diff=COALESCE(%s, diff), kill_reason=COALESCE(%s, kill_reason),
+                      diff=CASE WHEN snapshot_ref IS NULL THEN COALESCE(%s, diff)
+                                ELSE diff END,
+                      kill_reason=COALESCE(%s, kill_reason),
+                      snapshot_ref=CASE
+                          WHEN snapshot_ref IS NOT NULL THEN snapshot_ref
+                          WHEN %s::text IS NOT NULL THEN %s
+                          ELSE NULL
+                      END,
                       input_tokens=COALESCE(%s, input_tokens),
                       output_tokens=COALESCE(%s, output_tokens),
                       cache_read_input_tokens=COALESCE(%s, cache_read_input_tokens),
@@ -67,6 +74,8 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish):
                 late_task_id,
                 body.diff,
                 body.kill_reason,
+                body.diff,
+                body.snapshot_ref,
                 body.input_tokens,
                 body.output_tokens,
                 body.cache_read_input_tokens,

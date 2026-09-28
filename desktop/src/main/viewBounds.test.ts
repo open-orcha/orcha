@@ -25,6 +25,15 @@ describe('computeViewBounds', () => {
     })
   })
 
+  it('fills the entire window when task Code Space removes the top bar', () => {
+    expect(computeViewBounds({ width: 1200, height: 800 }, 0)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1200,
+      height: 800
+    })
+  })
+
   it('clamps to zero height instead of going negative when the window is shorter than the bar', () => {
     const bounds = computeViewBounds({ width: 300, height: 20 })
     expect(bounds.y).toBe(20)

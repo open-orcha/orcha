@@ -5,12 +5,20 @@ import json
 import time
 from typing import Optional
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from portal_backend import local_git
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, require_task, valid_uuid
+from portal_backend.github_repo_browse_routes import (
+    LOCAL_REPO,
+    _detail_error_payload,
+    _local_file_response,
+    _local_tree_level,
+)
+from portal_backend.identity_routes import require_member_read
 from portal_backend.worker_run_support import run_row
 
 
@@ -80,6 +88,73 @@ def list_task_runs(tid: str, limit: int = Query(default=20, ge=1, le=200)):
         )
         runs = [run_row(row) for row in cur.fetchall()]
     return {"task_id": tid, "runs": runs}
+
+
+def _run_snapshot_ref(cur, cid: str, run_id: str, request: Request) -> str:
+    """Authorize and resolve one run's immutable, container-scoped snapshot."""
+    if not valid_uuid(cid) or not valid_uuid(run_id):
+        raise HTTPException(400, "container_id / run_id must be valid UUIDs")
+    require_member_read(cur, request, cid)
+    cur.execute(
+        """SELECT wr.snapshot_ref FROM worker_runs wr
+           JOIN agents a ON a.id=wr.agent_id
+           WHERE wr.run_id=%s AND a.container_id=%s""",
+        (run_id, cid),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, f"worker run {run_id} not found in this project")
+    snapshot_ref = row.get("snapshot_ref")
+    if not snapshot_ref:
+        raise HTTPException(409, "this run predates immutable code snapshots")
+    if not local_git.available() or local_git.resolve_ref(snapshot_ref) != snapshot_ref:
+        raise HTTPException(410, "this run's immutable code snapshot is unavailable")
+    return snapshot_ref
+
+
+@app.get("/api/containers/{cid}/runs/{run_id}/snapshot/tree")
+def get_run_snapshot_tree(
+    cid: str,
+    run_id: str,
+    request: Request,
+    path: str = Query(default=""),
+):
+    """Browse one directory from the exact Git state captured for this run."""
+    with db_cursor() as (_, cur):
+        snapshot_ref = _run_snapshot_ref(cur, cid, run_id, request)
+    clean_path = (path or "").strip("/")
+    try:
+        entries = _local_tree_level(LOCAL_REPO, snapshot_ref, cid, clean_path)
+    except RuntimeError as exc:
+        return {**_detail_error_payload(exc), "repo": LOCAL_REPO}
+    entries.sort(
+        key=lambda entry: (entry["type"] != "dir", (entry["name"] or "").lower())
+    )
+    return {
+        "ref": snapshot_ref,
+        "path": clean_path,
+        "entries": entries,
+        "truncated": False,
+    }
+
+
+@app.get("/api/containers/{cid}/runs/{run_id}/snapshot/file")
+def get_run_snapshot_file(
+    cid: str,
+    run_id: str,
+    request: Request,
+    path: str = Query(...),
+):
+    """Read one file from the exact Git state captured for this run."""
+    clean_path = (path or "").strip("/")
+    if not clean_path:
+        raise HTTPException(400, "path is required")
+    with db_cursor() as (_, cur):
+        snapshot_ref = _run_snapshot_ref(cur, cid, run_id, request)
+    try:
+        return _local_file_response(LOCAL_REPO, snapshot_ref, cid, clean_path)
+    except RuntimeError as exc:
+        return {**_detail_error_payload(exc), "repo": LOCAL_REPO}
 
 
 def worker_run_status(run_id):

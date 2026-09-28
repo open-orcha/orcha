@@ -48,6 +48,7 @@ import { ThreadRail, type RailTab } from "./ThreadRail";
 import { usePaneWidths } from "./usePaneWidths";
 import { fetchWorktreeFile, type WorktreeFilePayload, fetchWorktreeAvailable } from "./worktreeApi";
 import { WorktreeDiffPane } from "./WorktreeDiffPane";
+import { TaskCodeSpacePage } from "./TaskCodeSpacePage";
 import "./codespace.css";
 
 // Item 1 — Markdown files render through the house Md component (esc-first,
@@ -96,6 +97,11 @@ function pulseTreeRow(dirPath: string): void {
 const LARGE_FILE_LINES = 1500;
 
 export function CodeSpacePage() {
+  const [searchParams] = useSearchParams();
+  return searchParams.get("task") ? <TaskCodeSpacePage /> : <RepositoryCodeSpacePage />;
+}
+
+function RepositoryCodeSpacePage() {
   const { snap, cid } = useSnapshot();
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();

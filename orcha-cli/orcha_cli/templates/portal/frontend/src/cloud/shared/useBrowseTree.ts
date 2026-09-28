@@ -25,7 +25,12 @@
  * collapsing/re-expanding) for the error row's own click-to-retry affordance.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchFile, fetchTree } from "../github/browse/browseApi";
+import {
+  fetchFile,
+  fetchRunSnapshotFile,
+  fetchRunSnapshotTree,
+  fetchTree,
+} from "../github/browse/browseApi";
 import { parentOf, type BrowseFilePayload } from "../github/browse/browseTypes";
 import type { GhError } from "../github/ghlib";
 import { buildVisibleRows, type DirState, type TreeRow } from "./browseTree";
@@ -45,7 +50,12 @@ export interface UseBrowseTreeResult {
   fileLoading: boolean;
 }
 
-export function useBrowseTree(cid: string, gitRef: string, path: string): UseBrowseTreeResult {
+export function useBrowseTree(
+  cid: string,
+  gitRef: string,
+  path: string,
+  snapshotRunId?: string,
+): UseBrowseTreeResult {
   const [dirCache, setDirCache] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
 
@@ -57,7 +67,10 @@ export function useBrowseTree(cid: string, gitRef: string, path: string): UseBro
   const loadDir = useCallback((dirPath: string) => {
     if (!cid) return; // caller resolving cid asynchronously (e.g. from useSnapshot()) — wait for it
     setDirCache((prev) => ({ ...prev, [dirPath]: { loading: true, error: null, entries: prev[dirPath]?.entries ?? null } }));
-    fetchTree(cid, gitRef, dirPath).then((res) => {
+    const request = snapshotRunId
+      ? fetchRunSnapshotTree(cid, snapshotRunId, dirPath)
+      : fetchTree(cid, gitRef, dirPath);
+    request.then((res) => {
       if (!res.ok) {
         setDirCache((prev) => ({ ...prev, [dirPath]: { loading: false, error: res.error, entries: null } }));
         return;
@@ -67,14 +80,14 @@ export function useBrowseTree(cid: string, gitRef: string, path: string): UseBro
         [dirPath]: { loading: false, error: null, entries: res.data.entries, truncated: res.data.truncated },
       }));
     });
-  }, [cid, gitRef]);
+  }, [cid, gitRef, snapshotRunId]);
 
   useEffect(() => {
     setDirCache({});
     setExpanded(new Set([""]));
     loadDir("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cid, gitRef]);
+  }, [cid, gitRef, snapshotRunId]);
 
   useEffect(() => {
     if (!path) return;
@@ -98,7 +111,7 @@ export function useBrowseTree(cid: string, gitRef: string, path: string): UseBro
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, cid, gitRef]);
+  }, [path, cid, gitRef, snapshotRunId]);
 
   const toggleDir = useCallback((dirPath: string) => {
     setExpanded((prev) => {
@@ -138,14 +151,17 @@ export function useBrowseTree(cid: string, gitRef: string, path: string): UseBro
     if (!path || !cid) { setFilePayload(null); setFileError(null); return; }
     const myToken = ++fileToken.current;
     setFileLoading(true);
-    fetchFile(cid, gitRef, path).then((res) => {
+    const request = snapshotRunId
+      ? fetchRunSnapshotFile(cid, snapshotRunId, path)
+      : fetchFile(cid, gitRef, path);
+    request.then((res) => {
       if (myToken !== fileToken.current) return;
       setFileLoading(false);
       if (!res.ok) { setFileError(res.error); setFilePayload(null); return; }
       setFileError(null);
       setFilePayload(res.data);
     });
-  }, [cid, gitRef, path]);
+  }, [cid, gitRef, path, snapshotRunId]);
 
   return { dirCache, expanded, rows, toggleDir, retryDir, filePayload, fileError, fileLoading };
 }

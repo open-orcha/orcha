@@ -60,6 +60,62 @@ def test_provision_isolated_worktree_diff_and_teardown(tmp_path):
     assert branch not in out
 
 
+def test_run_snapshot_freezes_worktree_without_touching_real_index(tmp_path):
+    work = _make_repo(tmp_path)
+    run_id = "11111111-1111-4111-8111-111111111111"
+    (work / "README.md").write_text("staged version\n")
+    _git(["add", "README.md"], work)
+    (work / "README.md").write_text("working version\n")
+    (work / "new.txt").write_text("untracked run output\n")
+
+    _, staged_before = notifier._run_git(
+        ["diff", "--cached", "--", "README.md"], cwd=str(work)
+    )
+    snapshot = notifier._capture_snapshot(str(work), run_id)
+
+    assert snapshot and len(snapshot) == 40
+    _, snap_readme = notifier._run_git(["show", f"{snapshot}:README.md"], cwd=str(work))
+    _, snap_new = notifier._run_git(["show", f"{snapshot}:new.txt"], cwd=str(work))
+    _, staged_after = notifier._run_git(
+        ["diff", "--cached", "--", "README.md"], cwd=str(work)
+    )
+    _, kept_ref = notifier._run_git(
+        ["rev-parse", f"refs/orcha/run-snapshots/{run_id}"], cwd=str(work)
+    )
+    assert snap_readme == "working version\n"
+    assert snap_new == "untracked run output\n"
+    assert staged_after == staged_before
+    assert kept_ref.strip() == snapshot
+
+
+def test_run_snapshot_is_create_only_for_repeated_capture(tmp_path):
+    work = _make_repo(tmp_path)
+    run_id = "22222222-2222-4222-8222-222222222222"
+    (work / "README.md").write_text("first reviewed state\n")
+    first = notifier._capture_snapshot(str(work), run_id)
+
+    (work / "README.md").write_text("later retry state\n")
+    second = notifier._capture_snapshot(str(work), run_id)
+
+    assert second == first
+    _, frozen = notifier._run_git(["show", f"{second}:README.md"], cwd=str(work))
+    assert frozen == "first reviewed state\n"
+
+
+def test_run_snapshot_diff_stays_pinned_after_worktree_moves(tmp_path):
+    work = _make_repo(tmp_path)
+    run_id = "33333333-3333-4333-8333-333333333333"
+    (work / "README.md").write_text("first reviewed state\n")
+    snapshot = notifier._capture_snapshot(str(work), run_id)
+
+    (work / "README.md").write_text("live replacement state\n")
+
+    assert notifier._existing_snapshot_ref(str(work), run_id) == snapshot
+    snapshot_diff = notifier._capture_snapshot_diff(str(work), snapshot)
+    assert "first reviewed state" in snapshot_diff
+    assert "live replacement state" not in snapshot_diff
+
+
 def test_two_workers_do_not_tangle(tmp_path):
     work = _make_repo(tmp_path)
     wt1, b1 = notifier._provision_worktree(str(work), "alice")

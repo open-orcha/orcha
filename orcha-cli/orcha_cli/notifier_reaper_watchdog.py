@@ -36,9 +36,9 @@ def handle_terminal_result(
     if now - seen <= services.GRACEFUL_EXIT_SECS:
         return True
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(
-        worker.get("worktree") or worker.get("base_cwd")
-    )
+    source_cwd = worker.get("worktree") or worker.get("base_cwd")
+    diff = services._capture_diff(source_cwd)
+    snapshot_ref = services._capture_snapshot(source_cwd, worker.get("run_id"))
     drain_status = "exited"
     if runtime == services.RUNTIME_CODEX:
         drain_status = services._codex_exit_status(
@@ -75,6 +75,7 @@ def handle_terminal_result(
         exit_code,
         worker.get("log_path"),
         diff,
+        snapshot_ref=snapshot_ref,
     ):
         services._reap_sandbox_artifacts(worker)  # I4: completed (lingering) — reap once stamped
     if worker.get("task_worktree"):
@@ -135,9 +136,9 @@ def kill_stalled(
         "last_event_type": services._last_event_type(log_path),
     }
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(
-        worker.get("worktree") or worker.get("base_cwd")
-    )
+    source_cwd = worker.get("worktree") or worker.get("base_cwd")
+    diff = services._capture_diff(source_cwd)
+    snapshot_ref = services._capture_snapshot(source_cwd, worker.get("run_id"))
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -145,6 +146,7 @@ def kill_stalled(
         proc.returncode,
         log_path,
         diff,
+        snapshot_ref=snapshot_ref,
         kill_reason=json.dumps(diag),
     ):
         # I4 (force-rm: takes a still-stopping container down with it, post-stamp)

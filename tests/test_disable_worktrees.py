@@ -204,6 +204,7 @@ def test_main_routed_task_exit_captures_base_checkout_diff():
     services = SimpleNamespace(
         RUNTIME_CODEX="codex",
         _capture_diff=lambda cwd: captured.append(cwd) or "main diff",
+        _capture_snapshot=lambda *_args, **_kwargs: None,
         _normalize_runtime=lambda runtime: runtime,
         _finish_run=lambda *args, **kwargs: finished.append((args, kwargs)) or True,
         _reap_sandbox_artifacts=lambda *args: None,
@@ -484,7 +485,7 @@ def test_restart_recovery_captures_when_live_sibling_uses_another_checkout(
 def _checkpoint_services(*, disabled, spawned, provisioned):
     posts = []
 
-    def get_json(url):
+    def get_json(url, timeout=None):
         if url.endswith("/runs?limit=20"):
             return {"runs": [{"run_id": "run-1", "task_id": "task-1"}]}
         if url.endswith("/persona"):
@@ -502,6 +503,7 @@ def _checkpoint_services(*, disabled, spawned, provisioned):
         time=time,
         _kill_worker=lambda *args, **kwargs: None,
         _capture_diff=lambda worktree: "saved diff" if worktree else None,
+        _capture_snapshot=lambda *args, **kwargs: None,
         _handoff_worktree_changes=lambda *args, **kwargs: True,
         _finish_run=lambda *args, **kwargs: True,
         _reap_sandbox_artifacts=lambda *args, **kwargs: None,
@@ -654,6 +656,7 @@ def _checkpoint_repo(tmp_path):
 def _real_checkpoint_services(*, disabled, spawned):
     services = _checkpoint_services(disabled=disabled, spawned=spawned, provisioned=[])
     services._capture_diff = notifier._capture_diff
+    services._capture_snapshot = notifier._capture_snapshot
     services._handoff_worktree_changes = notifier._handoff_worktree_changes
     services._provision_task_worktree = notifier._provision_task_worktree
     services._provision_worktree = notifier._provision_worktree
@@ -728,7 +731,7 @@ def test_checkpoint_carries_task_files_main_to_worktree_to_main(tmp_path):
     routing = {"disabled": False}
     services = _real_checkpoint_services(disabled=False, spawned=spawned)
 
-    def get_json(url):
+    def get_json(url, timeout=None):
         if url.endswith("/runs?limit=20"):
             return history
         if url.endswith("/persona"):
@@ -1012,7 +1015,7 @@ def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
         "base_cwd": str(main),
     }
     services = SimpleNamespace(
-        _get_json=lambda _url: {"runs": [previous]},
+        _get_json=lambda _url, timeout=None: {"runs": [previous]},
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
     )
     assert carry_previous_checkout(
@@ -1097,7 +1100,7 @@ async def test_ordinary_wake_carries_task_files_main_to_worktree_to_main(
         HARD_CAP_MIN_SECS=1200,
         WAKE_LEASE_TTL_SECS=120,
         pathlib=pathlib,
-        _get_json=lambda _url: history,
+        _get_json=lambda _url, timeout=None: history,
         _post_json=post_json,
         _build_persona=lambda *args, **kwargs: "persona",
         _provision_task_worktree=notifier._provision_task_worktree,
@@ -1275,7 +1278,7 @@ def test_resident_toggle_carries_preserved_worktree_state_to_main(
         _close_resident=lambda *args, **kwargs: None,
         _reap_dead_pid_resident_runs=lambda *args, **kwargs: None,
         _post_json=post_json,
-        _get_json=lambda url: (
+        _get_json=lambda url, timeout=None: (
             {"turns": []} if url.endswith("conversation?limit=200") else None
         ),
         _build_persona=lambda *args, **kwargs: "persona",
@@ -1351,7 +1354,7 @@ async def test_live_terminal_carries_state_main_to_worktree_to_main(
 
     class Notifier:
         _handoff_worktree_changes = staticmethod(notifier._handoff_worktree_changes)
-        _get_json = staticmethod(lambda _url: history)
+        _get_json = staticmethod(lambda _url, timeout=None: history)
         _provision_live_worktree = staticmethod(notifier._provision_live_worktree)
 
     class Ws:
@@ -1463,7 +1466,7 @@ async def test_live_terminal_carries_committed_branch_after_clean_worktree_retir
             return {"kind": kind, **kwargs}
 
     class Notifier:
-        _get_json = staticmethod(lambda _url: history)
+        _get_json = staticmethod(lambda _url, timeout=None: history)
         _handoff_worktree_changes = staticmethod(notifier._handoff_worktree_changes)
         _handoff_branch_changes = staticmethod(notifier._handoff_branch_changes)
         _provision_live_worktree = staticmethod(notifier._provision_live_worktree)
@@ -1597,7 +1600,7 @@ def test_taskless_prompt_wake_carries_main_state_back_to_worktree(tmp_path):
         WAKE_LEASE_TTL_SECS=120,
         pathlib=pathlib,
         _post_json=post_json,
-        _get_json=lambda url: {
+        _get_json=lambda url, timeout=None: {
             "runs": [
                 {
                     "run_id": "run-1",
@@ -1687,7 +1690,7 @@ def test_taskless_prompt_success_preserves_ignored_files_for_later_switch_to_mai
         RUNTIME_CODEX="codex",
         pathlib=pathlib,
         _post_json=post_json,
-        _get_json=lambda _url: history,
+        _get_json=lambda _url, timeout=None: history,
         _build_persona=lambda *args, **kwargs: "persona",
         _provision_task_worktree=lambda *args: pytest.fail(
             "taskless prompt must not provision a task worktree"
@@ -1852,7 +1855,7 @@ async def test_direct_prompt_with_active_task_remains_taskless_and_carries_files
         HARD_CAP_MIN_SECS=1200,
         WAKE_LEASE_TTL_SECS=120,
         pathlib=pathlib,
-        _get_json=lambda _url: history,
+        _get_json=lambda _url, timeout=None: history,
         _post_json=post_json,
         _build_persona=lambda *args, **kwargs: "persona",
         _provision_task_worktree=lambda *args: pytest.fail(
