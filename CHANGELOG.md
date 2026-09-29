@@ -32,6 +32,16 @@ missing.
   the previous checkout's files still are, instead of pausing every wake for
   good. With worktrees enabled the carry still fails closed.
 
+- Carrying a worker's previous checkout built its patch with one `git diff
+  --no-index` per untracked and ignored file (98 s and a 112 MB patch for a
+  task worktree with 6,422 ignored files; minutes for one holding node_modules).
+  A tick that long outlived the 120 s heartbeat, so the next `orcha notifier
+  --ensure` (every Claude session start runs one) killed the "wedged" daemon
+  mid-carry and the replacement started the same carry over — wakes arrived
+  minutes late or not at all. The patch is now built through a temporary index
+  in a handful of Git calls (3 s for the same worktree), and every Git command
+  the daemon runs refreshes its heartbeat.
+
 ### Added
 - `orcha file-guard` — per-file edit lock for agents that share one checkout
   (project has "Disable worktrees" on). Registered as PreToolUse (waits for

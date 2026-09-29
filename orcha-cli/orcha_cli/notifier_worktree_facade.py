@@ -113,8 +113,8 @@ def _reap_dead_pid_resident_runs(
     )
 
 
-def _run_git(args, cwd=None, timeout: float = 30.0):
-    return _worktree_base.run_git(args, cwd, timeout)
+def _run_git(args, cwd=None, timeout: float = 30.0, env=None):
+    return _worktree_base.run_git(args, cwd, timeout, env=env)
 
 
 def _safe_ref(alias) -> str:

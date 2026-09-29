@@ -12,12 +12,18 @@ import time
 from typing import Any
 
 
-def run_git(args, cwd=None, timeout: float = 30.0):
+# Called after every Git command (when set) so a long-running carry keeps
+# proving progress — the notifier daemon points this at its heartbeat writer.
+PROGRESS_HOOK = None
+
+
+def run_git(args, cwd=None, timeout: float = 30.0, env=None):
     """Run Git and return its status and stdout without raising."""
     try:
         result = subprocess.run(
             ["git", *args],
             cwd=cwd,
+            env=({**os.environ, **env} if env else None),
             capture_output=True,
             text=True,
             # Patch output can contain non-UTF-8 bytes (a Windows-1252 text file, a
@@ -31,6 +37,13 @@ def run_git(args, cwd=None, timeout: float = 30.0):
         return result.returncode, result.stdout
     except (OSError, subprocess.SubprocessError, ValueError):
         return 1, ""
+    finally:
+        hook = PROGRESS_HOOK
+        if hook is not None:
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 - progress reporting is best effort
+                pass
 
 
 def safe_ref(alias) -> str:
