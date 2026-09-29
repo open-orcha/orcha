@@ -232,13 +232,15 @@ describe("SEED_MODELS fallback list (model catalog refresh)", () => {
     vi.restoreAllMocks();
   });
 
-  it("contains Fable 5.1 and GPT-6 Astra alongside the current model families", async () => {
+  it("contains Fable 5.1, Opus 5.5, Sonnet 5.5 and GPT-6 Astra alongside the current model families", async () => {
     stubFetch(); // /api/models returns { models: [] } — the seed stays in effect
     const { container } = mount();
     await screen.findByText("Roster · 3");
     const seg = container.querySelector("#modelSeg") as HTMLElement;
     expect(seg).toBeTruthy();
     expect(within(seg).getByTitle("Fable 5.1")).toBeInTheDocument();
+    expect(within(seg).getByTitle("Opus 5.5")).toBeInTheDocument();
+    expect(within(seg).getByTitle("Sonnet 5.5")).toBeInTheDocument();
     expect(within(seg).getByTitle("Opus 5")).toBeInTheDocument();
     expect(within(seg).queryByTitle("Opus 4.8")).toBeNull();
 

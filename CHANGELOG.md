@@ -10,6 +10,18 @@ missing.
 
 ## [Unreleased]
 
+### Changed
+- Claude model catalog refreshed to the current generation. The per-agent
+  model picker now offers Opus 5.5 and Sonnet 5.5 next to Fable 5.1, and
+  Opus 5.5 is the default for agents that never picked a model; Fable 5,
+  Opus 5 and Sonnet 5 stay selectable so existing agents keep their choice.
+  The built-in LLM utility client (onboarding roster drafts, digest
+  curation, attachment transcription) moves its Sonnet default to Sonnet 5.5
+  and its Opus option from Opus 4.8 to Opus 5.5, and sends those models the
+  forced-tool request shape they accept (`tool_choice: auto` plus a
+  system-prompt instruction) instead of the forced `tool_choice` they reject
+  with a 400.
+
 ### Fixed
 - Workers stopped waking on task-thread and conversation posts once a run's
   recorded worktree AND its retained `orcha/*` branch were gone: the checkout

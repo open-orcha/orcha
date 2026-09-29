@@ -46,8 +46,10 @@ interface ModelInfo {
 // pre-fetch; GET /api/models is the source of truth (picks up new ids).
 const SEED_MODELS: ModelInfo[] = [
   { id: "claude-fable-5-1", name: "Fable 5.1", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
-  { id: "claude-opus-5", name: "Opus 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-opus-5-5", name: "Opus 5.5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-sonnet-5-5", name: "Sonnet 5.5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-fable-5", name: "Fable 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-opus-5", name: "Opus 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-sonnet-5", name: "Sonnet 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", runtime: "claude", reasoning_efforts: [] },
   { id: "gpt-6-astra", name: "GPT-6 Astra", runtime: "codex", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -411,7 +413,7 @@ export function AgentsPage() {
   // The model control sends the curated MODEL ID (POST /model only accepts ids)
   // while displaying the friendly name.
   const [models, setModels] = useState<ModelInfo[]>(SEED_MODELS);
-  const [defaultModel, setDefaultModel] = useState("claude-opus-5");
+  const [defaultModel, setDefaultModel] = useState("claude-opus-5-5");
   useEffect(() => {
     getJSON<any>("/api/models")
       .then((d) => {

@@ -9,6 +9,7 @@ try:
     from .llm_catalog import (
         ANTHROPIC_BASE_URL,
         ANTHROPIC_VERSION,
+        FORCED_TOOL_CHOICE_UNSUPPORTED,
         XAI_BASE_URL,
         LLMError,
         ModelSpec,
@@ -28,6 +29,7 @@ except ImportError:  # Portal copies these modules into a top-level build direct
     from llm_catalog import (
         ANTHROPIC_BASE_URL,
         ANTHROPIC_VERSION,
+        FORCED_TOOL_CHOICE_UNSUPPORTED,
         XAI_BASE_URL,
         LLMError,
         ModelSpec,
@@ -43,6 +45,33 @@ except ImportError:  # Portal copies these modules into a top-level build direct
         to_openai_tool_choice,
         to_openai_tools,
     )
+
+
+def adapt_forced_tool_choice(
+    model: str, system: Optional[str], tool_choice: Optional[dict]
+) -> tuple[Optional[str], Optional[dict]]:
+    """Return a (system, tool_choice) pair the given Claude model accepts.
+
+    Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 reject a forced tool_choice
+    ({"type": "tool"} / {"type": "any"}) with a 400. For those models the
+    equivalent is {"type": "auto"} with parallel calls disabled plus a
+    system-prompt instruction naming the tool. Older models keep the forced
+    shape untouched.
+    """
+    if not tool_choice or model not in FORCED_TOOL_CHOICE_UNSUPPORTED:
+        return system, tool_choice
+    if tool_choice.get("type") not in ("tool", "any"):
+        return system, tool_choice
+    name = tool_choice.get("name")
+    instruction = (
+        f"You must respond by calling the `{name}` tool exactly once. "
+        "Do not answer in plain text."
+        if name
+        else "You must respond by calling exactly one of the provided tools. "
+        "Do not answer in plain text."
+    )
+    merged = f"{system.rstrip()}\n\n{instruction}" if system else instruction
+    return merged, {"type": "auto", "disable_parallel_tool_use": True}
 
 
 def _http_helpers():
@@ -104,6 +133,7 @@ class AnthropicProvider(Provider):
 
     @staticmethod
     def _body(*, spec, system, messages, tools, tool_choice, stream: bool) -> dict:
+        system, tool_choice = adapt_forced_tool_choice(spec.model, system, tool_choice)
         body: dict[str, Any] = {
             "model": spec.model,
             "max_tokens": spec.max_tokens,

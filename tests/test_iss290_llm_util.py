@@ -230,6 +230,96 @@ def test_get_provider_anthropic_is_live_class():
     assert isinstance(L.get_provider("anthropic"), L.AnthropicProvider)
 
 
+def _anthropic_tool_response(name, payload):
+    return {"content": [{"type": "tool_use", "name": name, "input": payload}],
+            "usage": {"input_tokens": 3, "output_tokens": 2}, "stop_reason": "tool_use"}
+
+
+def test_catalog_anthropic_defaults_are_current_generation():
+    # Sonnet is the default for onboarding/curation/vision; Opus is the selectable upgrade.
+    assert L.MODEL_SONNET == "claude-sonnet-5-5"
+    assert L.MODEL_OPUS == "claude-opus-5-5"
+    assert L.MODEL_HAIKU == "claude-haiku-4-5-20251001"
+    assert {L.MODEL_SONNET, L.MODEL_OPUS} <= L.FORCED_TOOL_CHOICE_UNSUPPORTED
+    assert L.MODEL_HAIKU not in L.FORCED_TOOL_CHOICE_UNSUPPORTED
+
+
+def test_anthropic_forced_tool_choice_translated_for_models_that_reject_it(monkeypatch):
+    # Opus 5.5 / Sonnet 5.5 / Fable 5.1 return 400 on tool_choice {"type": "tool"|"any"}; the
+    # provider must send {"type": "auto"} (single call) plus a system instruction naming the tool.
+    captured = {}
+
+    def fake_post(url, headers, body, *, timeout_s):
+        captured["body"] = body
+        return _anthropic_tool_response("emit_result", {"label": "spam"})
+
+    monkeypatch.setattr(L, "_http_post_json", fake_post)
+    resp = L.AnthropicProvider().complete(
+        spec=L.ModelSpec(model=L.MODEL_SONNET), system="sys",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"name": "emit_result", "description": "d", "input_schema": {"type": "object"}}],
+        tool_choice={"type": "tool", "name": "emit_result"}, api_key="k")
+    body = captured["body"]
+    assert body["model"] == "claude-sonnet-5-5"
+    assert body["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    assert body["system"].startswith("sys\n\n") and "`emit_result`" in body["system"]
+    assert body["tools"][0]["name"] == "emit_result"           # tools untouched
+    assert resp["tool_calls"] == [{"name": "emit_result", "input": {"label": "spam"}}]
+
+
+def test_anthropic_forced_tool_choice_without_system_prompt(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(L, "_http_post_json",
+                        lambda url, headers, body, *, timeout_s:
+                        captured.setdefault("body", body) and _anthropic_tool_response("t", {}))
+    L.AnthropicProvider().complete(
+        spec=L.ModelSpec(model=L.MODEL_OPUS), system=None,
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"name": "t", "description": "d", "input_schema": {"type": "object"}}],
+        tool_choice={"type": "any"}, api_key="k")
+    body = captured["body"]
+    assert body["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    assert body["system"] == ("You must respond by calling exactly one of the provided tools. "
+                              "Do not answer in plain text.")
+
+
+def test_anthropic_forced_tool_choice_kept_for_models_that_accept_it(monkeypatch):
+    # Haiku 4.5 (and any model outside the set) still gets the exact forced shape.
+    captured = {}
+
+    def fake_post(url, headers, body, *, timeout_s):
+        captured["body"] = body
+        return _anthropic_tool_response("emit_result", {"wake": True})
+
+    monkeypatch.setattr(L, "_http_post_json", fake_post)
+    L.AnthropicProvider().complete(
+        spec=L.resolve_spec("triage"), system="sys",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"name": "emit_result", "description": "d", "input_schema": {"type": "object"}}],
+        tool_choice={"type": "tool", "name": "emit_result"}, api_key="k")
+    body = captured["body"]
+    assert body["model"] == L.MODEL_HAIKU
+    assert body["tool_choice"] == {"type": "tool", "name": "emit_result"}
+    assert body["system"] == "sys"
+
+
+def test_anthropic_auto_tool_choice_passes_through_on_new_models(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers, body, *, timeout_s):
+        captured["body"] = body
+        return _anthropic_tool_response("t", {})
+
+    monkeypatch.setattr(L, "_http_post_json", fake_post)
+    L.AnthropicProvider().complete(
+        spec=L.ModelSpec(model=L.MODEL_SONNET), system="sys",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"name": "t", "description": "d", "input_schema": {"type": "object"}}],
+        tool_choice={"type": "auto"}, api_key="k")
+    assert captured["body"]["tool_choice"] == {"type": "auto"}
+    assert captured["body"]["system"] == "sys"
+
+
 # ------------------------------------------------------------- xAI / Grok provider
 
 

@@ -120,8 +120,8 @@ def test_agents_model_control_posts_ids_not_labels():
     assert ": a.model" in html, "highlight value not derived from the agent's model id"
     # the curated list is the source of truth + a real curated id is present (not just labels)
     assert "/api/models" in html, "doesn't fetch the canonical model list"
-    assert "claude-opus-5" in html, "no curated model id (would 400 on every click)"
-    assert "claude-opus-4-8" not in html, "Opus 4.8 replaced by Opus 5"
+    assert "claude-opus-5-5" in html, "no curated model id (would 400 on every click)"
+    assert "claude-opus-4-8" not in html, "Opus 4.8 replaced by Opus 5 / 5.5"
 
 
 def test_agents_model_control_filters_by_provider_runtime():

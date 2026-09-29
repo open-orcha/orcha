@@ -11,11 +11,18 @@ ANTHROPIC_VERSION = "2023-06-01"
 XAI_BASE_URL = "https://api.x.ai/v1"
 
 MODEL_HAIKU = "claude-haiku-4-5-20251001"
-MODEL_SONNET = "claude-sonnet-5"
-MODEL_OPUS = "claude-opus-4-8"
+MODEL_SONNET = "claude-sonnet-5-5"
+MODEL_OPUS = "claude-opus-5-5"
 MODEL_GROK_4_3 = "grok-4.3"
 MODEL_GROK_4_20_REASONING = "grok-4.20-0309-reasoning"
 MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
+
+# Claude models that reject a forced tool_choice ({"type": "tool"|"any"}) with a
+# 400. The provider translates a forced choice into {"type": "auto"} plus a
+# system-prompt instruction for these; older models keep the forced shape.
+FORCED_TOOL_CHOICE_UNSUPPORTED: frozenset[str] = frozenset(
+    {"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"}
+)
 
 
 class LLMError(RuntimeError):
@@ -47,8 +54,8 @@ PROVIDER_CATALOG: list[dict] = [
         "available": True,
         "models": [
             {"id": MODEL_HAIKU, "name": "Haiku 4.5"},
-            {"id": MODEL_SONNET, "name": "Sonnet 5"},
-            {"id": MODEL_OPUS, "name": "Opus 4.8"},
+            {"id": MODEL_SONNET, "name": "Sonnet 5.5"},
+            {"id": MODEL_OPUS, "name": "Opus 5.5"},
         ],
     },
     {

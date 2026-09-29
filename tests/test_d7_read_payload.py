@@ -5,7 +5,7 @@ renders without extra calls and the approval card suppresses durably:
 - agent: model, wake_enabled, current_task, last_active
 - task:  plan_decision (latest plan_approval decision → ISS-41 root fix) + runs summary
 - request: task_link (the spawned task, resolved)
-Plus per-agent `model` is stored at registration (default Opus 5; NULL for humans).
+Plus per-agent `model` is stored at registration (default Opus 5.5; NULL for humans).
 """
 import pytest
 
@@ -30,7 +30,7 @@ def _task(payload, tid):
 async def test_model_defaults_to_opus_for_ai(client, container, make_agent):
     await make_agent("Aiden", "eng")                      # no model → server default
     p = await _get_container(client, container["id"])
-    assert _agent(p, "Aiden")["model"] == "claude-opus-5"
+    assert _agent(p, "Aiden")["model"] == "claude-opus-5-5"
 
 
 @pytest.mark.asyncio
@@ -64,9 +64,10 @@ async def test_list_models_endpoint(client):
     r = await client.get("/api/models")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["default"] == "claude-opus-5"
+    assert body["default"] == "claude-opus-5-5"
     ids = {m["id"] for m in body["models"]}
-    assert {"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"} <= ids
+    assert {"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"} <= ids
+    assert {"claude-fable-5", "claude-opus-5", "claude-sonnet-5"} <= ids   # previous generation stays selectable
     assert "claude-opus-4-8" not in ids
     assert {"gpt-6-astra", "gpt-5.5", "gpt-5.4-mini"} <= ids
     assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} <= ids

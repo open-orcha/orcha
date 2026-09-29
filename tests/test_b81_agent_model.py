@@ -22,7 +22,7 @@ async def _agent_model_in_payload(client, cid, alias):
 async def test_set_model_persists_and_flows_through_read_payload(client, container, make_agent):
     a = await make_agent("Switch", "eng")            # defaults to opus
     aid = a["agent_id"]
-    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-5"
+    assert await _agent_model_in_payload(client, container["id"], "Switch") == "claude-opus-5-5"
 
     r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-sonnet-5"})
     assert r.status_code == 200, r.text
@@ -163,7 +163,7 @@ async def test_persona_carries_resolved_model_for_live_terminal(client, containe
     aid = a["agent_id"]
     r = await client.get(f"/api/agents/{aid}/persona")
     assert r.status_code == 200, r.text
-    assert r.json()["model"] == "claude-opus-5"
+    assert r.json()["model"] == "claude-opus-5-5"
     assert r.json()["model_runtime"] == "claude"
 
     await client.post(f"/api/agents/{aid}/model", json={"model": "claude-fable-5"})
@@ -224,7 +224,7 @@ async def test_setting_same_model_does_not_reset_session(client, container, make
         (container["id"], aid, human["agent_id"], sid))
     conv_id = str(rows[0]["id"])
 
-    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-opus-5"})
+    r = await client.post(f"/api/agents/{aid}/model", json={"model": "claude-opus-5-5"})
     assert r.json()["cold_reset_conversations"] == []
     after = db.execute("SELECT session_id FROM conversations WHERE id=%s", (conv_id,))
     assert str(after[0]["session_id"]) == sid       # untouched

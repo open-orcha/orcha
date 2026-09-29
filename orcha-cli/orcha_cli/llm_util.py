@@ -8,6 +8,7 @@ try:
     from .llm_catalog import (
         ANTHROPIC_BASE_URL,
         ANTHROPIC_VERSION,
+        FORCED_TOOL_CHOICE_UNSUPPORTED,
         XAI_BASE_URL,
         LLMError,
         MODEL_GROK_4_20_NONREASONING,
@@ -43,6 +44,7 @@ except ImportError:  # Portal copies these modules into a top-level build direct
     from llm_catalog import (
         ANTHROPIC_BASE_URL,
         ANTHROPIC_VERSION,
+        FORCED_TOOL_CHOICE_UNSUPPORTED,
         XAI_BASE_URL,
         LLMError,
         MODEL_GROK_4_20_NONREASONING,

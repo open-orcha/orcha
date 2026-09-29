@@ -14,14 +14,26 @@ AVAILABLE_MODELS = [
         "reasoning_efforts": _MAX_EFFORTS,
     },
     {
-        "id": "claude-opus-5",
-        "name": "Opus 5",
+        "id": "claude-opus-5-5",
+        "name": "Opus 5.5",
+        "runtime": "claude",
+        "reasoning_efforts": _MAX_EFFORTS,
+    },
+    {
+        "id": "claude-sonnet-5-5",
+        "name": "Sonnet 5.5",
         "runtime": "claude",
         "reasoning_efforts": _MAX_EFFORTS,
     },
     {
         "id": "claude-fable-5",
         "name": "Fable 5",
+        "runtime": "claude",
+        "reasoning_efforts": _MAX_EFFORTS,
+    },
+    {
+        "id": "claude-opus-5",
+        "name": "Opus 5",
         "runtime": "claude",
         "reasoning_efforts": _MAX_EFFORTS,
     },
@@ -86,7 +98,7 @@ AVAILABLE_MODELS = [
         "reasoning_efforts": _STANDARD_EFFORTS,
     },
 ]
-DEFAULT_MODEL = "claude-opus-5"
+DEFAULT_MODEL = "claude-opus-5-5"
 MODEL_IDS = {model["id"] for model in AVAILABLE_MODELS}
 MODELS_BY_ID = {model["id"]: model for model in AVAILABLE_MODELS}
 
