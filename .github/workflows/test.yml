@@ -64,6 +64,24 @@ jobs:
           pytest --cov=main --cov-report=term-missing --cov-fail-under=70 \
                  --timeout=180 -p no:cacheprovider
 
+      # GH #258: the portal must boot as a plain host process from the installed CLI
+      # (`orcha portal`, no container), apply every migration to a fresh database,
+      # serve the React shell, and answer an API write. The project is the committed
+      # tests/fixtures/native-project (orcha.json + .orcha/.env only), copied out of
+      # the checkout because `orcha portal` appends a secret key to its .env.
+      - name: Smoke-test `orcha portal` as a host process
+        run: |
+          pip install -e orcha-cli
+          python -c "import psycopg; c = psycopg.connect('$ORCHA_TEST_ADMIN_URL', autocommit=True); c.execute('CREATE DATABASE orcha_portal_smoke')"
+          cp -R tests/fixtures/native-project "$RUNNER_TEMP/native-project"
+          (cd /tmp && orcha portal --project-dir "$RUNNER_TEMP/native-project" > "$RUNNER_TEMP/portal.log" 2>&1 &)
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null http://127.0.0.1:8123/ \
+            || { cat "$RUNNER_TEMP/portal.log"; exit 1; }
+          curl -fsS http://127.0.0.1:8123/ | grep -q '<title>Orcha</title>'
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+               -d '{"name":"smoke","root_objective":"smoke"}' http://127.0.0.1:8123/api/containers
+          grep -q "\[migrate\] applied: \[.001_init.sql" "$RUNNER_TEMP/portal.log" || { cat "$RUNNER_TEMP/portal.log"; exit 1; }
+
       # Reuse the .coverage file from the test step — do NOT re-run the suite
       # (a second full pytest pass here doubled the billed runtime of every job).
       - name: Coverage summary (PR)

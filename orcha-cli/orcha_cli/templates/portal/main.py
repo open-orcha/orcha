@@ -10,6 +10,7 @@ from portal_backend.application import (
     no_store_dynamic_responses as _no_store_dynamic_responses,
 )
 from portal_backend.attachment_config import (
+    DEFAULT_ATTACHMENTS_DIR,
     MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS_PER_MESSAGE,
     MAX_EXTRACTED_TEXT_CHARS,
@@ -101,7 +102,7 @@ except ImportError:
         _digest_curate = None
 
 ATTACHMENTS_DIR = pathlib.Path(
-    os.environ.get("ORCHA_ATTACHMENTS_DIR", "/app/orcha-attachments")
+    os.environ.get("ORCHA_ATTACHMENTS_DIR") or DEFAULT_ATTACHMENTS_DIR
 )
 
 
