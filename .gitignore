@@ -234,6 +234,10 @@ __marimo__/
 # --- Orcha per-project bootstrap state (never committed to the tool repo) ---
 .orcha/
 .claude/orcha.json
+# GH #258: the `orcha portal` CI smoke project is a committed fixture (no secrets).
+!tests/fixtures/native-project/.orcha/
+!tests/fixtures/native-project/.orcha/.env
+!tests/fixtures/native-project/.claude/orcha.json
 .claude/commands/orcha-*.md
 .agents/skills/orcha-*/
 

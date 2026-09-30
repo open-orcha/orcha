@@ -9,7 +9,12 @@ import psycopg
 from psycopg.rows import dict_row
 
 DB = os.environ["DATABASE_URL"]
-MIGRATIONS_DIR = pathlib.Path(os.environ.get("MIGRATIONS_DIR", "/app/migrations"))
+# Compose sets MIGRATIONS_DIR to its bind mount; a host-process portal (`orcha portal`)
+# falls back to the migrations shipped next to it in the package (templates/migrations).
+MIGRATIONS_DIR = pathlib.Path(
+    os.environ.get("MIGRATIONS_DIR")
+    or pathlib.Path(__file__).resolve().parents[2] / "migrations"
+)
 _MIGRATION_LOCK_KEY = 4242421
 
 
