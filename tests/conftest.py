@@ -264,6 +264,15 @@ async def read_sse(client, path, *, timeout=2.0, max_events=10, params=None):
     return out
 
 
+def pytest_addoption(parser):
+    # GH #258 PR 1: tests/test_dialect_parity.py rewrites tests/fixtures/parity_postgres.json
+    # instead of asserting against it (regenerate only on a deliberate response-shape change).
+    parser.addoption(
+        "--regen-parity", action="store_true", default=False,
+        help="rewrite tests/fixtures/parity_postgres.json from this run instead of comparing",
+    )
+
+
 def pytest_configure(config):
     # The bus suite tags itself @pytest.mark.committed (Thread's contract). Our
     # isolation truncates-committed uniformly, so the marker is a documented no-op.
