@@ -1,0 +1,249 @@
+# Allow-list for tests/test_no_postgres_syntax.py: Postgres-only constructs in portal_backend
+# that are not ported through portal_backend/sql.py yet (GH #258, plan Part 4 S0-S3).
+# Format: <path under portal_backend>:<line>:<token>. This list may only SHRINK: the lint fails
+# on an unlisted hit AND on an entry that no longer matches, so a PR that ports (or moves) a
+# site must delete (or re-point) its entry. Seeded from plan Appendix A, re-verified on main
+# @ b647cab (no line drift vs a776dd3). Hits in comments/docstrings are not counted (see the
+# lint's docstring); active_conversation_routes.py:107 and container_metrics_routes.py:161 were
+# found by the re-verify and are not in Appendix A.
+
+# active_conversation_routes.py
+active_conversation_routes.py:94:EXTRACT(EPOCH
+active_conversation_routes.py:107:EXTRACT(EPOCH
+active_conversation_routes.py:112:::text
+active_conversation_routes.py:123:::text
+active_conversation_routes.py:130:::text
+active_conversation_routes.py:139:LATERAL
+
+# agent_digest_routes.py
+agent_digest_routes.py:60:::jsonb
+agent_digest_routes.py:147:LEFT(
+agent_digest_routes.py:156:LEFT(
+agent_digest_routes.py:157:LEFT(
+
+# agent_notification_routes.py
+agent_notification_routes.py:84:ANY(
+agent_notification_routes.py:191:GREATEST(
+
+# agent_profile_routes.py
+agent_profile_routes.py:3:psycopg
+agent_profile_routes.py:188:psycopg
+
+# agent_registration_routes.py
+agent_registration_routes.py:3:psycopg
+agent_registration_routes.py:87:psycopg
+
+# agent_request_box_routes.py
+agent_request_box_routes.py:38:::timestamptz
+
+# agent_spend_routes.py
+agent_spend_routes.py:44:interval '
+
+# agent_status.py
+agent_status.py:22:::jsonb
+
+# agent_suggestion_routes.py
+agent_suggestion_routes.py:3:psycopg
+agent_suggestion_routes.py:82:psycopg
+
+# agent_task_claim_routes.py
+agent_task_claim_routes.py:42:FOR UPDATE
+agent_task_claim_routes.py:42:SKIP LOCKED
+
+# application_lifecycle.py
+application_lifecycle.py:6:psycopg
+application_lifecycle.py:75:psycopg
+
+# code_space_routes.py
+code_space_routes.py:438:DISTINCT ON
+code_space_routes.py:440:ANY(
+code_space_routes.py:575:FOR UPDATE
+
+# container_lifecycle_routes.py
+container_lifecycle_routes.py:3:psycopg
+container_lifecycle_routes.py:63:psycopg
+
+# container_metrics_routes.py
+container_metrics_routes.py:161:RIGHT(
+container_metrics_routes.py:165:make_interval
+container_metrics_routes.py:172:make_interval
+container_metrics_routes.py:181:make_interval
+
+# container_request_list_routes.py
+container_request_list_routes.py:94:json_build_object
+
+# container_snapshot_routes.py
+container_snapshot_routes.py:74:LEFT(
+container_snapshot_routes.py:76:GREATEST(
+container_snapshot_routes.py:80:json_build_object
+container_snapshot_routes.py:99:json_build_object
+container_snapshot_routes.py:171:EXTRACT(EPOCH
+container_snapshot_routes.py:172:::json
+container_snapshot_routes.py:178:json_agg
+container_snapshot_routes.py:178:json_build_object
+container_snapshot_routes.py:181:LEFT(
+container_snapshot_routes.py:253:json_build_object
+
+# container_token_usage_routes.py
+container_token_usage_routes.py:88:interval '
+container_token_usage_routes.py:89:interval '
+container_token_usage_routes.py:90:interval '
+container_token_usage_routes.py:91:interval '
+container_token_usage_routes.py:92:interval '
+container_token_usage_routes.py:93:interval '
+container_token_usage_routes.py:97:interval '
+container_token_usage_routes.py:98:interval '
+container_token_usage_routes.py:99:interval '
+container_token_usage_routes.py:100:interval '
+container_token_usage_routes.py:101:interval '
+container_token_usage_routes.py:102:interval '
+
+# conversation_write_routes.py
+conversation_write_routes.py:63:FOR UPDATE
+
+# database.py
+database.py:8:psycopg
+database.py:9:psycopg
+database.py:19:psycopg
+database.py:29:psycopg
+database.py:30:pg_advisory
+database.py:44:to_regclass
+database.py:68:pg_advisory
+
+# device_token_routes.py
+device_token_routes.py:123:interval '
+device_token_routes.py:140:ANY(
+
+# event_acknowledgement.py
+event_acknowledgement.py:53:GREATEST(
+
+# events.py
+events.py:30:::jsonb
+
+# member_routes.py
+member_routes.py:6:psycopg
+member_routes.py:8:psycopg
+member_routes.py:171:::jsonb
+member_routes.py:185:psycopg
+member_routes.py:250:Jsonb(
+
+# orphan_lease_routes.py
+orphan_lease_routes.py:26:GREATEST(
+orphan_lease_routes.py:34:EXTRACT(EPOCH
+orphan_lease_routes.py:42:make_interval
+orphan_lease_routes.py:59:::text
+orphan_lease_routes.py:59:ANY(
+orphan_lease_routes.py:71:ANY(
+orphan_lease_routes.py:164:interval '
+
+# push_outbox.py
+push_outbox.py:52:interval '
+push_outbox.py:142:::text
+
+# push_routes.py
+push_routes.py:220:interval '
+push_routes.py:266:ANY(
+push_routes.py:285:ANY(
+push_routes.py:312:ANY(
+
+# request_acceptance_routes.py
+request_acceptance_routes.py:135:::jsonb
+
+# request_backstop.py
+request_backstop.py:22:FOR UPDATE
+
+# request_creation_routes.py
+request_creation_routes.py:176:::interval
+request_creation_routes.py:176:::jsonb
+
+# request_lookup.py
+request_lookup.py:18:FOR UPDATE
+
+# request_rejection_routes.py
+request_rejection_routes.py:134:::jsonb
+
+# roster_analysis_routes.py
+roster_analysis_routes.py:78:::jsonb
+
+# task_completion_support.py
+task_completion_support.py:72:::jsonb
+
+# task_creation_routes.py
+task_creation_routes.py:70:::jsonb
+
+# task_done_routes.py
+task_done_routes.py:131:::jsonb
+task_done_routes.py:159:::jsonb
+
+# task_list_query.py
+task_list_query.py:19:json_build_object
+task_list_query.py:23:json_agg
+task_list_query.py:25:::json
+task_list_query.py:26:json_build_object
+task_list_query.py:28:json_build_object
+task_list_query.py:29:LEFT(
+task_list_query.py:36:json_build_object
+task_list_query.py:39:::text
+task_list_query.py:44:json_build_object
+task_list_query.py:52:json_build_object
+task_list_query.py:54:json_build_object
+
+# task_message_routes.py
+task_message_routes.py:178:::jsonb
+
+# task_protocol_routes.py
+task_protocol_routes.py:65:::jsonb
+
+# task_start_core.py
+task_start_core.py:241:::int
+task_start_core.py:241:unnest(
+task_start_core.py:242:LATERAL
+task_start_core.py:245:ANY(
+task_start_core.py:246:::text
+task_start_core.py:343:ILIKE
+
+# user_pref_routes.py
+user_pref_routes.py:153:::jsonb
+
+# wake_acknowledgement_routes.py
+wake_acknowledgement_routes.py:24:GREATEST(
+wake_acknowledgement_routes.py:66:GREATEST(
+wake_acknowledgement_routes.py:137:ANY(
+wake_acknowledgement_routes.py:202:ANY(
+
+# wake_backoff.py
+wake_backoff.py:115:interval '
+wake_backoff.py:144:::interval
+wake_backoff.py:206:interval '
+
+# wake_event_queries.py
+wake_event_queries.py:12:::text
+wake_event_queries.py:15:::text
+
+# wake_lease_claim_routes.py
+wake_lease_claim_routes.py:76:make_interval
+wake_lease_claim_routes.py:78:make_interval
+wake_lease_claim_routes.py:97:make_interval
+wake_lease_claim_routes.py:99:make_interval
+
+# wake_lease_renewal_routes.py
+wake_lease_renewal_routes.py:31:make_interval
+wake_lease_renewal_routes.py:43:make_interval
+wake_lease_renewal_routes.py:66:::text
+
+# wake_manifest.py
+wake_manifest.py:54:ANY(
+wake_manifest.py:114:ANY(
+wake_manifest.py:121:ANY(
+
+# wake_scan_queries.py
+wake_scan_queries.py:14:EXTRACT(EPOCH
+wake_scan_queries.py:16:EXTRACT(EPOCH
+wake_scan_queries.py:17:EXTRACT(EPOCH
+wake_scan_queries.py:19:EXTRACT(EPOCH
+
+# wake_scan_routes.py
+wake_scan_routes.py:57:interval '
+
+# worker_run_support.py
+worker_run_support.py:67:ANY(
