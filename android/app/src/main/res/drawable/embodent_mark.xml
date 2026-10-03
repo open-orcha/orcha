@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Embodent mark (in-app BrandMark), 1:1 from embodent-mark.svg: a dot inside a thick
+     round-armed "C", left half #ECEDF1, right half #7C808A. Transparent; drawn
+     on the dark #121314 tile. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="1254"
+    android:viewportHeight="1254">
+    <group android:translateX="25.5" android:translateY="18">
+        <group>
+            <clip-path android:pathData="M-200,-200 h827 v1654 h-827 z" />
+            <path android:fillColor="#FFECEDF1" android:pathData="M479,609 a148,148 0 1,0 296,0 a148,148 0 1,0 -296,0" />
+            <path android:strokeColor="#FFECEDF1" android:strokeWidth="204" android:strokeLineCap="round" android:pathData="M930,255 L627,255 A354,354 0 0,0 627,963 L930,963" />
+        </group>
+        <group>
+            <clip-path android:pathData="M627,-200 h827 v1654 h-827 z" />
+            <path android:fillColor="#FF7C808A" android:pathData="M479,609 a148,148 0 1,0 296,0 a148,148 0 1,0 -296,0" />
+            <path android:strokeColor="#FF7C808A" android:strokeWidth="204" android:strokeLineCap="round" android:pathData="M930,255 L627,255 A354,354 0 0,0 627,963 L930,963" />
+        </group>
+    </group>
+</vector>

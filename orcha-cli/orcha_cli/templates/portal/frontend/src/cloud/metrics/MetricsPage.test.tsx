@@ -8,7 +8,7 @@
  * from a per-agent row, rendering from a stubbed .../spend + .../insights
  * response, and window-switch refetch.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { HashRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
@@ -129,8 +129,8 @@ describe("MetricsPage (aggregate endpoint render)", () => {
     mount();
     // KPI tiles
     expect(await screen.findByText("$12.34")).toBeInTheDocument();
-    // caption appears twice: the Est. cost tile sub AND the agent-table card count
-    expect(screen.getAllByText("estimated · 6 of 9 runs reported cost").length).toBe(2);
+    // D12: the coverage caption is stated ONCE (the Est. cost figure), not echoed on the table
+    expect(screen.getByText("from 6 of 9 runs")).toHaveAttribute("title", "estimated · 6 of 9 runs reported cost");
     expect(screen.getByText("1h 30m")).toBeInTheDocument(); // 5400s sandbox compute
     expect(screen.getByText("4 done")).toBeInTheDocument();
     expect(screen.getByText("2 human-verified")).toBeInTheDocument();
@@ -142,8 +142,10 @@ describe("MetricsPage (aggregate endpoint render)", () => {
     expect(cols[2].querySelector(".mx-bar")).toBeTruthy();
     // per-agent table — rows are clickable (open the spend drilldown), not links
     expect(screen.getByText("forge")).toBeInTheDocument();
-    expect(screen.getByText("claude-sonnet")).toBeInTheDocument();
-    expect(screen.getByText("1 failed")).toBeInTheDocument();
+    // model display name (onboarding's modelLabel), raw id in the tooltip
+    expect(screen.getByText("Sonnet")).toHaveAttribute("title", "claude-sonnet");
+    // health chip: Initiatives verdict, real failed-run count in its tooltip
+    expect(screen.getByText("At risk").closest("[data-health]")?.getAttribute("title")).toContain("1 failed");
     expect(screen.getByText("$10.00")).toBeInTheDocument();
     const agentRow = screen.getByText("forge").closest("tr");
     expect(agentRow?.getAttribute("role")).toBe("button");
@@ -156,7 +158,7 @@ describe("MetricsPage (aggregate endpoint render)", () => {
     await screen.findByText("$12.34");
     fireEvent.click(screen.getByText("30 days"));
     await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics?days=30"));
-    expect(screen.getByText("last 30 days")).toBeInTheDocument();
+    await waitFor(() => expect(document.getElementById("mxScope")).toHaveTextContent("last 30 days"));
   });
 });
 
@@ -170,13 +172,14 @@ describe("agent spend drilldown (agent_spend_routes wire)", () => {
     const row = await screen.findByText("forge");
     fireEvent.click(row.closest("tr")!);
 
-    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=all"));
-    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/insights?window=all"));
+    // the summary's 7-day window is carried into the drilldown
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=7d"));
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/insights?window=7d"));
 
     // agent header: alias, model chip, effort chip
     expect(await screen.findByRole("heading", { name: "forge" })).toBeInTheDocument();
-    expect(screen.getByText("claude-opus-5")).toBeInTheDocument();
-    expect(screen.getByText("high effort")).toBeInTheDocument();
+    expect(screen.getByText("Opus 5").closest("[title]")).toHaveAttribute("title", "Model · claude-opus-5");
+    expect(screen.getByText(/high effort/)).toBeInTheDocument();
 
     // totals strip (In / Out / Cache read / Cache write / Total / $ / runs)
     expect(screen.getByText("1.2K")).toBeInTheDocument(); // input_tokens
@@ -184,11 +187,11 @@ describe("agent spend drilldown (agent_spend_routes wire)", () => {
 
     // per-task table: title links to /tasks?task=, synthetic conversation row present
     const taskLink = screen.getByText("Ship feature").closest("a");
-    expect(taskLink?.getAttribute("href")).toBe("/tasks?task=t1");
+    expect(taskLink?.getAttribute("href")).toMatch(/^#?\/tasks\?task=t1$/); // SPA Link (HashRouter in tests)
     expect(screen.getByText("Conversation & drains")).toBeInTheDocument();
 
     // back link returns to the aggregate view
-    fireEvent.click(screen.getByText("← Back to metrics"));
+    fireEvent.click(screen.getByRole("button", { name: "Back to metrics" }));
     await waitFor(() => expect(screen.getByText("Cost & activity by agent")).toBeInTheDocument());
   });
 
@@ -198,15 +201,23 @@ describe("agent spend drilldown (agent_spend_routes wire)", () => {
     const row = await screen.findByText("forge");
     fireEvent.click(row.closest("tr")!);
     await screen.findByRole("heading", { name: "forge" });
-    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=all"));
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=7d"));
     urls.length = 0; // only care about post-switch fetches from here
 
-    fireEvent.click(screen.getByText("5h"));
+    fireEvent.click(screen.getByText("5 hours"));
     await waitFor(() =>
       expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=5h"));
-    // insights has no 5h window — 5h maps to the 7d insights window, never a literal ?window=5h
-    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/insights?window=7d"));
+    // insights has no 5h window — 5h maps to the 7d insights window (already loaded
+    // for the carried 7 days, so no refetch), never a literal ?window=5h
     expect(urls).not.toContain("/api/containers/c1/metrics/insights?window=5h");
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "How to reduce spending" }).parentElement!.querySelector(".count")).toHaveTextContent("last 7 days"));
+
+    // 30 days: spend asks for 30d; insights (7d | all only) widen to all time
+    urls.length = 0;
+    fireEvent.click(screen.getByText("30 days"));
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=30d"));
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/insights?window=all"));
   });
 
   it("renders insights with severity, evidence and action", async () => {
@@ -240,7 +251,7 @@ describe("agent spend drilldown (agent_spend_routes wire)", () => {
     const row = await screen.findByText("forge");
     fireEvent.click(row.closest("tr")!);
 
-    expect(await screen.findByText("No measured runs in this window")).toBeInTheDocument();
+    expect(await screen.findByText(/No measured runs in this window/)).toBeInTheDocument();
     expect(screen.getByText(/No insights yet/)).toBeInTheDocument();
   });
 });
@@ -267,5 +278,127 @@ describe("metrics formatters (metrics-state.js parity)", () => {
   it("costCaption is honest about coverage", () => {
     expect(costCaption({ runs: 0, runs_with_cost: 0 } as never)).toBe("no runs in this window");
     expect(costCaption({ runs: 1, runs_with_cost: 1 } as never)).toBe("estimated · 1 of 1 run reported cost");
+  });
+});
+
+/* ---- V2: scope, units, sorting, missing-cost honesty (parity M-01/M-02) ---- */
+describe("MetricsPage V2 — scope, sort and missing cost", () => {
+  beforeEach(() => { localStorage.clear(); window.location.hash = "#/metrics"; });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  function stubWith(agg: unknown, spend?: unknown) {
+    const json = (data: unknown) => ({ ok: true, status: 200, json: async () => data }) as unknown as Response;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/containers") return json([{ id: "c1", status: "active" }]);
+      if (url.includes("/metrics/agents/")) return json(spend ?? spendAll);
+      if (url.includes("/metrics/insights")) return json({ window: "all", insights: [] });
+      if (url.includes("/metrics?days=")) return json(agg);
+      if (url.startsWith("/api/containers/c1")) return json(rawSnap);
+      return json({});
+    }) as unknown as typeof fetch;
+  }
+
+  it("states scope and window, and labels units", async () => {
+    stubWith(payload7);
+    mount();
+    await screen.findByText("$12.34");
+    expect(document.getElementById("mxScope")).toHaveTextContent("Orcha · all agents with runs · last 7 days (UTC calendar days)");
+    expect(screen.getAllByText("Est. cost (USD)").length).toBe(2); // summary + table header
+    expect(screen.getByText("excl. cache")).toHaveAttribute("title", "Excludes cache reads/writes");
+  });
+
+  it("no run reported cost → 'Not reported', never $0.00 (subscription billing)", async () => {
+    const agg = {
+      ...payload7,
+      totals: { ...payload7.totals, runs_with_cost: 0, est_cost_usd: 0 },
+      per_agent: payload7.per_agent.map((a) => ({ ...a, est_cost_usd: 0 })),
+      daily: payload7.daily.map((d) => ({ ...d, est_cost_usd: 0 })),
+    };
+    stubWith(agg);
+    mount();
+    expect(await screen.findByText("Not reported")).toBeInTheDocument();
+    expect(screen.getByTitle("No run reported cost — tokens are the usage signal")).toHaveTextContent("see tokens");
+    expect(screen.queryByText("$0.00")).toBeNull();
+    expect(screen.getAllByText("not reported").length).toBe(2); // one per agent row
+  });
+
+  it("when every run reported cost, a row's $0.00 is a real $0.00", async () => {
+    const agg = {
+      ...payload7,
+      totals: { ...payload7.totals, runs: 9, runs_with_cost: 9 },
+      per_agent: [payload7.per_agent[0], { ...payload7.per_agent[1], est_cost_usd: 0 }],
+    };
+    stubWith(agg);
+    mount();
+    await screen.findByText("$12.34");
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
+  });
+
+  it("the per-agent table sorts by a column header (aria-sort reflects it)", async () => {
+    stubWith(payload7);
+    mount();
+    await screen.findByText("$12.34");
+    const names = () => Array.from(document.querySelectorAll("tr[data-agent] .nm")).map((n) => n.textContent);
+    expect(names()).toEqual(["forge", "scout"]); // default: cost desc
+    fireEvent.click(screen.getByRole("button", { name: /^Agent/ }));
+    expect(screen.getByRole("columnheader", { name: /Agent/ })).toHaveAttribute("aria-sort", "ascending");
+    expect(names()).toEqual(["forge", "scout"]);
+    fireEvent.click(screen.getByRole("button", { name: /^Agent/ }));
+    expect(names()).toEqual(["scout", "forge"]);
+  });
+
+  it("drilldown: measured runs with no recorded cost show 'Not reported' for USD", async () => {
+    stubWith(payload7, {
+      ...spendAll,
+      totals: { ...spendAll.totals, total_cost_usd: 0 },
+      tasks: spendAll.tasks.map((t) => ({ ...t, total_cost_usd: 0 })),
+    });
+    mount();
+    const row = await screen.findByText("forge");
+    fireEvent.click(row.closest("tr")!);
+    expect(await screen.findByText("Not reported")).toBeInTheDocument();
+    expect(screen.getAllByText("not reported").length).toBe(2); // each task row
+    expect(screen.queryByText("$0.00")).toBeNull();
+  });
+});
+
+describe("Metrics r4 — one window vocabulary, carried in the URL", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it("a 30-day summary opens a 30-day drilldown (&window=30d), and Back returns to 30 days", async () => {
+    window.location.hash = "#/metrics?window=30d";
+    const urls = stubFetch();
+    mount();
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics?days=30"));
+    fireEvent.click((await screen.findByText("forge")).closest("tr")!);
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics/agents/a1/spend?window=30d"));
+    expect(window.location.hash).toMatch(/agent=a1/);
+    expect(window.location.hash).toMatch(/window=30d/);
+    const pills = await screen.findByRole("radiogroup", { name: "Spend window" });
+    expect(within(pills).getByRole("radio", { name: "30 days" })).toHaveAttribute("aria-checked", "true");
+    urls.length = 0;
+    fireEvent.click(screen.getByRole("button", { name: "Back to metrics" }));
+    await waitFor(() => expect(urls).toContain("/api/containers/c1/metrics?days=30"));
+    expect(window.location.hash).not.toMatch(/agent=/);
+  });
+
+  it("the summary window pill writes &window= to the URL", async () => {
+    window.location.hash = "#/metrics";
+    stubFetch();
+    mount();
+    await screen.findByText("$12.34");
+    fireEvent.click(screen.getByText("30 days"));
+    await waitFor(() => expect(window.location.hash).toMatch(/window=30d/));
+  });
+
+  it("the conversation row uses a muted chat glyph, never the empty 'todo' circle", async () => {
+    window.location.hash = "#/metrics?agent=a1";
+    stubFetch();
+    mount();
+    await screen.findByRole("heading", { name: "forge" });
+    const g = document.querySelector(".mx-noglyph svg");
+    expect(g).toBeTruthy();
+    expect(document.querySelector(".mx-noglyph .v2-status")).toBeNull();
   });
 });

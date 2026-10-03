@@ -187,7 +187,7 @@ def container_metrics(
 
     totals = {
         "runs": 0, "sandbox_seconds": 0.0, "est_cost_usd": 0.0,
-        "tokens_in": 0, "tokens_out": 0, "runs_with_cost": 0,
+        "tokens_in": 0, "tokens_out": 0, "runs_with_cost": 0, "runs_with_tokens": 0,
         "tasks_completed": tasks_completed, "tasks_verified": tasks_verified,
     }
     agents: dict = {}
@@ -209,12 +209,15 @@ def container_metrics(
         totals["tokens_in"] += tokens_in or 0
         totals["tokens_out"] += tokens_out or 0
         totals["runs_with_cost"] += 1 if has_cost else 0
+        # M02b: a run that reported NO token counts is "not reported", never 0 tokens.
+        has_tokens = tokens_in is not None or tokens_out is not None
+        totals["runs_with_tokens"] += 1 if has_tokens else 0
 
         aid = str(row["agent_id"])
         agent = agents.setdefault(aid, {
             "agent_id": aid, "alias": row["alias"], "model": row["model"],
             "runs": 0, "ok_runs": 0, "failed_runs": 0, "sandbox_seconds": 0.0,
-            "est_cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0,
+            "est_cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0, "runs_with_tokens": 0,
             "last_active": None,
         })
         agent["runs"] += 1
@@ -226,6 +229,7 @@ def container_metrics(
         agent["est_cost_usd"] += cost or 0.0
         agent["tokens_in"] += tokens_in or 0
         agent["tokens_out"] += tokens_out or 0
+        agent["runs_with_tokens"] += 1 if has_tokens else 0
         last = row["ended_at"] or row["started_at"]
         if last is not None and (
             agent["last_active"] is None or last.isoformat() > agent["last_active"]

@@ -1,313 +1,714 @@
-/* Agents page-scoped styles — VERBATIM copy of the <style> block in
-   static/agents.html (the shared styles.css does not carry these classes; in
-   the vanilla portal they ship inside the page). No new CSS was written. */
+/* Agents page (Agent E) — Orcha V2, dark only. Uses the --v2-* tokens
+   (docs/orcha-v2-design-system.md); no gradients, glass, glow or pulsing
+   status decorations. Selectors pinned by the Python source-contract tests
+   (test_d3_agents_view, test_s3_embedded_terminal, test_s5_presence_queued,
+   test_iss337_conversation_attachments_ui, test_s1_conversation,
+   test_rich_conversation_markdown) are kept. */
 
-/* roster (left, sticky) */
-/* ISS-38: bound the roster to the viewport so it scrolls independently of the detail —
-   lets a deeplinked (?agent=) row scrollIntoView WITHOUT scrolling the page away from
-   the agent detail. Harmless while the roster is short; correct as it grows. */
-.roster-card { padding: 9px; max-height: calc(100vh - 92px); overflow-y: auto; }
-.roster-card .rh { padding: 9px 9px 7px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;
-  text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
-/* align-items:flex-start so the avatar + status glyph sit at the top when the role
-   wraps to a 2nd line; the row has no fixed height, so it grows with its content. */
-.rrow { display: flex; align-items: flex-start; gap: 11px; padding: 9px 10px; border-radius: 11px; cursor: pointer;
-  border: 1px solid transparent; transition: background .12s, border-color .12s; width: 100%; text-align: left;
-  background: transparent; font: inherit; color: inherit; }
-.rrow:hover { background: var(--hover); }
-.rrow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
-/* stack name (line 1) over role (line 2) */
-.rrow .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.rrow .nm { font-weight: 650; font-size: 13.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* role on its own line, wrapping to AT MOST 2 lines then ellipsis */
-.rrow .rl { color: var(--faint); font-size: 11.5px; line-height: 1.3; overflow: hidden;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
-/* ISS-71/ISS-69(a): roster badge for an agent holding its single-flight embodiment lease.
-   The KIND is colour-coded so a held lease is legible at a glance: live terminal (teal),
-   resident conversation (violet), ephemeral task (amber). */
-.rrow .rlive { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; align-self: center; font-size: 10px; font-weight: 700;
-  color: #1fc7cd; background: rgba(31,199,205,.12); border: 1px solid rgba(31,199,205,.3); border-radius: 999px; padding: 2px 7px; }
-.rrow .rlive .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
-.rrow .rlive.resident { color: #b794f6; background: rgba(183,148,246,.12); border-color: rgba(183,148,246,.3); }
-.rrow .rlive.ephemeral { color: #e6a23c; background: rgba(230,162,60,.12); border-color: rgba(230,162,60,.3); }
+/* ---- roster / workspace layout ------------------------------------------- */
+.agents-v2 { display: grid; grid-template-columns: minmax(220px, 264px) minmax(0, 1fr); gap: var(--v2-space-5); align-items: start; }
+.agents-detail { min-width: 0; display: flex; flex-direction: column; gap: var(--v2-space-3); }
+.ag-back { display: none; }
+/* roster-or-detail below 1100px (SPLIT_QUERY in AgentsPage.tsx): side by side is too cramped */
+@media (max-width: 1099px) {
+  .agents-v2 { grid-template-columns: minmax(0, 1fr); }
+  .agents-v2[data-has-agent="true"] .roster-card { display: none; }
+  .agents-v2[data-has-agent="false"] .agents-detail { display: none; }
+  .ag-back { display: inline-flex; flex-basis: 100%; justify-content: flex-start; margin-left: calc(-1 * var(--v2-space-2)); }
+}
 
-/* detail header */
-.ahead { display: flex; align-items: center; gap: 16px; }
-.ahead .who h1 { font-size: 22px; font-weight: 740; letter-spacing: -.02em; display: flex; align-items: center; gap: 10px; margin: 0; }
-.ahead .who .role { color: var(--muted); font-size: 13px; margin-top: 3px; }
+/* roster (left, sticky). ISS-38: bound to the viewport so it scrolls independently of
+   the workspace — a deeplinked (?agent=) row scrollIntoView never scrolls the page away.
+   Linear list: no card chrome — a hairline column rule separates it from the workspace. */
+.roster-card { position: sticky; top: var(--v2-sticky-top, 0px); max-height: var(--v2-content-h, calc(100vh - 92px)); overflow-y: auto;
+  border-right: 1px solid var(--v2-border); padding: 0 var(--v2-space-2) var(--v2-space-2) 0; }
+@media (max-width: 1099px) { .roster-card { position: static; max-height: none; border-right: 0; padding-right: 0; } }
+.roster-card .rh { padding: var(--v2-space-1) var(--v2-space-2) var(--v2-space-2); font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-semibold);
+  color: var(--v2-text-2); display: flex; align-items: center; gap: var(--v2-space-2); }
+.roster-filter { display: block; width: 100%; margin: 0 0 var(--v2-space-2); height: var(--v2-control-h-sm);
+  background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control); color: var(--v2-text);
+  padding: 0 var(--v2-space-2); font: inherit; font-size: var(--v2-fs-body); }
+.roster-filter:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+/* D8 band headers (ListGroup) inside the roster column */
+.roster-card .v2-listgroup + .v2-listgroup { margin-top: 20px; }
+/* calm Linear section label: no filled band, just a muted caption above the rows */
+.roster-card .v2-group { background: transparent; border: 0; min-height: 28px; padding: 0 4px 0 0; margin-bottom: 4px; }
+.roster-card .v2-group-toggle { height: 28px; padding: 0 6px; gap: 6px; }
+.roster-card .v2-group:hover { background: transparent; }
+.roster-card .v2-group-h { margin: 0; }
+.roster-card .v2-group-title { font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); letter-spacing: 0.01em; }
+.roster-card .v2-group-count { font-size: var(--v2-fs-meta); color: var(--v2-text-4, var(--v2-text-3)); }
+.roster-card .v2-group-caret { opacity: 0; transition: opacity 120ms ease; }
+.roster-card .v2-group:hover .v2-group-caret, .roster-card .v2-group.is-collapsed .v2-group-caret { opacity: 1; }
+.rrow .rl-none { color: var(--v2-text-3); font-style: italic; }
+/* r3: the task sub-line carries the in-progress glyph so it never reads as a role */
+.rrow .rl.rl-task { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.rrow .rl.rl-task > .v2-si-wrap, .rrow .rl.rl-task > svg { flex: none; }
+.rrow .rl-task .rl-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roster-card .rgroup { padding: var(--v2-space-3) var(--v2-space-2) var(--v2-space-1); font-size: var(--v2-fs-label); color: var(--v2-text-3); }
+/* one compact 40px row: avatar · (alias over ONE meta line) · status label.
+   The full role / activity / lease are in the row tooltip. */
+.rrow { display: flex; align-items: center; gap: 12px; padding: 8px 10px; cursor: pointer; border-radius: 8px;
+  width: 100%; text-align: left; background: transparent; font: inherit; color: inherit; min-height: 52px;
+  transition: background-color 120ms ease; }
+.roster-card .v2-list > * + * { margin-top: 2px; }
+.rrow:hover { background: var(--v2-hover); }
+.rrow .rrow-in { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; }
+.rrow.sel { background: var(--v2-selected); }
+.rrow .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rrow .nm { font-weight: var(--v2-fw-medium); font-size: var(--v2-fs-body); line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rrow .rl { color: var(--v2-text-3); font-size: var(--v2-fs-meta); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rrow .rstat { flex: none; font-size: var(--v2-fs-meta); max-width: 96px; }
+/* KG-6/B25: the budget stop on a roster row / board column / header — never shrinks away */
+.ahead .who-row .bdg-chip { flex: none; cursor: help; }
+.rrow .rl-budget .bdg-chip { flex: none; cursor: help; font-size: var(--v2-fs-meta); }
+.v2-bcol-status:has(.bdg-chip) { gap: 6px; align-items: center; }
+.v2-bcol-status .bdg-chip { flex: none; cursor: help; }
+.rrow .rstat .v2-status-label { overflow: hidden; text-overflow: ellipsis; }
+@media (pointer: coarse) { .rrow { min-height: var(--v2-row-h-touch); } }
+/* roster lease: compact tinted text before the meta line (no pill) */
+.rrow .rlive { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--v2-text-3); }
+.rrow .rlive .d { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.rrow .rlive.live .d { color: var(--v2-info); }
+.rrow .rlive.resident .d { color: var(--v2-accent-hover); }
+.rrow .rlive.ephemeral .d { color: var(--v2-warn); }
+/* ISS-71/ISS-69(a): the embodiment lease badge (workspace header). KIND is told by label
+   AND tone: live terminal (info), resident conversation (accent), ephemeral task (warn). */
+.ahead .rlive { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; font-size: var(--v2-fs-meta);
+  font-weight: var(--v2-fw-medium); color: var(--v2-text-2); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-full); white-space: nowrap; }
+.ahead .rlive .d { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-info); }
+.ahead .rlive.resident .d { background: var(--v2-accent-hover); }
+.ahead .rlive.ephemeral .d { background: var(--v2-warn); }
 
-/* gate callout (decoupled from agent status — ISS-36) */
-.gatecard { padding: 14px 16px; margin-bottom: 18px; border-radius: 14px; }
-.gatecard.attn { border: 1px solid var(--warn-line); background: linear-gradient(180deg, var(--warn-soft), transparent 90px); }
-.gatecard.decided { border: 1px solid var(--border); background: var(--surface-2); }
-.gatecard .row { display: flex; align-items: center; gap: 11px; }
-.gatecard .ttl { font-weight: 680; font-size: 14px; }
-.gatecard .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-.gatecard .dnote { font-size: 12.5px; color: var(--text-2); }
-.gatecard .dnote b { color: var(--text); }
+/* ---- workspace header (owner: agents-workspace) ----------------------------
+   Linear detail header: round avatar · display title · model chip, ONE muted meta
+   line (role · now · last active), status + lease on the right. Tokens only. */
+.agents-detail { gap: var(--v2-space-3); }
+.ahead { display: flex; align-items: center; gap: var(--v2-space-3); min-width: 0; padding-top: 2px; }
+.ahead > .v2-av { flex: none; }
+.ahead .who { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.ahead .who-row { display: flex; align-items: center; gap: var(--v2-space-2); min-width: 0; }
+.ahead .who h1 { margin: 0; min-width: 0; display: flex; }
+.ahead .who .who-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ahead .who-row .v2-chip { flex: none; }
+.ahead .ag-model-effort { color: var(--v2-text-3); }
+.ahead .who .role { color: var(--v2-text-3); font-size: var(--v2-fs-meta); line-height: 18px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.ahead .who .role .role-t { color: var(--v2-text-2); }
+.ahead .who .role a { color: var(--v2-text-2); text-decoration: none; }
+.ahead .who .role a:hover { color: var(--v2-text); text-decoration: underline; text-underline-offset: 2px; }
+.ahead .who .role .ag-id { display: inline-flex; vertical-align: middle; }
+/* meta line: bits joined by a CSS separator (never a stray "ago· " join) */
+.ahead .who .role .role-bit + .role-bit::before { content: "·"; margin: 0 6px; color: var(--v2-text-3); }
+/* the ONE status pill: rounded-full outline chip, neutral text, the dot carries the tone (D8) */
+.ag-pres { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: var(--v2-radius-full);
+  border: 1px solid var(--v2-border); font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); color: var(--v2-text-2); white-space: nowrap; cursor: help; }
+.ag-pres:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.ag-pres .d { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-text-3); flex: none; }
+.ag-pres.t-progress .d { background: var(--v2-status-progress); }
+.ag-pres.t-warn .d { background: var(--v2-warn); }
+.ag-pres.t-danger .d { background: var(--v2-danger); }
+.ag-pres.t-hollow .d { background: transparent; border: 1.5px solid var(--v2-text-3); }
+.ahead .ag-more-menu { flex: none; align-self: flex-start; }
+/* D5 header actions: "1 / N ↑ ↓" + ⋯, top-right on every agent (AI and human) */
+.ahead .ahead-acts { flex: none; align-self: flex-start; display: inline-flex; align-items: center; gap: var(--v2-space-2); margin-left: auto; }
+@media (max-width: 600px) { .ahead .ahead-acts .v2-pager-pos { display: none; } }
+.ag-back.ag-back-nf { align-self: flex-start; }
+@media (max-width: 1099px) { .ahead { flex-wrap: wrap; } .ahead .who { flex-basis: 0; } }
+@media (max-width: 600px) { .ahead { row-gap: var(--v2-space-1); } .ahead .who-row { flex-wrap: wrap; row-gap: 4px; } }
+/* A10 (390): "All agents" and the header actions share the first line, so the name,
+   model chip and status keep one line under them (the wrapped header cost ~50px of thread) */
+@media (max-width: 600px) {
+  .ahead > .ag-back { order: 1; flex-basis: auto; }
+  .ahead > .ahead-acts { order: 2; align-self: center; }
+  .ahead::before { content: ""; order: 3; flex-basis: 100%; height: 0; }
+  .ahead > .v2-av { order: 4; }
+  .ahead > .who { order: 5; }
+}
+/* header + tabs stay pinned while the tab body scrolls (review: the header half-clipped on scroll) */
+.ag-top { position: sticky; top: calc(var(--v2-sticky-top, 0px) - var(--v2-content-pt, 20px)); z-index: 3; display: flex; flex-direction: column;
+  gap: var(--v2-space-3); margin-top: calc(-1 * var(--v2-content-pt, 20px)); padding-top: var(--v2-content-pt, 20px); background: var(--v2-panel, var(--v2-surface)); }
+.ag-id { display: inline-flex; align-items: center; gap: var(--v2-space-1); color: var(--v2-text-2); font-size: var(--v2-fs-meta); }
+/* failed agent: why, and where to look — ONE borderless muted line, red glyph only (D3/D12) */
+.ag-fail { display: flex; align-items: center; gap: var(--v2-space-2); padding: 0; border: 0; background: transparent;
+  color: var(--v2-text-2); font-size: var(--v2-fs-meta); min-height: 28px; }
+.ag-fail .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-fail .muted { color: var(--v2-text-3); }
+.ag-fail .ag-fail-go { flex: none; color: var(--v2-text-2); }
+.ag-fail > .v2-ico { color: var(--v2-danger); width: 14px; height: 14px; flex: none; }
+.ag-fail .grow { flex: 1; min-width: 0; }
 
-/* conversation panel (S1) */
-.conv { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface);
-  box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden; }
-.conv-h { display: flex; align-items: center; gap: 11px; padding: 12px 15px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
-.conv-h .conv-who { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.conv-h .cn { font-weight: 680; font-size: 14px; }
-.conv-h .cr { color: var(--faint); font-size: 11.5px; }
-.presence { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; padding: 4px 10px;
-  border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-.presence .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.presence.p-working { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
-.presence.p-working .d { animation: pulse 1.4s infinite; }
-.presence.p-replied { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
-.presence.p-waking { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
-.presence.p-offline { color: var(--faint); }
-/* busy = holding another (task) lease; your message is queued. Amber, steady dot (not the
-   accent pulse) so it reads as "occupied elsewhere" rather than "working on you". */
-.presence.p-busy { color: var(--amber); background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 30%, var(--border)); }
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-.conv-list { display: flex; flex-direction: column; gap: 14px; padding: 16px; max-height: 460px; overflow-y: auto; }
-.turn { display: flex; gap: 9px; align-items: flex-start; }
-.turn.human { flex-direction: row-reverse; }
-.turn .tb { max-width: 78%; }
-.turn .tmeta { font-size: 10.5px; color: var(--faint); font-weight: 600; margin-bottom: 4px; display: flex; gap: 7px; }
-.turn.human .tmeta { justify-content: flex-end; }
-.turn .tmeta .tt { color: var(--faint); font-weight: 400; }
-.turn .tx { font-size: 13.5px; line-height: 1.55; padding: 9px 13px; border-radius: 13px; white-space: pre-wrap;
-  background: var(--surface-2); border: 1px solid var(--border); }
-.turn.human .tx { background: color-mix(in oklab, var(--amber) 12%, var(--surface-2)); border-color: color-mix(in oklab, var(--amber) 26%, var(--border)); }
+/* gate callout (decoupled from agent status — ISS-36): a compact Linear triage card,
+   glyph carries the tone (no stripe, no coloured box). */
+.gatecard { padding: 6px 6px 6px var(--v2-space-3); border-radius: var(--v2-radius-card); border: 1px solid var(--v2-border); background: var(--v2-surface); }
+.gatecard .row { display: flex; align-items: center; gap: var(--v2-space-3); flex-wrap: wrap; }
+.gatecard .grow { flex: 1; min-width: 200px; }
+.gatecard .gate-ic { color: var(--v2-status-verify); display: inline-flex; }
+.gatecard .gate-ic svg { width: 16px; height: 16px; }
+.gatecard .gate-ic.ok { color: var(--v2-ok); }
+.gatecard .gate-ic.bad { color: var(--v2-danger); }
+.gatecard .ttl { font-weight: var(--v2-fw-medium); font-size: var(--v2-fs-body); }
+.gatecard .sub, .gatecard .dnote { color: var(--v2-text-3); font-size: var(--v2-fs-meta); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gatecard .row > .grow { min-width: 0; }
+@media (max-width: 600px) { .gatecard .row > .grow { flex-basis: calc(100% - 40px); } }
+.gatecard .dnote b { color: var(--v2-text-2); font-weight: var(--v2-fw-medium); }
+
+/* ---- tab panels ----------------------------------------------------------- */
+.ag-tabs { max-width: 100%; }
+/* r3 (390): the strip's edge fades only when that edge actually has hidden tabs, and are wide
+   enough (a hard 12px clear zone + 32px ramp) that a clipped fragment ("sation") never reads
+   as a label. AgentsPage centres the active tab. */
+.ag-tabs.v2-tabs.has-more-end { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 12px)); mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 12px)); }
+.ag-tabs.v2-tabs.has-more-start { -webkit-mask-image: linear-gradient(to right, transparent 12px, #000 44px); mask-image: linear-gradient(to right, transparent 12px, #000 44px); }
+.ag-tabs.v2-tabs.has-more-start.has-more-end { -webkit-mask-image: linear-gradient(to right, transparent 12px, #000 44px, #000 calc(100% - 44px), transparent calc(100% - 12px)); mask-image: linear-gradient(to right, transparent 12px, #000 44px, #000 calc(100% - 44px), transparent calc(100% - 12px)); }
+.ag-panel { padding-top: var(--v2-space-3); display: flex; flex-direction: column; gap: var(--v2-space-3); }
+.ag-panel[hidden] { display: none; }  /* the kept-mounted conversation panel must really hide */
+.ag-toolbar { display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: wrap; font-size: var(--v2-fs-meta); min-height: 28px; }
+.ag-toolbar .grow, .ag-sec-h .grow { flex: 1; }
+.ag-sec { display: flex; flex-direction: column; gap: var(--v2-space-2); }
+.ag-sec + .ag-sec { margin-top: var(--v2-space-3); }
+.ag-sec-h { display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: wrap; font-size: var(--v2-fs-meta); }
+.ag-sec-t { margin: 0; font-size: var(--v2-fs-title); font-weight: var(--v2-fw-semibold); letter-spacing: var(--v2-ls-title, -0.005em); }
+/* Linear list: D8 band headers (ListGroup) + flat 36px rows, no card chrome */
+.ag-list { display: flex; flex-direction: column; margin: 0; } /* r3: bands align with the tab rule + toolbar (no 8px overhang) */
+.ag-list .v2-listgroup + .v2-listgroup { margin-top: var(--v2-space-2); }
+.ag-list-none { padding: 8px var(--v2-space-3); color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.ag-trow { display: flex; align-items: center; gap: 10px; min-height: var(--v2-row-h); padding: 0 var(--v2-space-3);
+  color: var(--v2-text); text-decoration: none; border-radius: var(--v2-radius-control); }
+.ag-trow:hover { background: var(--v2-hover); }
+.ag-trow:focus-visible { outline: none; box-shadow: var(--v2-focus-ring-inset); }
+.ag-trow > .v2-prio, .ag-trow > .v2-si-wrap, .ag-trow > svg { flex: none; }
+.ag-trow-id { flex: none; min-width: 64px; }
+.ag-trow-t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--v2-fs-body); font-weight: var(--v2-fw-book, 450); }
+.ag-trow .ag-root, .ag-trow .ag-need { flex: none; }
+.ag-trow-at { flex: none; min-width: 56px; text-align: right; }
+@media (max-width: 600px) { .ag-trow-id { display: none; } }
+.ag-more { align-self: flex-start; margin: var(--v2-space-1) 0; }
+.ag-list .ag-more { margin: 2px 0 4px var(--v2-space-1); }
+/* quiet single-line empties (no dashed boxes) */
+.agents-detail .none, .roster-card .none { border: 0; background: none; border-radius: 0; padding: var(--v2-space-2) 0; margin: 0;
+  text-align: left; color: var(--v2-text-3); font-size: var(--v2-fs-body); min-height: 0; }
+.ag-human-note { margin: var(--v2-space-3) 0 0; }
+.ag-lock { display: inline-flex; align-items: center; gap: 5px; color: var(--v2-text-3); font-size: var(--v2-fs-meta); cursor: help; border-radius: var(--v2-radius-sm); }
+.ag-lock .v2-ico { width: 13px; height: 13px; }
+
+/* ---- conversation panel (S1 · D9 Linear agent panel) ------------------------ */
+.conv { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-panel); background: var(--v2-surface);
+  display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--v2-shadow-card, none); }
+/* slim bar: reply state · info … Pair / Maximize (identity + model live in the page header) */
+.conv-h { display: flex; align-items: center; gap: var(--v2-space-2); padding: 6px var(--v2-space-2) 6px var(--v2-space-3); border-bottom: 1px solid var(--v2-border-subtle); min-height: 40px; }
+.conv-h .grow { flex: 1; }
+.conv-info, .runs-info { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; color: var(--v2-text-3); cursor: help; }
+.conv-info:hover, .runs-info:hover { color: var(--v2-text-2); }
+.conv-info:focus-visible, .runs-info:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.conv-info .v2-ico, .runs-info .v2-ico { width: 14px; height: 14px; }
+@media (max-width: 480px) { #convPair .v2-btn-label { display: none; } }
+/* D16 panel header (Linear agent panel): avatar · name · role … help · pair · maximize.
+   Borderless and 40px — the thread starts right under it (no band, no second status pill) */
+.conv-head { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px var(--v2-space-2) 0 var(--v2-space-4); min-width: 0; }
+.conv-head .grow { flex: 1; }
+.conv-head-nm { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); color: var(--v2-text); white-space: nowrap; }
+.conv-head-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--v2-fs-meta); color: var(--v2-text-3); }
+.conv-head .presence { margin-left: 2px; }
+.conv-head .v2-help, .conv-head .conv-pair, .conv-head .conv-max { flex: none; }
+.conv-head .conv-pair, .conv-head .conv-max { width: 28px; height: 28px; color: var(--v2-text-3); }
+.conv-head .conv-pair:hover:not(:disabled), .conv-head .conv-max:hover { color: var(--v2-text); background: var(--v2-hover); }
+.conv-head .conv-pair[aria-pressed="true"] { color: var(--v2-info); background: var(--v2-hover); }
+.conv-head .conv-pair svg, .conv-head .conv-max svg { width: 14px; height: 14px; }
+@media (max-width: 480px) { .conv-head-role { display: none; } .conv-head { padding-left: var(--v2-space-3); } }
+/* reply state = a Linear live pill: rounded-full outline chip, neutral text, the dot carries the tone */
+.presence { display: inline-flex; align-items: center; gap: 6px; height: 22px; font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); padding: 0 9px;
+  border-radius: var(--v2-radius-full); color: var(--v2-text-2); background: transparent; border: 1px solid var(--v2-border); white-space: nowrap; }
+.presence .d { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-text-3); flex: none; }
+.presence.p-working .d { background: var(--v2-status-progress); }
+.presence.p-replied .d { background: var(--v2-status-done); }
+.presence.p-waking .d { background: var(--v2-warn); }
+.presence.p-offline { color: var(--v2-text-3); }
+.presence.p-failed { color: var(--v2-danger); }
+.presence.p-failed .d { background: var(--v2-danger); }
+/* no agent runtime bound: nothing can pick the message up — hollow neutral dot */
+.presence.p-noruntime .d { background: transparent; border: 1.5px solid var(--v2-text-3); }
+/* busy = holding another (task) lease; your message is queued. Hollow warn dot so it
+   reads as "occupied elsewhere" rather than "working on you". */
+.presence.p-busy { color: var(--v2-warn); }
+.presence.p-busy .d { background: transparent; border: 1.5px solid currentColor; }
+/* sized so the composer stays on screen under the header + tabs */
+.conv-list { display: flex; flex-direction: column; padding: var(--v2-space-4) var(--v2-space-4) var(--v2-space-2); overflow-y: auto; min-height: 160px;
+  max-height: max(260px, min(640px, calc(var(--v2-content-h, 100vh) - 300px)));
+  /* soft top edge: a scrolled message fades out instead of being hard-clipped */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px); mask-image: linear-gradient(to bottom, transparent 0, #000 24px);
+  /* r3: the first turn starts below the fade, and a scrolled-to turn lands there too */
+  padding-top: var(--v2-space-6, 24px); scroll-padding-top: var(--v2-space-6, 24px); }
+.conv-listwrap { position: relative; }
+/* wide layouts: the Conversation tab FILLS the panel like Linear's agent panel — the thread
+   scrolls, the composer stays pinned at the bottom, the page itself never scrolls. */
+@media (min-width: 901px) and (min-height: 600px) {
+  .agents-detail:has(> #agtab-panel-conversation:not([hidden]) .conv-wrap:not(.paired)) {
+    height: calc(var(--v2-content-h) - var(--v2-content-pt, 20px) - var(--v2-space-8)); min-height: 480px; }
+  .agents-detail:has(> #agtab-panel-conversation:not([hidden]) .conv-wrap:not(.paired)) > #agtab-panel-conversation { flex: 1; min-height: 0; }
+  #agtab-panel-conversation > #convWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #convWrap > .conv-wrap:not(.paired) { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  #convWrap > .conv-wrap:not(.paired) > .conv:not(.maximized) { height: 100%; min-height: 0; }
+  #convWrap > .conv-wrap:not(.paired) > .conv:not(.maximized) .conv-listwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #convWrap > .conv-wrap:not(.paired) > .conv:not(.maximized) .conv-list { flex: 1; max-height: none; }
+}
+/* A10: narrow screens (the agent is a full view; the DOCUMENT scrolls) fill the same way —
+   the detail is exactly the content viewport minus the content padding, so the thread
+   scrolls inside and the composer + Send stay on screen however tall the header wraps. */
+@media (max-width: 900px) {
+  .agents-v2[data-has-agent="true"] .agents-detail:has(> #agtab-panel-conversation:not([hidden]) .conv-wrap:not(.paired)) {
+    height: calc(var(--v2-content-h) - 2 * var(--v2-space-4)); min-height: 360px; }
+  .agents-v2[data-has-agent="true"] .agents-detail:has(> #agtab-panel-conversation:not([hidden]) .conv-wrap:not(.paired)) > #agtab-panel-conversation { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .agents-v2[data-has-agent="true"] #agtab-panel-conversation > #convWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .agents-v2[data-has-agent="true"] #convWrap > .conv-wrap:not(.paired) { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .agents-v2[data-has-agent="true"] #convWrap > .conv-wrap:not(.paired) > .conv:not(.maximized) { height: 100%; min-height: 0; }
+  .agents-v2[data-has-agent="true"] #convWrap > .conv-wrap:not(.paired) > .conv:not(.maximized) .conv-listwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .agents-v2[data-has-agent="true"] #convWrap > .conv-wrap:not(.paired) > .conv:not(.maximized) .conv-list { flex: 1; min-height: 0; max-height: none; }
+}
+@media (max-width: 560px) {
+  .agents-v2[data-has-agent="true"] .agents-detail:has(> #agtab-panel-conversation:not([hidden]) .conv-wrap:not(.paired)) {
+    height: calc(var(--v2-content-h) - 2 * var(--v2-space-3)); }
+}
+/* while scrolled away, reserve room at the bottom so the docked pill never covers a turn */
+.conv-listwrap.is-away .conv-list { padding-bottom: 52px;
+  /* …and whatever scrolls under the pill fades out, so the pill never sits ON a line of text */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 52px), transparent calc(100% - 8px));
+  mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 52px), transparent calc(100% - 8px)); }
+/* r2: centred just above the composer (it used to sit bottom-right, right on top of the
+   right-aligned delivery line "sent · awaiting reply"); a compact rounded pill */
+.conv-jump { position: absolute; left: 50%; transform: translateX(-50%); bottom: var(--v2-space-2); z-index: 2; box-shadow: var(--v2-shadow-pop);
+  border-radius: 999px; height: 26px; padding: 0 10px; font-size: var(--v2-fs-meta); }
+.conv-earlier { align-self: center; }
+.conv-list:has(> .conv-empty) { min-height: 0; }
+.conv-empty { color: var(--v2-text-3); font-size: var(--v2-fs-body); padding: var(--v2-space-2) 0; }
+.conv-empty.conv-err { display: flex; align-items: center; gap: var(--v2-space-2); color: var(--v2-text-2); }
+.conv-empty.conv-err > .v2-ico { color: var(--v2-danger); width: 14px; height: 14px; flex: none; }
+.conv-empty.conv-err .grow { flex: 1; min-width: 0; }
+.conv-list .v2-chat { gap: var(--v2-space-4); font-size: var(--v2-fs-body-lg); }
+/* the agent's turns: plain text on the panel (no bubble), the author line only on a new group */
+.turn.agent { max-width: min(100%, 76ch); }
+.turn.agent.v2-msg-agent + .turn.agent.v2-msg-agent:not(:has(> .v2-msg-h)) { margin-top: calc(-1 * var(--v2-space-2)); }
+.turn .tx { font-size: var(--v2-fs-body-lg); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--v2-text); }
+.turn.human .tx { line-height: 1.5; }
+.turn.human .v2-msg-status .tmeta { display: inline-flex; gap: 6px; justify-content: flex-end; }
+.turn .tmeta .tt { color: var(--v2-text-3); font-weight: var(--v2-fw-regular); }
+.turn .tmeta .dlv { color: var(--v2-text-3); }
+.turn .tmeta .dlv::before { content: "·"; margin-right: 6px; }
+.turn .tmeta .dlv.queued { color: var(--v2-text-2); }
+.turn .v2-msg-h .tt { color: var(--v2-text-3); font-weight: var(--v2-fw-regular); }
 /* rich markdown rendering for conversation messages (Orcha.mdText) */
-.tx.md strong { font-weight: 700; }
+.tx.md strong { font-weight: var(--v2-fw-semibold); }
 .tx.md em { font-style: italic; }
-.tx.md .md-code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 5px; border-radius: 5px;
-  background: var(--bg); border: 1px solid var(--border); }
-.tx.md .md-pre { margin: 7px 0; padding: 9px 11px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
+.tx.md .md-code { font-family: var(--v2-font-mono); font-size: 12px; padding: 1px 5px; border-radius: 5px;
+  background: var(--v2-raised); border: 1px solid var(--v2-border); }
+.tx.md .md-pre { margin: 7px 0; padding: 9px 11px; border-radius: var(--v2-radius-control); background: var(--v2-canvas); border: 1px solid var(--v2-border);
   overflow: auto; white-space: pre; }
-.tx.md .md-pre code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
-.tx.md .md-h { display: block; font-weight: 700; margin: 3px 0; }
-.tx.md .md-li { display: block; padding-left: 15px; position: relative; }
-.tx.md .md-li::before { content: "•"; position: absolute; left: 3px; color: var(--muted); }
+.tx.md .md-pre code { font-family: var(--v2-font-mono); font-size: 12px; }
+.tx.md .md-h { display: block; font-weight: var(--v2-fw-semibold); margin: 3px 0; }
 .tx.md .md-table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; overflow-x: auto; max-width: 100%; }
-.tx.md .md-table th, .tx.md .md-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; vertical-align: top; }
-.tx.md .md-table th { background: var(--surface-2); font-weight: 650; }
-.tx.md .md-table tr:nth-child(even) td { background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
-.turn details { margin-top: 6px; } .turn .work-sum { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
-.turn .log { margin-top: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); max-height: 240px; overflow: auto; }
-.conv-thinking { display: inline-flex; gap: 5px; align-items: center; padding: 11px 14px; border-radius: 13px;
-  background: var(--surface-2); border: 1px solid var(--border); }
-.conv-thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: convblink 1.2s infinite; }
+.tx.md .md-table th, .tx.md .md-table td { border: 1px solid var(--v2-border); padding: 5px 10px; text-align: left; vertical-align: top; }
+.tx.md .md-table th { background: var(--v2-surface); font-weight: var(--v2-fw-semibold); }
+.tx.md .md-table tr:nth-child(even) td { background: var(--v2-surface); }
+/* "Worked for 10 sec ▸ · 40m ago" + the run's streamed log (runlog WorkLogDetails) */
+.turn .worklog { margin: 0 0 2px; }
+.v2-worked-row { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.v2-worked-meta { display: inline-flex; align-items: center; font-size: var(--v2-fs-meta); color: var(--v2-text-3); white-space: nowrap; }
+.v2-worked-meta::before { content: "·"; margin: 0 6px 0 2px; }
+/* the live "Working…" row carries the Live changes button: no separator dot before a control */
+.v2-worked-meta:has(> .conv-live-changes)::before { content: none; }
+.v2-worked-meta > .conv-live-changes { margin-left: 8px; }
+.turn-time { font-size: var(--v2-fs-meta); color: var(--v2-text-3); line-height: 24px; }
+/* D16 live "AI working" row: Linear shimmer on "Working…", a live timer, the current activity */
+.conv-working { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: min(100%, 76ch); }
+.conv-working .v2-worked-toggle { font-size: var(--v2-fs-body); }
+.conv-working .v2-worked-label { display: inline-flex; align-items: baseline; gap: 8px; }
+.conv-shimmer { font-weight: var(--v2-fw-medium);
+  background: linear-gradient(90deg, var(--v2-text-3) 0%, var(--v2-text-3) 35%, var(--v2-text) 50%, var(--v2-text-3) 65%, var(--v2-text-3) 100%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: conv-shimmer 2.2s linear infinite; }
+@keyframes conv-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+.conv-elapsed { color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; }
+.conv-activity { font-size: var(--v2-fs-meta); color: var(--v2-text-3); line-height: 1.45; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-working .v2-worked-body { padding: 0; overflow: hidden; }
+.conv-working .log { max-height: 260px; overflow: auto; border: 0; border-radius: 0; margin: 0; background: transparent; }
+@media (prefers-reduced-motion: reduce) { .conv-shimmer { animation: none; background: none; color: var(--v2-text-2); } }
+/* ---- live chat: the reply streams in like a terminal (CSS + WAAPI only) ---------------
+   .conv-live = the in-progress reply: "Working… 12s ▸" · the step rail · the streamed text.
+   It freezes in place as "Worked for 18 sec" when the run ends; the durable turn then takes
+   its exact place (same line, same text), so nothing flashes or jumps. */
+/* the live block has the durable turn's geometry: the same body line-height as .v2-msg-body,
+   and "Working…/Worked for" sits 2px above the text exactly like .turn .worklog (margin 0 0 2px)
+   — no flex gap, so a collapsed rail leaves nothing behind and the swap is pixel-stable */
+.conv-live { display: flex; flex-direction: column; gap: 0; min-width: 0; max-width: min(100%, 76ch); line-height: 1.55; }
+.conv-live > .v2-worked { margin-bottom: 2px; }
+.conv-live .v2-worked-toggle { font-size: var(--v2-fs-body); }
+.conv-live .v2-worked-label { display: inline-flex; align-items: baseline; gap: 8px; }
+.conv-live .v2-worked-body { padding: 0; overflow: hidden; }
+.conv-live .log { max-height: 260px; overflow: auto; border: 0; border-radius: 0; margin: 0; background: transparent; }
+/* the run's durable turn sits right under its live block: close the thread gap so the
+   turn's text lands exactly where the streamed text was */
+.conv-list .v2-chat > .conv-live.is-owned + .turn.agent { margin-top: calc(-1 * var(--v2-space-4)); }
+/* step rail: compact, muted, a hairline connector; new steps slide in, the one they push
+   out collapses away, the rest fold into "N earlier steps" */
+.lt-railwrap { display: grid; grid-template-rows: 1fr; opacity: 1; margin: 2px 0 6px;
+  transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1), margin 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease-out; }
+.lt-railwrap.is-gone { grid-template-rows: 0fr; opacity: 0; margin: 0; }
+.lt-rail { min-height: 0; overflow: hidden; list-style: none; margin: 0 0 0 5px; padding: 0 0 0 11px; border-left: 1px solid var(--v2-border-subtle, var(--v2-border));
+  display: flex; flex-direction: column; }
+.lt-step { display: flex; align-items: center; gap: 8px; height: 22px; min-width: 0; font-size: var(--v2-fs-meta); color: var(--v2-text-3);
+  animation: lt-step-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.lt-step.is-current { color: var(--v2-text-2); }
+.lt-step.is-leaving { animation: lt-step-out 240ms cubic-bezier(0.22, 1, 0.36, 1) forwards; overflow: hidden; }
+.lt-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-glyph { flex: none; width: 12px; height: 12px; color: var(--v2-text-3); }
+.lt-pulse { position: relative; display: inline-grid; place-items: center; }
+.lt-pulse::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--v2-status-progress, var(--v2-warn)); }
+.lt-pulse::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--v2-status-progress, var(--v2-warn));
+  opacity: 0; animation: lt-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.lt-more { height: 22px; display: flex; align-items: center; }
+.lt-more button { border: 0; background: none; padding: 0 4px; margin-left: -4px; height: 20px; border-radius: 4px; font: inherit;
+  font-size: var(--v2-fs-meta); color: var(--v2-text-3); cursor: pointer; }
+.lt-more button:hover { color: var(--v2-text-2); background: var(--v2-hover); }
+.lt-more button:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+/* the streamed text: same type as a durable turn; each new chunk fades in on its own span */
+.lt-text { font-size: var(--v2-fs-body-lg); line-height: 1.6; white-space: normal; overflow-wrap: anywhere; color: var(--v2-text); }
+.lt-chunk { animation: lt-fade 280ms ease-out both; }
+/* the caret has ZERO layout width (an empty inline; the bar is an absolutely positioned
+   ::after), so it never wraps onto a line of its own and the live text breaks exactly like
+   the durable turn. The live text clips the 4px the bar may hang past a full line. */
+.lt-text.is-live { overflow-x: clip; }
+.lt-caret { position: relative; }
+.lt-caret::after { content: ""; position: absolute; left: 2px; top: 50%; width: 2px; height: 1.05em; margin-top: -0.55em; border-radius: 1px;
+  background: var(--v2-text-2); animation: lt-caret 1.1s ease-in-out infinite; }
+@keyframes lt-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lt-caret { 0%, 100% { opacity: .9; } 50% { opacity: .15; } }
+@keyframes lt-step-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes lt-step-out { from { opacity: 1; height: 22px; } to { opacity: 0; height: 0; } }
+@keyframes lt-ping { 0% { transform: scale(.5); opacity: .7; } 80%, 100% { transform: scale(1.35); opacity: 0; } }
+/* a delivery state that changes (sent → delivered) cross-fades in place */
+.turn .tmeta .dlv { animation: lt-fade 240ms ease-out both; }
+.conv-list .turn.human { transform-origin: 100% 100%; }
+/* the thinking line has the live header's geometry, so "Working…" replaces it in place */
+.conv-indicator .v2-msg-h { min-height: 24px; }
+/* long threads: off-screen turns skip layout + paint entirely (no virtualization lib) */
+.conv-list .v2-chat.is-long > .turn:not(:last-child) { content-visibility: auto; contain-intrinsic-size: auto 96px; }
+.conv-list { overscroll-behavior: contain; }
+@media (prefers-reduced-motion: reduce) {
+  .lt-chunk, .lt-step, .turn .tmeta .dlv { animation: none; }
+  .lt-caret::after, .lt-pulse::after { animation: none; }
+  .lt-step.is-leaving { display: none; }
+  .lt-railwrap { transition: none; }
+}
+.turn .worklog .v2-worked-body { padding: 0; overflow: hidden; }
+.turn .worklog .log { max-height: 260px; overflow: auto; border: 0; border-radius: 0; margin: 0; background: transparent; }
+.turn .run-changes { margin-top: var(--v2-space-2); display: flex; flex-direction: column; gap: var(--v2-space-2); max-width: 560px; }
+.turn .run-changes-diff .dfv { position: relative; border: 0; border-radius: 0; }
+.turn .run-changes-diff .dfv:not(.dfv-full) > .dfv-top { position: absolute; top: 3px; right: 6px; z-index: 5; padding: 0; background: transparent; border: 0; }
+.turn .run-changes-diff { scroll-margin-bottom: 96px; max-height: 360px; overflow: auto; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); }
+/* thinking / queued indicators: quiet inline lines, no boxes */
+.conv-thinking { display: inline-flex; gap: 4px; align-items: center; padding: 6px 0; }
+/* r3: ONE indicator — the dots sit on the author line; the empty body collapses */
+.v2-msg-h .conv-thinking { padding: 0; margin-left: 6px; vertical-align: middle; }
+.conv-indicator .v2-msg-body:empty { display: none; }
+.conv-thinking span { width: 5px; height: 5px; border-radius: 50%; background: var(--v2-text-3); animation: convblink 1.2s infinite; }
 .conv-thinking span:nth-child(2) { animation-delay: .2s; } .conv-thinking span:nth-child(3) { animation-delay: .4s; }
 /* honest "your message is queued" notice shown instead of fake thinking dots when busy */
-.conv-queued { display: inline-flex; gap: 8px; align-items: center; padding: 11px 14px; border-radius: 13px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
-  background: color-mix(in oklab, var(--amber) 8%, var(--surface-2)); border: 1px solid color-mix(in oklab, var(--amber) 22%, var(--border)); }
-.conv-queued svg { flex: 0 0 auto; color: var(--amber); }
+.conv-queued { display: inline-flex; gap: 8px; align-items: flex-start; font-size: var(--v2-fs-body); line-height: 1.5; color: var(--v2-text-2); }
+.conv-queued svg { flex: 0 0 auto; color: var(--v2-warn); width: 14px; height: 14px; margin-top: 3px; }
+.conv-unknown svg { color: var(--v2-text-3); }
 @keyframes convblink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .conv-thinking span { animation: none; opacity: .7; } }
 /* send-UX: optimistic pending bubble, failure note + Retry, cold-start honesty,
-   wakes-not-served banner, and the in-flight Send spinner */
-.turn.pending .tx { opacity: .55; }
+   wakes-not-served banner */
+/* the optimistic bubble looks exactly like the durable turn that replaces it in place —
+   only its status line says "sending…" (no dimmed flash when the server's copy lands) */
+.turn.pending .v2-msg-body { opacity: 1; }
 .turn.pending .tmeta .tt { font-style: italic; }
-.conv-sendfail { margin-top: 6px; display: flex; align-items: center; gap: 8px; padding: 8px 11px;
-  border-radius: 10px; font-size: 12px; color: var(--danger);
-  background: color-mix(in oklab, var(--danger) 10%, var(--surface-2));
-  border: 1px solid color-mix(in oklab, var(--danger) 30%, var(--border)); }
-.conv-sendfail svg { width: 14px; height: 14px; flex: none; }
-.conv-sendfail span { flex: 1; min-width: 0; }
-.conv-coldnote { margin-top: 6px; color: var(--faint); font-size: 11.5px; }
-.conv-wakes { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px;
-  border-bottom: 1px solid var(--warn-line); background: var(--warn-soft); }
-.conv-wakes > svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--warn); }
-.conv-wakes .body { flex: 1; min-width: 0; }
-.conv-wakes .t1 { font-size: 12.5px; font-weight: 700; color: var(--text); }
-.conv-wakes .t2 { color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 1px; }
-#convSend .spin { width: 12px; height: 12px; border: 2px solid currentColor; border-top-color: transparent;
-  border-radius: 50%; display: inline-block; animation: convspin .7s linear infinite; }
-@keyframes convspin { to { transform: rotate(360deg); } }
-.gcard { border-radius: 12px; padding: 11px 13px; border: 1px solid var(--warn-line); background: var(--warn-soft); }
-.gcard.ask { border-color: var(--accent-line); background: var(--accent-soft); }
-.gcard .gh { font-weight: 660; font-size: 13px; display: flex; align-items: center; gap: 7px; }
-.gcard .gpre { margin: 8px 0 0; font-size: 11.5px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; overflow: auto; max-height: 140px; }
-.gcard .gnote { color: var(--muted); font-size: 11px; margin-top: 7px; }
-.conv-composer { position: relative; display: flex; gap: 9px; align-items: flex-end; padding: 12px 14px; border-top: 1px solid var(--border); }
-.conv-in { flex: 1; resize: none; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-  border-radius: 11px; padding: 10px 13px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; max-height: 160px; }
-.conv-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-.slash { position: absolute; bottom: calc(100% - 4px); left: 14px; right: 14px; background: var(--raised); border: 1px solid var(--border);
-  border-radius: 11px; box-shadow: var(--shadow-lg); overflow: hidden; max-height: 220px; overflow-y: auto; z-index: 5; }
-.slash .si { padding: 8px 13px; font-size: 12.5px; font-family: "JetBrains Mono", ui-monospace, monospace; cursor: pointer; }
-.slash .si.on, .slash .si:hover { background: var(--accent-soft); color: var(--accent); }
-.conv-note { padding: 0 14px 12px; color: var(--faint); font-size: 11px; }
+.turn.pending.failed .v2-msg-body { opacity: .85; }
+.conv-sendfail { margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 4px 4px 4px 10px;
+  border-radius: var(--v2-radius-card); font-size: var(--v2-fs-meta); color: var(--v2-text-2);
+  background: var(--v2-surface); border: 1px solid var(--v2-border); max-width: 560px; }
+.conv-sendfail > svg { width: 14px; height: 14px; flex: none; color: var(--v2-danger); }
+.conv-sendfail > span:not(.conv-sendfail-acts) { flex: 1; min-width: 160px; }
+.conv-sendfail b { color: var(--v2-text); font-weight: var(--v2-fw-semibold); }
+.conv-sendfail-acts { display: inline-flex; gap: 2px; margin-left: auto; }
+.conv-coldnote { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+/* C9b: a run that ended without a reply — its outcome is the turn */
+.conv-ended-note { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+/* no runtime bound: ONE muted line over the thread (the explanation is its tooltip) — no amber band */
+.conv-wakes { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 var(--v2-space-4); font-size: var(--v2-fs-meta);
+  color: var(--v2-text-3); border-bottom: 1px solid var(--v2-border-subtle); cursor: help; white-space: nowrap; overflow: hidden; }
+.conv-wakes:focus-visible { outline: none; box-shadow: var(--v2-focus-ring-inset); }
+.conv-wakes > svg { width: 13px; height: 13px; flex: none; color: var(--v2-text-3); }
+.conv-wakes .t1 { color: var(--v2-text-2); font-weight: var(--v2-fw-medium); }
+.conv-wakes .t2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conv-wakes .t2::before { content: "·"; margin-right: 6px; }
+/* screen-reader-only reply state (the visible status is the workspace header pill) */
+.ag-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* gate cards (permission request / ask-human): a bordered triage card, the glyph carries the tone (D3) */
+.gcard { border-radius: var(--v2-radius-card); padding: var(--v2-space-2) var(--v2-space-3); border: 1px solid var(--v2-border);
+  background: color-mix(in srgb, var(--v2-raised) 55%, transparent); min-width: 0; max-width: 640px; }
+.gcard .gh { font-weight: var(--v2-fw-medium); font-size: var(--v2-fs-body); line-height: 1.45; display: flex; align-items: flex-start; gap: 8px; }
+.gcard .gh svg { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--v2-warn); }
+.gcard.ask .gh svg { color: var(--v2-accent); }
+.gcard .gpre { margin: 8px 0 0; min-width: 0; overflow-x: auto; }
+.gcard .gnote { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.gcard.ask .gnote { margin-top: 4px; padding-left: 23px; }
+.gcard .gfoot { display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: wrap; margin-top: 8px; }
+.gcard .gfoot .gnote { flex: 1; min-width: 160px; }
+/* D4 tool input as labelled fields; long values wrap (never clipped horizontally) */
+.gkv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px var(--v2-space-3); margin: 0; font-size: var(--v2-fs-meta); }
+.gkv > div { display: contents; }
+.gkv dt { color: var(--v2-text-3); padding-top: 3px; }
+.gkv dd { margin: 0; min-width: 0; color: var(--v2-text); }
+.gval { margin: 0; font-family: var(--v2-font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--v2-canvas); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control); padding: 6px 8px; max-height: 200px; overflow-y: auto; }
+.graw > summary { cursor: pointer; color: var(--v2-text-2); }
+.graw > .gval { margin-top: 4px; }
+
+/* D9 composer: ONE rounded field — context chips on top, the text, then Skills ·
+   attach · circular send. Grid areas place the shared MessageComposer's children. */
+.conv .message-composer.conv-composer { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "tray tray tray tray" "ta ta ta ta" "skills . attach send"; align-items: center; gap: 4px 4px;
+  margin: var(--v2-space-2) var(--v2-space-3) var(--v2-space-3); padding: 10px 8px 8px 12px; border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-panel); background: var(--v2-raised); }
+.conv .message-composer.conv-composer:focus-within { border-color: var(--v2-border-strong); }
+.conv .conv-composer .conv-in { grid-area: ta; resize: none; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: none;
+  color: var(--v2-text); padding: 0; min-height: 40px; max-height: 160px; font: inherit; font-size: var(--v2-fs-body-lg); line-height: 1.5; }
+.conv .conv-composer .conv-in::placeholder { color: var(--v2-text-3); }
+.conv .conv-composer .conv-in:focus { border: 0; box-shadow: none; }
+.conv-in:disabled { opacity: .5; cursor: not-allowed; }
+.conv-tray { grid-area: tray; display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
+.conv-tray:empty { display: none; }
+.conv-skills { grid-area: skills; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px; margin-left: -6px; border: 0;
+  border-radius: var(--v2-radius-control); background: transparent; color: var(--v2-text-3); font: inherit; font-size: var(--v2-fs-meta);
+  font-weight: var(--v2-fw-medium); cursor: pointer; }
+.conv-skills .v2-ico { width: 13px; height: 13px; }
+.conv-skills .conv-skills-chev { width: 11px; height: 11px; }
+.conv-skills:hover:not(:disabled) { color: var(--v2-text); background: var(--v2-hover); }
+.conv-skills:disabled { opacity: .5; cursor: not-allowed; }
+.conv-skills:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+/* D16: while the turn's run is live and the field is empty, send becomes a circular STOP
+   (Linear image 16) — same slot, same size; typing brings send back */
+/* contrast: a FILLED light circle with a dark glyph (like send when armed) — #EEEFF1 on
+   the #1E1F23 composer is ~14:1 for the control boundary, the glyph ~17:1 on its fill.
+   The old hover-solid fill + 1px border was ~1.1:1 against the composer (invisible). */
+.conv .conv-composer .conv-stop { grid-area: send; width: 28px; height: 28px; border: 0; border-radius: var(--v2-radius-full);
+  background: var(--v2-text); color: var(--v2-inverse-text); box-shadow: none; }
+.conv .conv-composer .conv-stop:hover:not(:disabled) { background: var(--v2-inverse-hover); color: var(--v2-inverse-text); }
+.conv .conv-composer .conv-stop:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+/* requested: muted but still a visible ring (--v2-text-2 #B4B7BE on the composer ≈ 8:1) */
+.conv .conv-composer .conv-stop:disabled { opacity: 1; background: transparent; color: var(--v2-text-2);
+  box-shadow: inset 0 0 0 1.5px var(--v2-text-2); cursor: not-allowed; }
+.conv .conv-composer.has-stop .conv-send { display: none; }
+/* attach = ghost circle; send = 28px circle, filled once there is something to send */
+.conv .conv-composer .conv-attach { grid-area: attach; width: 28px; height: 28px; border-radius: var(--v2-radius-full); border: 0;
+  background: transparent; color: var(--v2-text-3); }
+.conv .conv-composer .conv-attach:hover:not(:disabled) { color: var(--v2-text); background: var(--v2-hover); border: 0; }
+.conv .conv-composer .conv-attach:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.conv-attach svg { width: 15px; height: 15px; }
+.conv .conv-composer .conv-send { grid-area: send; position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  padding: 0; border: 0; border-radius: var(--v2-radius-full); background: var(--v2-text); color: var(--v2-inverse-text); cursor: pointer; }
+.conv .conv-composer .conv-send svg { width: 15px; height: 15px; transform: rotate(-90deg); }
+.conv .conv-composer .conv-send.is-idle { background: var(--v2-hover-solid, var(--v2-surface)); color: var(--v2-text-3); box-shadow: inset 0 0 0 1px var(--v2-border); }
+.conv .conv-composer .conv-send:hover:not(:disabled):not(.is-idle) { background: var(--v2-inverse-hover); }
+.conv .conv-composer .conv-send:disabled { cursor: not-allowed; opacity: .6; }
+.conv .conv-composer .conv-send:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.conv .conv-composer .conv-send.busy { background: var(--v2-surface); color: var(--v2-text-2); }
+/* send / stop: a quick press, a soft fill once there is something to send, Stop pops in */
+.conv .conv-composer .conv-send { transition: background-color 150ms ease-out, color 150ms ease-out, box-shadow 150ms ease-out, transform 120ms ease-out; }
+.conv .conv-composer .conv-send:active:not(:disabled) { transform: scale(.9); }
+.conv .conv-composer .conv-stop { animation: lt-pop 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes lt-pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .conv .conv-composer .conv-send, .conv .conv-composer .conv-stop { transition: none; animation: none; } }
+@media (pointer: coarse) {
+  .conv .conv-composer .conv-send, .conv .conv-composer .conv-attach { width: 36px; height: 36px; }
+  .conv .conv-composer .conv-send::after, .conv .conv-composer .conv-attach::after { content: ""; position: absolute; inset: -4px; }
+}
+/* skills menu: anchored to the Skills button, capped width, UI font, one-line description per command */
+.slash { position: absolute; bottom: calc(100% + 6px); left: 0; width: min(420px, 100%); background: var(--v2-raised); border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card); box-shadow: var(--v2-shadow-pop); overflow: hidden; max-height: 280px; overflow-y: auto; z-index: 5; padding: 4px; }
+.slash .si { display: flex; align-items: baseline; gap: 10px; min-height: 30px; padding: 5px 10px; font-size: var(--v2-fs-body); cursor: pointer; border-radius: var(--v2-radius-control); }
+.slash .si-cmd { flex: none; color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.slash .si-desc { flex: 1; min-width: 0; color: var(--v2-text-3); font-size: var(--v2-fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slash .si.on, .slash .si:hover { background: var(--v2-hover); color: var(--v2-text); }
 
 /* #337: conversation attachment composer + rendered attachments (parity with #330 task threads) */
-.conv.dragover { outline: 2px dashed var(--accent-line); outline-offset: -4px; }
-.conv-attach { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
-  flex: 0 0 auto; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2);
-  color: var(--muted); cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
-.conv-attach:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.conv.dragover { outline: 2px dashed var(--v2-accent); outline-offset: -4px; }
 .conv-attach:disabled { opacity: .5; cursor: not-allowed; }
-.conv-attach svg { width: 16px; height: 16px; }
-.conv-tray { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 4px; }
-.conv-tray:empty { display: none; }
-.conv-tray .att-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 230px; padding: 5px 8px;
-  border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; }
-.conv-tray .att-chip .thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: 0 0 auto; background: var(--surface-3); }
-.conv-tray .att-chip .ic { width: 28px; height: 28px; border-radius: 6px; flex: 0 0 auto; display: inline-flex;
-  align-items: center; justify-content: center; background: var(--surface-3); color: var(--muted); }
-.conv-tray .att-chip .ic svg { width: 15px; height: 15px; }
-.conv-tray .att-chip .meta { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
-.conv-tray .att-chip .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.conv-tray .att-chip .sz { color: var(--faint); font-size: 10.5px; }
-.conv-tray .att-chip .rm { flex: 0 0 auto; cursor: pointer; color: var(--faint); border: 0; background: none;
-  font-size: 15px; line-height: 1; padding: 0 2px; }
-.conv-tray .att-chip .rm:hover { color: var(--danger); }
+/* staged files = "added to context" chips (ContextChip) */
+.conv-tray .att-chip { display: inline-flex; max-width: 260px; min-width: 0; }
+.conv-tray .att-chip .v2-ctxchip { max-width: 100%; }
+.conv-tray .att-chip .thumb { width: 14px; height: 14px; border-radius: 3px; object-fit: cover; display: block; }
+.conv-tray .att-chip .ic { display: inline-flex; color: var(--v2-text-3); }
+.conv-tray .att-chip .ic svg { width: 12px; height: 12px; }
+.conv-tray .att-chip .nm { min-width: 0; }
+.conv-tray .att-chip .sz { color: var(--v2-text-3); margin-left: 6px; }
 .conv-tray .att-chip.uploading { opacity: .6; }
-.conv-tray .att-chip.failed { border-color: var(--danger-line, var(--danger)); }
+.conv-tray .att-chip.failed .v2-ctxchip { border-color: var(--v2-danger); }
 /* in-thread rendered attachments (read view) */
-.msg-atts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
-.msg-atts .att-img { max-width: 200px; max-height: 150px; border-radius: 9px; border: 1px solid var(--border);
+.msg-atts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; align-items: flex-start; }
+.turn.human .msg-atts { justify-content: flex-end; }
+.msg-atts .att-fig { margin: 0; display: flex; flex-direction: column; gap: 3px; max-width: 200px; }
+.msg-atts .att-img { max-width: 200px; max-height: 150px; border-radius: var(--v2-radius-control); border: 1px solid var(--v2-border);
   cursor: zoom-in; display: block; object-fit: cover; }
-.msg-atts .att-file { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px;
-  border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; color: var(--text); text-decoration: none; }
-.msg-atts .att-file:hover { border-color: var(--accent-line); background: var(--accent-soft); }
-.msg-atts .att-file svg { width: 15px; height: 15px; color: var(--muted); flex: 0 0 auto; }
-.msg-atts .att-file .sz { color: var(--faint); font-size: 10.5px; }
+.msg-atts .att-fig figcaption { display: flex; gap: 6px; font-size: 11.5px; color: var(--v2-text-2); min-width: 0; }
+.msg-atts .att-fig figcaption .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-atts .att-fig figcaption .sz { flex: none; color: var(--v2-text-3); }
+/* single-line file chip (rounded-full, D8) */
+.msg-atts .att-file { display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 280px; padding: 0 10px; border-radius: var(--v2-radius-full);
+  border: 1px solid var(--v2-border); background: transparent; font-size: var(--v2-fs-meta); color: var(--v2-text); text-decoration: none; }
+.msg-atts .att-file:hover { border-color: var(--v2-border-strong); background: var(--v2-hover); }
+.msg-atts .att-file:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.msg-atts .att-file .att-ic { display: inline-flex; flex: none; }
+.msg-atts .att-file svg { width: 13px; height: 13px; color: var(--v2-text-3); flex: 0 0 auto; }
+.msg-atts .att-file .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-atts .att-file .sz { flex: none; color: var(--v2-text-3); font-size: 11px; }
 /* lightbox */
-.att-lightbox { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.82); display: flex;
+.att-lightbox { position: fixed; inset: 0; z-index: var(--v2-z-dialog); background: var(--v2-lightbox-bg); display: flex;
   align-items: center; justify-content: center; padding: 32px; cursor: zoom-out; }
-.att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: var(--v2-radius-panel); }
 
-/* persona */
-.persona-pre { font-size: 13.5px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; }
-.persona-full { margin-top: 10px; padding-top: 11px; border-top: 1px solid var(--border); font-size: 13px;
-  line-height: 1.6; color: var(--text-2); white-space: pre-wrap; font-family: "JetBrains Mono", ui-monospace, monospace; }
-.persona-expand { margin-top: 10px; }
-
-/* controls (human-only) */
-.ctrl { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border);
-  border-radius: 11px; background: var(--surface-2); }
+/* ---- Configuration (Linear settings: section title + ONE bordered list of rows) ---- */
+.ag-config { max-width: 880px; }
+.persona-pre { font-size: var(--v2-fs-body); line-height: 1.6; color: var(--v2-text-2); white-space: pre-wrap; max-width: 80ch; }
+.persona-full { margin-top: var(--v2-space-2); padding: var(--v2-space-3); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface);
+  font-size: 12.5px; line-height: 1.6; color: var(--v2-text-2); white-space: pre-wrap; font-family: var(--v2-font-mono); max-height: 420px; overflow: auto; }
+.persona-expand { margin-top: -2px; }
+/* link-style disclosure: muted text + chevron, aligned with the text column */
+.ag-linkbtn.v2-btn { color: var(--v2-text-2); padding-left: 0; padding-right: 6px; margin-left: 0; flex-direction: row-reverse; }
+.ag-linkbtn.v2-btn:hover:not(:disabled) { color: var(--v2-text); background: transparent; text-decoration: underline; text-underline-offset: 2px; }
+.ag-ctrls { display: flex; flex-direction: column; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface); }
+.ctrl { display: flex; align-items: center; gap: var(--v2-space-4); padding: 10px var(--v2-space-3) 10px var(--v2-space-4); min-height: 52px; }
+.ctrl + .ctrl { border-top: 1px solid var(--v2-border-subtle); }
 .ctrl .grow { flex: 1; min-width: 0; }
-.ctrl .lbl { font-size: 12.5px; font-weight: 600; }
-.ctrl .desc { font-size: 11.5px; color: var(--muted); }
-.seg { display: inline-flex; background: var(--surface-3); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
-.seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
-  padding: 4px 11px; border-radius: 6px; cursor: pointer; }
-.seg button.on { background: var(--accent); color: var(--accent-ink); }
-.seg button:disabled { cursor: not-allowed; opacity: .55; }
-.ctrl.model-ctrl { flex-direction: column; align-items: stretch; gap: 9px; }
-.ctrl.model-ctrl .grow { width: 100%; }
-.ctrl.model-ctrl .seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
-  gap: 2px; width: 100%; max-width: none; }
-.ctrl.model-ctrl .seg button { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctrl .lbl { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); }
+.ctrl .desc { font-size: var(--v2-fs-meta); color: var(--v2-text-3); margin-top: 1px; }
+/* segmented rows reuse the primitive look (.v2-seg / .v2-seg-item); sized to content, right-aligned */
+.ctrl .seg { flex: none; }
+.seg .seg-sub { color: var(--v2-text-3); font-weight: var(--v2-fw-regular); }
+.seg .v2-seg-item.on:disabled { opacity: .8; }
+/* model / effort dropdowns: a compact button that always shows the CURRENT value */
+.ag-pick { flex: none; display: inline-flex; }
+.ag-pick .ag-pick-btn { max-width: 280px; }
+.ag-pick .ag-pick-btn .v2-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 720px) {
-  .ctrl { flex-direction: column; align-items: stretch; }
-  .ctrl .seg { align-self: flex-start; }
-  .ctrl.model-ctrl .seg { align-self: stretch; grid-template-columns: 1fr; }
+  .ctrl { flex-direction: column; align-items: flex-start; gap: var(--v2-space-2); }
+  .ctrl.model-ctrl { flex-direction: column; align-items: flex-start; gap: var(--v2-space-2); }
+  .ctrl .seg { max-width: 100%; }
 }
+@media (pointer: coarse) { .seg .v2-seg-item { min-height: 32px; } }
 /* wake — READ-ONLY badge (per-agent toggle is a Forge fast-follow) */
-.wakebadge { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; padding: 5px 11px;
-  border-radius: 999px; border: 1px solid var(--border); }
-.wakebadge.on { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
-.wakebadge.off { color: var(--muted); background: var(--surface-3); }
+.wakebadge { display: inline-flex; align-items: center; gap: 6px; font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); color: var(--v2-text-2); }
+.wakebadge.on .d { background: var(--v2-ok); }
 .wakebadge .d { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.wakebadge.off .d { background: transparent; border: 1.5px solid var(--v2-text-3); }
+/* VD-10: wakes refused by a budget stop — warn tone, the reason is the tooltip */
+.wakebadge.paused { color: var(--v2-warn); cursor: help; }
+.wakebadge.paused .d { background: var(--v2-warn); }
+/* details key/value */
+.ag-kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 6px var(--v2-space-3); margin: 0; font-size: var(--v2-fs-body); }
+.ag-kv > div { display: contents; }
+.ag-kv dt { color: var(--v2-text-3); font-size: var(--v2-fs-meta); align-self: center; }
+.ag-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ag-kv dd.ag-id span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* memory digest */
-.digest { display: grid; gap: 13px; }
-.digest [data-more] { justify-self: start; }   /* keep the "Show more" pill compact in the grid */
-.digest .focus { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 11px;
-  padding: 12px 14px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
-.digest .focus .lbl, .dgroup .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--accent); margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
-.dgroup .lbl { color: var(--faint); }
-.dgroup ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
-.dgroup li { font-size: 13px; line-height: 1.45; color: var(--text-2); padding-left: 18px; position: relative; }
-.dgroup li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 5px; height: 5px; border-radius: 50%;
-  background: var(--muted); }
-.dgroup.thr li::before { background: var(--warn); }
+/* memory digest: uniform sections, no accent stripe or idle-looking glyph */
+.digest { display: flex; flex-direction: column; gap: var(--v2-space-5); max-width: 80ch; }
+.dgroup .lbl { font-size: var(--v2-fs-label); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); margin-bottom: 6px; }
+.dgroup.focus p { margin: 0; font-size: var(--v2-fs-body-lg); line-height: 1.55; color: var(--v2-text); }
+.dgroup ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.dgroup li { font-size: var(--v2-fs-body); line-height: 1.45; color: var(--v2-text); padding-left: 14px; position: relative; }
+.dgroup li::before { content: ""; position: absolute; left: 3px; top: 8px; width: 4px; height: 4px; border-radius: 50%; background: var(--v2-text-3); }
+.dgroup .ag-more { margin-left: -8px; }
 
-/* all-tasks deeplink chips (ISS-33 revalidation: every task reachable, any status) */
-.tchips-wrap { margin-top: 4px; padding-top: 11px; border-top: 1px solid var(--border); }
-.tchips-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: 7px; }
-.tchips { display: flex; flex-wrap: wrap; gap: 7px; }
-.tchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 11.5px;
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); text-decoration: none; max-width: 220px; }
-.tchip:hover { border-color: var(--accent-line); color: var(--text); }
-.tchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* requests in/out: one-line Linear rows (glyph · text · kind / party / time) */
+.rqrow { display: flex; align-items: center; gap: 10px; min-height: var(--v2-row-h); padding: 4px var(--v2-space-3);
+  color: inherit; text-decoration: none; border-radius: var(--v2-radius-control); }
+.rqrow:hover { background: var(--v2-hover); }
+.rqrow:focus-visible { outline: none; box-shadow: var(--v2-focus-ring-inset); }
+.rqrow > .v2-si-wrap, .rqrow > svg { flex: none; }
+.rqrow .rq-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rqrow .pl { font-size: var(--v2-fs-body); color: var(--v2-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rqrow .ans { display: inline-flex; align-items: center; gap: 4px; color: var(--v2-text-3); font-size: var(--v2-fs-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rqrow .ans .v2-ico { width: 12px; height: 12px; color: var(--v2-ok); flex: none; }
+.rqrow .rq-meta { flex: none; display: inline-flex; align-items: center; gap: var(--v2-space-3); font-size: var(--v2-fs-meta); }
+.rqrow .rq-who { display: inline-flex; align-items: center; gap: 5px; max-width: 180px; min-width: 0; }
+.rqrow .rq-who b { color: var(--v2-text-2); font-weight: var(--v2-fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rqrow .rq-kind { color: var(--v2-text-3); text-transform: capitalize; }
+.rqrow .rq-at { min-width: 52px; text-align: right; }
+@media (max-width: 720px) { .rqrow { flex-wrap: wrap; } .rqrow .rq-meta { width: 100%; padding-left: 24px; } .rqrow .rq-at { margin-left: auto; } }
 
-/* requests in/out */
-.rqrow { display: flex; align-items: flex-start; gap: 11px; padding: 12px 13px; border: 1px solid var(--border);
-  border-radius: 12px; background: var(--surface-2); color: inherit; text-decoration: none; }
-.rqrow:hover { border-color: var(--accent-line); }
-.rqrow .body { flex: 1; min-width: 0; }
-.rqrow .top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
-.rqrow .pl { font-size: 13px; line-height: 1.5; color: var(--text-2); }
-.rqrow .ans { margin-top: 8px; border-left: 2px solid var(--ok); padding: 3px 0 3px 11px; color: var(--muted); font-size: 12.5px; }
-
-/* ISS-63: collapsible Current-task / Incoming / Outgoing widgets (chevron in the card header,
-   state remembered in localStorage) so the worker-progress feed is quickly reachable. */
-.collapse-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
-  border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
-  cursor: pointer; flex: 0 0 auto; transition: transform .15s, color .12s, border-color .12s; }
-.collapse-btn:hover { color: var(--text); border-color: var(--accent-line); }
-.collapse-btn svg { width: 15px; height: 15px; }
-.card.collapsed .collapse-btn { transform: rotate(-90deg); }   /* chevron points right when collapsed */
-/* !important: Current-task / Incoming / Outgoing card bodies carry an inline `display:flex`, which
-   (being inline) outranks a plain stylesheet rule — so only Memory digest (no inline display)
-   collapsed. A stylesheet !important beats a normal inline style, restoring collapse on all cards. */
-.card.collapsed .card-b { display: none !important; }
-/* S3 §3b "Pair in terminal" — docked beside the conversation (reference design lifted) */
-.conv-wrap { display: grid; grid-template-columns: minmax(0,1fr); gap: 16px; align-items: start; }
+/* S3 §3b "Pair in terminal" — docked beside the conversation */
+.conv-wrap { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--v2-space-4); align-items: start; }
 .conv-wrap.paired { grid-template-columns: minmax(0,1fr) minmax(380px, 470px); }
 @media (max-width: 1180px) { .conv-wrap.paired { grid-template-columns: 1fr; } }
 #convPair { white-space: nowrap; }
 .term-slot:empty { display: none; }
-.term { position: relative; display: flex; flex-direction: column; height: 560px; background: #0a0e14; border: 1px solid #1e2733;
-  border-radius: 15px; overflow: hidden; box-shadow: var(--shadow-sm); }
-.term-h { display: flex; align-items: center; gap: 10px; padding: 10px 13px; background: #11161f; border-bottom: 1px solid #1c2533; }
-.term-h .lights { display: flex; gap: 6px; } .term-h .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; }
-.term-h .lights .r { background: #f6757e; } .term-h .lights .y { background: #f5b13d; } .term-h .lights .g { background: #38d39a; }
-.term-h .ttl { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; color: #8b98ae; }
-.term-h .pairtag { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 650; color: #1fc7cd;
-  background: rgba(31,199,205,.1); border: 1px solid rgba(31,199,205,.3); border-radius: 999px; padding: 3px 9px; }
-.term-h .pairtag .d { width: 6px; height: 6px; border-radius: 50%; background: #1fc7cd; animation: pulse 1.4s infinite; }
+.term { position: relative; display: flex; flex-direction: column; height: 560px; background: var(--v2-canvas); border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-panel); overflow: hidden; }
+.term-h { display: flex; align-items: center; gap: var(--v2-space-2); padding: var(--v2-space-2) var(--v2-space-3); background: var(--v2-surface); border-bottom: 1px solid var(--v2-border); }
+.term-h .lights { display: flex; gap: 6px; } .term-h .lights i { width: 10px; height: 10px; border-radius: 50%; display: block; background: var(--v2-border-strong); }
+.term-h .ttl { font-family: var(--v2-font-mono); font-size: 11.5px; color: var(--v2-text-2); }
+.term-h .pairtag { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: var(--v2-fw-medium); color: var(--v2-info);
+  background: var(--v2-info-soft); border-radius: var(--v2-radius-control); padding: 2px 8px; }
+.term-h .pairtag .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .term-h .term-actions { margin-left: auto; display: flex; gap: 6px; }
-.term-h .x { width: 28px; height: 28px; border-radius: 8px; border: 1px solid #283242; background: transparent;
-  color: #8b98ae; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-.term-h .x:hover { color: #f6757e; border-color: rgba(246,117,126,.4); } .term-h .x svg { width: 15px; height: 15px; }
-/* the maximize toggle stays teal on hover (only Close is destructive-red) */
-.term-h .x.term-max:hover { color: #1fc7cd; border-color: rgba(31,199,205,.4); }
-.term-body { flex: 1; min-height: 0; overflow: hidden; padding: 10px 12px; background: #0b0e14; }
+.term-h .x { width: 28px; height: 28px; border-radius: var(--v2-radius-control); border: 1px solid var(--v2-border); background: transparent;
+  color: var(--v2-text-2); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.term-h .x:hover { color: var(--v2-danger); border-color: var(--v2-border-strong); } .term-h .x svg { width: 15px; height: 15px; }
+.term-h .x:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+/* the maximize toggle is neutral on hover (only Close is destructive-red) */
+.term-h .x.term-max:hover { color: var(--v2-text); }
+.term-body { flex: 1; min-height: 0; overflow: hidden; padding: 10px 12px; background: var(--v2-canvas); }
 .term-body .term-xterm { height: 100%; }
 .term-body .xterm { height: 100%; }
-.term-saving { position: absolute; inset: 0; background: rgba(10,14,20,.86); backdrop-filter: blur(2px); display: flex;
-  flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #d5d9e0; }
-.term-saving .ring { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #1c2533; border-top-color: #1fc7cd; animation: spin 0.8s linear infinite; }
-.term-saving .st { font-size: 13px; font-weight: 600; } .term-saving .sub { font-size: 12px; color: #8b98ae; }
+.term-saving { position: absolute; inset: 0; background: var(--v2-veil); display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--v2-text); }
+.term-saving .ring { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--v2-border); border-top-color: var(--v2-accent); animation: spin 0.8s linear infinite; }
+.term-saving .st { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-semibold); } .term-saving .sub { font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* visible failure state (bridge down / busy / denied) — no silent flash-and-die */
-.term-error { position: absolute; inset: 0; background: #0b0e14; display: flex; align-items: center; gap: 12px;
-  padding: 22px 24px; color: #d5d9e0; }
-.term-error svg { width: 22px; height: 22px; flex: 0 0 auto; color: #f5b13d; }
-.term-error .st { font-size: 13.5px; font-weight: 650; margin-bottom: 4px; }
-.term-error .sub { font-size: 12px; color: #8b98ae; line-height: 1.5; white-space: pre-wrap; }
+.term-error { position: absolute; inset: 0; background: var(--v2-canvas); display: flex; align-items: center; gap: 12px;
+  padding: 22px 24px; color: var(--v2-text); }
+.term-error svg { width: 22px; height: 22px; flex: 0 0 auto; color: var(--v2-warn); }
+.term-error .st { font-size: var(--v2-fs-body-lg); font-weight: var(--v2-fw-semibold); margin-bottom: 4px; }
+.term-error .sub { font-size: var(--v2-fs-meta); color: var(--v2-text-2); line-height: 1.5; white-space: pre-wrap; }
 /* ISS-84 #244: corrective-action buttons under a preflight failure (install / sign-in / retry) */
 .term-error .te-cta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 /* ISS-84 #244: install-hint code chip inside the "not installed" pre-gate modal */
 .pf-hint { margin: 2px 0; }
-.pf-hint code { display: block; padding: 10px 12px; background: #0b0e14; border: 1px solid #1c2533;
-  border-radius: 8px; font-size: 12px; color: #d5d9e0; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.pf-hint code { display: block; padding: 10px 12px; background: var(--v2-canvas); border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-control); font-size: 12px; color: var(--v2-text); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 /* conversation lock banner (§3b vice-versa): shown when the agent is in a live terminal */
-.conv-lock { display: flex; align-items: center; gap: 9px; padding: 11px 16px; font-size: 12.5px; font-weight: 600;
-  color: var(--accent); background: var(--accent-soft); border-top: 1px solid var(--accent-line); }
+.conv-lock { display: flex; align-items: center; gap: 9px; padding: var(--v2-space-2) var(--v2-space-4); font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium);
+  color: var(--v2-text); background: var(--v2-accent-soft); border-top: 1px solid var(--v2-border); }
+.conv-lock[hidden] { display: none; }
 .conv-in:disabled { opacity: .5; cursor: not-allowed; }
 /* only dim/disable the composer when the lock banner is actually VISIBLE — a sibling
    selector still matches a [hidden] .conv-lock, so without :not([hidden]) every (unlocked)
    composer would get pointer-events:none and be unusable (review P1). */
-.conv-lock:not([hidden]) + .conv-composer { opacity: .55; pointer-events: none; }
+/* AA-089: dim ONLY the input side of the composer. The composer footer also holds Pair and
+   Maximize, which must stay usable while locked (clicking Pair names who holds the live
+   session; our own paired terminal unpairs from the same toggle). The input, attach, send and
+   skills controls are already `disabled` by Conversation.tsx, so no pointer-events blanket. */
+.conv-lock:not([hidden]) + .conv-composer :is(.message-composer__input, .conv-attach, .conv-send, .conv-skills, .conv-tray) { opacity: .55; }
+.conv-lock:not([hidden]) + .conv-composer :is(.conv-pair, .conv-max) { opacity: 1; pointer-events: auto; }
+/* wave-4: a thread scrolled away from its top fades in under the edge instead of hard-clipping a card */
+.conv-list[data-scrolled] { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px); mask-image: linear-gradient(to bottom, transparent 0, #000 16px); }
+/* New agent without the manage_agents grant: visible, focusable (tooltip reason), clearly unavailable */
+.ag-new-locked[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 
 /* ISS-65: maximize the Conversation or the Embedded Terminal into a large overlay.
    We toggle a class on the EXISTING panel (never reparent the live xterm / composer),
    so all wiring + the open websocket survive. A backdrop + Escape restore the dock. */
-.max-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(4,8,14,.62); backdrop-filter: blur(3px); }
-.conv.maximized, .term.maximized { position: fixed; inset: 3vh 3vw; z-index: 160; margin: 0;
-  height: auto; max-height: none; box-shadow: var(--shadow-lg); }
+.max-backdrop { position: fixed; inset: 0; z-index: var(--v2-z-dock); background: var(--v2-scrim-strong); }
+.conv.maximized, .term.maximized { position: fixed; inset: 3vh 3vw; z-index: calc(var(--v2-z-dock) + 1); margin: 0;
+  height: auto; max-height: none; box-shadow: var(--v2-shadow-pop); }
 .conv.maximized { display: flex; flex-direction: column; }
 .conv.maximized .conv-list { max-height: none; flex: 1 1 auto; }   /* the thread grows to fill */
+/* the thread lives in .conv-listwrap (jump pill anchor): it must grow too, or a maximized
+   conversation parks its composer mid-overlay above an empty half (AA-087 follow-up) */
+.conv.maximized .conv-listwrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .conv-h .conv-max { flex: 0 0 auto; }
+@media (max-width: 640px) { .conv.maximized, .term.maximized { inset: 0; border-radius: 0; } .turn .tb { max-width: 88%; } }

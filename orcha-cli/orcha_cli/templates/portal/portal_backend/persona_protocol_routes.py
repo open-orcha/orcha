@@ -1,14 +1,16 @@
 """Serve the persona and task protocol injected into agent wake contexts."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
+from portal_backend.goal_ancestry import goal_chain_for_prompt
 from portal_backend.guards import (
     agent_participates_in_task,
     require_agent,
     valid_uuid,
 )
+from portal_backend.identity_routes import require_member_read
 
 
 def _fallback_model(model: str | None) -> str:
@@ -31,7 +33,7 @@ def configure_model_resolution(resolve_model, resolve_model_runtime) -> None:
 
 
 @app.get("/api/agents/{aid}/persona")
-def get_persona(aid: str):
+def get_persona(aid: str, request: Request):
     """Epic A: an agent's defining system prompt + role, for the notifier to inject
     into a headless `claude -p` wake (`--append-system-prompt`) so the spawned worker
     boots AS that agent — its persona/judgment, not a generic Claude. Pairs with
@@ -42,12 +44,14 @@ def get_persona(aid: str):
     with db_cursor() as (_, cur):
         cur.execute(
             """SELECT a.alias, a.role, a.kind, a.model, a.system_prompt,
-                      c.worktrees_disabled
+                      c.worktrees_disabled, a.container_id
                  FROM agents a JOIN containers c ON c.id = a.container_id
                 WHERE a.id=%s""",
             (aid,),
         )
         row = cur.fetchone()
+        if row:
+            require_member_read(cur, request, str(row["container_id"]))  # PS-08
     if not row:
         raise HTTPException(404, f"agent {aid} not found")
     model = _resolve_model(row["model"]) if row["kind"] != "human" else None
@@ -67,7 +71,7 @@ def get_persona(aid: str):
 
 
 @app.get("/api/agents/{aid}/protocol")
-def get_agent_protocol(aid: str, task_id: str | None = None):
+def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
     """#326 (A1): the RULES the waking agent must read FRESH every wake — the protocol of its
     currently in_progress task (SPEC-4 per-task working agreement: review_chain / handoff_to /
     autonomy / notes), human-authored and human-edit-only (PATCH /api/tasks/{tid}/protocol).
@@ -106,6 +110,7 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
         agent = require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
         row = None
         if (
             task_id
@@ -170,6 +175,8 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
             self_wake = cur.fetchone()
             if self_wake:
                 resume_context = self_wake["context"]
+        # Goal ancestry: the WHY (objective -> parent(s) -> this task) rides the wake context.
+        goal = goal_chain_for_prompt(cur, str(row["id"])) if row is not None else None
     if not row:
         return {"task_id": None, "protocol": None}
     result = {
@@ -182,4 +189,6 @@ def get_agent_protocol(aid: str, task_id: str | None = None):
     }
     if resume_context:
         result["resume_context"] = resume_context
+    if goal:
+        result["goal_chain"] = goal
     return result

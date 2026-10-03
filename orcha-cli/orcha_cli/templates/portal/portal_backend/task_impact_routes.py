@@ -1,15 +1,16 @@
 """Describe the downstream impact of closing a task without mutating it."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_task as _require_task
 from portal_backend.guards import valid_uuid as _valid_uuid
+from portal_backend.identity_routes import require_member_read
 
 
 @app.get("/api/tasks/{tid}/close-implications")
-def close_implications(tid: str):
+def close_implications(tid: str, request: Request):
     """Epic B P2 (READ-ONLY): the blast radius of authoritatively closing/completing
     a task, so the portal can show a confirm summary BEFORE the human acts. Pure
     SELECTs — mutates nothing. Aggregates: downstream tasks (and whether completing
@@ -22,6 +23,28 @@ def close_implications(tid: str):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (_, cur):
         t = _require_task(cur, tid)
+        # TG-32 / PS-08: project-scoped read — a signed-in non-member gets 403 (no header
+        # ⇒ unchanged for the agent lane).
+        require_member_read(cur, request, str(t["container_id"]))
+
+        # 0) TG-05: UPSTREAM — the tasks THIS one depends on, so a pending task can say
+        #    what it is waiting for. `satisfied` = completed or cancelled (a dependency
+        #    that no longer blocks).
+        cur.execute(
+            """SELECT u.id, u.title, u.status
+               FROM task_dependencies td JOIN tasks u ON u.id = td.depends_on_id
+               WHERE td.task_id = %s ORDER BY u.created_at""",
+            (tid,),
+        )
+        upstream = [
+            {
+                "task_id": str(u["id"]),
+                "title": u["title"],
+                "status": u["status"],
+                "satisfied": u["status"] in ("completed", "cancelled"),
+            }
+            for u in cur.fetchall()
+        ]
 
         # 1) downstream tasks that depend on this one, with a would-unblock test:
         #    completing THIS task readies a downstream only if all its OTHER deps
@@ -37,7 +60,7 @@ def close_implications(tid: str):
             did = str(d["id"])
             cur.execute(
                 """SELECT 1 FROM task_dependencies x JOIN tasks dep ON dep.id = x.depends_on_id
-                   WHERE x.task_id = %s AND x.depends_on_id <> %s AND dep.status <> 'completed'
+                   WHERE x.task_id = %s AND x.depends_on_id <> %s AND dep.status NOT IN ('completed','cancelled')
                    LIMIT 1""",
                 (did, tid),
             )
@@ -117,11 +140,14 @@ def close_implications(tid: str):
         "title": t["title"],
         "status": t["status"],
         "is_root": t["is_root"],
+        "upstream_tasks": upstream,
         "downstream_tasks": downstream,
         "in_flight_agents": in_flight,
         "spawned_from_request": spawned_from,
         "open_requests_from_assignees": open_reqs,
         "summary": {
+            "upstream_total": len(upstream),
+            "blocked_by": sum(1 for u in upstream if not u["satisfied"]),
             "downstream_total": len(downstream),
             "would_unblock": would_unblock,
             "still_blocked": still_blocked,

@@ -65,6 +65,15 @@ _NOTIF_TAXONOMY = {
         "link_kind": "task",
         "link_field": "task_id",
     },
+    # mig 068: the Verdikt auto-fix loop stopped (pass / limit / no progress …) — the task is
+    # waiting in needs_verification for a person, with the reason in `message`
+    "verdikt_autofix_stopped": {
+        "type": "task_verify",
+        "zone": "needs_you",
+        "priority": _NOTIF_PRI_OWN_WORK,
+        "link_kind": "task",
+        "link_field": "task_id",
+    },
     "task_request_rejected": {
         "type": "agent_blocked",
         "zone": "needs_you",

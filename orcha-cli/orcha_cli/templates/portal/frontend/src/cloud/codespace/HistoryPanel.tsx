@@ -9,6 +9,7 @@
  * genuine per-request failure (bad ref) after the button was already shown
  * for a DIFFERENT ref that WAS available.
  */
+import { IconButton } from "../../components/primitives";
 import { useEffect, useRef, useState } from "react";
 import { relTime } from "../../lib/format";
 import { fetchFileHistory, type FileHistoryCommit, type FileHistoryPayload } from "./worktreeApi";
@@ -38,16 +39,14 @@ export function HistoryPanel({ cid, path, gitRef, onSelectCommit, onClose }: His
     <div className="cs-history-popover" role="dialog" aria-label="File history">
       <div className="cs-history-head">
         <span>History</span>
-        <button type="button" className="cs-history-close" aria-label="Close history" onClick={onClose}>
-          ×
-        </button>
+        <IconButton size="sm" icon="x" label="Close history" className="cs-history-close" onClick={onClose} />
       </div>
       {!payload ? (
-        <div className="none" style={{ padding: 10 }}>Loading history…</div>
+        <div className="cs-empty-line" role="status">Loading history…</div>
       ) : !payload.available ? (
-        <div className="none" style={{ padding: 10 }}>{payload.detail || "History is unavailable."}</div>
+        <div className="cs-empty-line">{payload.detail || "History is unavailable."}</div>
       ) : !payload.commits || !payload.commits.length ? (
-        <div className="none" style={{ padding: 10 }}>No history found for this file.</div>
+        <div className="cs-empty-line">No history found for this file.</div>
       ) : (
         <div className="cs-history-list">
           {payload.commits.map((c: FileHistoryCommit) => (

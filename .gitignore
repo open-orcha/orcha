@@ -268,3 +268,7 @@ ios/dd/
 # portal React app: template-shipped source + built bundle (see frontend/README)
 !orcha-cli/orcha_cli/templates/portal/static/dist/
 !orcha-cli/orcha_cli/templates/portal/frontend/src/**
+
+# V2 QA screenshot evidence stays local (hundreds of MB) — reports (.md) are tracked
+docs/orcha-v2-screen-review/**/*.png
+docs/orcha-v2-parity-qa/**/*.png

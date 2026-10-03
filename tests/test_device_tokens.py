@@ -343,5 +343,6 @@ async def test_device_page_serves_redirect_js_and_fallback(client):
     # manual fallback: visible token + copy button + "app should have opened" copy
     assert "should have opened automatically" in src
     assert "Copy token" in src
-    # mint failure (non-member) renders an actionable message
-    assert "must be a member" in src
+    # mint failure (non-member) renders an actionable message (parity DEV-004:
+    # a fixed headline per case, raw server text only under Details)
+    assert "isn't a member of this Embodent yet" in src

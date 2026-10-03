@@ -18,6 +18,7 @@ import { Link } from "react-router-dom";
 import { Icon, useToast } from "../../components/ui";
 import { CloudIcon } from "../projects/icons";
 import { fetchGithubRepos, isLocalRepo, LOCAL_REPO_SENTINEL, putRepoBinding, type GhRepoEntry } from "./connectRepo";
+import { bindErrorText } from "./repoPermissions";
 import "./connectRepo.css";
 
 export interface ConnectRepoModalProps {
@@ -28,14 +29,19 @@ export interface ConnectRepoModalProps {
   currentRepo?: string | null;
   onClose: () => void;
   onBound: (repo: string | null) => void;
+  /** Why the viewer may not change the binding (viewer / non-member / no
+   *  manage_repo grant). Set → every row is disabled and the reason shown;
+   *  the server would refuse the PUT anyway (e2e-permissions-16). */
+  blockedReason?: string | null;
 }
 
 type LoadState = "loading" | "ready" | "error";
 
-export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose, onBound }: ConnectRepoModalProps) {
+export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose, onBound, blockedReason }: ConnectRepoModalProps) {
   const toast = useToast();
   const [state, setState] = useState<LoadState>("loading");
-  const [available, setAvailable] = useState(false);
+  const [source, setSource] = useState<string | null>(null);
+  const [ghDetail, setGhDetail] = useState<string | null>(null);
   const [githubRepos, setGithubRepos] = useState<GhRepoEntry[]>([]);
   const [localEntry, setLocalEntry] = useState<GhRepoEntry | null>(null);
   const [busyRepo, setBusyRepo] = useState<string | null>(null);
@@ -47,7 +53,8 @@ export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose,
     const local = repos.find((r) => r.source_kind === "local" || r.full_name === LOCAL_REPO_SENTINEL) || null;
     setLocalEntry(local);
     setGithubRepos(repos.filter((r) => r !== local && r.full_name !== LOCAL_REPO_SENTINEL));
-    setAvailable(!!payload.available);
+    setSource(payload.source || null);
+    setGhDetail(typeof payload.detail === "string" ? payload.detail : null);
     setState("ready");
   }, [cid]);
 
@@ -60,12 +67,12 @@ export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose,
   }, [onClose]);
 
   const choose = async (repo: string) => {
-    if (busyRepo) return;
+    if (busyRepo || blockedReason) return;
     setBusyRepo(repo);
     const res = await putRepoBinding(cid, repo);
     setBusyRepo(null);
     if (!res.ok) {
-      toast("Couldn't connect the repo" + (res.detail ? ": " + res.detail : " (" + res.status + ")"), "danger");
+      toast("Couldn't connect the repo: " + bindErrorText(res.status, res.detail), "danger");
       return;
     }
     toast(isLocalRepo(repo) ? "Connected — using the local repository." : "Connected — " + repo, "ok");
@@ -73,11 +80,18 @@ export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose,
     onClose();
   };
 
-  // Defensive: render a local row even when the backend hasn't shipped the
-  // prepended local entry yet (parallel-built gap #3) — falls back to a
-  // generic "This machine" label with no dirname.
-  const localName = (localEntry && (localEntry.name || undefined)) || fallbackLocalName || null;
+  // The backend prepends a local entry ONLY when local_git.available() — a
+  // row offered without it would PUT {"repo":"local"} into a guaranteed 400
+  // (parity: ORCHA_LOCAL_REPO_DIR unset still offered "This machine"). The
+  // row stays when the project is ALREADY bound local, so the current
+  // binding is always visible.
   const localBound = isLocalRepo(currentRepo);
+  const showLocal = state === "ready" && (!!localEntry || localBound);
+  const localName = (localEntry && (localEntry.name || undefined)) || (localBound ? fallbackLocalName : null) || null;
+  // The payload's `available` is true for a local-only listing too — only a
+  // real App/PAT `source` means "GitHub access is configured".
+  const hasGithubSource = !!source;
+  const locked = !!busyRepo || !!blockedReason;
 
   return createPortal(
     <div className="overlay show" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -87,12 +101,17 @@ export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose,
           <p>Browse and dispatch agents against either this machine&#39;s own git repository or a repo on GitHub.</p>
         </div>
         <div className="mb cr-body">
+          {blockedReason ? (
+            <p className="cr-blocked" role="note">{blockedReason} — ask an owner to connect or change the repository.</p>
+          ) : null}
+          {showLocal ? (
           <div className="cr-section">
             <div className="cr-section-h">This machine</div>
             <button
               type="button"
               className={"cr-row cr-row-local" + (localBound ? " on" : "")}
-              disabled={!!busyRepo}
+              disabled={locked}
+              title={blockedReason || undefined}
               onClick={() => void choose(LOCAL_REPO_SENTINEL)}
             >
               <CloudIcon name="folder" cls="cr-row-ico" />
@@ -104,16 +123,23 @@ export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose,
               {busyRepo === LOCAL_REPO_SENTINEL ? <span className="cr-row-busy">Connecting…</span> : null}
             </button>
           </div>
+          ) : null}
 
           <div className="cr-section">
             <div className="cr-section-h">GitHub</div>
             {state === "loading" ? (
               <div className="cr-empty">Checking GitHub access…</div>
-            ) : !available || !githubRepos.length ? (
+            ) : !githubRepos.length ? (
               <div className="cr-empty">
-                <p>{available ? "No repositories found for the active GitHub access." : "No GitHub access configured yet."}</p>
+                <p>
+                  {!hasGithubSource
+                    ? "No GitHub access configured yet."
+                    : ghDetail
+                      ? "GitHub didn't return a repository list. Check GitHub access, then try again."
+                      : "No repositories found for the active GitHub access."}
+                </p>
                 <p className="cr-hint">
-                  <Link to="/settings" onClick={onClose}>Settings → GitHub access</Link> unlocks repo listing,
+                  <Link to="/settings#tab=github-access" onClick={onClose}>Settings → Integrations</Link> unlocks repo listing,
                   issues, pull requests, and checks.
                 </p>
               </div>
@@ -127,7 +153,8 @@ export function ConnectRepoModal({ cid, fallbackLocalName, currentRepo, onClose,
                       key={name}
                       type="button"
                       className={"cr-row" + (bound ? " on" : "")}
-                      disabled={!!busyRepo || !name}
+                      disabled={locked || !name}
+                      title={blockedReason || undefined}
                       onClick={() => void choose(name)}
                     >
                       <Icon name="link" cls="cr-row-ico" />

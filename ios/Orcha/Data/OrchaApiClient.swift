@@ -387,7 +387,7 @@ struct OrchaApiClient {
         return pairs.isEmpty ? "" : "?" + pairs.joined(separator: "&")
     }
 
-    private func raw(_ base: String, _ path: String) async throws -> (Data, HTTPURLResponse) {
+    func raw(_ base: String, _ path: String) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: makeRequest(base, path))
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         try Self.checkPerimeter(http, data)
@@ -432,7 +432,7 @@ struct OrchaApiClient {
         _ = try await send(base, path, method: "PATCH", body)
     }
 
-    private func putDecoding<T: Decodable>(_ base: String, _ path: String, _ body: [String: Any?]) async throws -> T {
+    func putDecoding<T: Decodable>(_ base: String, _ path: String, _ body: [String: Any?]) async throws -> T {
         let data = try await send(base, path, method: "PUT", body)
         return try decoder.decode(T.self, from: data)
     }
@@ -448,7 +448,7 @@ private extension CharacterSet {
 /// caller needs a — correct — access token, not a different address.
 struct OrchaAuthRequiredError: LocalizedError, Equatable {
     var errorDescription: String? {
-        "This Orcha requires a team access token. Add or update it under Settings → Containers."
+        "This Embodent requires a team access token. Add or update it under Settings → Containers."
     }
 }
 
@@ -459,9 +459,9 @@ struct OrchaApiError: LocalizedError {
     var errorDescription: String? {
         switch status {
         case 403: "You don't have access to do this in this project."
-        case 409: "Orcha rejected this action because the item changed. Refresh and try again."
-        case 422: "Orcha needs more information for this action."
-        default: "Orcha answered with an error (\(status))."
+        case 409: "Embodent rejected this action because the item changed. Refresh and try again."
+        case 422: "Embodent needs more information for this action."
+        default: "Embodent answered with an error (\(status))."
         }
     }
 }

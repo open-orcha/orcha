@@ -1,45 +1,90 @@
 import { useState } from 'react'
-import { Button } from '../../ui/Button'
+import { PenLine } from 'lucide-react'
 import { Input } from '../../ui/Input'
-import { Label } from '../../ui/Label'
+import { ObButton, StepFooter, StepHeader, tildify } from '../ui'
 
+const INPUT = 'h-8 rounded-[6px] bg-bg text-[13px]'
+
+/** Name + optional objective for a NEW project. Values flow up on every keystroke so Back
+ *  (and a failed provision's Back) returns to exactly what was typed. */
 export default function DetailsStep({
-  suggestedName,
+  folder,
+  initial,
+  onChange,
   onBack,
   onCreate
 }: {
-  suggestedName: string
+  folder: string
+  initial: { name: string; objective: string }
+  onChange?: (v: { name: string; objective: string }) => void
   onBack: () => void
   onCreate: (name: string, objective: string) => void
 }) {
-  const [name, setName] = useState(suggestedName)
-  const [objective, setObjective] = useState('')
+  const [name, setName] = useState(initial.name)
+  const [objective, setObjective] = useState(initial.objective)
+  const update = (next: { name: string; objective: string }): void => {
+    setName(next.name)
+    setObjective(next.objective)
+    onChange?.(next)
+  }
+  const nameOk = name.trim().length > 0
+
   return (
-    <div className="mx-auto flex w-full max-w-[680px] flex-col gap-4 animate-slide-in">
-      <div className="flex flex-col gap-1">
-        <span className="onb-eyebrow">Details</span>
-        <h2 className="onb-title text-2xl">Project details</h2>
-      </div>
-      <div className="flex flex-col gap-1">
-        <Label htmlFor="proj-name">Project name</Label>
-        <Input id="proj-name" value={name} onChange={(e) => setName(e.target.value)} />
-      </div>
-      <div className="flex flex-col gap-1">
-        <Label htmlFor="proj-obj">Objective (optional)</Label>
-        <Input id="proj-obj" value={objective} onChange={(e) => setObjective(e.target.value)} />
-      </div>
-      <div className="flex gap-2">
-        <Button variant="ghost" onClick={onBack}>
-          Back
-        </Button>
-        <Button
-          data-onb-primary="true"
-          disabled={!name.trim()}
-          onClick={() => onCreate(name.trim(), objective.trim())}
+    <>
+      <StepHeader
+        icon={<PenLine className="h-4 w-4" aria-hidden="true" />}
+        title="Name your project"
+        subtitle={
+          <>
+            In <span className="font-mono text-[12.5px] text-text">{tildify(folder)}</span>
+          </>
+        }
+      />
+      <form
+        className="ob-form flex flex-col gap-5"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (nameOk) onCreate(name.trim(), objective.trim())
+        }}
+      >
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="proj-name" className="ob-label">
+            Project name
+          </label>
+          <Input
+            id="proj-name"
+            className={INPUT}
+            value={name}
+            autoFocus
+            onChange={(e) => update({ name: e.target.value, objective })}
+          />
+          <span className="ob-meta">Shown in the sidebar and the portal.</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="proj-obj" className="ob-label">
+            Objective <span className="font-normal text-text-3">· optional</span>
+          </label>
+          <Input
+            id="proj-obj"
+            className={INPUT}
+            placeholder="e.g. Ship the checkout redesign"
+            value={objective}
+            onChange={(e) => update({ name, objective: e.target.value })}
+          />
+          <span className="ob-meta">One line your agents keep in mind. You can change it later.</span>
+        </div>
+        <StepFooter
+          left={
+            <ObButton type="button" variant="ghost" onClick={onBack}>
+              Back
+            </ObButton>
+          }
         >
-          Create project
-        </Button>
-      </div>
-    </div>
+          <ObButton type="submit" variant="primary" data-onb-primary="true" disabled={!nameOk}>
+            Create project
+          </ObButton>
+        </StepFooter>
+      </form>
+    </>
   )
 }

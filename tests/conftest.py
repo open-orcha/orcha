@@ -47,9 +47,11 @@ APP_TABLES = [
     "decisions", "agent_events", "events", "task_messages", "agent_tasks",
     "task_dependencies", "requests", "tasks", "container_provider_keys",
     "container_github_pat",
-    "device_tokens", "user_prefs", "push_devices", "push_outbox",
+    "device_tokens", "user_prefs", "plan_usage_snapshots", "push_devices", "push_outbox",
     "wake_backoff",
     "agents", "containers",
+    # mig 063 — FK'd to agents/containers, so listed last (the CASCADE lock order)
+    "notification_prefs", "notification_pref_defaults",
 ]
 
 

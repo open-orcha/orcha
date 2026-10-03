@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import Header, HTTPException, Query
+from fastapi import Header, HTTPException, Query, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -17,6 +17,7 @@ from portal_backend.worker_auth import require_work_lane
 def schedule_agent_self_wake(
     aid: str,
     body: SelfWakeSet,
+    request: Request,
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
 ):
     """GH #122: work-lane task worker schedules a one-shot wake for the task it is working."""
@@ -50,7 +51,7 @@ def schedule_agent_self_wake(
 
     with db_cursor() as (conn, cur):
         agent = require_agent(cur, aid)
-        require_work_lane(cur, aid, x_orcha_run_token)
+        require_work_lane(cur, aid, x_orcha_run_token, request)
         cur.execute(
             """SELECT 1 FROM tasks t
                JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
@@ -109,6 +110,7 @@ def schedule_agent_self_wake(
 @app.delete("/api/agents/{aid}/self-wake", status_code=200)
 def cancel_agent_self_wake(
     aid: str,
+    request: Request,
     task_id: Optional[str] = Query(default=None),
     all_tasks: bool = Query(default=False, alias="all"),
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
@@ -120,7 +122,7 @@ def cancel_agent_self_wake(
         raise HTTPException(400, "task_id is required unless all=true")
     with db_cursor() as (conn, cur):
         agent = require_agent(cur, aid)
-        require_work_lane(cur, aid, x_orcha_run_token)
+        require_work_lane(cur, aid, x_orcha_run_token, request)
         if all_tasks:
             cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s", (aid,))
         else:

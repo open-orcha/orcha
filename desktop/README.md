@@ -3,8 +3,8 @@
 Electron + React + TypeScript stack manager for `orcha-*` Docker stacks:
 see every stack on the machine (running or stopped), start/stop them, open
 each stack's portal in an app window, and get tray + Notification Center
-alerts when something needs the human (open requests, `needs_verification`
-tasks, stacks going down).
+alerts when something needs the human (plan approvals, `needs_verification`
+tasks, requests open to a human or escalated, stacks going down).
 
 Design spec: `../docs/superpowers/specs/2026-06-11-desktop-app-design.md`
 (§9 covers the tray/notifications addendum). Tracking: Orcha#237.
@@ -16,7 +16,7 @@ npm install
 # If Electron fails to start with "Electron uninstall", the binary download
 # was skipped during install:
 node node_modules/electron/install.js
-# Re-signs the dev Electron binary and brands it with the Orcha icon — needed
+# Re-signs the dev Electron binary and brands it with the Embodent icon — needed
 # for notifications and the dock/banner icon in dev (re-run after any npm
 # install that touches electron):
 ./scripts/sign-dev-electron.sh
@@ -24,6 +24,20 @@ npm run dev            # add "-- --watch" to hot-restart main-process changes
 ```
 
 `npm test` (vitest), `npm run typecheck`, `npm run build`.
+
+## Window layout (Orcha V2)
+
+The window has a persistent host-owned **left sidebar** (every local project across all
+stacks, "Needs you", the open project's sections and live agents, stack start/stop) with the
+open project's portal in a native `WebContentsView` to its right. Portals get a dedicated,
+origin-checked preload (`src/preload/portal.ts` → `window.orchaHost`) and a typed message
+contract (`src/shared/embed.ts`); a V2 portal answers `ready` and renders header + content
+only. An older portal that doesn't answer within 3 s gets the pre-V2 layout (slim top bar,
+no host sidebar). Details: `../docs/orcha-v2-architecture.md` → "Desktop host (Agent C)".
+
+"Needs you" counts decisions only — plan approvals (autonomy `plan`), verifications (unless
+autonomy `full`) and requests open to a human or escalated. Follow-ups (answered requests you
+raised) are listed in the tray but never counted.
 
 ## Onboarding & New Project
 

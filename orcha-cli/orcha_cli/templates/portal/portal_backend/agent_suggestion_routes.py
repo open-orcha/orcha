@@ -12,7 +12,10 @@ from portal_backend.guards import (
     resolve_alias as _resolve_alias,
     valid_uuid as _valid_uuid,
 )
-from portal_backend.identity_routes import trusted_actor as _trusted_actor
+from portal_backend.identity_routes import (
+    enforce_grant as _enforce_grant,
+    trusted_actor as _trusted_actor,
+)
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import SuggestionDecision
 
@@ -41,15 +44,31 @@ def decide_suggestion(rid: str, body: SuggestionDecision, request: Request):
         detail = r["detail"] or {}
         if "proposed_alias" not in detail:
             raise HTTPException(409, "request has no agent-suggestion to decide on")
+        if detail.get("suggestion_decided"):
+            raise HTTPException(
+                409,
+                f"suggestion already decided ({detail['suggestion_decided'].get('kind')})",
+            )
         if r["status"] != "open":
             raise HTTPException(
                 409, f"suggestion is '{r['status']}', not 'open' — already decided"
             )
 
         if body.kind == "create":
-            # Cap check: containers.max_auto_agents = max TOTAL agents (post-PR#6 reinterpretation).
+            # Parity r2 (e2e-permissions-29): creating the proposed agent IS registering an
+            # agent, so it carries the same owner-or-manage_agents gate POST
+            # /api/containers/{cid}/agents enforces (trusted lane; trust-off unchanged).
+            # Reassign / refuse stay member-level — they route or close a request, they
+            # don't grow the roster.
+            _enforce_grant(cur, request, str(r["container_id"]), "manage_agents")
+            # Cap check (UO-11a): containers.max_auto_agents caps the live AI agents that
+            # were created FROM suggestions (is_auto_created) — the runaway it guards
+            # against. Counting every live row (humans, hand-made agents) made any real
+            # team hit the default cap of 3 and refused every approval.
             cur.execute(
-                "SELECT COUNT(*) AS n FROM agents WHERE container_id=%s AND terminated_at IS NULL",
+                """SELECT COUNT(*) AS n FROM agents
+                   WHERE container_id=%s AND terminated_at IS NULL
+                     AND kind='ai' AND is_auto_created""",
                 (str(r["container_id"]),),
             )
             n_existing = cur.fetchone()["n"]
@@ -61,8 +80,9 @@ def decide_suggestion(rid: str, body: SuggestionDecision, request: Request):
             if n_existing >= cap:
                 raise HTTPException(
                     409,
-                    f"container is at the {cap}-agent cap. Reassign to an existing agent or "
-                    f"raise containers.max_auto_agents.",
+                    f"this project already has {n_existing} suggested agent"
+                    f"{'s' if n_existing != 1 else ''} (the limit is {cap}). Reassign the "
+                    "work to an existing agent, or retire an agent created from a suggestion.",
                 )
             try:
                 cur.execute(
@@ -86,9 +106,16 @@ def decide_suggestion(rid: str, body: SuggestionDecision, request: Request):
                 )
             new_aid = str(cur.fetchone()["id"])
             # Now target the request at the new agent so they can /accept-task it.
+            # UO-11b: stamp the decision so read-models stop offering it as a pending
+            # suggestion (the request itself stays open for the new agent to accept).
             cur.execute(
-                "UPDATE requests SET target_id=%s, status='open' WHERE id=%s",
-                (new_aid, rid),
+                """UPDATE requests SET target_id=%s, status='open',
+                          detail = COALESCE(detail, '{}'::jsonb) || jsonb_build_object(
+                              'suggestion_decided', jsonb_build_object(
+                                  'kind', 'create', 'at', now(), 'actor', %s::text,
+                                  'new_agent_id', %s::text))
+                   WHERE id=%s""",
+                (new_aid, body.actor_agent_id, new_aid, rid),
             )
             log_event(
                 cur,
@@ -159,8 +186,13 @@ def decide_suggestion(rid: str, body: SuggestionDecision, request: Request):
                 cur, str(r["container_id"]), body.target_alias
             )
             cur.execute(
-                "UPDATE requests SET target_id=%s, status='open' WHERE id=%s",
-                (new_target_id, rid),
+                """UPDATE requests SET target_id=%s, status='open',
+                          detail = COALESCE(detail, '{}'::jsonb) || jsonb_build_object(
+                              'suggestion_decided', jsonb_build_object(
+                                  'kind', 'reassign', 'at', now(), 'actor', %s::text,
+                                  'target_alias', %s::text))
+                   WHERE id=%s""",
+                (new_target_id, body.actor_agent_id, body.target_alias, rid),
             )
             log_event(
                 cur,

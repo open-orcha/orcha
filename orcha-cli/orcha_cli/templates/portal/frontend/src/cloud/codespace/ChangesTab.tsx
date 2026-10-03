@@ -24,7 +24,9 @@
  * contract as the rest of this file.
  */
 import { useEffect, useRef, useState } from "react";
-import { useToast } from "../../components/ui";
+import { Button, EmptyState } from "../../components/primitives";
+import { ChangesCard } from "../../components/primitives";
+import { Icon, useToast } from "../../components/ui";
 import {
   commitWorktree,
   fetchWorktreeBranch,
@@ -34,6 +36,7 @@ import {
   type WorktreeChangedFile,
   type WorktreeChangesPayload,
 } from "./worktreeApi";
+import { useCodeWriteBlock } from "./writeAccess";
 
 // 15s, not 5s: each poll is a real `git status` + numstat on the server —
 // seconds on a big repo over a Docker-for-Mac bind mount (the server also
@@ -63,8 +66,25 @@ function statusLabel(status: WorktreeChangedFile["status"]): string {
   }
 }
 
-function CountBadge({ additions, deletions }: { additions: number | null; deletions: number | null }) {
-  if (additions == null && deletions == null) return <span className="muted cs-wt-bin">binary</span>;
+/** One-letter status marker shown in the row ("U" for untracked, never "??"). */
+export function statusLetter(status: WorktreeChangedFile["status"]): string {
+  return status === "??" ? "U" : status;
+}
+
+/**
+ * Right-hand counts. Null counts mean different things by status: git's
+ * numstat reports "-" for a BINARY file, but an UNTRACKED file simply has no
+ * numstat line at all — it's new, not binary (screen review: scratch/notes.txt
+ * was mislabeled "binary"). `binary:true` from the backend always wins.
+ */
+function CountBadge({ file }: { file: WorktreeChangedFile }) {
+  const { additions, deletions } = file;
+  if (file.binary) return <span className="muted cs-wt-bin">binary</span>;
+  if (additions == null && deletions == null) {
+    if (file.status === "??") return <span className="muted cs-wt-bin">new file</span>;
+    if (file.status === "D") return <span className="muted cs-wt-bin">deleted</span>;
+    return <span className="muted cs-wt-bin">binary</span>;
+  }
   return (
     <>
       {additions ? <span className="a">+{additions}</span> : null}
@@ -73,7 +93,17 @@ function CountBadge({ additions, deletions }: { additions: number | null; deleti
   );
 }
 
-function BranchBar({ cid }: { cid: string }) {
+/** C10: the Push button's verdict from the branch summary (pure, tested).
+ *  The server reports ahead/behind as null (not 0) when there is no upstream,
+ *  and remote as null when there is no origin — neither is "nothing to push". */
+export function pushState(b: Pick<WorktreeBranchPayload, "ahead" | "remote">): { enabled: boolean; title: string } {
+  if (!b.remote) return { enabled: false, title: "No remote configured" };
+  if (b.ahead == null) return { enabled: true, title: "Push and set upstream" };
+  if (b.ahead === 0) return { enabled: false, title: "Nothing to push" };
+  return { enabled: true, title: "Push " + b.ahead + " commit" + (b.ahead === 1 ? "" : "s") };
+}
+
+function BranchBar({ cid, writeBlock }: { cid: string; writeBlock: string | null }) {
   const toast = useToast();
   const [branch, setBranch] = useState<WorktreeBranchPayload | null>(null);
   const [pushing, setPushing] = useState(false);
@@ -93,34 +123,50 @@ function BranchBar({ cid }: { cid: string }) {
   }, [cid]);
 
   if (!branch || !branch.available) return null;
+  const push = pushState(branch);
 
   const onPush = () => {
     setPushing(true);
-    pushWorktree(cid).then((res) => {
-      setPushing(false);
-      if (res.ok) {
-        toast(res.detail || "Pushed", "ok");
-        load();
-      } else {
-        toast(res.detail || "Push failed", "danger");
-      }
-    });
+    pushWorktree(cid)
+      .then((res) => {
+        if (res.ok) {
+          toast(res.detail || "Pushed", "ok");
+          load();
+        } else {
+          toast(res.detail || "Push failed", "danger");
+        }
+      })
+      .finally(() => setPushing(false));
   };
 
   return (
     <div className="cs-branch-bar">
-      <span className="cs-branch-name mono">{branch.branch}</span>
+      <Icon name="git" cls="v2-ico cs-branch-ico" />
+      <span className="cs-branch-name mono" title={branch.branch ?? undefined}>{branch.branch}</span>
       {branch.ahead ? <span className="cs-branch-ahead">{branch.ahead} ahead</span> : null}
       <span className="grow" />
-      <button type="button" className="cs-branch-push-btn" onClick={onPush} disabled={pushing || !branch.ahead}>
+      <Button
+        size="sm"
+        variant="secondary"
+        pill
+        icon="arrow-up"
+        className="cs-branch-push-btn"
+        onClick={onPush}
+        busy={pushing}
+        disabled={!push.enabled || !!writeBlock}
+        title={writeBlock || push.title}
+      >
         {pushing ? "Pushing…" : "Push"}
-      </button>
+      </Button>
     </div>
   );
 }
 
 export function ChangesTab({ cid, selectedPath, onOpenChange, onDirtyCountChange }: ChangesTabProps) {
   const toast = useToast();
+  // viewer / non-member: the server refuses commit + push (trusted_actor) —
+  // the controls say so instead of failing with a 403 toast (wave4 review)
+  const writeBlock = useCodeWriteBlock();
   const [payload, setPayload] = useState<WorktreeChangesPayload | null>(null);
   const payloadRef = useRef<WorktreeChangesPayload | null>(null);
   payloadRef.current = payload;
@@ -177,19 +223,21 @@ export function ChangesTab({ cid, selectedPath, onOpenChange, onDirtyCountChange
   }, [cid]);
 
   if (!payload) {
-    return <div className="none" style={{ padding: 10 }}>Loading working-tree changes…</div>;
+    return <div className="cs-empty-line" role="status">Loading working-tree changes…</div>;
   }
 
   if (!payload.available) {
     if (payload.reason === "github_source") {
       return (
-        <div className="none" style={{ padding: 10 }}>
-          Working-tree changes need a local repository — this project is using a
-          connected GitHub repo as its code source.
-        </div>
+        <EmptyState
+          compact
+          icon="git"
+          title="No local working tree"
+          body="Working-tree changes need a local repository — this project is using a connected GitHub repo as its code source."
+        />
       );
     }
-    return <div className="none" style={{ padding: 10 }}>{payload.detail || "Working-tree changes are unavailable."}</div>;
+    return <EmptyState compact icon="info" title="Changes unavailable" body={payload.detail || "Working-tree changes are unavailable."} />;
   }
 
   const files = payload.files ?? [];
@@ -206,56 +254,62 @@ export function ChangesTab({ cid, selectedPath, onOpenChange, onDirtyCountChange
   const checkedPaths = files.map((f) => f.path).filter((p) => checked.has(p));
 
   const onCommit = () => {
-    if (!checkedPaths.length || !message.trim()) return;
+    if (writeBlock || !checkedPaths.length || !message.trim()) return;
     setCommitting(true);
-    commitWorktree(cid, checkedPaths, message.trim()).then((res) => {
-      setCommitting(false);
-      if (res.ok) {
-        toast("Committed " + res.short, "ok");
-        setMessage("");
-        poll();
-      } else {
-        toast("Nothing to commit", "warn");
-      }
-    });
+    commitWorktree(cid, checkedPaths, message.trim())
+      .then((res) => {
+        if (res.ok) {
+          toast("Committed " + res.short, "ok");
+          setMessage("");
+          poll();
+        } else if (res.reason === "nothing_committed") {
+          toast("Nothing to commit", "warn");
+        } else {
+          toast("Couldn't commit: " + res.detail, "danger");
+        }
+      })
+      .finally(() => setCommitting(false));
   };
 
   return (
     <div className="cs-changes">
-      <BranchBar cid={cid} />
+      <BranchBar cid={cid} writeBlock={writeBlock} />
       {!files.length ? (
         payload.scanning ? (
-          <div className="none" style={{ padding: 10 }}>Scanning the working tree…</div>
+          <div className="cs-empty-line" role="status">Scanning the working tree…</div>
         ) : (
-          <div className="none" style={{ padding: 10 }}>Working tree clean — everything is committed.</div>
+          <EmptyState compact icon="check" title="Working tree clean — everything is committed." />
         )
       ) : (
         <>
-          <div className="cs-changes-summary">
-            <span>{summary.files} file{summary.files === 1 ? "" : "s"} changed</span>
-            <span className="a">+{summary.additions}</span>
-            <span className="d">−{summary.deletions}</span>
-          </div>
+          <ChangesCard className="cs-changes-summary" files={summary.files} additions={summary.additions} deletions={summary.deletions} />
           <div className="cs-changes-list">
             {files.map((f) => (
               <div
                 key={f.path}
                 className={"cs-changes-row" + (f.path === selectedPath ? " on" : "")}
                 onClick={() => onOpenChange(f.path)}
-                title={statusLabel(f.status)}
+                title={statusLabel(f.status) + (f.orig_path ? " from " + f.orig_path : "")}
               >
                 <input
                   type="checkbox"
-                  className="cs-changes-row-check"
+                  className="v2-checkbox cs-changes-row-check"
                   checked={checked.has(f.path)}
+                  disabled={!!writeBlock}
+                  title={writeBlock || undefined}
                   onChange={() => toggleChecked(f.path)}
                   onClick={(e) => e.stopPropagation()}
                   aria-label={"Include " + f.path + " in the next commit"}
                 />
-                <span className={"cs-changes-badge " + f.status.replace("?", "u")}>{f.status}</span>
-                <span className="cs-changes-path mono">{f.path}</span>
+                <span className={"cs-changes-badge " + (f.status === "??" ? "u" : f.status)} aria-label={statusLabel(f.status)}>{statusLetter(f.status)}</span>
+                <span className="cs-changes-pathcol">
+                  <span className="cs-changes-path mono" title={f.path}>{f.path}</span>
+                  {f.status === "R" && f.orig_path ? (
+                    <span className="cs-changes-orig mono" title={f.orig_path + " → " + f.path}>renamed from {f.orig_path}</span>
+                  ) : null}
+                </span>
                 <span className="grow" />
-                <CountBadge additions={f.additions} deletions={f.deletions} />
+                <CountBadge file={f} />
               </div>
             ))}
           </div>
@@ -263,20 +317,25 @@ export function ChangesTab({ cid, selectedPath, onOpenChange, onDirtyCountChange
             <textarea
               className="cs-commit-msg"
               rows={1}
-              placeholder="Commit message"
+              placeholder={writeBlock ? "View-only — can't commit" : "Commit message"}
+              disabled={!!writeBlock}
+              title={writeBlock || undefined}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
             />
             <div className="cs-commit-row">
               <span className="grow" />
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant="primary"
                 className="cs-commit-btn"
                 onClick={onCommit}
-                disabled={committing || !checkedPaths.length || !message.trim()}
+                busy={committing}
+                disabled={!!writeBlock || !checkedPaths.length || !message.trim()}
+                title={writeBlock || (!checkedPaths.length ? "Select at least one file" : !message.trim() ? "Write a commit message first" : undefined)}
               >
                 {committing ? "Committing…" : "Commit " + checkedPaths.length + " file" + (checkedPaths.length === 1 ? "" : "s")}
-              </button>
+              </Button>
             </div>
           </div>
         </>

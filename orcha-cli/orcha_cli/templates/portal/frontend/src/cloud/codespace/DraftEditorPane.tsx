@@ -21,9 +21,10 @@ import { languages } from "@codemirror/language-data";
 import { LanguageDescription } from "@codemirror/language";
 import { searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { buildEditorTheme } from "./editorTheme";
+import { setThreadLines, threadMarks } from "./editorThreadMarks";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -32,6 +33,8 @@ export interface DraftEditorPaneProps {
   path: string;
   initialContent: string;
   onDraftChange: (content: string) => void;
+  /** 1-based lines carrying a code thread — painted as gutter dots, same as the read view. */
+  threadLines?: number[];
 }
 
 function baseName(path: string): string {
@@ -49,9 +52,12 @@ async function languageExtensionFor(path: string) {
   }
 }
 
-export function DraftEditorPane({ cid, path, initialContent, onDraftChange }: DraftEditorPaneProps) {
+export function DraftEditorPane({ cid, path, initialContent, onDraftChange, threadLines }: DraftEditorPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // latest thread lines, read when the CM state is (re)created
+  const threadLinesRef = useRef<readonly number[]>(threadLines ?? []);
+  threadLinesRef.current = threadLines ?? [];
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onDraftChangeRef = useRef(onDraftChange);
   onDraftChangeRef.current = onDraftChange;
@@ -101,7 +107,13 @@ export function DraftEditorPane({ cid, path, initialContent, onDraftChange }: Dr
       saveKeymap,
       updateListener,
       buildEditorTheme(),
-      EditorView.lineWrapping,
+      // V2 (screen review S5): edit mode keeps the line numbers the read view shows
+      lineNumbers(),
+      highlightActiveLineGutter(),
+      highlightActiveLine(),
+      // V2 (screen review r1): no soft-wrap — the read view never wraps, so
+      // toggling Edit must not reflow lines either.
+      threadMarks(() => threadLinesRef.current),
     ];
 
     const state = EditorState.create({ doc: initialContent, extensions });
@@ -127,6 +139,12 @@ export function DraftEditorPane({ cid, path, initialContent, onDraftChange }: Dr
     // path/cid change = a whole new buffer/draft session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid, path, initialContent]);
+
+  // thread list refreshes (3 s bump / new thread) → replace the gutter dots
+  const threadKey = (threadLines ?? []).join(",");
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: setThreadLines.of(threadLinesRef.current.slice()) });
+  }, [threadKey]);
 
   return (
     <div className="cs-editor-pane">

@@ -138,6 +138,7 @@ def build_wake_candidate(
         lease_active=lease_active,
         lease_kind=lease_kind,
         embodiment_running=embodiment_running,
+        embodiment_silent_seconds=agent.get("embodiment_silent_seconds"),
     )
     triage_hint = None
     if triage_eligible(
@@ -188,6 +189,7 @@ def build_wake_candidate(
         "lease_active": lease_active,
         "lease_kind": lease_kind,
         "embodiment_running": embodiment_running,
+        "embodiment_silent_seconds": agent.get("embodiment_silent_seconds"),
         "has_pending_task_request": pending_task_request,
         "conv_lease_active": bool(agent["conv_lease_active"]),
         "conv_embodiment_running": bool(agent["conv_embodiment_running"]),

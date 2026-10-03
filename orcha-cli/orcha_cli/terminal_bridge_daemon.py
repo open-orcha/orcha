@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import sys
 
+from . import personal_session
+
 
 def bridge_pid_path(cwd):
     return cwd / ".claude" / ".orcha-terminal-bridge.pid"
@@ -84,6 +86,9 @@ def ensure_bridge(bridge, cwd, quiet=False, restart=False):
                 stderr=log_file,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
+                # Paired terminals are managed sessions: never inherit the marker of the
+                # personal desktop tab whose SessionStart hook started the bridge.
+                env=personal_session.strip(dict(os.environ)),
             )
     except (OSError, subprocess.SubprocessError) as exc:
         if not quiet:

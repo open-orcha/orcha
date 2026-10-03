@@ -45,7 +45,6 @@ import urllib.request
 
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.events import publish_event
-from portal_backend.github_routes import _read_token, _read_token_map
 
 GITHUB_API = "https://api.github.com"
 GITHUB_COMMENT_TIMEOUT_SECONDS = 10
@@ -137,16 +136,15 @@ def build_task_fields(kind: str, number: int, gh_title: str, body_excerpt: str,
     return {"title": title, "description": description, "definition_of_done": dod}
 
 
-def _resolve_repo_token(repo: str):
-    """The installation token that can read/write `owner/name`, or None when the App
-    isn't wired for this owner. Duplicates github_hub_routes._resolve_repo_token's
-    logic (rather than importing it) to avoid a circular import: github_hub_routes
-    already imports THIS module. Same multi-org-then-legacy-file resolution."""
-    owner = (repo or "").split("/", 1)[0].lower()
-    token_map = _read_token_map()
-    if token_map and owner in token_map:
-        return token_map[owner]
-    return _read_token()
+def _resolve_repo_token(repo: str, container_id=None):
+    """The token that can read/write `owner/name`, or None when nothing is wired for it.
+
+    G05b/C01: delegates to github_hub_routes._resolve_repo_token WITH the project id so a
+    token saved in Settings (the per-project PAT) participates, exactly like every hub /
+    browse route. Imported lazily: github_hub_routes imports THIS module at load time."""
+    from portal_backend.github_hub_routes import _resolve_repo_token as _hub_resolve
+
+    return _hub_resolve(repo, str(container_id) if container_id else None)
 
 
 def _gh_post_comment(repo: str, number: int, token: str, body: str) -> None:
@@ -201,7 +199,7 @@ def _post_start_comment(cur, container_id, kind: str, number: int, task_id: str,
         repo = row["github_repo"] if row else None
         if not repo:
             return
-        token = _resolve_repo_token(repo)
+        token = _resolve_repo_token(repo, container_id)
         if not token:
             return
         assignee_alias = None

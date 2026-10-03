@@ -7,24 +7,54 @@
    variables (--diff-add/--diff-hunk/--accent/--violet) already defined in
    tokens.css rather than inventing a second palette. */
 
-.rb-wrap { display: flex; align-items: stretch; gap: 0; min-height: 420px; max-height: 72vh;
-  border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+/* D5: fill the inset panel's visible height (the panel scrolls, not the page) */
+/* Review r2: no card-in-panel — the browser IS the panel body (host renders it
+   flush): no outer border/radius, the ref/path bar is the panel's toolbar row. */
+.rb-wrap { display: flex; flex-direction: column; min-height: 420px; height: var(--v2-content-h, 80vh); max-height: none; min-width: 0;
+  border: 0; border-radius: 0; overflow: hidden; background: transparent; }
+.rb-bar { flex: none; display: flex; align-items: center; gap: var(--v2-space-2); min-width: 0; height: 44px; box-sizing: border-box; padding: 0 var(--v2-space-3);
+  border-bottom: 1px solid var(--v2-border); }
+.rb-bar .gh-back { flex: none; }
+.rb-body { flex: 1; min-height: 0; display: flex; align-items: stretch; }
+.rb-ref-btn { max-width: 220px; }
+.rb-ref-btn .v2-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-ref-pop { width: 260px; padding: 6px; }
+.rb-ref-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.rb-ref-opt { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border: 0; border-radius: var(--v2-radius-control);
+  background: transparent; color: var(--v2-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; min-width: 0; }
+.rb-ref-opt span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-ref-opt:hover, .rb-ref-opt:focus-visible { background: var(--v2-hover); outline: none; }
+.rb-ref-opt.on { color: var(--v2-text); }
+.rb-ref-opt .v2-ico { width: 14px; height: 14px; color: var(--v2-text-3); flex: none; }
+.rb-ref-k { margin-left: auto; color: var(--v2-text-3); font-size: 11.5px; }
+.rb-ref-form { display: flex; gap: 6px; border-top: 1px solid var(--v2-border); padding-top: 6px; }
+.rb-ref-form .rb-search-in { flex: 1; min-width: 0; }
+.rb-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; min-width: 0; font-size: 12px; color: var(--v2-text-3); }
+.rb-crumb-seg { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.rb-crumb { border: 0; background: transparent; color: var(--v2-text-2); font: inherit; padding: 2px 4px; border-radius: 4px; cursor: pointer;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-crumb:hover, .rb-crumb:focus-visible { background: var(--v2-hover); color: var(--v2-text); outline: none; }
+.rb-crumb.cur { color: var(--v2-text); cursor: default; }
+.rb-crumb.cur:hover { background: transparent; }
+.rb-crumb-sep { color: var(--v2-text-3); }
 
 /* ---- left: search + tree --------------------------------------------------- */
 .rb-side { width: 280px; min-width: 200px; max-width: 360px; flex: none;
-  display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--surface-2); }
+  display: flex; flex-direction: column; border-right: 1px solid var(--v2-border); background: transparent; }
+.rb-search { flex: none; padding: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.rb-search-seg { flex: none; }
+.rb-search-in { width: 100%; height: var(--v2-control-h-sm, 28px); background: var(--v2-canvas); border: 1px solid var(--v2-border); color: var(--v2-text);
+  border-radius: var(--v2-radius-control); padding: 0 10px; font: inherit; font-size: 12.5px; outline: none; }
+.rb-search-in:focus { border-color: var(--v2-accent); box-shadow: var(--v2-focus-ring); }
+.rb-search-in::placeholder { color: var(--v2-text-3); }
 
-.rb-search { flex: none; border-bottom: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.rb-search-tabs { display: flex; gap: 4px; }
-.rb-search-tab { flex: 1; border: 1px solid var(--border); background: var(--surface); color: var(--muted);
-  font: inherit; font-size: 12px; font-weight: 600; padding: 5px 8px; border-radius: 7px; cursor: pointer;
-  transition: color .12s, border-color .12s, background .12s; }
-.rb-search-tab:hover { color: var(--text); }
-.rb-search-tab.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
-.rb-search-in { background: var(--surface); border: 1px solid var(--border); color: var(--text);
-  border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 12.5px; outline: none; }
-.rb-search-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-.rb-search-in::placeholder { color: var(--faint); }
+/* ---- directory listing pane ------------------------------------------------- */
+.rb-dir-list { list-style: none; margin: 0; padding: 4px 0; }
+.rb-dir-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 14px; border: 0; background: transparent;
+  color: var(--v2-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.rb-dir-row:hover, .rb-dir-row:focus-visible { background: var(--v2-hover); outline: none; }
+.rb-dir-row .dfv-i { flex: none; color: var(--v2-text-3); }
+.rb-dir-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .rb-tree-scroll { flex: 1; overflow: auto; padding-bottom: 6px; }
 
@@ -33,56 +63,68 @@
 .rb-dfv-tree { overflow: visible; }
 .rb-dir-loading { font-size: 11.5px; padding: 3px 8px; }
 .rb-dir-retry { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
-.rb-dir-retry:hover, .rb-dir-retry:focus-visible { color: var(--text-2); }
+.rb-dir-retry:hover, .rb-dir-retry:focus-visible { color: var(--v2-text-2); }
 
 /* ---- search results -------------------------------------------------------- */
-.rb-search-note { font-size: 11.5px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.rb-search-note { font-size: 11.5px; padding: 8px 10px; border-bottom: 1px solid var(--v2-border); }
 .rb-result-name { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px;
-  color: var(--text-2); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rb-result-name:hover { background: var(--hover); color: var(--text); }
-.rb-result-name .dfv-i { flex: none; color: var(--faint); }
-.rb-result-file { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  color: var(--v2-text-2); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-result-name:hover { background: var(--v2-hover); color: var(--v2-text); }
+.rb-result-name .dfv-i { flex: none; color: var(--v2-text-3); }
+.rb-result-file { border-bottom: 1px solid var(--v2-border); padding-bottom: 4px; }
 .rb-result-path { display: flex; align-items: center; gap: 6px; padding: 6px 10px 3px; font-size: 12px;
-  font-weight: 600; color: var(--text); cursor: pointer; }
-.rb-result-path:hover { color: var(--accent); }
-.rb-result-path .dfv-i { flex: none; color: var(--faint); }
+  font-weight: 600; color: var(--v2-text); cursor: pointer; }
+.rb-result-path:hover { color: var(--v2-accent); }
+.rb-result-path .dfv-i { flex: none; color: var(--v2-text-3); }
 .rb-result-match { display: flex; gap: 8px; padding: 2px 10px 2px 26px; font-size: 11.5px; cursor: pointer;
-  color: var(--muted); overflow: hidden; }
-.rb-result-match:hover { background: var(--hover); color: var(--text); }
-.rb-result-line { flex: none; color: var(--faint); min-width: 2.5ch; text-align: right; }
+  color: var(--v2-text-2); overflow: hidden; }
+.rb-result-match:hover { background: var(--v2-hover); color: var(--v2-text); }
+.rb-result-line { flex: none; color: var(--v2-text-3); min-width: 2.5ch; text-align: right; }
 .rb-result-text { overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 
 /* ---- right: content pane ---------------------------------------------------- */
-.rb-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; background: var(--surface); }
+.rb-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; background: transparent; }
 .rb-empty-pane { padding: 24px; font-size: 13px; text-align: center; }
 
 .rb-file-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px;
-  padding: 8px 14px; font-size: 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  padding: 8px 14px; font-size: 12px; background: var(--v2-panel, var(--v2-surface)); border-bottom: 1px solid var(--v2-border); }
+.rb-dir-head { border-bottom: 0; padding-bottom: 2px; }
 .rb-ref-chip { flex: none; }
 .rb-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-2); font-weight: 600; }
+  color: var(--v2-text-2); font-weight: 600; }
 .rb-file-size { flex: none; font-size: 11px; }
 
-.rb-truncated-note, .rb-binary { padding: 10px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
-.rb-truncated-note a, .rb-binary a { color: var(--accent); text-decoration: none; }
+.rb-truncated-note, .rb-binary { padding: 10px 14px; font-size: 12.5px; border-bottom: 1px solid var(--v2-border); }
+.rb-truncated-note a, .rb-binary a { color: var(--v2-accent); text-decoration: none; }
 .rb-truncated-note a:hover, .rb-binary a:hover { text-decoration: underline; }
 
 .rb-code { font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.6; }
 .rb-line { display: flex; }
-.rb-line:hover { background: var(--hover); }
+.rb-line:hover { background: var(--v2-hover); }
 .rb-line[data-browse-line] { scroll-margin: 60px; }
-.rb-lineno { flex: none; width: 4.5ch; text-align: right; padding-right: 12px; color: var(--faint);
+.rb-lineno { flex: none; width: 4.5ch; text-align: right; padding-right: 12px; color: var(--v2-text-3);
   -webkit-user-select: none; user-select: none; }
 .rb-line-text { flex: 1; min-width: 0; white-space: pre; padding-right: 12px; }
 
 /* syntax token colors — reuse the diff palette rather than a new one */
-.rb-tok-comment { color: var(--faint); font-style: italic; }
+.rb-tok-comment { color: var(--v2-text-3); font-style: italic; }
 .rb-tok-string  { color: var(--diff-add); }
 .rb-tok-number  { color: var(--violet); }
 .rb-tok-keyword { color: var(--diff-hunk); font-weight: 600; }
 
+/* narrow: ONE navigator — the breadcrumb + the folder listing. The tree only
+   repeated the same entries above the listing, so it is hidden; the search
+   field stays (and its results replace the listing while a query is typed). */
 @media (max-width: 860px) {
-  .rb-wrap { flex-direction: column; max-height: none; }
-  .rb-side { width: 100%; max-width: none; max-height: 260px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .rb-main { max-height: 480px; }
+  .rb-wrap { max-height: none; height: auto; min-height: 0; }
+  .rb-bar { padding: 0 var(--v2-space-2); }
+  .rb-crumbs { flex-wrap: nowrap; overflow: hidden; }
+  .rb-body { flex-direction: column; }
+  .rb-side { width: 100%; max-width: none; border-right: 0; }
+  .rb-search { flex-direction: row; align-items: center; padding: 8px var(--v2-space-2); }
+  .rb-search-in { flex: 1; min-width: 0; }
+  .rb-wrap:not(.is-searching) .rb-tree-scroll { display: none; }
+  .rb-wrap.is-searching .rb-main { display: none; }
+  .rb-wrap.is-searching .rb-tree-scroll { border-top: 1px solid var(--v2-border); }
+  .rb-dir-row { padding: 0 var(--v2-space-4); height: 40px; }
 }

@@ -1,0 +1,108 @@
+/* D9 Agents board (AgentsBoard.tsx) — page-level layout on top of the
+   primitives' .v2-board / .v2-bcol / .v2-bcard (v2-primitives.css). Tokens only. */
+
+/* Wide layouts: the board fills the panel's content area and scrolls in both
+   directions itself, so the horizontal scrollbar is always in view and the
+   column headers stay pinned while cards scroll (Linear). */
+.ab-wrap { min-width: 0; max-width: 100%; }
+.ab-board { padding-top: var(--v2-space-1); min-width: 0; max-width: 100%; }
+/* explicit tracks: real columns are 272-400px (Linear's board never stretches a
+   column across half the screen); the "+N idle agents" slot is only as wide as it needs */
+.ab-wrap .ab-board { grid-template-columns: repeat(var(--ab-cols, 1), var(--ab-colw, minmax(272px, 400px))); }
+.ab-wrap[data-idle-slot] .ab-board { grid-template-columns: repeat(var(--ab-cols, 1), var(--ab-colw, minmax(272px, 400px))) max-content; }
+/* wave-4: a partial column ALWAYS peeks when more columns exist than fit. The
+   column width is sized from the board's own width so n whole columns leave a
+   ~56px peek of the next one (a column exactly flush with the edge read as the
+   end of the board, hiding the actors behind it). n = floor((W - 76) / 284):
+   16px side padding, 12px gaps, 272px minimum. Tokens: none needed (geometry). */
+.ab-wrap { container-type: inline-size; }
+@container (min-width: 644px) { .ab-wrap .ab-board { --ab-colw: clamp(272px, calc((100cqw - 88px - 24px) / 2), 400px); } }
+@container (min-width: 928px) { .ab-wrap .ab-board { --ab-colw: clamp(272px, calc((100cqw - 88px - 36px) / 3), 400px); } }
+@container (min-width: 1212px) { .ab-wrap .ab-board { --ab-colw: clamp(272px, calc((100cqw - 88px - 48px) / 4), 400px); } }
+@container (min-width: 1496px) { .ab-wrap .ab-board { --ab-colw: clamp(272px, calc((100cqw - 88px - 60px) / 5), 400px); } }
+@container (min-width: 1780px) { .ab-wrap .ab-board { --ab-colw: clamp(272px, calc((100cqw - 88px - 72px) / 6), 400px); } }
+@media (max-width: 640px) {
+  .ab-wrap .ab-board { grid-template-columns: repeat(var(--ab-cols, 1), 86%); }
+  .ab-wrap[data-idle-slot] .ab-board { grid-template-columns: repeat(var(--ab-cols, 1), 86%) max-content; }
+}
+@media (min-width: 901px) {
+  .ab-board { height: var(--v2-content-h, calc(100dvh - 120px)); overflow: auto; padding-top: 0; }
+  .ab-board .v2-bcol-h { position: sticky; top: 0; z-index: 1; background: var(--v2-panel); }
+}
+
+/* column header: the name opens the agent workspace (a quiet link, not a blue one) */
+.ab-col-name { color: inherit; text-decoration: none; }
+.ab-col-name:hover { text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--v2-border-strong); }
+.ab-col-name:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: 4px; }
+.ab-col .v2-bcol-h .v2-si-wrap { display: inline-flex; }
+/* agent presence: the avatar dot carries it; one muted word only when not idle (B3) */
+.ab-col-word { color: var(--v2-text-3); font-size: 12px; white-space: nowrap; }
+/* the name wins the width; the presence word gives way first (tooltip on the name has it all) */
+/* wave-4: a long alias ellipsizes FIRST; the presence word keeps its width (it used to be
+   squeezed to 0 by flex-shrink 10, so a working specialist's column read idle) */
+.ab-col .v2-bcol-title { flex: 0 1 auto; min-width: 0; }
+.ab-col .v2-bcol-status { flex: 0 0 auto; min-width: 0; max-width: 45%; overflow: hidden; }
+.ab-col-word { display: block; min-width: 3.5em; overflow: hidden; text-overflow: ellipsis; }
+
+/* empty column: a muted line, not a dashed card-shaped box (B5) */
+.ab-col .v2-bcol-empty { border: 0; padding: 4px 8px; text-align: left; color: var(--v2-text-3); font-size: 12px; }
+.ab-reason a { color: var(--v2-text-2); text-decoration: none; }
+.ab-reason a:hover { color: var(--v2-text); text-decoration: underline; text-underline-offset: 2px; }
+.ab-reason a:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: 4px; }
+
+/* Unassigned column: a dashed empty avatar (nobody owns this work yet) */
+.ab-unassigned-av { display: inline-block; width: 20px; height: 20px; border-radius: 50%; border: 1px dashed var(--v2-border-strong); box-sizing: border-box; }
+
+/* "+N idle agents" slot at the end of the board */
+.ab-idle { display: flex; align-items: flex-start; }
+.ab-idle-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 28px; margin-top: 4px; padding: 0 12px 0 8px;
+  border: 1px solid var(--v2-border); border-radius: 999px; background: transparent;
+  color: var(--v2-text-2); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.ab-idle-btn:hover { background: var(--v2-hover); color: var(--v2-text); }
+.ab-idle-btn:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+/* filtered board with nothing to show */
+.ab-none { padding: var(--v2-space-4); color: var(--v2-text-3); }
+.ab-none a { color: var(--v2-text-2); }
+.ab-col .v2-bcol-actions { opacity: 0.72; transition: opacity var(--v2-dur-fast) var(--v2-ease); }
+.ab-col .v2-bcol-h:hover .v2-bcol-actions,
+.ab-col .v2-bcol-h:focus-within .v2-bcol-actions { opacity: 1; }
+@media (pointer: coarse) { .ab-col .v2-bcol-actions { opacity: 1; } }
+
+/* priority as an icon-only round chip (Linear) */
+.ab-prio .v2-chip-text:empty { display: none; }
+
+/* "N more in Tasks" after the column cap */
+.ab-more { list-style: none; }
+.ab-more a { display: block; padding: 6px 10px; border-radius: 6px; color: var(--v2-text-3); font-size: 12px; text-decoration: none; }
+.ab-more a:hover { background: var(--v2-hover); color: var(--v2-text-2); }
+.ab-more a:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+/* toolbar: board / list toggle */
+.ab-viewtoggle { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---- roster list view (AgentsRoster.tsx) ---------------------------------
+   R1: one muted status word per row (no task glyph for a person — D8), shown
+   only when not idle; the avatar's presence dot carries idle. */
+.rrow .rword { flex: none; max-width: 104px; color: var(--v2-text-2); font-size: 12px; line-height: 20px; padding: 0 8px; border-radius: 999px;
+  background: var(--v2-surface-2, rgba(255,255,255,0.05)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rrow.sel .rword { color: var(--v2-text-2); }
+/* R4: a borderless 28px search field with an icon (Linear), not a boxed input.
+   r2: it lives in the page toolbar row (left, opposite the view toggles), so the
+   list view has ONE toolbar row like the board — no empty band above the roster */
+.roster-search { display: flex; align-items: center; gap: 6px; height: 28px; width: 248px; max-width: 100%; margin: 0; padding: 0 8px; border-radius: 999px; color: var(--v2-text-3); }
+.roster-search:hover { background: var(--v2-hover); }
+.roster-search:focus-within { background: var(--v2-hover); box-shadow: var(--v2-focus-ring); }
+.roster-search .v2-ico { width: 14px; height: 14px; flex: none; }
+.roster-search .roster-filter { flex: 1; min-width: 0; height: 28px; margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--v2-text); font: inherit; font-size: 13px; }
+.roster-search .roster-filter:focus, .roster-search .roster-filter:focus-visible { outline: none; box-shadow: none; }
+
+/* r2: the list view starts right under the toolbar row (the toolbar already
+   gives the breathing room — a second 20px band read as dead space) */
+.v2-content:has(> .agents-v2) { --v2-content-pt: var(--v2-space-2); }
+
+/* Live changes entry at the top of a working agent's column (the card itself is one link) */
+.ab-changes { list-style: none; display: flex; }
+.ab-changes .lc-btn { border-radius: var(--v2-radius-full); text-decoration: none; }

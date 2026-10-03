@@ -21,6 +21,10 @@ describe('scrubWorkerEnv', () => {
     expect(scrubbed.HOME).toBe('/Users/x')
   })
 
+  it('drops the personal-session marker so managed workers never inherit it', () => {
+    expect(scrubWorkerEnv({ ORCHA_PERSONAL_SESSION: '1', PATH: '/usr/bin' }).ORCHA_PERSONAL_SESSION).toBeUndefined()
+  })
+
   it('does not mutate the input object', () => {
     const env = { ANTHROPIC_API_KEY: 'sk-ant-x', PATH: '/usr/bin' }
     scrubWorkerEnv(env)

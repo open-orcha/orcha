@@ -62,7 +62,7 @@ private fun HunkHeaderRow(hunk: DiffHunk, codeWidthCh: Int) {
     val p = Orcha.palette
     Text(
         hunk.header,
-        style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace, fontSize = 11.5.sp),
+        style = ltype(LType.Mono).copy(fontSize = 11.sp),
         color = p.diffHunk,
         modifier = Modifier
             .background(p.diffHunkBg)
@@ -82,7 +82,7 @@ private fun DiffLineRow(line: DiffLine, codeWidthCh: Int) {
     val gutterBg = when (line.kind) {
         DiffLineKind.Add -> p.diffAddBg
         DiffLineKind.Del -> p.diffDelBg
-        DiffLineKind.Context, DiffLineKind.Meta -> p.surface2.copy(alpha = 0.6f)
+        DiffLineKind.Context, DiffLineKind.Meta -> p.surface2.copy(alpha = 0.5f)
     }
     val marker = when (line.kind) {
         DiffLineKind.Add -> "+"

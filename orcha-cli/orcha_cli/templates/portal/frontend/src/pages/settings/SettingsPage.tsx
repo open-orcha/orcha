@@ -1,141 +1,61 @@
 /**
- * Settings page — React port of static/settings.html + static/settings.js.
+ * Settings — Orcha V2 sectioned settings (parity R-06, P-05…P-12, PI-07).
  *
- * Two cards over the UNCHANGED FastAPI backend:
+ * Sections (arch §2.3; old `#tab=` keys keep resolving, aliases in
+ * SETTINGS_ALIASES): General · Execution · Models & providers · Integrations ·
+ * Members & access · Devices & pairing · Interface. Every pre-V2 setting is
+ * still here, only regrouped:
  *  - Anthropic API key (#294): GET/PUT/DELETE /api/containers/{cid}/settings/llm-key
  *    and POST .../llm-key/test. PRECEDENCE = env > db > none; env keys are
  *    read-only here. Every mutation is HUMAN-GATED (PR #315): the body carries
  *    actor_agent_id (the acting human) and the page refuses to fire without one.
+ *  - Provider keys: GET/PUT/DELETE …/settings/provider-keys[/{provider}] (+ /test).
  *  - Per-use-case universal-model selection (SPEC-SETTINGS §2):
  *    GET .../settings/models + GET .../settings/providers, explicit Save via one
  *    PUT .../settings/models writing only the overridden rows.
+ *  - Worktree routing: POST …/worktrees (human-gated) — now under Execution.
+ *  - Phone pairing: GET …/pairing — under Devices & pairing.
+ *  - Downstream sections registered on extensions.settingsSections (cloud:
+ *    provider keys, GitHub access, members, pairing, appearance) are slotted
+ *    into their V2 group by key; unknown keys get their own section.
+ * V2 is dark-only: the theme/skin pickers are gone (Interface section explains;
+ * stored preferences are kept, never applied — see InterfaceSection.tsx).
  *
- * Same class names / DOM structure as the vanilla page so the shared styles.css
- * (plus the settings-specific style block carried over VERBATIM from
- * settings.html's <head>) renders it identically. Key/model state lives in
- * component state fetched independently of the 3s snapshot poll — exactly like
- * the vanilla page — so the cards never flicker and drafts are never clobbered.
+ * Key/model state lives in component state fetched independently of the 3s
+ * snapshot poll, so the cards never flicker and drafts are never clobbered.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { getJSON, sendJSON } from "../../api/client";
 import { Icon, Modal, useToast } from "../../components/ui";
-import { Shell } from "../../shell/Shell";
-import { extensions } from "../../extensions";
-import { actingHuman, useSnapshot } from "../../state/SnapshotProvider";
-
-/* ---- settings-specific CSS, carried over verbatim from settings.html ------ */
-const SETTINGS_CSS = `
-  /* settings-specific layout — reuses styles.css tokens, no new color literals */
-  .set-wrap { max-width: 760px; }
-  .set-intro { margin: 2px 2px 20px; }
-  .set-intro h1 { font-size: 20px; font-weight: 740; letter-spacing: -.02em; }
-  .set-intro p { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.55; max-width: 64ch; }
-
-  .set-card .card-b { padding: 18px 20px; }
-  .set-card .lead { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: -2px 0 16px; }
-
-  /* Tab strip (vanilla settings-tabs port) — reuses the topbar's .aut/.seg pill
-     idiom from styles.css so dark/light and skins hold with no new tokens. */
-  .set-tabs { margin: 0 0 18px; }
-  .set-tabs .seg.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
-
-  /* status banner (ok / warn / err / muted) — built from the same soft tokens
-     used by .attn-card / callouts so it stays theme-correct. */
-  .sc-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px;
-    border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 16px; }
-  .sc-banner .bt { display: flex; align-items: center; gap: 9px; font-size: 13px; line-height: 1.45; }
-  .sc-banner .bt svg { width: 17px; height: 17px; flex: none; }
-  .sc-banner.ok   { background: var(--ok-soft);   border-color: var(--ok-line); }
-  .sc-banner.ok .bt svg   { color: var(--ok); }
-  .sc-banner.warn { background: var(--warn-soft); border-color: var(--warn-line); }
-  .sc-banner.warn .bt svg { color: var(--warn); }
-  .sc-banner.err  { background: var(--danger-soft); border-color: var(--danger-line); }
-  .sc-banner.err .bt svg  { color: var(--danger); }
-  .sc-banner.muted .bt { color: var(--muted); }
-  .sc-banner .masked { margin-left: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
-    color: var(--text-2); background: var(--surface-3); border: 1px solid var(--border); border-radius: 7px; padding: 3px 8px; }
-
-  .sc-row { display: flex; gap: 8px; align-items: stretch; }
-  .sc-inp { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 10px;
-    color: var(--text); font: 13px "JetBrains Mono", ui-monospace, monospace; padding: 10px 12px; outline: none; }
-  .sc-inp::placeholder { color: var(--faint); font-family: Inter, system-ui, sans-serif; }
-  .sc-inp:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-  .sc-row .iconbtn { flex: none; }
-
-  .sc-hint { font-size: 11.5px; color: var(--faint); min-height: 16px; margin: 7px 2px 0; line-height: 1.4; }
-  .sc-hint code { font-size: 11px; }
-  .sc-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-
-  .sc-result { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
-    font-size: 12.5px; line-height: 1.4; border: 1px solid var(--border); }
-  .sc-result svg { width: 16px; height: 16px; flex: none; }
-  .sc-result.ok  { background: var(--ok-soft);     border-color: var(--ok-line); }
-  .sc-result.ok svg  { color: var(--ok); }
-  .sc-result.err { background: var(--danger-soft); border-color: var(--danger-line); }
-  .sc-result.err svg { color: var(--danger); }
-
-  /* per-use-case model rows (SPEC-SETTINGS §2) — token-reuse only, no color literals. */
-  .uc-list { display: flex; flex-direction: column; gap: 12px; }
-  .uc-row { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding: 14px 16px; }
-  .uc-title { font-size: 13.5px; font-weight: 640; letter-spacing: -.01em; }
-  .uc-purpose { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 3px; }
-  .uc-controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 13px; }
-  .uc-sel { display: flex; flex-direction: column; gap: 4px; }
-  .uc-sel > span { font-size: 11px; color: var(--faint); }
-  .uc-sel select { background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 9px;
-    color: var(--text); font: 13px Inter, system-ui, sans-serif; padding: 8px 10px; outline: none; min-width: 150px; }
-  .uc-sel select:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-  .uc-sel select:disabled { opacity: .55; cursor: not-allowed; }
-  .uc-default { color: var(--faint); font-size: 11.5px; margin-left: auto; align-self: flex-end; padding-bottom: 9px; }
-  .uc-foot { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
-  .uc-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-  .uc-dot.on { background: var(--ok); }
-  .uc-dot.off { background: var(--faint); }
-  .uc-state-txt { font-size: 12px; color: var(--text-2); }
-  .uc-reset { margin-left: auto; }
-  .uc-note { font-size: 11.5px; color: var(--faint); margin-top: 9px; line-height: 1.45; }
-
-  .set-savebar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
-  .set-savebar .saved { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
-  .set-savebar .saved svg { width: 15px; height: 15px; color: var(--ok); }
-  .set-err { color: var(--danger); font-size: 12.5px; }
-
-  /* project execution routing */
-  .wt-setting { display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px;
-    border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
-  .wt-setting-main { flex: 1; min-width: 0; }
-  .wt-setting-title { font-size: 13.5px; font-weight: 650; }
-  .wt-setting-desc { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
-  .wt-setting-warn { color: var(--warn); font-size: 11.5px; line-height: 1.45; margin-top: 8px; }
-  .wt-switch { flex: none; min-width: 74px; }
-
-  /* per-provider key cards (multi-provider, follow-on to #294 Item 1) — one
-     .pk-card per additional AVAILABLE catalog provider, stacked like the
-     Anthropic card above; reuses the same .sc-* banner/row/result tokens. */
-  .pk-list { display: flex; flex-direction: column; gap: 16px; }
-  .pk-card + .pk-card { padding-top: 16px; border-top: 1px solid var(--border); }
-
-  /* mobile pairing card — the vanilla pair-modal's .pair-grid/.pair-qr/.pair-meta
-     markup, inlined into a settings card instead of an overlay (both consume the
-     shared styles.css .pair-* rules, so no new tokens here). */
-  .pair-card-body .pair-qr { margin: 0 auto; }
-
-  /* appearance / design picker — browser-local, applies instantly */
-  .skin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  @media (max-width: 640px) { .skin-grid { grid-template-columns: 1fr; } }
-  .skin-tile { text-align: left; cursor: pointer; font: inherit; color: var(--text);
-    border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
-    padding: 14px 15px; transition: border-color .15s ease; }
-  .skin-tile:hover { border-color: var(--accent-line); }
-  .skin-tile.on { border-color: var(--accent); box-shadow: var(--ring); }
-  .skin-tile .sw { display: flex; gap: 5px; margin-bottom: 11px; }
-  .skin-tile .sw i { width: 20px; height: 20px; border: 1px solid rgba(0,0,0,.25); display: block; }
-  .skin-tile[data-skin="classic"] .sw i { border-radius: 6px; }
-  .skin-tile[data-skin="swiss"] .sw i { border-radius: 0 !important; }
-  .skin-tile .nm { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 660; }
-  .skin-tile .nm svg { width: 15px; height: 15px; color: var(--accent); margin-left: auto; flex: none; }
-  .skin-tile .ds { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
-`;
+import { Button, ButtonLink, Chip, Tooltip } from "../../components/primitives";
+import { EnvKeyHint, SecretInput, SettingRow, SettingRows, SettingsGroup, StatusLine, TestResult, settingsErrText } from "./settingsUi";
+import { useLocation } from "react-router-dom";
+import { Shell, autonomyLabel, execChipState, snapshotErrorKind, wakesObserved } from "../../shell/Shell";
+import { useChrome } from "../../shell/chrome";
+import { extensions, type SettingsSection } from "../../extensions";
+import { actingHuman, autLevel, useSnapshot } from "../../state/SnapshotProvider";
+import { useGrantAuthority } from "./grantAuthority";
+import { AgentWorktreesSection } from "./AgentWorktreesSection";
+import { projectStatusMeta } from "../../cloud/projects/projectStatus";
+import { useProjectIconAuthority } from "../../components/primitives/projectIconAuthority";
+import * as prefs from "../../cloud/projects/prefs";
+import { ProjectIcon, useProjectIcon } from "../../components/primitives/ProjectIcon";
+import { ProjectIconPicker } from "../../components/primitives/EmojiPicker";
+import { InterfaceSection } from "./InterfaceSection";
+import { NotificationsSection } from "./notifications/NotificationsSection";
+import { VoiceSection } from "./voice/VoiceSection";
+import { AgentLimitRow } from "./AgentLimitRow";
+import { ObjectiveRow } from "./ObjectiveRow";
+import { ReviewRoutingRow } from "./ReviewRoutingRow";
+import { PortabilitySection } from "./portability/PortabilitySection";
+import { VerdiktSettingsSection } from "./integrations/VerdiktSettings";
+import { ProjectModeSection } from "../onboarding/templates/ProjectModeSection";
+import { DefaultBadge, KeyDetail, PROVIDER_DOCS, ProviderRow, RuntimesGroup } from "./providerRows";
+import { DEVICE_NOT_A_MEMBER, DEVICE_SIGNIN_UNAVAILABLE, DeviceTokensSection } from "../../cloud/device/DeviceTokens";
+import { fetchMe } from "../../cloud/identity";
+import { pairingErrorView, type PairingErrorView } from "../../cloud/projects/PairingModal";
+import "../../cloud/settings/settings-cards.css";
+import "./settings-v2.css";
 
 /* ====================================================================== *
  *  PURE view-model helpers (ports of window.OrchaSettings, DOM-free)     *
@@ -235,23 +155,33 @@ export function rowDirty(sel: Sel | null | undefined, uc: UseCase): boolean {
   return !!sel && (sel.provider !== persisted.provider || sel.model !== persisted.model);
 }
 
+// A row whose stored model is RETIRED: its provider is still available but the
+// model is no longer in that provider's catalog (UcRow flags it with a note).
+export function isRetiredSel(sel: Sel, catalog: Provider[] | null | undefined): boolean {
+  if (!catalog || !sel.model) return false;
+  const provAvail = catalog.some((p) => p.id === sel.provider && p.available);
+  return provAvail && !modelsForProvider(catalog, sel.provider).some((m) => m.id === sel.model);
+}
+
 // Build the PUT body: only overridden rows are sent (default-valued rows omitted ⇒ reset).
+// SET-009: an UNTOUCHED row whose stored model is retired is omitted too — the
+// server refuses a retired model, which would otherwise block every unrelated
+// save; omitting resets it to the default, exactly what the row's note says.
 export function buildOverrides(
   staged: Record<string, Sel | undefined>,
   ucs: UseCase[] | null | undefined,
+  catalog?: Provider[] | null,
 ): { key: string; provider: string; model: string }[] {
   const out: { key: string; provider: string; model: string }[] = [];
   (ucs || []).forEach((uc) => {
     const sel = staged[uc.key] || currentSel(uc);
+    if (!rowDirty(sel, uc) && isRetiredSel(sel, catalog)) return;
     if (isOverride(sel, uc)) out.push({ key: uc.key, provider: sel.provider, model: sel.model });
   });
   return out;
 }
 
 /* ---- shared bits ---------------------------------------------------------- */
-function statusOf(e: unknown): number | undefined {
-  return e && typeof e === "object" ? (e as { status?: number }).status : undefined;
-}
 
 /* ====================================================================== *
  *  Settings tabs (port of static/modules/settings-tabs.js)               *
@@ -263,30 +193,68 @@ function statusOf(e: unknown): number | undefined {
 //  - loading never writes the hash — only a user click does (replaceState).
 const TAB_HASH_RE = /(?:^#|[#&])tab=([\w-]+)/;
 
-export function tabFromHash(hash: string | null | undefined, names: string[]): string {
-  const m = TAB_HASH_RE.exec(hash || "");
-  const want = m && names.indexOf(m[1]) !== -1 ? m[1] : null;
-  return want || names[0];
+/**
+ * V2 section aliases (arch §2.3): every pre-V2 `#tab=` key keeps selecting the
+ * right content. Canonical keys are the pre-V2 ones where they existed
+ * (provider-keys, github-access, members, pairing, general) so existing deep
+ * links (desktop "Pair phone" → #tab=pairing) never change.
+ */
+export const SETTINGS_ALIASES: Record<string, string> = {
+  models: "provider-keys",
+  providers: "provider-keys",
+  integrations: "github-access",
+  github: "github-access",
+  devices: "pairing",
+  appearance: "interface",
+  access: "members",
+  notification: "notifications",
+  alerts: "notifications",
+  dictation: "voice",
+  microphone: "voice",
+};
+
+/** Resolve a (possibly aliased) key against the available section keys; unknown → first. */
+export function resolveSettingsKey(raw: string | null | undefined, names: string[]): string {
+  if (!raw) return names[0];
+  if (names.indexOf(raw) !== -1) return raw;
+  const alias = SETTINGS_ALIASES[raw];
+  return alias && names.indexOf(alias) !== -1 ? alias : names[0];
 }
 
-/** The General tab's key on the tab strip (the open key + models cards). */
+export function tabFromHash(hash: string | null | undefined, names: string[]): string {
+  const m = TAB_HASH_RE.exec(hash || "");
+  return resolveSettingsKey(m ? m[1] : null, names);
+}
+
+/** The General section key. */
 export const GENERAL_TAB = "general";
 
 /* ====================================================================== *
  *  Anthropic API-key card (#294)                                          *
  * ====================================================================== */
-interface TestResult {
+interface KeyTestResult {
   ok: boolean;
   detail?: string | null;
 }
 
-export function KeyCard({ cid }: { cid: string | null }) {
-  const { snap } = useSnapshot();
+/** Row-mode options (Models & providers, image-33 style). Omitted = the plain card (cloud section). */
+export interface KeyRowOpts {
+  /** render as a collapsible provider row (logo · name · masked key · Default · docs · chevron) */
+  asRow?: boolean;
+  /** this provider is the shipped default for Orcha's helpers */
+  isDefault?: boolean;
+  /** bump to re-fetch (the group's Refresh) */
+  reload?: number;
+  /** reports the loaded key state up (the group's "N connected" count) */
+  onState?: (vm: KeyVM | null) => void;
+}
+
+export function KeyCard({ cid, asRow = false, isDefault = false, reload = 0, onState }: { cid: string | null } & KeyRowOpts) {
   const toast = useToast();
   const [vm, setVm] = useState<KeyVM | null>(null);
   const [loadErr, setLoadErr] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [testResult, setTestResult] = useState<KeyTestResult | null>(null);
   const [draft, setDraft] = useState(""); // local — the 3s poll never clobbers it
   const [reveal, setReveal] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -309,13 +277,19 @@ export function KeyCard({ cid }: { cid: string | null }) {
 
   useEffect(() => {
     void loadKey();
-  }, [loadKey]);
+  }, [loadKey, reload]);
 
-  // PR #315 human gate — mirror the vanilla requireHuman() wording exactly.
-  const who = actingHuman(snap);
+  useEffect(() => {
+    onState?.(vm);
+  }, [vm, onState]);
+
+  // PR #315 human gate + the manage_keys grant (e2e-permissions-15): without
+  // it the card renders read-only (the section names the reason once).
+  const auth = useGrantAuthority("manage_keys");
+  const who = auth.human;
   const requireHuman = (verb: string): boolean => {
     if (who) return true;
-    toast("Pick an acting human to " + verb + " the key", "warn");
+    toast(auth.reason || "Pick an acting human to " + verb + " the key", "warn");
     return false;
   };
 
@@ -340,7 +314,7 @@ export function KeyCard({ cid }: { cid: string | null }) {
     } catch (e) {
       setBusy(false);
       // keep the typed value — a transient failure never loses it
-      toast("Couldn't save the key (" + statusOf(e) + "). Your input is preserved.", "danger");
+      toast("Couldn't save the key — " + settingsErrText(e) + ". Your input is preserved.", "danger");
     }
   };
 
@@ -360,7 +334,7 @@ export function KeyCard({ cid }: { cid: string | null }) {
       );
       setTestResult({ ok: !!(body && body.ok), detail: body ? body.detail : undefined });
     } catch (e) {
-      setTestResult({ ok: false, detail: "Test failed (" + statusOf(e) + ")." });
+      setTestResult({ ok: false, detail: "Test failed — " + settingsErrText(e) + "." });
     }
     setBusy(false); // the verdict shows AND the typed key stays so it can be Saved
   };
@@ -386,154 +360,61 @@ export function KeyCard({ cid }: { cid: string | null }) {
     } catch (e) {
       setBusy(false);
       setConfirmClear(false);
-      toast("Couldn't remove the key (" + statusOf(e) + ").", "danger");
+      toast("Couldn't remove the key — " + settingsErrText(e) + ".", "danger");
     }
   };
 
   if (loadErr) {
-    return (
-      <div className="sc-banner err">
-        <div className="bt">
-          <Icon name="x" cls="" />
-          <span>Couldn&#39;t load the API-key status.</span>
-        </div>
-        <button className="btn sm ghost" id="keyRetry" onClick={() => void loadKey()}>
-          Retry
-        </button>
-      </div>
+    const line = (
+      <StatusLine
+        tone="err"
+        action={<Button size="sm" variant="ghost" icon="refresh" id="keyRetry" onClick={() => void loadKey()}>Retry</Button>}
+      >
+        Couldn&#39;t load the API-key status.
+      </StatusLine>
     );
+    return asRow ? (
+      <ProviderRow key="err" id="anthropic" brand="anthropic" name="Anthropic" defaultOpen
+        detail={<span className="mp-detail-t">Couldn&#39;t load the key status</span>} detailTone="warn"
+        docsHref={PROVIDER_DOCS.anthropic}>
+        {line}
+      </ProviderRow>
+    ) : line;
   }
   if (!vm) {
-    return (
-      <div className="sc-banner muted">
-        <div className="bt">
-          <Icon name="clock" cls="" />
-          <span>Checking key status…</span>
-        </div>
-      </div>
-    );
+    return asRow ? (
+      <ProviderRow id="anthropic" brand="anthropic" name="Anthropic"
+        detail={<span className="mp-detail-t">Checking key status…</span>} docsHref={PROVIDER_DOCS.anthropic} />
+    ) : <StatusLine tone="muted">Checking key status…</StatusLine>;
   }
 
-  const hasField = draft.trim().length > 0;
-  const saveDisabled = busy || !hasField;
-  // Save needs a pasted value; Test works on the pasted value OR (when none is
-  // typed) the stored key — so an operator can verify an existing key in place.
-  const testDisabled = vm.editable ? busy || (!hasField && !vm.configured) : busy;
   const hint =
-    hasField && !looksLikeKey(draft)
+    draft.trim().length > 0 && !looksLikeKey(draft)
       ? 'Heads up: Anthropic keys usually start with "sk-ant-". Test to confirm.'
       : "";
 
-  const banner =
-    vm.mode === "db" ? (
-      <div className="sc-banner ok">
-        <div className="bt">
-          <Icon name="check" cls="" />
-          <span>
-            <b>Anthropic API key configured</b> — stored encrypted on this workspace.
-          </span>
-        </div>
-        <code className="masked">{vm.masked || "sk-…"}</code>
-      </div>
-    ) : vm.mode === "env" ? (
-      <div className="sc-banner ok">
-        <div className="bt">
-          <Icon name="shield" cls="" />
-          <span>
-            <b>
-              Using <code>ORCHA_LLM_API_KEY</code> from the environment
-            </b>{" "}
-            — it takes precedence over any stored key; read-only here.
-          </span>
-        </div>
-        <code className="masked">{vm.masked || "sk-…"}</code>
-      </div>
-    ) : (
-      <div className="sc-banner warn">
-        <div className="bt">
-          <Icon name="bell" cls="" />
-          <span>
-            <b>No Anthropic API key configured.</b> Universal-model features (guided onboarding, wake
-            triage) are off until you add one.
-          </span>
-        </div>
-      </div>
-    );
-
-  // env keys are managed outside the portal — no input/Save/Clear, only Test + a note.
-  const editor = vm.editable ? (
+  const body = (
     <>
-      <div className="sc-row">
-        <input
-          id="keyInput"
-          className="sc-inp"
-          type={reveal ? "text" : "password"}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder={vm.mode === "db" ? "Paste a new key to replace…" : "sk-ant-…"}
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setTestResult(null);
-          }}
-        />
-        <button
-          className="iconbtn"
-          id="keyReveal"
-          type="button"
-          title="Show / hide"
-          onClick={() => setReveal((r) => !r)}
-        >
-          <Icon name="search" cls="" />
-        </button>
-      </div>
-      <div className="sc-hint" id="keyHint">
-        {hint}
-      </div>
-      <div className="sc-acts">
-        <button className="btn sm" id="keySave" disabled={saveDisabled} onClick={() => void doSave()}>
-          <Icon name="check" cls="" />
-          {vm.mode === "db" ? "Replace key" : "Save key"}
-        </button>
-        <button className="btn sm ghost" id="keyTest" disabled={testDisabled} onClick={() => void doTest()}>
-          <Icon name="spark" cls="" />
-          Test
-        </button>
-        {vm.canClear && (
-          <button className="btn sm danger" id="keyClear" onClick={doClear}>
-            <Icon name="x" cls="" />
-            Remove
-          </button>
-        )}
-      </div>
-    </>
-  ) : (
-    <>
-      <div className="sc-acts">
-        <button className="btn sm ghost" id="keyTest" disabled={busy} onClick={() => void doTest()}>
-          <Icon name="spark" cls="" />
-          Test stored key
-        </button>
-      </div>
-      <div className="sc-hint">
-        To change an environment key, update <code>ORCHA_LLM_API_KEY</code> and relaunch with{" "}
-        <code>orcha up</code>.
-      </div>
-    </>
-  );
-
-  return (
-    <>
-      {banner}
-      {editor}
-      {testResult && (
-        <div className={"sc-result " + (testResult.ok ? "ok" : "err")}>
-          <Icon name={testResult.ok ? "check" : "x"} cls="" />
-          <span>
-            {testResult.ok ? "Key is valid — Anthropic accepted it." : testResult.detail || "Key was rejected."}
-          </span>
-        </div>
-      )}
+      <KeyBody
+        vm={vm}
+        name="Anthropic"
+        provider="anthropic"
+        unsetCopy="Universal-model features (guided onboarding, wake triage) are off until you add one."
+        envCopy="it takes precedence over any stored key; read-only here."
+        draft={draft}
+        onDraft={(v) => { setDraft(v); setTestResult(null); }}
+        reveal={reveal}
+        onReveal={() => setReveal((r) => !r)}
+        busy={busy}
+        hint={hint}
+        ids={{ input: "keyInput", reveal: "keyReveal", save: "keySave", test: "keyTest", clear: "keyClear", hint: "keyHint" }}
+        onSave={() => void doSave()}
+        onTest={() => void doTest()}
+        onClear={doClear}
+        testResult={testResult}
+        locked={!auth.can}
+        inRow={asRow}
+      />
       {confirmClear && (
         <Modal
           title="Remove API key"
@@ -543,6 +424,146 @@ export function KeyCard({ cid }: { cid: string | null }) {
           onPrimary={() => void doClearConfirmed()}
           onClose={() => setConfirmClear(false)}
         />
+      )}
+    </>
+  );
+  if (!asRow) return body;
+  return (
+    <ProviderRow
+      key="ok"
+      id="anthropic"
+      brand="anthropic"
+      name="Anthropic"
+      detail={<KeyDetail mode={vm.mode} masked={vm.masked} />}
+      detailTone={vm.mode === "none" ? "warn" : undefined}
+      badge={isDefault ? <DefaultBadge tip="The shipped default provider for Embodent's helpers" /> : null}
+      docsHref={PROVIDER_DOCS.anthropic}
+    >
+      {body}
+    </ProviderRow>
+  );
+}
+
+/**
+ * The shared body of every API-key card (Anthropic, each other provider —
+ * open and cloud builds): one flat status line (Remove lives on it as a quiet
+ * danger action), the secret field with an eye toggle, then Save (primary only
+ * once something is typed) and Test. Env-managed keys are read-only: Test +
+ * a note on how to change them.
+ */
+export function KeyBody({
+  vm, name, provider, unsetCopy, envCopy, draft, onDraft, reveal, onReveal, busy, hint, ids = {},
+  onSave, onTest, onClear, testResult, locked = false, inRow = false,
+}: {
+  vm: Pick<KeyVM, "mode" | "masked" | "editable" | "canClear" | "configured">;
+  name: string;
+  provider: string;
+  unsetCopy: ReactNode;
+  envCopy?: ReactNode;
+  draft: string;
+  onDraft: (v: string) => void;
+  reveal: boolean;
+  onReveal: () => void;
+  busy: boolean;
+  hint?: string;
+  ids?: { input?: string; reveal?: string; save?: string; test?: string; clear?: string; hint?: string };
+  onSave: () => void;
+  onTest: () => void;
+  onClear: () => void;
+  testResult: KeyTestResult | null;
+  /** no manage_keys authority (or still resolving): status only, no controls */
+  locked?: boolean;
+  /** inside a provider row: the row's detail line already shows the masked key (D12: once) */
+  inRow?: boolean;
+}) {
+  const hasField = draft.trim().length > 0;
+  const status =
+    vm.mode === "db" ? (
+      <StatusLine
+        tone="ok"
+        masked={inRow ? null : vm.masked || "sk-…"}
+        action={vm.canClear && !locked ? (
+          <Button size="sm" variant="ghost" className="sc-remove" icon="trash" id={ids.clear} onClick={onClear} disabled={busy}
+            aria-label={"Remove " + name + " API key"}>
+            Remove
+          </Button>
+        ) : null}
+      >
+        {/* D12: the group title already names the provider — the line says only the state */}
+        <b>Configured</b> · stored encrypted on this project<span className="v2-sr"> ({name} API key)</span>
+      </StatusLine>
+    ) : vm.mode === "env" ? (
+      <StatusLine tone="env" masked={inRow ? null : vm.masked || "sk-…"}>
+        <b>Using <code>ORCHA_LLM_API_KEY</code> from the environment</b> · {envCopy || "it takes precedence; read-only here."}
+      </StatusLine>
+    ) : (
+      <StatusLine tone="warn">
+        <b>Not configured.</b><span className="v2-sr"> (No {name} API key)</span> {unsetCopy}
+      </StatusLine>
+    );
+
+  // Read-only for this viewer (viewer role, member without manage_keys,
+  // non-member, offline): the configured/unset state still shows; every key
+  // write AND test is owner-or-manage_keys server-side, so no control renders.
+  if (locked) return status;
+  if (!vm.editable) {
+    return (
+      <>
+        {status}
+        <div className="sc-acts">
+          <Button size="sm" variant="secondary" icon="spark" id={ids.test} disabled={busy} onClick={onTest}>
+            Test stored key
+          </Button>
+          <EnvKeyHint provider={provider} />
+        </div>
+        {testResult && (
+          <TestResult ok={testResult.ok}>
+            {testResult.ok ? "Key is valid — " + name + " accepted it." : testResult.detail || "Key was rejected."}
+          </TestResult>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      {status}
+      <SecretInput
+        id={ids.input}
+        revealId={ids.reveal}
+        label={(vm.mode === "db" ? "Replace the " : "") + name + " API key"}
+        placeholder={vm.mode === "db" ? "Paste a new key to replace…" : "Paste " + name + " API key…"}
+        value={draft}
+        onChange={onDraft}
+        reveal={reveal}
+        onToggleReveal={onReveal}
+      />
+      {hint ? <div className="sc-hint" id={ids.hint}>{hint}</div> : null}
+      <div className="sc-acts">
+        <Button
+          size="sm"
+          variant={hasField ? "primary" : "secondary"}
+          icon="check"
+          id={ids.save}
+          disabled={busy || !hasField}
+          onClick={onSave}
+        >
+          {vm.mode === "db" ? "Replace key" : "Save key"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="spark"
+          id={ids.test}
+          disabled={busy || (!hasField && !vm.configured)}
+          onClick={onTest}
+        >
+          Test
+        </Button>
+      </div>
+      {testResult && (
+        <TestResult ok={testResult.ok}>
+          {testResult.ok ? "Key is valid — " + name + " accepted it." : testResult.detail || "Key was rejected."}
+        </TestResult>
       )}
     </>
   );
@@ -588,22 +609,26 @@ export function otherProviderKeys(keysIn: ProviderKeyEntry[] | null | undefined)
 function PkCard({
   k,
   cid,
+  asRow = false,
+  isDefault = false,
 }: {
   k: ProviderKeyCardVM;
   cid: string | null;
+  asRow?: boolean;
+  isDefault?: boolean;
 }) {
-  const { snap } = useSnapshot();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [testResult, setTestResult] = useState<KeyTestResult | null>(null);
   const [draft, setDraft] = useState("");
   const [reveal, setReveal] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  const who = actingHuman(snap);
+  const auth = useGrantAuthority("manage_keys");
+  const who = auth.human;
   const requireHuman = (verb: string): boolean => {
     if (who) return true;
-    toast("Pick an acting human to " + verb + " the key", "warn");
+    toast(auth.reason || "Pick an acting human to " + verb + " the key", "warn");
     return false;
   };
 
@@ -626,7 +651,7 @@ function PkCard({
       k.onSaved();
     } catch (e) {
       setBusy(false);
-      toast("Couldn't save the key (" + statusOf(e) + "). Your input is preserved.", "danger");
+      toast("Couldn't save the key — " + settingsErrText(e) + ". Your input is preserved.", "danger");
     }
   };
 
@@ -644,7 +669,7 @@ function PkCard({
       );
       setTestResult({ ok: !!(body && body.ok), detail: body ? body.detail : undefined });
     } catch (e) {
-      setTestResult({ ok: false, detail: "Test failed (" + statusOf(e) + ")." });
+      setTestResult({ ok: false, detail: "Test failed — " + settingsErrText(e) + "." });
     }
     setBusy(false);
   };
@@ -669,127 +694,79 @@ function PkCard({
     } catch (e) {
       setBusy(false);
       setConfirmClear(false);
-      toast("Couldn't remove the key (" + statusOf(e) + ").", "danger");
+      toast("Couldn't remove the key — " + settingsErrText(e) + ".", "danger");
     }
   };
 
-  const hasField = draft.trim().length > 0;
-  const saveDisabled = busy || !hasField;
-  const testDisabled = k.editable ? busy || (!hasField && !k.configured) : busy;
-
-  const banner =
-    k.mode === "db" ? (
-      <div className="sc-banner ok">
-        <div className="bt">
-          <Icon name="check" cls="" />
-          <span>
-            <b>{k.name} API key configured</b> — stored encrypted on this workspace.
-          </span>
-        </div>
-        <code className="masked">{k.masked || "sk-…"}</code>
-      </div>
-    ) : k.mode === "env" ? (
-      <div className="sc-banner ok">
-        <div className="bt">
-          <Icon name="shield" cls="" />
-          <span>
-            <b>
-              Using <code>ORCHA_LLM_API_KEY</code> from the environment
-            </b>{" "}
-            — it takes precedence; read-only here.
-          </span>
-        </div>
-        <code className="masked">{k.masked || "sk-…"}</code>
-      </div>
-    ) : (
-      <div className="sc-banner warn">
-        <div className="bt">
-          <Icon name="bell" cls="" />
-          <span>
-            <b>No {k.name} API key configured.</b> Use-cases set to {k.name} are off until you add one.
-          </span>
-        </div>
-      </div>
-    );
-
-  const editor = k.editable ? (
-    <>
-      <div className="sc-row">
-        <input
-          className="sc-inp"
-          type={reveal ? "text" : "password"}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder={k.mode === "db" ? "Paste a new key to replace…" : "Paste " + k.name + " API key…"}
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setTestResult(null);
-          }}
-        />
-        <button className="iconbtn" type="button" title="Show / hide" onClick={() => setReveal((r) => !r)}>
-          <Icon name="search" cls="" />
-        </button>
-      </div>
-      <div className="sc-acts">
-        <button className="btn sm" disabled={saveDisabled} onClick={() => void doSave()}>
-          <Icon name="check" cls="" />
-          {k.mode === "db" ? "Replace key" : "Save key"}
-        </button>
-        <button className="btn sm ghost" disabled={testDisabled} onClick={() => void doTest()}>
-          <Icon name="spark" cls="" />
-          Test
-        </button>
-        {k.canClear && (
-          <button className="btn sm danger" onClick={doClear}>
-            <Icon name="x" cls="" />
-            Remove
-          </button>
-        )}
-      </div>
-    </>
-  ) : (
-    <>
-      <div className="sc-acts">
-        <button className="btn sm ghost" disabled={busy} onClick={() => void doTest()}>
-          <Icon name="spark" cls="" />
-          Test stored key
-        </button>
-      </div>
-      <div className="sc-hint">
-        To change an environment key, update <code>ORCHA_LLM_API_KEY</code> and relaunch with{" "}
-        <code>orcha up</code>.
-      </div>
-    </>
+  const keyBody = (
+      <KeyBody
+        vm={k}
+        name={k.name}
+        provider={k.provider}
+        unsetCopy="Use-cases on this provider stay off until you add one."
+        draft={draft}
+        onDraft={(v) => { setDraft(v); setTestResult(null); }}
+        reveal={reveal}
+        onReveal={() => setReveal((r) => !r)}
+        busy={busy}
+        onSave={() => void doSave()}
+        onTest={() => void doTest()}
+        onClear={doClear}
+        testResult={testResult}
+        locked={!auth.can}
+        inRow={asRow}
+      />
   );
-
-  return (
-    <div className="pk-card" data-provider={k.provider}>
-      {banner}
-      {editor}
-      {testResult && (
-        <div className={"sc-result " + (testResult.ok ? "ok" : "err")}>
-          <Icon name={testResult.ok ? "check" : "x"} cls="" />
-          <span>
-            {testResult.ok ? "Key is valid — " + k.name + " accepted it." : testResult.detail || "Key was rejected."}
-          </span>
-        </div>
-      )}
-      {confirmClear && (
+  const confirm = confirmClear && (
         <Modal
-          title="Remove API key"
+          title={"Remove " + k.name + " API key"}
           danger
           primary="Remove key"
           desc="Deletes the stored key for this provider from this workspace. If ORCHA_LLM_API_KEY is set in the environment, the client falls back to it."
           onPrimary={() => void doClearConfirmed()}
           onClose={() => setConfirmClear(false)}
         />
-      )}
+  );
+  if (asRow) {
+    return (
+      <ProviderRow
+        id={k.provider}
+        brand={k.provider}
+        name={k.name}
+        detail={<KeyDetail mode={k.mode} masked={k.masked} />}
+        detailTone={k.mode === "none" ? "warn" : undefined}
+        badge={isDefault ? <DefaultBadge tip="The shipped default provider for Embodent's helpers" /> : null}
+        docsHref={PROVIDER_DOCS[k.provider] || null}
+      >
+        <div className="pk-card" data-provider={k.provider}>
+          {keyBody}
+          {confirm}
+        </div>
+      </ProviderRow>
+    );
+  }
+  return (
+    <div className="pk-card" data-provider={k.provider}>
+      <h3 className="pk-name">{k.name}</h3>
+      {keyBody}
+      {confirm}
     </div>
   );
 }
 
-export function ProviderKeysCard({ cid }: { cid: string | null }) {
+export function ProviderKeysCard({
+  cid, asRows = false, reload = 0, onKeys, defaults,
+}: {
+  cid: string | null;
+  /** render each provider as a collapsible row (Models & providers) */
+  asRows?: boolean;
+  /** bump to re-fetch (the group's Refresh) */
+  reload?: number;
+  /** reports the loaded non-Anthropic key states up (the group's count) */
+  onKeys?: (keys: ProviderKeyVM[] | null) => void;
+  /** providers that are the shipped default for Orcha's helpers */
+  defaults?: Set<string>;
+}) {
   const [keys, setKeys] = useState<ProviderKeyEntry[] | null>(null);
   const [loadErr, setLoadErr] = useState(false);
 
@@ -813,33 +790,35 @@ export function ProviderKeysCard({ cid }: { cid: string | null }) {
 
   useEffect(() => {
     void loadKeys();
-  }, [loadKeys]);
+  }, [loadKeys, reload]);
+
+  useEffect(() => {
+    onKeys?.(keys ? otherProviderKeys(keys) : null);
+  }, [keys, onKeys]);
 
   if (loadErr) {
-    return (
-      <div className="sc-banner err">
-        <div className="bt">
-          <Icon name="x" cls="" />
-          <span>Couldn&#39;t load provider keys.</span>
-        </div>
-        <button className="btn sm ghost" onClick={() => void loadKeys()}>
-          Retry
-        </button>
-      </div>
+    const line = (
+      <StatusLine
+        tone="err"
+        action={<Button size="sm" variant="ghost" icon="refresh" onClick={() => void loadKeys()}>Retry</Button>}
+      >
+        Couldn&#39;t load provider keys.
+      </StatusLine>
     );
+    return asRows ? <div className="mp-pad">{line}</div> : line;
   }
-  if (!keys) {
-    return (
-      <div className="sc-banner muted">
-        <div className="bt">
-          <Icon name="clock" cls="" />
-          <span>Checking provider keys…</span>
-        </div>
-      </div>
-    );
-  }
+  if (!keys) return asRows ? null : <StatusLine tone="muted">Checking provider keys…</StatusLine>;
 
   const vms = otherProviderKeys(keys).map((k) => ({ ...k, onSaved: () => void loadKeys() }));
+  if (asRows) {
+    return (
+      <>
+        {vms.map((k) => (
+          <PkCard key={k.provider} k={k} cid={cid} asRow isDefault={!!defaults?.has(k.provider)} />
+        ))}
+      </>
+    );
+  }
   if (!vms.length) return <div className="sc-hint">No additional providers are available yet.</div>;
 
   return (
@@ -862,6 +841,7 @@ function UcRow({
   onProvider,
   onModel,
   onReset,
+  locked = false,
 }: {
   uc: UseCase;
   sel: Sel;
@@ -869,6 +849,8 @@ function UcRow({
   onProvider: (key: string, provider: string) => void;
   onModel: (key: string, model: string) => void;
   onReset: (key: string) => void;
+  /** no manage_keys authority: the selection is shown, not editable */
+  locked?: boolean;
 }) {
   const overridden = isOverride(sel, uc);
   const provAvail = catalog.some((p) => p.id === sel.provider && p.available);
@@ -893,6 +875,7 @@ function UcRow({
           <select
             className="uc-prov"
             data-key={uc.key}
+            disabled={locked}
             value={sel.provider}
             onChange={(e) => onProvider(uc.key, e.target.value)}
           >
@@ -908,7 +891,7 @@ function UcRow({
           <select
             className="uc-model"
             data-key={uc.key}
-            disabled={!defModels.length && !retired}
+            disabled={locked || (!defModels.length && !retired)}
             value={sel.model || ""}
             onChange={(e) => onModel(uc.key, e.target.value)}
           >
@@ -923,15 +906,28 @@ function UcRow({
             )}
           </select>
         </label>
-        <span className="uc-default">default: {uc.default_model}</span>
       </div>
       <div className="uc-foot">
-        <span className={"uc-dot " + (overridden ? "on" : "off")} />
-        <span className="uc-state-txt">{overridden ? "set to " + sel.model : "using shipped default"}</span>
-        <button className="btn sm ghost uc-reset" data-key={uc.key} disabled={!overridden} onClick={() => onReset(uc.key)}>
-          <Icon name="x" cls="" />
-          Reset to default
-        </button>
+        <span className={"uc-dot " + (overridden ? "on" : "off")} aria-hidden="true" />
+        <span className="uc-state-txt">
+          {overridden ? (
+            <>
+              Custom: {modelName(catalog, sel.provider, sel.model)}
+              <span className="uc-default"> · Default: {modelName(catalog, uc.default_provider, uc.default_model)}</span>
+            </>
+          ) : (
+            <>Default: {modelName(catalog, uc.default_provider, uc.default_model)}</>
+          )}
+        </span>
+        {overridden && !locked && (
+          <Button
+            size="sm" variant="ghost" className="uc-reset" data-key={uc.key}
+            aria-label={"Reset " + uc.label + " to its default model"} title="Reset to default"
+            onClick={() => onReset(uc.key)}
+          >
+            Reset
+          </Button>
+        )}
       </div>
       {retired && (
         <div className="uc-note">
@@ -943,8 +939,15 @@ function UcRow({
   );
 }
 
+/** Human model name from the catalog ("Claude Opus 5.5"), falling back to the raw id. */
+export function modelName(catalog: Provider[] | null | undefined, providerId: string, modelId: string | null | undefined): string {
+  if (!modelId) return "—";
+  const p = (catalog || []).find((x) => x.id === providerId);
+  const m = p?.models?.find((x) => x.id === modelId);
+  return m ? m.name : modelId;
+}
+
 export function ModelsCard({ cid }: { cid: string | null }) {
-  const { snap } = useSnapshot();
   const toast = useToast();
   const [models, setModels] = useState<UseCase[] | null>(null);
   const [catalog, setCatalog] = useState<Provider[] | null>(null);
@@ -987,7 +990,10 @@ export function ModelsCard({ cid }: { cid: string | null }) {
     void loadModels();
   }, [loadModels]);
 
-  const who = actingHuman(snap);
+  // PUT settings/models is owner-or-manage_keys (model_setting_routes.py).
+  const auth = useGrantAuthority("manage_keys");
+  const who = auth.human;
+  const locked = !auth.can;
 
   const onProvider = (key: string, provider: string) => {
     const uc = (models || []).find((u) => u.key === key);
@@ -1033,13 +1039,12 @@ export function ModelsCard({ cid }: { cid: string | null }) {
   const doSaveModels = async () => {
     if (busy || !dirty) return;
     if (!who) {
-      // vanilla requireHuman("change models") — wording preserved verbatim
-      toast("Pick an acting human to change models the key", "warn");
+      toast(auth.reason || "Pick an acting human to change model settings", "warn");
       return;
     }
     setBusy(true);
     setSaveErr(false);
-    const overrides = buildOverrides(staged, models);
+    const overrides = buildOverrides(staged, models, catalog);
     try {
       const body = await sendJSON<{ use_cases?: UseCase[] }>(
         "PUT",
@@ -1057,39 +1062,27 @@ export function ModelsCard({ cid }: { cid: string | null }) {
         setStaged(st);
       } else {
         setSaveErr(true);
-        toast("Couldn't save model settings (200). Your edits are kept.", "danger");
+        toast("Couldn't save model settings — the server sent an unexpected answer. Your edits are kept.", "danger");
       }
     } catch (e) {
       setBusy(false);
       setSaveErr(true);
       // preserve staged edits — a transient failure never loses them
-      toast("Couldn't save model settings (" + statusOf(e) + "). Your edits are kept.", "danger");
+      toast("Couldn't save model settings — " + settingsErrText(e) + ". Your edits are kept.", "danger");
     }
   };
 
   if (mdlErr) {
     return (
-      <div className="sc-banner err">
-        <div className="bt">
-          <Icon name="x" cls="" />
-          <span>Couldn&#39;t load the model settings.</span>
-        </div>
-        <button className="btn sm ghost" id="mdlRetry" onClick={() => void loadModels()}>
-          Retry
-        </button>
-      </div>
+      <StatusLine
+        tone="err"
+        action={<Button size="sm" variant="ghost" icon="refresh" id="mdlRetry" onClick={() => void loadModels()}>Retry</Button>}
+      >
+        Couldn&#39;t load the model settings.
+      </StatusLine>
     );
   }
-  if (!models || !catalog) {
-    return (
-      <div className="sc-banner muted">
-        <div className="bt">
-          <Icon name="clock" cls="" />
-          <span>Loading models…</span>
-        </div>
-      </div>
-    );
-  }
+  if (!models || !catalog) return <StatusLine tone="muted">Loading models…</StatusLine>;
 
   return (
     <>
@@ -1103,28 +1096,36 @@ export function ModelsCard({ cid }: { cid: string | null }) {
             onProvider={onProvider}
             onModel={onModel}
             onReset={onReset}
+            locked={locked}
           />
         ))}
       </div>
-      <div className="set-savebar">
-        <button className="btn sm" id="mdlSave" disabled={!(dirty && !busy)} onClick={() => void doSaveModels()}>
-          <Icon name="check" cls="" />
+      {locked ? null : <div className="set-savebar">
+        <Button
+          size="sm"
+          variant={dirty ? "primary" : "secondary"}
+          icon="check"
+          id="mdlSave"
+          disabled={!(dirty && !busy)}
+          busy={busy}
+          onClick={() => void doSaveModels()}
+        >
           Save changes
-        </button>
+        </Button>
         {dirty && (
-          <button className="btn sm ghost" id="mdlDiscard" disabled={busy} onClick={onDiscard}>
+          <Button size="sm" variant="ghost" id="mdlDiscard" disabled={busy} onClick={onDiscard}>
             Discard
-          </button>
+          </Button>
         )}
         {saveErr ? (
           <span className="set-err">Couldn&#39;t save — retry (your edits are kept).</span>
         ) : !dirty ? (
           <span className="saved">
             <Icon name="check" cls="" />
-            all saved
+            All saved
           </span>
         ) : null}
-      </div>
+      </div>}
     </>
   );
 }
@@ -1157,7 +1158,7 @@ export interface PairingPayload {
 export function PairingCard({ cid }: { cid: string | null }) {
   const { snap } = useSnapshot();
   const [data, setData] = useState<PairingPayload | null>(null);
-  const [warn, setWarn] = useState<PairingWarning | null>(null);
+  const [warn, setWarn] = useState<PairingErrorView | null>(null);
   const [loading, setLoading] = useState(true);
 
   const who = actingHuman(snap);
@@ -1178,13 +1179,12 @@ export function PairingCard({ cid }: { cid: string | null }) {
         /* non-JSON error body */
       }
       if (!r.ok) {
+        // DP-ERR-1: the reachability warning ONLY for the structured 409
+        // {reachable:false}; any other failure gets fixed, friendly copy by
+        // status (the shared PairingModal mapping), raw text behind Details.
         const detail = (body as { detail?: PairingWarning | string } | null)?.detail;
         setData(null);
-        setWarn(
-          typeof detail === "string"
-            ? { message: detail }
-            : detail || { message: "Pairing failed (" + r.status + ")." },
-        );
+        setWarn(pairingErrorView(r.status, detail));
         setLoading(false);
         return;
       }
@@ -1192,7 +1192,7 @@ export function PairingCard({ cid }: { cid: string | null }) {
       setLoading(false);
     } catch (e) {
       setData(null);
-      setWarn({ message: "Could not reach the local pairing endpoint: " + (e as Error).message });
+      setWarn(pairingErrorView(null, null, (e as Error).message));
       setLoading(false);
     }
   }, [cid, humanId]);
@@ -1201,28 +1201,33 @@ export function PairingCard({ cid }: { cid: string | null }) {
     void load();
   }, [load]);
 
-  if (loading) {
-    return (
-      <div className="pair-loading">
-        <Icon name="clock" cls="" />
-        <span>Preparing pairing code…</span>
-      </div>
-    );
-  }
+  if (loading) return <StatusLine tone="muted">Preparing pairing code…</StatusLine>;
 
   if (warn) {
     return (
-      <div className="pair-warning">
-        <div className="pair-warn-title">
-          <Icon name="bell" cls="" />
-          <span>{warn.title || "Phones can't reach this Orcha yet"}</span>
-        </div>
-        <p>{warn.message || "The server could not produce a phone-reachable network address."}</p>
+      <div className="pair-warning v2-pair" role="alert">
+        <StatusLine tone="warn">
+          <b>{warn.title}</b>
+        </StatusLine>
+        <p className="set-note">{warn.message}</p>
         {warn.remedy && <div className="pair-remedy">{warn.remedy}</div>}
-        <p className="pair-foot">
-          Both devices must be on the same Wi-Fi. Some VPNs and corporate networks block phone-to-laptop
-          traffic.
-        </p>
+        {warn.wifiHint && (
+          <p className="set-note">
+            Both devices must be on the same Wi-Fi. Some VPNs and corporate networks block phone-to-laptop
+            traffic.
+          </p>
+        )}
+        {warn.details ? (
+          <details className="pair-details">
+            <summary>Details</summary>
+            <code>{warn.details}</code>
+          </details>
+        ) : null}
+        {warn.retry ? (
+          <div className="sc-acts">
+            <Button size="sm" variant="secondary" icon="refresh" onClick={() => void load()}>{warn.retryLabel ?? "Try again"}</Button>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1231,113 +1236,20 @@ export function PairingCard({ cid }: { cid: string | null }) {
 
   const human = data.humanAgentAlias || "selected human";
   return (
-    <div className="pair-card-body pair-grid">
+    <div className="pair-card-body pair-grid v2-pair">
       <div className="pair-qr-wrap">
-        <div className="pair-qr" aria-label="Orcha phone pairing QR code" dangerouslySetInnerHTML={{ __html: data.qrSvg || "" }} />
+        <div className="pair-qr" role="img" aria-label="Orcha phone pairing QR code" dangerouslySetInnerHTML={{ __html: data.qrSvg || "" }} />
         <div className="pair-url mono">{data.baseUrl || ""}</div>
       </div>
-      <div className="pair-meta">
-        <div>
-          <div className="pair-label">Pairing as</div>
-          <div className="pair-value">{human} (human)</div>
-        </div>
-        <div>
-          <div className="pair-label">Manual code</div>
-          <div className="pair-code mono">{data.shortCode || ""}</div>
-        </div>
-        <div className="pair-foot">
-          Your phone talks directly to this computer on your network. Nothing goes through the cloud.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ====================================================================== *
- *  Appearance: portal design (skin) picker                               *
- *  Browser-local (localStorage "orcha:skin"), no API — mirrors the theme *
- *  toggle's contract. "classic" = the shipped teal look (no attribute);   *
- *  "swiss" = the sharp indigo direction, applied as data-skin on <html>.  *
- *  index.html's pre-paint <head> script reads the same key, so the pick   *
- *  sticks across the whole portal with no flash.                          *
- * ====================================================================== */
-export interface Skin {
-  id: "classic" | "swiss";
-  name: string;
-  desc: string;
-  sw: string[];
-}
-export const SKINS: Skin[] = [
-  {
-    id: "classic",
-    name: "Classic",
-    desc: "Teal accent, rounded corners, soft shadows — the original Orcha look.",
-    sw: ["#111620", "#1fc7cd", "#f2a83c", "#e8edf6"],
-  },
-  {
-    id: "swiss",
-    name: "Swiss",
-    desc: "Electric indigo, sharp corners, mono status chips — dense engineering grid.",
-    sw: ["#151517", "#5a72ff", "#ff7a52", "#f2f2ee"],
-  },
-];
-
-export function currentSkin(): string {
-  try {
-    const s = localStorage.getItem("orcha:skin");
-    return SKINS.some((k) => k.id === s) ? (s as string) : "classic";
-  } catch {
-    return "classic";
-  }
-}
-
-export function applySkin(id: string): void {
-  const d = document.documentElement;
-  if (id === "classic") d.removeAttribute("data-skin");
-  else d.setAttribute("data-skin", id);
-  try {
-    localStorage.setItem("orcha:skin", id);
-  } catch {
-    /* private mode */
-  }
-}
-
-export function AppearanceCard() {
-  const toast = useToast();
-  const [skin, setSkin] = useState(() => currentSkin());
-
-  const pick = (id: string) => {
-    if (id === skin) return;
-    applySkin(id);
-    setSkin(id);
-    toast("Design · " + (SKINS.find((k) => k.id === id) || {}).name, "ok");
-  };
-
-  return (
-    <div className="skin-grid" id="skinGrid">
-      {SKINS.map((k) => {
-        const on = k.id === skin;
-        return (
-          <button
-            key={k.id}
-            type="button"
-            className={"skin-tile" + (on ? " on" : "")}
-            data-skin={k.id}
-            onClick={() => pick(k.id)}
-          >
-            <div className="sw">
-              {k.sw.map((c, i) => (
-                <i key={i} style={{ background: c }} />
-              ))}
-            </div>
-            <div className="nm">
-              {k.name}
-              {on && <Icon name="check" cls="" />}
-            </div>
-            <div className="ds">{k.desc}</div>
-          </button>
-        );
-      })}
+      <dl className="set-facts pair-meta">
+        <dt>Pairing as</dt>
+        <dd className="pair-value">{human} (human)</dd>
+        <dt>Manual code</dt>
+        <dd><span className="pair-code mono">{data.shortCode || ""}</span></dd>
+      </dl>
+      <p className="set-note pair-foot">
+        Your phone talks directly to this computer on your network. Nothing goes through the cloud.
+      </p>
     </div>
   );
 }
@@ -1351,14 +1263,19 @@ export function WorktreeRoutingCard({ cid }: { cid: string | null }) {
   const [busy, setBusy] = useState(false);
   const persisted = !!snap?.container?.worktrees_disabled;
   const [disabled, setDisabled] = useState(persisted);
-  const who = actingHuman(snap);
+  const [confirmOff, setConfirmOff] = useState(false);
+  // EX-12: POST …/worktrees is owner-or-manage_autonomy (container_control_routes.py);
+  // without it the switch is disabled with the reason, and never POSTs.
+  const auth = useGrantAuthority("manage_autonomy");
+  const who = auth.human;
+  const locked = !auth.can;
 
   useEffect(() => setDisabled(persisted), [persisted]);
 
   const toggle = async () => {
-    if (!cid || busy) return;
+    if (!cid || busy || locked) return;
     if (!who) {
-      toast("Pick an acting human to change worktree routing", "warn");
+      toast(auth.reason || "Pick an acting human to change worktree routing", "warn");
       return;
     }
     const next = !disabled;
@@ -1377,221 +1294,726 @@ export function WorktreeRoutingCard({ cid }: { cid: string | null }) {
         "ok",
       );
     } catch (e) {
-      toast("Couldn't change worktree routing (" + statusOf(e) + ").", "danger");
+      toast("Couldn't change worktree routing — " + settingsErrText(e) + ".", "danger");
     }
     setBusy(false);
   };
 
+  const isolated = !disabled;
+  const onSwitch = () => {
+    if (!cid || busy || locked) return;
+    // turning isolation OFF is the risky direction — confirm with the warning
+    if (isolated) setConfirmOff(true);
+    else void toggle();
+  };
+
   return (
-    <div className="wt-setting">
+    <div className="wt-setting set-rowi">
       <div className="wt-setting-main">
-        <div className="wt-setting-title">Disable worktrees</div>
-        <div className="wt-setting-desc">
-          Run every agent in this project&#39;s main checkout instead of creating or selecting an
-          isolated task or agent worktree. Turning this off restores normal worktree routing.
-        </div>
-        <div className="wt-setting-warn">
-          Concurrent agents may edit the same checkout and can overwrite or conflict with each
-          other&#39;s changes. Existing worktrees are not removed.
+        <div className="wt-setting-title set-rowi-l" id="wtTitle">Isolated worktrees</div>
+        <div className="wt-setting-desc set-rowi-d" id="wtDesc">
+          {isolated
+            ? "Each task or agent runs in its own Git worktree, so concurrent agents never share a checkout."
+            : "Off — every agent runs in this project’s main checkout. Concurrent agents may edit the same checkout and can overwrite or conflict with each other’s changes."}
         </div>
       </div>
-      <button
-        type="button"
-        className={"btn sm wt-switch" + (disabled ? " approve" : " ghost")}
-        role="switch"
-        aria-checked={disabled}
-        aria-label="Disable worktrees"
-        disabled={busy}
-        onClick={() => void toggle()}
-      >
-        {busy ? "Saving…" : disabled ? "On" : "Off"}
-      </button>
+      {(() => {
+        const sw = (
+          <button
+            type="button"
+            className={"set-switch" + (isolated ? " on" : "") + (locked ? " is-locked" : "")}
+            role="switch"
+            id="wtSwitch"
+            aria-checked={isolated}
+            aria-labelledby="wtTitle"
+            aria-describedby="wtDesc"
+            aria-busy={busy || undefined}
+            aria-disabled={locked || undefined}
+            disabled={busy}
+            onClick={onSwitch}
+          >
+            <span className="set-switch-knob" />
+          </button>
+        );
+        // aria-disabled (not disabled) keeps the switch focusable so the
+        // reason tooltip is reachable by keyboard too
+        return locked && auth.reason ? <Tooltip label={auth.reason} placement="left">{sw}</Tooltip> : sw;
+      })()}
+      {confirmOff && (
+        <Modal
+          title="Turn off isolated worktrees?"
+          danger
+          primary="Turn off"
+          desc="Every agent will run in this project's main checkout instead of an isolated task or agent worktree. Concurrent agents may edit the same checkout and can overwrite or conflict with each other's changes. Existing worktrees are not removed."
+          onPrimary={() => { setConfirmOff(false); void toggle(); }}
+          onClose={() => setConfirmOff(false)}
+        />
+      )}
     </div>
   );
 }
 
 /* ====================================================================== *
+ *  V2 sections                                                            *
+ * ====================================================================== */
+
+/**
+ * What to say while a section has no project data (pure, tested; SG-12 /
+ * EX-14): the snapshot failure named for what it is — an HTTP answer is not
+ * an outage — with Retry only where retrying can help.
+ */
+export function projectLoadState(error: string | null | undefined): { text: string; tone: "muted" | "warn" | "err"; retry: boolean } {
+  switch (snapshotErrorKind(error)) {
+    case "forbidden": return { text: "You're not a member of this project.", tone: "warn", retry: false };
+    case "not_found": return { text: "This project couldn't be found.", tone: "warn", retry: false };
+    case "server": return { text: "Couldn't load this project.", tone: "err", retry: true };
+    case "network": return { text: "Can't reach Embodent.", tone: "err", retry: true };
+    default: return { text: "Loading project…", tone: "muted", retry: false };
+  }
+}
+
+function ProjectLoadLine({ id }: { id?: string }) {
+  const { error, refresh } = useSnapshot();
+  const st = projectLoadState(error);
+  return (
+    <div className="set-pad" id={id}>
+      <StatusLine
+        tone={st.tone}
+        action={st.retry ? <Button size="sm" variant="ghost" icon="refresh" onClick={() => void refresh()}>Retry</Button> : null}
+      >
+        {st.text}
+      </StatusLine>
+    </div>
+  );
+}
+
+/** General: what this project is (read-only facts) + the per-user default-project star. */
+function GeneralSection() {
+  const { snap, cid, multi } = useSnapshot();
+  const c = snap?.container ?? null;
+  const [prefsOn, setPrefsOn] = useState(prefs.active());
+  const [defCid, setDefCid] = useState<string | null>(prefs.defaultCid());
+  useEffect(() => {
+    let alive = true;
+    void prefs.sync().then(() => {
+      if (!alive) return;
+      setPrefsOn(prefs.active());
+      setDefCid(prefs.defaultCid());
+    });
+    return () => { alive = false; };
+  }, []);
+  const isDefault = cid != null && defCid != null && String(defCid) === String(cid);
+  const toggleDefault = () => {
+    const next = isDefault ? null : cid;
+    prefs.setDefaultCid(next);
+    setDefCid(next);
+  };
+  return (
+    <SettingsGroup settab={GENERAL_TAB} title="Details" flush>
+      {c ? (
+        <SettingRows>
+          <SettingRow label="Name"><span className="set-val">{c.name || "—"}</span></SettingRow>
+          <ProjectIconRow cid={c.id} name={c.name || "this project"} />
+          <ObjectiveRow cid={c.id} objective={c.description} />
+          {/* SG-06: a PROJECT lifecycle status (Active / Paused …), never the task glyph set */}
+          <SettingRow label="Status">
+            <Chip size="sm" dot={projectStatusMeta(c.status).tone} className="set-proj-status" data-status={c.status || "active"}>
+              {projectStatusMeta(c.status).label}
+            </Chip>
+          </SettingRow>
+          <SettingRow label="Project ID"><span className="set-val mono" title={c.id}>{c.id}</span></SettingRow>
+          {prefsOn && multi && cid ? (
+            <SettingRow label="Default project" desc="Your default opens first when you sign in. Saved to your account.">
+              <Button size="sm" variant={isDefault ? "secondary" : "ghost"} aria-pressed={isDefault} onClick={toggleDefault} id="setDefaultProject">
+                {isDefault ? "Default project ✓" : "Make this my default project"}
+              </Button>
+            </SettingRow>
+          ) : null}
+        </SettingRows>
+      ) : (
+        <ProjectLoadLine id="generalLoad" />
+      )}
+    </SettingsGroup>
+  );
+}
+
+/**
+ * D14 — the project icon (emoji, or an app glyph + palette colour; unset = the
+ * neutral cube, never initials). Same store and picker as the sidebar ⋯ menu's
+ * "Change icon…": the canonical per-project `containers.icon` column
+ * (PUT /api/containers/{cid}/icon via cloud/projects/projectIcons.ts
+ * saveProjectIconResult), shared by portal and desktop.
+ */
+export function ProjectIconRow({ cid, name }: { cid: string; name: string }) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const icon = useProjectIcon(cid);
+  const current = icon ? icon.value : "default";
+  // SG-09: PUT /icon is owner-or-manage_autonomy — without it the button is
+  // disabled (aria-disabled, still focusable) with the reason; never a picker
+  // whose every pick is refused and snaps back.
+  const auth = useProjectIconAuthority(cid);
+  const denied = !auth.pending && !auth.canEdit ? auth.reason || "You can't change this project's icon" : null;
+  const btn = (
+    <button
+      ref={ref}
+      type="button"
+      id="setProjectIcon"
+      className={"v2-btn v2-btn-ghost v2-btn-sm set-icon-btn" + (denied ? " is-locked" : "")}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      aria-disabled={denied ? true : undefined}
+      aria-label={"Change icon for " + name + " (current: " + current + ")"}
+      onClick={() => { if (!denied) setOpen((o) => !o); }}
+    >
+      <ProjectIcon cid={cid} size={18} />
+      <span className="v2-btn-label">Change icon…</span>
+    </button>
+  );
+  return (
+    <SettingRow label="Icon" desc="Shown beside the project in the sidebar and project lists." id="setProjectIconL">
+      <span className="set-icon">
+        {denied ? <Tooltip label={denied} placement="left">{btn}</Tooltip> : btn}
+      </span>
+      <ProjectIconPicker cid={cid} name={name} anchor={ref} open={open} onClose={() => setOpen(false)} placement="bottom-end" />
+    </SettingRow>
+  );
+}
+
+/** Execution: worktree routing (P-05), the agent limit, + where the notifier / autonomy controls live. */
+function ExecutionSection() {
+  const { snap, cid } = useSnapshot();
+  const chrome = useChrome();
+  const c = snap?.container ?? null;
+  const level = autLevel(snap);
+  // EX-14: with no project data there is nothing to show or change — one
+  // honest line (+ Retry where it can help), no switch bound to a dead POST.
+  if (!c) {
+    return (
+      <SettingsGroup settab="execution" title="Notifier and autonomy" flush>
+        <ProjectLoadLine id="execLoad" />
+      </SettingsGroup>
+    );
+  }
+  return (
+    <>
+      <SettingsGroup
+        settab="execution" title="Notifier and autonomy" flush
+        help="The notifier wakes agents; autonomy decides how far they may go before a human decides. They are independent: pausing wakes never changes autonomy, and never stops runs already in progress."
+        action={chrome ? (
+          <Tooltip label="Change them from the header's Execution controls, with their confirmations." placement="top">
+            <Button size="sm" variant="secondary" id="setOpenExec" onClick={() => chrome.setExecOpen(true)}>Change…</Button>
+          </Tooltip>
+        ) : null}
+      >
+        {(
+          <SettingRows id="execFacts">
+            {/* The OBSERVED wake service, worded exactly like the header chip
+                (execChipState — the shared notifierState() mapping), so the
+                two can never disagree; the line under it names the config. */}
+            <SettingRow label="Notifier" desc={wakesObserved(c)}>
+              <span className="set-val" id="setNotifierState">{execChipState(c)}</span>
+            </SettingRow>
+            <SettingRow label="Autonomy">
+              <span className="set-val">{autonomyLabel(level).label}</span>
+            </SettingRow>
+          </SettingRows>
+        )}
+      </SettingsGroup>
+      <SettingsGroup
+        settab="execution" title="Agent workspace" flush
+      >
+        <WorktreeRoutingCard cid={cid} />
+        {/* mig 056: the agent limit (PUT …/limits, owner-or-manage_agents) */}
+        <SettingRows id="execLimits">
+          <AgentLimitRow cid={cid} />
+        </SettingRows>
+      </SettingsGroup>
+      {/* mig 067: agent worktree clean-up (GET/PUT …/agent-worktrees, owner-or-manage_autonomy) */}
+      <AgentWorktreesSection cid={cid} />
+      {/* mig 057: finished work follows the org chart (PUT …/review-routing, owner-or-assign_reviewers) */}
+      {c.review_route != null ? (
+        <SettingsGroup
+          settab="execution" title="Review" flush
+          help="Who verifies an agent's finished work. An agent's “done” is never the verification — a person always verifies; an AI manager's review is a recommendation."
+        >
+          <SettingRows id="execReview">
+            <ReviewRoutingRow cid={cid} />
+          </SettingRows>
+        </SettingsGroup>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The ONE reason line for Models & providers when this viewer can't change
+ * keys or models (viewer, member without manage_keys, non-member, offline):
+ * the cards themselves go read-only silently, so the reason is said once
+ * (D12), not per card.
+ */
+function KeysLockNote() {
+  const auth = useGrantAuthority("manage_keys");
+  if (auth.can || auth.pending || !auth.reason) return null;
+  return (
+    <div className="set-lock-note" id="keysLocked" data-settab="provider-keys">
+      <StatusLine tone="muted" icon="shield">View-only — {auth.reason}</StatusLine>
+    </div>
+  );
+}
+
+/**
+ * Providers (image-33 rows): Anthropic (llm-key route) then every other
+ * AVAILABLE catalog provider (provider-keys routes), each a collapsible row
+ * whose panel is the unchanged key body (field · Save/Replace · Test · Remove).
+ * Catalog providers that are stubbed (available:false) are listed under
+ * "Coming soon" without controls. "Default" marks the provider the shipped
+ * use-case defaults run on (GET settings/models default_provider) — reported,
+ * not settable (there is no settable default provider).
+ */
+/** What a distribution's own non-Anthropic key rows need from the group (cloud: ProviderKeysSection). */
+export interface ProviderRowsSlot {
+  /** bump to re-fetch (the group's Refresh) */
+  reload: number;
+  /** report the loaded key states up (the group's "N connected" count) */
+  onKeys: (keys: ProviderKeyState[] | null) => void;
+  /** providers that are the shipped default for Orcha's helpers */
+  defaults: Set<string>;
+}
+export type ProviderKeyState = Pick<ProviderKeyVM, "provider" | "configured">;
+
+export function ProvidersGroup({
+  cid, renderOthers,
+}: {
+  cid: string | null;
+  /** replaces the open ProviderKeysCard rows (same ProviderRow look, distribution-owned wiring) */
+  renderOthers?: (slot: ProviderRowsSlot) => ReactNode;
+}) {
+  const [reload, setReload] = useState(0);
+  const [anth, setAnth] = useState<KeyVM | null>(null);
+  const [others, setOthers] = useState<ProviderKeyState[] | null>(null);
+  const [defaults, setDefaults] = useState<Set<string>>(() => new Set());
+  const [soon, setSoon] = useState<Provider[]>([]);
+
+  useEffect(() => {
+    if (!cid) return;
+    let live = true;
+    const base = "/api/containers/" + encodeURIComponent(cid) + "/settings/";
+    getJSON<{ use_cases?: UseCase[] }>(base + "models")
+      .then((m) => { if (live) setDefaults(new Set((m?.use_cases || []).map((u) => u.default_provider).filter(Boolean))); })
+      .catch(() => { if (live) setDefaults(new Set()); });
+    getJSON<{ providers?: Provider[] }>(base + "providers")
+      .then((p) => { if (live) setSoon((p?.providers || []).filter((x) => x && !x.available)); })
+      .catch(() => { if (live) setSoon([]); });
+    return () => { live = false; };
+  }, [cid, reload]);
+
+  const onAnth = useCallback((vm: KeyVM | null) => setAnth(vm), []);
+  const onOthers = useCallback((ks: ProviderKeyState[] | null) => setOthers(ks), []);
+  const connected = (anth?.configured ? 1 : 0) + (others || []).filter((k) => k.configured).length;
+  const known = anth != null && others != null;
+  // a provider that already has a key row is never also listed as "coming soon"
+  const soonShown = soon.filter((p) => p.id !== "anthropic" && !(others || []).some((k) => k.provider === p.id));
+
+  return (
+    <SettingsGroup
+      settab="provider-keys" title="Providers" flush className="mp-group"
+      lead="API keys for Embodent's own helpers."
+      help="Keys are stored encrypted on this project. ORCHA_LLM_API_KEY in the environment takes precedence over any stored key."
+      action={
+        <>
+          {known ? <Chip size="sm">{connected + " connected"}</Chip> : null}
+          <Button size="sm" variant="ghost" icon="refresh" id="providersRefresh" onClick={() => setReload((r) => r + 1)}>
+            Refresh
+          </Button>
+        </>
+      }
+    >
+      <div className="mp-list" id="providerKeys">
+        <div id="keyCard" className="mp-contents">
+          <KeyCard cid={cid} asRow isDefault={defaults.has("anthropic")} reload={reload} onState={onAnth} />
+        </div>
+        {renderOthers
+          ? renderOthers({ reload, onKeys: onOthers, defaults })
+          : <ProviderKeysCard cid={cid} asRows reload={reload} onKeys={onOthers} defaults={defaults} />}
+      </div>
+      {soonShown.length ? (
+        <>
+          <div className="mp-subhead">
+            <span>Coming soon</span>
+            <Chip size="sm">{soonShown.length + (soonShown.length === 1 ? " provider" : " providers")}</Chip>
+          </div>
+          <div className="mp-list" id="providersSoon">
+            {soonShown.map((p) => (
+              <ProviderRow
+                key={p.id}
+                id={p.id}
+                brand={p.id}
+                name={p.name}
+                dimmed
+                detail={<span className="mp-detail-t">Not supported yet</span>}
+                docsHref={PROVIDER_DOCS[p.id] || null}
+              />
+            ))}
+          </div>
+        </>
+      ) : null}
+    </SettingsGroup>
+  );
+}
+
+function ModelsGroup({ cid }: { cid: string | null }) {
+  return (
+    <SettingsGroup
+      settab="provider-keys" title="Universal model selection" flush
+      lead="The model behind each of Embodent's own helpers."
+      help="Embodent's direct-API helpers (the universal client) — separate from each agent's own model, which is set per agent."
+    >
+      <div id="modelRows"><ModelsCard cid={cid} /></div>
+    </SettingsGroup>
+  );
+}
+
+function OpenPairingGroup({ cid }: { cid: string | null }) {
+  return (
+    <SettingsGroup settab="pairing" title="Phone pairing" lead="Scan the code with the Orcha mobile app on the same Wi-Fi.">
+      <div id="pairingCard"><PairingCard cid={cid} /></div>
+    </SettingsGroup>
+  );
+}
+
+/** The repo this project is bound to (snapshot container.github_repo), or "Not connected". */
+export function RepoLinkGroup() {
+  const { snap } = useSnapshot();
+  const repo = (snap?.container as { github_repo?: string | null } | undefined)?.github_repo || null;
+  const known = !!snap?.container;
+  return (
+    <SettingsGroup settab="github-access" title="Repository" flush>
+      <SettingRows>
+        <SettingRow
+          label="Connected repository"
+          desc={known ? (
+            repo ? (
+              <span className="set-repo" id="setRepo" title={repo}>
+                <Icon name="git" cls="" />
+                <span className="set-repo-t">{repo}</span>
+              </span>
+            ) : <span id="setRepo">Not connected</span>
+          ) : null}
+        >
+          <ButtonLink size="sm" variant="secondary" href="/github" iconRight="arrow">
+            {known && !repo ? "Connect on GitHub" : "Open GitHub"}
+          </ButtonLink>
+        </SettingRow>
+      </SettingRows>
+    </SettingsGroup>
+  );
+}
+
+function DesktopSignInGroup() {
+  return (
+    <SettingsGroup settab="pairing" title="Desktop app" flush>
+      <SettingRows>
+        <SettingRow
+          label="Sign-in"
+          desc="Opens a one-time sign-in page for the app."
+        >
+          <ButtonLink size="sm" variant="secondary" href="/auth/device?client=desktop" iconRight="arrow">Sign in the desktop app…</ButtonLink>
+        </SettingRow>
+      </SettingRows>
+    </SettingsGroup>
+  );
+}
+
+/**
+ * DEV-SELFHOST: device sign-in (the desktop app row + Signed-in devices) only
+ * works behind GitHub sign-in — device_token_routes refuses without a verified
+ * identity. On a self-hosted (trust-off) portal both are replaced by one muted
+ * line instead of a button that 403s and an error card.
+ */
+function DeviceSignInGroups({ cid }: { cid: string | null }) {
+  const [trusted, setTrusted] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    // an identity timeout has no verdict: show the groups (their own calls
+    // then say whether device sign-in is available)
+    fetchMe(cid || "").then((m) => { if (alive) setTrusted(!!m.trusted); }, () => { if (alive) setTrusted(true); });
+    return () => { alive = false; };
+  }, [cid]);
+  // D9: signed in with GitHub but a member of no project — one plain line, and
+  // no "Sign in the desktop app" offer that can't work for them.
+  const [notMember, setNotMember] = useState(false);
+  const onNotMember = useCallback(() => setNotMember(true), []);
+  if (trusted == null) return null;
+  if (trusted && notMember) {
+    return (
+      <SettingsGroup settab="pairing" title="Desktop app & signed-in devices">
+        <p className="set-note" id="deviceNotMember">{DEVICE_NOT_A_MEMBER}</p>
+      </SettingsGroup>
+    );
+  }
+  if (!trusted) {
+    return (
+      <SettingsGroup settab="pairing" title="Desktop app & signed-in devices">
+        <p className="set-note" id="deviceSignInOff">{DEVICE_SIGNIN_UNAVAILABLE}</p>
+      </SettingsGroup>
+    );
+  }
+  return (
+    <>
+      <DesktopSignInGroup />
+      <DeviceTokensSection onNotMember={onNotMember} />
+    </>
+  );
+}
+
+/** One V2 settings section: canonical key, title, one-line purpose, content. */
+export interface SettingsGroup { key: string; title: string; sub: string; render: () => ReactNode }
+
+/** Section-list glyph + cluster (Linear settings: a short grouped list). */
+const SECTION_META: Record<string, { icon: string; cluster: string }> = {
+  general: { icon: "folder", cluster: "Project" },
+  execution: { icon: "play", cluster: "Project" },
+  "provider-keys": { icon: "spark", cluster: "Project" },
+  "github-access": { icon: "git", cluster: "Project" },
+  members: { icon: "agents", cluster: "Access" },
+  pairing: { icon: "phone", cluster: "Access" },
+  notifications: { icon: "bell", cluster: "Personal" },
+  voice: { icon: "mic", cluster: "Personal" },
+  interface: { icon: "sidebar", cluster: "Personal" },
+};
+export function sectionMeta(key: string): { icon: string; cluster: string } {
+  return SECTION_META[key] || { icon: "more", cluster: "More" };
+}
+/** The section list split into its clusters, in first-seen order. */
+export function clusterSections<T extends { key: string }>(groups: T[]): { cluster: string; items: T[] }[] {
+  const out: { cluster: string; items: T[] }[] = [];
+  groups.forEach((g) => {
+    const c = sectionMeta(g.key).cluster;
+    const hit = out.find((x) => x.cluster === c);
+    if (hit) hit.items.push(g);
+    else out.push({ cluster: c, items: [g] });
+  });
+  return out;
+}
+
+const KNOWN_EXT = new Set(["provider-keys", "github-access", "members", "pairing", "appearance"]);
+
+/**
+ * Build the V2 section list from the open cards + the registered extension
+ * sections. Pure except for reading `extensions` — exported for tests.
+ */
+export function buildSettingsGroups(cid: string | null, ext = extensions): SettingsGroup[] {
+  const sections: SettingsSection[] = ext.settingsSections ?? [];
+  const byKey = (k: string) => sections.find((s) => s.key === k) || null;
+  const keyOn = ext.settingsGeneral?.key ?? true;
+  const modelsOn = ext.settingsGeneral?.models ?? true;
+  const hasRoute = (p: string) => (ext.routes || []).some((r) => r.path === p);
+  const el = (s: SettingsSection | null) => (s ? <s.element /> : null);
+  const groups: SettingsGroup[] = [];
+
+  groups.push({ key: GENERAL_TAB, title: "General", sub: "What this project is.", render: () => <><GeneralSection />{cid ? <ProjectModeSection cid={cid} /> : null}<PortabilitySection /></> });
+  groups.push({ key: "execution", title: "Execution", sub: "How and where agents run.", render: () => <ExecutionSection /> });
+
+  const pk = byKey("provider-keys");
+  groups.push({
+    key: "provider-keys", title: "Models & providers",
+    sub: "Agent runtimes, provider API keys and the models behind Embodent's own helpers.",
+    render: () => (
+      <>
+        {(keyOn || modelsOn) && <KeysLockNote />}
+        {/* the open layout; a distribution that brings its own key section (cloud: keyOn false) keeps its arrangement */}
+        {keyOn && <RuntimesGroup />}
+        {keyOn && <ProvidersGroup cid={cid} />}
+        {el(pk)}
+        {modelsOn && <ModelsGroup cid={cid} />}
+      </>
+    ),
+  });
+
+  const gh = byKey("github-access");
+  const hasGh = !!gh || hasRoute("/github");
+  // Integrations: GitHub (when this distribution has it) + the Verdikt QA handoff (always)
+  groups.push({
+    key: "github-access", title: "Integrations",
+    sub: hasGh ? "GitHub access, the connected repository and Verdikt QA." : "Verdikt QA for finished work.",
+    render: () => <>{el(gh)}{hasRoute("/github") && <RepoLinkGroup />}{cid ? <VerdiktSettingsSection cid={cid} /> : null}</>,
+  });
+
+  const mem = byKey("members");
+  if (mem) {
+    groups.push({ key: "members", title: "Members & access", sub: "Who can see and act in this project.", render: () => el(mem) });
+  }
+
+  const pair = byKey("pairing");
+  groups.push({
+    key: "pairing", title: "Devices & pairing",
+    sub: hasRoute("/auth/device")
+      ? "Pair a phone, sign in the desktop app, and manage the devices signed in as you."
+      : "Pair a phone with this project.",
+    render: () => (
+      <>
+        {pair ? el(pair) : <OpenPairingGroup cid={cid} />}
+        {hasRoute("/auth/device") && <DeviceSignInGroups cid={cid} />}
+      </>
+    ),
+  });
+
+  groups.push({
+    key: "notifications", title: "Notifications",
+    sub: "What reaches you, and where. Saved instantly, just for you.",
+    render: () => <NotificationsSection cid={cid} />,
+  });
+
+  groups.push({
+    key: "voice", title: "Voice",
+    sub: "Dictate into any text field: engine, language, clean-up, shortcut and microphone.",
+    render: () => <VoiceSection cid={cid} />,
+  });
+
+  const app = byKey("appearance");
+  groups.push({ key: "interface", title: "Interface", sub: "Theme, sidebar and keyboard.", render: () => (app ? el(app) : <InterfaceSection />) });
+
+  // any other downstream section keeps its own place, after the V2 groups
+  sections.filter((s) => !KNOWN_EXT.has(s.key)).forEach((s) => {
+    groups.push({ key: s.key, title: s.title, sub: "", render: () => el(s) });
+  });
+  return groups;
+}
+
+/* ====================================================================== *
  *  The page                                                               *
  * ====================================================================== */
-export function SettingsPage() {
-  const { snap, cid } = useSnapshot();
+/** Sections whose cards read project-scoped routes: for someone who isn't a
+ *  member (the snapshot itself answered 403) each card would fail on its own
+ *  with a Retry that can't help — say "not a member" once instead (S1). */
+const MEMBER_ONLY_SECTIONS = new Set(["provider-keys", "github-access", "members"]);
 
-  // Tabs appear ONLY when a downstream registered settings sections; open
-  // Orcha (no sections) keeps today's untabbed layout with zero visual change.
-  const sections = extensions.settingsSections ?? [];
-  const tabbed = sections.length > 0;
-  const names = [GENERAL_TAB, ...sections.map((s) => s.key)];
+export function SettingsPage() {
+  const { snap, cid, error } = useSnapshot();
+  const groups = useMemo(() => buildSettingsGroups(cid), [cid]);
+  const names = groups.map((g) => g.key);
   const namesKey = names.join("\u0000");
 
   const [tab, setTab] = useState(() => tabFromHash(window.location.hash, names));
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const pillsRef = useRef<HTMLElement | null>(null);
 
-  // Vanilla contract: #tab=<name> re-selects on hashchange (back/forward,
-  // manual edit) without writing the hash back.
+  // #tab=<name> (or an alias) re-selects on hashchange (back/forward, manual
+  // edit, a deep link from the sidebar/palette) without writing the hash back.
   useEffect(() => {
-    if (!tabbed) return;
     const list = namesKey.split("\u0000");
-    const onHash = () => setTab(tabFromHash(window.location.hash, list));
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, [tabbed, namesKey]);
+    const sync = () => setTab(tabFromHash(window.location.hash, list));
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, [namesKey]);
+  // Router navigations (palette "Settings: X", desktop host "Pair phone")
+  // use history.pushState, which never fires hashchange: follow the router
+  // location too. Keyed on location.key so re-navigating to the hash the
+  // router last saw still re-selects after select() rewrote it locally.
+  const location = useLocation();
+  useEffect(() => {
+    setTab(tabFromHash(location.hash || window.location.hash, namesKey.split("\u0000")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key, location.hash, namesKey]);
 
-  // Clicking a pill selects it and rewrites the hash via replaceState (no
-  // history spam) — the vanilla module's exact idiom, fallback included.
+  // Selecting a section rewrites the hash via replaceState (no history spam);
+  // loading never writes the hash.
   const select = (name: string) => {
     setTab(name);
     try {
-      history.replaceState(null, "", "#tab=" + name);
+      history.replaceState(history.state, "", "#tab=" + name);
     } catch {
       window.location.hash = "tab=" + name;
     }
   };
 
-  const active = tabbed && names.indexOf(tab) !== -1 ? tab : GENERAL_TAB;
-  const activeSection = sections.find((s) => s.key === active);
+  const onNavKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const i = names.indexOf(active);
+    let j = -1;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") j = (i + 1) % names.length;
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") j = (i - 1 + names.length) % names.length;
+    else if (e.key === "Home") j = 0;
+    else if (e.key === "End") j = names.length - 1;
+    if (j < 0) return;
+    e.preventDefault();
+    select(names[j]);
+    requestAnimationFrame(() => navRef.current?.querySelector<HTMLElement>(`[data-tab="${names[j]}"]`)?.focus());
+  };
+
+  const active = names.indexOf(tab) !== -1 ? tab : GENERAL_TAB;
+  const group = groups.find((g) => g.key === active) || groups[0];
+
+  // keep the active mobile pill in view (never an off-screen selection)
+  useEffect(() => {
+    const el = pillsRef.current?.querySelector<HTMLElement>(`[data-pill="${active}"]`);
+    if (el && typeof el.scrollIntoView === "function" && pillsRef.current && pillsRef.current.scrollWidth > pillsRef.current.clientWidth) {
+      el.scrollIntoView({ block: "nearest", inline: "center" });
+    }
+  }, [active]);
 
   return (
     <Shell page="settings" title="Settings" ctx={snap?.container?.name}>
-      <style>{SETTINGS_CSS}</style>
-      <div className="set-wrap" {...(tabbed ? { "data-tab": active } : {})}>
-        <div className="set-intro">
-          <h1>Settings</h1>
-          <p>
-            Project-level configuration for agent execution, model providers, connected devices, and
-            this portal&#39;s appearance.
-          </p>
+      <div className="set-layout">
+        {/* narrow widths: a horizontally scrolling pill row (like the project
+            tabs), edge-faded, with the active pill kept in view */}
+        <nav className="set-nav-pills" id="setSectionPills" aria-label="Settings section" ref={pillsRef}>
+          {groups.map((g) => (
+            <button
+              key={g.key}
+              type="button"
+              className={"set-pill" + (g.key === active ? " on" : "")}
+              data-pill={g.key}
+              aria-current={g.key === active ? "page" : undefined}
+              onClick={() => select(g.key)}
+            >
+              {g.title}
+            </button>
+          ))}
+        </nav>
+        <div
+          className="set-nav" id="setTabs" role="tablist" aria-label="Settings sections"
+          aria-orientation="vertical" ref={navRef} onKeyDown={onNavKey}
+        >
+          {clusterSections(groups).map(({ cluster, items }) => (
+            <div className="set-nav-group" key={cluster} role="presentation">
+              <div className="set-nav-h" aria-hidden="true">{cluster}</div>
+              {items.map((g) => {
+            const on = g.key === active;
+            return (
+              <button
+                key={g.key}
+                type="button"
+                className={"set-nav-item" + (on ? " on" : "")}
+                role="tab"
+                id={"settab-" + g.key}
+                aria-selected={on}
+                aria-controls="setPanel"
+                tabIndex={on ? 0 : -1}
+                data-tab={g.key}
+                onClick={() => select(g.key)}
+              >
+                <Icon name={sectionMeta(g.key).icon} cls="set-nav-ico" />
+                <span className="set-nav-t">{g.title}</span>
+              </button>
+            );
+              })}
+            </div>
+          ))}
         </div>
-
-        {tabbed && (
-          /* Vanilla tab strip verbatim (settings.html #setTabs): the topbar
-             .aut/.seg pill idiom, so cloud's settings.css + the open styles.css
-             style it with no new tokens. First tab is always General. */
-          <nav className="aut set-tabs" id="setTabs" role="tablist" aria-label="Settings sections">
-            {[{ key: GENERAL_TAB, title: "General" }, ...sections].map((t) => {
-              const on = t.key === active;
-              return (
-                <span
-                  key={t.key}
-                  className={"seg" + (on ? " on" : "")}
-                  role="tab"
-                  tabIndex={0}
-                  aria-selected={on}
-                  data-tab={t.key}
-                  onClick={() => select(t.key)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      select(t.key);
-                    }
-                  }}
-                >
-                  {t.title}
-                </span>
-              );
-            })}
-          </nav>
-        )}
-
-        {active === GENERAL_TAB && (
-          <>
-        <div className="card set-card" data-settab={GENERAL_TAB}>
-          <div className="card-h">
-            <h2>Agent workspace</h2>
+        <div className="set-wrap" data-tab={active} role="tabpanel" id="setPanel" aria-labelledby={"settab-" + active}>
+          <div className="set-head">
+            <h1 className="set-title v2-t-display">{group.title}</h1>
+            {group.sub ? <p className="set-sub">{group.sub}</p> : null}
           </div>
-          <div className="card-b">
-            <div className="lead">
-              Choose whether agents work in isolated Git worktrees or share this project&#39;s main checkout.
-            </div>
-            <WorktreeRoutingCard cid={cid} />
-          </div>
+          {!snap?.container && snapshotErrorKind(error) === "forbidden" && MEMBER_ONLY_SECTIONS.has(group.key)
+            ? <ProjectLoadLine id="setNotMember" />
+            : !snap?.container && snapshotErrorKind(error) === "forbidden" && group.key === GENERAL_TAB
+              /* NEW-G6w: a non-member's General is the one not-a-member line only — no
+                 Work type / Template sections whose reads would 403 on their own. */
+              ? <GeneralSection />
+              : group.render()}
         </div>
-
-        {(extensions.settingsGeneral?.key ?? true) && (
-        <div className="card set-card" data-settab={GENERAL_TAB}>
-          <div className="card-h">
-            <h2>Anthropic API key</h2>
-          </div>
-          <div className="card-b">
-            <div className="lead">
-              Stored encrypted on this workspace and used for the universal client. The{" "}
-              <code>ORCHA_LLM_API_KEY</code> environment variable takes precedence — a key set here is used
-              only when no env key is present.
-            </div>
-            <div id="keyCard">
-              <KeyCard cid={cid} />
-            </div>
-          </div>
-        </div>
-        )}
-
-        {(extensions.settingsGeneral?.key ?? true) && (
-        <div className="card set-card" data-settab={GENERAL_TAB}>
-          <div className="card-h">
-            <h2>Provider API keys</h2>
-          </div>
-          <div className="card-b">
-            <div className="lead">
-              Stored encrypted on this workspace and used when a use-case below is set to that provider.
-              As above, <code>ORCHA_LLM_API_KEY</code> takes precedence when present.
-            </div>
-            <div id="providerKeys">
-              <ProviderKeysCard cid={cid} />
-            </div>
-          </div>
-        </div>
-        )}
-
-        {(extensions.settingsGeneral?.models ?? true) && (
-        <div className="card set-card" data-settab={GENERAL_TAB}>
-          <div className="card-h">
-            <h2>Universal model selection</h2>
-          </div>
-          <div className="card-b">
-            <div className="lead">
-              Pick which model powers each non-agent task. These are direct-API calls (the universal
-              client, #290), separate from each agent&#39;s own embodiment model. A use-case left on its
-              shipped default uses the model Orcha ships with.
-            </div>
-            <div id="modelRows">
-              <ModelsCard cid={cid} />
-            </div>
-          </div>
-        </div>
-        )}
-
-        {(extensions.settingsGeneral?.key ?? true) && (
-        <div className="card set-card" data-settab={GENERAL_TAB}>
-          <div className="card-h">
-            <h2>Phone pairing</h2>
-          </div>
-          <div className="card-b">
-            <div className="lead">
-              Pair the Orcha mobile app with this workspace on your local Wi-Fi network.
-            </div>
-            <div id="pairingCard">
-              <PairingCard cid={cid} />
-            </div>
-          </div>
-        </div>
-        )}
-
-        {(extensions.settingsGeneral?.key ?? true) && (
-        <div className="card set-card" data-settab={GENERAL_TAB}>
-          <div className="card-h">
-            <h2>Appearance</h2>
-          </div>
-          <div className="card-b">
-            <div className="lead">
-              How the portal looks in this browser — applies instantly, per device. Dark / light stays
-              on the theme toggle in the top bar; this picks the design language.
-            </div>
-            <AppearanceCard />
-          </div>
-        </div>
-        )}
-          </>
-        )}
-
-        {activeSection && <activeSection.element />}
       </div>
     </Shell>
   );

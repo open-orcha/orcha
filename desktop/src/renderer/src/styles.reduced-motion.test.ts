@@ -46,3 +46,14 @@ describe('styles.css — reduced motion', () => {
     expect(css).toMatch(/\.onb-check-pop\s*\{\s*\n\s*animation: none;\s*\n\s*opacity: 1;\s*\n\s*transform: scale\(1\);/)
   })
 })
+
+describe('styles.css — app frame never scrolls (sidebar clip)', () => {
+  it('html, body and #root clip overflow so nothing can scroll the host sideways', () => {
+    const block = css.match(/html,\s*body,\s*#root\s*\{([^}]*)\}/)
+    expect(block?.[1]).toMatch(/overflow:\s*hidden/)
+  })
+  it('the running-session spinner stops under reduced motion', () => {
+    const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    expect(reduced).toMatch(/\.orcha-spin\s*\{\s*animation:\s*none/)
+  })
+})

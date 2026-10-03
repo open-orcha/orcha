@@ -38,6 +38,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,6 +78,12 @@ import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.MonoStyle
 import io.openorcha.mobile.ui.theme.Orcha
+import androidx.compose.material3.CenterAlignedTopAppBar
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LEmptyState
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 
 /* =============================================================================
    Flow 09 — Agent detail (header, Now, Controls, persona, runs) + pickers.
@@ -97,6 +104,7 @@ fun AgentDetailScreen(
     onOpenTask: (String) -> Unit,
     onOpenRun: (RunDto) -> Unit,
     onOpenRequests: () -> Unit,
+    onOpenAgent: ((String) -> Unit)? = null,
 ) {
     val p = Orcha.palette
     val agent = state.selectedAgent
@@ -108,41 +116,59 @@ fun AgentDetailScreen(
     var modelSheet by remember { mutableStateOf(false) }
     var wakeSheet by remember { mutableStateOf(false) }
     val dead = agent?.status == "terminated" || agent?.terminatedAt != null
+    var historyOpen by remember { mutableStateOf(false) }
+    val baseUrl = state.selectedContainer?.baseUrl
+    val containerId = state.selectedContainer?.id
+    LaunchedEffect(baseUrl, containerId) {
+        if (baseUrl != null && containerId != null) io.openorcha.mobile.ui.AgentSliceStore.refreshMe(baseUrl, containerId)
+    }
+    val meByProject by io.openorcha.mobile.ui.AgentSliceStore.me.collectAsState()
+    val me = containerId?.let { meByProject[it] }
+    val canManageAgents = io.openorcha.mobile.domain.AgentControlsUx.canManage(me, "manage_agents")
+    val canManageAutonomy = io.openorcha.mobile.domain.AgentControlsUx.canManage(me, "manage_autonomy")
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = p.bg,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = { Text(agent?.alias ?: "Agent") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
-                actions = {
-                    IconButton(onClick = onRefresh) { Icon(OrchaIcons.Refresh, "Refresh") }
-                    if (agent?.kind == "ai" && !dead) {
-                        IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More") }
+            Column {
+                CenterAlignedTopAppBar(
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = p.bg, titleContentColor = p.text),
+                    title = { Text(agent?.alias ?: "Agent", style = ltype(LType.Headline), maxLines = 1) },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back", tint = p.text2) } },
+                    actions = {
+                        IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More actions", tint = p.accent) }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Rename") },
-                                onClick = { menuOpen = false; newAlias = agent.alias; renaming = true },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Retire agent…", color = p.danger) },
-                                onClick = { menuOpen = false; confirmRetire = true },
-                            )
+                            DropdownMenuItem(text = { Text("Refresh") }, onClick = { menuOpen = false; onRefresh() })
+                            if (agent?.kind == "ai" && !dead) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { menuOpen = false; newAlias = agent.alias; renaming = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Retire agent…", color = p.danger) },
+                                    onClick = { menuOpen = false; confirmRetire = true },
+                                )
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                )
+                LDivider()
+            }
         },
     ) { padding ->
         if (agent == null) {
-            OrchaCard(Modifier.padding(padding).padding(16.dp)) { Text("Agent not found — refresh the workspace.", color = p.muted) }
+            LEmptyState(
+                icon = OrchaIcons.SmartToy,
+                title = "Agent not found",
+                message = "Refresh the workspace.",
+                modifier = Modifier.padding(padding).padding(16.dp),
+            )
             return@Scaffold
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = LSpace.l, vertical = LSpace.l),
+            verticalArrangement = Arrangement.spacedBy(LSpace.l),
         ) {
             AgentDetailContent(
                 state = state,
@@ -157,8 +183,24 @@ fun AgentDetailScreen(
                 onOpenRun = onOpenRun,
                 onOpenRequests = onOpenRequests,
                 onConversation = onConversation,
+                onOpenAgent = onOpenAgent,
+                onOpenHistory = if (agent.kind == "ai" && baseUrl != null) ({ historyOpen = true }) else null,
+                canManageAgents = canManageAgents,
+                canManageAutonomy = canManageAutonomy,
             )
         }
+    }
+
+    if (historyOpen && agent != null && baseUrl != null) {
+        AgentConfigHistorySheet(
+            baseUrl = baseUrl,
+            agentId = agent.id,
+            alias = agent.alias,
+            actorId = state.selectedContainer?.humanAgentId,
+            canRestore = !dead && (canManageAgents || canManageAutonomy),
+            onDismiss = { historyOpen = false },
+            onRestored = onRefresh,
+        )
     }
 
     if (renaming && agent != null) {

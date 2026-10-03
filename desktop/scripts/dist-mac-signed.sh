@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build a SIGNED + NOTARIZED universal Orcha .dmg/.zip.
+# Build a SIGNED + NOTARIZED universal Embodent .dmg/.zip.
 #
 # Signing and notarization credentials are read from environment variables that
 # this script loads from `.env.signing.local` (gitignored). Copy
@@ -33,7 +33,7 @@ for var in CSC_LINK APPLE_API_KEY; do
   fi
 done
 
-echo "Building signed + notarized universal Orcha app…"
+echo "Building signed + notarized universal Embodent app…"
 npm run dist:mac
 
 # --- Sign + notarize + staple the DMG itself --------------------------------
@@ -41,7 +41,7 @@ npm run dist:mac
 # but it does NOT code-sign, notarize, or staple the .dmg *container*. Without
 # this, a freshly-downloaded .dmg still trips Gatekeeper on mount ("Apple could
 # not verify…") even though the app inside is fine. So we finish the DMG here.
-DMG="$(ls -t dist/Orcha-*-universal.dmg 2>/dev/null | head -1)"
+DMG="$(ls -t dist/Embodent-*-universal.dmg 2>/dev/null | head -1)"
 if [[ -z "$DMG" ]]; then
   echo "error: no universal .dmg found in dist/ after build." >&2
   exit 1
@@ -73,7 +73,7 @@ spctl -a -vvv -t open --context context:primary-signature "$DMG"
 
 echo ""
 echo "Done. Signed + notarized artifacts in dist/:"
-ls -1 dist/Orcha-*-universal.dmg dist/Orcha-*-universal-mac.zip 2>/dev/null
+ls -1 dist/Embodent-*-universal.dmg dist/Embodent-*-universal-mac.zip 2>/dev/null
 echo ""
 echo "sha256 (for the Homebrew formula / release notes):"
-shasum -a 256 dist/Orcha-*-universal.dmg dist/Orcha-*-universal-mac.zip 2>/dev/null
+shasum -a 256 dist/Embodent-*-universal.dmg dist/Embodent-*-universal-mac.zip 2>/dev/null

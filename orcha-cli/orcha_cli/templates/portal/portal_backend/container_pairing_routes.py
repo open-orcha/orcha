@@ -34,14 +34,14 @@ def pairing_warning(reason: str) -> dict:
     return {
         "reachable": False,
         "reason": reason,
-        "title": "Phones can't reach this Orcha yet",
+        "title": "Phones can't reach this Embodent yet",
         "message": (
             "The portal only has a localhost address right now, so a phone on Wi-Fi would not "
             "know how to reach this computer."
         ),
         "remedy": (
             "Connect this Mac to the same Wi-Fi as the phone, run `orcha up` from this workspace, "
-            "and allow the Orcha portal port through macOS Firewall or Local Network prompts."
+            "and allow the Embodent portal port through macOS Firewall or Local Network prompts."
         ),
     }
 
@@ -105,13 +105,14 @@ def short_pairing_code() -> str:
 #   - dot-style data modules + rounded finder frames (the modern, branded look);
 #   - a 4-module quiet zone baked into the viewBox over an always-LIGHT tile —
 #     dark modules on light stay fixed in every theme, scanners need the contrast;
-#   - the orca glyph (same artwork as static/favicon.svg) embedded on a rounded
-#     dark tile in the centre. EC=H recovers up to 30% damage; the knockout is
+#   - the Embodent mark (same artwork as static/logo-mark.svg) embedded on a
+#     rounded dark tile in the centre. EC=H recovers up to 30% damage; the knockout is
 #     capped well below that (~8% of the module area, see QR_EMBED_FRACTION).
 # Pure string assembly on qrcode's matrix — no Pillow/StyledPilImage dependency,
 # and SVG stays crisp at any rendered size.
 QR_DARK = "#0b1216"    # module ink — matches the favicon's tile
 QR_LIGHT = "#ffffff"   # the light tile behind the code (never theme-inverted)
+QR_TILE = "#121314"    # the centre logo tile (Embodent brand tile colour)
 QR_QUIET_MODULES = 4   # quiet zone, in modules, on every side
 QR_EMBED_FRACTION = 0.28  # centre knockout side as a fraction of the module count
 
@@ -126,22 +127,19 @@ def _qr_finder_frame(x: float, y: float) -> str:
 
 
 def _qr_orca_tile(x: float, y: float, size: float) -> str:
-    """The favicon orca on its rounded dark tile, scaled into the centre knockout."""
+    """The Embodent mark on its rounded dark tile, scaled into the centre knockout."""
     s = size / 100.0
+    # the mark's 1254-unit artwork, fitted into the inner ~80% of the 100-unit tile
+    m = 80.0 / 1050.0
     return (
         f'<g transform="translate({x:.2f},{y:.2f}) scale({s:.4f})" aria-hidden="true">'
-        f'<rect width="100" height="100" rx="22" fill="{QR_DARK}"/>'
-        '<path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 '
-        'C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/>'
-        '<g stroke="#06171c" stroke-width="2.4" stroke-linecap="round">'
-        '<line x1="49" y1="38" x2="40" y2="62"/><line x1="49" y1="38" x2="56" y2="62"/>'
-        '<line x1="49" y1="38" x2="50" y2="74"/></g>'
-        '<g fill="#06171c"><circle cx="39" cy="64" r="4"/><circle cx="57" cy="64" r="4"/>'
-        '<circle cx="50" cy="76" r="4"/></g>'
-        '<circle cx="49" cy="35" r="6" fill="#1fc7cd"/>'
-        '<path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" '
-        'stroke-width="5" stroke-linecap="round" fill="none"/>'
-        "</g>"
+        f'<rect width="100" height="100" rx="22" fill="{QR_TILE}"/>'
+        f'<g transform="translate(10,10) scale({m:.5f}) translate(-76.5,-84)">'
+        '<path fill="#ECEDF1" d="M627 153A456 456 0 0 0 627 1065L627 861A252 '
+        '252 0 0 1 627 357ZM627 461A148 148 0 0 0 627 757Z"/>'
+        '<path fill="#7C808A" d="M627 153L930 153A102 102 0 0 1 930 357L627 357ZM627 861L930'
+        ' 861A102 102 0 0 1 930 1065L627 1065ZM627 461A148 148 0 0 1 627 757Z"/>'
+        "</g></g>"
     )
 
 
@@ -259,7 +257,7 @@ def get_container_pairing(
                 "reachable": False,
                 "reason": "no_human",
                 "title": "No human can pair this phone",
-                "message": "Add a human operator to this Orcha before pairing a phone.",
+                "message": "Add a human operator to this Embodent before pairing a phone.",
             },
         )
     if human_agent_id:

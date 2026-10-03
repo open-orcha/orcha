@@ -42,7 +42,7 @@ export function homebrewPrefix(arch: string): string {
  *  real git checkout — needed for `brew update` and for tapping open-orcha/orcha. */
 export function homebrewStep(arch: string, user: string): InstallStep {
   const detail =
-    'The package manager Orcha uses to install everything else. Creating its folder needs ' +
+    'The package manager Embodent uses to install everything else. Creating its folder needs ' +
     'your Mac password once.'
   const installer = `NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL ${BREW_INSTALLER})"`
   if (arch === 'arm64') {
@@ -77,7 +77,7 @@ export function dockerEngineStep(): InstallStep {
   return {
     id: 'dockerEngine',
     title: 'Docker engine',
-    detail: 'Runs Orcha’s projects in the background (via Colima — no Docker Desktop needed).',
+    detail: 'Runs Embodent’s projects in the background (via Colima — no Docker Desktop needed).',
     actions: [{ kind: 'user', script: 'brew install colima docker docker-compose && colima start' }]
   }
 }

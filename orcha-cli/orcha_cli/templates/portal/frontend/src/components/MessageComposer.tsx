@@ -142,7 +142,7 @@ export function MessageComposer({
       <button
         {...sendButtonData}
         type="button"
-        className={`${sendClassName}${sending ? " busy" : ""}`}
+        className={`${sendClassName}${sending ? " busy" : ""}${!value.trim() && !sending ? " is-idle" : ""}`}
         id={sendButtonId}
         disabled={disabled || sending}
         onClick={onSend}

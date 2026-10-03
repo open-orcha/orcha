@@ -9,13 +9,17 @@
  * the run's agent, with the honest "queued — the agent addresses this at its
  * next checkpoint" caption instead of a free @agent picker.
  */
+import { Button } from "../../components/primitives";
+import { Composer, ContextChip } from "../../components/primitives";
+import { FilterPills } from "../../components/primitives";
 import { useEffect, useState } from "react";
-import { useToast } from "../../components/ui";
+import { Icon, useToast } from "../../components/ui";
 import { navigateScoped } from "../../lib/scope";
 import { actingHuman, useSnapshot } from "../../state/SnapshotProvider";
 import type { Agent } from "../../types";
 import { createThread } from "./codespaceApi";
-import { anchorLabel, THREAD_TEMPLATES, type CreateThreadResponse, type ThreadKind } from "./codespaceTypes";
+import { useCodeWriteBlock } from "./writeAccess";
+import { anchorLabel, kindIcon, THREAD_TEMPLATES, type CreateThreadResponse, type ThreadKind } from "./codespaceTypes";
 
 export interface ThreadComposerProps {
   cid: string;
@@ -60,6 +64,8 @@ export function ThreadComposer({
   const [body, setBody] = useState(THREAD_TEMPLATES[0].starterBody);
   const [taggedAgentId, setTaggedAgentId] = useState<string>(preTaggedAgentId || "");
   const [busy, setBusy] = useState(false);
+  // a viewer / non-member can't post (the server's trusted_actor refuses): say why up front
+  const writeBlock = useCodeWriteBlock();
 
   const aiAgents = agents.filter((a) => a.kind === "ai");
   const raiseHand = !!preTaggedAgentId;
@@ -102,6 +108,7 @@ export function ThreadComposer({
   };
 
   const submit = () => {
+    if (writeBlock) { toast(writeBlock, "warn"); return; }
     const who = actingHuman(snap);
     if (!who) { toast("Pick an acting human first", "warn"); return; }
     if (!body.trim()) { toast("Write something first", "warn"); return; }
@@ -127,71 +134,79 @@ export function ThreadComposer({
     });
   };
 
+  const anchorText = (path.slice(path.lastIndexOf("/") + 1) || path) + " · " + (wholeDocument ? "whole document" : "line " + anchorLabel(startLine, endLine));
+  const taggedAlias = (aiAgents.find((a) => a.id === preTaggedAgentId) || { alias: "agent" }).alias;
+
+  // Linear composer (D9): kind pills above a rounded field whose context chip
+  // names the anchor ("Shell.tsx · line 20"), the @agent picker bottom-left,
+  // Cancel + a circular Post button bottom-right.
   return (
     <div className="cs-composer">
-      <div className="cs-composer-anchor">
-        {path} · {wholeDocument ? "whole document" : "line " + anchorLabel(startLine, endLine)}
-      </div>
       {!raiseHand ? (
-        <div className="cs-templates" role="group" aria-label="Question templates">
-          {THREAD_TEMPLATES.map((t) => (
-            <button
-              key={t.kind}
-              type="button"
-              className={"cs-template-btn" + (kind === t.kind ? " on" : "")}
-              onClick={() => pickTemplate(t)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <FilterPills
+          size="sm"
+          label="Question templates"
+          className="cs-templates"
+          value={kind}
+          onChange={(k) => { const t = THREAD_TEMPLATES.find((x) => x.kind === k); if (t) pickTemplate(t); }}
+          items={THREAD_TEMPLATES.map((t) => ({ key: t.kind, label: t.label, icon: kindIcon(t.kind) }))}
+        />
       ) : (
         <div className="cs-raise-hand-caption">queued — the agent addresses this at its next checkpoint</div>
       )}
-      {routingHint ? <div className="cs-routing-hint">{routingHint}</div> : null}
       {questionBlocked ? (
         <div className="cs-no-agent-warn" role="alert">
           <span>
             <b>No AI agent in this workspace</b> — nobody can answer a question yet.
             Register an agent first, then come back and ask.
           </span>
-          <button type="button" className="btn sm" onClick={() => navigateScoped("/agents")}>
+          <Button size="sm" variant="secondary" pill iconRight="arrow" onClick={() => navigateScoped("/agents")}>
             Register an agent
-          </button>
+          </Button>
         </div>
       ) : null}
-      <textarea
-        className="cs-composer-body"
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
+      <Composer
+        className="cs-composer-field"
+        label="Thread message"
         placeholder="Write your message…"
-        aria-label="Thread message"
+        value={body}
+        onChange={setBody}
+        onSubmit={submit}
+        busy={busy}
+        disabled={questionBlocked || !!writeBlock}
+        disabledReason={writeBlock || (questionBlocked ? "Register an AI agent first — nobody can answer a question yet." : undefined)}
+        submitLabel="Post"
+        minRows={3}
+        autoFocus
+        attachments={
+          <>
+            <ContextChip icon={<Icon name="code" cls="v2-ico" />}>
+              <span className="cs-composer-anchor" title={path}>{anchorText}</span>
+            </ContextChip>
+            {routingHint ? <span className="cs-routing-hint">{routingHint}</span> : null}
+          </>
+        }
+        leading={
+          !raiseHand ? (
+            <>
+              <select
+                className="cs-agent-select"
+                value={taggedAgentId}
+                aria-label="Tag an agent"
+                onChange={(e) => setTaggedAgentId(e.target.value)}
+              >
+                <option value="">No @agent tag</option>
+                {aiAgents.map((a) => (
+                  <option key={a.id} value={a.id}>@{a.alias}</option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <span className="cs-agent-select is-static">@{taggedAlias}</span>
+          )
+        }
+        tools={onCancel ? <Button size="sm" variant="ghost" pill onClick={onCancel}>Cancel</Button> : null}
       />
-      <div className="cs-composer-row">
-        {!raiseHand ? (
-          <select
-            className="cs-agent-select"
-            value={taggedAgentId}
-            aria-label="Tag an agent"
-            onChange={(e) => setTaggedAgentId(e.target.value)}
-          >
-            <option value="">No @agent tag</option>
-            {aiAgents.map((a) => (
-              <option key={a.id} value={a.id}>@{a.alias}</option>
-            ))}
-          </select>
-        ) : (
-          <span className="cs-agent-select muted" aria-hidden="true">
-            @{(aiAgents.find((a) => a.id === preTaggedAgentId) || { alias: "agent" }).alias}
-          </span>
-        )}
-        {onCancel ? (
-          <button type="button" className="btn ghost sm" onClick={onCancel}>Cancel</button>
-        ) : null}
-        <button type="button" className="btn approve sm" disabled={busy || questionBlocked} onClick={submit}>
-          {busy ? "Posting…" : "Post"}
-        </button>
-      </div>
     </div>
   );
 }

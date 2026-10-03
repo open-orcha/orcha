@@ -244,7 +244,7 @@ extension AppModel {
     ) async -> GitHubStartResponse? {
         guard let sel = selectedContainer else { return nil }
         guard let actor = sel.humanAgentId else {
-            error = "Pairing is missing the human identity. Reconnect this Orcha first."
+            error = "Pairing is missing the human identity. Reconnect this Embodent first."
             return nil
         }
         let assigneeName = assigneeAgentId.flatMap { id in

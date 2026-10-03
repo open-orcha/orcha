@@ -99,51 +99,58 @@ private fun feedTint(type: String): Color {
 }
 
 /**
- * One classified run-feed row (A2): label tag + body text; narration reads as plain
- * prose, everything else is label-tinted; `detail` starts collapsed and expands on tap
- * (the web's <details> affordance).
+ * One classified run-feed row (A2), Linear-calm: a small mono label tag + body text;
+ * narration reads as plain prose, tool/result lines are mono in a muted tint; `detail`
+ * starts collapsed and expands on tap (the web's <details> affordance). No raw JSON —
+ * the classifier in domain/RunFeed.kt has already reduced events to text.
  */
 @Composable
 fun FeedRow(type: String, label: String, text: String, detail: String? = null) {
     val p = Orcha.palette
     var expanded by remember { mutableStateOf(false) }
     val tint = feedTint(type)
+    val hasDetail = !detail.isNullOrBlank()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (!detail.isNullOrBlank()) Modifier.clickable { expanded = !expanded } else Modifier)
-            .padding(vertical = 3.dp),
+            .then(if (hasDetail) Modifier.clickable(onClickLabel = if (expanded) "Hide details" else "Show details") { expanded = !expanded } else Modifier)
+            .padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(6.dp).background(tint.copy(alpha = 0.9f), CircleShape))
             Text(
-                label.uppercase(),
-                style = MonoSmStyle.copy(fontSize = 9.5.sp, letterSpacing = 0.6.sp),
-                color = tint,
-                fontWeight = FontWeight.W700,
+                label.lowercase(),
+                style = ltype(LType.Micro).copy(fontFamily = MonoFontFamily),
+                color = p.faint,
             )
-            if (!detail.isNullOrBlank()) {
-                Text(if (expanded) "▾" else "▸", color = p.faint, fontSize = 10.sp)
+            if (hasDetail) {
+                Text(if (expanded) "▾" else "▸", style = ltype(LType.Micro), color = p.faint)
             }
         }
         if (text.isNotBlank()) {
             Text(
                 text,
-                style = if (type == "narrate") MaterialTheme.typography.bodyMedium
-                else MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily, fontSize = 11.5.sp, lineHeight = 16.sp),
-                color = if (type == "narrate") p.text else tint,
+                style = if (type == "narrate") ltype(LType.Body) else ltype(LType.Mono),
+                color = when (type) {
+                    "narrate" -> p.text
+                    "error" -> p.danger
+                    "think", "boot" -> p.muted
+                    else -> p.text2
+                },
+                modifier = Modifier.padding(start = 12.dp),
             )
         }
-        if (expanded && !detail.isNullOrBlank()) {
+        if (expanded && hasDetail) {
             Text(
-                detail,
-                fontFamily = MonoFontFamily,
-                fontSize = 10.5.sp,
-                lineHeight = 15.sp,
+                detail!!,
+                style = ltype(LType.Mono),
                 color = p.muted,
                 modifier = Modifier
+                    .padding(start = 12.dp)
                     .fillMaxWidth()
-                    .background(Orcha.palette.surface2, RoundedCornerShape(8.dp))
+                    .background(p.surface2, RoundedCornerShape(6.dp))
+                    .border(1.dp, p.border, RoundedCornerShape(6.dp))
                     .padding(8.dp),
             )
         }

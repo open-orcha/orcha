@@ -1,0 +1,614 @@
+/* ============================================================================
+   Orcha V2 — design tokens: DARK (default) + LIGHT. Source of truth for
+   values: docs/orcha-v2-design-system.md §1. Imported AFTER the legacy layers
+   so the legacy custom properties (--bg, --surface, --accent, …) are
+   re-pointed at the V2 palette and unmigrated class names render in V2
+   colours. <html data-theme> holds the RESOLVED theme (src/shell/theme.ts):
+   the base block below is dark; the [data-theme="light"] block after it
+   re-declares every colour token. Both win over the legacy light/auto/skin
+   blocks by specificity AND order. [data-skin] stays retired.
+
+   COLOUR RULE: v2 CSS never hard-codes a colour outside these token blocks —
+   add a token (in BOTH blocks) instead. themeTokens.test.ts enforces it.
+
+   "Linear pop" retune (D5/D6/D8): the window + sidebar sit on the darkest
+   tone (--v2-window); page content lives in an inset raised PANEL
+   (--v2-panel). Everything inside the panel should mark its root with
+   [data-v2-surface="panel"] (or .v2-panel-surface) — that re-scopes
+   --v2-canvas to the panel tone, so sticky headers, inset focus rings and
+   avatar badge rings that paint "the background I sit on" stay seamless.
+   ========================================================================== */
+
+/* ---- Inter Variable (wght 100..900 + opsz 14..32) — self-hosted ----------
+   @fontsource-variable/inter 5.3.0 "opsz" build (rsms Inter 4.x), SIL OFL 1.1:
+   static/fonts/OFL-inter.txt. font-optical-sizing:auto picks the Display
+   cut automatically at large sizes. The latin file is preloaded in
+   frontend/index.html. Family name is distinct from the legacy "Inter"
+   registration in fonts.css (wght-only, no opsz) so the two never mix. */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/assets/fonts/inter-var-opsz-latin.woff2") format("woff2-variations"),
+       url("/assets/fonts/inter-var-opsz-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/assets/fonts/inter-var-opsz-latin-ext.woff2") format("woff2-variations"),
+       url("/assets/fonts/inter-var-opsz-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Inter Variable";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/assets/fonts/inter-var-opsz-latin-italic.woff2") format("woff2-variations"),
+       url("/assets/fonts/inter-var-opsz-latin-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root,
+:root[data-theme],
+:root[data-skin],
+:root[data-theme][data-skin] {
+  color-scheme: dark;
+
+  /* ---- 1.1 surfaces and lines ------------------------------------------
+     Elevation ladder (darkest → lightest):
+       window (app frame + sidebar) < panel (inset content panel)
+       < surface (cards on the panel) < raised (popovers, menus, dialogs).
+     Hover / selected are TRANSLUCENT white overlays so they read the same on
+     any of those surfaces; use the *-solid variants only when an opaque
+     fill is required (e.g. a sticky element covering scrolled content). */
+  --v2-window: #0E0F10;
+  --v2-canvas: var(--v2-window);     /* "the background I sit on" — re-scoped to --v2-panel inside the panel */
+  --v2-sidebar: var(--v2-window);    /* D5: sidebar sits directly on the window tone, no divider line */
+  --v2-panel: #151618;               /* D5 inset raised panel */
+  --v2-panel-border: #232427;        /* 1px hairline around the panel */
+  --v2-surface: #19191C;             /* cards / bordered blocks on the panel */
+  --v2-raised: #1E1F23;              /* popovers, menus, dialogs, tooltips */
+  --v2-band: #1A1B1E;                /* list group-header band (full width, slightly lighter than panel) */
+  --v2-hover: rgba(255, 255, 255, 0.045);
+  --v2-selected: rgba(255, 255, 255, 0.08);
+  --v2-hover-solid: #1C1D20;         /* = hover over --v2-panel */
+  --v2-selected-solid: #232427;      /* = selected over --v2-panel */
+  --v2-border: #25262A;              /* hairline dividers + card borders */
+  --v2-border-subtle: #1E1F22;       /* inner separators that should almost disappear */
+  --v2-border-strong: #33353A;       /* control outlines: inputs, circular icon buttons, pills */
+
+  /* ---- 1.2 text (all AA on window, panel, surface, band, raised) ---- */
+  --v2-text: #EEEFF1;
+  --v2-text-2: #B4B7BE;              /* secondary text, group-header counts, pill labels */
+  --v2-text-3: #8A8F98;              /* meta: ids, timestamps, column headers (≥4.9:1 on raised) */
+  --v2-text-disabled: #5E626A;       /* disabled controls + placeholder glyphs ONLY — never information */
+  --v2-text-on-accent: #0E0F10;
+
+  /* ---- 1.3 accent + semantics ---- */
+  --v2-accent: #8D93F7;
+  --v2-accent-hover: #A1A6F9;
+  --v2-accent-soft: rgba(141, 147, 247, 0.14);
+  /* Primary BUTTON fill (Linear #5E6AD2 + white). Deliberately NOT --v2-accent:
+     the pastel accent is a TEXT/icon/ring colour (AA as text on every
+     surface); as a filled block with near-black text it read as the loudest
+     element on every screen (r1 review). White on these fills is >= 4.5:1;
+     hover goes a touch deeper so the white label never drops below AA. */
+  --v2-primary-bg: #5E6AD2;
+  --v2-primary-bg-hover: #5563CC;
+  --v2-primary-text: #FFFFFF;
+  --v2-focus-color: var(--v2-accent);
+  --v2-ok: #4CB782;
+  --v2-ok-soft: rgba(76, 183, 130, 0.14);
+  --v2-warn: #E2A336;
+  --v2-warn-soft: rgba(226, 163, 54, 0.14);
+  --v2-danger: #EE7070;
+  --v2-danger-soft: rgba(238, 112, 112, 0.14);
+  --v2-info: #4EA7FC;
+  --v2-info-soft: rgba(78, 167, 252, 0.14);
+  --v2-neutral: #8A8F98;
+  --v2-neutral-soft: rgba(138, 143, 152, 0.14);
+  --v2-danger-line: rgba(238, 112, 112, 0.32);  /* danger button hover outline */
+  --v2-danger-press: rgba(238, 112, 112, 0.22); /* danger button :active fill */
+  --v2-danger-text: #F2A3A3;                     /* error copy on a danger-soft fill */
+
+  /* ---- 1.3b task status glyph colours (D8 — one glyph set everywhere) ---- */
+  --v2-status-todo: #8A8F98;         /* empty circle */
+  --v2-status-pending: #8A8F98;      /* dashed circle (waiting on deps) */
+  --v2-status-progress: #F0BF4C;     /* half-filled yellow circle */
+  --v2-status-review: #4CB782;       /* ring + dot, green */
+  --v2-status-verify: #E2A336;       /* ring + dot, amber (needs verification) */
+  --v2-status-done: #4CB782;         /* filled circle + check */
+  --v2-status-blocked: #EE7070;
+  --v2-status-failed: #EE7070;       /* filled circle + x */
+  --v2-status-cancelled: #8A8F98;    /* circle + slash */
+
+  /* ---- 1.3c priority, health, label dots ---- */
+  --v2-prio-bar: var(--v2-text-2);   /* filled bar */
+  --v2-prio-bar-empty: #3A3C42;      /* unfilled bar */
+  --v2-prio-urgent: #F2994A;         /* urgent "!" square fill */
+  --v2-health-on: var(--v2-ok);      /* "On track" */
+  --v2-health-risk: var(--v2-warn);  /* "At risk" */
+  --v2-health-off: var(--v2-danger); /* "Off track" */
+  --v2-label-1: #4EA7FC;  /* blue   */
+  --v2-label-2: #4CB782;  /* green  */
+  --v2-label-3: #F0BF4C;  /* yellow */
+  --v2-label-4: #F2994A;  /* orange */
+  --v2-label-5: #EE7070;  /* red    */
+  --v2-label-6: #8D93F7;  /* indigo */
+  --v2-label-7: #D682C8;  /* pink   */
+  --v2-label-8: #3FBAC9;  /* teal   */
+
+  /* ---- 1.3d avatars (D7: circles everywhere) ---- */
+  --v2-avatar-xs: 16px;
+  --v2-avatar-sm: 20px;
+  --v2-avatar-md: 24px;
+  --v2-avatar-lg: 32px;
+  --v2-avatar-overlap: -4px;         /* stack margin */
+  --v2-avatar-badge: 8px;            /* status dot at bottom-right */
+  --v2-avatar-ring: var(--v2-canvas);/* badge / stack ring = surface it sits on (re-scoped in panel) */
+  /* Identity colours are NOT tokens: the Avatar primitive computes them from the
+     desktop's AVATAR_HUES palette (D13) — hsl(h 34% 28%) fill, hsl(h 72% 86%)
+     initial — with ONE assignPalette map per project shared by every surface.
+     The old --v2-avatar-bg-1…8 tokens were unused and diverged from desktop;
+     removed in r2 so nobody paints an avatar from them. */
+  --v2-avatar-fg: #EEEFF1;           /* initials on non-identity (system) avatars */
+  /* identity avatar = hsl(<hue> <fill-s> <fill-l>) with hsl(<hue> <ink-s> <ink-l>)
+     initials; the hue comes from AVATAR_HUES, the tone from the theme */
+  --v2-av-fill-s: 34%; --v2-av-fill-l: 28%;
+  --v2-av-ink-s: 72%;  --v2-av-ink-l: 86%;
+  /* hue-driven marks (label chips, project glyphs): hsl(<hue> <s> <l>) */
+  --v2-hue-mark-s: 62%; --v2-hue-mark-l: 62%;
+  --v2-hue-glyph-s: 70%; --v2-hue-glyph-l: 70%;
+
+  /* ---- 1.3e section hues (project tab icons: hover / current) ---- */
+  --v2-hue-home: #7AA2F7;
+  --v2-hue-tasks: #A78BFA;
+  --v2-hue-routines: #2DD4BF;
+  --v2-hue-agents: #F472B6;
+  --v2-hue-org: #FBBF24;
+  --v2-hue-requests: #FB923C;
+  --v2-hue-code: #4ADE80;
+  --v2-hue-github: #E5E7EB;
+  --v2-hue-activity: #22D3EE;
+  --v2-hue-metrics: #A3E635;
+  --v2-pr-color: var(--v2-hue-tasks); /* pull-request glyph */
+
+  /* ---- 1.3f overlays, selection, inverse controls ---- */
+  --v2-selection: rgba(141, 147, 247, 0.32);
+  --v2-scrim: rgba(6, 7, 9, 0.55);          /* palette / sheet backdrop */
+  --v2-scrim-strong: rgba(6, 7, 9, 0.62);   /* modal dialog backdrop */
+  --v2-lightbox-bg: rgba(0, 0, 0, 0.82);    /* image lightbox: dark in both themes */
+  --v2-veil: rgba(16, 17, 19, 0.92);        /* "saving…" veil over a pane */
+  --v2-inverse-hover: #FFFFFF;              /* hover of a filled --v2-text control (composer send/stop) */
+  --v2-inverse-text: var(--v2-window);      /* glyph on a filled --v2-text control */
+  --v2-scroll-shadow: rgba(0, 0, 0, 0.45);  /* horizontal scroll affordance shadows */
+  --v2-shadow-seg: 0 1px 0 rgba(0, 0, 0, 0.25); /* selected segment lift */
+  --v2-shadow-palette: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --v2-shadow-lightbox: 0 20px 60px rgba(0, 0, 0, 0.5);
+  --v2-live-pulse: rgba(76, 183, 130, 0.5);
+  --v2-live-pulse-0: rgba(76, 183, 130, 0);
+  --v2-logo-ink: #ECEDF1;                   /* Embodent mark: left (light) half */
+  --v2-logo-accent: #7C808A;                /* Embodent mark: right (grey) half */
+
+  /* ---- 1.4 typography (D6) ---- */
+  --v2-font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --v2-font-display: var(--v2-font-sans);          /* same family; opsz picks the Display cut */
+  --v2-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --v2-font-features: "cv01", "ss03";               /* Linear-like: open 1, round quotes/commas */
+  --v2-fs-xs: 11px;         /* tiny counters inside badges only */
+  --v2-fs-meta: 12px;       /* meta lines, ids, timestamps, chips, column headers */
+  --v2-fs-label: 12px;      /* section labels ("Live agents", field labels); sentence case, never tracked caps */
+  --v2-fs-body: 13px;       /* body + list rows */
+  --v2-fs-btn: 13px;
+  --v2-fs-header: 13px;     /* D5 panel header title (with page icon) */
+  --v2-fs-body-lg: 14px;    /* long-form descriptions, markdown */
+  --v2-fs-title: 15px;      /* section titles (600) */
+  --v2-fs-page: 18px;       /* in-page headings: metric values, settings/card titles */
+  --v2-fs-inspector-title: 18px; /* split-inspector detail title (600, clamp 3 lines); full view uses --v2-fs-display */
+  --v2-fs-display: 24px;    /* page / detail titles (Display, 600, -0.01em) */
+  --v2-fs-display-lg: 28px; /* hero detail title, onboarding */
+  --v2-fw-regular: 400;
+  --v2-fw-book: 450;        /* row titles */
+  --v2-fw-medium: 500;
+  --v2-fw-semibold: 600;
+  --v2-lh-tight: 1.2;       /* display titles */
+  --v2-lh-snug: 1.35;       /* rows, chips, meta */
+  --v2-lh-body: 1.5;        /* paragraphs */
+  --v2-ls-display: -0.012em;
+  --v2-ls-title: -0.006em;
+
+  /* ---- 1.5 spacing, size, radius ---- */
+  --v2-space-1: 4px;
+  --v2-space-2: 8px;
+  --v2-space-3: 12px;
+  --v2-space-4: 16px;
+  --v2-space-5: 20px;
+  --v2-space-6: 24px;
+  --v2-space-7: 28px;
+  --v2-space-8: 32px;
+  --v2-space-10: 40px;
+  --v2-space-12: 48px;
+  --v2-row-h: 36px;
+  --v2-row-h-lg: 40px;      /* two-line / roomy rows (inbox items use auto height) */
+  --v2-row-h-touch: 44px;
+  /* D14 spacing discipline (one rhythm for every list / tree in the app) */
+  --v2-tree-row-h: 32px;    /* sidebar / tree rows (project, branch, agent session) */
+  --v2-indent: 16px;        /* one tree / nesting level */
+  --v2-row-px: 12px;        /* inline padding of an inset (rounded) list row */
+  --v2-row-inset: 6px;      /* inset rows sit this far inside their list edge */
+  --v2-row-gap: 12px;       /* gap between a row's leading icons / columns */
+  --v2-group-gap: 16px;     /* between top-level groups (sidebar project groups, page sections) */
+  --v2-list-group-gap: 8px; /* between list group bands (ListGroup + ListGroup) */
+  --v2-control-h: 32px;     /* inputs / selects (default) */
+  --v2-control-h-sm: 28px;  /* compact inputs / selects / segmented controls */
+  --v2-btn-h: 28px;         /* Button md — visual height, NOT raised on touch (hit area via ::after) */
+  --v2-btn-h-sm: 24px;      /* Button sm */
+  --v2-btn-secondary-bg: #1C1D21; /* reads as a control on window, panel AND surface */
+  --v2-hit-min: 44px;       /* minimum touch target (coarse pointers) */
+  --v2-radius-sm: 4px;
+  --v2-radius-control: 6px;
+  --v2-radius-card: 8px;
+  --v2-radius-panel: 10px;
+  --v2-radius-full: 999px;
+
+  /* ---- 1.5b D5 app frame ---- */
+  --v2-frame-gap: 8px;      /* panel inset from window top/right/bottom and from the sidebar */
+  --v2-panel-radius: var(--v2-radius-panel);
+  --v2-panel-px: 20px;      /* horizontal padding of panel header / pills row / list rows */
+  --v2-header-h: 44px;      /* panel header row (page icon + title | circular actions) */
+  --v2-pillbar-h: 44px;     /* filter pills row under the header */
+  --v2-sidebar-w-default: 264px;
+  --v2-sidebar-rail: 56px;
+  --v2-icon: 16px;
+  --v2-icon-sm: 14px;
+  --v2-icon-xs: 12px;
+  --v2-fade-w: 24px;        /* edge-fade width on horizontally scrolling strips (.v2-fade-x) */
+
+  /* ---- 1.5c chips, pills, circular icon buttons (D5/D8) ---- */
+  --v2-chip-h: 22px;                   /* metadata chip: rounded-full, 1px border, dot + text */
+  --v2-chip-px: 8px;
+  --v2-chip-gap: 6px;
+  --v2-chip-fs: var(--v2-fs-meta);
+  --v2-chip-dot: 7px;
+  --v2-chip-bg: transparent;
+  --v2-chip-border: #2C2D32;           /* quieter than control outlines (Linear chips) */
+  --v2-chip-text: var(--v2-text-2);
+  --v2-pill-h: 28px;                   /* filter pill ("All · Active · Backlog") */
+  --v2-pill-px: 12px;
+  --v2-pill-bg: transparent;
+  --v2-pill-border: var(--v2-border);
+  --v2-pill-text: var(--v2-text-2);
+  --v2-pill-bg-selected: #26272C;      /* selected = filled subtle */
+  --v2-pill-border-selected: #2E3035;
+  --v2-pill-text-selected: var(--v2-text);
+  --v2-iconbtn-size: 28px;             /* circular icon button */
+  --v2-iconbtn-border: var(--v2-border-strong);
+  --v2-iconbtn-bg: transparent;
+  --v2-livepill-h: 20px;               /* "Working…" outline pill on agent work */
+
+  /* ---- 1.6 focus, elevation, z-index, motion ---- */
+  /* ONE 2px accent ring hugging the element (r1: the old 2px canvas gap +
+     2px accent read as a thick two-tone halo). Independent of --v2-canvas,
+     so it needs no per-surface re-declaration. */
+  --v2-focus-ring: 0 0 0 2px var(--v2-focus-color);
+  /* inset variant for elements inside overflow:hidden/auto containers (rows,
+     tab panels): BOTH layers are inset, accent outermost so it is never clipped */
+  --v2-focus-ring-inset: inset 0 0 0 2px var(--v2-accent), inset 0 0 0 3px var(--v2-canvas);
+  --v2-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.28);     /* the inset content panel */
+  --v2-shadow-card: 0 1px 1px rgba(0, 0, 0, 0.18);      /* optional on cards */
+  --v2-shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.2);
+  --v2-z-sidebar: 10;
+  --v2-z-header: 20;
+  --v2-z-dock: 30;
+  --v2-z-popover: 40;
+  --v2-z-dialog: 50;
+  --v2-z-dialog-popover: 55;          /* menus/popovers opened FROM a dialog (portaled to body) must stack above its overlay */
+  --v2-z-toast: 60;
+  --v2-z-palette: 70;
+  --v2-dur-fast: 90ms;
+  --v2-dur-base: 150ms;
+  --v2-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ---- 1.8 legacy mapping: pre-V2 class names render in V2 colours ---- */
+  --bg: var(--v2-canvas);
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface: var(--v2-surface);
+  --surface-2: var(--v2-raised);
+  --surface-3: var(--v2-hover-solid);
+  --raised: var(--v2-raised);
+  --border: var(--v2-border);
+  --border-2: var(--v2-border-strong);
+  --hover: var(--v2-hover);
+  --text: var(--v2-text);
+  --text-2: var(--v2-text-2);
+  --muted: var(--v2-text-3);
+  --faint: var(--v2-text-3); /* legacy #5a6678 failed AA — lifted to the lowest allowed readable tone */
+  --accent: var(--v2-accent);
+  --accent-ink: var(--v2-text-on-accent);
+  --accent-soft: var(--v2-accent-soft);
+  --accent-line: rgba(141, 147, 247, 0.34);
+  --accent-glow: rgba(141, 147, 247, 0.22);
+  --amber: var(--v2-warn);
+  --ok: var(--v2-ok);         --ok-soft: var(--v2-ok-soft);         --ok-line: rgba(76, 183, 130, 0.32);
+  --info: var(--v2-info);     --info-soft: var(--v2-info-soft);     --info-line: rgba(78, 167, 252, 0.32);
+  --warn: var(--v2-warn);     --warn-soft: var(--v2-warn-soft);     --warn-line: rgba(226, 163, 54, 0.34);
+  --danger: var(--v2-danger); --danger-soft: var(--v2-danger-soft); --danger-line: rgba(238, 112, 112, 0.32);
+  --violet: var(--v2-accent); --violet-soft: var(--v2-accent-soft); --violet-line: rgba(141, 147, 247, 0.32);
+  --idle: var(--v2-neutral);  --idle-soft: var(--v2-neutral-soft);  --idle-line: rgba(138, 143, 152, 0.28);
+  --diff-add: #8FD9AE; --diff-add-bg: rgba(76, 183, 130, 0.10);
+  --diff-del: #F4A0A0; --diff-del-bg: rgba(238, 112, 112, 0.10);
+  --diff-hunk: var(--v2-info); --diff-hunk-bg: rgba(78, 167, 252, 0.07);
+  --shadow-sm: none;
+  --shadow: var(--v2-shadow-pop);
+  --shadow-lg: var(--v2-shadow-pop);
+  --ring: var(--v2-focus-ring);
+}
+
+/* ---- LIGHT (Linear light: warm-neutral window, white panel, same indigo) ----
+   <html data-theme="light"> (resolved by src/shell/theme.ts). Re-declares
+   every COLOUR token of the base block; sizes/type/motion are shared.
+   Contrast (WCAG 2.x, measured on --v2-window #F4F4F5 / --v2-panel #FFFFFF /
+   --v2-selected-solid #EDEDEF): text 15.4:1, text-2 7.1:1, text-3 5.2:1
+   (4.9:1 on selected), accent 5.2:1, ok 4.9:1, warn 5.3:1, danger 5.0:1,
+   info 5.1:1, and each semantic on its own -soft tint >= 4.6:1. White on the
+   primary fill #5E6AD2 is 4.7:1 (hover 5.6:1). Status glyphs (non-text) are
+   >= 3:1 on the panel. */
+:root[data-theme="light"],
+:root[data-theme="light"][data-skin] {
+  color-scheme: light;
+
+  --v2-window: #F4F4F5;
+  --v2-panel: #FFFFFF;
+  --v2-panel-border: #E4E4E7;
+  --v2-surface: #FFFFFF;
+  --v2-raised: #FFFFFF;
+  --v2-band: #F7F7F8;
+  --v2-hover: rgba(24, 25, 28, 0.045);
+  --v2-selected: rgba(24, 25, 28, 0.07);
+  --v2-hover-solid: #F4F4F5;
+  --v2-selected-solid: #EDEDEF;
+  --v2-border: #E6E6E9;
+  --v2-border-subtle: #EFEFF1;
+  --v2-border-strong: #D5D6DA;
+
+  --v2-text: #1C1D1F;
+  --v2-text-2: #4E525A;
+  --v2-text-3: #62666E;
+  --v2-text-disabled: #A3A6AD;
+  --v2-text-on-accent: #FFFFFF;
+
+  --v2-accent: #505AC9;
+  --v2-accent-hover: #434CB8;
+  --v2-accent-soft: rgba(80, 90, 201, 0.10);
+  --v2-primary-bg: #5E6AD2;
+  --v2-primary-bg-hover: #525DC7;
+  --v2-primary-text: #FFFFFF;
+  --v2-ok: #187A4C;
+  --v2-ok-soft: rgba(24, 122, 76, 0.10);
+  --v2-warn: #955500;
+  --v2-warn-soft: rgba(149, 85, 0, 0.10);
+  --v2-danger: #C23434;
+  --v2-danger-soft: rgba(194, 52, 52, 0.09);
+  --v2-info: #1A68BA;
+  --v2-info-soft: rgba(26, 104, 186, 0.10);
+  --v2-neutral: #62666E;
+  --v2-neutral-soft: rgba(98, 102, 110, 0.10);
+  --v2-danger-line: rgba(194, 52, 52, 0.30);
+  --v2-danger-press: rgba(194, 52, 52, 0.15);
+  --v2-danger-text: #A82B2B;
+
+  --v2-status-todo: #8A8E96;
+  --v2-status-pending: #8A8E96;
+  --v2-status-progress: #B07D00;
+  --v2-status-review: #23905E;
+  --v2-status-verify: #B86E00;
+  --v2-status-done: #23905E;
+  --v2-status-blocked: #C23434;
+  --v2-status-failed: #C23434;
+  --v2-status-cancelled: #8A8E96;
+  /* primitives-a status palette (v2-primitives.css :root block) */
+  --v2-st-todo: #8A8E96;
+  --v2-st-faint: #A3A6AD;
+  --v2-st-progress: #B07D00;
+  --v2-st-muted: #8A8E96;
+
+  --v2-prio-bar-empty: #D5D6DA;
+  --v2-prio-urgent: #DE6414;
+  --v2-label-1: #1A68BA;
+  --v2-label-2: #187A4C;
+  --v2-label-3: #9A6B00;
+  --v2-label-4: #C2570C;
+  --v2-label-5: #C23434;
+  --v2-label-6: #505AC9;
+  --v2-label-7: #B0409A;
+  --v2-label-8: #13808C;
+
+  --v2-avatar-fg: #1C1D1F;
+  --v2-av-fill-s: 62%; --v2-av-fill-l: 90%;
+  --v2-av-ink-s: 48%;  --v2-av-ink-l: 30%;
+  --v2-hue-mark-s: 58%; --v2-hue-mark-l: 42%;
+  --v2-hue-glyph-s: 55%; --v2-hue-glyph-l: 42%;
+
+  --v2-hue-home: #3569D8;
+  --v2-hue-tasks: #7447D6;
+  --v2-hue-routines: #0F8577;
+  --v2-hue-agents: #C4317F;
+  --v2-hue-org: #A06A00;
+  --v2-hue-requests: #C2570C;
+  --v2-hue-code: #1F8A4C;
+  --v2-hue-github: #1C1D1F;
+  --v2-hue-activity: #0E7C95;
+  --v2-hue-metrics: #4D7C0F;
+
+  --v2-selection: rgba(80, 90, 201, 0.20);
+  --v2-scrim: rgba(24, 25, 28, 0.24);
+  --v2-scrim-strong: rgba(24, 25, 28, 0.32);
+  --v2-veil: rgba(255, 255, 255, 0.92);
+  --v2-inverse-hover: #000000;
+  --v2-inverse-text: #FFFFFF;
+  --v2-scroll-shadow: rgba(24, 25, 28, 0.10);
+  --v2-shadow-seg: 0 1px 2px rgba(24, 25, 28, 0.10);
+  --v2-shadow-palette: 0 16px 48px rgba(24, 25, 28, 0.16), 0 0 0 1px rgba(24, 25, 28, 0.06);
+  --v2-shadow-lightbox: 0 20px 60px rgba(0, 0, 0, 0.35);
+  --v2-live-pulse: rgba(24, 122, 76, 0.40);
+  --v2-live-pulse-0: rgba(24, 122, 76, 0);
+  --v2-logo-ink: #1C1D1F;                   /* light mode: near-black left half stays readable */
+  --v2-logo-accent: #7C808A;
+
+  --v2-chip-border: #E1E1E5;
+  --v2-pill-bg-selected: #EDEDEF;
+  --v2-pill-border-selected: #DCDCE0;
+  --v2-btn-secondary-bg: #FFFFFF;
+
+  --v2-shadow-panel: 0 1px 2px rgba(24, 25, 28, 0.05), 0 0 0 0.5px rgba(24, 25, 28, 0.02);
+  --v2-shadow-card: 0 1px 1px rgba(24, 25, 28, 0.04);
+  --v2-shadow-pop: 0 8px 28px rgba(24, 25, 28, 0.14), 0 0 0 1px rgba(24, 25, 28, 0.06);
+
+  --accent-line: rgba(80, 90, 201, 0.30);
+  --accent-glow: rgba(80, 90, 201, 0.16);
+  --ok-line: rgba(24, 122, 76, 0.30);
+  --info-line: rgba(26, 104, 186, 0.30);
+  --warn-line: rgba(149, 85, 0, 0.30);
+  --danger-line: rgba(194, 52, 52, 0.30);
+  --violet-line: rgba(80, 90, 201, 0.30);
+  --idle-line: rgba(98, 102, 110, 0.26);
+  --diff-add: #17754A; --diff-add-bg: rgba(24, 122, 76, 0.09);
+  --diff-del: #B8342A; --diff-del-bg: rgba(194, 52, 52, 0.08);
+  --diff-hunk-bg: rgba(26, 104, 186, 0.07);
+}
+
+/* Panel scope: everything inside the D5 inset panel treats the panel tone as
+   its canvas (sticky headers, focus-ring gap, avatar rings, legacy --bg). */
+[data-v2-surface="panel"],
+.v2-panel-surface {
+  --v2-canvas: var(--v2-panel);
+  --v2-avatar-ring: var(--v2-panel);
+  --v2-focus-ring-inset: inset 0 0 0 2px var(--v2-accent), inset 0 0 0 3px var(--v2-panel);
+  --bg: var(--v2-panel);
+}
+/* Popover / menu / dialog scope (optional): rings + gaps match the raised tone. */
+[data-v2-surface="raised"] {
+  --v2-canvas: var(--v2-raised);
+  --v2-avatar-ring: var(--v2-raised);
+}
+
+/* Phone widths: no inset frame — the panel fills the viewport (Linear mobile). */
+@media (max-width: 720px) {
+  :root, :root[data-theme], :root[data-skin], :root[data-theme][data-skin] {
+    --v2-frame-gap: 0px;
+    --v2-panel-radius: 0px;
+    --v2-panel-px: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root, :root[data-theme], :root[data-skin] {
+    --v2-dur-fast: 0ms;
+    --v2-dur-base: 0ms;
+  }
+}
+
+/* ---- base ---------------------------------------------------------------- */
+html {
+  /* r1: a stray 2px (pseudo-element / negative margin) made the whole page
+     pan sideways at 390. Page-level horizontal scroll is never intended —
+     strips that scroll sideways own their own overflow-x: auto. */
+  overflow-x: clip;
+  background: var(--v2-window); /* before + during first paint (index.html also sets it inline) */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  background: var(--v2-window);
+  color: var(--v2-text);
+  font-family: var(--v2-font-sans);
+  font-size: var(--v2-fs-body);
+  line-height: var(--v2-lh-body);
+  font-feature-settings: var(--v2-font-features);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+/* form controls do not inherit font by default */
+button, input, select, textarea { font-family: inherit; font-feature-settings: inherit; }
+a { color: var(--v2-accent); }
+code, kbd, pre, .mono { font-family: var(--v2-font-mono); font-feature-settings: normal; }
+/* No programming ligatures anywhere code is shown — the viewer and the editor
+   must render "=>", "===" identically (r1 Code Space: edit mode showed ⇒ ≡). */
+code, kbd, pre, .mono, .cm-editor, .cm-content, .cm-gutters { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+::selection { background: var(--v2-selection); }
+:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: var(--v2-radius-control); }
+.tnum, .v2-count, time { font-variant-numeric: tabular-nums; }
+
+/* ---- type scale utilities (D6). Compose with layout classes; they only set
+   font properties + colour for the muted roles. ---------------------------- */
+.v2-t-display, .v2-t-display-lg {
+  font-family: var(--v2-font-display);
+  font-size: var(--v2-fs-display);
+  font-weight: var(--v2-fw-semibold);
+  line-height: var(--v2-lh-tight);
+  letter-spacing: var(--v2-ls-display);
+  font-optical-sizing: auto;
+  text-wrap: balance;
+}
+.v2-t-display-lg { font-size: var(--v2-fs-display-lg); }
+/* split-inspector title: Display-ish but compact; clamp is opt-in (never on the full-view H1) */
+.v2-t-inspector-title { font-size: var(--v2-fs-inspector-title); font-weight: var(--v2-fw-semibold); line-height: 1.3; letter-spacing: var(--v2-ls-title); font-optical-sizing: auto; }
+.v2-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.v2-t-title   { font-size: var(--v2-fs-title);  font-weight: var(--v2-fw-semibold); line-height: 1.3; letter-spacing: var(--v2-ls-title); }
+.v2-t-header  { font-size: var(--v2-fs-header); font-weight: var(--v2-fw-medium);   line-height: var(--v2-lh-snug); }
+.v2-t-row     { font-size: var(--v2-fs-body);   font-weight: var(--v2-fw-book);     line-height: var(--v2-lh-snug); }
+.v2-t-body    { font-size: var(--v2-fs-body);   font-weight: var(--v2-fw-regular);  line-height: var(--v2-lh-body); }
+.v2-t-body-lg { font-size: var(--v2-fs-body-lg); font-weight: var(--v2-fw-regular); line-height: 1.55; color: var(--v2-text-2); }
+.v2-t-meta    { font-size: var(--v2-fs-meta);   font-weight: var(--v2-fw-regular);  line-height: var(--v2-lh-snug); color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+.v2-t-label   { font-size: var(--v2-fs-label);  font-weight: var(--v2-fw-medium);   line-height: var(--v2-lh-snug); color: var(--v2-text-3); }
+.v2-t-id      { font-size: var(--v2-fs-meta);   font-weight: var(--v2-fw-medium);   color: var(--v2-text-3); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+
+/* ---- horizontal strips (tabs, filter pills, boards) ----------------------
+   .v2-fade-x = single-row horizontal scroller with optional edge fades.
+   The component sets data-fade="start|end|both" from its scroll position
+   (scrollLeft > 0 → start; scrollLeft + clientWidth < scrollWidth → end);
+   no attribute = no mask. Scrollbar hidden (Linear); wheel, touch and
+   keyboard still scroll. Pair with scrollIntoView({inline:"center"}) on the
+   active item so the current tab/pill is never cut off. */
+.v2-fade-x {
+  display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: var(--v2-fade-w);
+}
+.v2-fade-x::-webkit-scrollbar { display: none; }
+.v2-fade-x > * { flex: none; }
+.v2-fade-x[data-fade="end"]   { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--v2-fade-w)), transparent); mask-image: linear-gradient(to right, #000 calc(100% - var(--v2-fade-w)), transparent); }
+.v2-fade-x[data-fade="start"] { -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--v2-fade-w)); mask-image: linear-gradient(to right, transparent, #000 var(--v2-fade-w)); }
+.v2-fade-x[data-fade="both"]  { -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--v2-fade-w), #000 calc(100% - var(--v2-fade-w)), transparent); mask-image: linear-gradient(to right, transparent, #000 var(--v2-fade-w), #000 calc(100% - var(--v2-fade-w)), transparent); }
+
+/* screen-reader-only text */
+.v2-sr {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* No decorative motion under reduced motion: static live markers. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
+}
+
+/* touch targets on coarse pointers */
+/* Same selector list as the token block above — `:root` alone (0,1,0) loses to
+   `:root[data-theme]` (0,2,0), which always matches (QA: the override was dead). */
+@media (pointer: coarse) {
+  :root,
+  :root[data-theme],
+  :root[data-skin],
+  :root[data-theme][data-skin] {
+    --v2-row-h: var(--v2-row-h-touch);
+    --v2-control-h: 44px;
+    --v2-control-h-sm: 44px;
+  }
+}

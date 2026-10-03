@@ -1,0 +1,41 @@
+/* Pairing body — Orcha V2 overrides (scoped under #pairBody so the legacy
+   overlays.css rules stay intact for anything else). Linear-style: no card
+   inside the section/modal (the QR tile is the only framed thing), sentence-
+   case 12px labels, a neutral expiry line (amber only in the last 30 s), and
+   neutral chooser / warning states with a real retry. */
+#pairBody .pair-card { background: transparent; border: 0; box-shadow: none; padding: 0; }
+#pairBody .pair-qr { border-radius: 8px; overflow: hidden; }
+#pairBody .pair-label { color: var(--v2-text-2); font-size: 12px; font-weight: var(--v2-fw-medium); letter-spacing: 0; text-transform: none; }
+#pairBody .pair-value { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); }
+#pairBody .pair-code { background: var(--v2-raised); border: 1px solid var(--v2-border); border-radius: 6px; letter-spacing: .08em; }
+#pairBody .pair-url { color: var(--v2-text-2); font-family: var(--v2-font-mono); }
+#pairBody .pair-foot { color: var(--v2-text-2); font-size: 12px; }
+#pairBody .pair-expiry { display: inline-flex; align-items: center; gap: 6px; color: var(--v2-text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+#pairBody .pair-expiry svg { width: 14px; height: 14px; flex: none; }
+#pairBody .pair-expiry.is-urgent { color: var(--v2-warn); }
+
+/* warning: neutral surface, icon + muted amber title, actions row */
+#pairBody .pair-warning { border: 0; background: transparent; border-radius: 0; padding: 0; }
+#pairBody .pair-warn-title { color: var(--v2-text); font-size: var(--v2-fs-body); font-weight: var(--v2-fw-semibold); }
+#pairBody .pair-warn-title svg { color: var(--v2-warn); width: 16px; height: 16px; }
+#pairBody .pair-remedy { background: var(--v2-raised); border: 1px solid var(--v2-border); border-radius: 6px; }
+#pairBody .pair-acts { display: flex; gap: var(--v2-space-2); margin-top: var(--v2-space-3); }
+
+/* chooser: a plain labelled select, label right next to its control */
+#pairBody .pair-chooser { display: flex; flex-direction: column; gap: 6px; max-width: 360px; }
+#pairBody .pair-chooser-l { color: var(--v2-text); font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); }
+#pairBody .pair-chooser-h { color: var(--v2-text-2); font-size: 12px; margin: 0; }
+#pairBody .pair-chooser select {
+  height: 28px; background: var(--v2-raised); color: var(--v2-text); border: 1px solid var(--v2-border-strong);
+  border-radius: 6px; font: inherit; font-size: 13px; padding: 0 8px;
+}
+#pairBody .pair-chooser select:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+/* collapsed raw error (status + server text) — never the headline (D4) */
+#pairBody .pair-details { margin-top: var(--v2-space-2); color: var(--v2-text-2); font-size: 12px; }
+#pairBody .pair-details summary { cursor: pointer; width: max-content; }
+#pairBody .pair-details code { display: block; margin-top: 4px; font-family: var(--v2-font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; color: var(--v2-text-2); }
+
+/* "Pairing as": GitHub login (who pairs) + the project alias, muted, when it differs */
+#pairBody .pair-identity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+#pairBody .pair-alias { color: var(--v2-text-3); font-weight: var(--v2-fw-regular); white-space: nowrap; }

@@ -1,0 +1,13 @@
+{
+  "name": "Embodent",
+  "short_name": "Embodent",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121314",
+  "theme_color": "#0E0F10",
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/assets/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

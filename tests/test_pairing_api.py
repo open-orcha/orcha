@@ -80,7 +80,7 @@ async def test_pairing_warns_when_only_localhost_is_available(client, container,
 
     assert r.status_code == 409, r.text
     detail = r.json()["detail"]
-    assert detail["title"] == "Phones can't reach this Orcha yet"
+    assert detail["title"] == "Phones can't reach this Embodent yet"
     assert detail["reason"] == "no_lan_address"
     assert "orcha up" in detail["remedy"]
     assert "--host" not in detail["remedy"]
@@ -232,8 +232,8 @@ async def test_qr_svg_is_branded_and_payload_unchanged(
     assert re.search(r'<rect width="\d+" height="\d+" rx="\d+" fill="#ffffff"/>', svg), (
         "the light tile behind the code is baked into the SVG (never theme-inverted)"
     )
-    # the centre orca tile: same artwork as favicon.svg on the rounded dark tile
-    assert 'rx="22" fill="#0b1216"' in svg and "#1fc7cd" in svg, "embedded orca glyph"
+    # the centre Embodent mark on the rounded dark tile
+    assert 'rx="22" fill="#121314"' in svg and "#ECEDF1" in svg and "#7C808A" in svg, "embedded Embodent mark"
 
     # the QR payload contract is unchanged by the restyle
     payload = json.loads(data["qrText"])

@@ -34,7 +34,7 @@ export interface Plan {
   upgrade_url: string;
 }
 
-const DEFAULT_UPGRADE_URL = "https://orcha.nursoftai.com/#pricing";
+const DEFAULT_UPGRADE_URL = "https://orcha.quantallabs.ai";
 
 // The fail-open fallback — see the file-level comment for why "team".
 const FAIL_OPEN_PLAN: Plan = {

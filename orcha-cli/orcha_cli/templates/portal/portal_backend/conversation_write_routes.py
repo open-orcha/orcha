@@ -11,6 +11,7 @@ from portal_backend.attachment_references import (
 )
 from portal_backend.conversation_read_routes import TURN_COLUMNS
 from portal_backend.database import db_cursor
+from portal_backend import stream_signal as _stream_signal
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import require_agent as _require_agent
 from portal_backend.guards import valid_uuid as _valid_uuid
@@ -122,7 +123,29 @@ def append_turn(conv_id: str, body: TurnAppend, request: Request):
                     "attachments": attachments,
                 },
             )
+        else:
+            # Live chat: the reply landed — a container-wide event (NOT agent-targeted, so
+            # it can never wake the agent) lets open portals fetch it now, not next poll.
+            _publish_event(
+                cur,
+                str(conversation["container_id"]),
+                None,
+                "conversation_reply",
+                {
+                    "conversation_id": conv_id,
+                    "agent_id": str(conversation["agent_id"]),
+                    "turn_id": str(turn["id"]),
+                    "seq": seq,
+                    "run_id": body.run_id,
+                },
+            )
         conn.commit()
+    # wake the streams waiting on these event keys now (the resident manager's watcher
+    # and open portals) instead of on their next DB poll
+    _stream_signal.notify(
+        f"c:{conversation['container_id']}",
+        str(conversation["agent_id"]) if body.role == "human" else None,
+    )
     return {"turn": turn}
 
 

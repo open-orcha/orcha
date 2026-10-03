@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import datetime
 import os
+import subprocess
+import time
 from typing import Callable, Optional
+
+# A host pid that started more than this long AFTER its run row was recorded is not
+# that run's process: the pid was recycled by an unrelated program.
+PID_REUSE_SLACK_SECS = 120.0
 
 
 def mint_token(api_base: str, aid: str, lane: str, kind: str, *, post_json) -> Optional[str]:
@@ -106,19 +113,74 @@ def reap_sandbox_artifacts(rec: dict, *, sandbox_mod) -> None:
         pass                                   # cleanup must never take down a reap path
 
 
+def _ps_state(pid):
+    """Return ``(stat, start_epoch)`` for a host pid, or None when ps cannot say."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "stat=", "-o", "lstart=", "-p", str(int(pid))],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "LC_ALL": "C", "LANG": "C"},
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+    line = result.stdout.strip()
+    if result.returncode != 0 or not line:
+        return None
+    stat, _, lstart = line.partition(" ")
+    try:
+        started = time.mktime(time.strptime(" ".join(lstart.split()), "%a %b %d %H:%M:%S %Y"))
+    except (ValueError, OverflowError):
+        started = None
+    return stat, started
+
+
 def run_pid_alive(pid) -> bool:
-    """Return whether a host process exists, treating unknown PIDs as dead."""
+    """Return whether a host process is really running, treating unknown PIDs as dead.
+
+    ``os.kill(pid, 0)`` also succeeds for a ZOMBIE — a worker that exited but whose
+    parent never reaped it — which is exactly the state a stalled daemon leaves its
+    finished workers in. A zombie runs nothing, so it counts as dead here."""
     if not pid:
         return False
     try:
         os.kill(int(pid), 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
     except (OSError, ValueError, TypeError):
         return False
+    state = _ps_state(pid)
+    return not (state and state[0].startswith("Z"))
+
+
+def _epoch(iso_ts) -> Optional[float]:
+    if not iso_ts:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.timestamp()
+
+
+def run_pid_reused(pid, run_started_at) -> bool:
+    """Return True only when ``pid`` provably belongs to a process newer than the run.
+
+    Unknown start times (ps unavailable, pid gone, unparseable row timestamp) are
+    never called reused — the caller's liveness answer stands."""
+    run_started = _epoch(run_started_at)
+    if not pid or run_started is None:
+        return False
+    state = _ps_state(pid)
+    if not state or state[1] is None:
+        return False
+    return state[1] > run_started + PID_REUSE_SLACK_SECS
 
 
 def reap_dead_resident_runs(

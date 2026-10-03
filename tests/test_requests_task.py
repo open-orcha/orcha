@@ -334,11 +334,13 @@ async def test_decide_is_human_only(client, make_agent, make_request):
 
 
 async def test_max_auto_agents_cap(client, container, make_agent, make_request, db):
-    # cap the container so no new agent can be created
-    db.execute("UPDATE containers SET max_auto_agents=3 WHERE id=%s", (container["id"],))
+    # UO-11a: the cap counts live AI agents created FROM suggestions (is_auto_created),
+    # not humans / hand-made agents. Cap at 2 and mark both AI agents auto-created.
+    db.execute("UPDATE containers SET max_auto_agents=2 WHERE id=%s", (container["id"],))
     human = await make_agent("human", "operator", kind="human")
     a = await make_agent("a", "eng")
-    b = await make_agent("b", "eng")  # now at 3 agents == cap
+    b = await make_agent("b", "eng")
+    db.execute("UPDATE agents SET is_auto_created=true WHERE id IN (%s, %s)", (a["agent_id"], b["agent_id"]))  # now 2 == cap
     req = await make_request(a["agent_id"], "build", target_alias="b",
                              type="task", task=_task_payload())
     await client.post(f"/api/requests/{req['request_id']}/reject-task",
@@ -348,4 +350,9 @@ async def test_max_auto_agents_cap(client, container, make_agent, make_request, 
                             "proposed_role": "eng", "proposed_prompt": "p", "rationale": "r"})
     d = await client.post(f"/api/agent-suggestions/{req['request_id']}/decide",
                           json={"kind": "create", "actor_agent_id": human["agent_id"]})
-    assert d.status_code == 409, "creating past max_auto_agents must be rejected"
+    assert d.status_code == 409, ("creating past max_auto_agents must be rejected", d.status_code, d.text)
+    # UO-11a: hand-made agents / humans never count — lift the auto flag and it goes through
+    db.execute("UPDATE agents SET is_auto_created=false WHERE id IN (%s, %s)", (a["agent_id"], b["agent_id"]))
+    d = await client.post(f"/api/agent-suggestions/{req['request_id']}/decide",
+                          json={"kind": "create", "actor_agent_id": human["agent_id"]})
+    assert d.status_code == 200, d.text

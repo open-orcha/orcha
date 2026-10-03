@@ -11,7 +11,8 @@ from portal_backend.agent_profile_routes import retire_agent_record
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend.guards import require_container, valid_uuid
+from portal_backend.events import publish_event
+from portal_backend.guards import require_container, reroute_open_requests, valid_uuid
 from portal_backend.identity_routes import (
     container_mapped,
     has_grant,
@@ -258,6 +259,23 @@ def update_member_role(cid: str, aid: str, body: MemberRoleUpdate, request: Requ
             params,
         )
         updated = cur.fetchone()
+        cleared_reviews: list[str] = []
+        moved = {"rerouted": [], "unrouted": []}
+        if detail.get("to") == "viewer":
+            # Parity r3 (e2e-permissions-24): a viewer is read-only — every write 403s —
+            # so nothing may stay parked on them. Mirror remove_member: their delegated
+            # reviews revert to reviewer=anyone (PUT /reviewer refuses a viewer anyway),
+            # and their open asks move to a human who can answer them.
+            cur.execute(
+                "UPDATE tasks SET reviewer_agent_id=NULL "
+                "WHERE container_id=%s AND reviewer_agent_id=%s RETURNING id",
+                (cid, aid),
+            )
+            cleared_reviews = [str(r["id"]) for r in cur.fetchall()]
+            moved = reroute_open_requests(cur, cid, aid)
+            detail["cleared_reviewer_on"] = cleared_reviews
+            detail["rerouted_requests"] = moved["rerouted"]
+            detail["unrouted_requests"] = moved["unrouted"]
         log_event(
             cur,
             cid,
@@ -268,7 +286,23 @@ def update_member_role(cid: str, aid: str, body: MemberRoleUpdate, request: Requ
             "member_role_changed" if "to" in detail else "member_grants_changed",
             detail,
         )
+        for m in moved["rerouted"]:
+            log_event(
+                cur, cid, "human", str(actor["id"]), "request", m["request_id"],
+                "rerouted",
+                {"from_target_id": aid, "to_human_id": m["to_agent_id"],
+                 "reason": "member_demoted_to_viewer"},
+            )
+            publish_event(
+                cur, cid, m["to_agent_id"], "request_created",
+                {"request_id": m["request_id"], "via": "rerouted"},
+            )
         conn.commit()
+    if detail.get("to") == "viewer":
+        # additive: the settings UI can say what moved
+        return {**updated, "cleared_reviewer_on": cleared_reviews,
+                "rerouted_requests": moved["rerouted"],
+                "unrouted_requests": moved["unrouted"]}
     return updated
 
 

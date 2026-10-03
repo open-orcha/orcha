@@ -101,7 +101,10 @@ describe("ThreadRail — Threads tab", () => {
     mount();
     expect(await screen.findByText("Question")).toBeInTheDocument();
     expect(screen.getByText("Teach")).toBeInTheDocument();
-    expect(screen.getByText(/outdated — pinned to abc1234/i)).toBeInTheDocument();
+    // visible "⚠ Outdated abc1234"; the full sentence stays in the accessible text
+    const chips = document.querySelectorAll(".cs-thread-chip .outdated-chip");
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent?.replace(/\s+/g, " ").trim()).toMatch(/outdated — pinned to abc1234/i);
     // the answered/non-outdated thread has no outdated chip on its own chip
     expect(screen.getAllByText(/outdated/i)).toHaveLength(1);
   });
@@ -120,7 +123,7 @@ describe("ThreadRail — Threads tab", () => {
     const onOpenThread = vi.fn();
     const onJumpToLine = vi.fn();
     mount({ onOpenThread, onJumpToLine });
-    const anchor = await screen.findByText(":3");
+    const anchor = await screen.findByText("L3");
     fireEvent.click(anchor);
     expect(onJumpToLine).toHaveBeenCalledWith(3);
     expect(onOpenThread).not.toHaveBeenCalled();
@@ -155,7 +158,8 @@ describe("ThreadRail — tabs", () => {
       ({ ok: true, status: 200, json: async () => ({ threads: [] }) }) as unknown as Response,
     ) as unknown as typeof fetch;
     mount({ tab: "learn" });
-    expect(await screen.findByText(/no teach\/why threads yet/i)).toBeInTheDocument();
+    // empty library → the inviting hero with quick starts
+    expect(await screen.findByText(/learn this codebase/i)).toBeInTheDocument();
   });
 
   it("renders an Outline tab button alongside Threads/Live/Learn", () => {
@@ -209,7 +213,7 @@ describe("ThreadRail — Changes tab (working-tree, local run addendum)", () => 
     }) as unknown as typeof fetch;
     mount({ tab: "changes" });
     expect(await screen.findByText("src/a.ts")).toBeInTheDocument();
-    expect(screen.getByText("1 file changed")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Code changes" }).textContent).toMatch(/Changed\s*1 file/);
   });
 
   it("clicking a changed file calls onOpenWorktreeDiff with its path", async () => {
@@ -427,7 +431,7 @@ describe("ThreadRail — optimistic post-to-conversation (item 5)", () => {
     );
     await screen.findByText(/line 5/i);
     fireEvent.change(screen.getByLabelText(/thread message/i), { target: { value: "How does auth work here?" } });
-    fireEvent.click(screen.getByText("Post"));
+    fireEvent.click(screen.getByRole("button", { name: "Post" }));
 
     // seeded straight into ThreadView — the posted message is visible without
     // an extra click or waiting for the poll.

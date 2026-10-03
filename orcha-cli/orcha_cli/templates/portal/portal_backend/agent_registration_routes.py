@@ -24,6 +24,34 @@ def configure_model_ids(model_ids):
     _model_ids = model_ids
 
 
+def _lock_pickable_task(cur, cid: str, tid: str):
+    """P-10: lock and validate an existing task the new agent should start on: same
+    project, not the root, status 'ready' and no active assignee. Anything else is a 409
+    so the client never silently creates a duplicate or steals someone's work."""
+    cur.execute(
+        """SELECT id, title, status, is_root, container_id FROM tasks
+           WHERE id=%s FOR UPDATE""",
+        (tid,),
+    )
+    row = cur.fetchone()
+    if not row or str(row["container_id"]) != cid:
+        raise HTTPException(404, f"task {tid} not found in this project")
+    if row["is_root"]:
+        raise HTTPException(409, "the root task cannot be picked as a first task")
+    if row["status"] != "ready":
+        raise HTTPException(
+            409, f"task is '{row['status']}' — only a ready task can be picked"
+        )
+    cur.execute(
+        """SELECT 1 FROM agent_tasks WHERE task_id=%s
+             AND assignment_status IN ('assigned','accepted','working') LIMIT 1""",
+        (tid,),
+    )
+    if cur.fetchone():
+        raise HTTPException(409, "task already has an active assignee")
+    return row
+
+
 @app.post(
     "/api/containers/{cid}/agents",
     response_model=AgentCreateResponse,
@@ -36,10 +64,18 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
         raise HTTPException(
             400, "kind='ai' requires a non-empty `prompt` (the system prompt)"
         )
-    if body.kind == "human" and body.initial_task is not None:
+    if body.kind == "human" and (
+        body.initial_task is not None or body.initial_task_id is not None
+    ):
         raise HTTPException(
             400, "humans don't get an initial_task — they pick work deliberately"
         )
+    if body.initial_task is not None and body.initial_task_id is not None:
+        raise HTTPException(
+            400, "pass either initial_task (a new task) or initial_task_id (an existing one), not both"
+        )
+    if body.initial_task_id is not None and not _valid_uuid(body.initial_task_id):
+        raise HTTPException(400, "initial_task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
         # Per-project identity: once this container has a mapped member, only members
@@ -50,6 +86,9 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
         # Access model: registering agents is owner-or-manage_agents (trusted lane;
         # the CLI's headerless `orcha init` registration is untouched).
         _enforce_grant(cur, request, cid, "manage_agents")
+        picked = None
+        if body.initial_task_id is not None:
+            picked = _lock_pickable_task(cur, cid, body.initial_task_id)
         model = body.model
         if body.kind == "human":
             model = None
@@ -154,6 +193,44 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
                 {"via": "initial_task on register"},
             )
             initial = {"task_id": tid, "title": task.title, "status": "in_progress"}
+        elif picked is not None:
+            # P-10: the picked EXISTING task becomes this agent's first task — same end
+            # state as initial_task (in_progress + working), but no duplicate row.
+            tid = str(picked["id"])
+            cur.execute(
+                "UPDATE tasks SET status='in_progress', started_at=now() WHERE id=%s",
+                (tid,),
+            )
+            cur.execute(
+                """INSERT INTO agent_tasks (agent_id, task_id, assignment_status)
+                   VALUES (%s, %s, 'working')
+                   ON CONFLICT (agent_id, task_id) DO UPDATE SET assignment_status='working'""",
+                (aid, tid),
+            )
+            bump_agent(cur, aid)
+            recompute_agent_status(cur, aid)
+            log_event(
+                cur,
+                cid,
+                "human",
+                None,
+                "task",
+                tid,
+                "assigned",
+                {"agent_id": aid, "alias": body.alias, "status": "in_progress",
+                 "via": "initial_task_id on register"},
+            )
+            log_event(
+                cur,
+                cid,
+                "ai",
+                aid,
+                "task",
+                tid,
+                "claimed",
+                {"via": "initial_task_id on register"},
+            )
+            initial = {"task_id": tid, "title": picked["title"], "status": "in_progress"}
         conn.commit()
     return AgentCreateResponse(
         agent_id=aid,

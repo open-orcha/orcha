@@ -1,0 +1,30 @@
+/* Agent Configuration → Performance (Linear-grade: one bordered card, a sparkline row
+   over a figure grid, hairline dividers, tabular numbers, no stripes). Inherits Inter (D15). */
+.apf { display: flex; flex-direction: column; gap: var(--v2-space-2); }
+.apf-h { display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: wrap; min-height: 24px; }
+.apf-t { margin: 0; font-size: var(--v2-fs-title); font-weight: var(--v2-fw-semibold); letter-spacing: var(--v2-ls-title, -0.005em); }
+.apf-grow { flex: 1; min-width: 0; }
+
+.apf-card { display: flex; flex-direction: column; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface); }
+.apf-msg { flex-direction: row; align-items: center; gap: var(--v2-space-3); padding: 12px var(--v2-space-4); min-height: 52px; }
+.apf-msg-t { flex: 1; min-width: 0; font-size: var(--v2-fs-body); color: var(--v2-text-2); }
+.apf-err { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+
+.apf-chart { padding: 12px var(--v2-space-4) 10px; border-bottom: 1px solid var(--v2-border-subtle); }
+.apf-chart-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.apf-chart-t, .apf-chart-n { font-size: var(--v2-fs-meta); color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+
+.apf-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+.apf-tile { min-width: 0; padding: 10px var(--v2-space-4); border-top: 1px solid var(--v2-border-subtle); margin-top: -1px; cursor: default; }
+.apf-l { font-size: var(--v2-fs-meta); color: var(--v2-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.apf-v { margin-top: 3px; font-size: var(--v2-fs-title); font-weight: var(--v2-fw-semibold); color: var(--v2-text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; white-space: nowrap; }
+.apf-v.is-unknown { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); }
+.apf-s { margin-top: 2px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
+.apf-link { align-self: flex-start; font-size: var(--v2-fs-meta); color: var(--v2-text-2); text-decoration: none; border-radius: var(--v2-radius-sm); }
+.apf-link:hover { color: var(--v2-text); text-decoration: underline; }
+.apf-link:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+@media (max-width: 720px) {
+  .apf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

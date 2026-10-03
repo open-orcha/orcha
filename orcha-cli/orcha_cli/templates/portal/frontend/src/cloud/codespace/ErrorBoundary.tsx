@@ -16,6 +16,7 @@
  * fully interactive, and the compact fallback offers a "reload pane" reset
  * that clears the boundary's error state without a full-page reload.
  */
+import { Button } from "../../components/primitives";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 export interface ErrorBoundaryProps {
@@ -49,10 +50,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (this.state.error) {
       return (
         <div className="cs-pane-crash" role="alert">
-          <div className="cs-pane-crash-msg">something broke here — reload pane</div>
-          <button type="button" className="btn ghost sm" onClick={this.reset}>
+          <div className="cs-pane-crash-msg">Something broke in this pane.</div>
+          <Button size="sm" variant="secondary" icon="refresh" onClick={this.reset}>
             Reload {this.props.label} pane
-          </button>
+          </Button>
         </div>
       );
     }

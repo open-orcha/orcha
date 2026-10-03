@@ -80,7 +80,7 @@ async def test_empty_diff_is_retrievable(client, make_agent, make_task):
 def test_pages_mount_the_shared_run_engine():
     """Both detail pages render runs via the shared engine — fetch the agent/task /runs
     endpoint and render each run with the shared classifier + diff widget."""
-    tasks = (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    tasks = "".join((FRONTEND / "pages" / "tasks" / f).read_text() for f in ("TasksPage.tsx", "TaskDetail.tsx"))
     assert "useRunStream" in tasks and "FilesChanged" in tasks, "tasks page: doesn't use the shared run engine"
     assert '"/api/tasks/" + encodeURIComponent(tid) + "/runs"' in tasks, "tasks page: doesn't fetch the /runs feed"
     runlog = (FRONTEND / "pages" / "agents" / "runlog.tsx").read_text()
@@ -97,7 +97,7 @@ def test_shared_classifier_has_the_full_taxonomy():
     assert "export function selfAction" in cl, "orcha self-action detector missing"
     for token in ("narrate", "think", "tool", "result", "label"):
         assert token in cl, f"shared classifier missing '{token}'"
-    for page in ("pages/tasks/TasksPage.tsx", "pages/agents/runlog.tsx"):
+    for page in ("pages/tasks/TaskDetail.tsx", "pages/agents/runlog.tsx"):
         assert "watchdog-killed" in (FRONTEND / page).read_text(), \
             f"{page}: run card doesn't flag a watchdog-killed run"
 

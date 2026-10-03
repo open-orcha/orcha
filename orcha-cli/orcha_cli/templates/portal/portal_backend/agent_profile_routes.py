@@ -3,6 +3,7 @@
 import psycopg
 from fastapi import HTTPException, Request
 
+from portal_backend.agent_config_history_routes import config_before, record_config_change
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -178,6 +179,7 @@ def update_agent(aid: str, body: AgentUpdate, request: Request):
             params.append(body.autonomy_override)
             changed.append("autonomy_override")
         params.append(aid)
+        before = config_before(cur, aid)  # config history: pre-change state (row-locked)
         try:
             cur.execute(
                 f"UPDATE agents SET {', '.join(sets)} WHERE id=%s "
@@ -190,6 +192,7 @@ def update_agent(aid: str, body: AgentUpdate, request: Request):
                 409, f"alias '{body.alias}' already exists in this container"
             )
         updated = cur.fetchone()
+        record_config_change(cur, aid, before, source="profile", actor_agent_id=body.actor_agent_id)
         log_event(
             cur,
             row["container_id"],

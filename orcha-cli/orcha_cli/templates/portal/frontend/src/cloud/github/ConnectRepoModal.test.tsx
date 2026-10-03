@@ -63,16 +63,24 @@ describe("ConnectRepoModal", () => {
     expect(screen.getByText("the app")).toBeInTheDocument();
   });
 
-  it("falls back to a generic local row when the backend hasn't shipped the prepended entry yet", async () => {
+  it("offers NO local row when the backend has no local entry (would 400) — parity extra", async () => {
     stubFetch({ available: false, repos: [] });
     mount({ fallbackLocalName: "acme-ehr" });
+    expect(await screen.findByText("No GitHub access configured yet.")).toBeInTheDocument();
+    expect(screen.queryByText("This machine")).toBeNull();
+    expect(screen.queryByText("acme-ehr")).toBeNull();
+  });
+
+  it("keeps the local row visible when the project is already bound local", async () => {
+    stubFetch({ available: false, repos: [] });
+    mount({ fallbackLocalName: "acme-ehr", currentRepo: "local" });
     expect(await screen.findByText("This machine")).toBeInTheDocument();
-    expect(screen.getByText("acme-ehr")).toBeInTheDocument();
+    expect(screen.getByText("acme-ehr").closest("button")!).toHaveTextContent("Connected");
   });
 
   it("choosing the local entry PUTs {repo: 'local'} and reports the binding", async () => {
-    const calls = stubFetch({ available: false, repos: [] });
-    const { onBound, onClose } = mount({ fallbackLocalName: "acme-ehr" });
+    const calls = stubFetch({ available: true, repos: [{ full_name: "local", name: "acme-ehr", source_kind: "local" }] });
+    const { onBound, onClose } = mount();
     await screen.findByText("This machine");
     fireEvent.click(screen.getByText("acme-ehr"));
     await waitFor(() => expect(onBound).toHaveBeenCalledWith("local"));
@@ -92,11 +100,43 @@ describe("ConnectRepoModal", () => {
     expect(put!.body).toEqual({ repo: "acme/app" });
   });
 
-  it("no-token empty state hints at Settings -> GitHub access", async () => {
+  it("no-token empty state deep-links Settings → Integrations (GH-035)", async () => {
     stubFetch({ available: false, repos: [] });
     mount();
     expect(await screen.findByText("No GitHub access configured yet.")).toBeInTheDocument();
-    expect(screen.getByText("Settings → GitHub access")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Settings → Integrations" });
+    expect(link.getAttribute("href")).toBe("/settings#tab=github-access");
+  });
+
+  it("a local-only listing (available:true, no source) still reads as no GitHub access", async () => {
+    stubFetch({ available: true, repos: [{ full_name: "local", name: "w", source_kind: "local" }] });
+    mount();
+    expect(await screen.findByText("No GitHub access configured yet.")).toBeInTheDocument();
+  });
+
+  it("blockedReason disables every row and names why (e2e-permissions-16)", async () => {
+    const calls = stubFetch({ available: true, source: "app", repos: [{ full_name: "local", name: "w", source_kind: "local" }, { full_name: "acme/app" }] });
+    mount({ blockedReason: "Your role is viewer (read-only)" });
+    await screen.findByText("acme/app");
+    expect(screen.getByText(/Your role is viewer \(read-only\) — ask an owner/)).toBeInTheDocument();
+    expect(screen.getByText("acme/app").closest("button")!).toBeDisabled();
+    expect(screen.getByText("w").closest("button")!).toBeDisabled();
+    fireEvent.click(screen.getByText("acme/app"));
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("a 422 array detail never toasts [object Object]", async () => {
+    stubFetch({ available: true, source: "app", repos: [{ full_name: "acme/app" }] }, 422);
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/repos")) return { ok: true, status: 200, json: async () => ({ available: true, source: "app", repos: [{ full_name: "acme/app" }] }) } as unknown as Response;
+      if (init?.method === "PUT") return { ok: false, status: 422, json: async () => ({ detail: [{ msg: "bad", type: "string_pattern_mismatch" }] }) } as unknown as Response;
+      return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    mount();
+    fireEvent.click(await screen.findByText("acme/app"));
+    expect(await screen.findByText("Couldn't connect the repo: That repository name isn't valid.")).toBeInTheDocument();
+    expect(screen.queryByText(/object Object/)).toBeNull();
   });
 
   it("keeps the existing empty-state copy when a token IS configured but lists no repos", async () => {

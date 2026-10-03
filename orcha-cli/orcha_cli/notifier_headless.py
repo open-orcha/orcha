@@ -7,6 +7,7 @@ from typing import Optional
 
 # Remote-runner spec §3.2–3.4: sandbox wake execution. Imported as a module so
 # tests can monkeypatch `_sandbox.preflight` etc. (attribute lookup at call time).
+from . import personal_session
 from . import sandbox as _sandbox
 
 
@@ -258,7 +259,7 @@ def spawn_headless(
     ):
         return False, repr_, None
 
-    env = dict(services.os.environ)
+    env = personal_session.strip(dict(services.os.environ))
     if alias:
         env["ORCHA_ALIAS"] = alias
     if run_token:

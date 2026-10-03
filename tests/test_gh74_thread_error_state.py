@@ -34,7 +34,7 @@ CONV_TSX = (
 
 
 def _tasks_src() -> str:
-    return TASKS_TSX.read_text()
+    return TASKS_TSX.read_text() + (TASKS_TSX.parent / "TaskDetail.tsx").read_text()
 
 
 def _conv_src() -> str:

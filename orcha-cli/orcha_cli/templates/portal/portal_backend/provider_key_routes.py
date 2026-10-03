@@ -18,7 +18,7 @@ from portal_backend.guards import (
 from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
-from portal_backend.llm_key_routes import _llm_error_public_detail, _mask_llm_key
+from portal_backend.llm_key_routes import _llm_error_public_detail
 from portal_backend.provider_keys import (
     provider_api_key as _provider_api_key,
 )
@@ -43,6 +43,17 @@ KEYTEST_LOG = logging.getLogger("orcha.llm-key-test")
 # catalog provider, uniformly for the SETTINGS page — the Anthropic key still lives in its own
 # column (the /settings/llm-key routes above remain), other providers in container_provider_keys.
 # Same discipline as /settings/llm-key: human-gated writes, never return plaintext, 503 w/o master key.
+
+
+_KEY_PREFIX = {"anthropic": "sk-ant-", "xai": "xai-"}
+
+
+def _mask_provider_key(provider: str, hint: Optional[str]) -> Optional[str]:
+    """M5b: the last-4 hint with the PROVIDER's own key prefix (never Anthropic's `sk-`
+    on an xAI key), or just '...WXYZ' for a provider with no well-known prefix."""
+    if not hint:
+        return None
+    return f"{_KEY_PREFIX.get(provider, '')}...{hint}"
 
 
 def _available_provider(provider: str) -> Optional[dict]:
@@ -116,14 +127,14 @@ def list_container_provider_keys(cid: str, request: Request):
                 entry = {
                     "configured": True,
                     "source": "env",
-                    "masked": _mask_llm_key(secret_box.last4(env_override)),
+                    "masked": _mask_provider_key(p["id"], secret_box.last4(env_override)),
                     "set_at": None,
                 }
             elif row:
                 entry = {
                     "configured": True,
                     "source": "db",
-                    "masked": _mask_llm_key(row["key_hint"]),
+                    "masked": _mask_provider_key(p["id"], row["key_hint"]),
                     "set_at": row["set_at"],
                 }
             else:
@@ -187,7 +198,7 @@ def put_container_provider_key(cid: str, provider: str, body: LlmKeyUpdate, requ
         "configured": True,
         "source": "db",
         "provider": provider,
-        "masked": _mask_llm_key(hint),
+        "masked": _mask_provider_key(provider, hint),
     }
 
 
@@ -228,7 +239,7 @@ def delete_container_provider_key(cid: str, provider: str, body: LlmKeyActor, re
             "configured": True,
             "source": "env",
             "provider": provider,
-            "masked": _mask_llm_key(secret_box.last4(env_override)),
+            "masked": _mask_provider_key(provider, secret_box.last4(env_override)),
         }
     return {"configured": False, "source": None, "provider": provider, "masked": None}
 

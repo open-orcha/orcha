@@ -3,7 +3,7 @@
 import json
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
@@ -35,6 +35,7 @@ def configure_compatibility(attribute_token_run_to_task_getter):
 def accept_task_request(
     rid: str,
     body: TaskRequestAccept,
+    request: Request,
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
 ):
     """Target accepts a task request → creates the task, assigns it, marks request 'accepted'."""
@@ -50,7 +51,7 @@ def accept_task_request(
         # task INTO working, which is WORK-lane only. Gate on the ACCEPTING agent (the target /
         # responder). A conversation-lane embodiment can DISPATCH a task (create/assign a request) but
         # cannot accept one into its own working set (403).
-        _require_work_lane(cur, body.responder_agent_id, x_orcha_run_token)
+        _require_work_lane(cur, body.responder_agent_id, x_orcha_run_token, request)
         _reject_if_retired(
             cur, body.responder_agent_id
         )  # ISS-51 [P1]: retired can't take on work

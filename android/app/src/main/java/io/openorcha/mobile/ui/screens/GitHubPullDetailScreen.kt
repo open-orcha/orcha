@@ -22,7 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -45,18 +45,25 @@ import io.openorcha.mobile.domain.GitHubHubUx
 import io.openorcha.mobile.domain.GitHubPullDetailPhase
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
-import io.openorcha.mobile.ui.components.Avatar
-import io.openorcha.mobile.ui.components.AvatarSize
 import io.openorcha.mobile.ui.components.CheckRunGlyph
 import io.openorcha.mobile.ui.components.ChecksChip
 import io.openorcha.mobile.ui.components.MarkdownText
 import io.openorcha.mobile.ui.components.MergeStateChip
-import io.openorcha.mobile.ui.components.MetaTag
-import io.openorcha.mobile.ui.components.OrchaCard
+import io.openorcha.mobile.ui.components.LCard
 import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.Skeleton
-import io.openorcha.mobile.ui.components.StatusDomain
-import io.openorcha.mobile.ui.components.StatusPill
+import io.openorcha.mobile.ui.components.LAvatar
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LCard
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LSection
+import io.openorcha.mobile.ui.components.LSize
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LTag
+import io.openorcha.mobile.ui.components.GitHubStateTag
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -73,18 +80,26 @@ fun GitHubPullDetailScreen(
     var showStartSheet by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = p.bg,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = { Text("PR #$number") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
-                actions = {
-                    if (state.githubPullDetailPhase is GitHubPullDetailPhase.Loaded) {
-                        TextButton(onClick = { showStartSheet = true }, enabled = !state.actionInFlight) { Text("Start") }
-                    }
-                },
-            )
+            Column {
+                CenterAlignedTopAppBar(
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = p.bg),
+                    title = { Text("PR #$number", style = ltype(LType.Headline), color = p.text) },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back", tint = p.text2) } },
+                    actions = {
+                        if (state.githubPullDetailPhase is GitHubPullDetailPhase.Loaded) {
+                            LButton(
+                                "Start", { showStartSheet = true },
+                                modifier = Modifier.padding(end = LSpace.s),
+                                icon = OrchaIcons.PlayArrow, kind = LButtonKind.Primary, size = LSize.Small,
+                                enabled = !state.actionInFlight,
+                            )
+                        }
+                    },
+                )
+                LDivider()
+            }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -129,15 +144,14 @@ private fun PullDetailBody(pull: GitHubPullDetail) {
     val p = Orcha.palette
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(LSpace.l),
+        verticalArrangement = Arrangement.spacedBy(LSpace.xl),
     ) {
         item { PullHeader(pull) }
         if (pull.bodyMarkdown.isNotBlank()) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionH("Description")
-                    OrchaCard { MarkdownText(pull.bodyMarkdown) }
+                LSection("Description") {
+                    LCard { MarkdownText(pull.bodyMarkdown) }
                 }
             }
         }
@@ -151,9 +165,9 @@ private fun PullDetailBody(pull: GitHubPullDetail) {
 private fun PullHeader(pull: GitHubPullDetail) {
     val p = Orcha.palette
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(pull.title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.W700), color = p.text)
+        Text(pull.title, style = ltype(LType.Title), color = p.text)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusPill(if (pull.draft) "draft" else pull.state, StatusDomain.Task)
+            GitHubStateTag(if (pull.draft) "draft" else pull.state)
             ChecksChip(pull.checks)
             MergeStateChip(pull.mergeableState)
         }
@@ -165,13 +179,13 @@ private fun PullHeader(pull: GitHubPullDetail) {
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             pull.authorLogin?.let { author ->
-                Avatar(author, human = true, size = AvatarSize.Sm)
-                Text(author, style = MaterialTheme.typography.bodyMedium, color = p.text2)
+                LAvatar(author, size = 20.dp)
+                Text(author, style = ltype(LType.Meta), color = p.text2)
             }
             // The reviewers tag is the flexible member — unbounded it squeezed the
             // "updated" text to zero width (one character per line, stretching the row).
             if (pull.requestedReviewers.isNotEmpty()) {
-                MetaTag(
+                LTag(
                     "reviewers: ${pull.requestedReviewers.joinToString(", ")}",
                     modifier = Modifier.weight(1f, fill = false),
                 )
@@ -180,7 +194,7 @@ private fun PullHeader(pull: GitHubPullDetail) {
             }
             Text(
                 MobileUx.agoLabel(pull.updatedAt)?.let { "updated $it" } ?: "",
-                style = MaterialTheme.typography.labelMedium, color = p.faint,
+                style = ltype(LType.Micro), color = p.faint,
                 maxLines = 1, softWrap = false,
             )
         }
@@ -195,7 +209,7 @@ private fun ChecksSection(checks: GitHubChecks) {
     val summary = GitHubHubUx.checksSummary(checks)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionH("Checks · ${summary.label}")
-        OrchaCard {
+        LCard {
             if (checks.runs.isEmpty()) {
                 Text(
                     if (summary.hasChecks) "No per-run detail reported." else "No checks are configured on this repository.",
@@ -210,7 +224,7 @@ private fun ChecksSection(checks: GitHubChecks) {
                                 run.name.ifEmpty { "(unnamed check)" }, color = p.text, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                             )
-                            run.conclusion?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = p.muted) }
+                            run.conclusion?.let { Text(it, style = ltype(LType.Micro), color = p.muted) }
                         }
                     }
                 }

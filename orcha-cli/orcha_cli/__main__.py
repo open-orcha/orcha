@@ -13,6 +13,7 @@ from importlib.metadata import version as _pkg_version
 from .cli_env import _append_env_file, _read_env_file_value, _tighten_env_file
 from .cli_hook_facade import *
 from .cli_http import _get_json, _post_json, _put_json, _wait_for_portal
+from .cli_worktrees import cmd_worktrees
 from .cli_project_facade import *
 from .cli_runtime_facade import *
 from .cli_text import (
@@ -88,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         "pause": cmd_pause,
         "resume": cmd_resume,
         "stop": cmd_stop,
+        "worktrees": cmd_worktrees,
     }
     return assemble_parser(_cli_version(), handlers)
 

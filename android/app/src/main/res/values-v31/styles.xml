@@ -1,0 +1,10 @@
+<resources>
+    <!-- Android 12+ system splash: Linear window colour instead of the default grey. -->
+    <style name="Theme.Orcha" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/orcha_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/orcha_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@color/orcha_bg</item>
+        <item name="android:statusBarColor">@color/orcha_bg</item>
+    </style>
+</resources>

@@ -2,11 +2,12 @@
 
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
 from portal_backend.autonomy import effective_autonomy
+from portal_backend.budget_routes import agent_budget_block
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.guards import reject_if_retired as _reject_if_retired
@@ -20,6 +21,7 @@ from portal_backend.worker_auth import require_work_lane as _require_work_lane
 @app.post("/api/agents/{aid}/next")
 def agent_next(
     aid: str,
+    request: Request,
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
 ):
     """Atomically claim the highest-priority READY task in this agent's container."""
@@ -27,11 +29,27 @@ def agent_next(
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
-        _require_work_lane(cur, aid, x_orcha_run_token)
+        _require_work_lane(cur, aid, x_orcha_run_token, request)
         _require_kind(cur, aid, ("ai",))
         _reject_if_retired(cur, aid)
         cid = str(agent["container_id"])
         _require_container_active(cur, cid, aid)
+        # Budget hard stop (KG-1): a budget-paused agent claims NO new task. A task it is
+        # already working stays untouched (in-flight work is never stopped). A human-opened
+        # live terminal (token kind 'live') is exempt, matching wake-claim.
+        cur.execute(
+            "SELECT kind FROM embodiment_tokens WHERE run_token=%s", (x_orcha_run_token,)
+        )
+        tok = cur.fetchone()
+        if not (tok and tok["kind"] == "live"):
+            budget_reason = agent_budget_block(cur, cid, aid)
+            if budget_reason:
+                conn.commit()
+                return {
+                    "task": None,
+                    "message": "budget: " + budget_reason,
+                    "budget_paused": True,
+                }
         cur.execute(
             """SELECT t.id, t.title, t.description, t.definition_of_done, t.priority, t.protocol
                FROM tasks t

@@ -99,4 +99,8 @@ describe('listStacks', () => {
     const exec = vi.fn().mockRejectedValue(new Error('spawn docker ENOENT'))
     await expect(listStacks(exec)).rejects.toEqual({ code: 'DOCKER_UNAVAILABLE' })
   })
+  it('flags a timed-out (hung) docker CLI as unresponsive, not merely down', async () => {
+    const exec = vi.fn().mockRejectedValue(Object.assign(new Error('killed'), { timedOut: true }))
+    await expect(listStacks(exec)).rejects.toEqual({ code: 'DOCKER_UNAVAILABLE', unresponsive: true })
+  })
 })

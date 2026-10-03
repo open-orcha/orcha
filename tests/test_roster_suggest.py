@@ -322,7 +322,63 @@ async def test_accept_rejects_bad_container(client, tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
+async def test_accept_takes_a_full_analysis_roster(client, container, make_agent, tmp_path, monkeypatch):
+    """Regression: desktop onboarding offers workspace + analysis suggestions (up to 8
+    from the analysis alone); accepting them all used to 422 (limit was 5)."""
+    monkeypatch.setenv("ORCHA_LOCAL_REPO_DIR", str(tmp_path))
+    cid = container["id"]
+    await make_agent("root", "operator", kind="human")
+    aliases = ["atlas", "forge", "pixel", "vault", "sentry", "harbor", "scribe", "relay"]
+    body = {"suggestions": [{"alias": a, "role": f"{a} role", "focus": f"{a} focus"} for a in aliases]}
+    r = await client.post(f"/api/containers/{cid}/roster/suggest/accept", json=body)
+    assert r.status_code == 201, r.text
+    assert {c["alias"] for c in r.json()["created"]} == set(aliases)
+
+
+async def test_accept_caps_at_the_union_of_both_sources(client, container):
+    from portal_backend.roster_suggest_routes import MAX_ACCEPT_SUGGESTIONS
+    from portal_backend.roster_analysis_routes import MAX_SUGGESTIONS
+    from portal_backend.roster_signals import MAX_SPECIALISTS
+    assert MAX_ACCEPT_SUGGESTIONS == 1 + MAX_SPECIALISTS + MAX_SUGGESTIONS
+    cid = container["id"]
+    too_many = [{"alias": f"a{i}", "role": "r", "focus": "f"} for i in range(MAX_ACCEPT_SUGGESTIONS + 1)]
+    r = await client.post(f"/api/containers/{cid}/roster/suggest/accept", json={"suggestions": too_many})
+    assert r.status_code == 422
+
+
 async def test_accept_requires_at_least_one_suggestion(client, container):
     cid = container["id"]
     r = await client.post(f"/api/containers/{cid}/roster/suggest/accept", json={"suggestions": []})
     assert r.status_code == 422
+
+
+# ---- D-21: a Reconnect of an existing project never re-suggests registered aliases ----
+
+
+async def test_suggest_omits_aliases_already_on_the_roster(client, container, make_agent, tmp_path, monkeypatch):
+    _write(tmp_path / "package.json", '{"dependencies": {"react": "1"}}')
+    _write(tmp_path / "pyproject.toml", '[project]\ndependencies=["fastapi"]\n')
+    monkeypatch.setenv("ORCHA_LOCAL_REPO_DIR", str(tmp_path))
+    cid = container["id"]
+    r = await client.get(f"/api/containers/{cid}/roster/suggest")
+    before = [s["alias"] for s in r.json()["suggestions"]]
+    assert "atlas" in before and "nova" in before
+
+    await make_agent("Atlas")  # case-insensitive match
+    r = await client.get(f"/api/containers/{cid}/roster/suggest")
+    after = [s["alias"] for s in r.json()["suggestions"]]
+    assert "atlas" not in after
+    assert set(after) == set(before) - {"atlas"}
+
+
+async def test_suggest_unavailable_when_every_suggestion_is_taken(client, container, make_agent, tmp_path, monkeypatch):
+    _write(tmp_path / "go.mod", "module x\n")
+    monkeypatch.setenv("ORCHA_LOCAL_REPO_DIR", str(tmp_path))
+    cid = container["id"]
+    r = await client.get(f"/api/containers/{cid}/roster/suggest")
+    for s in r.json()["suggestions"]:
+        await make_agent(s["alias"])
+    r = await client.get(f"/api/containers/{cid}/roster/suggest")
+    body = r.json()
+    assert body["available"] is False
+    assert body["suggestions"] == []

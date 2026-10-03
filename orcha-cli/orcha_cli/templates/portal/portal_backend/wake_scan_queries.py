@@ -1,5 +1,7 @@
 """Read wake state and pending work without deciding whether to wake."""
 
+from portal_backend.stranded_runs import last_activity_expr
+
 
 def list_wake_agents(cur, cid: str, cooldown: float):
     """Return active AI agents with both wake-lane liveness projections."""
@@ -31,6 +33,14 @@ def list_wake_agents(cur, cid: str, cooldown: float):
                     WHERE wr.agent_id = a.id AND wr.status = 'running'
                       AND wr.lane = 'work'
                   ) AS embodiment_running,
+                  -- how long the newest running work row (and its lane) has been silent;
+                  -- lets the wake reason say when a stranded run will be reconciled
+                  (SELECT EXTRACT(EPOCH FROM (now() - """ + last_activity_expr("work") + """))
+                     FROM worker_runs wr
+                    WHERE wr.agent_id = a.id AND wr.status = 'running'
+                      AND wr.lane = 'work'
+                    ORDER BY wr.started_at DESC LIMIT 1
+                  ) AS embodiment_silent_seconds,
                   EXISTS (
                     SELECT 1 FROM worker_runs wr
                     WHERE wr.agent_id = a.id AND wr.status = 'running'

@@ -1,0 +1,83 @@
+/* Agent config history — Linear activity rows, calm and quiet (D10/D12). Inter everywhere;
+   mono ONLY for the prompt text diff (D15). No stripes, no heavy boxes. */
+
+.ach { display: flex; flex-direction: column; gap: var(--v2-space-2, 8px); min-width: 0; }
+.ach-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.ach-title { margin: 0; font-size: var(--v2-fs-title, 15px); font-weight: var(--v2-fw-semibold, 600); color: var(--v2-text); letter-spacing: var(--v2-ls-title, -0.005em); }
+.ach-count { color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); font-variant-numeric: tabular-nums; }
+.ach .grow { flex: 1 1 auto; }
+
+.ach-empty { color: var(--v2-text-3); font-size: 13px; padding: 10px 2px; }
+
+.ach-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ach-item { border-radius: var(--v2-radius-control, 6px); }
+.ach-item.is-open { background: var(--v2-hover); }
+
+.ach-row { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: var(--v2-row-h, 36px); padding: 0 var(--v2-row-px, 8px); border-radius: var(--v2-radius-control, 6px);
+  cursor: pointer; color: var(--v2-text-2); font-size: 13px; }
+.ach-row:hover { background: var(--v2-hover); }
+.ach-row:focus-visible { box-shadow: var(--v2-focus-ring); }
+.ach-glyph { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  border-radius: 50%; color: var(--v2-text-3); background: var(--v2-chip-bg, transparent); }
+.ach-glyph .v2-ico { width: 12px; height: 12px; }
+.ach-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ach-text b { color: var(--v2-text); font-weight: var(--v2-fw-medium, 500); }
+.ach-id { flex: none; color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); font-variant-numeric: tabular-nums; }
+.ach-text .ach-id { font-size: inherit; }
+.ach-time { flex: none; color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); white-space: nowrap; }
+.ach-chip { flex: none; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: var(--v2-radius-full, 999px);
+  border: 1px solid var(--v2-chip-border, var(--v2-border)); color: var(--v2-text-2); font-size: 11px; }
+.ach-caret { flex: none; width: 12px; height: 12px; color: var(--v2-text-3); transition: transform var(--v2-dur-fast, 120ms) var(--v2-ease, ease); transform: rotate(-90deg); }
+.ach-caret.is-open { transform: rotate(0deg); }
+
+.ach-detail { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 10px 38px; }
+.ach-reason, .ach-note { font-size: 12.5px; color: var(--v2-text-2); display: flex; align-items: center; gap: 6px; }
+.ach-reason .k { color: var(--v2-text-3); }
+.ach-note .v2-ico { width: 12px; height: 12px; color: var(--v2-text-3); }
+
+.ach-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ach-field-k { color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); }
+.ach-derived { color: var(--v2-text-3); }
+.ach-field-v { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--v2-text); }
+.ach-old { color: var(--v2-text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--v2-text-3) 60%, transparent); }
+.ach-new { color: var(--v2-text); }
+.ach-arrow { width: 12px; height: 12px; color: var(--v2-text-3); }
+
+/* prompt text diff — the one mono surface here (D15) */
+.ach-tdiff { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ach-tdiff-h { display: flex; align-items: center; }
+.ach-ct { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--v2-text-3); }
+.ach-ct .a { color: var(--diff-add, var(--v2-ok)); }
+.ach-ct .d { color: var(--diff-del, var(--v2-danger)); }
+.ach-tdiff-b { margin: 0; max-height: 320px; overflow: auto; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control, 6px);
+  background: var(--v2-surface); font-family: var(--v2-font-mono); font-size: 12px; line-height: 1.55; padding: 4px 0; }
+.ach-plain { padding: 6px 10px; white-space: pre-wrap; word-break: break-word; color: var(--v2-text-2); }
+.ach-dl { display: flex; gap: 8px; padding: 0 10px; white-space: pre-wrap; word-break: break-word; color: var(--v2-text-2); }
+.ach-dl.add { background: color-mix(in srgb, var(--v2-ok) 12%, transparent); color: var(--v2-text); }
+.ach-dl.del { background: color-mix(in srgb, var(--v2-danger) 12%, transparent); color: var(--v2-text); }
+.ach-dl.gap { color: var(--v2-text-3); font-family: var(--v2-font-sans); font-size: 11.5px; padding: 2px 10px; }
+.ach-dl-sign { flex: none; width: 10px; color: var(--v2-text-3); user-select: none; }
+.ach-dl.add .ach-dl-sign { color: var(--diff-add, var(--v2-ok)); }
+.ach-dl.del .ach-dl-sign { color: var(--diff-del, var(--v2-danger)); }
+.ach-dl-t { min-width: 0; }
+
+.ach-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 2px; }
+.ach-muted { color: var(--v2-text-3); font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }
+.ach-muted .v2-ico { width: 12px; height: 12px; }
+.ach-denied { flex-basis: 100%; text-align: right; color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); }
+.ach-more { align-self: flex-start; }
+
+/* confirm dialog body */
+.ach-preview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.ach-reason-in { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--v2-text-3); }
+.ach-reason-in .muted { color: var(--v2-text-3); opacity: 0.8; }
+.ach-reason-in input { box-sizing: border-box; height: var(--v2-control-h, 32px); padding: 0 10px; border-radius: var(--v2-radius-control, 6px);
+  border: 1px solid var(--v2-border); background: var(--v2-surface); color: var(--v2-text); font: inherit; font-size: 13px; outline: none; }
+.ach-reason-in input:focus-visible { box-shadow: var(--v2-focus-ring); border-color: var(--v2-border-strong, var(--v2-border)); }
+
+@media (max-width: 760px) {
+  .ach-detail { padding-left: 10px; }
+  .ach-time { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .ach-caret { transition: none; } }

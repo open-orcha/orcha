@@ -1,14 +1,34 @@
+# Branding: the user-facing name is Embodent; appId, the orcha:// scheme and the userData
+# folder (<appData>/Orcha, pinned in src/main/userDataPath.ts) keep their orcha names.
 appId: io.openorcha.desktop
-productName: Orcha
-copyright: Copyright © 2026 Orcha
+productName: Embodent
+copyright: Copyright © 2026 Embodent
 
 # What goes inside the .app bundle. electron-vite emits everything to out/;
-# the renderer bundles its own deps, and main/preload have no external runtime
-# deps, so we only ship out/ + package.json (electron-builder needs the latter
-# to resolve "main").
+# the renderer bundles its own deps. Main has ONE external runtime dep, node-pty
+# (terminal tabs), which electron-builder packs from node_modules as a production
+# dependency; out/ + package.json cover the rest ("main" is resolved from it).
 files:
   - out/**/*
   - package.json
+  # node-pty at runtime needs only lib/ + the macOS prebuilds; drop its C++ sources,
+  # build scripts and the Windows binaries from the bundle.
+  - '!node_modules/node-pty/prebuilds/win32-*/**'
+  - '!node_modules/node-pty/{src,deps,third_party,scripts,typings}/**'
+  - '!node_modules/node-pty/binding.gyp'
+
+# node-pty: native module handling for terminal tabs.
+# - It ships N-API prebuilds (prebuilds/darwin-{arm64,x64}/pty.node) that load in any
+#   Electron without a rebuild, so electron-builder must NOT try to node-gyp it
+#   against Electron headers (npmRebuild: false) — no compiler needed to package.
+# - pty.node and the `spawn-helper` executable cannot run from inside app.asar:
+#   unpack the module (node-pty rewrites its helper path to app.asar.unpacked).
+#   scripts/fix-node-pty.mjs (postinstall/predist) restores spawn-helper's exec bit.
+# - Universal builds: both prebuild dirs are identical in the x64 and arm64 copies,
+#   so @electron/universal keeps them as-is; node-pty picks the one for process.arch.
+npmRebuild: false
+asarUnpack:
+  - node_modules/node-pty/**
 
 # The onboarding flow lays down a project's Orcha stack from these templates
 # (compose, migrations, portal, skills, prefs) WITHOUT the orcha CLI installed.
@@ -18,6 +38,12 @@ files:
 extraResources:
   - from: resources/orcha-templates
     to: orcha-templates
+  # Menu-bar tray face (macOS template image; the @2x sibling is picked up
+  # automatically by nativeImage). Resolved via resourceFile() in main/tray.ts.
+  - from: resources/trayTemplate.png
+    to: trayTemplate.png
+  - from: resources/trayTemplate@2x.png
+    to: trayTemplate@2x.png
 
 directories:
   output: dist
@@ -25,7 +51,11 @@ directories:
 
 mac:
   category: public.app-category.developer-tools
-  icon: resources/icon.png
+  icon: resources/icon.icns
+  # Dictation (portal Settings › Voice): macOS shows this when the app first asks for the
+  # microphone, and kills an app that touches the mic without it.
+  extendInfo:
+    NSMicrophoneUsageDescription: Embodent uses your microphone only while you dictate into a text field. Audio is never stored.
   # Signed with a Developer ID Application certificate and notarized by Apple,
   # so Gatekeeper opens the app on a normal double-click — no right-click→Open
   # or xattr/quarantine workaround needed. Credentials are supplied via
@@ -42,9 +72,10 @@ mac:
     - dmg
     - zip
 
-# Preserve the orcha:// deep-link protocol the widget uses to open the app.
+# Preserve the orcha:// deep-link protocol the widget uses to open the app (the scheme
+# stays `orcha` for compatibility; only its display name follows the product).
 protocols:
-  - name: Orcha
+  - name: Embodent
     schemes:
       - orcha
 

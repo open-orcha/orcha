@@ -18,9 +18,12 @@ import { languages } from "@codemirror/language-data";
 import { LanguageDescription } from "@codemirror/language";
 import { searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "../../components/primitives";
 import { buildEditorTheme } from "./editorTheme";
+import { setThreadLines, threadMarks } from "./editorThreadMarks";
+import { lessonFocus, lessonFocusSpec, type FocusRange } from "./editorLessonFocus";
 import {
   initialSaveState,
   onEdit,
@@ -44,6 +47,10 @@ export interface EditorPaneProps {
   readOnly?: boolean;
   onDirty: (dirty: boolean) => void;
   onSaved?: (hash: string) => void;
+  /** 1-based lines carrying a code thread — painted as gutter dots, same as the read view. */
+  threadLines?: number[];
+  /** Learn: the current lesson step's cited lines — glowed, the rest dimmed, first line centred. */
+  focusRanges?: FocusRange[] | null;
 }
 
 function baseName(path: string): string {
@@ -64,12 +71,18 @@ async function languageExtensionFor(path: string) {
 function reasonMessage(reason: string): string {
   if (reason === "exists") return "A file already exists at this path.";
   if (reason === "too_large") return "This file is too large to save through the editor.";
+  if (reason === "write_failed") return "Save failed: the file couldn't be written.";
   return "Save failed: " + reason;
 }
 
-export function EditorPane({ cid, path, initialContent, contentHash, readOnly, onDirty, onSaved }: EditorPaneProps) {
+export function EditorPane({ cid, path, initialContent, contentHash, readOnly, onDirty, onSaved, threadLines, focusRanges }: EditorPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // latest thread lines, read when the CM state is (re)created
+  const threadLinesRef = useRef<readonly number[]>(threadLines ?? []);
+  threadLinesRef.current = threadLines ?? [];
+  const focusRef = useRef<FocusRange[] | null>(focusRanges ?? null);
+  focusRef.current = focusRanges ?? null;
   const [saveState, setSaveState] = useState<EditorSaveState>(() => initialSaveState(contentHash));
   const saveStateRef = useRef(saveState);
   saveStateRef.current = saveState;
@@ -90,6 +103,20 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
 
   const flushSave = useRef<() => void>(() => {});
 
+  // Reload/close while an autosave is pending or in flight would lose the
+  // edit — ask the browser to confirm (its own generic dialog) only then.
+  useEffect(() => {
+    if (readOnly) return;
+    const pending = saveState.status === "dirty" || saveState.status === "saving" || saveState.status === "drift";
+    if (!pending) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [saveState.status, readOnly]);
+
   useEffect(() => {
     if (!hostRef.current) return;
     let disposed = false;
@@ -108,7 +135,7 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
         } else if (res.reason === "drift") {
           setSaveState(onSaveDrift(saveStateRef.current, res.current_hash ?? ""));
         } else {
-          setSaveState(onSaveError(saveStateRef.current, res.reason));
+          setSaveState(onSaveError(saveStateRef.current, res.reason === "http" ? res.detail : res.reason));
         }
       });
     };
@@ -151,7 +178,14 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
       saveKeymap,
       updateListener,
       buildEditorTheme(),
-      EditorView.lineWrapping,
+      // V2 (screen review S5): edit mode keeps the line numbers the read view shows
+      lineNumbers(),
+      highlightActiveLineGutter(),
+      highlightActiveLine(),
+      // V2 (screen review r1): no soft-wrap — the read view never wraps, so
+      // toggling Edit must not reflow lines either.
+      threadMarks(() => threadLinesRef.current),
+      lessonFocus(() => focusRef.current),
       EditorView.editable.of(!readOnly),
     ];
 
@@ -174,8 +208,20 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
     });
 
     return () => {
+      // V2 (C-13, brief: "preserve unsaved drafts across navigation"): an
+      // autosave still pending in its debounce window when the human switches
+      // files / leaves edit mode is FLUSHED, not dropped — the same
+      // flush-on-unmount DraftEditorPane already does. The PUT still carries
+      // the base hash, so a concurrent agent edit is caught as drift
+      // server-side rather than overwritten; the result is ignored (disposed).
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+        // Direct PUT (not doSave): the dirty transition may not have re-rendered
+        // into saveStateRef yet when the edit and the unmount land together.
+        if (!readOnly) void saveWorktreeFile(cid, path, view.state.doc.toString(), saveStateRef.current.baseHash).catch(() => {});
+      }
       disposed = true;
-      if (debounceRef.current) clearTimeout(debounceRef.current);
       view.destroy();
       viewRef.current = null;
     };
@@ -183,6 +229,19 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
     // is not a real-world case this pane needs to react to live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid, path, initialContent]);
+
+  // thread list refreshes (3 s bump / new thread) → replace the gutter dots
+  const threadKey = (threadLines ?? []).join(",");
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: setThreadLines.of(threadLinesRef.current.slice()) });
+  }, [threadKey]);
+
+  // lesson stepping → glow the cited lines, dim the rest, centre the first
+  const focusKey = JSON.stringify(focusRanges ?? null);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view) view.dispatch(lessonFocusSpec(view.state.doc, focusRef.current));
+  }, [focusKey]);
 
   const doReload = () => {
     const myToken = ++opToken.current;
@@ -212,7 +271,7 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
       } else if (res.reason === "drift") {
         setSaveState(onSaveDrift(saveStateRef.current, res.current_hash ?? ""));
       } else {
-        setSaveState(onSaveError(saveStateRef.current, res.reason));
+        setSaveState(onSaveError(saveStateRef.current, res.reason === "http" ? res.detail : res.reason));
       }
     });
   };
@@ -222,8 +281,9 @@ export function EditorPane({ cid, path, initialContent, contentHash, readOnly, o
       {saveState.status === "drift" ? (
         <div className="cs-editor-banner cs-editor-banner-drift">
           <span>This file changed on disk (an agent may have edited it).</span>
-          <button type="button" className="cs-editor-banner-btn" onClick={doReload}>Reload file</button>
-          <button type="button" className="cs-editor-banner-btn" onClick={doOverwrite}>Overwrite</button>
+          <span className="grow" />
+          <Button size="sm" variant="secondary" icon="refresh" className="cs-editor-banner-btn" onClick={doReload}>Reload file</Button>
+          <Button size="sm" variant="danger" className="cs-editor-banner-btn" onClick={doOverwrite}>Overwrite</Button>
         </div>
       ) : null}
       {saveState.status === "error" ? (

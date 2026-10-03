@@ -1,6 +1,6 @@
 """List active conversation sessions and their current embodiment state."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.attachment_references import (
@@ -23,6 +23,7 @@ from portal_backend.guards import (
     require_container as _require_container,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import require_member_read
 from portal_backend.orphan_lease_routes import ORPHAN_LEASE_SECS
 from portal_backend.limits import MAX_PROMPT_BATCH_CHARS
 from portal_backend.model_policy import (
@@ -51,7 +52,7 @@ def configure_compatibility(supported_models):
 
 
 @app.get("/api/containers/{cid}/active-conversations")
-def active_conversations(cid: str):
+def active_conversations(cid: str, request: Request):
     """E3: the resident-session manager's read-only discovery scan. Every ACTIVE
     conversation in the container with its last-turn {role, seq}, so the daemon can
     find conversations whose latest turn is an unanswered HUMAN turn (`pending_human`)
@@ -81,6 +82,7 @@ def active_conversations(cid: str):
     )
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
+        require_member_read(cur, request, cid)  # PS-08
         cur.execute("SELECT worktrees_disabled FROM containers WHERE id=%s", (cid,))
         worktrees_disabled = bool(cur.fetchone()["worktrees_disabled"])
         cur.execute(

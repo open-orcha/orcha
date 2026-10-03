@@ -8,7 +8,7 @@
  *  - a JSONB (object) task.result renders normalized text — never
  *    "[object Object]" — in both the Result field and the verify gate.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
@@ -109,41 +109,48 @@ function renderPage() {
   );
 }
 
+// the list row ALSO carries a reviewer chip (D12) — scope detail assertions to the inspector
+const detail = () => within(document.querySelector("#detailMain") as HTMLElement);
+
 describe("reviewer chip (collab v1, tasks-detail.js reviewerChip)", () => {
-  it("renders the resolved reviewer (github_login preferred) when fields are present", async () => {
+  it("renders the resolved reviewer (alias first, login in the tooltip) when fields are present", async () => {
     snapshot = rawSnap({ reviewer: { agent_id: "h2", alias: "sam", github_login: "sam-gh" } });
     renderPage();
-    await screen.findByText("reviewer");
-    expect(screen.getByText("sam-gh")).toBeInTheDocument();
+    await screen.findByText("Reviewer");
+    expect(detail().getByText("sam")).toHaveAttribute("title", "Reviewer: sam (@sam-gh)");
+    // the list row shows the same reviewer as a compact chip
+    const chip = document.querySelector('.trow[data-id="t1"] .tl-revchip');
+    expect(chip?.textContent).toContain("sam");
+    expect(chip?.textContent).not.toContain("sam-gh");
   });
 
   it("renders 'anyone' when collab is on but no reviewer is set", async () => {
     snapshot = rawSnap({ reviewer: null });
     renderPage();
-    await screen.findByText("reviewer");
-    expect(screen.getByText("anyone")).toBeInTheDocument();
+    await screen.findByText("Reviewer");
+    expect(screen.getByText("Anyone")).toBeInTheDocument();
   });
 
   it("renders NOTHING on open backends (no member_role, no reviewer fields)", async () => {
     snapshot = rawSnap({ collab: false, result: "plain" });
     renderPage();
     await screen.findByRole("heading", { name: /Verify me/ });
-    expect(screen.queryByText("reviewer")).not.toBeInTheDocument();
-    expect(screen.queryByText("anyone")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reviewer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Anyone")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Change reviewer")).not.toBeInTheDocument();
   });
 
   it("hides the change affordance from non-owner members (owner-gated)", async () => {
     snapshot = rawSnap({ actorRole: "member", reviewer: { agent_id: "h2", alias: "sam", github_login: "sam-gh" } });
     renderPage();
-    await screen.findByText("reviewer");
+    await screen.findByText("Reviewer");
     expect(screen.queryByTitle("Change reviewer")).not.toBeInTheDocument();
   });
 
   it("shows the change affordance when member_role is ABSENT but reviewer fields exist (permissive fallback)", async () => {
     snapshot = rawSnap({ collab: false, reviewer: { agent_id: "h2", alias: "sam", github_login: "sam-gh" } });
     renderPage();
-    await screen.findByText("reviewer");
+    await screen.findByText("Reviewer");
     expect(screen.getByTitle("Change reviewer")).toBeInTheDocument();
   });
 
@@ -151,14 +158,14 @@ describe("reviewer chip (collab v1, tasks-detail.js reviewerChip)", () => {
     snapshot = rawSnap({ actorRole: "owner", reviewer: null });
     reviewerEcho = { reviewer: { agent_id: "h2", alias: "sam", github_login: "sam-gh" } };
     renderPage();
-    await screen.findByText("reviewer");
+    await screen.findByText("Reviewer");
     fireEvent.click(screen.getByTitle("Change reviewer"));
-    // picker lists the human members + the Anyone reset
-    const sel = document.getElementById("revSel") as HTMLSelectElement;
-    expect(sel).toBeTruthy();
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["", "h1", "h2"]);
-    fireEvent.change(sel, { target: { value: "h2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Set reviewer" }));
+    // in-place popover lists the human members + the Anyone reset (no modal, no native select)
+    const menu = await screen.findByRole("menu", { name: "Reviewer" });
+    const opts = within(menu).getAllByRole("menuitemradio");
+    expect(opts.map((o) => o.getAttribute("data-value"))).toEqual(["", "h1", "h2"]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(opts[2]);
     await waitFor(() => {
       const put = calls.find((c) => c.url === "/api/tasks/t1/reviewer");
       expect(put).toBeTruthy();
@@ -166,21 +173,21 @@ describe("reviewer chip (collab v1, tasks-detail.js reviewerChip)", () => {
       expect(put!.body).toEqual({ reviewer_agent_id: "h2", actor_agent_id: "h1" });
     });
     // the 200 echo is stamped in place — the chip updates without the poll
-    await waitFor(() => expect(screen.getByText("sam-gh")).toBeInTheDocument());
+    await waitFor(() => expect(detail().getByTitle("Reviewer: sam (@sam-gh)")).toBeInTheDocument());
   });
 
   it("clearing via '— Anyone —' PUTs reviewer_agent_id: null", async () => {
     snapshot = rawSnap({ actorRole: "owner", reviewer: { agent_id: "h2", alias: "sam", github_login: "sam-gh" } });
     reviewerEcho = { reviewer: null };
     renderPage();
-    await screen.findByText("reviewer");
+    await screen.findByText("Reviewer");
     fireEvent.click(screen.getByTitle("Change reviewer"));
-    const sel = document.getElementById("revSel") as HTMLSelectElement;
-    // current reviewer is preselected and labeled
-    expect(sel.value).toBe("h2");
-    expect(Array.from(sel.options).find((o) => o.value === "h2")!.text).toBe("sam-gh (current)");
-    fireEvent.change(sel, { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Set reviewer" }));
+    const menu = await screen.findByRole("menu", { name: "Reviewer" });
+    // current reviewer is checked and labeled
+    const cur = within(menu).getAllByRole("menuitemradio").find((o) => o.getAttribute("aria-checked") === "true")!;
+    expect(cur.getAttribute("data-value")).toBe("h2");
+    expect(cur.textContent).toContain("sam-gh");
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Anyone/ }));
     await waitFor(() => {
       const put = calls.find((c) => c.url === "/api/tasks/t1/reviewer");
       expect(put).toBeTruthy();
@@ -194,17 +201,22 @@ describe("JSONB result rendering (open-orcha#209)", () => {
   it("renders the conventional text field of an object result — never [object Object]", async () => {
     snapshot = rawSnap({ reviewer: null, result: { result: "PR #203 opened and merged" } });
     renderPage();
-    // both render sites (Result field + verify-gate body) show the normalized text
+    // the verify gate shows the normalized text (the Overview doesn't repeat it while the gate is open)
     const hits = await screen.findAllByText(/PR #203 opened and merged/);
-    expect(hits.length).toBeGreaterThanOrEqual(2);
+    expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(document.body.textContent).not.toContain("[object Object]");
   });
 
-  it("pretty-prints an unconventional object result", async () => {
+  it("renders an unconventional object result as labelled fields — never raw JSON (D4)", async () => {
     snapshot = rawSnap({ reviewer: null, result: { pr: 203, ok: true } });
     renderPage();
     await screen.findByRole("heading", { name: /Verify me/ });
-    expect(document.body.textContent).toContain('"pr": 203');
+    const gate = document.querySelector("#gate-t1")!;
+    const dts = Array.from(gate.querySelectorAll("dt")).map((d) => d.textContent);
+    expect(dts).toEqual(expect.arrayContaining(["Pr", "Ok"]));
+    expect(gate.textContent).toContain("203");
+    expect(gate.textContent).toContain("Yes");
+    expect(document.body.textContent).not.toContain('"pr": 203');
     expect(document.body.textContent).not.toContain("[object Object]");
   });
 });

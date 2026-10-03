@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="1050" viewBox="76.5 84 1050 1050">
+  <!-- Embodent mark (flattened for CoreSVG: no use/clipPath): a "C" around a dot, light | grey halves. -->
+  <path fill="#ECEDF1" d="M627 153A456 456 0 0 0 627 1065L627 861A252 252 0 0 1 627 357ZM627 461A148 148 0 0 0 627 757Z"/>
+  <path fill="#7C808A" d="M627 153L930 153A102 102 0 0 1 930 357L627 357ZM627 861L930 861A102 102 0 0 1 930 1065L627 1065ZM627 461A148 148 0 0 1 627 757Z"/>
+</svg>

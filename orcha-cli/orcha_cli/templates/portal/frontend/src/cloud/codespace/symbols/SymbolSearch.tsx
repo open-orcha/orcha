@@ -10,10 +10,11 @@
  * This is WORKSPACE SYMBOL SEARCH, never "go to definition" — no LSP
  * pretense (design doc's Phase 3 non-goal).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { GhError } from "../../github/ghlib";
 import { BrowseErrorBody } from "../../shared/browseTree";
 import { useDebouncedValue } from "../../github/browse/useDebounce";
+import { Icon } from "../../../components/ui";
 import { fetchSymbolSearch } from "./symbolsApi";
 import { groupByPath, symbolKindLabel, type WorkspaceSymbol } from "./symbolsTypes";
 
@@ -36,6 +37,8 @@ export interface SymbolSearchProps {
   // stale results reading as broken is the same bad outcome for a human).
   path?: string;
 }
+
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 
 type SearchState =
   | { phase: "idle" }
@@ -141,20 +144,54 @@ export function SymbolSearch({ cid, gitRef, onNavigate, prefill, prefillToken, f
 
   const showPanel = open && query.trim().length > 0;
 
+  // C11: keyboard navigation — the results in display (grouped) order; the
+  // active row is announced via aria-activedescendant, Enter opens it.
+  const groups = useMemo(() => (state.phase === "loaded" ? groupByPath(state.results) : []), [state]);
+  const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  const [active, setActive] = useState(0);
+  useEffect(() => { setActive(0); }, [flat]);
+  const listId = useId();
+  const optId = (i: number) => listId + "-opt-" + i;
+  const choose = (sym: WorkspaceSymbol) => { onNavigate(sym.path, sym.line); setOpen(false); };
+  const onInputKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!flat.length) return;
+      e.preventDefault();
+      setOpen(true);
+      setActive((i) => (e.key === "ArrowDown" ? (i + 1) % flat.length : (i - 1 + flat.length) % flat.length));
+    } else if (e.key === "Enter") {
+      if (!showPanel || !flat.length) return;
+      e.preventDefault();
+      choose(flat[Math.min(active, flat.length - 1)]);
+    }
+  };
+  const hasOptions = showPanel && flat.length > 0;
+  let rowIndex = -1;
+
   return (
     <div className="cs-symsearch" ref={rootRef}>
       <div className="cs-symsearch-box">
+        <Icon name="search" cls="v2-ico cs-symsearch-ico" />
         <input
           ref={inputRef}
           className="cs-symsearch-in"
           type="search"
-          placeholder="Search symbols… (Ctrl/Cmd+P)"
+          aria-label="Search symbols"
+          role="combobox"
+          aria-expanded={hasOptions}
+          aria-controls={hasOptions ? listId : undefined}
+          aria-autocomplete="list"
+          aria-activedescendant={hasOptions ? optId(Math.min(active, flat.length - 1)) : undefined}
+          onKeyDown={onInputKey}
+          aria-keyshortcuts="Meta+P Control+P"
+          placeholder="Search symbols…"
           spellCheck={false}
           autoComplete="off"
           value={query}
           onFocus={() => setOpen(true)}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         />
+        <kbd className="cs-symsearch-kbd" aria-hidden="true">{IS_MAC ? "⌘P" : "Ctrl P"}</kbd>
       </div>
       {showPanel ? (
         <div
@@ -167,28 +204,38 @@ export function SymbolSearch({ cid, gitRef, onNavigate, prefill, prefillToken, f
             <BrowseErrorBody err={state.error} what="Symbol search" />
           ) : state.phase === "loaded" ? (
             state.results.length ? (
-              <>
-                {groupByPath(state.results).map((g) => (
-                  <div key={g.path} className="cs-symsearch-group">
-                    <div className="cs-symsearch-group-path mono">{g.path}</div>
-                    {g.items.map((s, i) => (
+              <div role="listbox" id={listId} aria-label="Symbols">
+                {groups.map((g) => (
+                  <div key={g.path} className="cs-symsearch-group" role="group" aria-label={g.path}>
+                    <div className="cs-symsearch-group-path mono" aria-hidden="true">{g.path}</div>
+                    {g.items.map((s, i) => {
+                      const idx = ++rowIndex;
+                      const on = idx === active;
+                      return (
                       <div
                         key={g.path + ":" + s.name + ":" + s.line + ":" + i}
-                        className="cs-symsearch-row"
-                        onClick={() => { onNavigate(s.path, s.line); setOpen(false); }}
+                        id={optId(idx)}
+                        role="option"
+                        aria-selected={on}
+                        className={"cs-symsearch-row" + (on ? " on" : "")}
+                        onMouseEnter={() => setActive(idx)}
+                        // keep focus in the input so the keyboard keeps working
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => choose(s)}
                       >
                         <span className={"kind-tag cs-symkind-" + s.kind}>{symbolKindLabel(s.kind)}</span>
                         <span className="cs-symsearch-name mono">{s.name}</span>
                         <span className="grow" />
                         <span className="cs-symsearch-line mono muted">:{s.line}</span>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ))}
                 {state.truncated ? (
                   <div className="cs-symsearch-note muted">More results exist — narrow your search.</div>
                 ) : null}
-              </>
+              </div>
             ) : (
               <div className="none" style={{ padding: 10 }}>No symbols match &#34;{query}&#34;.</div>
             )

@@ -1,21 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <!-- App-icon tile of the portal brand mark (orcaSVG in portal app.js; tile
-       gradient from .brand .mark in portal styles.css). icon.png is rendered
-       from this via rsvg-convert. -->
+<!-- Embodent app icon (macOS grid: 824px plate inset 100px on a 1024 canvas, rx 185.4, #121314),
+     the mark (resources/logo-mark.svg: a "C" around a dot, light | grey halves) centred on it.
+     icon.png / icon.icns are rendered from this (scripts in the PR notes: rsvg-convert + sips + iconutil). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <radialGradient id="bg" cx="0.5" cy="0.3" r="1.2">
-      <stop offset="0" stop-color="#0e2d33"/>
-      <stop offset="1" stop-color="#06171c"/>
-    </radialGradient>
+    <clipPath id="l"><rect x="-200" y="-200" width="827" height="1654"/></clipPath>
+    <clipPath id="r"><rect x="627" y="-200" width="827" height="1654"/></clipPath>
   </defs>
-  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
-  <g transform="translate(148,148) scale(7.28)">
-    <path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/>
-    <g stroke="#06171c" stroke-width="2.4" stroke-linecap="round">
-      <line x1="49" y1="38" x2="40" y2="62"/><line x1="49" y1="38" x2="56" y2="62"/><line x1="49" y1="38" x2="50" y2="74"/>
-    </g>
-    <g fill="#06171c"><circle cx="39" cy="64" r="4"/><circle cx="57" cy="64" r="4"/><circle cx="50" cy="76" r="4"/></g>
-    <circle cx="49" cy="35" r="6" fill="#1fc7cd"/>
-    <path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="#121314"/>
+  <g transform="translate(199.22 195.32) scale(0.52)">
+    <g clip-path="url(#l)" fill="#ECEDF1" stroke="#ECEDF1"><circle cx="627" cy="609" r="148"/><path d="M930 255 L627 255 A354 354 0 0 0 627 963 L930 963" fill="none" stroke-width="204" stroke-linecap="round"/></g>
+    <g clip-path="url(#r)" fill="#7C808A" stroke="#7C808A"><circle cx="627" cy="609" r="148"/><path d="M930 255 L627 255 A354 354 0 0 0 627 963 L930 963" fill="none" stroke-width="204" stroke-linecap="round"/></g>
   </g>
 </svg>

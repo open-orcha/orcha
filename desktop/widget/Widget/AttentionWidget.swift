@@ -7,6 +7,7 @@ private func attentionKindLabel(_ kind: String) -> String {
   case "request_answer": return "escalation"
   case "request_close": return "close"
   case "task_verify": return "verify"
+  case "task_plan": return "plan"
   case "health": return "health"
   default: return kind
   }
@@ -69,7 +70,7 @@ struct OrchaAttentionWidget: Widget {
       AttentionView(entry: entry)
         .widgetURL(deepLink(status: entry.status, path: "/requests"))
     }
-    .configurationDisplayName("Orcha Attention")
+    .configurationDisplayName("Embodent Attention")
     .description("What's waiting on you.")
     .supportedFamilies([.systemLarge])
   }

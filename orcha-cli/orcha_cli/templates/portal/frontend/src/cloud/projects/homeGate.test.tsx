@@ -45,7 +45,8 @@ function mount(initialEntry: string) {
 }
 
 describe("CloudHome (vanilla home-boot redirect decision)", () => {
-  beforeEach(() => { localStorage.clear(); });
+  // the provider pins ?cid= into the REAL (jsdom) url on multi stacks — reset it per test
+  beforeEach(() => { localStorage.clear(); window.history.replaceState(null, "", "/"); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it("bare '/' on a multi-project stack redirects to /projects (replace)", async () => {
@@ -63,15 +64,34 @@ describe("CloudHome (vanilla home-boot redirect decision)", () => {
   it("bare '/' on the single-project case renders the open HomePage", async () => {
     stubFetch(1);
     mount("/");
-    // HomePage's action queue renders — no bounce to the hub
-    expect(await screen.findByText("✓ Nothing needs you right now.")).toBeInTheDocument();
+    // HomePage renders (an empty project shows its setup checklist) — no bounce to the hub
+    expect(await screen.findByText("Get this project working")).toBeInTheDocument();
     expect(screen.queryByTestId("projects-probe")).not.toBeInTheDocument();
+  });
+
+  it("SH-002: bare '/' still bounces when the provider resolves a cid BEFORE the gate's own fetch answers", async () => {
+    const list = Array.from({ length: 3 }, (_, i) => ({ id: "c" + (i + 1), status: "active" }));
+    const json = (data: unknown) => ({ ok: true, status: 200, json: async () => data }) as unknown as Response;
+    let n = 0;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/containers") {
+        // child effects run first: call #1 is the gate's — make it lose the race
+        if (++n === 1) await new Promise((r) => setTimeout(r, 120));
+        return json({ containers: list });
+      }
+      if (url.startsWith("/api/containers/")) return json(rawSnap);
+      return json({});
+    }) as unknown as typeof fetch;
+    mount("/");
+    expect(await screen.findByTestId("projects-probe", {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(n).toBeGreaterThanOrEqual(2); // the provider's resolve really did run first
   });
 
   it("a cid-carrying '/' never bounces, even multi-project", async () => {
     stubFetch(3);
     mount("/?cid=c2");
-    expect(await screen.findByText("✓ Nothing needs you right now.")).toBeInTheDocument();
+    expect(await screen.findByText("Get this project working")).toBeInTheDocument();
     expect(screen.queryByTestId("projects-probe")).not.toBeInTheDocument();
   });
 });

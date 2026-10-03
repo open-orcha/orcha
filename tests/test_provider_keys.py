@@ -63,7 +63,7 @@ async def test_put_xai_then_get_is_isolated_from_anthropic(client, container, ma
     r = await client.put(f"/api/containers/{container['id']}/settings/provider-keys/xai",
                          json={"actor_agent_id": hid, "api_key": XAI_KEY})
     assert r.status_code == 200, r.text
-    assert r.json()["provider"] == "xai" and r.json()["masked"] == "sk-...9876"
+    assert r.json()["provider"] == "xai" and r.json()["masked"] == "xai-...9876"  # M5b: provider-correct prefix
 
     by = _by_provider((await client.get(
         f"/api/containers/{container['id']}/settings/provider-keys")).json())
@@ -139,7 +139,7 @@ async def test_env_override_shadows_all_providers(client, container, make_agent,
         f"/api/containers/{container['id']}/settings/provider-keys")).json())
     # the global env override is reported as source='env' for every provider
     assert by["xai"]["source"] == "env" and by["anthropic"]["source"] == "env"
-    assert by["xai"]["masked"] == "sk-...7777"
+    assert by["xai"]["masked"] == "xai-...7777"
 
 
 # ---- /test ping (provider monkeypatched: no live network, no real key) ----
@@ -172,3 +172,12 @@ async def test_test_route_bad_key(client, container, make_agent, monkeypatch):
                           json={"actor_agent_id": hid, "api_key": "bad"})
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is False
+
+
+def test_mask_provider_key_prefixes():
+    """M5b: never imply an Anthropic `sk-` key on another provider's key."""
+    from portal_backend.provider_key_routes import _mask_provider_key
+    assert _mask_provider_key("xai", "WXYZ") == "xai-...WXYZ"
+    assert _mask_provider_key("anthropic", "WXYZ") == "sk-ant-...WXYZ"
+    assert _mask_provider_key("someother", "WXYZ") == "...WXYZ"
+    assert _mask_provider_key("xai", None) is None

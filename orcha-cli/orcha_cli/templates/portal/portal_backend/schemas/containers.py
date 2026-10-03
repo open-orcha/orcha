@@ -1,6 +1,6 @@
 """Container, credential, model-setting, and onboarding API schemas."""
 
-from typing import Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -203,3 +203,78 @@ class ProposeBody(BaseModel):
     cid: str = Field(..., description="container id for the workspace being staffed")
     goal: str = Field(..., max_length=MAX_PAYLOAD_LEN)
     dialogue: list[ProposeDialogueTurn] = Field(default_factory=list)
+
+
+class ContainerIconUpdate(BaseModel):
+    """D14: set (or with null, clear) a project's icon — cosmetic, shared by the portal
+    and the desktop app. Validated server-side (portal_backend/project_icons.py)."""
+
+    icon: Optional[Dict[str, Any]] = Field(
+        ...,
+        description=(
+            '{"kind":"emoji","value":"🚀"} or {"kind":"glyph","value":"<name>",'
+            '"color":0-9|null}; null resets to the default glyph'
+        ),
+        examples=[{"kind": "emoji", "value": "🚀"}],
+    )
+    actor_agent_id: Optional[str] = Field(
+        default=None, description="who changed it (for the audit row)"
+    )
+
+
+class ContainerIconResponse(BaseModel):
+    container_id: str
+    icon: Optional[Dict[str, Any]] = None
+
+
+class ContainerObjectiveUpdate(BaseModel):
+    """Set (or with null / blank, clear) the project's stated objective — what the
+    Overview's summary line and every task's goal chain read (``containers.description``,
+    mirrored onto the root task's description as template apply does)."""
+
+    objective: Optional[str] = Field(
+        ...,
+        max_length=MAX_DESC_LEN,
+        description="the objective in plain words; null or blank clears it",
+        examples=["Ship a checkout that never lets a cart exceed stock."],
+    )
+    actor_agent_id: Optional[str] = Field(
+        default=None, description="who changed it (for the audit row)"
+    )
+
+
+class ContainerObjectiveResponse(BaseModel):
+    container_id: str
+    objective: Optional[str] = Field(None, description="the stored objective; null when none is set")
+
+
+# Agent limit (mig 056): containers.max_auto_agents — how many live AI agents created
+# FROM suggestions (agents.is_auto_created) the project may hold. Bounds match the UI.
+MAX_AUTO_AGENTS_MIN = 1
+MAX_AUTO_AGENTS_MAX = 50
+
+
+class ContainerLimitsUpdate(BaseModel):
+    """PUT /api/containers/{cid}/limits — owner-or-manage_agents, audited."""
+
+    max_auto_agents: int = Field(
+        ...,
+        ge=MAX_AUTO_AGENTS_MIN,
+        le=MAX_AUTO_AGENTS_MAX,
+        description="how many agents created from suggestions this project may hold (1-50)",
+    )
+    actor_agent_id: str = Field(
+        ...,
+        description="UUID of the human (kind='human') changing the limit — an agent can "
+        "never raise its own project's cap",
+    )
+
+
+class ContainerLimitsResponse(BaseModel):
+    container_id: str
+    max_auto_agents: int
+    auto_agents_in_use: int = Field(
+        ..., description="live AI agents created from suggestions (counted against the limit)"
+    )
+    min_max_auto_agents: int = MAX_AUTO_AGENTS_MIN
+    max_max_auto_agents: int = MAX_AUTO_AGENTS_MAX

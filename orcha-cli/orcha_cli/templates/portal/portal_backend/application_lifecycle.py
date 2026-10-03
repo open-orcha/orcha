@@ -68,6 +68,38 @@ def start_local_index_warmer() -> None:
     threading.Thread(target=_loop, name="local-index-warmer", daemon=True).start()
 
 
+def start_verdikt_sweeper() -> None:
+    """Background check for in-flight Verdikt runs + the auto-fix loop (mig 068).
+
+    Results used to be polled only while someone viewed the task or a preview ran; this daemon
+    thread refreshes every in-flight run every ORCHA_VERDIKT_SWEEP_SECONDS (default 12; 0 turns
+    it off) and applies the auto-fix loop to finished ones, so a fail at 3am still sends the
+    task back. Idle cost: one indexed count per pass. Idempotent with the notifier's
+    POST /api/containers/{cid}/verdikt/sweep and any person's "Check now" (each finished run is
+    judged exactly once). Each pass swallows its own failures."""
+    import threading
+
+    try:
+        every = float(os.environ.get("ORCHA_VERDIKT_SWEEP_SECONDS", "12"))
+    except ValueError:
+        every = 12.0
+    if every <= 0:
+        return
+
+    def _loop() -> None:
+        from portal_backend import verdikt_autofix
+
+        time.sleep(5)  # let migrations settle before the first pass
+        while True:
+            try:
+                verdikt_autofix.sweep(None)
+            except Exception:  # noqa: BLE001 — never let the thread die
+                pass
+            time.sleep(max(2.0, every))
+
+    threading.Thread(target=_loop, name="verdikt-sweeper", daemon=True).start()
+
+
 def startup_migrate() -> None:
     """Wait briefly for Postgres, then apply pending migrations at startup."""
     for _ in range(20):

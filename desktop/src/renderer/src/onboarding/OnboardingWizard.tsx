@@ -1,92 +1,105 @@
-import { useEffect, useState } from 'react'
-import type { BridgeError, FolderChoice, FolderState, WizardVariant } from '../../../shared/types'
-import { Button } from '../ui/Button'
-import { ProgressPills, type PillSegment } from './ProgressPills'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { FolderChoice, FolderState, ProvisionResult, WizardVariant } from '../../../shared/types'
+import './onboarding.css'
+import { ObButton, OrchaMark } from './ui'
+import { StepIndicator, type StepItem } from './StepIndicator'
 import { SkipConfirmDialog } from './SkipConfirmDialog'
 import { useProvisionStream } from './useProvisionStream'
 import { bindCodeSource } from './bindCodeSource'
+import { describeProvisionFailure, type ProvisionFailure } from './provisionError'
+import { motionAllowed, useStageTransition } from './motion'
+import { setupIssues, usePreflightChecks } from './usePreflightChecks'
+import { SetupCheckNotice, setupReason } from './SetupCheckNotice'
 import WelcomeStep from './steps/WelcomeStep'
 import PreflightStep from './steps/PreflightStep'
 import SourceStep, { type ProjectSource } from './steps/SourceStep'
 import FolderStep from './steps/FolderStep'
-import GithubSourceStep from './steps/GithubSourceStep'
+import GithubSourceStep, { type GithubDraft } from './steps/GithubSourceStep'
 import DetailsStep from './steps/DetailsStep'
-import ProvisionStep from './steps/ProvisionStep'
+import ProvisionStep, { type ProvisionStatus } from './steps/ProvisionStep'
 import FleetStep from './steps/FleetStep'
 import FinishStep from './steps/FinishStep'
 
 const TITLES: Record<WizardVariant, string> = {
-  'first-run': 'Set up Orcha',
+  'first-run': 'Set up Embodent',
   'add-project': 'Add a project'
 }
 
-/** Which screen is on-stage. Distinct from the pill segment (below) — a few phases share a
- *  pill position (e.g. 'source' covers both the chooser and each source's own picker) since
- *  the two sources take different-length paths to the same provision step.
- *
- *  'welcome' only appears for first-run (there's no wizard chrome to skip back to on
- *  add-project — see `PHASES_FOR`). 'fleet' and 'finish' are new post-provision phases;
- *  'fleet' silently self-skips (via FleetStep's onUnavailable) on portals that predate the
- *  roster/suggest endpoint. */
-type Phase =
-  | 'welcome'
-  | 'preflight'
-  | 'source'
-  | 'folder'
-  | 'github'
-  | 'details'
-  | 'provision'
-  | 'fleet'
-  | 'finish'
+/** Which screen is on stage. Several phases share one stepper position ('folder' and
+ *  'github' both read as "Source"). 'welcome' (first-run only) and 'finish' are bookends
+ *  without a stepper. */
+type Phase = 'welcome' | 'preflight' | 'source' | 'folder' | 'github' | 'details' | 'provision' | 'fleet' | 'finish'
 
-/** Pill segment for each phase — 'folder'/'github' both read as "Source"; provisioning
- *  always reads as "Create" whether it got there via Details or a straight-through clone.
- *  'welcome' and 'finish' aren't part of the pill row (bookend screens, not "steps"). */
-const SEGMENT_FOR: Partial<Record<Phase, string>> = {
+type StepKey = 'setup' | 'source' | 'details' | 'create' | 'agents'
+
+/** Depth of each phase in the flow — decides whether a move slides forward or back. */
+const ORDER: Record<Phase, number> = {
+  welcome: 0,
+  preflight: 1,
+  source: 2,
+  folder: 3,
+  github: 3,
+  details: 4,
+  provision: 5,
+  fleet: 6,
+  finish: 7
+}
+
+/** The stepper per variant. Adding a project later never shows Setup: its checks run
+ *  silently in the background and only surface when something is actually missing. */
+const STEP_KEYS: Record<WizardVariant, StepKey[]> = {
+  'first-run': ['setup', 'source', 'details', 'create', 'agents'],
+  'add-project': ['source', 'details', 'create', 'agents']
+}
+
+/** How long the Create step holds its completion moment before moving on to Agents. Only
+ *  when motion is allowed — reduced motion moves on at once. */
+export const CELEBRATE_MS = 1200
+
+const STEP_FOR: Partial<Record<Phase, StepKey>> = {
   preflight: 'setup',
   source: 'source',
   folder: 'source',
   github: 'source',
   details: 'details',
   provision: 'create',
-  fleet: 'fleet'
+  fleet: 'agents'
 }
 
-const SEGMENT_LABELS: { key: string; label: string }[] = [
-  { key: 'setup', label: 'Setup' },
-  { key: 'source', label: 'Source' },
-  { key: 'details', label: 'Details' },
-  { key: 'create', label: 'Create' },
-  { key: 'fleet', label: 'Fleet' }
-]
-
-/** Auto-skip walker: the ordered phase list for a variant, minus phases irrelevant to it.
- *  first-run gets the full cinematic open (Welcome); add-project drops straight into Setup
- *  since a manager window is already on screen. Both variants get Fleet/Finish — a fleet is
- *  worth suggesting whether this is the very first project or the fifth. */
-function phasesFor(variant: WizardVariant): Phase[] {
-  const base: Phase[] = ['preflight', 'source', 'provision', 'fleet', 'finish']
-  return variant === 'first-run' ? ['welcome', ...base] : base
+const STEP_LABELS: Record<StepKey, string> = {
+  setup: 'Setup',
+  source: 'Source',
+  details: 'Details',
+  create: 'Create',
+  agents: 'Agents'
 }
 
-/** Drives welcome → preflight → source → (folder details | github clone) → provision →
- *  fleet → finish for BOTH first-run onboarding (zero stacks) and "Add project" from an
- *  existing manager — same step components either way, only framing (title, cancel
- *  affordance, welcome screen) differs. `variant` picks the framing; `onCancel`
- *  (add-project only) backs out to the manager without provisioning anything — safe any
- *  time, since orcha init/upgrade is re-runnable.
+/** What the last provisioning attempt asked for — kept so "Try again" re-runs exactly it and
+ *  "Back" returns to the step that produced it with every input still filled in. */
+type Attempt =
+  | {
+      kind: 'local'
+      choice: FolderChoice
+      state: FolderState
+      name: string
+      objective: string
+    }
+  | { kind: 'github'; repoUrl: string; dest: string }
+
+/** Drives welcome → setup → source → (folder → details | github) → create → agents → finish.
  *
- *  Two sources converge on the same provisioning step:
- *   - 'local': FolderStep picks/creates a folder → DetailsStep (skipped on reconnect) →
- *     provision({mode: initialized ? 'upgrade' : 'init'}).
- *   - 'github': GithubSourceStep clones a repo into a fresh destination → straight to
- *     provision({mode: 'init'}) — a repo we just cloned is never already .orcha-initialized,
- *     and it's always a git repo, so no Details step and no git-init tip either.
+ *  First run walks all of it. "Add a project" starts at Source: the Setup checks run silently
+ *  in the background and only surface — as a compact notice with the fix and "Check again",
+ *  or by routing to Setup with the reason when the user tries to create — if something
+ *  required is missing. Back from Source there closes the wizard; it never lands on Setup.
  *
- *  Provisioning success moves to 'fleet' (GET .../roster/suggest on the just-provisioned
- *  stack) rather than opening the portal directly; FleetStep itself skips straight to
- *  'finish' when the endpoint isn't available (older/open CLI portals). 'finish' is the
- *  terminal screen — its CTA is what actually opens the portal and calls onDone. */
+ *  Every move between steps is a direction-aware transition (see motion.ts / onboarding.css);
+ *  under reduced motion it is instant.
+ *
+ *  Input is preserved across every back/forward move (folder choice, name, objective, repo
+ *  URL and destination live here, not in the step components), and a failed provision is
+ *  never a dead end: the Create step offers Try again (same request) and Back (to the step
+ *  that produced it). Finish opens the created project on its next useful screen. */
 export default function OnboardingWizard({
   onDone,
   variant = 'first-run',
@@ -96,249 +109,384 @@ export default function OnboardingWizard({
   variant?: WizardVariant
   onCancel?: () => void
 }) {
-  const phases = phasesFor(variant)
-  const [phase, setPhase] = useState<Phase>(phases[0])
+  const [phase, setPhaseState] = useState<Phase>(variant === 'first-run' ? 'welcome' : 'source')
+  const phaseRef = useRef(phase)
+  const transition = useStageTransition()
+  const celebrateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const setPhase = useCallback(
+    (next: Phase): void => {
+      if (celebrateTimer.current) {
+        clearTimeout(celebrateTimer.current)
+        celebrateTimer.current = null
+      }
+      const from = phaseRef.current
+      if (next === from) return
+      phaseRef.current = next
+      transition(ORDER[next] >= ORDER[from] ? 'forward' : 'back', () => setPhaseState(next))
+    },
+    [transition]
+  )
+  useEffect(
+    () => () => {
+      if (celebrateTimer.current) clearTimeout(celebrateTimer.current)
+    },
+    []
+  )
+  // Add a project: the Setup checks, silently. First run shows them as a step instead.
+  const background = usePreflightChecks(variant === 'add-project')
+  const issues = variant === 'add-project' ? setupIssues(background) : []
+  /** Add a project routed to Setup: why, and where to return afterwards. */
+  const [detour, setDetour] = useState<{ reason: string | null; from: Phase } | null>(null)
   const [source, setSource] = useState<ProjectSource | null>(null)
   const [choice, setChoice] = useState<FolderChoice | null>(null)
   const [folderState, setFolderState] = useState<FolderState | null>(null)
-  const [provisioning, setProvisioning] = useState(false)
-  const [done, setDone] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [warnings, setWarnings] = useState<string[]>([])
-  const [project, setProject] = useState<string | null>(null)
-  const [apiPort, setApiPort] = useState<number | null>(null)
-  const [fleetCreated, setFleetCreated] = useState(false)
+  const [details, setDetails] = useState<{
+    name: string
+    objective: string
+  } | null>(null)
+  const [github, setGithub] = useState<GithubDraft>({ url: '', dest: null })
+  const [status, setStatus] = useState<ProvisionStatus>('idle')
+  const [failure, setFailure] = useState<ProvisionFailure | null>(null)
+  const [result, setResult] = useState<ProvisionResult | null>(null)
+  const [attempt, setAttempt] = useState<Attempt | null>(null)
+  const [createdAgents, setCreatedAgents] = useState<string[]>([])
   const [codeSourceBound, setCodeSourceBound] = useState(false)
-  const [projectFolder, setProjectFolder] = useState<string | null>(null)
   const [confirmingSkip, setConfirmingSkip] = useState(false)
-  const { events } = useProvisionStream(null)
+  const [opening, setOpening] = useState(false)
+  const { events, begin } = useProvisionStream()
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Git tip: shown once provisioning succeeds, only for a folder that wasn't a git repo.
-  // Only reachable via the local-folder source — a clone is always a git repo.
-  const gitTip =
-    source === 'local' && folderState && !folderState.isGitRepo
-      ? 'Tip: `git init` in this folder unlocks the local code-source features.'
-      : null
+  const running = status === 'running'
+  const canSkip = !!onCancel && !running && phase !== 'finish'
 
-  // Enter advances the current phase's primary action, ignored while typing (inputs/
-  // textareas) so it doesn't fight normal text entry. Escape opens the one shared skip
-  // confirm dialog rather than silently discarding progress.
+  // Each step starts at the top of the panel.
+  useEffect(() => {
+    scrollRef.current?.scrollTo?.({ top: 0 })
+  }, [phase])
+
+  // Enter triggers the step's single primary (ignored while typing); Escape asks before
+  // abandoning an add-project flow, and closes that question again.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape' && canSkip()) {
-        e.preventDefault()
-        setConfirmingSkip(true)
+      if (e.key === 'Escape') {
+        if (confirmingSkip) {
+          e.preventDefault()
+          setConfirmingSkip(false)
+        } else if (canSkip) {
+          e.preventDefault()
+          setConfirmingSkip(true)
+        }
         return
       }
-      if (e.key !== 'Enter') return
+      if (e.key !== 'Enter' || confirmingSkip) return
       const target = e.target as HTMLElement | null
-      if (target && /^(input|textarea|select)$/i.test(target.tagName)) return
-      const primary = document.querySelector<HTMLButtonElement>('[data-onb-primary="true"]:not(:disabled)')
-      primary?.click()
+      if (target && /^(input|textarea|select|button)$/i.test(target.tagName)) return
+      document.querySelector<HTMLButtonElement>('[data-onb-primary="true"]:not(:disabled)')?.click()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, provisioning])
+  }, [canSkip, confirmingSkip])
 
-  function canSkip(): boolean {
-    return !!onCancel && !provisioning && phase !== 'finish'
+  const gitTip =
+    attempt?.kind === 'local' && !attempt.state.isGitRepo
+      ? 'This folder isn’t a git repository yet. Run `git init` in it to unlock the local code features.'
+      : null
+
+  function openSetup(from: Phase): void {
+    setDetour({ reason: setupReason(issues), from })
+    setPhase('preflight')
   }
 
-  async function openPortalAndFinish(proj: string): Promise<void> {
-    await window.orchaDesktop.openOnboardingPortal(proj)
+  function leaveSetup(): void {
+    const back = detour?.from ?? 'source'
+    setDetour(null)
+    background.check()
+    setPhase(back)
+  }
+
+  async function runAttempt(a: Attempt, retry = false): Promise<void> {
+    // Add a project: never start a create the background check already knows will fail —
+    // route to Setup with the reason instead (nothing entered is lost).
+    if (variant === 'add-project' && !retry && issues.length > 0) {
+      openSetup(phaseRef.current)
+      return
+    }
+    setAttempt(a)
+    setPhase('provision')
+    setStatus('running')
+    setFailure(null)
+    setResult(null)
+    begin()
+    try {
+      let res: ProvisionResult
+      if (a.kind === 'local') {
+        // A folder that already holds an Orcha project reconnects (mode 'upgrade': keeps its
+        // ports/config, never re-creates the container) instead of re-initializing over it.
+        res = await window.orchaDesktop.provision({
+          folder: a.choice.folder,
+          mode: a.state.initialized ? 'upgrade' : 'init',
+          name: a.name,
+          objective: a.objective
+        })
+      } else if (retry && (await folderHasContent(a.dest))) {
+        // Retrying after the clone itself succeeded: the destination now holds the repo, so
+        // re-cloning would be refused. Provision the existing clone instead.
+        res = await window.orchaDesktop.provision({
+          folder: a.dest,
+          mode: 'init'
+        })
+      } else {
+        res = await window.orchaDesktop.cloneAndProvision({
+          repoUrl: a.repoUrl,
+          dest: a.dest
+        })
+      }
+      setResult(res)
+      setStatus('done')
+      const isGitRepo = a.kind === 'github' || a.state.isGitRepo
+      // Fire-and-forget: never gates the wizard; resolves false on older portals.
+      void bindCodeSource(res.apiPort, isGitRepo).then(setCodeSourceBound)
+      // Pause on warnings / the git tip so they're actually read; otherwise move on.
+      const pause = res.warnings.length > 0 || (a.kind === 'local' && !a.state.isGitRepo)
+      if (!pause) {
+        // Hold the completion moment briefly (motion only), then on to Agents.
+        if (motionAllowed()) {
+          celebrateTimer.current = setTimeout(() => {
+            celebrateTimer.current = null
+            if (phaseRef.current === 'provision') setPhase('fleet')
+          }, CELEBRATE_MS)
+        } else setPhase('fleet')
+      }
+    } catch (err) {
+      setFailure(describeProvisionFailure(err))
+      setStatus('failed')
+    }
+  }
+
+  /** True when a clone destination already has files (i.e. the clone step completed). */
+  async function folderHasContent(dest: string): Promise<boolean> {
+    const cloned = events.some((e) => e.step === 'clone-repo' && e.status === 'ok')
+    if (cloned) return true
+    try {
+      const s = await window.orchaDesktop.inspectFolder(dest)
+      return s.isGitRepo
+    } catch {
+      return false
+    }
+  }
+
+  function backFromFailure(): void {
+    setStatus('idle')
+    setFailure(null)
+    if (attempt?.kind === 'github') setPhase('github')
+    else if (attempt?.kind === 'local' && !attempt.state.initialized) setPhase('details')
+    else setPhase('folder')
+  }
+
+  async function openProject(project: string, path: string): Promise<void> {
+    setOpening(true)
+    try {
+      await window.orchaDesktop.portalShow(project, path)
+    } catch {
+      // Older main process / stack not listed yet — fall back to the default landing.
+      await window.orchaDesktop.openOnboardingPortal(project).catch(() => undefined)
+    }
     onDone()
   }
 
-  function finishProvision(
-    res: { project: string; apiPort: number; warnings: string[] },
-    showGitTip: boolean,
-    isGitRepo: boolean
-  ): void {
-    setDone(true)
-    setProject(res.project)
-    setApiPort(res.apiPort)
-    // Auto-bind the code source (fixes the "Code Space blank after clone/pick" bug) —
-    // fire-and-forget: never gates the wizard walker, and bindCodeSource itself never
-    // throws (feature-detects the endpoint, swallows any non-200). The Finish step's
-    // summary line only appears once this resolves true.
-    void bindCodeSource(res.apiPort, isGitRepo).then(setCodeSourceBound)
-    // If something needs the user's attention (e.g. the agent worker couldn't start, or
-    // this folder isn't a git repo yet), pause on a plain-language note rather than
-    // silently walking them into the Fleet step.
-    if (res.warnings.length > 0 || showGitTip) {
-      setWarnings(res.warnings)
-    } else {
-      setPhase('fleet')
-    }
-  }
-
-  function failProvision(err: unknown): void {
-    const be = err as BridgeError
-    setError('stderr' in be ? be.stderr : 'reason' in be ? be.reason : be.code)
-  }
-
-  // choice/state come in as explicit args (not read off earlier state) so the reconnect
-  // path — which calls this straight out of FolderStep's onNext — always provisions
-  // against the folder that was JUST picked, not a stale render's closure.
-  async function create(choice: FolderChoice, state: FolderState, name: string, objective: string): Promise<void> {
-    setPhase('provision')
-    setProvisioning(true)
-    setError(null)
-    setProjectFolder(choice.folder)
-    try {
-      // A folder with .orcha already provisioned reconnects (mode 'upgrade': preserves
-      // the existing ports/config, skips container-create + human-register) instead of
-      // re-running init, which would mint a fresh project name/ports over a live stack.
-      const res = await window.orchaDesktop.provision({
-        folder: choice.folder,
-        mode: state.initialized ? 'upgrade' : 'init',
-        name,
-        objective
-      })
-      finishProvision(res, !state.isGitRepo, state.isGitRepo)
-    } catch (err) {
-      failProvision(err)
-    } finally {
-      setProvisioning(false)
-    }
-  }
-
-  // From GitHub: clone into `dest` (streams 'clone-repo' progress on the same provisioning
-  // channel), then the exact same provision pipeline runs server-side on the clone.
-  async function cloneAndCreate(repoUrl: string, dest: string): Promise<void> {
-    setPhase('provision')
-    setProvisioning(true)
-    setError(null)
-    setProjectFolder(dest)
-    try {
-      const res = await window.orchaDesktop.cloneAndProvision({ repoUrl, dest })
-      // A repo we just cloned is always a git repo.
-      finishProvision(res, false, true)
-    } catch (err) {
-      failProvision(err)
-    } finally {
-      setProvisioning(false)
-    }
-  }
-
-  const segmentKey = SEGMENT_FOR[phase]
-  const segments: PillSegment[] = segmentKey
-    ? SEGMENT_LABELS.map((s) => ({
-        key: s.key,
-        label: s.label,
-        state:
-          s.key === segmentKey
+  // ---- stepper ----------------------------------------------------------------------
+  const skipDetails = source === 'github' || !!folderState?.initialized
+  // The stepper always shows the same five steps so the count never shifts mid-flow; a step
+  // that doesn't apply to this path (Details for GitHub or an existing Orcha folder) is
+  // rendered as skipped rather than removed.
+  const stepKeys = STEP_KEYS[variant]
+  const mapped = STEP_FOR[phase]
+  // Add a project's detour to Setup isn't one of its steps: no stepper there.
+  const currentKey = mapped && stepKeys.includes(mapped) ? mapped : undefined
+  const currentIdx = currentKey ? stepKeys.indexOf(currentKey) : -1
+  const steps: StepItem[] = stepKeys.map((key, i) => ({
+    key,
+    label: STEP_LABELS[key],
+    state:
+      key === 'details' && skipDetails
+        ? 'skipped'
+        : i < currentIdx
+          ? 'done'
+          : i === currentIdx
             ? 'current'
-            : SEGMENT_LABELS.findIndex((x) => x.key === s.key) <
-                SEGMENT_LABELS.findIndex((x) => x.key === segmentKey)
-              ? 'done'
-              : 'upcoming'
-      }))
-    : []
+            : 'upcoming'
+  }))
+  // Jumping back is only meaningful before anything has been created.
+  const canJump = ['preflight', 'source', 'folder', 'github', 'details'].includes(phase)
+  function jump(key: string): void {
+    if (key === 'setup' && variant === 'first-run') setPhase('preflight')
+    else if (key === 'source') setPhase(source === 'github' ? 'github' : source === 'local' ? 'folder' : 'source')
+    else if (key === 'details') setPhase('details')
+  }
+
+  const projectLabel =
+    result?.project.replace(/^orcha-/, '') ??
+    (attempt?.kind === 'local'
+      ? attempt.name || attempt.state.suggestedName
+      : attempt?.kind === 'github'
+        ? (attempt.dest.split('/').filter(Boolean).pop() ?? 'your project')
+        : 'your project')
+
+  // Only before anything is created, and only when the background check found a problem.
+  const setupNotice =
+    issues.length > 0 && ['source', 'folder', 'github', 'details'].includes(phase) ? (
+      <SetupCheckNotice
+        issues={issues}
+        checking={background.checking && !background.slow}
+        onRecheck={background.check}
+        onOpenSetup={() => openSetup(phase)}
+      />
+    ) : null
 
   return (
-    <main className="onb-stage flex h-full flex-col items-center overflow-y-auto p-8 animate-fade-in">
-      <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col justify-center gap-6 py-8">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">{TITLES[variant]}</h1>
-          {canSkip() && (
-            <Button variant="ghost" size="sm" onClick={() => setConfirmingSkip(true)}>
-              Cancel
-            </Button>
-          )}
-        </div>
-        {segments.length > 0 && (
-          <div className="flex justify-center">
-            <ProgressPills
-              segments={segments}
-              onJump={(key) => {
-                // Only jump to phases already visited — 'done' segments only, mirroring
-                // back-navigation. Pick the canonical phase for that segment.
-                const target = (Object.entries(SEGMENT_FOR) as [Phase, string][]).find(([, v]) => v === key)?.[0]
-                const seg = segments.find((s) => s.key === key)
-                if (target && seg?.state === 'done') setPhase(target)
-              }}
-            />
+    <div className="ob-window">
+      <main className="ob-panel" aria-label={TITLES[variant]}>
+        <div className="ob-panel-head">
+          <div className="ob-panel-title">
+            <OrchaMark size={18} />
+            <span className="truncate">{TITLES[variant]}</span>
           </div>
-        )}
-        <div className="flex flex-1 flex-col justify-center">
-          {phase === 'welcome' && <WelcomeStep onContinue={() => setPhase('preflight')} />}
-          {phase === 'preflight' && <PreflightStep onContinue={() => setPhase('source')} />}
-          {phase === 'source' && (
-            <SourceStep
-              onChoose={(s) => {
-                setSource(s)
-                setPhase(s === 'local' ? 'folder' : 'github')
-              }}
-            />
-          )}
-          {phase === 'folder' && (
-            <FolderStep
-              onBack={() => setPhase('source')}
-              onNext={(c, s) => {
-                setChoice(c)
-                setFolderState(s)
-                // Reconnecting ignores name/objective (mode 'upgrade' reads the existing
-                // config), so there's nothing useful to ask on the Details step — skip it.
-                if (s.initialized) {
-                  void create(c, s, s.suggestedName, '')
-                } else {
-                  setPhase('details')
-                }
-              }}
-            />
-          )}
-          {phase === 'github' && (
-            <GithubSourceStep
-              onBack={() => setPhase('source')}
-              onNext={(repoUrl, dest) => void cloneAndCreate(repoUrl, dest)}
-            />
-          )}
-          {phase === 'details' && (
-            <DetailsStep
-              suggestedName={folderState?.suggestedName ?? ''}
-              onBack={() => setPhase('folder')}
-              onCreate={(name, objective) =>
-                choice && folderState && void create(choice, folderState, name, objective)
-              }
-            />
-          )}
-          {phase === 'provision' && (
-            <ProvisionStep
-              events={events}
-              done={done && !provisioning}
-              error={error}
-              warnings={warnings}
-              gitTip={done && !provisioning ? gitTip : null}
-              withClone={source === 'github'}
-              onContinue={project ? () => setPhase('fleet') : undefined}
-            />
-          )}
-          {phase === 'fleet' && apiPort !== null && (
-            <FleetStep
-              apiPort={apiPort}
-              folder={projectFolder}
-              onDone={() => {
-                setFleetCreated(true)
-                setPhase('finish')
-              }}
-              onUnavailable={() => setPhase('finish')}
-            />
-          )}
-          {phase === 'finish' && project && (
-            <FinishStep
-              project={project}
-              portalUrl={apiPort !== null ? `http://localhost:${apiPort}` : ''}
-              fleetCreated={fleetCreated}
-              codeSourceBound={codeSourceBound}
-              onOpenPortal={() => void openPortalAndFinish(project)}
-            />
+          {canSkip && (
+            <ObButton variant="ghost" onClick={() => setConfirmingSkip(true)}>
+              Cancel
+            </ObButton>
           )}
         </div>
-      </div>
+        <div className="ob-scroll" ref={scrollRef}>
+          <div className="ob-col">
+            {currentKey && (
+              <div className="ob-stepper-row">
+                <StepIndicator steps={steps} onJump={canJump ? jump : undefined} />
+              </div>
+            )}
+            <div key={phase} className="ob-stage flex flex-col gap-6" data-phase={phase}>
+              {setupNotice && phase !== 'source' && setupNotice}
+              {phase === 'welcome' && <WelcomeStep onContinue={() => setPhase('preflight')} />}
+              {phase === 'preflight' &&
+                (variant === 'add-project' ? (
+                  <PreflightStep reason={detour?.reason} onBack={leaveSetup} onContinue={leaveSetup} />
+                ) : (
+                  <PreflightStep onContinue={() => setPhase('source')} />
+                ))}
+              {phase === 'source' && (
+                <SourceStep
+                  selected={source}
+                  notice={setupNotice}
+                  onBack={variant === 'first-run' ? () => setPhase('preflight') : onCancel}
+                  onChoose={(s) => {
+                    setSource(s)
+                    setPhase(s === 'local' ? 'folder' : 'github')
+                  }}
+                />
+              )}
+              {phase === 'folder' && (
+                <FolderStep
+                  choice={choice}
+                  state={folderState}
+                  onPicked={(c, s) => {
+                    if (c.folder !== choice?.folder) setDetails(null)
+                    setChoice(c)
+                    setFolderState(s)
+                  }}
+                  onBack={() => setPhase('source')}
+                  onNext={(c, s) => {
+                    // Reconnecting reads the existing config — there's nothing to ask on
+                    // Details, so go straight to Create.
+                    if (s.initialized)
+                      void runAttempt({
+                        kind: 'local',
+                        choice: c,
+                        state: s,
+                        name: s.suggestedName,
+                        objective: ''
+                      })
+                    else setPhase('details')
+                  }}
+                />
+              )}
+              {phase === 'github' && (
+                <GithubSourceStep
+                  draft={github}
+                  onDraftChange={setGithub}
+                  onBack={() => setPhase('source')}
+                  onNext={(repoUrl, dest) => void runAttempt({ kind: 'github', repoUrl, dest })}
+                />
+              )}
+              {phase === 'details' && choice && folderState && (
+                <DetailsStep
+                  folder={choice.folder}
+                  initial={
+                    details ?? {
+                      name: folderState.suggestedName,
+                      objective: ''
+                    }
+                  }
+                  onChange={setDetails}
+                  onBack={() => setPhase('folder')}
+                  onCreate={(name, objective) =>
+                    void runAttempt({
+                      kind: 'local',
+                      choice,
+                      state: folderState,
+                      name,
+                      objective
+                    })
+                  }
+                />
+              )}
+              {phase === 'provision' && (
+                <ProvisionStep
+                  projectName={projectLabel}
+                  events={events}
+                  status={status}
+                  failure={failure}
+                  warnings={result?.warnings ?? []}
+                  gitTip={status === 'done' ? gitTip : null}
+                  withClone={attempt?.kind === 'github'}
+                  onContinue={() => setPhase('fleet')}
+                  onRetry={() => attempt && void runAttempt(attempt, true)}
+                  onBack={backFromFailure}
+                />
+              )}
+              {phase === 'fleet' && result && (
+                <FleetStep
+                  apiPort={result.apiPort}
+                  folder={
+                    attempt?.kind === 'local' ? attempt.choice.folder : attempt?.kind === 'github' ? attempt.dest : null
+                  }
+                  onDone={(created) => {
+                    setCreatedAgents(created)
+                    setPhase('finish')
+                  }}
+                  onUnavailable={() => setPhase('finish')}
+                />
+              )}
+              {phase === 'finish' && result && (
+                <FinishStep
+                  project={result.project}
+                  folder={
+                    attempt?.kind === 'local' ? attempt.choice.folder : attempt?.kind === 'github' ? attempt.dest : null
+                  }
+                  portalUrl={`http://localhost:${result.apiPort}`}
+                  agents={createdAgents}
+                  codeSourceBound={codeSourceBound}
+                  opening={opening}
+                  onOpen={(path) => void openProject(result.project, path)}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
       {confirmingSkip && (
         <SkipConfirmDialog
+          variant={variant}
+          projectCreated={result !== null}
           onConfirm={() => {
             setConfirmingSkip(false)
             onCancel?.()
@@ -346,6 +494,6 @@ export default function OnboardingWizard({
           onCancel={() => setConfirmingSkip(false)}
         />
       )}
-    </main>
+    </div>
   )
 }

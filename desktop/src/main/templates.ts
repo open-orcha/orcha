@@ -4,6 +4,12 @@ import { app } from 'electron'
 /** Resolve the bundled template root. In packaged builds resources live under
  *  process.resourcesPath; in dev they sit in the repo's desktop/resources. */
 export function templatesRoot(): string {
+  return resourceFile('orcha-templates')
+}
+
+/** Resolve a file/dir shipped via electron-builder `extraResources` (templates, the tray
+ *  template image): process.resourcesPath when packaged, desktop/resources in dev. */
+export function resourceFile(name: string): string {
   // app.isPackaged is false under electron-vite dev and vitest.
   const packaged = (() => {
     try {
@@ -12,8 +18,8 @@ export function templatesRoot(): string {
       return false
     }
   })()
-  if (packaged) return path.join(process.resourcesPath, 'orcha-templates')
-  return path.join(__dirname, '..', '..', 'resources', 'orcha-templates')
+  if (packaged) return path.join(process.resourcesPath, name)
+  return path.join(__dirname, '..', '..', 'resources', name)
 }
 
 /** Mirror of the CLI's _sanitize_name. */
