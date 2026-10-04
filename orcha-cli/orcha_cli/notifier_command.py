@@ -120,6 +120,13 @@ def cmd_notifier(args, *, services) -> None:
     def _handle(signum, frame):
         stop["flag"] = True
 
+    # A carry that runs many Git commands must keep proving progress: --ensure
+    # treats a heartbeat older than HEARTBEAT_STALE_SECS as a wedged daemon and
+    # replaces it mid-tick, which used to restart the same long carry from scratch.
+    from . import notifier_worktree_base as _worktree_base
+
+    _worktree_base.PROGRESS_HOOK = lambda: _write_heartbeat(cwd)
+
     signal.signal(signal.SIGTERM, _handle)
     signal.signal(signal.SIGINT, _handle)
     # Own the PID file so `--ensure` / `daemon_running` detect this loop and never

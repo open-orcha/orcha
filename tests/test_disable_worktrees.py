@@ -2644,10 +2644,10 @@ def test_handoff_into_dirty_main_skips_per_file_diffs(tmp_path, monkeypatch):
     no_index_calls = []
     real_run_git = notifier._run_git
 
-    def counting_run_git(args, cwd=None, timeout=30.0):
+    def counting_run_git(args, cwd=None, timeout=30.0, env=None):
         if args[:2] == ["diff", "--no-index"] and str(cwd) == str(main):
             no_index_calls.append(args[-1])
-        return real_run_git(args, cwd=cwd, timeout=timeout)
+        return real_run_git(args, cwd=cwd, timeout=timeout, env=env)
 
     monkeypatch.setattr(notifier, "_run_git", counting_run_git)
 
@@ -2765,3 +2765,105 @@ def test_worktrees_disabled_starts_in_main_when_carry_is_refused(monkeypatch):
         url.endswith("/wake-ack") and body.get("kind") == "worker_routing_handoff_failed"
         for url, body in posts
     )
+
+
+# --- The source patch is built through a temporary index, in seconds ------------
+
+
+def test_full_patch_covers_every_kind_of_change_without_touching_the_index(tmp_path):
+    from orcha_cli import notifier_worktree_cleanup as cleanup
+
+    main = _checkpoint_repo(tmp_path)
+    (main / ".gitignore").write_text("secret.env\nbuild/\n")
+    (main / "keep.txt").write_text("keep\n")
+    assert notifier._run_git(["add", ".gitignore", "keep.txt"], cwd=main)[0] == 0
+    assert notifier._run_git(["commit", "-m", "ignore + keep"], cwd=main)[0] == 0
+    assert notifier._run_git(["push", "origin", "main"], cwd=main)[0] == 0
+
+    (main / "base.txt").write_text("modified\n")          # tracked modification
+    (main / "keep.txt").unlink()                          # tracked deletion
+    (main / "new.txt").write_text("new\n")                # untracked
+    (main / "secret.env").write_text("TOKEN=1\n")         # ignored file
+    (main / "build").mkdir()
+    (main / "build" / "out.bin").write_bytes(b"\x00\x93\xff")  # ignored binary
+    index_before = (main / ".git" / "index").read_bytes()
+    _code, status_before = notifier._run_git(["status", "--porcelain"], cwd=main)
+
+    patch = cleanup._full_patch(str(main), notifier)
+    with_ignored = cleanup._full_patch(str(main), notifier, include_ignored=True)
+
+    assert (main / ".git" / "index").read_bytes() == index_before
+    assert notifier._run_git(["status", "--porcelain"], cwd=main)[1] == status_before
+    assert not list((main / ".git").glob("orcha-index-*")), "temporary index removed"
+    for name in ("base.txt", "keep.txt", "new.txt"):
+        assert f"diff --git a/{name} b/{name}" in patch
+    assert "secret.env" not in patch and "build/out.bin" not in patch
+    assert "diff --git a/secret.env b/secret.env" in with_ignored
+    assert "GIT binary patch" in with_ignored and "build/out.bin" in with_ignored
+    assert "+modified" in patch and "-keep" in patch and "+new" in patch
+
+    # The patch applies onto a fresh checkout of origin/main and reproduces the tree.
+    fresh, _branch = notifier._provision_worktree(str(main), "verifier")
+    assert cleanup._apply_patch(fresh, with_ignored, notifier)
+    assert (pathlib.Path(fresh) / "base.txt").read_text() == "modified\n"
+    assert not (pathlib.Path(fresh) / "keep.txt").exists()
+    assert (pathlib.Path(fresh) / "new.txt").read_text() == "new\n"
+    assert (pathlib.Path(fresh) / "secret.env").read_text() == "TOKEN=1\n"
+    assert (pathlib.Path(fresh) / "build" / "out.bin").read_bytes() == b"\x00\x93\xff"
+
+
+def test_full_patch_uses_three_git_calls_not_one_per_file(tmp_path, monkeypatch):
+    from orcha_cli import notifier_worktree_cleanup as cleanup
+
+    main = _checkpoint_repo(tmp_path)
+    (main / ".gitignore").write_text("deps/\n")
+    assert notifier._run_git(["add", ".gitignore"], cwd=main)[0] == 0
+    assert notifier._run_git(["commit", "-m", "ignore deps"], cwd=main)[0] == 0
+    assert notifier._run_git(["push", "origin", "main"], cwd=main)[0] == 0
+    (main / "deps").mkdir()
+    for index in range(300):
+        (main / "deps" / f"mod{index}.js").write_text(f"module.exports = {index};\n")
+    calls = []
+    real = notifier._run_git
+
+    def counting(args, cwd=None, timeout=30.0, env=None):
+        calls.append(args[0])
+        return real(args, cwd=cwd, timeout=timeout, env=env)
+
+    monkeypatch.setattr(notifier, "_run_git", counting)
+    patch = cleanup._full_patch(str(main), notifier, include_ignored=True)
+    assert patch.count("diff --git") == 300
+    assert calls.count("diff") == 1
+    assert "no-index" not in " ".join(calls)
+    assert calls.count("update-index") == 2, "300 files registered in batches of 200"
+    assert len(calls) <= 10
+
+
+def test_git_progress_hook_fires_per_command(monkeypatch, tmp_path):
+    ticks = []
+    monkeypatch.setattr(notifier_worktree_base, "PROGRESS_HOOK", lambda: ticks.append(1))
+    main = _checkpoint_repo(tmp_path)
+    assert notifier._run_git(["status", "--porcelain"], cwd=main)[0] == 0
+    assert ticks, "each git command reports progress so the heartbeat stays fresh"
+
+
+def test_daemon_points_progress_hook_at_heartbeat(monkeypatch):
+    """Commit-level guard: the daemon loop wires the hook (mid-tick proof of life)."""
+    source = pathlib.Path(notifier.__file__).with_name("notifier_command.py").read_text()
+    assert "PROGRESS_HOOK = lambda: _write_heartbeat(cwd)" in source
+
+
+def test_full_patch_skips_nested_checkouts(tmp_path):
+    from orcha_cli import notifier_worktree_cleanup as cleanup
+
+    main = _checkpoint_repo(tmp_path)
+    worktree, _branch = notifier._provision_task_worktree(str(main), "builder", "task-1")
+    nested = main / "vendor-clone"
+    nested.mkdir()
+    assert notifier._run_git(["init", "-q"], cwd=nested)[0] == 0
+    (nested / "x.txt").write_text("x\n")
+
+    patch = cleanup._full_patch(str(main), notifier, include_ignored=True)
+
+    assert patch == "", "nested worktree and nested repo are not this checkout's state"
+    assert pathlib.Path(worktree).exists()

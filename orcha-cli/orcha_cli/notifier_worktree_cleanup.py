@@ -22,68 +22,99 @@ DIFF_EXCLUDES = (
 
 
 def _full_patch(cwd, services: Any, *, include_ignored: bool = False):
-    """Return the complete binary-safe patch without changing the checkout index."""
-    return_code, tracked = services._run_git(
-        ["diff", "--binary", "--full-index", "origin/main", "--", *DIFF_EXCLUDES],
-        cwd=cwd,
-        timeout=60,
-    )
-    if return_code != 0:
+    """Return the complete binary-safe patch without changing the checkout index.
+
+    Everything in the working tree — tracked changes, untracked files and (when
+    asked) ignored files — is staged into a TEMPORARY index and diffed against
+    origin/main in one pass. The checkout's real index is never touched, and the
+    cost is three Git commands instead of one ``git diff --no-index`` per file
+    (a task worktree with a virtualenv or node_modules used to take minutes and
+    stall the whole notifier tick).
+    """
+    return_code, git_dir = services._run_git(["rev-parse", "--git-dir"], cwd=cwd)
+    if return_code != 0 or not git_dir.strip():
         return None
-
-    # ``git diff`` deliberately omits ordinary untracked files.  Diff each one
-    # against /dev/null rather than using ``git add -N``: intent-to-add mutates
-    # the real index and made even a rejected handoff observably change a human
-    # checkout.  NUL separation preserves unusual but valid path names.
-    untracked_commands = [
-        ["ls-files", "--others", "--exclude-standard", "-z", "--", *DIFF_EXCLUDES]
-    ]
-    if include_ignored:
-        untracked_commands.append(
-            [
-                "ls-files",
-                "--others",
-                "--ignored",
-                "--exclude-standard",
-                "-z",
-                "--",
-                *DIFF_EXCLUDES,
-            ]
+    git_path = pathlib.Path(git_dir.strip())
+    if not git_path.is_absolute():
+        git_path = pathlib.Path(cwd) / git_path
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix="orcha-index-", dir=str(git_path))
+        os.close(fd)
+        os.unlink(temporary)  # git read-tree creates the file itself
+        env = {"GIT_INDEX_FILE": temporary}
+        read_code, _ = services._run_git(
+            ["read-tree", "HEAD"], cwd=cwd, timeout=60, env=env
         )
-
-    patches = [tracked]
-    untracked_paths = []
-    seen_paths = set()
-    for command in untracked_commands:
-        untracked_code, untracked = services._run_git(
-            command, cwd=cwd, timeout=60
-        )
-        if untracked_code != 0:
+        if read_code != 0:
             return None
-        for relative_path in filter(None, untracked.split("\0")):
-            if relative_path not in seen_paths:
-                seen_paths.add(relative_path)
-                untracked_paths.append(relative_path)
-
-    for relative_path in untracked_paths:
-        file_code, file_patch = services._run_git(
+        # Tracked modifications and deletions only; `--update` never looks at
+        # untracked paths, so nested repositories cannot abort it.
+        update_code, _ = services._run_git(
+            ["add", "--update", "--", *DIFF_EXCLUDES], cwd=cwd, timeout=120, env=env
+        )
+        if update_code != 0:
+            return None
+        # Untracked (and, when asked, ignored) files from ONE listing. A nested
+        # repository or linked worktree is listed as "dir/" and skipped: it is a
+        # separate checkout, never part of this one's file state.
+        listing = ["ls-files", "--others", "--exclude-standard", "-z"]
+        if include_ignored:
+            listing.insert(2, "--ignored")
+        others_code, others = services._run_git(
+            [*listing, "--", *DIFF_EXCLUDES], cwd=cwd, timeout=120
+        )
+        if others_code != 0:
+            return None
+        if include_ignored:
+            plain_code, plain = services._run_git(
+                ["ls-files", "--others", "--exclude-standard", "-z", "--", *DIFF_EXCLUDES],
+                cwd=cwd,
+                timeout=120,
+            )
+            if plain_code != 0:
+                return None
+            others = others + plain
+        untracked = []
+        seen = set()
+        for path in others.split("\0"):
+            if not path or path.endswith("/") or path in seen:
+                continue
+            seen.add(path)
+            untracked.append(path)
+        for offset in range(0, len(untracked), 200):
+            add_code, _ = services._run_git(
+                ["update-index", "--add", "--", *untracked[offset:offset + 200]],
+                cwd=cwd,
+                timeout=120,
+                env=env,
+            )
+            if add_code != 0:
+                return None
+        diff_code, patch = services._run_git(
             [
                 "diff",
-                "--no-index",
+                "--cached",
                 "--binary",
                 "--full-index",
+                "--no-renames",
+                "origin/main",
                 "--",
-                "/dev/null",
-                relative_path,
+                *DIFF_EXCLUDES,
             ],
             cwd=cwd,
-            timeout=60,
+            timeout=120,
+            env=env,
         )
-        # --no-index uses 1 for the expected "files differ" result.
-        if file_code not in (0, 1):
-            return None
-        patches.append(file_patch)
-    return "".join(patches)
+        return patch if diff_code == 0 else None
+    except OSError:
+        return None
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def _branch_patch(base_cwd, branch: str, services: Any):
