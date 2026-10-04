@@ -235,6 +235,40 @@ describe('OnboardingWizard — local folder source', () => {
   })
 })
 
+describe('OnboardingWizard — setup-mode chooser (GH #238)', () => {
+  it('offers all four setup modes; the two preview modes cannot leave the chooser', async () => {
+    const user = userEvent.setup()
+    render(<OnboardingWizard onDone={vi.fn()} variant="add-project" />)
+
+    await continueToSource(user)
+    expect(screen.getByRole('button', { name: /local folder/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /from github, gitlab or bitbucket/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /icloud drive folder/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /cloud-hosted orcha/i })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: /icloud drive folder/i }))
+    await user.click(screen.getByRole('button', { name: /cloud-hosted orcha/i }))
+    // Still on the chooser: no folder picker, no repo URL field, nothing provisioned.
+    expect(screen.getByText(/where's the project/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/repository url/i)).not.toBeInTheDocument()
+    expect(window.orchaDesktop.pickFolder).not.toHaveBeenCalled()
+    expect(window.orchaDesktop.provision).not.toHaveBeenCalled()
+    expect(window.orchaDesktop.cloneAndProvision).not.toHaveBeenCalled()
+  })
+
+  it('the git card leads to the clone step whose hint names the supported hosts', async () => {
+    const user = userEvent.setup()
+    render(<OnboardingWizard onDone={vi.fn()} variant="add-project" />)
+
+    await continueToSource(user)
+    await user.click(screen.getByRole('button', { name: /from github, gitlab or bitbucket/i }))
+
+    expect(await screen.findByLabelText(/repository url/i)).toBeInTheDocument()
+    expect(screen.getByText(/clone a repository/i)).toBeInTheDocument()
+    expect(screen.getByText(/github\.com, gitlab\.com or bitbucket\.org/i)).toBeInTheDocument()
+  })
+})
+
 describe('OnboardingWizard — From GitHub source', () => {
   it('gh-authenticated: lists repos, picks one, clones, then provisions', async () => {
     ;(window.orchaDesktop.githubStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
