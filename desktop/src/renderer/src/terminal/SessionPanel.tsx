@@ -36,6 +36,7 @@ export function stripTitle(tab: TermTab): string {
  *  portal shows (scrollback / TUI state survive) and refit when shown. */
 export default function SessionPanel({
   terms,
+  tabs: stripTabs,
   shown,
   portalTab,
   onShowPortal,
@@ -47,6 +48,10 @@ export default function SessionPanel({
   children
 }: {
   terms: Terminals
+  /** The tabs the strip lists: the open project's sessions only (App scopes them). Every
+   *  terminal stays mounted below regardless, so other projects' sessions keep running.
+   *  Defaults to all tabs. */
+  tabs?: readonly TermTab[]
   /** A terminal fills the panel (false = the portal / projects view is showing). */
   shown: boolean
   portalTab: { label: string; icon: ReactNode }
@@ -61,6 +66,7 @@ export default function SessionPanel({
   children: ReactNode
 }) {
   const { state, api, client } = terms
+  const tabs = stripTabs ?? state.tabs
   const termRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
   const launchers = useLaunchers()
@@ -79,7 +85,7 @@ export default function SessionPanel({
     else for (const k of keys) terms.close(k)
   }
   const tabActions: TabMenuActions = {
-    tabs: state.tabs,
+    tabs,
     onPin: terms.pin,
     onCloseTabs: closeTabs,
     onColor: terms.setColor,
@@ -126,7 +132,7 @@ export default function SessionPanel({
       ? stripRef.current?.querySelector<HTMLElement>(`[data-tab-key="${CSS.escape(selectedKey)}"]`)
       : stripRef.current?.querySelector<HTMLElement>('[data-testid="portal-tab"]')
     el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
-  }, [selectedKey, state.tabs.length])
+  }, [selectedKey, tabs.length])
 
   // A restored tab's "Restored · …" note stays until it has been ON SCREEN for a few seconds:
   // a relaunch that opens on the portal must not fade it unseen (DT-35). Hiding the terminal
@@ -140,13 +146,13 @@ export default function SessionPanel({
   }, [noteKey, dismissRestored])
 
   // Strip order: [portal, ...terminals]; index 0 = the portal tab.
-  const selectedIndex = shown ? 1 + state.tabs.findIndex((t) => t.key === state.activeKey) : 0
+  const selectedIndex = shown ? 1 + tabs.findIndex((t) => t.key === state.activeKey) : 0
   const select = (index: number): void => {
     if (index <= 0) onShowPortal()
-    else onShowTab(state.tabs[index - 1].key)
+    else onShowTab(tabs[index - 1].key)
   }
   const onStripKey = (e: ReactKeyboardEvent<HTMLDivElement>, index: number): void => {
-    const count = state.tabs.length + 1
+    const count = tabs.length + 1
     let next = -1
     if (e.key === 'ArrowRight') next = (index + 1) % count
     else if (e.key === 'ArrowLeft') next = (index - 1 + count) % count
@@ -154,15 +160,15 @@ export default function SessionPanel({
     else if (e.key === 'End') next = count - 1
     else if (index > 0 && (e.key === 'Delete' || e.key === 'Backspace')) {
       e.preventDefault()
-      closeTabs([state.tabs[index - 1].key])
+      closeTabs([tabs[index - 1].key])
       return
     } else if (index > 0 && e.key === 'F2') {
       e.preventDefault()
-      setRenaming(state.tabs[index - 1].key)
+      setRenaming(tabs[index - 1].key)
       return
     } else if (index > 0 && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) {
       e.preventDefault()
-      openTabMenu(state.tabs[index - 1].key)
+      openTabMenu(tabs[index - 1].key)
       return
     }
     if (next < 0) return
@@ -209,7 +215,7 @@ export default function SessionPanel({
               <span className="truncate font-medium">{portalTab.label}</span>
             </div>
             <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />
-            {state.tabs.map((tab, i) => (
+            {tabs.map((tab, i) => (
               <Tab
                 key={tab.key}
                 tab={tab}

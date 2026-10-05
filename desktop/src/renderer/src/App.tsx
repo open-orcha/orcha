@@ -359,6 +359,39 @@ function AppShell() {
     focusTerminal()
   }, [terms.state.tabs.length, openTerminal, focusTerminal, settingsOpen, statsOpen, closeOverlays])
   const sessionGroups = useMemo(() => groupSessions(rows, terms.state.tabs), [rows, terms.state.tabs])
+  // The session strip is scoped to ONE project — the project of the terminal on screen, else
+  // the open project; All projects lists only home-folder sessions. Other projects' terminals
+  // keep running (and stay in the sidebar under their project); they just aren't in this strip.
+  const tabRowKey = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const [rk, g] of sessionGroups.byRow) for (const t of g.all) m.set(t.key, rk)
+    return m
+  }, [sessionGroups])
+  const scopeKey = termShown && terms.state.activeKey ? (tabRowKey.get(terms.state.activeKey) ?? null) : activeKey
+  const scopeRow = scopeKey ? (rows.find((r) => r.key === scopeKey) ?? null) : null
+  const stripTabs = useMemo(
+    () => (scopeKey ? (sessionGroups.byRow.get(scopeKey)?.all ?? []) : sessionGroups.unplaced),
+    [scopeKey, sessionGroups]
+  )
+  const stripTabsRef = useRef(stripTabs)
+  stripTabsRef.current = stripTabs
+  // Closing the on-screen tab must not hop to another project's session (the reducer picks a
+  // neighbour across ALL tabs): stay in the same project's strip, or back to its portal.
+  const lastShown = useRef<{ tab: string | null; scope: string | null }>({ tab: null, scope: null })
+  useEffect(() => {
+    const prev = lastShown.current
+    const active = terms.state.activeKey
+    const prevGone = prev.tab !== null && !terms.state.tabs.some((t) => t.key === prev.tab)
+    if (termShown && prevGone && active && (tabRowKey.get(active) ?? null) !== prev.scope) {
+      const same = prev.scope ? (sessionGroups.byRow.get(prev.scope)?.all ?? []) : sessionGroups.unplaced
+      const next = same[same.length - 1]
+      if (next) terms.activate(next.key)
+      else setTermShown(false)
+      lastShown.current = { tab: next?.key ?? null, scope: prev.scope }
+      return
+    }
+    lastShown.current = termShown ? { tab: active, scope: scopeKey } : { tab: null, scope: null }
+  }, [termShown, terms, terms.state.activeKey, terms.state.tabs, tabRowKey, scopeKey, sessionGroups])
   // Saved tabs whose project wasn't discovered at launch come back once it is.
   const { deferred: deferredTabs, restoreProject } = terms
   const stackKey = stacks.map((st) => st.project).join('\n')
@@ -609,9 +642,11 @@ function AppShell() {
       if (hit.type === 'command-menu') {
         e.preventDefault()
         void openMenu()
-      } else if (terms.state.tabs.length > 0) {
+      } else {
+        const tab = stripTabsRef.current[hit.index]
+        if (!tab) return
         e.preventDefault()
-        terms.activateIndex(hit.index)
+        terms.activate(tab.key)
         setTermShown(true)
         focusTerminal()
       }
@@ -880,13 +915,16 @@ function AppShell() {
               }
             ]
           : []),
-        ...terms.state.tabs.map((tab, i) => ({
+        ...terms.state.tabs.map((tab) => ({
           id: `tab-${tab.key}`,
           section: 'tabs' as const,
           label: stripTitle(tab),
           hint: exitLabel(tab) ?? (tab.key === terms.state.activeKey ? 'current' : undefined),
           keywords: `${tab.kind} terminal tab ${tab.cwd ?? ''}`,
-          shortcut: i < 9 ? ['⌘', String(i + 1)] : undefined,
+          shortcut: (() => {
+            const i = stripTabs.findIndex((t) => t.key === tab.key)
+            return i >= 0 && i < 9 ? ['⌘', String(i + 1)] : undefined
+          })(),
           glyph: <KindIcon kind={tab.kind} className="h-4 w-4" />,
           run: () => {
             closeMenu('host')
@@ -989,16 +1027,23 @@ function AppShell() {
     />
   )
 
-  const portalTab = activeRow
-    ? { label: activeRow.name, icon: <ProjectIconGlyph icon={icons[projectIconKey(activeRow)] ?? null} size={16} ring="var(--color-card)" /> }
+  const portalTab = scopeRow
+    ? { label: scopeRow.name, icon: <ProjectIconGlyph icon={icons[projectIconKey(scopeRow)] ?? null} size={16} ring="var(--color-card)" /> }
     : { label: 'All projects', icon: <LayoutGrid className="h-3.5 w-3.5 text-text-3" /> }
   const sessions = (content: ReactNode) =>
     hasTabs ? (
       <SessionPanel
         terms={terms}
+        tabs={stripTabs}
         shown={termShown}
         portalTab={portalTab}
-        onShowPortal={showPortal}
+        onShowPortal={() =>
+          // The strip's project tab opens THAT project's portal (a terminal from another
+          // project may be on screen while a different portal is loaded underneath).
+          scopeRow && scopeRow.key !== activeKey && scopeRow.stack.running && scopeRow.stack.apiPort !== null
+            ? openRow(scopeRow)
+            : showPortal()
+        }
         onShowTab={showTab}
         onLaunch={(kind) => openTerminal(kind)}
         onOpenMenu={() => void openMenu()}

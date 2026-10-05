@@ -65,6 +65,25 @@ function renderPanel(state: TabsState, over: Partial<Parameters<typeof SessionPa
 }
 
 describe('SessionPanel (full-panel terminals, Orca strip)', () => {
+  it('lists only the tabs it is given (one project), yet keeps every terminal mounted', () => {
+    const state = twoTabs()
+    renderPanel(state, { tabs: [state.tabs[1]] })
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['fleet-mate', 'Claude · todo'])
+    expect(screen.getAllByTestId('terminal-view')).toHaveLength(2)
+  })
+
+  it('arrow keys and positions follow the scoped strip, not every tab', async () => {
+    const state = twoTabs()
+    const { onShowTab, onShowPortal } = renderPanel(state, { tabs: [state.tabs[1]] })
+    const tabs = screen.getAllByRole('tab')
+    tabs[1].focus()
+    await userEvent.keyboard('{ArrowRight}')
+    expect(onShowPortal).toHaveBeenCalled()
+    tabs[0].focus()
+    await userEvent.keyboard('{ArrowRight}')
+    expect(onShowTab).toHaveBeenLastCalledWith('t2')
+  })
+
   it('the strip lists the project portal tab first, then every terminal; the active terminal fills the panel', () => {
     renderPanel(twoTabs())
     const tabs = screen.getAllByRole('tab')
