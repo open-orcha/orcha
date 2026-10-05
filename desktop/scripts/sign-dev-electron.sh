@@ -29,17 +29,23 @@ IDENTITY="${1:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple De
 # signature, so this must happen BEFORE codesign). Gives Dock + Notification
 # Center the Embodent icon in dev; packaged builds carry their own icon.
 ICNS_SRC="$HERE/../resources/icon.icns"
-ICNS_TARGET="$APP/Contents/Resources/electron.icns"
-if [ -f "$ICNS_SRC" ] && [ -f "$ICNS_TARGET" ]; then
+PLIST="$APP/Contents/Info.plist"
+if [ -f "$ICNS_SRC" ]; then
   # resources/icon.icns is pre-built (iconutil from an iconset rendered off icon.svg),
-  # so copy it rather than converting icon.png here.
-  cp "$ICNS_SRC" "$ICNS_TARGET"
-  echo "branded $ICNS_TARGET with the Embodent mark"
+  # so copy it rather than converting icon.png here. It ships under its own name (not
+  # electron.icns): macOS icon services cache by bundle + icon file, and a stale cached
+  # Electron atom for electron.icns survives a content swap. The name carries the icns
+  # hash so a future mark change is a new file again.
+  ICNS_NAME="embodent-$(md5 -q "$ICNS_SRC" | cut -c1-8).icns"
+  rm -f "$APP"/Contents/Resources/embodent-*.icns
+  cp "$ICNS_SRC" "$APP/Contents/Resources/$ICNS_NAME"
+  cp "$ICNS_SRC" "$APP/Contents/Resources/electron.icns"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile $ICNS_NAME" "$PLIST"
+  echo "branded $APP with the Embodent mark ($ICNS_NAME)"
 fi
 
 # The bold macOS app-menu title reads CFBundleName from Info.plist at launch —
 # app.setName() can't reach it. Patch it (also sealed by the signature below).
-PLIST="$APP/Contents/Info.plist"
 # (Only the display name changes; the dev app's userData stays <appData>/Orcha —
 # src/main/userDataPath.ts pins it.)
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Embodent" "$PLIST"
@@ -69,3 +75,4 @@ codesign -dv "$APP" 2>&1 | grep -E "Authority|Signature" | head -3
 killall Dock 2>/dev/null || true
 killall NotificationCenter 2>/dev/null || true
 killall usernoted 2>/dev/null || true
+killall iconservicesagent 2>/dev/null || true
