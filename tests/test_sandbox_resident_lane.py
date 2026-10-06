@@ -15,6 +15,22 @@ from orcha_cli import notifier_resident_turn as _turn_mod
 _DEAD_PID = 2_000_000        # > macOS max pid → os.kill always ProcessLookupError
 
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 def _sandbox_project(tmp_path):
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "orcha.json").write_text(json.dumps({
@@ -203,6 +219,10 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if "active-conversations" in url:
             return {"conversations": active}
         if "/turns" in url:
@@ -417,11 +437,11 @@ def test_dead_pid_resident_reaper_leaves_sandbox_rows_to_container_sweep(monkeyp
     while it is open the lane's lease is shielded — the dead HOST row is finished
     as a sibling instead of releasing the lease."""
     posts = []
-    monkeypatch.setattr(notifier, "_get_json", lambda u, **k: {"runs": [
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda u, **k: {"runs": [
         {"run_id": "SBX", "pid": _DEAD_PID, "status": "running",
          "sandbox_container_id": "orcha-run-warm"},
         {"run_id": "HOST", "pid": _DEAD_PID, "status": "running",
-         "sandbox_container_id": None}]})
+         "sandbox_container_id": None}]}))
     monkeypatch.setattr(notifier, "_post_json",
                         lambda u, b=None, **k: posts.append((u, b)) or {})
     n = notifier._reap_dead_pid_resident_runs("http://x", "A1")
@@ -433,9 +453,9 @@ def test_dead_pid_resident_reaper_leaves_sandbox_rows_to_container_sweep(monkeyp
 
 def test_dead_pid_resident_reaper_noop_when_only_sandbox_rows(monkeypatch):
     posts = []
-    monkeypatch.setattr(notifier, "_get_json", lambda u, **k: {"runs": [
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda u, **k: {"runs": [
         {"run_id": "SBX", "pid": _DEAD_PID, "status": "running",
-         "sandbox_container_id": "orcha-run-warm"}]})
+         "sandbox_container_id": "orcha-run-warm"}]}))
     monkeypatch.setattr(notifier, "_post_json",
                         lambda u, b=None, **k: posts.append((u, b)) or {})
     assert notifier._reap_dead_pid_resident_runs("http://x", "A1") == 0

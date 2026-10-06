@@ -42,7 +42,7 @@ def get_persona(aid: str):
     with db_cursor() as (_, cur):
         cur.execute(
             """SELECT a.alias, a.role, a.kind, a.model, a.system_prompt,
-                      c.worktrees_disabled
+                      a.container_id, c.worktrees_disabled
                  FROM agents a JOIN containers c ON c.id = a.container_id
                 WHERE a.id=%s""",
             (aid,),
@@ -63,6 +63,9 @@ def get_persona(aid: str):
         # The live-terminal bridge reads persona before it chooses a cwd, so it shares the same
         # persisted project routing preference as notifier-managed wakes and conversations.
         "worktrees_disabled": bool(row["worktrees_disabled"]),
+        # Checkout routing's live-run guard needs the agent's container; a fresh worktree has no
+        # project config to re-derive it from.
+        "container_id": str(row["container_id"]),
     }
 
 

@@ -16,6 +16,22 @@ from orcha_cli import notifier
 
 # ---------- ENV contract (Vault req 9f5caa8e) ----------
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 def test_build_spawn_env_cold():
     env = tb.build_spawn_env("Vault", cold=True, base_env={})
     assert env["ORCHA_ALIAS"] == "Vault"
@@ -209,6 +225,10 @@ class _FakeWS:
 def _wire_handle(monkeypatch):
     """Stub the network + process side-effects so handle_connection runs in-proc."""
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         # Real-route guard: ONLY /persona answers (the bare /api/agents/{id} is PATCH-only → 405 →
         # None in production). If the bridge ever reads the bare route again, these return None and
         # the connection is rejected — catching the regression a _get_json-agnostic mock would hide.
@@ -267,6 +287,10 @@ async def test_handle_connection_passes_target_model_runtime_to_spawn(monkeypatc
     _wire_handle(monkeypatch)
     # re-stub /persona so the AI target carries an explicit model + runtime (the resolved persona)
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if url.endswith("/agents/HUMAN/persona"):
             return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss"}
         if url.endswith("/agents/AID/persona"):
@@ -291,6 +315,10 @@ async def test_handle_connection_disabled_worktrees_uses_main_checkout(monkeypat
     _wire_handle(monkeypatch)
 
     def _get(url, **kwargs):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if url.endswith("/agents/HUMAN/persona"):
             return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss"}
         if url.endswith("/agents/AID/persona"):
@@ -331,6 +359,10 @@ async def test_handle_connection_human_target_normalizes_runtime_to_claude(monke
     no --model. A raw passthrough (the pre-fix bug) would hand runtime=None to spawn_pty."""
     _wire_handle(monkeypatch)
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if url.endswith("/agents/HUMAN/persona"):
             return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss"}
         # the TARGET is a human → no model, no model_runtime (mirrors /persona main.py:2565-2566)
@@ -364,7 +396,7 @@ async def test_handle_connection_releases_lease_even_if_socket_already_closed(mo
 async def test_handle_connection_rejects_non_human_actor(monkeypatch):
     _wire_handle(monkeypatch)
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"id": "X", "kind": "ai", "alias": "Bot"})
+                        _with_routing_reads(lambda url, **k: {"id": "X", "kind": "ai", "alias": "Bot"}))
     ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=X")
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     assert ws.closed is True
@@ -867,7 +899,7 @@ async def test_handle_connection_reads_persona_route_not_bare_agent(monkeypatch)
     spawned, killed, released, posts = _wire_handle(monkeypatch)
     seen = []
     real_get = notifier._get_json
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: seen.append(url) or real_get(url, **k))
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: seen.append(url) or real_get(url, **k)))
     ws = _FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN")
     await tb.handle_connection(ws, "http://x", "/base", quiet=True)
     assert any(u.endswith("/agents/HUMAN/persona") for u in seen)

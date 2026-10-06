@@ -219,6 +219,7 @@ def _boot(
             shared_checkout=bool(in_git and worktree is None),
             source_cwd=routing_source_cwd,
             conversation_id=conv_id,
+            container_id=candidate.get("container_id"),
         )
 
     preparation = None if dry_run else _prepare()

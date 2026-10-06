@@ -224,6 +224,9 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
     for conv_id, c in by_id.items():
         if not c.get("pending_human"):
             continue
+        # The checkout live-guard must know which container's runs to consult; the scan row's
+        # container is this one, so never make it re-derive that from a checkout's files.
+        c.setdefault("container_id", cid)
         runtime = _normalize_runtime(c.get("model_runtime"))
         try:
             if runtime == RUNTIME_CODEX:

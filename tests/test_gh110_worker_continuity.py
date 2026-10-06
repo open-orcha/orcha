@@ -15,6 +15,22 @@ import pytest
 from orcha_cli import notifier  # noqa: E402 (conftest puts orcha-cli on sys.path)
 
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 def _git(args, cwd):
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
 
@@ -83,7 +99,7 @@ def _success_log(tmp_path, name="ok.log"):
 def _wire(monkeypatch, posts, *, digest=None):
     monkeypatch.setattr(notifier, "_post_json",
                         lambda url, body, **k: posts.append((url, body)) or {})
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"digest": digest})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"digest": digest}))
 
 
 # ---------- test 2: Claude ephemeral task worker preserved on clean exit ----------
@@ -175,7 +191,7 @@ def test_context_only_rework_rate_limit_keeps_directive_pending(
     scan = {"active": True, "candidates": [candidate]}
     posts = []
 
-    monkeypatch.setattr(notifier, "_get_json", lambda *a, **k: scan)
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda *a, **k: scan))
     monkeypatch.setattr(
         notifier,
         "_post_json",
@@ -408,6 +424,8 @@ def test_terminal_task_worktrees_reclaimed_conservatively(tmp_path, monkeypatch)
     wt_live, br_live = notifier._provision_task_worktree(str(work), "Ethan", "still-live")
 
     def fake_get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "/runs" in url:
             if "TC/runs" in url:
                 return {"runs": [{"worktree": wt_clean, "branch": br_clean, "base_cwd": str(work)}]}
@@ -447,6 +465,8 @@ def test_terminal_task_worktree_with_commits_keeps_branch(tmp_path, monkeypatch)
     notifier._checkpoint_task_worktree(str(work), wt, branch, "pr-task", "RUN-1")   # commit, clean tree
 
     def fake_get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "/runs" in url:
             return {"runs": [{"worktree": wt, "branch": branch, "base_cwd": str(work)}]}
         if "status=completed" in url:
@@ -475,6 +495,8 @@ def test_terminal_reaper_paginates_past_page_one(tmp_path, monkeypatch):
     page2 = [{"id": "NEW"}]
 
     def fake_get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "/runs" in url:
             if "NEW/runs" in url:
                 return {"runs": [{"worktree": wt_new, "branch": br_new, "base_cwd": str(work)}]}
@@ -579,6 +601,10 @@ async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return scan if "wake-scan" in url else {"digest": None}
 
     def _post(url, body, **k):

@@ -598,6 +598,7 @@ def prepare_checkout_start(
         ignore_activity_id=(
             getattr(activity, "reservation_id", None) if activity else None
         ),
+        container_id=container_id,
     )
     if not handoff:
         if activity is not None:
@@ -959,6 +960,7 @@ def carry_previous_checkout(
     structured=False,
     local_workers=None,
     ignore_activity_id=None,
+    container_id=None,
 ):
     """Move the prior file view into ``destination_cwd`` before a new run starts.
 
@@ -987,10 +989,11 @@ def carry_previous_checkout(
         )
         local_workers = (local_workers, *configured)
     live_guard = None
-    if callable(getattr(services, "_container_id_for", None)):
+    if container_id or callable(getattr(services, "_container_id_for", None)):
         live_guard = checkout_live_guard(
             api_base,
             services,
+            container_id=container_id,
             local_workers=local_workers,
             ignore_activity_id=ignore_activity_id,
         )

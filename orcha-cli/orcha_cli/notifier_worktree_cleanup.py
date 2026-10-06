@@ -1269,6 +1269,13 @@ def checkout_activity_status(
     """
     path = _checkout_activity_path(cwd, services)
     if path is None:
+        # Reservations live in Git's private metadata, so a checkout Git itself
+        # reports as "not a repository" (exit 128) can hold none.  Any other
+        # failure (git missing, timeout) stays unreadable and fails closed.
+        if pathlib.Path(cwd).is_dir() and services._run_git(
+            ["rev-parse", "--git-dir"], cwd=cwd
+        )[0] == 128:
+            return {"status": "none", "records": []}
         return {"status": "unreadable", "records": []}
     if not path.exists():
         return {"status": "none", "records": []}

@@ -434,6 +434,7 @@ def spawn(
             lane="work",
             require_taskless=run_task_id is None,
             local_workers=live_workers,
+            container_id=candidate.get("container_id"),
         )
         handoff = preparation.handoff
         checkout_activity = preparation.activity

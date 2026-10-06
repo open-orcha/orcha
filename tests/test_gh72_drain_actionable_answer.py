@@ -144,6 +144,10 @@ async def test_tick_spawns_real_worker_for_task_answer_instead_of_suppressing(
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return scan if "wake-scan" in url else None
 
     def _post(url, body, **k):
@@ -262,6 +266,10 @@ def _wire_resident_drain(monkeypatch, active):
     posts, sigs = [], []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return {"conversations": active} if "active-conversations" in url else None
 
     def _post(url, body, **k):

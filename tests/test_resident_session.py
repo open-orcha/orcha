@@ -294,6 +294,8 @@ def test_reconcile_codex_conversation_runs_reattaches_live_pid(monkeypatch, tmp_
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "active-conversations" in url:
             return {"conversations": [conv]}
         if "/agents/A1/runs" in url:
@@ -332,6 +334,8 @@ def test_reconcile_codex_conversation_runs_recovers_dead_pid_reply(monkeypatch, 
     teardowns = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "active-conversations" in url:
             return {"conversations": [conv]}
         if "/agents/A1/runs" in url:
@@ -467,6 +471,8 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "active-conversations" in url:
             return {"conversations": active}
         if "/turns" in url:                               # _next_human_turn — API filters after_seq
@@ -475,6 +481,8 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
             return {"turns": [t for t in (turns or []) if t.get("seq", 0) > after]}
         if "/conversation" in url:                        # agent's active conv: NEWEST page, oldest→newest
             return {"conversation": {"id": "C1"}, "turns": turns or []}
+        if "provenance_only=true" in url:                 # checkout routing: no prior run to carry
+            return {"runs": [], "query_complete": True}
         return None      # persona/digest → None
 
     def _post(url, body, **k):
@@ -900,6 +908,10 @@ def _wire_preempt(monkeypatch, *, active, preempt_requested):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return {"conversations": active} if "active-conversations" in url else None
 
     def _post(url, body, **k):
@@ -993,6 +1005,10 @@ def _wire_drain(monkeypatch, *, active):
     fed = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return {"conversations": active} if "active-conversations" in url else None
 
     def _post(url, body, **k):

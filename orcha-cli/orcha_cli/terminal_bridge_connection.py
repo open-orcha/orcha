@@ -120,6 +120,7 @@ async def handle_connection(bridge, notifier, ws, api_base, base_cwd, quiet=True
             preempt,
             on_yielding,
             routing_source_cwd,
+            container_id=target.get("container_id"),
         )
         if session is None:
             return
@@ -191,6 +192,7 @@ async def _start_session(
     preempt,
     on_yielding,
     routing_source_cwd=None,
+    container_id=None,
 ):
     """Claim resources and start a new PTY-backed live session."""
     claim = await bridge.acquire_live_lease(
@@ -230,6 +232,7 @@ async def _start_session(
         shared_checkout=shared_git_checkout,
         source_cwd=routing_source_cwd,
         wake_kind="live",
+        container_id=container_id,
     )
     handoff = preparation.handoff
     checkout_activity = preparation.activity

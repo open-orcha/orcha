@@ -24,6 +24,22 @@ from orcha_cli import notifier
 
 # ======================== Part 1 — notifier send-first reorder ========================
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 class _BrokenProc:
     """A resident whose stdin pipe is gone — _send_user_turn returns False (dead resident)."""
     def __init__(self):
@@ -58,6 +74,10 @@ def _wire(monkeypatch, *, active, turns=None):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if "active-conversations" in url:
             return {"conversations": active}
         if "/turns" in url:
@@ -374,7 +394,7 @@ def test_reap_dead_pid_releases_lease_when_no_live(monkeypatch):
     /finish (the release path owns the status), so there's a single source of truth."""
     posts = []
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda u, **k: {"runs": [{"run_id": "R", "pid": _DEAD_PID, "status": "running"}]})
+                        _with_routing_reads(lambda u, **k: {"runs": [{"run_id": "R", "pid": _DEAD_PID, "status": "running"}]}))
     monkeypatch.setattr(notifier, "_post_json", lambda u, b=None, **k: posts.append((u, b)) or {})
 
     n = notifier._reap_dead_pid_resident_runs("http://x", "A1")
@@ -387,9 +407,9 @@ def test_reap_dead_pid_keeps_lease_with_live_sibling(monkeypatch):
     """TEETH (919050a5 b): a true double-spawn (one dead row, one LIVE sibling) → finish ONLY the
     dead orphan, KEEP the lease the live resident still renews. Never rip out a live embodiment."""
     posts = []
-    monkeypatch.setattr(notifier, "_get_json", lambda u, **k: {"runs": [
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda u, **k: {"runs": [
         {"run_id": "DEAD", "pid": _DEAD_PID, "status": "running"},
-        {"run_id": "LIVE", "pid": os.getpid(), "status": "running"}]})
+        {"run_id": "LIVE", "pid": os.getpid(), "status": "running"}]}))
     monkeypatch.setattr(notifier, "_post_json", lambda u, b=None, **k: posts.append((u, b)) or {})
     monkeypatch.setattr(notifier, "_capture_run_output", lambda p: "")
 
@@ -405,7 +425,7 @@ def test_reap_dead_pid_shields_live_pids(monkeypatch):
     always return False so live_pids is the ONLY thing that saves it — confirms the shield is wired."""
     posts = []
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda u, **k: {"runs": [{"run_id": "R", "pid": 777, "status": "running"}]})
+                        _with_routing_reads(lambda u, **k: {"runs": [{"run_id": "R", "pid": 777, "status": "running"}]}))
     monkeypatch.setattr(notifier, "_post_json", lambda u, b=None, **k: posts.append((u, b)) or {})
     monkeypatch.setattr(notifier, "_run_pid_alive", lambda _pid: False)  # os.kill says dead
 
@@ -420,6 +440,10 @@ def _wire_with_resident_runs(monkeypatch, *, active, turns=None, resident_runs=N
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if "active-conversations" in url:
             return {"conversations": active}
         if "resident-runs" in url:

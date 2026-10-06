@@ -21,6 +21,22 @@ import pytest
 from orcha_cli import notifier  # noqa: E402  (notifier lives in the CLI package)
 
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 class FakeProc:
     """Stands in for a subprocess.Popen. poll() returns None while 'alive', else the
     exit code — mirroring how the daemon detects (and reaps) an exited worker.
@@ -456,7 +472,7 @@ def test_tick_skips_spawn_when_claim_lost(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None}
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"active": True, "candidates": [cand]})
+                        _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     posts = []
     monkeypatch.setattr(notifier, "_post_json",
@@ -489,7 +505,7 @@ def test_tick_backfills_reachability_for_portal_agent(monkeypatch):
     and it can't be woken by anything. tick() auto-records headless_cwd = its project dir, so the
     agent becomes spawnable THIS tick (no extra-tick latency) and is woken."""
     cand = _portal_cand()
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     posts = []
 
@@ -527,7 +543,7 @@ def test_tick_backfill_is_trigger_agnostic(monkeypatch):
     info/task REQUESTS, decisions/approvals, and prompts (Tim addendum 0d8f4981). Here the trigger
     is a request event; the backfill + spawn path is identical regardless of the event type."""
     cand = _portal_cand(latest_event="request_created")     # an info/task request, not a task message
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     posts = []
 
@@ -555,7 +571,7 @@ def test_tick_backfill_is_trigger_agnostic(monkeypatch):
 def test_tick_no_reachability_backfill_when_already_reachable(monkeypatch):
     """A CLI-registered agent already has a headless_cwd — never re-recorded."""
     cand = _portal_cand(headless_cwd="/existing")
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     posts = []
 
@@ -575,7 +591,7 @@ def test_tick_backfill_respects_wake_disabled_optout(monkeypatch):
     """A human opt-out (wake_enabled=false) is never auto-recorded reachable — we don't drag a
     deliberately-disabled agent back into the wakeable pool."""
     cand = _portal_cand(wake_enabled=False, should_wake=False)
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     posts = []
     monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
     spawned = []
@@ -594,7 +610,7 @@ def test_tick_spawns_when_claim_won(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None}
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"active": True, "candidates": [cand]})
+                        _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     def _post(url, body, **k):
@@ -633,7 +649,7 @@ def test_taskless_ephemeral_wake_uses_work_lane(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_answered", "max_event_ts": 5.0, "headless_flags": None}
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"active": True, "candidates": [cand]})
+                        _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
@@ -681,7 +697,7 @@ def test_tick_isolates_task_message_wake_in_worktree(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": [], "wake_task_id": "TASK-77",
             "reason": "wake", "latest_event": "task_message", "max_event_ts": 5.0,
             "headless_flags": None}
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     prov = []
@@ -709,7 +725,7 @@ def test_tick_attributes_event_wake_run_to_task_via_wake_task_id(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": [], "wake_task_id": "TASK-77",
             "reason": "wake", "latest_event": "task_message", "max_event_ts": 5.0,
             "headless_flags": None}
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
@@ -732,7 +748,7 @@ def test_tick_auto_start_task_takes_precedence_over_wake_task_id(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": ["TASK-AUTO"], "wake_task_id": "TASK-77",
             "reason": "wake", "latest_event": "task_message", "max_event_ts": 5.0,
             "headless_flags": None}
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
@@ -758,7 +774,7 @@ def test_tick_persona_and_run_keyed_off_context_task_not_wake_task_id(monkeypatc
             "wake_task_id": "TASK-A", "context_task_id": "TASK-B",
             "reason": "wake", "latest_event": "task_assigned", "max_event_ts": 5.0,
             "headless_flags": None}
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     persona_task_ids = []
     monkeypatch.setattr(notifier, "_build_persona",
@@ -786,7 +802,7 @@ def test_hardcap_floored_independent_of_small_lease_ttl(monkeypatch):
             "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "task_assigned", "max_event_ts": 5.0, "headless_flags": None}
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
@@ -816,7 +832,7 @@ def test_tick_releases_lease_when_headless_spawn_fails(monkeypatch):
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None}
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"active": True, "candidates": [cand]})
+                        _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     posts = []
@@ -1612,7 +1628,7 @@ def test_tick_stores_model_in_respawn_ctx(monkeypatch):
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None,
             "model": "claude-fable-5", "model_runtime": "claude"}
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"active": True, "candidates": [cand]})
+                        _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "_post_json",
@@ -1695,9 +1711,9 @@ def test_checkpoint_respawn_uses_servers_task_id_not_stale_ctx(monkeypatch, tmp_
         return {"run_id": "R2"} if url.endswith("/runs") else {}
     monkeypatch.setattr(notifier, "_post_json", _post)
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"runs": [{"run_id": "R-CONV", "task_id": None},
+                        _with_routing_reads(lambda url, **k: {"runs": [{"run_id": "R-CONV", "task_id": None},
                                                     {"run_id": "R1", "task_id": "T2"}]}
-                        if "/runs?limit=20" in url else None)
+                        if "/runs?limit=20" in url else None))
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
@@ -1730,7 +1746,7 @@ def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_fetch_fails(monkeypat
         posts.append((url, body))
         return {"run_id": "R2"} if url.endswith("/runs") else {}
     monkeypatch.setattr(notifier, "_post_json", _post)
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: None)   # fetch fails
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))   # fetch fails
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
@@ -1762,8 +1778,8 @@ def test_checkpoint_respawn_falls_back_to_ctx_task_id_when_run_not_in_page(monke
         return {"run_id": "R2"} if url.endswith("/runs") else {}
     monkeypatch.setattr(notifier, "_post_json", _post)
     monkeypatch.setattr(notifier, "_get_json",
-                        lambda url, **k: {"runs": [{"run_id": "R-OTHER", "task_id": "T9"}]}
-                        if "/runs?limit=20" in url else None)
+                        _with_routing_reads(lambda url, **k: {"runs": [{"run_id": "R-OTHER", "task_id": "T9"}]}
+                        if "/runs?limit=20" in url else None))
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA+DIGEST")
@@ -2317,7 +2333,7 @@ def test_tmux_delivery_keeps_directive_pending(monkeypatch):
     """A live-terminal send is non-reaped. It may acknowledge delivery-safe id 11, but must keep
     directive id 12 pending because a later failed or rate-limited run still needs to retry it."""
     cand = _drain_cand(tmux_target="sess:0.0")
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "tmux")
     monkeypatch.setattr(notifier, "send_tmux", lambda target, prompt, dry: (True, "tmux cmd"))
     posts = []
@@ -2338,7 +2354,7 @@ def test_once_ephemeral_delivery_keeps_directive_pending(monkeypatch):
     """`orcha notifier --once` has no reaper, so delivery may acknowledge id 11 but cannot consume
     directive id 12 before the fire-and-forget worker's outcome is known."""
     cand = _drain_cand()
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "decide_wake_tier", lambda c, triage_fn=None: {"tier": "full"})
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
@@ -2366,7 +2382,7 @@ def test_daemon_ephemeral_defers_ack_to_reaper_not_at_spawn(monkeypatch):
     reaper posts /events/ack-handled on the worker's clean exit, so a spawn-then-crash re-surfaces the
     backlog. At spawn it only stamps wake-ack with delivered_ts None (lease/cooldown), no high-water."""
     cand = _drain_cand(latest_event="request_answered", pending_events=1)   # single no-code → no worktree
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [cand]}))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "decide_wake_tier", lambda c, triage_fn=None: {"tier": "full"})
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)

@@ -94,6 +94,7 @@ def start_candidate(
             services,
             shared_checkout=bool(in_git and worktree is None),
             conversation_id=conv_id,
+            container_id=candidate.get("container_id"),
         )
 
     preparation = _prepare()
