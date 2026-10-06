@@ -7,6 +7,7 @@ import sys
 
 from . import (
     cli_claim_guard,
+    cli_handoff_doctor,
     cli_lifecycle,
     cli_live,
     cli_sandbox,
@@ -45,6 +46,7 @@ __all__ = [
     "_rich_digest_posted_this_session",
     "_runtime_executable",
     "_self_wake_request",
+    "cmd_handoff_doctor",
     "cmd_pause",
     "cmd_resume",
     "cmd_sandbox",
@@ -124,6 +126,10 @@ def _exec_live_session(
 
 def cmd_use(args) -> None:
     cli_live.use_command(args, exec_session=_services()._exec_live_session)
+
+
+def cmd_handoff_doctor(args) -> None:
+    cli_handoff_doctor.cmd_handoff_doctor(args)
 
 
 def cmd_sandbox(args) -> None:

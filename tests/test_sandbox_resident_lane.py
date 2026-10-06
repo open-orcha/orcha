@@ -15,6 +15,22 @@ from orcha_cli import notifier_resident_turn as _turn_mod
 _DEAD_PID = 2_000_000        # > macOS max pid → os.kill always ProcessLookupError
 
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 def _sandbox_project(tmp_path):
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "orcha.json").write_text(json.dumps({
@@ -203,6 +219,10 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if "active-conversations" in url:
             return {"conversations": active}
         if "/turns" in url:
@@ -243,6 +263,9 @@ def test_resident_boot_threads_container_into_handle_and_turn_run_row(monkeypatc
     monkeypatch.setattr(sandbox, "preflight", lambda cfg, ws: None)
     monkeypatch.setattr(sandbox, "cap_defers_spawn", lambda cfg: None)  # #75: not under test here
     monkeypatch.setattr(notifier, "_is_git_repo", lambda p: False)  # spawn in base_cwd
+    # ...and Git agrees it is not a repository (exit 128), so the checkout guard needs no Git
+    # process — Popen is faked below and must see only the sandbox launch.
+    monkeypatch.setattr(notifier, "_run_git", lambda args, **k: (128, ""))
     monkeypatch.setattr(notifier.subprocess, "Popen", CapturePopen)
     live = {}
 
@@ -286,6 +309,9 @@ def test_resident_preflight_failure_releases_lane_and_surfaces_reason(monkeypatc
     monkeypatch.setattr(sandbox, "preflight",
                         lambda cfg, ws: "runner image orcha/runner:0.5 not present")
     monkeypatch.setattr(notifier, "_is_git_repo", lambda p: False)  # spawn in base_cwd
+    # ...and Git agrees it is not a repository (exit 128), so the checkout guard needs no Git
+    # process — Popen is faked below and must see only the sandbox launch.
+    monkeypatch.setattr(notifier, "_run_git", lambda args, **k: (128, ""))
     def _boom(*a, **k):
         raise AssertionError("must not spawn any process")
     monkeypatch.setattr(notifier.subprocess, "Popen", _boom)
@@ -417,11 +443,11 @@ def test_dead_pid_resident_reaper_leaves_sandbox_rows_to_container_sweep(monkeyp
     while it is open the lane's lease is shielded — the dead HOST row is finished
     as a sibling instead of releasing the lease."""
     posts = []
-    monkeypatch.setattr(notifier, "_get_json", lambda u, **k: {"runs": [
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda u, **k: {"runs": [
         {"run_id": "SBX", "pid": _DEAD_PID, "status": "running",
          "sandbox_container_id": "orcha-run-warm"},
         {"run_id": "HOST", "pid": _DEAD_PID, "status": "running",
-         "sandbox_container_id": None}]})
+         "sandbox_container_id": None}]}))
     monkeypatch.setattr(notifier, "_post_json",
                         lambda u, b=None, **k: posts.append((u, b)) or {})
     n = notifier._reap_dead_pid_resident_runs("http://x", "A1")
@@ -433,9 +459,9 @@ def test_dead_pid_resident_reaper_leaves_sandbox_rows_to_container_sweep(monkeyp
 
 def test_dead_pid_resident_reaper_noop_when_only_sandbox_rows(monkeypatch):
     posts = []
-    monkeypatch.setattr(notifier, "_get_json", lambda u, **k: {"runs": [
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda u, **k: {"runs": [
         {"run_id": "SBX", "pid": _DEAD_PID, "status": "running",
-         "sandbox_container_id": "orcha-run-warm"}]})
+         "sandbox_container_id": "orcha-run-warm"}]}))
     monkeypatch.setattr(notifier, "_post_json",
                         lambda u, b=None, **k: posts.append((u, b)) or {})
     assert notifier._reap_dead_pid_resident_runs("http://x", "A1") == 0

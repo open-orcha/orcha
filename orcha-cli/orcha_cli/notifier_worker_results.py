@@ -109,9 +109,18 @@ def drain_task_failure(
     key = (agent_id, task_id)
     failed_drains[key] = failed_drains.get(key, 0) + 1
     attempts = failed_drains[key]
+    attribution = worker.get("snapshot_attribution_blocked")
     if status == "rate_limited":
         hold = services._parse_rate_limit_reset(worker.get("log_path"))
         agent_hold_until[agent_id] = now + hold
+    if attribution:
+        human = (
+            "worker stopped while another stream shared its checkout — all files "
+            "and existing ownership proof remain preserved in place, but Orcha did "
+            "not assign that combined file view to this task; ask the project owner "
+            f"which saved state should resume (reason: {attribution.get('code')})"
+        )
+    elif status == "rate_limited":
         human = (
             "worker hit a rate limit (Codex 429) — work saved and preserved; "
             "it will retry after the cooldown"
@@ -134,13 +143,21 @@ def drain_task_failure(
                 "lane": lane,
             },
         )
+        if attribution:
+            final_human = (
+                f"heads up: this worker has failed to finish {attempts} times "
+                "in a row, so Orcha released it without assigning the shared "
+                "checkout's combined files to this task; the checkout remains "
+                "preserved for project-owner review"
+            )
+        else:
+            final_human = (
+                f"heads up: this worker has failed to finish {attempts} times "
+                "in a row — releasing it for now so it doesn't loop; the work "
+                "is saved on its branch"
+            )
         services._record_task_saved_ref(
-            api_base,
-            worker,
-            saved_ref,
-            f"heads up: this worker has failed to finish {attempts} times "
-            "in a row — releasing it for now so it doesn't loop; the work "
-            "is saved on its branch",
+            api_base, worker, saved_ref, final_human
         )
         failed_drains.pop(key, None)
     else:

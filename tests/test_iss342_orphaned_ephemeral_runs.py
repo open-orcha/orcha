@@ -96,6 +96,30 @@ async def test_container_running_runs_excludes_terminated_agent(client, make_age
     runs = (await client.get(f"/api/containers/{cid}/running-runs")).json()["runs"]
     assert runs == []
 
+    reconciliation_runs = (
+        await client.get(
+            f"/api/containers/{cid}/running-runs?include_retired=true"
+        )
+    ).json()["runs"]
+    assert len(reconciliation_runs) == 1
+    assert reconciliation_runs[0]["agent_id"] == aid
+
+
+def test_orphan_sweep_includes_retired_agents(monkeypatch):
+    requested = []
+    monkeypatch.setattr(
+        notifier,
+        "_get_json",
+        lambda url, **_kwargs: requested.append(url) or {"runs": []},
+    )
+    monkeypatch.setattr(notifier._sandbox, "daemon_reachable", lambda: True)
+    monkeypatch.setattr(notifier._sandbox, "managed_containers", lambda _cid: [])
+
+    assert notifier.reap_orphaned_runs("http://x", "C1") == 0
+    assert requested == [
+        "http://x/api/containers/C1/running-runs?include_retired=true"
+    ]
+
 
 async def test_dead_pid_ephemeral_run_reconciled_to_orphaned(client, make_agent, container, db):
     """HEADLINE invariant (#342): a dead-pid EPHEMERAL run must NEVER stay 'running'. The host's sweep

@@ -6,7 +6,11 @@ import pathlib
 import time
 
 from . import notifier_checkout_consent as _consent
-from .notifier_routing_handoff import carry_previous_checkout
+from .notifier_checkout_activity import preserve_unregistered_writer
+from .notifier_routing_handoff import (
+    checkout_owner_key,
+    prepare_checkout_start,
+)
 
 
 def start_candidate(
@@ -82,26 +86,39 @@ def start_candidate(
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
 
-    def _carry():
-        return carry_previous_checkout(
+    def _prepare():
+        return prepare_checkout_start(
             api_base,
             candidate["agent_id"],
             run_cwd,
             services,
+            shared_checkout=bool(in_git and worktree is None),
             conversation_id=conv_id,
+            container_id=candidate.get("container_id"),
         )
 
-    if not _carry():
-        consented = _consent.handle_carry_failure(
-            services,
-            api_base,
-            conv_id,
-            candidate,
-            turns,
-            base_cwd=base_cwd,
-            quiet=quiet,
-        )
-        if not (consented and _carry()):
+    preparation = _prepare()
+    handoff = preparation.handoff
+    if not handoff:
+        consented = False
+        if getattr(handoff, "code", None) == "destination_has_independent_changes":
+            consented = _consent.handle_carry_failure(
+                services,
+                api_base,
+                conv_id,
+                candidate,
+                turns,
+                base_cwd=base_cwd,
+                quiet=quiet,
+            )
+        else:
+            _consent.post_blocked_notice(
+                services, api_base, conv_id, candidate, base_cwd, turns, handoff, quiet
+            )
+        if consented:
+            preparation = _prepare()
+            handoff = preparation.handoff
+        if not (consented and preparation):
             _fail(
                 services,
                 api_base,
@@ -110,6 +127,7 @@ def start_candidate(
                 "saved files could not be carried into the selected checkout",
             )
             return
+    checkout_activity = preparation.activity
     log_path = services._conversation_log_path(base_cwd, conv_id)
     reply_path = services._conversation_reply_path(log_path)
     session_id = candidate.get("session_id")
@@ -157,12 +175,57 @@ def start_candidate(
         run_token=token,
         conversation=True,
         spawn_info=_spawn_info,
+        checkout_activity=checkout_activity,
     )
     if not sent or process is None:
+        if checkout_activity is not None:
+            services._release_checkout_activity(
+                run_cwd, activity=checkout_activity
+            )
         services._safe_teardown_worktree(base_cwd, worktree, branch)
         services._revoke_or_defer(api_base, token)
         _fail(services, api_base, candidate, quiet)
         return
+    if checkout_activity is not None:
+        try:
+            activity_bound = services._bind_checkout_activity(
+                checkout_activity,
+                pid=getattr(process, "pid", None),
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            )
+        except Exception:
+            activity_bound = False
+        if not activity_bound:
+            services._kill_worker(process, graceful=True)
+            preserve_unregistered_writer(
+                api_base,
+                services,
+                cwd=run_cwd,
+                owner_key=checkout_owner_key(
+                    candidate["agent_id"],
+                    conversation_id=conv_id,
+                    lane="conversation",
+                ),
+                agent_id=candidate["agent_id"],
+                activity=checkout_activity,
+                identity=token or getattr(process, "pid", "unknown"),
+            )
+            services._safe_teardown_worktree(base_cwd, worktree, branch)
+            services._reap_sandbox_artifacts(
+                {
+                    "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
+                    "base_cwd": base_cwd,
+                }
+            )
+            services._revoke_or_defer(api_base, token)
+            _fail(
+                services,
+                api_base,
+                candidate,
+                quiet,
+                "checkout activity binding failed",
+            )
+            return
     _run_payload = {
         "wake_kind": "ephemeral",
         "wake_event": "conversation_turn",
@@ -185,13 +248,30 @@ def start_candidate(
     if _spawn_info.get("sandbox_container_id"):
         _run_payload["sandbox_container_id"] = _spawn_info["sandbox_container_id"]
         _run_payload["wake_kind"] = "sandbox"
-    run = services._post_json(
-        f"{api_base}/api/agents/{candidate['agent_id']}/runs",
-        _run_payload,
-    )
+    try:
+        run = services._post_json(
+            f"{api_base}/api/agents/{candidate['agent_id']}/runs",
+            _run_payload,
+        )
+    except Exception:
+        run = None
     run_id = (run or {}).get("run_id")
     if not run_id:
         services._kill_worker(process, graceful=True)
+        if checkout_activity is not None:
+            preserve_unregistered_writer(
+                api_base,
+                services,
+                cwd=run_cwd,
+                owner_key=checkout_owner_key(
+                    candidate["agent_id"],
+                    conversation_id=conv_id,
+                    lane="conversation",
+                ),
+                agent_id=candidate["agent_id"],
+                activity=checkout_activity,
+                identity=token or getattr(process, "pid", "unknown"),
+            )
         services._safe_teardown_worktree(base_cwd, worktree, branch)
         services._revoke_or_defer(api_base, token)
         _fail(
@@ -202,7 +282,18 @@ def start_candidate(
             "worker_run creation failed",
         )
         return
-    live_residents[conv_id] = {
+    activity_bound = True
+    if checkout_activity is not None:
+        try:
+            activity_bound = services._bind_checkout_activity(
+                checkout_activity,
+                run_id=run_id,
+                pid=getattr(process, "pid", None),
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            )
+        except Exception:
+            activity_bound = False
+    state = {
         "runtime": services.RUNTIME_CODEX,
         "proc": process,
         "agent_id": candidate["agent_id"],
@@ -222,6 +313,7 @@ def start_candidate(
         "conversation_ack_ts": candidate.get("conversation_ack_ts"),
         "resume_session_id": session_id if use_resume else None,
         "run_token": token,
+        "checkout_activity": checkout_activity,
         "worktrees_disabled": worktrees_disabled,
         "hard_deadline": time.time() + services.HARD_CAP_MIN_SECS,
         "last_size": 0,
@@ -231,6 +323,22 @@ def start_candidate(
         "lines_seq": 1,
         "last_activity_ts": time.time(),
     }
+    if not activity_bound:
+        services._kill_worker(process, graceful=True)
+        services._finish_codex_conversation(
+            api_base,
+            conv_id,
+            state,
+            status="killed",
+            exit_code=getattr(process, "returncode", -1),
+            ack_kind="codex_conversation_activity_bind_failed",
+            post_reply=False,
+            teardown_worktree=False,
+        )
+        if state.get("snapshot_retry_pending"):
+            live_residents[conv_id] = state
+        return
+    live_residents[conv_id] = state
     if not quiet:
         print(
             "[notifier] Codex conversation worker for "

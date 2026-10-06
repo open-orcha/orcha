@@ -29,6 +29,7 @@ def cmd_notifier(args, *, services) -> None:
     live_sandbox_shield = services.live_sandbox_shield
     reap_terminal_task_worktrees = services.reap_terminal_task_worktrees
     service_residents = services.service_residents
+    reconcile_checkout_activities = services._reconcile_checkout_activities
     _container_vanished = services._container_vanished
     _global_pid_path = services._global_pid_path
     cwd = pathlib.Path.cwd()
@@ -146,6 +147,7 @@ def cmd_notifier(args, *, services) -> None:
               file=sys.stderr)
     live_workers: dict = {}   # {agent_id: pid} — for releasing leases on worker exit
     live_residents: dict = {}  # {conversation_id: resident-state} — E3 warm conversation sessions
+    services._LOCAL_CHECKOUT_REGISTRIES = (live_workers, live_residents)
     # GH#110: DAEMON-SCOPE continuity state (survives the per-reap live_workers.pop, so it persists
     # across a wake→fail→re-wake). failed_drains bounds the withheld-cursor task-worker path;
     # agent_hold_until is the Codex rate-limit cooldown that keeps tick from re-waking a still-
@@ -153,6 +155,13 @@ def cmd_notifier(args, *, services) -> None:
     failed_drains: dict = {}       # {(agent_id, task_id): consecutive failed/rate-limited drains}
     agent_hold_until: dict = {}    # {agent_id: epoch-secs until the rate-limit hold-down lifts}
     swept_tasks: set = set()       # GH#110 §2c: terminal tasks whose durable worktree we reclaimed
+    if project_cwd:
+        reconcile_checkout_activities(
+            api_base,
+            project_cwd,
+            container_id=cid,
+            local_workers=(live_workers, live_residents),
+        )
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
     # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
@@ -212,6 +221,13 @@ def cmd_notifier(args, *, services) -> None:
                 live_sandbox = live_sandbox_shield(live_workers, live_residents)
                 reap_orphaned_runs(api_base, cid, live_pids,
                                    live_sandbox=live_sandbox, quiet=args.quiet)
+                if project_cwd:
+                    reconcile_checkout_activities(
+                        api_base,
+                        project_cwd,
+                        container_id=cid,
+                        local_workers=(live_workers, live_residents),
+                    )
                 # GH#110 §2c: reclaim durable per-(agent+task) worktrees whose task went terminal
                 # (completed/cancelled) so orcha/task-* trees don't accumulate forever — conservative
                 # (never touches a live worktree, preserves any dirty tree, keeps committed/PR
@@ -236,6 +252,11 @@ def cmd_notifier(args, *, services) -> None:
                 time.sleep(min(0.25, args.interval - slept))
                 slept += 0.25
     finally:
+        if getattr(services, "_LOCAL_CHECKOUT_REGISTRIES", None) == (
+            live_workers,
+            live_residents,
+        ):
+            services._LOCAL_CHECKOUT_REGISTRIES = ()
         try:
             if pid_file.read_text().strip() == str(os.getpid()):
                 pid_file.unlink()

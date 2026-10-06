@@ -3,6 +3,11 @@
 import asyncio
 import os
 
+from .notifier_routing_handoff import (
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
+
 
 class WarmSession:
     """State owned by a live PTY while it is detached from a websocket."""
@@ -21,6 +26,7 @@ class WarmSession:
         rec,
         run_token=None,
         worktrees_disabled=False,
+        checkout_activity=None,
     ):
         self.aid = aid
         self.alias = alias
@@ -34,7 +40,11 @@ class WarmSession:
         self.rec = rec
         self.run_token = run_token
         self.worktrees_disabled = bool(worktrees_disabled)
+        self.checkout_activity = checkout_activity
         self._expiry_task = None
+        self.snapshot_retry_pending = None
+        self._retire_teardown_worktree = None
+        self._pty_stopped = False
 
     def pty_alive(self):
         return pid_alive(self.pid)
@@ -81,34 +91,132 @@ async def expire_warm(bridge, session, quiet=True):
             bridge.renew_live_lease(session.api_base, aid)
     except asyncio.CancelledError:
         return
-    if bridge._WARM_SESSIONS.pop(aid, None) is session:
+    if bridge._WARM_SESSIONS.get(aid) is session:
         bridge._retire_warm(session, quiet=quiet)
+
+
+async def _retry_snapshot(bridge, session, quiet):
+    """Keep the lease alive and retry a failed stopped-checkout snapshot."""
+    try:
+        await asyncio.sleep(bridge.LIVE_RENEW_SECS)
+        if bridge._WARM_SESSIONS.get(session.aid) is not session:
+            return
+        bridge.renew_live_lease(session.api_base, session.aid)
+        bridge._retire_warm(
+            session,
+            quiet=quiet,
+            teardown_worktree=bool(session._retire_teardown_worktree),
+        )
+    except asyncio.CancelledError:
+        return
+
+
+def _retain_snapshot_retry(bridge, session, quiet):
+    """Retain one stopped session as the sole owner until its snapshot succeeds."""
+    current = bridge._WARM_SESSIONS.get(session.aid)
+    if current is not None and current is not session:
+        # A live lease should make this impossible.  Never overwrite a different
+        # in-memory owner merely to make the retry convenient.
+        return
+    bridge._WARM_SESSIONS[session.aid] = session
+    previous = session._expiry_task
+    try:
+        active = asyncio.current_task()
+    except RuntimeError:
+        active = None
+    if previous is not None and previous is not active:
+        previous.cancel()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        session._expiry_task = None
+        return
+    session._expiry_task = loop.create_task(
+        _retry_snapshot(bridge, session, quiet)
+    )
 
 
 def retire_warm(bridge, session, quiet=True, teardown_worktree=True):
     """Terminate a session and release every resource it owns."""
     disposition = None
+    snapshot_ready = True
+    if session._retire_teardown_worktree is None:
+        # Preserve the first retirement intent across retries.  In particular,
+        # a routing-toggle retry must never turn into worktree teardown.
+        session._retire_teardown_worktree = bool(teardown_worktree)
+    teardown_worktree = bool(session._retire_teardown_worktree)
     try:
-        bridge.terminate_pty(session.pid, session.master_fd)
-        if teardown_worktree:
+        if not session._pty_stopped:
+            try:
+                bridge.terminate_pty(session.pid, session.master_fd)
+                session._pty_stopped = True
+            except Exception:  # noqa: BLE001 - a live writer cannot be snapshotted
+                snapshot_ready = False
+                session.snapshot_retry_pending = "pty_stop_failed"
+                disposition = "snapshot-pending:pty_stop_failed"
+                _retain_snapshot_retry(bridge, session, quiet)
+        notifier = getattr(bridge, "notifier", None)
+        if snapshot_ready and notifier is not None:
+            try:
+                snapshot = record_stopped_checkout_snapshot(
+                    {
+                        "base_cwd": session.base_cwd,
+                        "worktree": session.worktree,
+                        "run_id": session.run_id,
+                        "wake_kind": "live",
+                        "lane": "live",
+                        "checkout_activity": session.checkout_activity,
+                    },
+                    session.aid,
+                    notifier,
+                    api_base=session.api_base,
+                )
+            except Exception:  # noqa: BLE001 - fail closed and retry in memory
+                snapshot = None
+                snapshot_ready = False
+                session.snapshot_retry_pending = "snapshot_exception"
+            if stopped_snapshot_requires_retry(snapshot):
+                snapshot_ready = False
+                session.snapshot_retry_pending = snapshot.code
+            if not snapshot_ready:
+                disposition = (
+                    "snapshot-pending:"
+                    f"{session.snapshot_retry_pending}"
+                )
+                _retain_snapshot_retry(bridge, session, quiet)
+        if snapshot_ready and teardown_worktree:
             disposition = bridge.safe_teardown_worktree(
                 session.base_cwd, session.worktree, session.branch
             )
-        elif session.worktree:
+        elif snapshot_ready and session.worktree:
             # A project routing toggle may retire an old warm process, but must never clean up the
             # worktree it used.  Leave it available for explicit human inspection/removal.
             disposition = "preserved-routing-change"
-        else:
+        elif snapshot_ready:
             disposition = "noop"
     finally:
-        bridge.release_live_lease(session.api_base, session.aid)
-        bridge.finish_live_run(
-            session.api_base,
-            session.run_id,
-            "exited",
-            output="".join(session.rec["chunks"]),
-        )
-        bridge.revoke_live_token(session.api_base, getattr(session, "run_token", None))
+        if snapshot_ready:
+            session.snapshot_retry_pending = None
+            if bridge._WARM_SESSIONS.get(session.aid) is session:
+                bridge._WARM_SESSIONS.pop(session.aid, None)
+            retry_task = session._expiry_task
+            try:
+                active = asyncio.current_task()
+            except RuntimeError:
+                active = None
+            if retry_task is not None and retry_task is not active:
+                retry_task.cancel()
+            session._expiry_task = None
+            bridge.release_live_lease(session.api_base, session.aid)
+            bridge.finish_live_run(
+                session.api_base,
+                session.run_id,
+                "exited",
+                output="".join(session.rec["chunks"]),
+            )
+            bridge.revoke_live_token(
+                session.api_base, getattr(session, "run_token", None)
+            )
     if not quiet:
         print(
             f"[terminal-bridge] warm session retired for {session.alias} "
@@ -120,7 +228,7 @@ def retire_warm(bridge, session, quiet=True, teardown_worktree=True):
 def retire_all_warm(bridge):
     """Best-effort retirement for every session during bridge shutdown."""
     for aid in list(bridge._WARM_SESSIONS):
-        session = bridge._WARM_SESSIONS.pop(aid, None)
+        session = bridge._WARM_SESSIONS.get(aid)
         if session is None:
             continue
         session.cancel_expiry()

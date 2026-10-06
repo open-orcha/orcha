@@ -10,6 +10,7 @@ The daemon-loop integration (discovery → claim → feed → capture → reap) 
 """
 import io
 import json
+import pathlib
 import re
 import time
 
@@ -294,6 +295,8 @@ def test_reconcile_codex_conversation_runs_reattaches_live_pid(monkeypatch, tmp_
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "active-conversations" in url:
             return {"conversations": [conv]}
         if "/agents/A1/runs" in url:
@@ -332,6 +335,8 @@ def test_reconcile_codex_conversation_runs_recovers_dead_pid_reply(monkeypatch, 
     teardowns = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "active-conversations" in url:
             return {"conversations": [conv]}
         if "/agents/A1/runs" in url:
@@ -467,6 +472,8 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
         if "active-conversations" in url:
             return {"conversations": active}
         if "/turns" in url:                               # _next_human_turn — API filters after_seq
@@ -475,6 +482,8 @@ def _wire(monkeypatch, *, active, turns=None, claim=True):
             return {"turns": [t for t in (turns or []) if t.get("seq", 0) > after]}
         if "/conversation" in url:                        # agent's active conv: NEWEST page, oldest→newest
             return {"conversation": {"id": "C1"}, "turns": turns or []}
+        if "provenance_only=true" in url:                 # checkout routing: no prior run to carry
+            return {"runs": [], "query_complete": True}
         return None      # persona/digest → None
 
     def _post(url, body, **k):
@@ -900,6 +909,10 @@ def _wire_preempt(monkeypatch, *, active, preempt_requested):
     posts = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return {"conversations": active} if "active-conversations" in url else None
 
     def _post(url, body, **k):
@@ -993,6 +1006,10 @@ def _wire_drain(monkeypatch, *, active):
     fed = []
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         return {"conversations": active} if "active-conversations" in url else None
 
     def _post(url, body, **k):
@@ -1904,12 +1921,34 @@ def test_safe_teardown_worktree_preserves_dirty(monkeypatch):
     assert removed == []
 
 
-def test_safe_teardown_worktree_removes_clean(monkeypatch):
-    monkeypatch.setattr(notifier, "_run_git", lambda args, **k: (0, ""))
-    removed = []
-    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: removed.append(a))
-    assert notifier._safe_teardown_worktree("/base", "/wt", "br") == "removed"
-    assert removed == [("/base", "/wt", "br")]
+def _real_main_checkout(main):
+    """Make ``main`` a real Git checkout with a local ``origin/main``.
+
+    Shared-main starts and worktree retirement prove state in Git's private metadata, so a
+    faked ``_is_git_repo`` over a plain directory can no longer stand in for a repository."""
+    main.mkdir(exist_ok=True)
+    for args in (["init"], ["symbolic-ref", "HEAD", "refs/heads/main"],
+                 ["config", "user.email", "test@example.com"], ["config", "user.name", "Test"]):
+        assert notifier._run_git(args, cwd=main)[0] == 0
+    (main / "base.txt").write_text("base\n")
+    assert notifier._run_git(["add", "base.txt"], cwd=main)[0] == 0
+    assert notifier._run_git(["commit", "-m", "base"], cwd=main)[0] == 0
+    origin = main.parent / f"{main.name}-origin.git"
+    assert notifier._run_git(["clone", "--bare", str(main), str(origin)], cwd=main.parent)[0] == 0
+    assert notifier._run_git(["remote", "add", "origin", str(origin)], cwd=main)[0] == 0
+    assert notifier._run_git(["fetch", "origin"], cwd=main)[0] == 0
+    return main
+
+
+def test_safe_teardown_worktree_removes_clean(tmp_path):
+    """A provably clean worktree is removed.  Retirement now proves the branch, the full
+    handoff patch, and the runtime overlay against real Git, so this uses a real repository."""
+    main = _real_main_checkout(tmp_path / "main")
+    worktree, branch = notifier._provision_worktree(str(main), "Vox")
+    assert worktree and pathlib.Path(worktree).exists()
+
+    assert notifier._safe_teardown_worktree(str(main), worktree, branch) == "removed"
+    assert not pathlib.Path(worktree).exists()
 
 
 def test_safe_teardown_worktree_noop_without_worktree():
@@ -1947,7 +1986,7 @@ def test_service_residents_disabled_worktrees_boots_claude_in_main(monkeypatch, 
         "worktrees_disabled": True,
     }
     _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hi"}])
-    monkeypatch.setattr(notifier, "_is_git_repo", lambda cwd: True)
+    _real_main_checkout(tmp_path)                                  # shared main is a real repo
     monkeypatch.setattr(
         notifier,
         "_provision_resident_worktree",
@@ -1982,7 +2021,7 @@ def test_service_residents_disabled_worktrees_boots_codex_in_main(monkeypatch, t
         "worktrees_disabled": True,
     }
     _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hi"}])
-    monkeypatch.setattr(notifier, "_is_git_repo", lambda cwd: True)
+    _real_main_checkout(tmp_path)                                  # shared main is a real repo
     monkeypatch.setattr(
         notifier,
         "_provision_resident_worktree",

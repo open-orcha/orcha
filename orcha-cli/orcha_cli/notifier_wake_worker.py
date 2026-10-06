@@ -5,7 +5,10 @@ from __future__ import annotations
 import sys
 import time
 
-from .notifier_routing_handoff import carry_previous_checkout
+from .notifier_routing_handoff import (
+    checkout_owner_key,
+    prepare_checkout_start,
+)
 
 # A wake whose saved files cannot be carried into the selected checkout is not
 # retried on every scan tick: the candidate is held down for this long, and the
@@ -156,6 +159,7 @@ def _worker_state(
     token,
     prompt,
     sandbox_container_id=None,
+    checkout_activity=None,
 ):
     """Build the daemon-owned state used by progress and completion reapers."""
     now = time.time()
@@ -179,6 +183,8 @@ def _worker_state(
         # Checkpoint respawns re-read the persisted project setting, but this value is the
         # fail-safe when the API is temporarily unavailable during that hand-off.
         "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
+        # The checkpoint respawn's live-checkout guard consults this container's runs.
+        "container_id": candidate.get("container_id"),
     }
     return {
         "proc": process,
@@ -216,7 +222,100 @@ def _worker_state(
         "run_token": token,
         "lane": "work",
         "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
+        # Shared-main starts hold this Git-private barrier through stopped-state
+        # snapshotting. Dedicated worktrees retain their existing isolation and
+        # leave it unset. Keep the live handle out of respawn_ctx, which is
+        # treated as serialisable continuation metadata.
+        "checkout_activity": checkout_activity,
     }
+
+
+def _stop_unregistered_worker(
+    api_base,
+    candidate,
+    *,
+    process,
+    token,
+    worktree,
+    branch,
+    task_worktree,
+    run_task_id,
+    log_path,
+    sandbox_container_id,
+    services,
+):
+    """Stop a worker whose durable run row could not be created.
+
+    Letting that process continue would make every API-backed live-check blind to
+    a real checkout writer.  Stop it synchronously, preserve any files it managed
+    to create, and leave durable ambiguity proof when it used shared main.
+    """
+    killer = getattr(services, "_kill_worker", None)
+    if callable(killer):
+        killer(process, graceful=True)
+
+    evidence = None
+    if not worktree:
+        recorder = getattr(services, "_record_checkout_overlap_evidence", None)
+        if callable(recorder) and candidate.get("headless_cwd"):
+            evidence = recorder(
+                candidate["headless_cwd"],
+                checkout_owner_key(
+                    candidate["agent_id"], task_id=run_task_id, lane="work"
+                ),
+                run_id=(
+                    f"unregistered:{token}"
+                    if token
+                    else f"unregistered-pid:{getattr(process, 'pid', 'unknown')}"
+                ),
+                agent_id=candidate["agent_id"],
+                other_rows=(),
+                unknown_checkout_user=True,
+            )
+
+    # A generic disposable checkout can be removed only when the existing safe
+    # teardown proves it stayed clean.  Stable task worktrees are retained so a
+    # later normal wake reuses the exact path and any early edits.
+    if worktree and not task_worktree:
+        teardown = getattr(services, "_safe_teardown_worktree", None)
+        if callable(teardown):
+            teardown(candidate.get("headless_cwd"), worktree, branch)
+
+    reaper = getattr(services, "_reap_sandbox_artifacts", None)
+    if callable(reaper):
+        reaper(
+            {
+                "sandbox_container_id": sandbox_container_id,
+                "base_cwd": candidate.get("headless_cwd"),
+            }
+        )
+    revoker = getattr(services, "_revoke_or_defer", None)
+    if callable(revoker):
+        revoker(api_base, token)
+
+    if run_task_id:
+        evidence_code = getattr(evidence, "code", "unavailable")
+        services._post_json(
+            f"{api_base}/api/tasks/{run_task_id}/messages",
+            {
+                "author_agent_id": candidate["agent_id"],
+                "body": (
+                    "Worker start stopped because Orcha could not create its durable "
+                    "run record. The process was terminated before another checkout "
+                    "handoff, and any files it created remain preserved. "
+                    f"Shared-checkout safety evidence: {evidence_code}."
+                ),
+            },
+        )
+    services._post_json(
+        f"{api_base}/api/agents/{candidate['agent_id']}/wake-ack",
+        {
+            "kind": "worker_run_registration_failed",
+            "release_lease": True,
+            "lane": "work",
+        },
+    )
+    return evidence
 
 
 def spawn(
@@ -291,40 +390,64 @@ def spawn(
         candidate, auto_tasks, live_workers, dry_run, services
     )
     run_cwd = worktree or headless_cwd
-    carried = dry_run or carry_previous_checkout(
-        api_base,
-        candidate["agent_id"],
-        run_cwd,
-        services,
-        task_id=run_task_id,
-        lane="work",
-        require_taskless=run_task_id is None,
-    )
-    if not carried and candidate.get("worktrees_disabled"):
-        # The project chose the shared main checkout. Refusing to start because
-        # main holds unrelated changes would block every wake for good, so start
-        # there as-is and say once where the previous checkout's files still are.
-        if run_task_id and _due(
-            _HANDOFF_FAILURE_NOTICE_TS,
-            (candidate["agent_id"], run_task_id),
-            HANDOFF_FAILURE_NOTICE_INTERVAL_SECS,
-        ):
-            services._post_json(
-                f"{api_base}/api/tasks/{run_task_id}/messages",
-                {
-                    "author_agent_id": candidate["agent_id"],
-                    "body": (
-                        "Starting in the main checkout without carrying over the "
-                        "files saved in my previous checkout "
-                        f"`{_previous_checkout_hint(api_base, candidate, run_task_id, services)}` "
-                        "(the main checkout already holds unrelated changes). That "
-                        "checkout is preserved as-is; re-enable worktrees to continue "
-                        "from it instead."
-                    ),
-                },
-            )
-        carried = True
+    git_checker = getattr(services, "_is_git_repo", None)
+    shared_git_checkout = False
+    if not worktree and run_cwd and callable(git_checker):
+        try:
+            shared_git_checkout = bool(git_checker(run_cwd))
+        except (OSError, TypeError, ValueError):
+            shared_git_checkout = False
+    if not dry_run and shared_git_checkout and live_workers is None:
+        # ``notifier --once`` cannot retain a run row or reconcile a stopped
+        # shared-main writer, so refuse before routing mutates the checkout.
+        guidance = (
+            "A one-shot notifier cannot safely track a shared-checkout writer "
+            "through completion. Run the notifier daemon or enable worktrees; "
+            "no files were routed and no worker was started."
+        )
+        services._post_json(
+            f"{api_base}/api/agents/{candidate['agent_id']}/wake-ack",
+            {
+                "kind": "worker_checkout_tracking_unavailable",
+                "release_lease": True,
+                "lane": lane,
+            },
+        )
+        return {
+            "sent": False,
+            "command": "checkout tracking unavailable",
+            "resume_rendered": resume_rendered,
+            "lane": lane,
+            "handoff_failed": True,
+            "handoff_code": "checkout_activity_tracking_unavailable",
+            "handoff_guidance": guidance,
+        }
+    preparation = None
+    handoff = None
+    checkout_activity = None
+    if not dry_run:
+        preparation = prepare_checkout_start(
+            api_base,
+            candidate["agent_id"],
+            run_cwd,
+            services,
+            shared_checkout=shared_git_checkout,
+            task_id=run_task_id,
+            lane="work",
+            require_taskless=run_task_id is None,
+            local_workers=live_workers,
+            container_id=candidate.get("container_id"),
+        )
+        handoff = preparation.handoff
+        checkout_activity = preparation.activity
+    carried = dry_run or bool(handoff)
     if not carried:
+        handoff_code = getattr(handoff, "code", "handoff_failed")
+        handoff_guidance = getattr(
+            handoff,
+            "guidance",
+            "Orcha could not prove a safe checkout handoff; both checkouts were preserved.",
+        )
         if run_task_id and _due(
             _HANDOFF_FAILURE_NOTICE_TS,
             (candidate["agent_id"], run_task_id),
@@ -338,9 +461,9 @@ def spawn(
                         "Run start paused because Orcha could not safely carry the "
                         "saved files into the checkout selected by the project setting. "
                         "Both checkouts remain preserved, and no worker was started. "
+                        f"{handoff_guidance} "
                         f"Orcha retries every {int(HANDOFF_FAILURE_HOLD_SECS // 60)} "
-                        "minutes; to unblock sooner, re-enable worktrees or commit/stash "
-                        "the unrelated changes in the target checkout."
+                        "minutes unless the project owner resolves the saved-state conflict."
                     ),
                 },
             )
@@ -352,6 +475,11 @@ def spawn(
                 "lane": lane,
             },
         )
+        # Taskless wakes provision a fresh disposable checkout before routing
+        # can be inspected. Retire a still-clean destination when the handoff
+        # fails; safe teardown preserves it if any file unexpectedly changed.
+        if worktree and not task_worktree:
+            services._safe_teardown_worktree(headless_cwd, worktree, branch)
         if not quiet:
             print(
                 f"[notifier] wake for {candidate.get('alias')} paused: saved files "
@@ -364,42 +492,106 @@ def spawn(
             "resume_rendered": resume_rendered,
             "lane": lane,
             "handoff_failed": True,
+            "handoff_code": handoff_code,
+            "handoff_guidance": handoff_guidance,
         }
     if not dry_run:
-        _advise_shared_checkout(
-            api_base, candidate, run_task_id, live_workers, services
+        try:
+            _advise_shared_checkout(
+                api_base, candidate, run_task_id, live_workers, services
+            )
+        except Exception:
+            # No child exists yet, so this reservation can be archived safely.
+            if checkout_activity is not None:
+                services._release_checkout_activity(
+                    run_cwd, activity=checkout_activity
+                )
+            raise
+    try:
+        token = (
+            None
+            if dry_run
+            else services._mint_embodiment_token(
+                api_base, candidate["agent_id"], lane, "headless"
+            )
         )
-    token = (
-        None
-        if dry_run
-        else services._mint_embodiment_token(
-            api_base, candidate["agent_id"], lane, "headless"
-        )
-    )
+    except Exception:
+        if checkout_activity is not None:
+            services._release_checkout_activity(
+                run_cwd, activity=checkout_activity
+            )
+        raise
     _spawn_info: dict = {}
-    sent, command, process = services.spawn_headless(
-        run_cwd,
-        prompt,
-        candidate.get("headless_flags"),
-        dry_run,
-        alias=candidate.get("alias"),
-        system_prompt=persona,
-        model=candidate.get("model"),
-        reasoning_effort=candidate.get("reasoning_effort"),
-        runtime=candidate.get("model_runtime"),
-        log_path=log_path,
-        run_token=token,
-        conversation=False,
-        spawn_info=_spawn_info,
-    )
+    try:
+        sent, command, process = services.spawn_headless(
+            run_cwd,
+            prompt,
+            candidate.get("headless_flags"),
+            dry_run,
+            alias=candidate.get("alias"),
+            system_prompt=persona,
+            model=candidate.get("model"),
+            reasoning_effort=candidate.get("reasoning_effort"),
+            runtime=candidate.get("model_runtime"),
+            log_path=log_path,
+            run_token=token,
+            conversation=False,
+            spawn_info=_spawn_info,
+            checkout_activity=checkout_activity,
+        )
+    except Exception:
+        # A transport exception may occur after it created a child but before it
+        # returned the process handle. Keep the durable reservation in place;
+        # releasing it here would permit an untracked concurrent writer.
+        services._revoke_or_defer(api_base, token)
+        raise
+    if sent and process is not None and checkout_activity is not None:
+        try:
+            bound = services._bind_checkout_activity(
+                checkout_activity,
+                pid=getattr(process, "pid", None),
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            )
+        except Exception:
+            bound = False
+        if not bound:
+            evidence = _stop_unregistered_worker(
+                api_base,
+                candidate,
+                process=process,
+                token=token,
+                worktree=worktree,
+                branch=branch,
+                task_worktree=task_worktree,
+                run_task_id=run_task_id,
+                log_path=log_path,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+                services=services,
+            )
+            if evidence is not None and bool(evidence):
+                services._release_checkout_activity(
+                    run_cwd, activity=checkout_activity
+                )
+            return {
+                "sent": False,
+                "command": command,
+                "resume_rendered": resume_rendered,
+                "lane": lane,
+                "run_registration_failed": True,
+                "handoff_code": "checkout_activity_bind_failed",
+            }
     # Issue #75: the box-wide concurrency cap deferred this spawn (ground-truth count
     # ≥ budget at decision time). NOT a failure — release everything we speculatively
     # claimed (lease, worktree) so the candidate re-competes cleanly on a later tick in
     # the SAME server-side ORDER BY created_at order (oldest agent first = fairness, no
     # starvation), and log the cap ONCE for this deferral (per tick, not per second).
     if _spawn_info.get("deferred"):
+        if checkout_activity is not None:
+            services._release_checkout_activity(
+                run_cwd, activity=checkout_activity
+            )
         if worktree:
-            services._teardown_worktree(headless_cwd, worktree, branch)
+            services._safe_teardown_worktree(headless_cwd, worktree, branch)
         if not dry_run:
             services._revoke_or_defer(api_base, token)
         if not quiet:
@@ -427,18 +619,113 @@ def spawn(
         if _spawn_info.get("sandbox_container_id"):
             _run_payload["sandbox_container_id"] = _spawn_info["sandbox_container_id"]
             _run_payload["wake_kind"] = "sandbox"
-        run = services._post_json(
-            f"{api_base}/api/agents/{candidate['agent_id']}/runs",
-            _run_payload,
-        )
-        run_id = (run or {}).get("run_id")
-        if not run_id and not quiet:
-            print(
-                f"[notifier] WARN: worker_run NOT recorded for "
-                f"{candidate.get('alias')} — POST /runs failed "
-                f"(returned {run!r}); the worker is running unseen",
-                file=sys.stderr,
+        try:
+            run = services._post_json(
+                f"{api_base}/api/agents/{candidate['agent_id']}/runs",
+                _run_payload,
             )
+        except Exception:
+            evidence = _stop_unregistered_worker(
+                api_base,
+                candidate,
+                process=process,
+                token=token,
+                worktree=worktree,
+                branch=branch,
+                task_worktree=task_worktree,
+                run_task_id=run_task_id,
+                log_path=log_path,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+                services=services,
+            )
+            if (
+                checkout_activity is not None
+                and evidence is not None
+                and bool(evidence)
+            ):
+                services._release_checkout_activity(
+                    run_cwd, activity=checkout_activity
+                )
+            raise
+        run_id = (run or {}).get("run_id")
+        if not run_id:
+            evidence = _stop_unregistered_worker(
+                api_base,
+                candidate,
+                process=process,
+                token=token,
+                worktree=worktree,
+                branch=branch,
+                task_worktree=task_worktree,
+                run_task_id=run_task_id,
+                log_path=log_path,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+                services=services,
+            )
+            if (
+                checkout_activity is not None
+                and evidence is not None
+                and bool(evidence)
+            ):
+                services._release_checkout_activity(
+                    run_cwd, activity=checkout_activity
+                )
+            if not quiet:
+                print(
+                    f"[notifier] worker start for {candidate.get('alias')} stopped: "
+                    "the durable run record could not be created; files preserved "
+                    f"(safety evidence {getattr(evidence, 'code', 'unavailable')})",
+                    file=sys.stderr,
+                )
+            return {
+                "sent": False,
+                "command": command,
+                "resume_rendered": resume_rendered,
+                "lane": lane,
+                "run_registration_failed": True,
+                "handoff_code": getattr(evidence, "code", None),
+            }
+        activity_bound = True
+        if checkout_activity is not None:
+            try:
+                activity_bound = services._bind_checkout_activity(
+                    checkout_activity,
+                    run_id=run_id,
+                    pid=getattr(process, "pid", None),
+                    sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+                )
+            except Exception:
+                activity_bound = False
+        if not activity_bound:
+            # The run row exists, so keep it as the durable recovery identity.
+            # Stop the process and leave both the row and reservation registered;
+            # the ordinary reaper will snapshot, archive, and release them.  A
+            # notifier crash in this branch therefore remains fail-closed.
+            services._kill_worker(process, graceful=True)
+            live_workers[candidate["agent_id"]] = _worker_state(
+                candidate,
+                process=process,
+                run_id=run_id,
+                log_path=log_path,
+                worktree=worktree,
+                branch=branch,
+                task_worktree=task_worktree,
+                cap=cap,
+                event=event,
+                run_task_id=run_task_id,
+                token=token,
+                prompt=prompt,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+                checkout_activity=checkout_activity,
+            )
+            return {
+                "sent": False,
+                "command": command,
+                "resume_rendered": resume_rendered,
+                "lane": lane,
+                "run_registration_failed": True,
+                "handoff_code": "checkout_activity_bind_failed",
+            }
         live_workers[candidate["agent_id"]] = _worker_state(
             candidate,
             process=process,
@@ -453,11 +740,16 @@ def spawn(
             token=token,
             prompt=prompt,
             sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            checkout_activity=checkout_activity,
         )
     elif worktree and not sent:
-        services._teardown_worktree(headless_cwd, worktree, branch)
+        services._safe_teardown_worktree(headless_cwd, worktree, branch)
         services._revoke_or_defer(api_base, token)
     elif not sent and not dry_run:
+        if checkout_activity is not None:
+            services._release_checkout_activity(
+                run_cwd, activity=checkout_activity
+            )
         services._revoke_or_defer(api_base, token)
     return {
         "sent": sent,

@@ -202,6 +202,8 @@ def provision_disposable(base_cwd, alias, services: Any):
     stamp = f"{services._safe_ref(alias)}-{int(time.time() * 1000)}"
     branch = f"orcha/wk-{stamp}"
     worktree = base / ".orcha-worktrees" / stamp
+    if not services._clear_retirement_record(base_cwd, worktree):
+        return None, None
     services._run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
     return_code, _ = services._run_git(
         [

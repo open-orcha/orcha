@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
+from enum import Enum
 from typing import Optional, Sequence
 
 DEFAULT_IMAGE = "orcha/runner:0.5"
@@ -323,8 +324,118 @@ class SandboxState:
     started_at: Optional[str]        # RFC3339 from docker inspect
 
 
+class SandboxProbeStatus(str, Enum):
+    """Fail-closed outcome of inspecting one sandbox container."""
+
+    RUNNING = "running"
+    EXITED = "exited"
+    DEFINITIVELY_MISSING = "definitively_missing"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SandboxProbeResult:
+    status: SandboxProbeStatus
+    state: Optional[SandboxState] = None
+    reason: Optional[str] = None
+
+
+def _unknown_probe(reason: str) -> SandboxProbeResult:
+    return SandboxProbeResult(SandboxProbeStatus.UNKNOWN, reason=reason)
+
+
+def _exact_container_listing(name: str) -> SandboxProbeResult:
+    """Confirm absence after ``docker inspect`` reports no usable object.
+
+    Docker's name filter is a regular expression. Anchor it to the complete
+    container name (including Docker's leading slash convention), then still
+    validate the formatted names client-side. An empty *successful* result is
+    the only evidence strong enough to call a container missing.
+    """
+    # Docker container names use a deliberately small alphabet. ``re.escape``
+    # also protects this helper if a caller ever supplies punctuation that has
+    # meaning to Docker's regular-expression name filter.
+    exact_name = f"^/{re.escape(name)}$"
+    listed = _docker([
+        "container", "ls", "-a",
+        "--filter", f"name={exact_name}",
+        "--format", "{{.Names}}",
+    ], timeout=10)
+    if listed.returncode != 0:
+        return _unknown_probe("exact-name container listing failed")
+    if not isinstance(listed.stdout, str):
+        return _unknown_probe("exact-name container listing returned malformed data")
+
+    names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if not names:
+        return SandboxProbeResult(
+            SandboxProbeStatus.DEFINITIVELY_MISSING,
+            reason="successful exact-name listing found no container",
+        )
+    if names == [name]:
+        # The object exists, but inspect could not tell us whether its writer is
+        # live. Never turn that uncertainty into permission to snapshot/reap.
+        return _unknown_probe("container exists but its state could not be inspected")
+    return _unknown_probe("exact-name container listing returned unexpected data")
+
+
+def probe_container(name: str) -> SandboxProbeResult:
+    """Return a structured, fail-closed liveness result for ``name``.
+
+    ``docker inspect`` is authoritative for running/exited state. A normal
+    inspect miss is verified with a successful exact-name ``docker container
+    ls -a`` before it becomes ``DEFINITIVELY_MISSING``. Timeouts, malformed
+    inspect data, listing errors, and all other ambiguous states stay
+    ``UNKNOWN`` so lifecycle callers cannot mistake uncertainty for a stopped
+    writer.
+    """
+    out = _docker(["inspect", name], timeout=10)
+    if out.returncode != 0:
+        if out.returncode == 124:
+            return _unknown_probe("container inspect timed out")
+        return _exact_container_listing(name)
+    try:
+        payload = json.loads(out.stdout)
+    except (ValueError, KeyError, IndexError, TypeError):
+        return _unknown_probe("container inspect returned malformed JSON")
+    if not isinstance(payload, list) or len(payload) != 1:
+        return _unknown_probe("container inspect returned an unexpected object count")
+    item = payload[0]
+    if not isinstance(item, dict) or not isinstance(item.get("State"), dict):
+        return _unknown_probe("container inspect returned malformed state data")
+    raw_state = item["State"]
+    status = raw_state.get("Status")
+    if status not in {"running", "exited"}:
+        return _unknown_probe("container inspect returned an ambiguous state")
+    oom_killed = raw_state.get("OOMKilled")
+    started_at = raw_state.get("StartedAt")
+    exit_code = raw_state.get("ExitCode")
+    if not isinstance(oom_killed, bool):
+        return _unknown_probe("container inspect returned malformed OOM state")
+    if started_at is not None and not isinstance(started_at, str):
+        return _unknown_probe("container inspect returned malformed start time")
+    if status == "exited" and (not isinstance(exit_code, int) or isinstance(exit_code, bool)):
+        return _unknown_probe("container inspect returned malformed exit status")
+
+    state = SandboxState(
+        running=status == "running",
+        exit_code=None if status == "running" else exit_code,
+        oom_killed=oom_killed,
+        started_at=started_at,
+    )
+    return SandboxProbeResult(
+        SandboxProbeStatus.RUNNING if state.running else SandboxProbeStatus.EXITED,
+        state=state,
+    )
+
+
 def probe(name: str) -> Optional[SandboxState]:
-    """State of one managed container; None if docker errors or it's gone."""
+    """State of one managed container; None if docker errors or it's gone.
+
+    Keep this historical state-or-None API unchanged for existing reaper
+    callers. New lifecycle barriers that must distinguish absence from an
+    uncertain Docker response should use :func:`probe_container` instead.
+    """
     out = _docker(["inspect", name], timeout=10)
     if out.returncode != 0:
         return None

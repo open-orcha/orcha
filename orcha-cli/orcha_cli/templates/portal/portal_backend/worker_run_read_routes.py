@@ -30,34 +30,71 @@ def list_agent_runs(
     aid: str,
     limit: int = Query(default=20, ge=1, le=200),
     task_id: Optional[str] = Query(default=None),
+    conversation_id: Optional[str] = Query(default=None),
+    wake_kind: Optional[str] = Query(default=None),
+    lane: Optional[str] = Query(default=None),
+    taskless: bool = Query(default=False),
+    provenance_only: bool = Query(default=False),
 ):
     """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter.
 
-    GH #144: the ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every task a run
-    touched) instead of the single worker_runs.task_id pin — a session that spanned this task shows
-    up here even if its pin settled on another task."""
+    GH #144: the ordinary ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every
+    task a run touched) instead of the single worker_runs.task_id pin.  Internal checkout routing
+    sets provenance_only=true and must instead follow that primary pin: feed membership proves that
+    a run narrated on a task, not that its saved checkout belongs to that task."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
         require_agent(cur, aid)
+        if conversation_id is not None and not valid_uuid(conversation_id):
+            raise HTTPException(400, "conversation_id is not a valid UUID")
+        joins = []
+        conditions = ["wr.agent_id=%s"]
+        params = [aid]
         if task_id is not None:
             if not valid_uuid(task_id):
                 raise HTTPException(400, "task_id is not a valid UUID")
-            cur.execute(
-                """SELECT wr.* FROM worker_runs wr
-                           JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
-                           WHERE wr.agent_id=%s AND wrt.task_id=%s
-                           ORDER BY wr.started_at DESC LIMIT %s""",
-                (aid, task_id, limit),
+            if provenance_only:
+                conditions.append("wr.task_id=%s")
+            else:
+                joins.append("JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id")
+                conditions.append("wrt.task_id=%s")
+            params.append(task_id)
+        if conversation_id is not None:
+            conditions.append("wr.conversation_id=%s")
+            params.append(conversation_id)
+        if wake_kind is not None:
+            conditions.append("wr.wake_kind=%s")
+            params.append(wake_kind)
+        if lane is not None:
+            conditions.append("wr.lane=%s")
+            params.append(lane)
+        if taskless:
+            conditions.extend(["wr.task_id IS NULL", "wr.conversation_id IS NULL"])
+        if provenance_only:
+            conditions.append(
+                "(wr.wake_event IS NULL OR wr.wake_event NOT IN (%s,%s,%s,%s))"
             )
-        else:
-            cur.execute(
-                """SELECT * FROM worker_runs WHERE agent_id=%s
-                           ORDER BY started_at DESC LIMIT %s""",
-                (aid, limit),
+            params.extend(
+                [
+                    "checkout_consent_prompt",
+                    "checkout_consent_declined",
+                    "checkout_consent_resolved",
+                    "checkout_handoff_blocked",
+                ]
             )
+            conditions.append("(wr.worktree IS NOT NULL OR wr.base_cwd IS NOT NULL)")
+        params.append(limit)
+        cur.execute(
+            "SELECT DISTINCT wr.* FROM worker_runs wr "
+            + " ".join(joins)
+            + " WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY wr.started_at DESC LIMIT %s",
+            tuple(params),
+        )
         runs = [run_row(row) for row in cur.fetchall()]
-    return {"agent_id": aid, "runs": runs}
+    return {"agent_id": aid, "runs": runs, "query_complete": True}
 
 
 @app.get("/api/tasks/{tid}/runs")

@@ -83,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         "reachability": cmd_reachability,
         "enable-hook": cmd_enable_hook,
         "notifier": cmd_notifier,
+        "handoff-doctor": cmd_handoff_doctor,
         "terminal-bridge": cmd_terminal_bridge,
         "sandbox": cmd_sandbox,
         "pause": cmd_pause,

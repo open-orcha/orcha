@@ -113,6 +113,9 @@ def tick(
     context = _scan_context(scan, holds, services)
     woke = []
     for candidate in scan.get("candidates", []):
+        # Checkout routing consults this container's live runs; never make it
+        # re-derive the container from a checkout's (possibly absent) config.
+        candidate.setdefault("container_id", container_id)
         try:
             record = notifier_wake_candidate.process_candidate(
                 api_base,

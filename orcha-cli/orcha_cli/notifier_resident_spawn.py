@@ -9,6 +9,7 @@ from typing import Optional
 # a module so tests can monkeypatch `_sandbox.preflight` etc. (attribute lookup at
 # call time) — same seam as notifier_headless.
 from . import sandbox as _sandbox
+from .notifier_checkout_activity import pass_fds as _activity_pass_fds
 
 
 def spawn_resident(
@@ -26,6 +27,7 @@ def spawn_resident(
     conversation: bool = False,
     dry_run: bool = False,
     spawn_info: Optional[dict] = None,
+    checkout_activity=None,
     services,
 ) -> tuple[bool, str, object]:
     """Launch a warm resident while resolving patchable services through the facade.
@@ -105,6 +107,12 @@ def spawn_resident(
         sbx_name = _sandbox.new_container_name()
         if spawn_info is not None:
             spawn_info["sandbox_container_id"] = sbx_name
+        if checkout_activity is not None:
+            binder = getattr(services, "_bind_checkout_activity", None)
+            if not callable(binder) or not binder(
+                checkout_activity, sandbox_container_id=sbx_name
+            ):
+                return False, "(sandbox checkout activity binding failed)", None
         # Path-identical mounting: a resident's cwd is a PER-CONVERSATION git
         # worktree whose `.git` is a pointer file into the ROOT checkout, and
         # the rotating .orcha/github-token lives at the root — mount the root
@@ -200,6 +208,7 @@ def spawn_resident(
             ),
             stdin=services.subprocess.PIPE,
             start_new_session=True,
+            pass_fds=_activity_pass_fds(checkout_activity),
         )
         return True, repr_, proc
     except (OSError, services.subprocess.SubprocessError):

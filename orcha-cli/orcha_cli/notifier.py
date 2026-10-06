@@ -35,6 +35,11 @@ from .notifier_context import install as _install_context
 
 _install_context(globals())
 
+# The daemon installs its two in-memory embodiment registries here. Checkout
+# handoff guards consult both so an idle warm resident (which deliberately has
+# no per-turn run row) is still treated as a live checkout user.
+_LOCAL_CHECKOUT_REGISTRIES = ()
+
 from .notifier_wake_facade import (
     _ack_config_from_scan,
     _advance_wake_cursor,
@@ -62,20 +67,35 @@ from .notifier_wake_facade import (
 )
 from .notifier_worktree_facade import (
     _branch_commit_count,
+    _bind_checkout_activity,
     _capture_diff,
+    _checkout_activity_status,
+    _checkout_overlap_evidence,
+    _clear_retirement_record,
     _drain_pending_revokes,
     _ensure_worktree_exclude,
     _finish_run,
     _discard_worktree,
     _handoff_branch_changes,
+    _handoff_branch_changes_result,
+    _handoff_record_bytes,
     _handoff_worktree_changes,
+    _handoff_worktree_changes_result,
+    _inspect_worktree_handoff,
     _is_git_repo,
     _mint_embodiment_token,
+    _mark_checkout_activity_routed,
     _overlay_runtime_config,
     _provision_live_worktree,
     _provision_resident_worktree,
     _provision_task_worktree,
     _provision_worktree,
+    _release_checkout_activity,
+    _reconcile_checkout_activities,
+    _reserve_checkout_activity,
+    _record_checkout_stream_snapshot,
+    _record_checkout_overlap_evidence,
+    _retirement_record_status,
     _reap_dead_pid_resident_runs,
     _reap_sandbox_artifacts,
     _retire_headless,
@@ -204,6 +224,9 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
     for conv_id, c in by_id.items():
         if not c.get("pending_human"):
             continue
+        # The checkout live-guard must know which container's runs to consult; the scan row's
+        # container is this one, so never make it re-derive that from a checkout's files.
+        c.setdefault("container_id", cid)
         runtime = _normalize_runtime(c.get("model_runtime"))
         try:
             if runtime == RUNTIME_CODEX:

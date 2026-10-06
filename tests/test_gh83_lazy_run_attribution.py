@@ -174,6 +174,71 @@ async def test_accept_task_multi_task_session_feeds_both_tasks(
     assert run_id in [r["run_id"] for r in b_agent.json()["runs"]]
 
 
+async def test_agent_run_provenance_filter_uses_primary_task_pin(
+        client, make_agent, make_task, make_request, db, work_headers):
+    """Checkout routing must not treat progress on a second task as ownership of its checkout."""
+    requester = await make_agent("Requester", "lead")
+    worker = await make_agent("bb", "eng")
+    worker_id = worker["agent_id"]
+    primary = await make_task("primary task", "done", assignee_alias="bb")
+    headers = await work_headers(worker_id)
+    token = headers["X-Orcha-Run-Token"]
+
+    started = await client.post(
+        f"/api/agents/{worker_id}/runs",
+        json={
+            "wake_kind": "ephemeral",
+            "token_id": token,
+            "task_id": primary["id"],
+            "worktree": "/project/primary-task",
+            "base_cwd": "/project",
+        },
+    )
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run_id"]
+
+    request = await make_request(
+        requester["agent_id"],
+        "build follow-up",
+        target_alias="bb",
+        type="task",
+        task=_task_payload(title="follow-up task"),
+    )
+    accepted = await client.post(
+        f"/api/requests/{request['request_id']}/accept-task",
+        json={"responder_agent_id": worker_id, "note": "on it"},
+        headers=headers,
+    )
+    assert accepted.status_code == 200, accepted.text
+    follow_up = accepted.json()["spawned_task_id"]
+    row = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (run_id,))[0]
+    assert str(row["task_id"]) == primary["id"]
+
+    # The ordinary progress feed deliberately narrates the continuous run on
+    # both tasks, preserving GH #144's many-to-many behavior.
+    ordinary = await client.get(
+        f"/api/agents/{worker_id}/runs", params={"task_id": follow_up}
+    )
+    assert ordinary.status_code == 200, ordinary.text
+    assert run_id in [run["run_id"] for run in ordinary.json()["runs"]]
+
+    # Routing asks for provenance and therefore sees only the primary checkout
+    # pin; the follow-up task cannot inherit the primary task's saved files.
+    provenance = await client.get(
+        f"/api/agents/{worker_id}/runs",
+        params={"task_id": follow_up, "provenance_only": "true"},
+    )
+    assert provenance.status_code == 200, provenance.text
+    assert run_id not in [run["run_id"] for run in provenance.json()["runs"]]
+
+    primary_provenance = await client.get(
+        f"/api/agents/{worker_id}/runs",
+        params={"task_id": primary["id"], "provenance_only": "true"},
+    )
+    assert primary_provenance.status_code == 200, primary_provenance.text
+    assert run_id in [run["run_id"] for run in primary_provenance.json()["runs"]]
+
+
 async def test_accept_task_retry_attributes_respawned_taskless_run(
         client, make_agent, make_task, make_request, db, work_headers):
     """If the first accept response is lost and a respawn retries the already-accepted request,

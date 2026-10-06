@@ -27,7 +27,10 @@ from .notifier_routing_handoff import previous_run
 KIND_PROMPT = "checkout_consent_prompt"
 KIND_DECLINED = "checkout_consent_declined"
 KIND_RESOLVED = "checkout_consent_resolved"
-SYSTEM_KINDS = frozenset({KIND_PROMPT, KIND_DECLINED, KIND_RESOLVED})
+KIND_BLOCKED = "checkout_handoff_blocked"
+SYSTEM_KINDS = frozenset(
+    {KIND_PROMPT, KIND_DECLINED, KIND_RESOLVED, KIND_BLOCKED}
+)
 
 CONSENT_RE = re.compile(
     r"^\W*(yes|y|yep|yeah|ok|okay|sure|discard|drop|proceed|go ahead|do it|switch)\b",
@@ -76,11 +79,12 @@ def _post_notice(services, api_base, conv_id, candidate, base_cwd, kind, content
         f"{api_base}/api/agents/{agent_id}/runs",
         {
             "wake_kind": "ephemeral",
-            "wake_event": "conversation_turn",
+            # Control notices are deliberately provenance-ineligible. They must
+            # never become the newest saved checkout for the human's stream.
+            "wake_event": kind,
             "conversation_id": conv_id,
             "lane": "conversation",
             "runtime": candidate.get("model_runtime"),
-            "base_cwd": base_cwd,
         },
     )
     run_id = (run or {}).get("run_id")
@@ -101,6 +105,38 @@ def _post_notice(services, api_base, conv_id, candidate, base_cwd, kind, content
         {"status": "exited", "exit_code": 0, "output": f"orcha {kind}"},
     )
     return bool(posted)
+
+
+def post_blocked_notice(
+    services, api_base, conv_id, candidate, base_cwd, turns, result, quiet
+) -> bool:
+    """Explain a non-consentable provenance conflict without offering deletion."""
+    if _latest_seq(turns, KIND_BLOCKED):
+        return False
+    guidance = getattr(
+        result,
+        "guidance",
+        "Orcha could not prove which saved checkout state belongs to this conversation.",
+    )
+    posted = _post_notice(
+        services,
+        api_base,
+        conv_id,
+        candidate,
+        base_cwd,
+        KIND_BLOCKED,
+        (
+            "I paused this conversation before starting a worker because the saved "
+            "checkout state is ambiguous. Both checkouts and all ownership proof "
+            f"remain unchanged. {guidance}"
+        ),
+    )
+    if posted and not quiet:
+        print(
+            f"[notifier] {candidate.get('agent_alias')} — checkout handoff paused "
+            "without offering a destructive choice"
+        )
+    return posted
 
 
 def prompt_text(worktree, base_cwd) -> str:

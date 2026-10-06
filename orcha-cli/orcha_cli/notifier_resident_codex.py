@@ -6,6 +6,12 @@ import json
 import os
 import time
 
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
+
 
 def advance_codex_resident(
     compat,
@@ -22,14 +28,23 @@ def advance_codex_resident(
     agent_id = resident["agent_id"]
     if conv_id not in active_ids:
         compat._kill_worker(proc, graceful=True)
+        snapshot = record_stopped_checkout_snapshot(
+            resident, agent_id, compat, api_base=api_base
+        )
+        if stopped_snapshot_requires_retry(snapshot):
+            resident["snapshot_retry_pending"] = snapshot.code
+            return
+        resident.pop("snapshot_retry_pending", None)
         compat._finish_run(
             api_base,
             resident.get("current_run_id"),
             "killed",
             proc.returncode,
             resident.get("log_path"),
-            compat._capture_diff(
-                resident.get("worktree") or resident.get("base_cwd")
+            capture_stopped_checkout_diff(
+                snapshot,
+                resident.get("worktree") or resident.get("base_cwd"),
+                compat,
             ),
         )
         compat._safe_teardown_worktree(
@@ -58,6 +73,8 @@ def advance_codex_resident(
             ack_kind="codex_conversation_released",
             post_reply=True,
         )
+        if resident.get("snapshot_retry_pending"):
+            return
         compat._retire_resident(api_base, live_residents, conv_id)
         if not quiet:
             print(
@@ -86,14 +103,23 @@ def advance_codex_resident(
     if time.time() <= resident.get("hard_deadline", time.time()):
         return
     compat._kill_worker(proc, graceful=True)
+    snapshot = record_stopped_checkout_snapshot(
+        resident, agent_id, compat, api_base=api_base
+    )
+    if stopped_snapshot_requires_retry(snapshot):
+        resident["snapshot_retry_pending"] = snapshot.code
+        return
+    resident.pop("snapshot_retry_pending", None)
     compat._finish_run(
         api_base,
         resident.get("current_run_id"),
         "killed",
         proc.returncode,
         resident.get("log_path"),
-        compat._capture_diff(
-            resident.get("worktree") or resident.get("base_cwd")
+        capture_stopped_checkout_diff(
+            snapshot,
+            resident.get("worktree") or resident.get("base_cwd"),
+            compat,
         ),
     )
     compat._post_json(
@@ -137,14 +163,23 @@ def _stop_turn(
             "by": renew.get("stop_requested_by"),
         },
     )
+    snapshot = record_stopped_checkout_snapshot(
+        resident, agent_id, compat, api_base=api_base
+    )
+    if stopped_snapshot_requires_retry(snapshot):
+        resident["snapshot_retry_pending"] = snapshot.code
+        return
+    resident.pop("snapshot_retry_pending", None)
     compat._finish_run(
         api_base,
         resident.get("current_run_id"),
         "killed",
         proc.returncode,
         resident.get("log_path"),
-        compat._capture_diff(
-            resident.get("worktree") or resident.get("base_cwd")
+        capture_stopped_checkout_diff(
+            snapshot,
+            resident.get("worktree") or resident.get("base_cwd"),
+            compat,
         ),
         kill_reason=json.dumps(
             {

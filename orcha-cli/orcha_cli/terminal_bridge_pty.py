@@ -5,6 +5,7 @@ import pty
 import signal
 import time
 
+from .notifier_checkout_activity import pass_fds as activity_pass_fds
 from .terminal_bridge_protocol import build_spawn_env
 
 PTY_READ_BYTES = 65_536
@@ -20,6 +21,7 @@ def spawn_pty(
     model=None,
     runtime=None,
     run_token=None,
+    checkout_activity=None,
 ):
     """Fork ``orcha use <alias>`` into a new PTY session."""
     env = build_spawn_env(
@@ -34,6 +36,11 @@ def spawn_pty(
     pid, master_fd = pty.fork()
     if pid == 0:
         try:
+            # Python marks descriptors close-on-exec by default.  The terminal
+            # process must keep the checkout reservation locked if the bridge
+            # crashes while the PTY survives.
+            for descriptor in activity_pass_fds(checkout_activity):
+                os.set_inheritable(descriptor, True)
             if cwd:
                 os.chdir(cwd)
             os.execvpe("orcha", ["orcha", "use", alias], env)

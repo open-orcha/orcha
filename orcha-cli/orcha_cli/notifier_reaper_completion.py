@@ -4,6 +4,47 @@ from __future__ import annotations
 
 import json
 
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_has_attributable_state,
+    stopped_snapshot_requires_retry,
+)
+
+
+def _snapshot_stopped_worker(api_base, worker, aid, quiet, services):
+    """Best-effort durable provenance for a stopped shared-main worker."""
+    result = record_stopped_checkout_snapshot(
+        worker, aid, services, api_base=api_base
+    )
+    if result is not None and not result.ok and not quiet:
+        print(
+            f"[notifier] could not record checkout provenance for {aid}: "
+            f"{result.code} — {result.guidance}"
+        )
+    if stopped_snapshot_has_attributable_state(result):
+        worker.pop("snapshot_attribution_blocked", None)
+    elif result is not None:
+        worker["snapshot_attribution_blocked"] = {
+            "code": result.code,
+            "guidance": result.guidance,
+        }
+    return result
+
+
+def _snapshot_pending(result) -> bool:
+    """A failed shared-checkout capture must remain retryable before finalization."""
+    return stopped_snapshot_requires_retry(result)
+
+
+def _snapshot_diff(result, worker, services):
+    """Return a diff only when the stopped run owned an attributable file view."""
+    return capture_stopped_checkout_diff(
+        result,
+        worker.get("worktree") or worker.get("base_cwd"),
+        services,
+    )
+
 
 def _save_task_result(api_base, aid, worker, diff, failed_drains, services):
     task_id = (worker.get("respawn_ctx") or {}).get("task_id")
@@ -50,9 +91,12 @@ def handle_exited(
     """Finalize a child process which has already exited."""
     proc = worker["proc"]
     lane = worker.get("lane", "work")
-    diff = services._capture_diff(
-        worker.get("worktree") or worker.get("base_cwd")
-    )
+    snapshot = _snapshot_stopped_worker(api_base, worker, aid, quiet, services)
+    if _snapshot_pending(snapshot):
+        worker["snapshot_retry_pending"] = snapshot.code
+        return
+    worker.pop("snapshot_retry_pending", None)
+    diff = _snapshot_diff(snapshot, worker, services)
     runtime = services._normalize_runtime(
         (worker.get("respawn_ctx") or {}).get("model_runtime")
     )
@@ -137,9 +181,12 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     proc = worker["proc"]
     lane = worker.get("lane", "work")
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(
-        worker.get("worktree") or worker.get("base_cwd")
-    )
+    snapshot = _snapshot_stopped_worker(api_base, worker, aid, quiet, services)
+    if _snapshot_pending(snapshot):
+        worker["snapshot_retry_pending"] = snapshot.code
+        return True
+    worker.pop("snapshot_retry_pending", None)
+    diff = _snapshot_diff(snapshot, worker, services)
     diag = {
         "run_id": str(worker.get("run_id")),
         "agent_id": aid,

@@ -8,6 +8,7 @@ from typing import Optional
 # Remote-runner spec §3.2–3.4: sandbox wake execution. Imported as a module so
 # tests can monkeypatch `_sandbox.preflight` etc. (attribute lookup at call time).
 from . import sandbox as _sandbox
+from .notifier_checkout_activity import pass_fds as _activity_pass_fds
 
 
 _CODEX_HOOK_TRUST_BYPASS: dict = {}
@@ -52,6 +53,7 @@ def spawn_headless(
     conversation: bool = False,
     spawn_info: Optional[dict] = None,
     sandbox_sidecar: bool = False,
+    checkout_activity=None,
     services,
 ) -> tuple[bool, str, object]:
     """Launch a one-shot worker while resolving patchable services through the facade.
@@ -190,6 +192,12 @@ def spawn_headless(
         sbx_name = _sandbox.new_container_name()
         if spawn_info is not None:
             spawn_info["sandbox_container_id"] = sbx_name
+        if checkout_activity is not None:
+            binder = getattr(services, "_bind_checkout_activity", None)
+            if not callable(binder) or not binder(
+                checkout_activity, sandbox_container_id=sbx_name
+            ):
+                return False, "(sandbox checkout activity binding failed)", None
         # Path-identical mounting: mount the workspace ROOT (a worktree cwd's
         # main checkout — its `.git` pointer file and the root's
         # .orcha/github-token must resolve in-container) and run in `cwd`.
@@ -289,6 +297,7 @@ def spawn_headless(
             ),
             stdin=services.subprocess.DEVNULL,
             start_new_session=True,
+            pass_fds=_activity_pass_fds(checkout_activity),
         )
         return True, repr_, proc
     except (OSError, services.subprocess.SubprocessError):

@@ -40,6 +40,22 @@ import main  # noqa: E402
 # decide_wake_tier — grades a candidate into the cheapest sufficient substrate
 # ===========================================================================================
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 def _cand(hint, **extra):
     c = {"agent_id": str(uuid.uuid4()), "alias": "X", "triage_hint": hint}
     c.update(extra)
@@ -313,7 +329,7 @@ def _ephemeral_t2_cand():
 def _wire_tick(monkeypatch, scan, *, ack_decision):
     """Common tick() wiring: ephemeral transport, a triage that WAKES (so the event would full-boot
     today), a cheap model returning `ack_decision`, and recorded spawns + posts."""
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: scan)
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: scan))
     monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
     monkeypatch.setattr(notifier, "build_wake_prompt", lambda c: "PROMPT")
     monkeypatch.setattr(notifier, "derive_wake_event", lambda c: "task_verified")

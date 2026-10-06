@@ -178,6 +178,10 @@ def _drive_service_residents(monkeypatch, state, conv, turns):
     monkeypatch.setattr(notifier, "_PERSONA_CACHE_TTL_SECS", 90.0)
 
     def _get(url, **k):
+        if "/running-runs" in url:  # live-checkout guard: no live users
+            return {"runs": []}
+        if "provenance_only=true" in url:  # checkout routing: no prior run
+            return {"runs": [], "query_complete": True}
         if "active-conversations" in url:
             return {"conversations": [conv]}
         if url.endswith("/persona"):

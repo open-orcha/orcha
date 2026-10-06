@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -150,7 +150,10 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
 
 
 @app.get("/api/containers/{cid}/running-runs")
-def list_container_running_runs(cid: str):
+def list_container_running_runs(
+    cid: str,
+    include_retired: bool = Query(default=False),
+):
     """#342: every worker_run still status='running' across this container's (live) agents, with its
     host `pid` — so the notifier (the only side that can os.kill(pid,0); the API runs in Docker and
     can't see host PIDs) can detect a run whose row says 'running' but whose process is DEAD and
@@ -175,13 +178,14 @@ def list_container_running_runs(cid: str):
         # max-runtime deadline and reap its per-run api-config file. `log_path` lets the
         # sweep's finish CAPTURE the adopted run's stream-json output (the run wrote it to
         # the workspace all along) — without it a re-adopted run finishes output=NULL.
+        retired_filter = "" if include_retired else " AND a.terminated_at IS NULL"
         cur.execute(
-            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
+            f"""SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
                       wr.started_at, wr.sandbox_container_id, wr.worktree, wr.base_cwd,
-                      wr.log_path
+                      wr.log_path, wr.task_id, wr.conversation_id, wr.branch
                  FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
                 WHERE a.container_id = %s AND wr.status = 'running'
-                  AND a.terminated_at IS NULL
+                  {retired_filter}
                 ORDER BY wr.started_at DESC""",
             (cid,),
         )
@@ -199,7 +203,14 @@ def list_container_running_runs(cid: str):
                 "sandbox_container_id": row["sandbox_container_id"],
                 "worktree": row["worktree"],
                 "base_cwd": row["base_cwd"],
+                "branch": row["branch"],
                 "log_path": row["log_path"],
+                "task_id": str(row["task_id"]) if row["task_id"] else None,
+                "conversation_id": (
+                    str(row["conversation_id"])
+                    if row["conversation_id"]
+                    else None
+                ),
                 "started_at": (
                     row["started_at"].isoformat() if row["started_at"] else None
                 ),

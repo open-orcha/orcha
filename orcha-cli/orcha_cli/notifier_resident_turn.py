@@ -5,6 +5,12 @@ from __future__ import annotations
 import json
 import time
 
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
+
 
 def capture_result(
     services, api_base, conv_id, resident, candidate, quiet,
@@ -17,6 +23,23 @@ def capture_result(
     )
     if result is None:
         return
+    # A warm resident remains capable of writing after one prompt completes.
+    # Its process-wide activity barrier therefore stays held until the process
+    # is actually stopped; per-turn completion only captures a display diff.
+    snapshot = (
+        None
+        if resident.get("checkout_activity") is not None
+        else record_stopped_checkout_snapshot(
+            resident,
+            resident["agent_id"],
+            services,
+            api_base=api_base,
+        )
+    )
+    if stopped_snapshot_requires_retry(snapshot):
+        resident["snapshot_retry_pending"] = snapshot.code
+        return
+    resident.pop("snapshot_retry_pending", None)
     text = (result.get("text") or "").strip()
     if not text and not resident.get("cold"):
         # Sandbox-continuity fix: a WARM (--resume) turn that "completed" with
@@ -43,8 +66,10 @@ def capture_result(
             "killed",
             0,
             resident.get("log_path"),
-            services._capture_diff(
-                resident.get("worktree") or resident.get("base_cwd")
+            capture_stopped_checkout_diff(
+                snapshot,
+                resident.get("worktree") or resident.get("base_cwd"),
+                services,
             ),
         )
         resident["current_run_id"] = None
@@ -85,8 +110,10 @@ def capture_result(
         "exited",
         0,
         resident.get("log_path"),
-        services._capture_diff(
-            resident.get("worktree") or resident.get("base_cwd")
+        capture_stopped_checkout_diff(
+            snapshot,
+            resident.get("worktree") or resident.get("base_cwd"),
+            services,
         ),
     )
     model_switched = (
@@ -147,6 +174,16 @@ def stop_turn(
     process = resident["proc"]
     services._pump_one(api_base, resident["agent_id"], resident)
     services._kill_worker(process, graceful=True)
+    snapshot = record_stopped_checkout_snapshot(
+        resident,
+        resident["agent_id"],
+        services,
+        api_base=api_base,
+    )
+    if stopped_snapshot_requires_retry(snapshot):
+        resident["snapshot_retry_pending"] = snapshot.code
+        return
+    resident.pop("snapshot_retry_pending", None)
     stopped_by = renew.get("stop_requested_by") or "a human"
     services._post_conversation_reply(
         api_base,
@@ -161,8 +198,10 @@ def stop_turn(
         "killed",
         process.returncode,
         resident.get("log_path"),
-        services._capture_diff(
-            resident.get("worktree") or resident.get("base_cwd")
+        capture_stopped_checkout_diff(
+            snapshot,
+            resident.get("worktree") or resident.get("base_cwd"),
+            services,
         ),
         kill_reason=json.dumps(
             {

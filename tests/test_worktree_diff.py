@@ -10,6 +10,22 @@ import time
 from orcha_cli import notifier  # noqa: E402 (conftest puts orcha-cli on sys.path)
 
 
+def _with_routing_reads(fake):
+    """Answer the checkout-routing reads (live runs, run provenance) like the real server.
+
+    URL-agnostic ``_get_json`` fakes predate those reads; without this they would hand the
+    live-checkout guard a non-runs payload and (correctly) fail closed before any spawn."""
+
+    def _get(url, **k):
+        if "/running-runs" in url:
+            return {"runs": []}
+        if "provenance_only=true" in url:
+            return {"runs": [], "query_complete": True}
+        return fake(url, **k)
+
+    return _get
+
+
 def _git(args, cwd):
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
 
@@ -208,7 +224,7 @@ def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch):
 
     def run_with(scan):
         calls.clear()
-        monkeypatch.setattr(notifier, "_get_json", lambda url, **k: scan)
+        monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: scan))
         notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})
 
     run_with(cand(["task-1"]))                 # ready auto-start target
@@ -237,11 +253,11 @@ def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch):
     assert calls == ["B"], "task_message is actionable now → must get a worktree (ISS-8)"
     # ...and a task_message hidden behind a newer event still isolates via wake_task_id.
     calls.clear()
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [{
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"active": True, "candidates": [{
         "agent_id": "00000000-0000-0000-0000-000000000009", "alias": "B", "should_wake": True,
         "headless_cwd": "/proj", "tmux_target": None, "pending_events": 1,
         "auto_start_task_ids": [], "wake_task_id": "TASK-7", "reason": "wake",
-        "latest_event": "request_answered", "max_event_ts": 1.0, "headless_flags": None}]})
+        "latest_event": "request_answered", "max_event_ts": 1.0, "headless_flags": None}]}))
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})
     assert calls == ["B"], "wake_task_id present → task work → must isolate"
 
@@ -259,7 +275,7 @@ def _wire_spawn(monkeypatch, posts, run_resp):
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
     monkeypatch.setattr(notifier, "_provision_worktree", lambda b, a: (None, None))
     monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (True, "cmd", _FakeP()))
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: _event_scan())
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: _event_scan()))
     monkeypatch.setattr(notifier, "_post_json",
                         lambda url, body, **k: posts.append(url) or
                         ({"claimed": True} if "wake-claim" in url
@@ -268,12 +284,17 @@ def _wire_spawn(monkeypatch, posts, run_resp):
 
 def test_event_wake_records_run_and_logs_failure(monkeypatch, capsys):
     """ISS-8.2: a DAEMON-LOOP event-wake (no auto_start) records a worker_run; a failed
-    POST /runs is logged, not swallowed."""
+    POST /runs is logged, not swallowed — and the unrecorded worker is stopped rather than left
+    writing invisibly to every live-checkout guard."""
     posts = []
     _wire_spawn(monkeypatch, posts, run_resp=None)   # /runs fails → returns None
-    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=False, live_workers={})
+    killed = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc))
+    live = {}
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=False, live_workers=live)
     assert any(u.endswith("/runs") for u in posts)               # recorded on event-wake
-    assert "worker_run NOT recorded" in capsys.readouterr().err  # failure logged
+    assert "durable run record could not be created" in capsys.readouterr().err  # failure logged
+    assert len(killed) == 1 and live == {}                       # unseen worker stopped, not tracked
 
 
 def test_once_path_does_not_create_dangling_run(monkeypatch):
@@ -324,7 +345,7 @@ def _codex_success_log(tmp_path, name="codex.log"):
 def _wire_reap(monkeypatch, posts, *, digest=None):
     monkeypatch.setattr(notifier, "_post_json",
                         lambda url, body, **k: posts.append((url, body)) or {})
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"digest": digest})
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"digest": digest}))
 
 
 def test_codex_task_worker_preserved_on_clean_exit(tmp_path, monkeypatch):
@@ -502,10 +523,10 @@ def test_noncode_wake_uses_no_task_worktree(monkeypatch):
             "auto_start_task_ids": auto or [], "reason": "w", "latest_event": latest,
             "max_event_ts": 1.0, "headless_flags": None}]}
 
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: scan("request_answered", 1))
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: scan("request_answered", 1)))
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})
     assert tcalls == [] and ecalls == []                            # no worktree at all for a no-code wake
 
-    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: scan("task_assigned", 1, auto=["task-9"]))
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: scan("task_assigned", 1, auto=["task-9"])))
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})
     assert tcalls == ["task-9"] and ecalls == []                    # task wake → durable, not ephemeral
