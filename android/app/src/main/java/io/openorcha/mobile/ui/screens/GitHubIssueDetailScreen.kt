@@ -20,7 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -39,16 +39,23 @@ import io.openorcha.mobile.domain.GitHubHubKind
 import io.openorcha.mobile.domain.GitHubIssueDetailPhase
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
-import io.openorcha.mobile.ui.components.Avatar
-import io.openorcha.mobile.ui.components.AvatarSize
 import io.openorcha.mobile.ui.components.GitHubLabelChip
-import io.openorcha.mobile.ui.components.MetaTag
-import io.openorcha.mobile.ui.components.OrchaCard
+import io.openorcha.mobile.ui.components.LCard
 import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.Skeleton
-import io.openorcha.mobile.ui.components.StatusDomain
-import io.openorcha.mobile.ui.components.StatusPill
 import io.openorcha.mobile.ui.components.MarkdownText
+import io.openorcha.mobile.ui.components.LAvatar
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LCard
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LSection
+import io.openorcha.mobile.ui.components.LSize
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LTag
+import io.openorcha.mobile.ui.components.GitHubStateTag
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -65,18 +72,26 @@ fun GitHubIssueDetailScreen(
     var showStartSheet by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = p.bg,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = { Text("Issue #$number") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
-                actions = {
-                    if (state.githubIssueDetailPhase is GitHubIssueDetailPhase.Loaded) {
-                        TextButton(onClick = { showStartSheet = true }, enabled = !state.actionInFlight) { Text("Start") }
-                    }
-                },
-            )
+            Column {
+                CenterAlignedTopAppBar(
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = p.bg),
+                    title = { Text("Issue #$number", style = ltype(LType.Headline), color = p.text) },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back", tint = p.text2) } },
+                    actions = {
+                        if (state.githubIssueDetailPhase is GitHubIssueDetailPhase.Loaded) {
+                            LButton(
+                                "Start", { showStartSheet = true },
+                                modifier = Modifier.padding(end = LSpace.s),
+                                icon = OrchaIcons.PlayArrow, kind = LButtonKind.Primary, size = LSize.Small,
+                                enabled = !state.actionInFlight,
+                            )
+                        }
+                    },
+                )
+                LDivider()
+            }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -120,22 +135,21 @@ private fun IssueDetailBody(issue: GitHubIssueDetail) {
     val p = Orcha.palette
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(LSpace.l),
+        verticalArrangement = Arrangement.spacedBy(LSpace.xl),
     ) {
         item { IssueHeader(issue) }
         if (issue.bodyMarkdown.isNotBlank()) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionH("Description")
-                    OrchaCard { MarkdownText(issue.bodyMarkdown) }
+                LSection("Description") {
+                    LCard { MarkdownText(issue.bodyMarkdown) }
                 }
             }
         }
         item { SectionH("Comments", "${issue.commentsCount}") }
         if (issue.comments.isEmpty()) {
             item {
-                OrchaCard {
+                LCard {
                     Text(
                         if (issue.commentsCount > 0) "The comment thread couldn't be loaded." else "No comments yet.",
                         color = p.muted,
@@ -147,7 +161,7 @@ private fun IssueDetailBody(issue: GitHubIssueDetail) {
                 item {
                     Text(
                         "Showing the most recent ${issue.comments.size} of ${issue.commentsCount} comments.",
-                        style = MaterialTheme.typography.labelMedium, color = p.faint,
+                        style = ltype(LType.Micro), color = p.faint,
                     )
                 }
             }
@@ -161,21 +175,21 @@ private fun IssueDetailBody(issue: GitHubIssueDetail) {
 private fun IssueHeader(issue: GitHubIssueDetail) {
     val p = Orcha.palette
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(issue.title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.W700), color = p.text)
-        StatusPill(issue.state, StatusDomain.Task)
+        Text(issue.title, style = ltype(LType.Title), color = p.text)
+        GitHubStateTag(issue.state)
         if (issue.labels.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { issue.labels.forEach { GitHubLabelChip(it) } }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             issue.authorLogin?.let { author ->
-                Avatar(author, human = true, size = AvatarSize.Sm)
-                Text(author, style = MaterialTheme.typography.bodyMedium, color = p.text2)
+                LAvatar(author, size = 20.dp)
+                Text(author, style = ltype(LType.Meta), color = p.text2)
             }
-            if (issue.assignees.isNotEmpty()) MetaTag("assigned: ${issue.assignees.joinToString(", ")}")
+            if (issue.assignees.isNotEmpty()) LTag("assigned: ${issue.assignees.joinToString(", ")}")
             Spacer(Modifier.weight(1f))
             Text(
                 MobileUx.agoLabel(issue.updatedAt)?.let { "updated $it" } ?: "",
-                style = MaterialTheme.typography.labelMedium, color = p.faint,
+                style = ltype(LType.Micro), color = p.faint,
             )
         }
     }
@@ -184,12 +198,12 @@ private fun IssueHeader(issue: GitHubIssueDetail) {
 @Composable
 private fun CommentCard(comment: GitHubComment) {
     val p = Orcha.palette
-    OrchaCard {
+    LCard {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Avatar(comment.authorLogin ?: "?", human = true, size = AvatarSize.Sm)
-            Text(comment.authorLogin ?: "someone", style = MaterialTheme.typography.titleSmall, color = p.text)
+            LAvatar(comment.authorLogin ?: "?", size = 20.dp)
+            Text(comment.authorLogin ?: "someone", style = ltype(LType.BodyEmph), color = p.text)
             Spacer(Modifier.weight(1f))
-            Text(MobileUx.agoLabel(comment.createdAt) ?: "", style = MaterialTheme.typography.labelSmall, color = p.faint)
+            Text(MobileUx.agoLabel(comment.createdAt) ?: "", style = ltype(LType.Micro), color = p.faint)
         }
         MarkdownText(comment.bodyMarkdown)
     }

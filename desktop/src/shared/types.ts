@@ -1,3 +1,21 @@
+import type { TermApi } from './terminal'
+import type { AgentsApi } from './agents'
+import type { UsageApi } from './usage'
+import type { ThemeApi } from './theme'
+import type { ProfileApi } from './profile'
+import type { ProviderKeysApi } from './providerKeys'
+import type { MicApi } from './mic'
+import type { EmbedEvent, EmbedMode, HostToPortal, PortalToHost } from './embed'
+import type { ProjectIcon } from './projectIcon'
+
+/** What main broadcasts on `orcha:portalActive`. `embed`/`route` are V2 additions; an
+ *  older main omits them (treated as legacy by the renderer only if explicitly 'legacy'). */
+export interface PortalActive {
+  project: string | null
+  embed?: EmbedMode | null
+  route?: Extract<PortalToHost, { type: 'route' }> | null
+}
+
 /** Fixed height (CSS px) of the renderer's top bar, shown above the embedded portal view
  *  once a project is open ("← Projects" + name + status dot). Shared between main (embedded
  *  portal view bounds — see main/viewBounds.ts) and the renderer (the TopBar component's own
@@ -25,6 +43,149 @@ export interface Stack {
   folder: string | null
 }
 
+// ---- Remove project / Storage -------------------------------------------------------------
+
+/** "Remove project…" levels. Default (both false) = Remove from Embodent: containers, sandboxes,
+ *  network, portal image and host daemons go; the data volume and every file stay. */
+export interface RemoveOptions {
+  /** Also delete the stack's volumes (tasks, agents, history) — irreversible, typed confirm. */
+  deleteData: boolean
+  /** Also remove Embodent's own files from the project folder (never the user's code). */
+  removeFiles: boolean
+  /** With removeFiles: first save agent worktrees' output (attached to its task while the
+   *  portal still runs, else copied to .orcha/saved-output/<branch>/, which is kept). Default
+   *  true; when false, worktrees with output are kept instead. */
+  saveOutput?: boolean
+}
+
+export type RemovePhase = 'stopping' | 'removing' | 'deleting-data' | 'removing-files' | 'cleaning'
+
+export interface SizedName {
+  name: string
+  /** Bytes, null when docker didn't report it. */
+  size: number | null
+}
+
+/** Exactly what a removal would touch (exact names, by compose label). */
+export interface RemovePlan {
+  project: string
+  projectShort: string
+  folder: string | null
+  /** The folder demonstrably belongs to this project (else it's never touched). */
+  folderMatches: boolean
+  containers: string[]
+  sandboxes: string[]
+  networks: string[]
+  images: SizedName[]
+  volumes: SizedName[]
+  daemonPidFiles: string[]
+  /** Embodent's files present in the folder (relative), removed only with removeFiles. */
+  folderFiles: string[]
+  worktrees: Array<{
+    path: string
+    branch: string | null
+    /** The CLI's classification (absent when the CLI is too old to say). Embodent's own
+     *  scaffolding never counts as a change. */
+    state?: AgentWorktreeState
+    /** has-output: the files that would be saved first. */
+    files?: string[]
+    size?: number | null
+  }>
+}
+
+export interface RemoveResult {
+  project: string
+  projectShort: string
+  dataDeleted: boolean
+  filesRemoved: boolean
+  /** Plain-words lines of what was removed / kept, and anything left with a reason. */
+  removed: string[]
+  kept: string[]
+  warnings: string[]
+}
+
+// ---- Agent worktrees (orcha worktrees --json; orcha_cli/worktree_gc.py) -------------------
+
+export type AgentWorktreeState = 'clean' | 'has-output' | 'unmerged' | 'in-use' | 'not-quorate'
+
+export interface AgentWorktree {
+  path: string
+  name: string
+  branch: string | null
+  kind: string | null
+  agent: string | null
+  state: AgentWorktreeState
+  reason?: string
+  task_id?: string | null
+  task_title?: string | null
+  unmerged_commits?: number | null
+  output?: string[]
+  modified?: string[]
+  output_count?: number
+  modified_count?: number
+  size_bytes?: number | null
+  last_activity_at?: string | null
+}
+
+export interface ProjectWorktrees {
+  project: string
+  projectShort: string
+  folder: string
+  items: AgentWorktree[]
+  reclaimable_bytes: number
+  /** Plain words when this project's worktrees couldn't be read (e.g. an old CLI). */
+  error?: string
+}
+
+export interface WorktreeCleanRequest {
+  folder: string
+  /** Preview only — nothing changes. */
+  dryRun: boolean
+  /** Leave worktrees with output alone. */
+  onlyClean: boolean
+  /** Unmerged worktrees to remove anyway (their branches are kept). */
+  unmerged: string[]
+}
+
+export interface WorktreeCleanEntry {
+  path: string
+  name: string
+  branch: string | null
+  state: AgentWorktreeState
+  size_bytes?: number | null
+  reason?: string
+  /** dry run: files that would be saved first */
+  saves?: string[]
+  keep_branch?: boolean
+}
+
+export interface AgentWorktreeCleanResult {
+  folder: string
+  dryRun: boolean
+  removed: WorktreeCleanEntry[]
+  kept: WorktreeCleanEntry[]
+  skipped: WorktreeCleanEntry[]
+  freed_bytes: number
+}
+
+export type StorageItemKind = 'image' | 'volume' | 'network' | 'container'
+
+export interface StorageItem {
+  kind: StorageItemKind
+  name: string
+  /** The compose project it belonged to (orcha-*), null when unknown (a sandbox). */
+  project: string | null
+  size: number | null
+  /** Plain words: why it's listed / what removing it means. */
+  note: string
+}
+
+export interface StorageReport {
+  items: StorageItem[]
+  /** Compose projects that still have a stack (their resources are never listed). */
+  inUse: string[]
+}
+
 // ---- Home screen: per-container project cards (GET /api/containers) --------------------
 // Mirrors the cloud hub's ProjectsPage contract (resources/orcha-templates/portal/frontend/
 // src/cloud/projects/ProjectsPage.tsx + its portal_backend route) — the desktop home renders
@@ -41,13 +202,35 @@ export interface ProjectContainer {
   tasks: number
   needs_you: number
   member_count: number | null
+  /** D14 (additive): the project's shared icon (portal `containers.icon`, mig 050), validated
+   *  on read. `undefined` = the portal predates the store; `null` = unset (default glyph). */
+  icon?: ProjectIcon | null
 }
 
 export type BridgeError =
-  | { code: 'DOCKER_UNAVAILABLE' }
+  /** `unresponsive`: the docker CLI timed out (Docker Desktop wedged) rather than refusing
+   *  the connection — "isn't responding, quit and reopen", not "isn't running". */
+  | { code: 'DOCKER_UNAVAILABLE'; unresponsive?: boolean }
   | { code: 'COMPOSE_FAILED'; stderr: string }
   | { code: 'UNKNOWN_STACK' }
+  /** Terminal: the requested branch is not a checkout of the project's repo (any more). */
+  | { code: 'UNKNOWN_BRANCH' }
   | { code: 'INTERNAL' }
+  /** Terminal tabs: the request was refused (FORBIDDEN sender / INVALID payload) or the pty
+   *  could not start (SPAWN_FAILED, with node-pty's message for the tab to show). */
+  | { code: 'TERMINAL_FAILED'; reason: 'FORBIDDEN' | 'INVALID' | 'SPAWN_FAILED'; message?: string }
+  | { code: 'AGENTS_FAILED'; reason: 'FORBIDDEN' | 'INVALID' }
+  | { code: 'USAGE_FAILED'; reason: 'FORBIDDEN' | 'INVALID' }
+  /** Settings › Appearance: a mode other than system/light/dark, or a foreign sender. */
+  | { code: 'INVALID_THEME' }
+  /** Settings › Profile: a non-string / over-long name, or a foreign sender. */
+  | { code: 'INVALID_PROFILE' }
+  /** Settings › API keys: a malformed save (bad provider / key / switch), or a foreign sender. */
+  | { code: 'INVALID_PROVIDER_KEYS' }
+  /** Microphone (dictation): a sender that isn't our window or an embedded portal view. */
+  | { code: 'INVALID_MIC' }
+  /** Settings › Storage: the item isn't a leftover the current scan offers (or no confirm). */
+  | { code: 'INVALID_STORAGE_ITEM' }
   // ---- onboarding / provisioning ----
   | { code: 'DOCKER_NOT_INSTALLED' }
   | { code: 'DOCKER_START_TIMEOUT' }
@@ -128,6 +311,9 @@ export interface PreflightReport {
   autoStarted: boolean
   /** Human-readable next-step hint when docker !== 'ok'. */
   hint: string | null
+  /** True when the Docker CLI hung (probe timed out) rather than refused — Docker Desktop is
+   *  wedged, so the UI should offer "restart Docker" instead of waiting longer. */
+  unresponsive?: boolean
 }
 
 // ---- Prerequisites / auto-install ----
@@ -135,7 +321,7 @@ export interface PreflightReport {
 /** The host-side tools Orcha needs that the Docker stack can't provide. Agents run as a
  *  host `claude -p` process launched by the orcha CLI, so a fresh Mac needs all of these
  *  before assigned tasks actually run. */
-export type Prereq = 'homebrew' | 'dockerEngine' | 'orcha' | 'claude' | 'apiKey'
+export type Prereq = 'homebrew' | 'dockerEngine' | 'orcha' | 'claude'
 
 /** What's already present on this Mac. Each false → one install step. */
 export interface PrereqProbe {
@@ -150,8 +336,6 @@ export interface PrereqProbe {
   /** `codex` (OpenAI Codex CLI) resolves on PATH. Either claude or codex satisfies the
    *  "AI coding agent" requirement. */
   codex: boolean
-  /** An Anthropic API key is available to the agent worker. */
-  apiKey: boolean
 }
 
 /** A single shell command in an install step. `admin` actions run as root via the native
@@ -161,8 +345,7 @@ export interface InstallAction {
   script: string
 }
 
-/** One installable prerequisite, in plain language, plus the commands that install it.
- *  `apiKey` carries no actions — it's handled by prompting for + storing the key. */
+/** One installable prerequisite, in plain language, plus the commands that install it. */
 export interface InstallStep {
   id: Prereq
   /** Short plain-English name shown to a non-engineer. */
@@ -249,6 +432,21 @@ export interface OrchaDesktopApi {
   /** Destructively delete a stack: down -v + remove its portal image + on-disk Orcha files.
    *  Irreversible; the renderer gates it behind a type-to-confirm prompt. */
   resetStack(project: string): Promise<void>
+  /** What "Remove project…" would remove / keep (with sizes) — the dialog's summary. */
+  removePlan?(project: string): Promise<RemovePlan>
+  /** Remove a project from Embodent (see RemoveOptions). Progress arrives on onRemoveProgress. */
+  removeProject?(project: string, opts: RemoveOptions): Promise<RemoveResult>
+  onRemoveProgress?(cb: (e: { project: string; phase: RemovePhase }) => void): () => void
+  /** Settings › Storage: Embodent leftovers whose project no longer has a stack. */
+  storageScan?(): Promise<StorageReport>
+  /** Remove one leftover (re-validated against a fresh scan; a volume needs `confirm` = its name). */
+  storageRemove?(item: { kind: StorageItemKind; name: string; confirm?: string }): Promise<void>
+  /** Settings › Storage › Agent worktrees: every known project's worktrees, classified. */
+  storageWorktrees?(): Promise<ProjectWorktrees[]>
+  /** Preview (dryRun) or run a clean-up of one project's worktrees. */
+  storageCleanWorktrees?(req: WorktreeCleanRequest): Promise<AgentWorktreeCleanResult>
+  /** Show one agent worktree in Finder (must be inside a known project's .orcha-worktrees). */
+  revealWorktree?(folder: string, path: string): Promise<void>
   listAttention(): Promise<AttentionItem[]>
   openManager(): Promise<void>
   quitApp(): Promise<void>
@@ -293,8 +491,43 @@ export interface OrchaDesktopApi {
   onNavigate(cb: (nav: { target: 'onboarding' | 'manager'; variant?: WizardVariant }) => void): () => void
   /** Subscribe to which stack's embedded portal view is active (main is the source of
    *  truth — a notification click or deep link can change it without any renderer click).
-   *  `project` is null when no view is showing (home/manager or the wizard is on screen). */
-  onPortalActive(cb: (active: { project: string | null }) => void): () => void
+   *  `project` is null when no view is showing (home/manager or the wizard is on screen).
+   *  V2 (additive): `embed` is that view's embed mode and `route` its last reported route. */
+  onPortalActive(cb: (active: PortalActive) => void): () => void
+  /** Pull the current active-view state (a reloaded manager renderer asks on mount). */
+  getPortalActive?(): Promise<PortalActive | null>
+  // ---- V2 host (desktop embedded mode, docs/orcha-v2-architecture.md §7) ----
+  /** Attention items plus per-stack availability (unavailable ≠ zero). */
+  listAttentionStatus(): Promise<AttentionSnapshot>
+  /** Report the host sidebar geometry; main re-lays out the active portal view.
+   *  `stripHeight`: the session tab strip at the top of the panel (the view starts under it);
+   *  `terminalShown`: a terminal session fills the panel — main hides the portal view. */
+  setHostLayout(layout: { sidebarWidth: number; collapsed: boolean; stripHeight?: number; terminalShown?: boolean }): Promise<void>
+  /** A host DOM dialog opened/closed — main hides/restores the native view under it. On
+   *  close, `focus: 'host'` keeps keyboard focus in the host (default: back to the view). */
+  setHostModal(open: boolean, opts?: { focus?: 'host' | 'view' }): Promise<void>
+  /** JPEG still of the active portal view (painted under a host overlay while the view is
+   *  hidden), or null when no view is showing. */
+  portalSnapshot?(): Promise<Uint8Array | null>
+  /** Terminal tabs (host renderer only; absent on an older preload). */
+  term?: TermApi
+  /** Settings › Agents (host renderer only; absent on an older preload). */
+  agents?: AgentsApi
+  /** Usage & spend (Stats & Usage, the status indicator, the tray popover). */
+  usage?: UsageApi
+  /** Settings › Appearance (System / Light / Dark; absent on an older preload). */
+  theme?: ThemeApi
+  /** Settings › Profile (absent on an older preload: the section is hidden). */
+  profile?: ProfileApi
+  /** Settings › API keys (absent on an older preload: the section is hidden). */
+  providerKeys?: ProviderKeysApi
+  /** Microphone access for dictation (Settings › Voice). */
+  mic?: MicApi
+  /** Forward a host → portal message (navigate / openSearch) to the ACTIVE portal view.
+   *  Resolves false when there is nothing to deliver to. */
+  embedSend(msg: HostToPortal): Promise<boolean>
+  /** Validated portal → host messages, tagged with the sending stack (main-derived). */
+  onEmbedEvent(cb: (event: EmbedEvent) => void): () => void
   // fleet (post-provision):
   /** GET a JSON path on a stack's own localhost portal (port + path validated in main —
    *  the renderer can't reach localhost directly under sandbox:true). Rejects with
@@ -352,14 +585,101 @@ export type AnalyzeProjectResult =
   | { ok: true; summary: string; agents: AnalyzeAgentSuggestion[] }
   | { ok: false; reason: string }
 
-/** One thing waiting on the human, surfaced in tray/popover/notifications/cards. */
+/** One thing waiting on the human, surfaced in tray/popover/notifications/cards.
+ *
+ *  Kinds follow the canonical V2 attention definition (docs/orcha-v2-architecture.md §3.1):
+ *  - task_plan      — plan awaiting approval (in_progress, plan posted, no decision) — only
+ *                     when the project's autonomy level is `plan`;
+ *  - task_verify    — task at needs_verification — unless autonomy is `full`;
+ *  - request_answer — request open to a human (or untargeted) OR status `escalated`;
+ *  - request_close  — FOLLOW-UP (informational): an answered request a human raised. Listed
+ *                     in the tray, but NOT counted in any "needs you" badge;
+ *  - health         — stack up/down notification only (never in the polled list). */
 export interface AttentionItem {
   project: string
   projectShort: string
-  kind: 'request_answer' | 'request_close' | 'task_verify' | 'health'
+  kind: 'task_plan' | 'request_answer' | 'request_close' | 'task_verify' | 'health'
   /** Stable id for dedup (request/task uuid, or health:<project>:<up|down>). */
   id: string
   title: string
-  /** Portal path for this item (e.g. /requests?req=<id>); '/' for health items. */
+  /** Portal path for this item (e.g. /requests?req=<id>&cid=<cid>); '/' for health items.
+   *  Carries `cid` whenever the container is known so a multi-project stack opens the
+   *  right project (GAP-07). */
   path: string
+  /** Container (project) id inside the stack, when known. Additive (V2). */
+  cid?: string
+}
+
+/** True for items that count toward a "needs you" badge (decisions), false for follow-ups
+ *  and health notices. The single rule shared by tray title, tray panel, status file and the
+ *  host sidebar (arch §3.3, desktop). */
+export function isDecisionItem(item: Pick<AttentionItem, 'kind'>): boolean {
+  return item.kind === 'task_plan' || item.kind === 'task_verify' || item.kind === 'request_answer'
+}
+
+/** Per-project availability of the host's attention poll, so the UI can tell
+ *  "unavailable/unknown" apart from "zero" (brief §3). */
+export interface AttentionProjectStatus {
+  project: string
+  /** Containers successfully fetched this tick, with their decision counts and (additive,
+   *  D11) the agents live in them right now. */
+  containers: Array<{
+    cid: string
+    name: string
+    count: number
+    partial: boolean
+    /** Live agents (working / needs review / blocked — never idle), capped; absent from
+     *  older hosts' snapshots. */
+    live?: HostLiveAgent[]
+    /** How many live agents the container has in total (≥ live.length). */
+    liveTotal?: number
+    /** D14 (additive): the project's real git checkouts (primary first), read on the host
+     *  from the stack folder; absent/null = no branch data (agents nest under the project). */
+    checkouts?: HostCheckout[] | null
+  }>
+  /** Container ids listed by the stack whose snapshot fetch failed this tick. */
+  unavailable: string[]
+  /** ISO time of the last successful fetch of this stack, or null if never. */
+  fetchedAt: string | null
+  /** False when the last attempt for this (running) stack failed entirely. */
+  ok: boolean
+}
+
+export interface AttentionSnapshot {
+  items: AttentionItem[]
+  projects: AttentionProjectStatus[]
+}
+
+/** Why an agent is shown under its project in the host sidebar (D11). Idle agents never are.
+ *  `waiting` = the agent has an open outgoing request (portal status `awaiting_request`); it is
+ *  NEUTRAL, the portal's "Waiting" everywhere (VD-09) — never red, never "needs review".
+ *  `blocked` is no longer produced by main (kept so older renderer code still type-checks). */
+export type HostLiveAgentState = 'working' | 'needs_review' | 'waiting' | 'blocked'
+
+/** One live agent of a project, as the host attention poller derives it from the project's
+ *  snapshot (`GET /api/containers/{cid}`) — real data only, nothing inferred beyond it. */
+export interface HostLiveAgent {
+  alias: string
+  state: HostLiveAgentState
+  /** The task the agent is on (working/blocked), or the task awaiting review. Clipped. */
+  task: string | null
+  /** ISO time of the agent's last heartbeat / run start, when reported. */
+  lastActive: string | null
+  /** D14 (additive): the checkout branch this agent verifiably works on (matches a
+   *  HostCheckout.branch of its container), null/absent when not known. */
+  branch?: string | null
+  /** D13 (additive): the agent's palette slot from the portal's canonical assignment (the
+   *  project's full snapshot roster, snapshot order); absent/null = hash it locally. */
+  palette?: number | null
+}
+
+/** D14: one real git checkout of a project (host `git worktree list` of the stack folder). */
+export interface HostCheckout {
+  /** Short branch name ("main", "orcha/task-lead-3f2a…"), or "detached @ <sha7>". */
+  branch: string
+  /** The main working tree (the project root the agents' daemon runs from). */
+  primary: boolean
+  detached: boolean
+  /** Muted second line: "owner/name" for a GitHub-bound project, else the folder name. */
+  repo: string | null
 }

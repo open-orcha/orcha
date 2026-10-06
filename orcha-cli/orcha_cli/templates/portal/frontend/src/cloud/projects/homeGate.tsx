@@ -21,7 +21,12 @@ export function CloudHome() {
   // "stay on this project's dashboard" — the hub bounce is ONLY for a truly
   // unscoped landing. (Sidebar Dashboard is an SPA Link to a bare "/", which
   // must respect the current project rather than dumping the user on the hub.)
-  const hasCid = /[?&]cid=/.test(location.search || "") || cid != null;
+  //
+  // Decided ONCE, from the state at MOUNT (parity SH-002): the provider's own
+  // auto-resolve on a bare "/" (it picks a project and pins ?cid= via
+  // replaceState) can land BEFORE this gate's /api/containers answers — a live
+  // `cid != null` would then cancel the hub bounce for a truly unscoped landing.
+  const [hasCid] = useState(() => /[?&]cid=/.test(location.search || "") || cid != null);
   // "home" renders the open HomePage; "projects" bounces; null = still deciding.
   const [dest, setDest] = useState<"home" | "projects" | null>(hasCid ? "home" : null);
 

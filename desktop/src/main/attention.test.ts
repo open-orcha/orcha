@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { computeAttention, fetchStackAttention, type StackAttention } from './attention'
-import type { Stack } from '../shared/types'
+import { computeAttention, liveAgentsOf, liveTaskIds, fetchStackAttention, type StackAttention } from './attention'
+import { isDecisionItem, type AttentionItem, type Stack } from '../shared/types'
+import { assignPalette } from '../shared/palette'
 
 const stack: Stack = {
   project: 'orcha-acme-ehr',
@@ -122,22 +123,30 @@ const DETAIL_AGENTS = [
   { id: 'human-1', alias: 'husseinmohamed', kind: 'human' }
 ]
 
+const SNAP_REQUESTS = [{ id: 'r1', status: 'open', target_id: 'human-1', requester_id: 'ai-1', type: 'info', detail: 'Hi' }]
+const SNAP_TASKS = [
+  { id: 't1', title: 'Verify me', status: 'needs_verification' },
+  { id: 't2', title: 'WIP one', status: 'in_progress' },
+  { id: 't3', title: 'WIP two', status: 'in_progress' },
+  { id: 't4', title: 'Done', status: 'done' },
+  { id: 't5', title: 'Queued', status: 'ready' }
+]
+const SNAP_QS = '?task_limit=200&request_limit=200'
+
+/** Snapshot-walk fake: GET /api/containers → GET /api/containers/{cid}?limits (one call per
+ *  container; agents + tasks + requests + autonomy ride the same snapshot response). */
 const walkFetch = (agents: unknown[] = DETAIL_AGENTS) =>
   vi.fn(async (url: string) => {
-    if (url.endsWith('/api/containers')) return { containers: [{ id: 'cid-1' }] }
-    if (url.endsWith('/api/containers/cid-1')) return { agents }
-    if (url.includes('/requests')) return {
-      requests: [{ id: 'r1', status: 'open', target_id: 'human-1', requester_id: 'ai-1', type: 'info', detail: 'Hi' }]
-    }
-    if (url.includes('/tasks')) return {
-      tasks: [
-        { id: 't1', title: 'Verify me', status: 'needs_verification' },
-        { id: 't2', title: 'WIP one', status: 'in_progress' },
-        { id: 't3', title: 'WIP two', status: 'in_progress' },
-        { id: 't4', title: 'Done', status: 'done' },
-        { id: 't5', title: 'Queued', status: 'ready' }
-      ]
-    }
+    if (url.endsWith('/api/containers')) return { containers: [{ id: 'cid-1', name: 'EHR' }] }
+    if (url.endsWith(`/api/containers/cid-1${SNAP_QS}`))
+      return {
+        container: { autonomy_level: 'plan' },
+        agents,
+        tasks: SNAP_TASKS,
+        requests: SNAP_REQUESTS,
+        task_total: SNAP_TASKS.length,
+        request_total: 1
+      }
     throw new Error(`unexpected url ${url}`)
   })
 
@@ -149,13 +158,62 @@ describe('fetchStackAttention', () => {
     expect(fetchJson).not.toHaveBeenCalled()
   })
 
-  it('walks containers -> detail -> requests -> tasks and computes items', async () => {
+  it('walks containers -> one capped snapshot per container and computes cid-scoped items', async () => {
     const fetchJson = walkFetch()
     const result = await fetchStackAttention(stack, fetchJson)
     expect(result.items.map((i) => i.id).sort()).toEqual(['r1', 't1'])
+    expect(result.items.every((i) => i.cid === 'cid-1' && i.path.endsWith('&cid=cid-1'))).toBe(true)
     expect(fetchJson).toHaveBeenCalledWith('http://localhost:8001/api/containers')
-    expect(fetchJson).toHaveBeenCalledWith('http://localhost:8001/api/containers/cid-1/requests?limit=100')
-    expect(fetchJson).toHaveBeenCalledWith('http://localhost:8001/api/containers/cid-1/tasks?limit=100')
+    expect(fetchJson).toHaveBeenCalledWith(`http://localhost:8001/api/containers/cid-1${SNAP_QS}`)
+    expect(fetchJson).toHaveBeenCalledTimes(2)
+    expect(result.containers).toEqual([
+      { cid: 'cid-1', name: 'EHR', count: 2, partial: false, live: [{ alias: 'Plum', state: 'working', task: 'Wire the widget bridge', lastActive: null, palette: expect.any(Number) }], liveTotal: 1, checkouts: null }
+    ])
+    expect(result.unavailable).toEqual([])
+  })
+
+  it('walks every container of a multi-project stack; roster/task counts stay on the founding one', async () => {
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/containers')) return { containers: [{ id: 'c1', name: 'One' }, { id: 'c2', name: 'Two' }] }
+      if (url.includes('/api/containers/c1?'))
+        return { container: { autonomy_level: 'plan' }, agents: DETAIL_AGENTS, tasks: SNAP_TASKS, requests: [] }
+      if (url.includes('/api/containers/c2?'))
+        return {
+          container: { autonomy_level: 'plan' },
+          agents: [],
+          tasks: [{ id: 'x1', title: 'Other verify', status: 'needs_verification' }],
+          requests: [],
+          task_total: 500
+        }
+      throw new Error(url)
+    })
+    const result = await fetchStackAttention(stack, fetchJson)
+    expect(result.items.map((i) => `${i.cid}:${i.id}`)).toEqual(['c1:t1', 'c2:x1'])
+    expect(result.items[1].path).toBe('/tasks?task=x1&cid=c2')
+    expect(result.containers).toEqual([
+      { cid: 'c1', name: 'One', count: 1, partial: false, live: [{ alias: 'Plum', state: 'working', task: 'Wire the widget bridge', lastActive: null, palette: expect.any(Number) }], liveTotal: 1, checkouts: null },
+      { cid: 'c2', name: 'Two', count: 1, partial: true, live: [], liveTotal: 0, checkouts: null }
+    ])
+    expect(result.tasks).toEqual({ ready: 1, inProgress: 2, needsVerification: 1 })
+  })
+
+  it('reports a failing secondary container as unavailable instead of zero', async () => {
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/containers')) return { containers: [{ id: 'c1' }, { id: 'c2' }] }
+      if (url.includes('/api/containers/c1?')) return { agents: [], tasks: [], requests: [] }
+      throw new Error('503')
+    })
+    const result = await fetchStackAttention(stack, fetchJson)
+    expect(result.unavailable).toEqual(['c2'])
+    expect(result.containers?.map((c) => c.cid)).toEqual(['c1'])
+  })
+
+  it('fails the whole stack when the founding container cannot be fetched (poller keeps it unavailable)', async () => {
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/containers')) return { containers: [{ id: 'c1' }] }
+      throw new Error('boom')
+    })
+    await expect(fetchStackAttention(stack, fetchJson)).rejects.toThrow('boom')
   })
 
   it('summarizes agents working-first then alias, with model (claude- prefix stripped) and current task title', async () => {
@@ -225,5 +283,164 @@ describe('fetchStackAttention', () => {
   it('returns an empty summary when the stack has no container yet', async () => {
     const fetchJson = vi.fn(async () => ({ containers: [] }))
     expect(await fetchStackAttention(stack, fetchJson)).toEqual(EMPTY)
+  })
+})
+
+describe('computeAttention — canonical V2 kinds (arch §3.1)', () => {
+  const planned = { id: 'p1', title: 'Plan me', status: 'in_progress', plan_decision: null, plan_message: { body: 'plan' } }
+
+  it('flags a pending plan only at autonomy "plan" (the default when unknown)', () => {
+    expect(computeAttention(stack, AGENTS, [], [planned]).map((i) => i.kind)).toEqual(['task_plan'])
+    expect(computeAttention(stack, AGENTS, [], [planned], { autonomy: 'plan' }).map((i) => i.kind)).toEqual(['task_plan'])
+    expect(computeAttention(stack, AGENTS, [], [planned], { autonomy: 'auto' })).toEqual([])
+    expect(computeAttention(stack, AGENTS, [], [planned], { autonomy: 'full' })).toEqual([])
+  })
+
+  it('does not flag a plan that already has a decision, or an in-progress task with no plan post', () => {
+    expect(
+      computeAttention(stack, AGENTS, [], [
+        { ...planned, plan_decision: { decision: 'approve' } },
+        { id: 'p2', title: 'No plan yet', status: 'in_progress', plan_decision: null, plan_message: null }
+      ])
+    ).toEqual([])
+  })
+
+  it('suppresses verification at autonomy "full" only', () => {
+    const t = [{ id: 't1', title: 'Verify', status: 'needs_verification' }]
+    expect(computeAttention(stack, AGENTS, [], t, { autonomy: 'full' })).toEqual([])
+    expect(computeAttention(stack, AGENTS, [], t, { autonomy: 'auto' }).map((i) => i.kind)).toEqual(['task_verify'])
+  })
+
+  it('includes escalated requests (GAP-04) regardless of target', () => {
+    const items = computeAttention(stack, AGENTS, [
+      { id: 'e1', status: 'escalated', target_id: 'ai-1', requester_id: 'ai-1', type: 'info', detail: 'Escalated' }
+    ], [])
+    expect(items.map((i) => i.kind)).toEqual(['request_answer'])
+  })
+
+  it('orders plans, verifications, requests, then follow-ups and adds cid to every path', () => {
+    const items = computeAttention(
+      stack,
+      AGENTS,
+      [
+        { id: 'f1', status: 'answered', target_id: 'ai-1', requester_id: 'human-1', type: 'info', detail: 'mine' },
+        { id: 'r1', status: 'open', target_id: 'human-1', requester_id: 'ai-1', type: 'info', detail: 'ask' }
+      ],
+      [{ id: 'v1', title: 'Verify', status: 'needs_verification' }, planned],
+      { cid: 'c 1' }
+    )
+    expect(items.map((i) => i.kind)).toEqual(['task_plan', 'task_verify', 'request_answer', 'request_close'])
+    expect(items.map((i) => i.path)).toEqual([
+      '/tasks?task=p1&cid=c%201',
+      '/tasks?task=v1&cid=c%201',
+      '/requests?req=r1&cid=c%201',
+      '/requests?req=f1&cid=c%201'
+    ])
+    expect(items.every((i) => i.cid === 'c 1')).toBe(true)
+  })
+
+  it('isDecisionItem counts plans/verifications/requests, never follow-ups or health', () => {
+    expect(['task_plan', 'task_verify', 'request_answer', 'request_close', 'health'].map((kind) =>
+      isDecisionItem({ kind: kind as AttentionItem['kind'] })
+    )).toEqual([true, true, true, false, false])
+  })
+})
+
+describe('liveAgentsOf (D11: live agents nested under their project)', () => {
+  const ai = (alias: string, extra: Record<string, unknown> = {}) => ({ id: alias, alias, kind: 'ai', status: 'idle', ...extra })
+
+  it('lists working, waiting and needs-review agents — never idle, human or terminated ones', () => {
+    const { live, total } = liveAgentsOf(
+      [
+        ai('idle-one'),
+        ai('worker', { status: 'working', current_task: { title: 'Fix the scheduler' }, last_active: '2026-09-28T10:00:00Z' }),
+        ai('waiter', { status: 'awaiting_request', current_task: { title: 'Migrate billing' } }),
+        ai('reviewer-bot'),
+        ai('gone', { status: 'terminated' }),
+        { id: 'h', alias: 'hussein', kind: 'human', status: 'working' }
+      ],
+      [
+        { id: 't1', title: 'Add dark-mode tokens', status: 'needs_verification', assignees: ['reviewer-bot'] },
+        { id: 't2', title: 'Something else', status: 'in_progress', assignees: ['idle-one'] }
+      ]
+    )
+    expect(total).toBe(3)
+    expect(live).toEqual([
+      { alias: 'reviewer-bot', state: 'needs_review', task: 'Add dark-mode tokens', lastActive: null },
+      { alias: 'worker', state: 'working', task: 'Fix the scheduler', lastActive: '2026-09-28T10:00:00Z' },
+      { alias: 'waiter', state: 'waiting', task: 'Migrate billing', lastActive: null }
+    ])
+  })
+
+  it('VD-09: one vocabulary with the portal — awaiting_request is neutral "waiting", a running run (even lease-lapsed) is working', () => {
+    const { live } = liveAgentsOf(
+      [
+        ai('Atlas', { status: 'awaiting_request' }),
+        ai('Pixel', { status: 'idle', running_run: { task_id: 't9', task_title: 'Polish icons', lease_live: false } }),
+        ai('Scout', { status: 'awaiting_request', active_run: { task_title: 'Crawl docs' } })
+      ],
+      []
+    )
+    expect(live.map((l) => [l.alias, l.state, l.task])).toEqual([
+      ['Pixel', 'working', 'Polish icons'],
+      ['Scout', 'working', 'Crawl docs'],
+      ['Atlas', 'waiting', null]
+    ])
+    expect(live.some((l) => l.state === 'blocked')).toBe(false)
+    const ids = liveTaskIds(live, [ai('Pixel', { running_run: { task_id: 't9' } })], [])
+    expect(ids.get('Pixel')).toBe('t9')
+  })
+
+  it('prefers the live run task title and treats a live run as working even when status reads idle', () => {
+    const { live } = liveAgentsOf([ai('runner', { active_run: { task_title: 'Live run task' }, current_task: { title: 'Stale claim' } })], [])
+    expect(live).toEqual([{ alias: 'runner', state: 'working', task: 'Live run task', lastActive: null }])
+  })
+
+  it('a working agent with a task in review shows as working (its current activity wins)', () => {
+    const { live } = liveAgentsOf(
+      [ai('busy', { status: 'working', current_task: { title: 'Now' } })],
+      [{ id: 't', title: 'Earlier', status: 'needs_verification', assignees: ['busy'] }]
+    )
+    expect(live[0]).toMatchObject({ state: 'working', task: 'Now' })
+  })
+
+  it('caps the list but reports the true total; most recently active first within a state', () => {
+    const agents = Array.from({ length: 7 }, (_, i) =>
+      ai(`a${i}`, { status: 'working', last_active: `2026-09-28T10:0${i}:00Z` })
+    )
+    const { live, total } = liveAgentsOf(agents, [], 3)
+    expect(total).toBe(7)
+    expect(live.map((a) => a.alias)).toEqual(['a6', 'a5', 'a4'])
+  })
+
+  it('tolerates older snapshots (no assignees / active_run / last_active)', () => {
+    const { live } = liveAgentsOf([ai('x', { status: 'working' })], [{ id: 't', title: 'T', status: 'needs_verification' }])
+    expect(live).toEqual([{ alias: 'x', state: 'working', task: null, lastActive: null }])
+  })
+})
+
+describe('D13 palette parity: live agents carry the portal\'s roster slot', () => {
+  it('slots come from ONE assignment over the full snapshot roster (humans + idle included, snapshot order)', async () => {
+    // The portal colours an agent by rosterPaletteSlots(snap.agents): the whole roster, in
+    // snapshot order — not just the agents the sidebar shows.
+    const roster = [
+      { id: 'h', alias: 'hussein', kind: 'human', status: 'idle' },
+      { id: 'a', alias: 'lead', kind: 'ai', status: 'idle' },
+      { id: 'b', alias: 'backend-dev', kind: 'ai', status: 'working' },
+      { id: 'c', alias: 'docs-writer', kind: 'ai', status: 'working' },
+      { id: 'd', alias: 'reviewer', kind: 'ai', status: 'idle' }
+    ]
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/containers')) return { containers: [{ id: 'c1', name: 'One' }] }
+      return { container: { autonomy_level: 'plan' }, agents: roster, tasks: [], requests: [] }
+    })
+    const result = await fetchStackAttention(stack, fetchJson, async () => null)
+    const want = assignPalette(roster.map((a) => a.alias))
+    const live = result.containers![0].live
+    expect(live.map((a) => a.alias).sort()).toEqual(['backend-dev', 'docs-writer'])
+    for (const a of live) expect(a.palette).toBe(want.get(a.alias))
+    // a subset-only assignment would differ for at least one agent in general; the roster one
+    // is what the portal renders (AVATAR_HUES / FNV-1a / assignPalette are identical).
+    expect(new Set(live.map((a) => a.palette)).size).toBe(live.length)
   })
 })

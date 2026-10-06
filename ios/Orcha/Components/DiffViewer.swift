@@ -179,23 +179,15 @@ struct DiffViewer: View {
                     .foregroundStyle(p.muted)
             }
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: LSpace.s) {
+                HStack(spacing: LSpace.s) {
                     Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
-                        .font(p.uiFont(15, .bold))
+                        .ltype(.headline)
                         .foregroundStyle(p.text)
-                    if totalAdds > 0 {
-                        Text("+\(totalAdds)")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(p.ok)
-                    }
-                    if totalDels > 0 {
-                        Text("−\(totalDels)")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(p.danger)
-                    }
                     Spacer()
+                    DiffCounts(adds: totalAdds, dels: totalDels)
                 }
+                .accessibilityElement(children: .combine)
                 ForEach(files) { file in
                     DiffFileSection(file: file)
                 }
@@ -222,54 +214,94 @@ private struct DiffFileSection: View {
             Button {
                 withAnimation(.spring(duration: 0.25)) { expanded.toggle() }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
+                HStack(spacing: LSpace.s) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(p.faint)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 12))
+                        .foregroundStyle(p.muted)
+                        .accessibilityHidden(true)
                     Text(file.path)
-                        .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                        .ltype(.mono)
                         .foregroundStyle(p.text)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    if file.adds > 0 {
-                        Text("+\(file.adds)")
-                            .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(p.ok)
-                    }
-                    if file.dels > 0 {
-                        Text("−\(file.dels)")
-                            .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(p.danger)
-                    }
+                    Spacer(minLength: LSpace.s)
+                    DiffCounts(adds: file.adds, dels: file.dels, compact: true)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, LSpace.m)
+                .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .background(p.surface2)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("\(file.adds) additions, \(file.dels) deletions")
 
             if expanded {
+                LDivider()
                 if file.isBinary {
                     Text("Binary file — no textual diff.")
-                        .font(p.uiFont(12.5))
+                        .ltype(.meta)
                         .foregroundStyle(p.muted)
-                        .padding(12)
+                        .padding(LSpace.m)
                 } else {
                     DiffFileBody(file: file)
                 }
             } else if !file.isBinary {
-                Text("\(lineCount) lines — tap to expand")
-                    .font(p.uiFont(12))
+                Text("\(lineCount) lines hidden")
+                    .ltype(.meta)
                     .foregroundStyle(p.faint)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, LSpace.m)
+                    .padding(.bottom, LSpace.s)
             }
         }
         .background(p.surface)
-        .clipShape(RoundedRectangle(cornerRadius: p.radiusCard))
-        .overlay(RoundedRectangle(cornerRadius: p.radiusCard).strokeBorder(p.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(p.border, lineWidth: 1))
+    }
+}
+
+/// `+12 −3` plus a five-cell proportion bar (GitHub's diffstat), muted and mono.
+struct DiffCounts: View {
+    @Environment(\.palette) private var p
+    let adds: Int
+    let dels: Int
+    var compact = false
+
+    private var cells: [Color] {
+        let total = adds + dels
+        guard total > 0 else { return Array(repeating: p.border2, count: 5) }
+        let green = Int((Double(adds) / Double(total) * 5).rounded())
+        let red = min(5 - green, Int((Double(dels) / Double(total) * 5).rounded()))
+        return Array(repeating: p.ok, count: green)
+            + Array(repeating: p.danger, count: red)
+            + Array(repeating: p.border2, count: max(0, 5 - green - red))
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if adds > 0 || !compact {
+                Text("+\(adds)").foregroundStyle(p.ok)
+            }
+            if dels > 0 || !compact {
+                Text("−\(dels)").foregroundStyle(p.danger)
+            }
+            HStack(spacing: 1.5) {
+                ForEach(cells.indices, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(cells[i].opacity(cells[i] == p.border2 ? 1 : 0.85))
+                        .frame(width: 7, height: 7)
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .ltype(.mono)
+        .monospacedDigit()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(adds) additions, \(dels) deletions")
     }
 }
 
@@ -283,7 +315,7 @@ struct DiffFileBody: View {
     @Environment(\.palette) private var p
     let file: DiffFile
 
-    private static let codeSize: CGFloat = 12
+    private static let codeSize: CGFloat = 12.5
     private static let charW: CGFloat = {
         let font = UIFont.monospacedSystemFont(ofSize: codeSize, weight: .regular)
         return ("M" as NSString).size(withAttributes: [.font: font]).width
@@ -303,11 +335,12 @@ struct DiffFileBody: View {
                 ForEach(file.hunks) { hunk in
                     Text(hunk.header)
                         .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(p.info)
+                        .foregroundStyle(p.muted)
+                        .lineLimit(1)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
+                        .padding(.vertical, 6)
                         .frame(width: gutterWidth * 2 + codeWidth, alignment: .leading)
-                        .background(p.infoSoft)
+                        .background(p.surface2)
                     ForEach(hunk.lines) { line in
                         DiffLineRow(line: line, codeWidth: codeWidth, gutterWidth: gutterWidth, codeSize: Self.codeSize)
                     }
@@ -328,8 +361,8 @@ private struct DiffLineRow: View {
 
     private var rowBg: Color {
         switch line.kind {
-        case .add: p.okSoft
-        case .del: p.dangerSoft
+        case .add: p.ok.opacity(p.isDark ? 0.10 : 0.08)
+        case .del: p.danger.opacity(p.isDark ? 0.10 : 0.07)
         case .context, .meta: .clear
         }
     }
@@ -338,9 +371,9 @@ private struct DiffLineRow: View {
     /// number column) — the -line tokens already encode that heavier alpha.
     private var gutterBg: Color {
         switch line.kind {
-        case .add: p.okLine
-        case .del: p.dangerLine
-        case .context, .meta: p.surface2.opacity(0.6)
+        case .add: p.ok.opacity(p.isDark ? 0.16 : 0.13)
+        case .del: p.danger.opacity(p.isDark ? 0.16 : 0.12)
+        case .context, .meta: .clear
         }
     }
 
@@ -371,7 +404,7 @@ private struct DiffLineRow: View {
                     .foregroundStyle(markerColor)
                 Text(line.text.isEmpty ? " " : line.text)
                     .font(.system(size: codeSize, design: .monospaced))
-                    .foregroundStyle(line.kind == .meta ? p.faint : p.text)
+                    .foregroundStyle(line.kind == .meta ? p.faint : (line.kind == .context ? p.text2 : p.text))
                     .lineLimit(1)
             }
             .padding(.horizontal, 8)

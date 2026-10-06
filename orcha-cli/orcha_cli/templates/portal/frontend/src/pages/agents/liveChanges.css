@@ -1,0 +1,67 @@
+/* Live changes — the entry button and the right-side inspector sheet. Linear-quiet:
+   one surface, 1px borders, 32px rows, mono only for paths/branches (D15). */
+
+/* ---- entry button ("Live changes 3 files +42 −7") ---- */
+.lc-btn { gap: 6px; font-variant-numeric: tabular-nums; }
+.lc-btn .v2-btn-label { display: inline-flex; align-items: center; gap: 6px; }
+.lc-btn-ct { color: var(--v2-text-3); font-weight: var(--v2-fw-regular, 400); }
+.lc-btn-ct .a { color: var(--diff-add, var(--v2-ok)); }
+.lc-btn-ct .d { color: var(--diff-del, var(--v2-danger)); }
+.lc-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--v2-ok); flex: none;
+  box-shadow: 0 0 0 0 var(--v2-live-pulse); animation: lc-pulse 1.8s ease-out infinite; }
+@keyframes lc-pulse { 0% { box-shadow: 0 0 0 0 var(--v2-live-pulse); } 70%, 100% { box-shadow: 0 0 0 5px var(--v2-live-pulse-0); } }
+
+/* ---- sheet ---- */
+.lc-sheet { position: fixed; top: 8px; right: 8px; bottom: 8px; width: min(620px, calc(100vw - 16px)); z-index: var(--v2-z-dock, 30);
+  display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; background: var(--v2-surface);
+  border: 1px solid var(--v2-border); border-radius: var(--v2-radius-panel, 10px); box-shadow: var(--v2-shadow-pop); outline: none; }
+.lc-sheet .v2-inspector { min-height: 0; }
+.lc-sheet .v2-inspector-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-variant-numeric: tabular-nums; }
+.lc-sheet .v2-inspector-b { padding: var(--v2-space-3) var(--v2-space-4) var(--v2-space-4); display: flex; flex-direction: column; gap: var(--v2-space-3); }
+@media (max-width: 760px) {
+  .lc-sheet { inset: 0; width: auto; border-radius: 0; border: 0; }
+}
+.lc-status { display: inline-flex; align-items: center; gap: 6px; color: var(--v2-text-2); }
+.lc-status.is-live { color: var(--v2-text); }
+.lc-branch { color: var(--v2-text-3); font-size: 12px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-sum { color: var(--v2-text-3); }
+.lc-note { color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); }
+
+/* ---- file list ---- */
+.lc-files { list-style: none; margin: 0; padding: 4px; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control, 6px);
+  max-height: 38vh; overflow: auto; }
+.lc-row { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: var(--v2-radius-control, 6px);
+  cursor: pointer; color: var(--v2-text-2); font-size: 13px; }
+.lc-row:hover { background: var(--v2-hover); color: var(--v2-text); }
+.lc-row.on { background: var(--v2-selected); color: var(--v2-text); }
+.lc-row:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.lc-row.is-fresh { animation: lc-flash 1.6s ease-out; }
+@keyframes lc-flash { 0% { background: var(--v2-accent-soft); } 100% { background: transparent; } }
+.lc-row.on.is-fresh { animation: none; }
+.lc-badge { flex: none; width: 14px; text-align: center; font-family: var(--v2-font-mono); font-size: 11px; font-weight: var(--v2-fw-semibold, 600); }
+.lc-badge.s-M { color: var(--v2-warn); }
+.lc-badge.s-A { color: var(--v2-ok); }
+.lc-badge.s-D { color: var(--v2-danger); }
+.lc-badge.s-R { color: var(--v2-info); }
+.lc-badge.s-u { color: var(--v2-text-3); }
+.lc-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.lc-editing { flex: none; font-size: 11px; color: var(--v2-accent); }
+.lc-ct { flex: none; display: inline-flex; gap: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.lc-ct .a { color: var(--diff-add, var(--v2-ok)); }
+.lc-ct .d { color: var(--diff-del, var(--v2-danger)); }
+
+/* ---- selected diff ---- */
+.lc-diff { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.lc-diff-h { display: flex; align-items: center; }
+.lc-diff .dfv { margin: 0; position: relative; }
+/* the viewer's own top bar only holds "expand" here (hideSummary) — float it over the
+   file header instead of spending a whole empty row on it (same as the chat's card) */
+.lc-diff .dfv:not(.dfv-full) > .dfv-top { position: absolute; top: 4px; right: 8px; z-index: 5; padding: 0; background: transparent; border: 0; }
+/* keep a long path clear of the floated expand button (it ellipsizes instead) */
+.lc-diff .dfv:not(.dfv-full) .dfv-ph { padding-right: 44px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-dot { animation: none; }
+  /* no flash: a still tint marks the changed row until the next refresh */
+  .lc-row.is-fresh { animation: none; background: var(--v2-accent-soft); }
+}

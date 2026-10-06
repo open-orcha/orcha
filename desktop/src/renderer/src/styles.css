@@ -1,15 +1,118 @@
 @import 'tailwindcss';
 
+/* Inter Variable 4 with the optical-size axis (Inter Display at large sizes), bundled — no
+ * CDN (CSP is default-src 'self'). Same font as the V2 portal (design directive D6). OFL:
+ * assets/fonts/OFL-inter.txt. */
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./assets/fonts/inter-latin-opsz-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./assets/fonts/inter-latin-ext-opsz-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Orcha V2 — tokens (dark values; the light set is the prefers-color-scheme block below). Values mirror docs/orcha-v2-design-system.md §1 (the
+ * portal's --v2-* custom properties); the desktop consumes EQUIVALENT values through its own
+ * Tailwind theme (runtimes are not merged — §1.8 legacy mapping):
+ *   --color-bg → --v2-canvas, --color-card → --v2-surface, --color-text → --v2-text,
+ *   --color-border → --v2-border, --color-accent → --v2-accent, ok/warning/danger/info →
+ *   the semantic foregrounds. White text on the accent fails contrast (2.75:1): accent-filled
+ *   controls use text-bg (#101113, 6.9:1). */
 @theme {
-  --color-bg: #141311;
-  --color-card: #1d1b18;
-  --color-text: #efe9df;
-  --color-border: #3a352e;
-  --color-accent: #f0b94b;
-  --color-ok: #42d98a;
-  --color-warning: #e0a93b;
-  --color-danger: #d9544f;
-  --duration-base: 180ms;
+  --color-bg: #101113;
+  --color-sidebar: #141517;
+  --color-card: #191a1d;
+  --color-raised: #202126;
+  --color-hover: #25262b;
+  --color-selected: #2b2c34;
+  --color-text: #eeeff2;
+  --color-text-2: #aaadb7;
+  --color-text-3: #959aa4;
+  --color-border: #2b2d33;
+  --color-border-strong: #3a3d45;
+  --color-accent: #8d93f7;
+  --color-accent-hover: #a1a6f9;
+  --color-ok: #4cb782;
+  --color-warning: #e2a336;
+  --color-danger: #ee7070;
+  --color-info: #4ea7fc;
+  --duration-base: 150ms;
+  --duration-fast: 90ms;
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Non-colour-token surfaces that differ per theme (shadows, scrims, identity-palette
+ * lightness). Dark values here; the light block below overrides them. Consumed as
+ * arbitrary values, e.g. shadow-[var(--shadow-pop)] / bg-[var(--scrim)]. */
+:root {
+  --scheme: dark;
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-menu: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --scrim-soft: rgba(0, 0, 0, 0.25);
+  /* D13 identity palette (shared/palette.ts, ProjectIcon, tabColors): "S% L%" pairs. */
+  --avatar-bg-sl: 34% 28%;
+  --avatar-fg-sl: 72% 86%;
+  --glyph-sl: 70% 70%;
+  --marker-sl: 62% 62%;
+}
+
+/* Settings › Appearance → Light (or System while macOS is light). Main drives
+ * nativeTheme.themeSource, so this media query is the ONE switch for the manager window and
+ * the tray popover alike — no attribute, no JS. Warm-neutral Linear light; every text token
+ * is ≥ 4.5:1 on bg, card and hover (text-3 5.2:1 on hover; accent 4.6:1). Surfaces match the
+ * portal's light set (window #F4F4F5, panel/surface #FFFFFF) so chrome and the embedded portal
+ * read as one app; the semantic hues are a step deeper than the portal's so they stay AA as
+ * TEXT on the #F4F4F5 window tone the desktop chrome sits on. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg: #f4f4f5;
+    --color-sidebar: #f4f4f5;
+    --color-card: #ffffff;
+    --color-raised: #ffffff;
+    --color-hover: #efeff1;
+    --color-selected: #eaeaed;
+    --color-text: #1c1d1f;
+    --color-text-2: #4e525a;
+    --color-text-3: #5f636c;
+    --color-border: #e6e6e9;
+    --color-border-strong: #d5d6da;
+    --color-accent: #5561cc;
+    --color-accent-hover: #4955c2;
+    --color-ok: #177a4b;
+    --color-warning: #955600;
+    --color-danger: #bf3535;
+    --color-info: #1b66b6;
+
+    --scheme: light;
+    --shadow-pop: 0 8px 24px rgba(16, 17, 19, 0.1), 0 0 0 1px rgba(16, 17, 19, 0.02);
+    --shadow-dialog: 0 16px 48px rgba(16, 17, 19, 0.14);
+    --shadow-menu: 0 24px 64px rgba(16, 17, 19, 0.14), 0 2px 8px rgba(16, 17, 19, 0.06);
+    --shadow-toast: 0 8px 24px rgba(16, 17, 19, 0.1);
+    --shadow-seg: 0 1px 2px rgba(16, 17, 19, 0.12);
+    --scrim: rgba(16, 17, 19, 0.28);
+    --scrim-soft: rgba(16, 17, 19, 0.08);
+    /* pale fill + deep initial (≥ 4.5:1 for every hue) */
+    --avatar-bg-sl: 62% 90%;
+    --avatar-fg-sl: 55% 30%;
+    --glyph-sl: 55% 42%;
+    --marker-sl: 60% 50%;
+  }
 }
 
 html,
@@ -17,14 +120,93 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* The window IS the app frame: the document itself never scrolls. Without this, anything
+   * a pixel too wide (or a focused xterm helper textarea scrolled into view) could scroll the
+   * whole host sideways and clip the sidebar at the left edge. */
+  overflow: hidden;
+}
+
+/* Canvas before first paint: the html background is set here AND by BrowserWindow's
+ * backgroundColor (main, per resolved theme), so neither the manager nor the tray ever
+ * flashes the wrong tone. color-scheme flips to light in the block above. */
+html {
+  background: var(--color-bg);
+  color-scheme: var(--scheme);
 }
 
 body {
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color-scheme: dark;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color-scheme: var(--scheme);
+  /* Linear-like Inter alternates (D6): single-storey-ish "a" off, open digits, etc. */
+  font-feature-settings: 'cv01', 'ss03';
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Display type (D6): page titles 24-28px, Inter Display via the opsz axis, tight tracking. */
+.type-display {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  font-optical-sizing: auto;
+}
+
+/* The inset raised content panel (D5): 8px from the window's top/right/bottom edges, flush
+ * with the sidebar's own inner padding, 1px subtle border, 10px radius, a surface slightly
+ * lighter than the canvas, scrolling INSIDE. Main lays the native portal view on exactly
+ * this rect (main/viewBounds.ts PANEL_GAP / PANEL_RADIUS). */
+.host-panel {
+  margin: 8px 8px 8px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-card);
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Visible focus everywhere (V2 --v2-focus-ring): 2 px canvas gap + 2 px accent ring. */
+:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 4px var(--color-accent);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Running terminal session glyph: a slow, subtle rotation (static under reduced motion). */
+@keyframes orcha-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.orcha-spin {
+  animation: orcha-spin 1.6s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orcha-spin {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+  }
+  .animate-fade-in,
+  .animate-slide-in {
+    animation: none;
+  }
 }
 
 /* Seamless cross-fade / slide primitives (no motion lib) */
@@ -307,10 +489,11 @@ body {
   color: color-mix(in srgb, var(--color-text) 55%, transparent);
 }
 .onb-title {
-  font-size: 34px;
+  /* V2: no oversized/hero type — one clear page title per step. */
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  line-height: 1.15;
+  line-height: 1.25;
   color: var(--color-text);
 }
 .onb-body {
@@ -389,15 +572,24 @@ body {
   padding-top: 4px;
 }
 
-/* Full-screen scrim (confirm dialogs only) — blur ONLY here, never on content surfaces. */
+/* Full-screen scrim (confirm dialogs only). V2 prohibits glass/blur — a plain dim scrim. */
 .onb-scrim {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
+}
+
+/* The command menu's search field is the focus owner the whole time the menu is open; its
+ * row already reads as focused, so it drops the global ring (unlayered rule → must be here). */
+.cmdk-input:focus-visible {
+  box-shadow: none;
+}
+
+/* xterm inside the dock: its scroll area matches the panel surface. */
+.orcha-xterm .xterm-viewport {
+  background-color: transparent !important;
 }

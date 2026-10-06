@@ -19,7 +19,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -41,7 +41,11 @@ import io.openorcha.mobile.domain.GitHubIssuesPhase
 import io.openorcha.mobile.domain.GitHubPullsPhase
 import io.openorcha.mobile.domain.PullsInvolvement
 import io.openorcha.mobile.ui.OrchaUiState
-import io.openorcha.mobile.ui.components.SegControl
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LSegmented
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -70,32 +74,35 @@ fun GitHubHubScreen(
     } ?: state.snapshot?.container?.githubRepo
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = p.bg,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = { Text("GitHub") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
-            )
+            Column {
+                CenterAlignedTopAppBar(
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = p.bg),
+                    title = {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("GitHub", style = ltype(LType.Headline), color = p.text)
+                            if (boundRepo != null) {
+                                Text(boundRepo, style = ltype(LType.Micro), color = p.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back", tint = p.text2) } },
+                )
+                LDivider()
+            }
         },
     ) { padding ->
         Column(Modifier.padding(padding)) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SegControl(
-                    options = GitHubHubKind.entries.map { it.title },
-                    selected = GitHubHubKind.entries.indexOf(state.githubHubKind),
-                    onSelect = { onSelectKind(GitHubHubKind.entries[it]) },
+            Column(Modifier.fillMaxWidth().padding(horizontal = LSpace.l, vertical = LSpace.s), verticalArrangement = Arrangement.spacedBy(LSpace.s)) {
+                LSegmented(
+                    options = GitHubHubKind.entries.map { it to it.title },
+                    selection = state.githubHubKind,
+                    onSelect = onSelectKind,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(LSpace.s)) {
                     GitHubHubFilter.entries.forEach { f ->
                         GitHubFilterChip(label = f.label, on = state.githubHubFilter == f) { onSelectFilter(f) }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    if (boundRepo != null) {
-                        Text(
-                            boundRepo, style = MaterialTheme.typography.labelSmall, color = p.faint,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
                     }
                 }
                 if (state.githubHubKind == GitHubHubKind.Pulls) {
@@ -114,6 +121,7 @@ fun GitHubHubScreen(
                     )
                 }
             }
+            LDivider()
             PullToRefreshBox(isRefreshing = false, onRefresh = onRefresh, modifier = Modifier.weight(1f, fill = true)) {
                 when (state.githubHubKind) {
                     GitHubHubKind.Pulls -> PullsList(state, onOpenPull, onRefresh, onLoadMorePulls) { pull -> startTarget = GitHubStartTarget.ForPull(pull) }

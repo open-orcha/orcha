@@ -80,7 +80,7 @@ function mount() {
   return render(
     <ToastProvider>
       <SnapshotProvider>
-        <MemoryRouter initialEntries={["/agents?agent=forge"]}>
+        <MemoryRouter initialEntries={["/agents?agent=forge&tab=config"]}>
           <Routes>
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="*" element={<AgentsPage />} />

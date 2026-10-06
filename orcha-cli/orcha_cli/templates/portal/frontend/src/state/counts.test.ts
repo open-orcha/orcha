@@ -1,8 +1,9 @@
 /**
- * Authoritative sidebar counts (GH count-mismatch fix): the Shell's
- * Tasks/Requests nav counts and the attn-card prefer the snapshot's
- * task_open_total / request_open_total when non-null; open backends omit them
- * (mapped to null) and the counts fall back to today's list-computed values.
+ * Authoritative nav counts (GH count-mismatch fix): the Tasks/Requests nav
+ * counts prefer the snapshot's task_open_total / request_open_total when
+ * non-null; open backends omit them (mapped to null) and the counts fall back
+ * to list-computed values. V2 (GAP-01): the attention card NO LONGER reads
+ * those totals — attention comes from state/attention.ts selectAttention.
  */
 import { describe, expect, it } from "vitest";
 import { mapSnapshot } from "../api/client";
@@ -57,12 +58,11 @@ describe("attnCardCounts", () => {
     expect(c.total).toBe(a.count);
   });
 
-  it("prefers authoritative totals when non-null", () => {
+  it("GAP-01: open-work totals are NOT attention — the card counts attention entities only", () => {
     const snap = mapSnapshot({ ...RAW, task_open_total: 7, request_open_total: 3 });
-    const a = attnItems(snap);
-    const c = attnCardCounts(snap, a);
-    expect(c.verify).toBe(7);
-    expect(c.esc).toBe(3);
-    expect(c.total).toBe(a.plans.length + 7 + 3);
+    const c = attnCardCounts(snap);
+    expect(c.verify).toBe(1); // t1 needs_verification (not 7 open tasks)
+    expect(c.esc).toBe(1); // r1 open-to-human (not 3 open requests)
+    expect(c.total).toBe(2);
   });
 });

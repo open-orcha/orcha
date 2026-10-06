@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { leaseOf } from "../../lib/status";
-import { actingHuman, useSnapshot } from "../../state/SnapshotProvider";
+import { actingHuman, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import type { Agent } from "../../types";
 import { Icon, Modal, useToast } from "../ui";
 import * as OrchaTerm from "./orchaTerm";
@@ -169,6 +169,9 @@ export function usePairing(agent: Agent): Pairing {
   agentRef.current = agent;
   const snapRef = useRef(snap);
   snapRef.current = snap;
+  const authority = useActingAuthority();
+  const noActorReasonRef = useRef<string | null>(authority.reason);
+  noActorReasonRef.current = authority.reason;
   const pairedRef = useRef(paired);
   pairedRef.current = paired;
   const termConnectedRef = useRef(false);
@@ -329,7 +332,7 @@ export function usePairing(agent: Agent): Pairing {
         return;
       }
       if (code === 4403 || state === "lease_denied") { // DENIED: no valid human actor
-        termFail("denied", "Not permitted", "Couldn't pair as " + nm + " — pick an acting human (top-right) the bridge recognizes, then re-open.");
+        termFail("denied", "Not permitted", "Couldn't pair as " + nm + " — the terminal bridge didn't recognise you as a human on this project. Check who you're acting as (sidebar, bottom-left), then re-open.");
         return;
       }
       if (code === 4404) {
@@ -372,7 +375,9 @@ export function usePairing(agent: Agent): Pairing {
       const reattach = OrchaTerm.hasSession(aid);
       const h = actingHuman(snapRef.current);
       if (!reattach && !h) {
-        toast("Pick an acting human (top-right) first.", "danger");
+        // the real reason (viewer / not a member / offline / nobody acting) —
+        // never point at a header control V2 no longer has
+        toast(noActorReasonRef.current || "Pick who you're acting as (sidebar, bottom-left) first.", "danger");
         return;
       }
       const ok = await loadXtermAssets();
@@ -515,7 +520,7 @@ export function usePairing(agent: Agent): Pairing {
         title={product + " isn't installed"}
         desc={
           "Pairing as " + nm + " runs " + product +
-          " on this host, but it isn't on the PATH. Install it (or point Orcha at it with the override env), then pair again."
+          " on this host, but it isn't on the PATH. Install it (or point Embodent at it with the override env), then pair again."
         }
         primary="Copy install hint"
         cancel="Dismiss"

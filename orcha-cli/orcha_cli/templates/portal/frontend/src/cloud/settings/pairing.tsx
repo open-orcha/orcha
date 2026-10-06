@@ -21,7 +21,8 @@
 import { useEffect, useState } from "react";
 import { useToast } from "../../components/ui";
 import { useSnapshot } from "../../state/SnapshotProvider";
-import { CloudIcon } from "../projects/icons";
+import { Button } from "../../components/primitives";
+import { GroupHead, StatusLine } from "../../pages/settings/settingsUi";
 import { PairingModal, PairingPanel } from "../projects/PairingModal";
 import { fetchMe, type Me } from "../identity";
 import "./settings-cards.css";
@@ -46,18 +47,18 @@ export function PairingButton() {
   const identity = useMeIdentity(cid);
 
   const launch = () => {
-    if (!cid) { toast("No Orcha container is loaded.", "danger"); return; }
+    if (!cid) { toast("No Embodent container is loaded.", "danger"); return; }
     setOpen(true);
   };
 
   return (
     <>
-      <button
-        className="btn sm subtle pair-top" id="pairPhoneBtn" type="button"
-        title="Pair a phone with this Orcha" onClick={launch}
+      <Button
+        size="sm" variant="ghost" icon="phone" className="pair-top" id="pairPhoneBtn"
+        title="Pair a phone with this Embodent" onClick={launch}
       >
-        <CloudIcon name="phone" cls="" />Pair phone
-      </button>
+        Pair phone
+      </Button>
       {open && cid && (
         <PairingModal cid={cid} identity={identity} onClose={() => setOpen(false)} />
       )}
@@ -72,22 +73,13 @@ export function PairingSection() {
 
   return (
     <div className="card set-card">
-      <div className="card-h"><h2>Phone pairing</h2></div>
+      <GroupHead title="Phone pairing" lead="Scan the code with the Orcha mobile app, or type the manual code." />
       <div className="card-b">
-        <div className="lead">
-          Pair the Orcha mobile app with this workspace. Scan the code with the Orcha app — it
-          explains how your phone connects.
-        </div>
         <div id="pairingCard">
           {cid ? (
             <PairingPanel cid={cid} identity={identity} />
           ) : (
-            <div className="sc-banner muted">
-              <div className="bt">
-                <CloudIcon name="phone" cls="" />
-                <span>Waiting for a loaded Orcha container…</span>
-              </div>
-            </div>
+            <StatusLine tone="muted" icon="phone">Waiting for a loaded Embodent project…</StatusLine>
           )}
         </div>
       </div>

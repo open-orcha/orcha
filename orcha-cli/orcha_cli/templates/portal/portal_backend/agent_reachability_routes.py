@@ -1,15 +1,16 @@
 """Store and expose the transports available to wake an agent."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
+from portal_backend.identity_routes import require_machine_lane_member, require_member_read
 from portal_backend.schemas.agent_state import ReachabilityUpsert
 
 
 @app.post("/api/agents/{aid}/reachability", status_code=200)
-def set_reachability(aid: str, body: ReachabilityUpsert):
+def set_reachability(aid: str, body: ReachabilityUpsert, request: Request):
     """Record/refresh how the notifier daemon can wake this agent's Claude session.
 
     Partial upsert: a NULL field in the body leaves the stored value unchanged, so
@@ -20,7 +21,8 @@ def set_reachability(aid: str, body: ReachabilityUpsert):
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
-        require_agent(cur, aid)
+        agent = require_agent(cur, aid)
+        require_machine_lane_member(cur, request, str(agent["container_id"]))  # PS-07
         cur.execute(
             """INSERT INTO agent_reachability
                  (agent_id, wake_enabled, tmux_target, headless_cwd, headless_flags, updated_at)
@@ -46,12 +48,13 @@ def set_reachability(aid: str, body: ReachabilityUpsert):
 
 
 @app.get("/api/agents/{aid}/reachability")
-def get_reachability(aid: str):
+def get_reachability(aid: str, request: Request):
     """Read an agent's reachability. Returns wake-on defaults when no row exists yet."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        require_agent(cur, aid)
+        agent = require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
         cur.execute(
             """SELECT wake_enabled, tmux_target, headless_cwd, headless_flags, updated_at
                FROM agent_reachability WHERE agent_id=%s""",

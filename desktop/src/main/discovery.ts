@@ -1,7 +1,9 @@
 import type { Stack } from '../shared/types'
-import { dockerExec, type Exec, type ExecResult } from './dockerExec'
+import { dockerExecWithTimeout, type Exec, type ExecResult } from './dockerExec'
 
-const defaultExec: Exec = dockerExec
+/** `docker ps` is a quick probe: a hung CLI must settle as DOCKER_UNAVAILABLE, not block the
+ *  manager's first paint forever (desktop audit BLOCKER). */
+const defaultExec: Exec = dockerExecWithTimeout()
 
 const PS_FORMAT =
   '{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}'
@@ -76,12 +78,18 @@ export function parseDockerPs(stdout: string): Stack[] {
 }
 
 /** All orcha-* stacks on this machine, running or stopped.
- *  Rejects with {code:'DOCKER_UNAVAILABLE'} when docker is missing or the daemon is down. */
+ *  Rejects with {code:'DOCKER_UNAVAILABLE'} when docker is missing or the daemon is down, adding
+ *  `unresponsive: true` when the CLI hung past the probe timeout. */
 export async function listStacks(exec: Exec = defaultExec): Promise<Stack[]> {
   let result: ExecResult
   try {
     result = await exec('docker', ['ps', '-a', '--format', PS_FORMAT])
-  } catch {
+  } catch (err) {
+    // A timed-out probe means the CLI is wedged, not that the daemon is stopped: say so, so
+    // the manager/sidebar don't claim "isn't running" while preflight says "not responding".
+    if ((err as { timedOut?: boolean } | null)?.timedOut === true) {
+      throw { code: 'DOCKER_UNAVAILABLE', unresponsive: true } as const
+    }
     throw { code: 'DOCKER_UNAVAILABLE' } as const
   }
   return parseDockerPs(result.stdout)

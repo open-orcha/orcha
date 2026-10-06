@@ -87,8 +87,8 @@ def _is_stream_event_line(line: str) -> bool:
     return _run_feed.is_stream_event_line(line)
 
 
-def _pump_one(api_base: str, aid: str, worker: dict) -> None:
-    _run_feed.pump_one(api_base, worker, _compat()._post_json)
+def _pump_one(api_base: str, aid: str, worker: dict) -> bool:
+    return _run_feed.pump_one(api_base, worker, _compat()._post_json)
 
 
 def _checkpoint_and_respawn(

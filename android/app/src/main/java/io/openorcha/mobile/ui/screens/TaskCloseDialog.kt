@@ -2,14 +2,19 @@ package io.openorcha.mobile.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.TaskDto
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.OrchaField
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.theme.Orcha
 
 /** Owns the destructive close-task confirmation and reason entry. */
@@ -26,25 +31,29 @@ internal fun TaskCloseDialog(
     val p = Orcha.palette
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Close ${task.title}?") },
+        title = { Text("Close ${task.title}?", style = ltype(LType.Headline), color = p.text, maxLines = 3, overflow = TextOverflow.Ellipsis) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(LSpace.m)) {
                 if (implications != null) {
-                    implications.forEach { Text("• $it") }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        implications.forEach {
+                            Row(horizontalArrangement = Arrangement.spacedBy(LSpace.s)) {
+                                Text("·", style = ltype(LType.Body), color = p.faint)
+                                Text(it, style = ltype(LType.Body), color = p.text2)
+                            }
+                        }
+                    }
                 } else {
-                    Text("The task is force-closed and anything waiting on it unblocks. A reason is routed to the assignee.")
+                    Text(
+                        "Closes it as cancelled and unblocks anything waiting on it. A running worker isn't stopped. A reason is sent to the assignee.",
+                        style = ltype(LType.Body), color = p.text2,
+                    )
                 }
                 OrchaField(reason, onReasonChange, label = "Reason (recommended)", minLines = 2)
             }
         },
-        confirmButton = {
-            TextButton(onClick = onClose) {
-                Text("Close task", color = p.danger, fontWeight = FontWeight.W700)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = p.accent) }
-        },
-        containerColor = p.raised,
+        confirmButton = { LButton("Close task", onClose, kind = LButtonKind.Danger) },
+        dismissButton = { LButton("Keep task", onDismiss, kind = LButtonKind.Ghost) },
+        containerColor = p.surface,
     )
 }

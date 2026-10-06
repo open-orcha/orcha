@@ -81,15 +81,17 @@ def sandbox_command(args: argparse.Namespace, *, pkg_templates) -> None:
             for k in (
                 "ANTHROPIC_API_KEY",
                 "OPENAI_API_KEY",
+                "CODEX_API_KEY",
                 "ORCHA_LLM_API_KEY",
                 "CLAUDE_CODE_OAUTH_TOKEN",
             )
         ):
             print(
                 "WARNING: no provider API key in the daemon environment — "
-                "sandbox wakes will fail auth (export ANTHROPIC_API_KEY / "
-                "OPENAI_API_KEY / ORCHA_LLM_API_KEY / CLAUDE_CODE_OAUTH_TOKEN "
-                "where the notifier starts)"
+                "sandbox wakes will fail auth unless the project's API key is set to "
+                "\"Use for agent runs\" (Settings › Models & providers), or export "
+                "ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY / ORCHA_LLM_API_KEY / "
+                "CLAUDE_CODE_OAUTH_TOKEN where the notifier starts"
             )
         return
 

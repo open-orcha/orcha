@@ -314,19 +314,21 @@ def put_container_github(cid: str, body: ContainerGithubBinding, request: Reques
     """
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    if body.repo == "local" and not local_git.available():
-        raise HTTPException(
-            400,
-            "local repository source is not available here — "
-            "ORCHA_LOCAL_REPO_DIR is unset, the mounted directory is missing, "
-            "it has no .git, or the git binary is unavailable in this container",
-        )
     with db_cursor() as (conn, cur):
         require_container(cur, cid)
         # Per-project identity + access model: binding a repo is owner-or-manage_repo
         # under the trusted lane (403 non-member / ungranted member / viewer).
+        # Authorize BEFORE validating the source: an unauthorized caller must get the
+        # honest 403, never a 400 about the local tree that implies they could bind it.
         enforce_grant(cur, request, cid, "manage_repo")
         trusted_actor(cur, request, cid, None)
+        if body.repo == "local" and not local_git.available():
+            raise HTTPException(
+                400,
+                "local repository source is not available here — "
+                "ORCHA_LOCAL_REPO_DIR is unset, the mounted directory is missing, "
+                "it has no .git, or the git binary is unavailable in this container",
+            )
         cur.execute(
             "UPDATE containers SET github_repo=%s WHERE id=%s RETURNING github_repo",
             (body.repo, cid),

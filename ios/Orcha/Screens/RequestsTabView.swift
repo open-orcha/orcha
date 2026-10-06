@@ -35,7 +35,7 @@ struct RequestsTabView: View {
 
     private var content: some View {
         ScrollView {
-            VStack(spacing: 10) {
+            LazyVStack(alignment: .leading, spacing: LSpace.l) {
                 ConnectionBanners()
                 lensChips
                 if lens == .yours {
@@ -44,8 +44,10 @@ struct RequestsTabView: View {
                     flatView
                 }
             }
-            .padding(16)
+            .padding(.horizontal, LSpace.l)
+            .padding(.vertical, LSpace.m)
         }
+        .background(p.bg)
         .refreshable { await model.refresh() }
     }
 
@@ -53,9 +55,9 @@ struct RequestsTabView: View {
 
     private var lensChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: LSpace.s) {
                 ForEach(MobileUx.RequestLens.allCases) { l in
-                    FilterChip(label: l.label, on: lens == l) {
+                    LChip(lensLabel(l), selected: lens == l) {
                         lens = l
                         shown = Self.REQS_PAGE
                     }
@@ -64,55 +66,67 @@ struct RequestsTabView: View {
         }
     }
 
+    /// Web parity copy — the escalations lens reads "To a human".
+    private func lensLabel(_ l: MobileUx.RequestLens) -> String {
+        l == .escalated ? "To a human" : l.label
+    }
+
     // MARK: "Yours" — the four binding groups (flow 07)
 
     @ViewBuilder
     private var groupedView: some View {
         group("Needs your answer", groups.needsYourAnswer)
         group("Waiting on others", groups.waitingOnOthers)
-        group("Answered — act on it", groups.answeredActOnIt)
+        // A Resolve inside its undo window leaves the queue at once (web resolveUndo.ts).
+        group("Answered — act on it", groups.answeredActOnIt.filter { !ResolveUndoQueue.shared.isResolving($0.id) })
         if !groups.done.isEmpty {
             let doneOnly = groups.needsYourAnswer.isEmpty && groups.waitingOnOthers.isEmpty &&
                 groups.answeredActOnIt.isEmpty
-            HStack {
-                SectionH(title: "Done", count: "\(groups.done.count)")
-                Button(showDone ? "hide" : "show") { showDone.toggle() }
-                    .font(p.uiFont(11, .bold))
-                    .foregroundStyle(p.accent)
-            }
-            .onAppear { if doneOnly { showDone = true } }
-            if showDone {
-                rows(groups.done)
-            } else if doneOnly {
-                OrchaCard {
-                    Text("Nothing needs you — your \(groups.done.count) request\(groups.done.count == 1 ? " is" : "s are") all done. Tap “show” to see them.")
+            LSection(
+                "Done",
+                count: groups.done.count,
+                trailing: AnyView(
+                    LButton(showDone ? "Hide" : "Show", kind: .ghost, size: .small) { showDone.toggle() }
+                )
+            ) {
+                if showDone {
+                    rows(groups.done)
+                } else if doneOnly {
+                    Text("Nothing needs you — your \(groups.done.count) request\(groups.done.count == 1 ? " is" : "s are") all done. Tap “Show” to see them.")
+                        .ltype(.meta)
                         .foregroundStyle(p.muted)
                 }
             }
+            .onAppear { if doneOnly { showDone = true } }
         }
         if groups.needsYourAnswer.isEmpty && groups.waitingOnOthers.isEmpty &&
             groups.answeredActOnIt.isEmpty && groups.done.isEmpty {
-            OrchaCard {
-                Text("You're all caught up — no requests involve you. Tap “All” to see every request.")
-                    .foregroundStyle(p.muted)
-            }
+            LEmptyState(
+                icon: "tray",
+                title: "You're all caught up",
+                message: "No requests involve you. Tap “All” to see every request."
+            )
         }
     }
 
     @ViewBuilder
     private func group(_ title: String, _ requests: [RequestDto]) -> some View {
         if !requests.isEmpty {
-            SectionH(title: title, count: "\(requests.count)")
-            rows(requests)
+            LSection(title, count: requests.count) {
+                rows(requests)
+            }
         }
     }
 
     private func rows(_ requests: [RequestDto]) -> some View {
-        ForEach(requests) { req in
-            NavigationLink(value: WorkspaceRoute.request(req.id)) {
-                RequestRowCard(request: req, humanId: model.humanId, agents: agents)
+        RequestListPanel {
+            ForEach(requests) { req in
+                NavigationLink(value: WorkspaceRoute.request(req.id)) {
+                    RequestRowCard(request: req, humanId: model.humanId, agents: agents)
+                }
+                .buttonStyle(.lRow)
+                if req.id != requests.last?.id { LDivider().padding(.leading, 60) }
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -129,29 +143,20 @@ struct RequestsTabView: View {
         let visible = Array(list.prefix(shown))
         sortControl(total: list.count)
         if visible.isEmpty {
-            OrchaCard {
-                Text("No requests match this filter.").foregroundStyle(p.muted)
-            }
-        }
-        ForEach(visible) { req in
-            NavigationLink(value: WorkspaceRoute.request(req.id)) {
-                RequestRowCard(request: req, humanId: model.humanId, agents: agents)
-            }
-            .buttonStyle(.plain)
+            LEmptyState(icon: "line.3.horizontal.decrease", title: "Nothing here", message: "No requests match this filter.")
+        } else {
+            rows(visible)
         }
         if list.count > visible.count {
-            Button("Load more · \(visible.count) of \(list.count)") { shown += Self.REQS_PAGE }
-                .buttonStyle(.plain)
-                .font(p.uiFont(13, .bold))
-                .foregroundStyle(p.accent)
+            LButton("Load more · \(visible.count) of \(list.count)", kind: .ghost, size: .small) { shown += Self.REQS_PAGE }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
         }
     }
 
     private func sortControl(total: Int) -> some View {
-        HStack(spacing: 6) {
-            SectionH(title: "Requests", count: "\(total)")
+        HStack(spacing: LSpace.xs) {
+            Text("Requests").ltype(.meta).foregroundStyle(p.muted)
+            Text("\(total)").ltype(.meta).foregroundStyle(p.faint)
             Spacer()
             sortKeyButton("Time", .time)
             sortKeyButton("Priority", .priority)
@@ -159,8 +164,10 @@ struct RequestsTabView: View {
                 ascending.toggle()
             } label: {
                 Image(systemName: ascending ? "arrow.up" : "arrow.down")
-                    .font(p.uiFont(12, .bold))
-                    .foregroundStyle(p.accent)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(p.text2)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(sortDirectionLabel)
@@ -174,10 +181,15 @@ struct RequestsTabView: View {
             ascending = key == .time ? false : true   // reset to the key's natural default (web)
         } label: {
             Text(label)
-                .font(p.uiFont(12, .bold))
-                .foregroundStyle(sortKey == key ? p.accent : p.muted)
+                .ltype(.meta)
+                .fontWeight(sortKey == key ? .semibold : .regular)
+                .foregroundStyle(sortKey == key ? p.text : p.muted)
+                .padding(.horizontal, 8)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(sortKey == key ? .isSelected : [])
     }
 
     private var sortDirectionLabel: String {
@@ -190,8 +202,21 @@ struct RequestsTabView: View {
     }
 }
 
-/// Flow 07 request card: flow row (aliases resolved from the roster), payload preview,
-/// meta row with status glyph, type tag, and expiry chip.
+/// One bordered surface holding a run of request rows (hairline-divided).
+private struct RequestListPanel<Content: View>: View {
+    @Environment(\.palette) private var p
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(p.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(p.border, lineWidth: 1).allowsHitTesting(false))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Linear request row: requester avatar with the target avatar tucked bottom-right,
+/// the question as the title, "from → to" + kind tag as meta, status glyph + time trailing.
 struct RequestRowCard: View {
     @Environment(\.palette) private var p
     let request: RequestDto
@@ -203,53 +228,86 @@ struct RequestRowCard: View {
     private var escalated: Bool {
         request.status == "open" && MobileUx.isToHuman(request, agents: agents)
     }
+    private var fromIsYou: Bool { request.requesterId == humanId }
+    private var toIsYou: Bool { request.targetId == humanId || request.targetId == nil }
+    private var fromLabel: String { fromIsYou ? "You" : (requesterAlias ?? "agent") }
+    private var toLabel: String { toIsYou ? "you" : (targetAlias ?? "agent") }
+    private var title: String {
+        // Human text only: a legacy combined code-thread payload loses its agent-only blocks.
+        let human = InboxRequestText.humanize(payload: request.payload, detail: nil).question
+        return human.split(whereSeparator: \.isNewline).first.map(String.init) ?? human
+    }
 
     var body: some View {
         let expiry = MobileUx.expiryChip(request.expiresAt)
-        let fromLabel = request.requesterId == humanId ? "you" : (requesterAlias ?? "agent")
-        let toIsYou = request.targetId == humanId || request.targetId == nil
-        let toLabel = toIsYou ? "you" : (targetAlias ?? "agent")
-        OrchaCard {
-            HStack(spacing: 8) {
-                AgentAvatar(
-                    alias: requesterAlias ?? fromLabel,
-                    human: request.requesterId == humanId,
-                    githubLogin: MobileUx.humanLogin(alias: requesterAlias, in: agents),
-                    size: 30
-                )
-                Text("→")
-                    .foregroundStyle(p.faint)
-                AgentAvatar(
-                    alias: request.targetId == nil ? "H" : (targetAlias ?? "A"),
-                    human: toIsYou,
-                    githubLogin: MobileUx.humanLogin(alias: targetAlias, in: agents),
-                    size: 30
-                )
-                Text("\(fromLabel) → \(toLabel)")
-                    .font(p.uiFont(15, .semibold))
+        HStack(alignment: .center, spacing: LSpace.m) {
+            RequestAvatarPair(
+                from: requesterAlias ?? fromLabel, fromHuman: fromIsYou,
+                to: request.targetId == nil ? "Human" : (targetAlias ?? "A"), toHuman: toIsYou
+            )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .ltype(.bodyEmph)
                     .foregroundStyle(p.text)
                     .lineLimit(1)
-            }
-            Text(request.payload)
-                .font(p.uiFont(13))
-                .foregroundStyle(p.muted)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            HStack(spacing: 8) {
-                RequestStatusPill(status: request.status, escalated: escalated)
-                MetaTag(text: request.type)
-                if request.chainDepth > 0 { MetaTag(text: "↳ chain") }
-                switch expiry {
-                case let .warn(label): MetaTag(text: label, tint: p.warn)
-                case .expired: MetaTag(text: "expired", tint: p.danger)
-                case nil: EmptyView()
+                HStack(spacing: 6) {
+                    Text("\(fromLabel) → \(toLabel)")
+                        .ltype(.meta)
+                        .foregroundStyle(p.muted)
+                        .lineLimit(1)
+                    LTag(request.type == "task" ? "Task" : "Question")
+                    if request.chainDepth > 0 { LTag("↳ chain") }
+                    switch expiry {
+                    case let .warn(label): LTag(label, tint: p.warn)
+                    case .expired: LTag("Expired", tint: p.danger)
+                    case nil: EmptyView()
+                    }
                 }
-                Spacer()
+            }
+            Spacer(minLength: LSpace.xs)
+            VStack(alignment: .trailing, spacing: 4) {
+                LStatusGlyph(status: Self.glyphStatus(request.status, escalated: escalated))
                 Text(MobileUx.agoLabel(request.createdAt) ?? "")
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .ltype(.micro)
                     .foregroundStyle(p.faint)
             }
         }
-        .opacity(expiry == .expired ? 0.65 : 1)
+        .padding(.horizontal, LSpace.m)
+        .padding(.vertical, LSpace.m)
+        .frame(minHeight: 60)
+        .contentShape(Rectangle())
+        .opacity(expiry == .expired ? 0.6 : 1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title). \(fromLabel) to \(toLabel), \(request.type == "task" ? "task request" : "question")")
+        .accessibilityValue([escalated ? "to a human" : MobileUx.statusCopy(request.status), MobileUx.agoLabel(request.createdAt)].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    /// Request status → the shared Linear status glyph vocabulary.
+    /// The request's own status for the glyph (web `StatusIcon` parity); escalated wins.
+    static func glyphStatus(_ status: String, escalated: Bool) -> String {
+        escalated ? "escalated" : status
+    }
+}
+
+/// Requester avatar with the target's avatar overlapping bottom-right (web flow avatars).
+struct RequestAvatarPair: View {
+    @Environment(\.palette) private var p
+    let from: String
+    let fromHuman: Bool
+    let to: String
+    let toHuman: Bool
+    var size: CGFloat = 32
+
+    var body: some View {
+        LAvatar(name: from, isAI: !fromHuman, size: size)
+            .overlay(alignment: .bottomTrailing) {
+                LAvatar(name: to, isAI: !toHuman, size: size * 0.56)
+                    .padding(1.5)
+                    .background(p.surface, in: Circle())
+                    .offset(x: size * 0.18, y: size * 0.18)
+            }
+            .padding(.trailing, size * 0.18)
+            .padding(.bottom, size * 0.18)
+            .accessibilityHidden(true)
     }
 }

@@ -9,12 +9,12 @@
  * production.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { HashRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
 import { extensions } from "../../extensions";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
-import { applySkin, currentSkin, otherProviderKeys, SettingsPage, type ProviderKeyEntry } from "./SettingsPage";
+import { otherProviderKeys, SettingsPage, type ProviderKeyEntry } from "./SettingsPage";
 
 /* ---- fetch stub ----------------------------------------------------------- */
 interface Call {
@@ -82,13 +82,15 @@ function installFetch() {
   vi.stubGlobal("fetch", vi.fn(impl));
 }
 
-function renderPage() {
+// V2 sections: deep-link straight to the section under test (#tab=<key>).
+function renderPage(tab = "provider-keys") {
+  window.history.replaceState(null, "", window.location.pathname + "#tab=" + tab);
   return render(
     <ToastProvider>
       <SnapshotProvider>
-        <HashRouter>
+        <MemoryRouter>
           <SettingsPage />
-        </HashRouter>
+        </MemoryRouter>
       </SnapshotProvider>
     </ToastProvider>,
   );
@@ -134,9 +136,9 @@ afterEach(() => {
 describe("provider-keys cards", () => {
   it("renders one card per non-Anthropic provider from the GET list, Anthropic excluded", async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText("No xAI / Grok API key configured.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("(No xAI / Grok API key)")).toBeInTheDocument());
     // Anthropic keeps its own dedicated card (KeyCard) — never duplicated here.
-    expect(screen.queryAllByText(/Anthropic API key configured/).length).toBe(1);
+    expect(screen.queryAllByText("(Anthropic API key)").length).toBe(1);
   });
 
   it("shows the env-shadow state when source is env", async () => {
@@ -154,7 +156,7 @@ describe("provider-keys cards", () => {
 
   it("PUT saves a new key to the provider-scoped route with the acting human", async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText("No xAI / Grok API key configured.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("(No xAI / Grok API key)")).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText("Paste xAI / Grok API key…"), {
       target: { value: "xai-test-key" },
@@ -175,7 +177,7 @@ describe("provider-keys cards", () => {
       { provider: "xai", name: "xAI / Grok", configured: true, source: "db", masked: "sk-...9999", set_at: "t" },
     ];
     renderPage();
-    await waitFor(() => expect(screen.getByText("xAI / Grok API key configured")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("(xAI / Grok API key)")).toBeInTheDocument());
 
     const pkCard = document.querySelector<HTMLElement>('.pk-card[data-provider="xai"]')!;
     fireEvent.click(within(pkCard).getByText("Remove"));
@@ -194,7 +196,7 @@ describe("provider-keys cards", () => {
       { provider: "xai", name: "xAI / Grok", configured: true, source: "db", masked: "sk-...9999", set_at: "t" },
     ];
     renderPage();
-    await waitFor(() => expect(screen.getByText("xAI / Grok API key configured")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("(xAI / Grok API key)")).toBeInTheDocument());
 
     const pkCard = document.querySelector<HTMLElement>('.pk-card[data-provider="xai"]')!;
     fireEvent.click(within(pkCard).getByText("Test"));
@@ -218,9 +220,28 @@ describe("provider-keys cards", () => {
 /* ====================================================================== *
  *  FEATURE 2 — mobile pairing card                                       *
  * ====================================================================== */
+describe("key field affordances (V2)", () => {
+  it("the reveal toggle is an eye button with aria-label + aria-pressed, and the narrow-width section pills mirror the tabs", async () => {
+    renderPage("provider-keys");
+    const reveal = await screen.findByRole("button", { name: "Show key" }, { timeout: 3000 }).catch(() => null);
+    const btn = reveal || (await waitFor(() => document.querySelector<HTMLButtonElement>("#keyReveal")!));
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(btn);
+    expect(document.querySelector("#keyReveal")).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector("#keyReveal")).toHaveAttribute("aria-label", "Hide key");
+    // narrow widths: a scrolling pill row mirrors the tabs (no native <select>)
+    expect(document.querySelector("#setSectionSelect")).toBeNull();
+    const pills = document.querySelector("#setSectionPills")!;
+    expect(pills.querySelector('[data-pill="provider-keys"]')).toHaveAttribute("aria-current", "page");
+    fireEvent.click(pills.querySelector('[data-pill="interface"]')!);
+    expect(screen.getByRole("tab", { name: "Interface" })).toHaveAttribute("aria-selected", "true");
+    expect(pills.querySelector('[data-pill="interface"]')).toHaveAttribute("aria-current", "page");
+  });
+});
+
 describe("pairing card", () => {
   it("fetches on load and renders the QR svg + guidance on 200", async () => {
-    renderPage();
+    renderPage("pairing");
     await waitFor(() => expect(screen.getByText("ABCD-1234")).toBeInTheDocument());
     expect(screen.getByText("http://192.168.1.20:8000")).toBeInTheDocument();
     expect(document.querySelector(".pair-value")?.textContent).toContain("kedar");
@@ -243,15 +264,21 @@ describe("pairing card", () => {
         detail: {
           reachable: false,
           reason: "no_lan_address",
-          title: "Phones can't reach this Orcha yet",
+          title: "Phones can't reach this Embodent yet",
           message: "The portal only has a localhost address right now.",
         },
       },
     };
-    renderPage();
-    await waitFor(() => expect(screen.getByText("Phones can't reach this Orcha yet")).toBeInTheDocument());
+    renderPage("pairing");
+    await waitFor(() => expect(screen.getByText("Phones can't reach this Embodent yet")).toBeInTheDocument());
     expect(screen.getByText("The portal only has a localhost address right now.")).toBeInTheDocument();
     expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
+    // a real way forward: "Check again" re-requests the pairing payload
+    const before = calls.filter((c) => c.url.startsWith("/api/containers/c1/pairing")).length;
+    fireEvent.click(screen.getByRole("button", { name: /Check again/ }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.url.startsWith("/api/containers/c1/pairing")).length).toBeGreaterThan(before),
+    );
   });
 
   it("renders the no_human 409 message honestly", async () => {
@@ -262,61 +289,31 @@ describe("pairing card", () => {
           reachable: false,
           reason: "no_human",
           title: "No human can pair this phone",
-          message: "Add a human operator to this Orcha before pairing a phone.",
+          message: "Add a human operator to this Embodent before pairing a phone.",
         },
       },
     };
-    renderPage();
+    renderPage("pairing");
     await waitFor(() => expect(screen.getByText("No human can pair this phone")).toBeInTheDocument());
-    expect(screen.getByText("Add a human operator to this Orcha before pairing a phone.")).toBeInTheDocument();
+    expect(screen.getByText("Add a human operator to this Embodent before pairing a phone.")).toBeInTheDocument();
   });
 });
 
 /* ====================================================================== *
- *  FEATURE 3 — appearance skin picker                                    *
+ *  FEATURE 3 — Interface (theme picker; the skin picker is retired)      *
  * ====================================================================== */
-describe("appearance skin picker", () => {
-  it("renders Classic and Swiss tiles, Classic selected by default", async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByText("Appearance")).toBeInTheDocument());
-    const grid = document.querySelector("#skinGrid");
-    expect(grid).not.toBeNull();
-    expect(screen.getByText("Classic")).toBeInTheDocument();
-    expect(screen.getByText("Swiss")).toBeInTheDocument();
-    const classicTile = document.querySelector('.skin-tile[data-skin="classic"]');
-    expect(classicTile?.className).toContain("on");
-  });
-
-  it("clicking the Swiss tile writes localStorage orcha:skin and sets data-skin on <html>", async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByText("Swiss")).toBeInTheDocument());
-
-    fireEvent.click(document.querySelector('.skin-tile[data-skin="swiss"]')!);
-
-    expect(localStorage.getItem("orcha:skin")).toBe("swiss");
-    expect(document.documentElement.getAttribute("data-skin")).toBe("swiss");
-    expect(document.querySelector('.skin-tile[data-skin="swiss"]')?.className).toContain("on");
-    expect(document.querySelector('.skin-tile[data-skin="classic"]')?.className).not.toContain("on");
-  });
-
-  it("clicking Classic removes the data-skin attribute", async () => {
-    applySkin("swiss");
-    renderPage();
-    await waitFor(() => expect(screen.getByText("Classic")).toBeInTheDocument());
-    expect(document.documentElement.getAttribute("data-skin")).toBe("swiss");
-
-    fireEvent.click(document.querySelector('.skin-tile[data-skin="classic"]')!);
-
-    expect(localStorage.getItem("orcha:skin")).toBe("classic");
-    expect(document.documentElement.hasAttribute("data-skin")).toBe(false);
-  });
-
-  it("currentSkin() falls back to classic for an unknown/absent stored value", () => {
-    localStorage.setItem("orcha:skin", "not-a-real-skin");
-    expect(currentSkin()).toBe("classic");
-    localStorage.removeItem("orcha:skin");
-    expect(currentSkin()).toBe("classic");
+describe("interface section (skins retired)", () => {
+  it("#tab=appearance resolves to Interface: no skin tiles, data-skin untouched", async () => {
     localStorage.setItem("orcha:skin", "swiss");
-    expect(currentSkin()).toBe("swiss");
+    renderPage("appearance");
+    expect(await screen.findByText(/Swiss design\) is kept on file/)).toBeInTheDocument();
+    expect(screen.queryByText(/Orcha uses one dark appearance everywhere/)).toBeNull();
+    expect(screen.getByRole("tab", { name: "Interface" })).toHaveAttribute("aria-selected", "true");
+    expect(document.querySelector("#skinGrid")).toBeNull();
+    expect(document.querySelector(".skin-tile")).toBeNull();
+    expect(document.documentElement.hasAttribute("data-skin")).toBe(false);
+    // the stored choice is disclosed, never deleted
+    expect(screen.getByText(/Swiss design\) is kept on file/)).toBeInTheDocument();
+    expect(localStorage.getItem("orcha:skin")).toBe("swiss");
   });
 });

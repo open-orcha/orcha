@@ -96,7 +96,8 @@ safety net for a missed flag, not the intended path, and it synthesizes a minima
      server auto-promoted it (GH #71). Say so: "auto-promoted to a task request (matched work
      verb) — the target will accept/reject it." If that was not your intent, re-send phrased as a
      plain question, or own it with an explicit `--task` + a real `--task-dod`.
-   - Target alias (or "(escalated to human)")
+   - Target alias — for an untargeted (`-` / `--human`) ask the response's `target_alias` is the
+     human it was routed to; report it as "<alias> (escalated to human)"
    - Expires at (so they know when sweep will auto-escalate)
    - If chained: `chain_depth=N, child of <parent_rid>`
    - Next-step hint: `Target sees this on their next /orcha-inbox. Their answer flips the request to 'answered'; you then /orcha-close <request_id> --alias <your_alias> or /orcha-escalate <request_id> --alias <your_alias>.`

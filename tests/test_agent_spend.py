@@ -150,6 +150,26 @@ async def test_spend_window_filtering(client, make_agent, container, db):
     assert wall["totals"]["total_tokens"] == 1007
 
 
+async def test_spend_window_30d(client, make_agent, container, db):
+    """30d (the Metrics summary's window): a run 10 days old counts, one 40 days old does not."""
+    cid = container["id"]
+    aid = (await make_agent("Monthly", "eng"))["agent_id"]
+    await _run_with(client, aid, input_tokens=100, output_tokens=0,
+                    cache_read_input_tokens=0, cache_creation_input_tokens=0,
+                    ended_ago="10 days", db=db)
+    await _run_with(client, aid, input_tokens=5000, output_tokens=0,
+                    cache_read_input_tokens=0, cache_creation_input_tokens=0,
+                    ended_ago="40 days", db=db)
+    r = await client.get(f"/api/containers/{cid}/metrics/agents/{aid}/spend?window=30d")
+    assert r.status_code == 200, r.text
+    assert r.json()["totals"]["total_tokens"] == 100
+    w7d = (await client.get(f"/api/containers/{cid}/metrics/agents/{aid}/spend?window=7d")).json()
+    assert w7d["totals"]["total_tokens"] == 0
+    wall = (await client.get(f"/api/containers/{cid}/metrics/agents/{aid}/spend?window=all")).json()
+    assert wall["totals"]["total_tokens"] == 5100
+    assert (await client.get(f"/api/containers/{cid}/metrics/agents/{aid}/spend?window=90d")).status_code == 422
+
+
 async def test_spend_membership_gate_matches_meter(client, make_agent, container, monkeypatch):
     """Trusted non-member on a MAPPED container → 403 (same guard as the meter)."""
     cid = container["id"]
@@ -386,3 +406,25 @@ async def test_insights_window_query_validation(client, container):
     """window only accepts 7d|all here (unlike spend's 5h|7d|all) — 5h is not a valid insights window."""
     r = await client.get(f"/api/containers/{container['id']}/metrics/insights?window=5h")
     assert r.status_code == 422
+
+
+async def test_spend_reports_runs_with_cost_per_task(client, make_agent, container, make_task):
+    """Additive `runs_with_cost` (V2 QA): a task whose runs recorded no cost
+    (subscription-billed / unpriced) must be distinguishable from a real $0 —
+    the drilldown shows it as "not reported", never "$0.00"."""
+    cid = container["id"]
+    aid = (await make_agent("Mixed", "eng"))["agent_id"]
+    priced = (await make_task("Priced work", "done"))["id"]
+    unpriced = (await make_task("Subscription work", "done"))["id"]
+
+    await _run_with(client, aid, task_id=priced, input_tokens=5, output_tokens=5, total_cost_usd=2.0)
+    await _run_with(client, aid, task_id=unpriced, input_tokens=7, output_tokens=3)
+    await _run_with(client, aid, task_id=unpriced, input_tokens=1, output_tokens=1)
+
+    body = (await client.get(f"/api/containers/{cid}/metrics/agents/{aid}/spend")).json()
+    assert body["totals"]["runs"] == 3
+    assert body["totals"]["runs_with_cost"] == 1
+    rows = {r["task_id"]: r for r in body["tasks"]}
+    assert rows[priced]["runs"] == 1 and rows[priced]["runs_with_cost"] == 1
+    assert rows[unpriced]["runs"] == 2 and rows[unpriced]["runs_with_cost"] == 0
+    assert rows[unpriced]["total_cost_usd"] == 0.0  # the sum alone cannot tell "unreported" from $0

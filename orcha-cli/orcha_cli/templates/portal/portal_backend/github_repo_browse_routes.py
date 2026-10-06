@@ -68,8 +68,10 @@ from portal_backend.database import db_cursor
 from portal_backend.github_hub_routes import (
     _gh_get,
     _load_binding,
+    _no_token,
     _not_connected,
     _resolve_repo_token,
+    _browse_error_payload,
     _detail_error_payload,
     _error_payload,
 )
@@ -501,28 +503,28 @@ def browse_tree(cid: str, request: Request, ref: str = Query(default=""), path: 
         try:
             resolved_ref = _resolve_ref(repo, None, cid, ref)
         except RuntimeError as exc:
-            return {**_detail_error_payload(exc), "repo": repo}
+            return {**_browse_error_payload(exc), "repo": repo}
         clean_path = (path or "").strip("/")
         try:
             entries = _local_tree_level(repo, resolved_ref, cid, clean_path)
         except RuntimeError as exc:
-            return {**_detail_error_payload(exc), "repo": repo}
+            return {**_browse_error_payload(exc), "repo": repo}
         entries.sort(key=lambda e: (e["type"] != "dir", (e["name"] or "").lower()))
         return {"ref": resolved_ref, "path": clean_path, "entries": entries, "truncated": False}
-    token = _resolve_repo_token(repo)
+    token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         resolved_ref = _resolve_ref(repo, token, cid, ref)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
     clean_path = (path or "").strip("/")
     contents_path = f"/repos/{repo}/contents/{clean_path}" if clean_path else f"/repos/{repo}/contents"
     query = urllib.parse.urlencode({"ref": resolved_ref})
     try:
         raw = _gh_get(f"{contents_path}?{query}", token)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
     if isinstance(raw, dict):
         # GitHub returns a single object (not a list) when `path` names a FILE, not a
         # directory — a clean 400 rather than pretending it's an empty directory.
@@ -644,19 +646,19 @@ def browse_file(cid: str, request: Request, ref: str = Query(default=""), path: 
             resolved_ref = _resolve_ref(repo, None, cid, ref)
             return _local_file_response(repo, resolved_ref, cid, clean_path)
         except RuntimeError as exc:
-            return {**_detail_error_payload(exc), "repo": repo}
-    token = _resolve_repo_token(repo)
+            return {**_browse_error_payload(exc), "repo": repo}
+    token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         resolved_ref = _resolve_ref(repo, token, cid, ref)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
     query = urllib.parse.urlencode({"ref": resolved_ref})
     try:
         raw = _gh_get(f"/repos/{repo}/contents/{clean_path}?{query}", token)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
     if isinstance(raw, list):
         raise HTTPException(400, f"path {clean_path!r} is a directory, not a file")
     size = raw.get("size") or 0
@@ -878,7 +880,7 @@ def browse_search(
         try:
             resolved_ref = _resolve_ref(repo, None, cid, ref)
         except RuntimeError as exc:
-            return {**_detail_error_payload(exc), "repo": repo}
+            return {**_browse_error_payload(exc), "repo": repo}
         if mode == "contents":
             results = _in_memory_grep(cid, resolved_ref, q)
             if results is None:
@@ -894,9 +896,9 @@ def browse_search(
         except RuntimeError as exc:
             return {**_error_payload(exc), "repo": repo}
         return {"available": True, "repo": repo, "ref": resolved_ref, **payload}
-    token = _resolve_repo_token(repo)
+    token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     if mode == "contents":
         try:
             return {"available": True, "repo": repo, **_contents_search(repo, token, q)}
@@ -905,7 +907,7 @@ def browse_search(
     try:
         resolved_ref = _resolve_ref(repo, token, cid, ref)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
     try:
         payload = _names_search(repo, resolved_ref, token, cid, q)
     except RuntimeError as exc:

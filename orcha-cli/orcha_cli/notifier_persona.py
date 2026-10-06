@@ -11,6 +11,7 @@ from .notifier_handoff_policy import (
     LOCAL_HANDOFF_TURN_REMINDER,
 )
 from .notifier_protocol import _render_protocol, _render_resume_context, _render_task_body
+from .notifier_deliverables import DELIVERABLES_GUIDANCE
 
 # #325: the standing plain-language rule for every message an agent sends a HUMAN. Orcha is
 # built for non-engineers to run their own agent teams, so communication clarity is a product
@@ -281,6 +282,9 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     body_section = _render_task_body(protocol)
     if body_section:
         parts.append(body_section)
+        # Non-code deliverables: where a task-bound run writes files Orcha attaches to the
+        # task (collected by the reaper — notifier_deliverables). Rides only with a task body.
+        parts.append(DELIVERABLES_GUIDANCE)
     # #326 (A1): RULES (protocol) ahead of the digest — read fresh every wake, human-editable.
     proto_section = _render_protocol(protocol)
     if proto_section:

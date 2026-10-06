@@ -249,3 +249,20 @@ async def test_metrics_output_tail_is_capped_in_sql(client, container, make_agen
     d = await _metrics(client, cid)
     assert d["totals"]["est_cost_usd"] == 0.25
     assert d["totals"]["runs_with_cost"] == 1
+
+
+async def test_metrics_runs_with_tokens_distinguishes_not_reported(client, container, make_agent):
+    """M02b: an agent whose runs reported no token counts has runs_with_tokens 0 (the UI
+    says 'not reported'), never an indistinguishable '0 in · 0 out'."""
+    cid = container["id"]
+    quiet = (await make_agent("Quill", "eng"))["agent_id"]
+    loud = (await make_agent("Forge", "eng"))["agent_id"]
+    await _run(client, quiet)
+    await _run(client, quiet, output="garbage")
+    await _run(client, loud, finish_extra={"input_tokens": 10, "output_tokens": 20})
+    await _run(client, loud)
+    d = await _metrics(client, cid)
+    by = {a["alias"]: a for a in d["per_agent"]}
+    assert by["Quill"]["runs_with_tokens"] == 0 and by["Quill"]["tokens_in"] == 0
+    assert by["Forge"]["runs_with_tokens"] == 1
+    assert d["totals"]["runs_with_tokens"] == 1

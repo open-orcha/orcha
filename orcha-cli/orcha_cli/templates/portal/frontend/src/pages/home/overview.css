@@ -1,0 +1,238 @@
+/* ============================================================================
+   Project Overview (pages/home/HomePage.tsx) — Orcha V2 "Linear pop" (D10).
+   Pulse-like: ONE centred column inside the panel — summary, Needs you band,
+   Active work band, Updates timeline with day dividers. Borderless rows with
+   hover backgrounds, D8 bands for list groups, no stat walls, no stripes.
+   Status is always a glyph + exact label (visible or tooltip/sr), never colour
+   alone. Tokens only — no hard-coded colours.
+   ========================================================================== */
+.ov {
+  display: flex; flex-direction: column; gap: var(--v2-space-8);
+  width: 100%; max-width: 880px; margin: 0 auto; padding: 0 0 var(--v2-space-12);
+}
+.ov .grow { flex: 1; min-width: 0; }
+.ov .tnum { font-variant-numeric: tabular-nums; }
+.ov-meta { color: var(--v2-text-3); font-size: var(--v2-fs-meta); white-space: nowrap; }
+.ov-muted { color: var(--v2-text-3); }
+.ov-note { margin: var(--v2-space-2) var(--v2-space-3) 0; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.ov-empty {
+  display: flex; align-items: center; gap: var(--v2-space-2); margin: 0;
+  padding: var(--v2-space-3) var(--v2-space-3); color: var(--v2-text-3); font-size: var(--v2-fs-body);
+}
+.ov-empty-ico { width: 14px; height: 14px; color: var(--v2-ok); flex: none; }
+.ov-h { margin: 0; font-size: var(--v2-fs-body-lg); font-weight: var(--v2-fw-semibold); color: var(--v2-text); letter-spacing: -0.005em; }
+.ov-link {
+  font-size: var(--v2-fs-meta); color: var(--v2-text-3); text-decoration: none; white-space: nowrap;
+  border-radius: var(--v2-radius-full); padding: 3px 8px;
+}
+.ov-link:hover { color: var(--v2-text); background: var(--v2-hover); }
+.ov-link:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.ov-input {
+  width: 100%; min-height: 72px; background: var(--v2-canvas); color: var(--v2-text); font: inherit; font-size: var(--v2-fs-body);
+  border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-control); padding: var(--v2-space-2) var(--v2-space-3); resize: vertical;
+}
+.ov-input:focus-visible { outline: none; border-color: var(--v2-accent); box-shadow: 0 0 0 1px var(--v2-accent); }
+
+/* ---- summary: objective · ONE facts line ------------------------------------- */
+.ov-sum { display: flex; flex-direction: column; gap: var(--v2-space-3); }
+.ov-obj {
+  margin: 0; font-size: var(--v2-fs-body-lg); line-height: 1.6; color: var(--v2-text-2); max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+.ov-obj a { color: var(--v2-text); text-decoration: none; font-weight: var(--v2-fw-medium); }
+.ov-obj a:hover { text-decoration: underline; }
+.ov-facts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 0; font-size: var(--v2-fs-body); color: var(--v2-text-3); }
+.ov-fi { display: inline-flex; align-items: center; }
+/* separators belong to the fact that follows (never an orphan "·" at a line end) */
+.ov-fi + .ov-fi::before { content: "·"; margin: 0 8px; color: var(--v2-text-3); opacity: .6; }
+/* the (non-active) project status chip leads without a dot after it */
+.ov-fi-status { margin-right: 8px; }
+.ov-fi-status + .ov-fi::before { content: none; }
+.ov-fact {
+  display: inline-flex; align-items: center; gap: 4px; color: var(--v2-text-3); text-decoration: none;
+  border-radius: var(--v2-radius-full); padding: 2px 6px; margin: -2px -2px;
+}
+.ov-fact .v2-avstack { margin-right: 4px; }
+.ov-fact .n { color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.ov-fact:hover { background: var(--v2-hover); color: var(--v2-text-2); }
+.ov-fact:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.ov-fact-st > svg { flex: none; margin-right: 2px; }
+@media (max-width: 640px) {
+  /* wrapped facts read as a list: gaps instead of dots */
+  .ov-facts { gap: 6px 14px; }
+  .ov-fi + .ov-fi::before { content: none; }
+  .ov-fi-status { margin-right: 0; }
+}
+
+/* ---- bands (D8 ListGroup) + one-line rows ------------------------------------- */
+.ov-sec { min-width: 0; }
+.ov-sec .v2-group { border-radius: var(--v2-radius-control); }
+.ov-band-ico { width: 14px; height: 14px; color: var(--v2-text-2); }
+.ov-sec .v2-group-actions .ov-link { margin-right: 2px; }
+.ov-rows { list-style: none; margin: 4px 0 0; padding: 0; }
+.ov-row {
+  display: flex; align-items: center; gap: var(--v2-space-3); height: 38px; padding: 0 var(--v2-space-3);
+  border-radius: var(--v2-radius-control); color: var(--v2-text); text-decoration: none; font-size: var(--v2-fs-body);
+  min-width: 0;
+}
+.ov-row:hover { background: var(--v2-hover); }
+.ov-row:focus-visible { outline: none; box-shadow: var(--v2-focus-ring-inset, inset 0 0 0 2px var(--v2-accent)); }
+.ov-row > .v2-si-wrap, .ov-row > .v2-av { flex: none; }
+.ov-row-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--v2-fw-medium); }
+.ov-row .v2-chip, .ov-row .v2-live { flex: none; }
+/* Active work = Linear My-issues row: priority bars · muted short ID · status glyph · title */
+.ov-row > .ov-prio { flex: none; color: var(--v2-text-3); }
+.ov-id {
+  flex: none; width: 9ch; margin-left: calc(-1 * var(--v2-space-1, 4px)); color: var(--v2-text-3); font-size: var(--v2-fs-meta);
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ov-age { flex: none; min-width: 52px; text-align: right; color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-av-none { width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 50%; color: var(--v2-text-3); box-shadow: inset 0 0 0 1px var(--v2-border-strong); }
+.ov-av-none .v2-ico { width: 12px; height: 12px; }
+.ov-more { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px var(--v2-space-2); }
+li.ov-empty { list-style: none; }
+
+/* Needs-you kind chip (icon tinted, text neutral) */
+.aq-type { flex: none; }
+.aq-type .aq-type-ico { width: 12px; height: 12px; }
+.aq-type .aq-l-short { display: none; }
+.aq-type.v2-tone-warn .aq-type-ico { color: var(--v2-warn); }
+.aq-type.v2-tone-danger .aq-type-ico { color: var(--v2-danger); }
+.aq-type.v2-tone-info .aq-type-ico { color: var(--v2-info); }
+.nq.other-review .ov-row { color: var(--v2-text-2); }
+.nq.other-review .ov-row-t { font-weight: var(--v2-fw-regular); }
+.review-for { flex: none; }
+.tag.review-for {
+  font-size: var(--v2-fs-meta); color: var(--v2-text-2); border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-full); padding: 1px 8px; white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .ov { gap: var(--v2-space-6); padding-top: 0; }
+  .ov-row { gap: var(--v2-space-2); padding: 0 var(--v2-space-2); }
+  .nq .review-for { display: none; }
+  /* one-word kind label (Plan / Verify / Escalated) — never an icon alone */
+  .nq .aq-type .aq-l-long {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .nq .aq-type .aq-l-short { display: inline; }
+  .ov-age { min-width: 0; }
+  .ov-id { display: none; }
+  .ov-row .v2-live .v2-live-text { display: none; }
+}
+@media (pointer: coarse) { .ov-row { height: auto; min-height: var(--v2-row-h-touch, 44px); } }
+
+/* ---- inline gate cards (fallback when the /needs page is absent) -------------- */
+.aq-list { display: flex; flex-direction: column; gap: var(--v2-space-2); margin-top: var(--v2-space-2); }
+.aq {
+  display: flex; flex-direction: column; gap: var(--v2-space-3); padding: var(--v2-space-3) var(--v2-space-4);
+  background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card);
+}
+.aq.other-review { opacity: .62; }
+.aq.other-review:hover, .aq.other-review:focus-within { opacity: 1; }
+.aq-top { display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: wrap; min-width: 0; }
+.aq-title {
+  flex: 1 1 240px; min-width: 0; color: var(--v2-text); font-weight: var(--v2-fw-medium); font-size: var(--v2-fs-body);
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.aq-title:hover { text-decoration: underline; }
+.aq-who { display: inline-flex; align-items: center; gap: var(--v2-space-2); font-size: var(--v2-fs-meta); color: var(--v2-text-3); }
+.aq-who .dlink { display: inline-flex; align-items: center; gap: 6px; color: var(--v2-text-2); text-decoration: none; }
+.aq-who .dlink:hover { color: var(--v2-text); }
+.aq-lines { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px var(--v2-space-3); margin: 0; font-size: var(--v2-fs-body); }
+.aq-lines dt { color: var(--v2-text-3); font-size: var(--v2-fs-meta); line-height: 20px; }
+.aq-lines dd { margin: 0; color: var(--v2-text); line-height: 20px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.aq-ctx {
+  font-size: var(--v2-fs-body); color: var(--v2-text); line-height: 1.55; max-height: 200px; overflow: auto; white-space: pre-wrap;
+  padding: var(--v2-space-2) var(--v2-space-3); background: var(--v2-panel); border: 1px solid var(--v2-border-subtle, var(--v2-border)); border-radius: var(--v2-radius-control);
+}
+.aq-ctx:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.aq-ctx .lbl { display: block; color: var(--v2-text-3); font-size: var(--v2-fs-meta); margin-bottom: 2px; white-space: normal; }
+.aq-acts { display: flex; gap: var(--v2-space-2); align-items: center; flex-wrap: wrap; }
+.aq-reason { display: flex; flex-direction: column; gap: var(--v2-space-2); }
+.aq-reason-acts { display: flex; gap: var(--v2-space-2); align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 640px) { .aq-lines { grid-template-columns: minmax(0, 1fr); } .aq-lines dd { margin-bottom: 4px; } }
+
+/* ---- empty-project checklist --------------------------------------------------- */
+.ov-setup { display: flex; flex-direction: column; gap: var(--v2-space-3); }
+.ov-steps {
+  list-style: none; margin: 0; padding: 0;
+  background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); overflow: hidden;
+}
+.ov-steps li { display: flex; align-items: center; gap: var(--v2-space-3); padding: var(--v2-space-3) var(--v2-space-4); }
+.ov-steps li + li { border-top: 1px solid var(--v2-border); }
+.ov-step-n {
+  width: 20px; height: 20px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: var(--v2-fs-meta);
+  font-weight: var(--v2-fw-medium); color: var(--v2-text-2); box-shadow: inset 0 0 0 1.5px var(--v2-border-strong);
+}
+.ov-step-ico { width: 12px; height: 12px; }
+.ov-steps li.done .ov-step-n { color: var(--v2-ok); box-shadow: inset 0 0 0 1.5px var(--v2-ok); }
+.ov-step-b { flex: 1; min-width: 0; }
+.ov-step-t { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); color: var(--v2-text); }
+.ov-steps li.done .ov-step-t { color: var(--v2-text-2); }
+.ov-step-d {
+  font-size: var(--v2-fs-meta); color: var(--v2-text-3); line-height: 1.5; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 640px) { .ov-steps li { flex-wrap: wrap; padding: var(--v2-space-3); } .ov-step-b { flex-basis: calc(100% - 40px); } .ov-steps li > .v2-btn { margin-left: 32px; } }
+
+/* ---- updates feed (band + Timeline + day dividers) ----------------------------- */
+.ov-feed .v2-group-actions { display: flex; align-items: center; gap: var(--v2-space-2); }
+.ov-feed .ov-pills { flex: none; }
+.ov-tl { padding: var(--v2-space-3) var(--v2-space-3) 0; }
+.ov-tl .v2-tl-divider { margin-top: var(--v2-space-5); }
+.ov-tl > .v2-tl-divider:first-child { margin-top: 0; }
+.ov-ev .v2-tl-line { flex: 1; min-width: 0; display: block; }
+.ov-ev-main { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
+.ov-ev-main > * { flex: none; }
+.ov-ev .v2-tl-actor { color: var(--v2-text); max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.ov-ev-verb { color: var(--v2-text-3); }
+/* the object ellipsizes instead of wrapping: ONE event line */
+.ov-ev-main > .ov-tl-obj { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; }
+.ov-tl-obj b { color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.ov-tl-obj:hover b { text-decoration: underline; }
+.ov-tl-obj:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: 3px; }
+/* the message body = ONE muted line under the event line */
+.ov-ev-body { display: block; margin-top: 2px; color: var(--v2-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-feed-more { display: inline-block; margin-top: var(--v2-space-2); }
+@media (max-width: 640px) {
+  /* the band keeps title + link; the pills drop to a scrolling row under it */
+  .ov-feed .v2-group { flex-wrap: wrap; row-gap: 4px; height: auto; padding-bottom: 6px; }
+  .ov-feed .v2-group-actions { flex-basis: 100%; min-width: 0; }
+  /* "Open activity" stays on the title row (top-right); the pills get the full row */
+  .ov-feed .v2-group-actions > .ov-link { position: absolute; top: 8px; right: 8px; }
+  .ov-feed .ov-pills { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+}
+
+/* "+ New agent": a quiet 18px circle right after the agents fact it adds to */
+.ov-newagent { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; border-radius: 50%;
+  border: 1px solid var(--v2-border); color: var(--v2-text-3); text-decoration: none; }
+.ov-newagent:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.ov-newagent:hover { color: var(--v2-text); background: var(--v2-hover); }
+.ov-newagent .v2-ico { width: 12px; height: 12px; }
+
+/* ---- parity r1 (home-projects fixer) ------------------------------------------ */
+/* Needs-you row: the actor avatar is its own agent link BESIDE the row link
+   (no nested anchors); the li carries the hover so the row still reads as one */
+.nq { display: flex; align-items: center; border-radius: var(--v2-radius-control); }
+.nq:hover { background: var(--v2-hover); }
+.nq > .ov-row { flex: 1; min-width: 0; padding-left: var(--v2-space-2); }
+.nq > .ov-row:hover { background: transparent; }
+.nq-av { flex: none; display: inline-grid; place-items: center; margin-left: var(--v2-space-3); border-radius: 50%; }
+.nq-av:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+/* feed actor: a quiet link to the agent */
+.ov-ev-actor { text-decoration: none; }
+.ov-ev-actor:hover { text-decoration: underline; }
+.ov-ev-actor:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: 3px; }
+/* the live pill never ellipsizes its word ("Working…") */
+.ov-row .v2-live, .ov-row .v2-live .v2-live-text { min-width: max-content; overflow: visible; text-overflow: clip; }
+@media (max-width: 640px) { .nq-av { margin-left: var(--v2-space-2); } }
+/* phones: the event line may wrap to TWO lines (D12 max 2) and the body line
+   drops, so the object and actor both stay readable */
+@media (max-width: 480px) {
+  .ov-ev-main { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; }
+  .ov-ev-main > *, .ov-ev-main > .ov-tl-obj { display: inline; overflow: visible; white-space: normal; }
+  .ov-ev .v2-tl-actor { max-width: none; }
+  .ov-ev-body { display: none; }
+}

@@ -38,15 +38,23 @@ def test_recency_band_helper_retained():
 # ---------- tasks: shared control owns within-group order; band float retired ----------
 
 def test_tasks_sort_uses_shared_control_status_bucket_outer():
+    """V2: the tasks list sort is URL state (`?sort=`), falling back to the shared
+    persisted control state (lib/sort sortState("tasks") — the same orcha:sort:tasks
+    key), and the comparator mirrors lib/sort sortComparator with the status bucket as
+    the OUTER key whenever the list is grouped by status."""
     tasks = (SRC / "pages" / "tasks" / "TasksPage.tsx").read_text()
-    # ISS-331: within-group ordering routes through the shared control...
-    assert "sortComparator(SORT_NAME, { bucket: taskBucket" in tasks, \
-        "tasks sort no longer routes through the shared control with the status bucket outer"
-    # ...with the status grouping as the OUTER key (open/needs-attention float survives).
-    assert "const ORDER" in tasks and "ORDER[t.status]" in tasks, \
+    query = (SRC / "pages" / "tasks" / "taskQuery.ts").read_text()
+    # default = the shared persisted control state; a URL pick persists back to the same key
+    assert 'if (!k) return sortState("tasks");' in query, \
+        "tasks sort no longer falls back to the shared control's persisted choice"
+    assert '"orcha:sort:" + SORT_NAME' in tasks, "a URL sort choice no longer persists to the shared key"
+    # the status bucket stays the OUTER key when grouped by status
+    assert "taskComparator(sortSt, query.group === \"status\")" in tasks, \
+        "status bucket is no longer the outer key of the grouped list"
+    assert "const bk = taskBucket(a) - taskBucket(b);" in query and "BUCKET[t.status]" in query, \
         "status bucket accessor dropped — status is no longer outer"
     # SUPERSESSION: the recency-band float is NO LONGER a comparator key.
-    assert "recencyBand" not in tasks, \
+    assert "recencyBand" not in tasks and "recencyBand" not in query, \
         "recency-band float wired into the tasks comparator — ISS-331 supersedes it"
 
 
@@ -55,7 +63,9 @@ def test_tasks_sort_uses_shared_control_status_bucket_outer():
 def test_requests_sort_uses_shared_control_open_first():
     reqs = (SRC / "pages" / "requests" / "RequestsPage.tsx").read_text()
     # the request list runs through the shared control with the open-first bucket outer
-    assert 'sortComparator("requests", { bucket: reqRank' in reqs, \
+    # (parity r1: the bucket wraps reqRank so a just-answered row keeps its place)
+    assert ('sortComparator("requests", { bucket: reqRank' in reqs
+            or ('sortComparator("requests", { bucket,' in reqs and ": reqRank(x))" in reqs)), \
         "requests sort no longer routes through the shared control / open-first bucket"
     assert "REQ_STATUS_RANK" in reqs and "open: 0" in reqs, "open-first status ranking dropped"
     # SUPERSESSION: recency-band float removed from the request comparator.

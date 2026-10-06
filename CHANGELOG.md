@@ -11,6 +11,13 @@ missing.
 ## [Unreleased]
 
 ### Changed
+- The product is now called **Embodent** (formerly Quorate). The portal's
+  title, sidebar, pairing dialog, device page and every user-facing message
+  say Embodent, and the portal carries the new Embodent mark (a figure split
+  light | grey; near-black | grey in light mode) — in the sidebar, the pairing
+  QR code's centre tile, favicons, the apple-touch icon and a new PWA manifest.
+  The `orcha` CLI command, `ORCHA_*` env vars, API paths and the `orcha://`
+  URL scheme are unchanged.
 - Claude model catalog refreshed to the current generation. The per-agent
   model picker now offers Opus 5.5 and Sonnet 5.5 next to Fable 5.1, and
   Opus 5.5 is the default for agents that never picked a model; Fable 5,

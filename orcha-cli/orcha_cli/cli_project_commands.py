@@ -160,9 +160,11 @@ def cmd_upgrade(args: argparse.Namespace, services) -> None:
     # hooks (e.g. C1's SessionEnd `orcha snapshot`) reach an EXISTING workspace on
     # upgrade — init/connect call this, but upgrade previously didn't, so new hooks
     # never landed without a manual `orcha enable-hook`. Idempotent + additive: only
-    # missing hooks are added; existing settings.json entries are untouched.
+    # missing hooks are added, and already-registered ORCHA hooks get their template
+    # `timeout` refreshed; user-authored settings.json entries are untouched.
     if services._write_hook_config(config_path.parent):
-        print("[orcha] registered newly-shipped notification hooks in .claude/settings.json")
+        print("[orcha] registered newly-shipped notification hooks / refreshed hook timeouts "
+              "in .claude/settings.json")
     else:
         print("[orcha] notification hooks already up to date (.claude/settings.json)")
     print("[orcha] rebuilding portal (data preserved — no volume wipe) ...")

@@ -28,15 +28,18 @@ top-level key, and any sandbox sub-keys you've already set (a custom `image`,
 Sandbox mode needs three things present before wakes will succeed:
 
 1. **Docker running** and reachable on the host (or VM) the notifier runs on.
-2. **A provider API key in the daemon's environment.** The container receives
-   credentials ONLY via env passthrough from the process that starts the
-   notifier daemon (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
-   `ORCHA_LLM_API_KEY`) — interactive host OAuth login state (`claude login` /
-   `codex login`) does **not** reach the container. Export the key in the
-   environment that starts the daemon, or sandbox wakes will fail auth.
+2. **A Claude/ChatGPT subscription or an API key the container can use.** The
+   container receives credentials ONLY via env passthrough from the process
+   that starts the notifier daemon (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+   `CODEX_API_KEY`, or `ORCHA_LLM_API_KEY`) — interactive host OAuth login
+   state (`claude login` / `codex login`) does **not** reach the container.
+   Either store the project's Anthropic / OpenAI key in Settings › Models &
+   providers and switch on **Use for agent runs** (the daemon injects it into
+   each run, sandboxed or not), or export the key in the environment that
+   starts the daemon — otherwise sandbox wakes will fail auth.
    Subscription (BYOC) users can export a long-lived `claude setup-token`
    token as `CLAUDE_CODE_OAUTH_TOKEN` instead — it rides the same passthrough.
-   `orcha sandbox status` warns when none of these is set.
+   `orcha sandbox status` warns when no key is in the daemon environment.
 3. **The runner image present** — either build it locally:
 
    ```bash

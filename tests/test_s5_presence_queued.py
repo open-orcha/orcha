@@ -43,7 +43,11 @@ def test_presence_contract_is_wired_into_the_panel():
     assert "const queued = (" in js and "conv-queued" in js, "no queued notice"
     assert "p.reason ? p.reason :" in js, "queued notice doesn't carry the opaque presence_reason"
     assert "is busy with another task" in js, "no generic queued fallback line"
-    assert 'if (p.k === "busy") return queued();' in js, "busy doesn't route to the queued notice"
+    # V2 (Agent E): one replyState() decision feeds both the indicator and the per-turn
+    # delivery label; busy still routes to the queued notice (never thinking dots)
+    assert 'if (p.k === "busy") return { kind: "queued" };' in js, "busy doesn't route to the queued notice"
+    assert 'if (r.kind === "thinking") return thinking();' in js and "return queued(r.reason);" in js, \
+        "the indicator doesn't render the replyState decision"
     # the busy pill + queued styles exist
     css = (AGENTS_DIR / "agents.css").read_text()
     assert ".presence.p-busy" in css and ".conv-queued" in css, "busy pill / queued CSS missing"
@@ -72,7 +76,10 @@ def test_presence_drives_queued_vs_thinking_vs_fallback():
         "falls back to agent.status; an agent reply clears the pending indicator",
         'presence: "frobnicate"',
         'toContain("p-idle")',
-        'toContain("is busy with another task")',  # generic honest fallback line
+        # generic honest fallback line for an IDLE agent (V2, Agent E): the message is saved
+        # and not yet picked up — an idle agent is never described as "busy with another task"
+        'toContain("hasn\'t picked it up yet")',
+        'not.toContain("busy with another task")',
     ):
         assert beat in t, f"presence harness lost a beat: {beat}"
 

@@ -1,11 +1,13 @@
 """Reap stale wake leases independently for work and conversation lanes."""
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
+from portal_backend.identity_routes import require_machine_lane_member
+from portal_backend.stranded_runs import reconcile_stranded_runs
 
 ORPHAN_LEASE_SECS = 1260.0
 
@@ -93,7 +95,9 @@ def _reap_lane(
 
 @app.post("/api/containers/{cid}/reap-orphan-leases", status_code=200)
 def reap_orphan_leases(
-    cid: str, orphan_secs: float = Query(default=ORPHAN_LEASE_SECS, ge=0)
+    cid: str,
+    request: Request,
+    orphan_secs: float = Query(default=ORPHAN_LEASE_SECS, ge=0),
 ):
     """ISS-60(B): heartbeat-keyed orphan-lease reaper (defense-in-depth backstop for ISS-60).
 
@@ -130,11 +134,17 @@ def reap_orphan_leases(
     old that pre-claim heartbeat was and false-orphan a lease that is seconds old and genuinely
     alive — flipping its worker_run to 'orphaned' out from under it and briefly reopening the
     single-flight guard for a competing claim (a real double-embodiment window, not just a
-    cosmetic status flash)."""
+    cosmetic status flash).
+
+    Stranded runs: a 'running' worker_runs row whose lane lease has already LAPSED is reconciled
+    too (see portal_backend/stranded_runs.py) — once neither the run nor its lane has shown any
+    activity for `orphan_secs`, it is marked 'orphaned', its tokens are revoked, and a
+    `stranded_run_reaped` event is logged. Those rows are returned under `stranded`."""
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         require_container(cur, cid)
+        require_machine_lane_member(cur, request, cid)  # PS-07
         work_reaped = _reap_lane(
             cur,
             cid,
@@ -157,6 +167,15 @@ def reap_orphan_leases(
             preempt_cols=("conv_preempt_requested_at", "conv_preempt_for"),
             run_lane="conversation",
         )
+        # Stranded-run backstop: a 'running' row whose lane lease already LAPSED is
+        # invisible to the live-lease branches above, yet it blocks every wake of that
+        # lane (wake-scan "lapsed-lease orphan"). Orphan it once the run and its lane
+        # have been silent past the same threshold. See portal_backend/stranded_runs.py.
+        stranded = [
+            dict(row, lane=lane)
+            for lane in ("work", "conversation")
+            for row in reconcile_stranded_runs(cur, cid, orphan_secs, lane)
+        ]
         cur.execute(
             """UPDATE embodiment_tokens SET revoked_at=now()
                WHERE run_id IS NULL AND revoked_at IS NULL
@@ -176,5 +195,16 @@ def reap_orphan_leases(
                 "idle_seconds": round(float(row["idle_seconds"]), 1),
             }
             for row in reaped
+        ],
+        "stranded": [
+            {
+                "run_id": str(row["run_id"]),
+                "agent_id": str(row["agent_id"]),
+                "alias": row["alias"],
+                "lane": row["lane"],
+                "wake_kind": row["wake_kind"],
+                "idle_seconds": round(float(row["idle_seconds"]), 1),
+            }
+            for row in stranded
         ],
     }

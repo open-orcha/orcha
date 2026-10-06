@@ -31,6 +31,7 @@ from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import valid_uuid
 from portal_backend.identity_routes import proxy_login
+from portal_backend.push_outbox import push_logins_allowed
 
 # APNs device tokens are hex blobs (64 hex chars today; Apple says treat length
 # as opaque). Accept 16..200 hex chars, store lowercased — reject anything else
@@ -228,10 +229,10 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
             (body.limit,),
         )
         rows = cur.fetchall()
-        events, empty_ids = [], []
+        events, empty_ids, muted_ids = [], [], []
         for row in rows:
             cur.execute(
-                """SELECT pd.apns_token FROM push_devices pd
+                """SELECT pd.apns_token, pd.github_login FROM push_devices pd
                    WHERE pd.revoked_at IS NULL
                      AND EXISTS (SELECT 1 FROM agents a
                                   WHERE a.container_id=%s AND a.kind='human'
@@ -240,9 +241,18 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
                    ORDER BY pd.created_at ASC""",
                 (row["container_id"],),
             )
-            devices = [d["apns_token"] for d in cur.fetchall()]
-            if not devices:
+            device_rows = cur.fetchall()
+            if not device_rows:
                 empty_ids.append(row["id"])
+                continue
+            # mig 063: each member's notification settings are re-checked AT SEND
+            # TIME (a pause or quiet hours that began after enqueue holds the push).
+            allowed = push_logins_allowed(
+                cur, row["container_id"], row["kind"], row["ref_id"]
+            )
+            devices = [d["apns_token"] for d in device_rows if d["github_login"] in allowed]
+            if not devices:
+                muted_ids.append(row["id"])
                 continue
             events.append(
                 {
@@ -265,6 +275,12 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
                 "UPDATE push_outbox SET failed='no live devices at claim' "
                 "WHERE id = ANY(%s)",
                 (empty_ids,),
+            )
+        if muted_ids:
+            cur.execute(
+                "UPDATE push_outbox SET failed='muted by notification settings' "
+                "WHERE id = ANY(%s)",
+                (muted_ids,),
             )
         conn.commit()
     return {"events": events}

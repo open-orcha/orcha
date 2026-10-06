@@ -95,7 +95,7 @@ struct OrchaPipelineWidget: Widget {
       PipelineView(entry: entry)
         .widgetURL(deepLink(status: entry.status))
     }
-    .configurationDisplayName("Orcha Pipeline")
+    .configurationDisplayName("Embodent Pipeline")
     .description("Task flow across your stacks.")
     .supportedFamilies([.systemMedium])
   }

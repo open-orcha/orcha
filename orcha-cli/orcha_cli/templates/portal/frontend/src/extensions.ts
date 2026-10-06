@@ -7,21 +7,23 @@
  * multi-project "/" to the /projects landing, else renders the open HomePage).
  */
 import type { ComponentType } from "react";
-import { accountMenu, fetchIdentity } from "./cloud/identity";
+import { accountMenu, fetchIdentity, lastTrusted, resetIdentity, type Me } from "./cloud/identity";
 import { ProjectsPage } from "./cloud/projects/ProjectsPage";
-import { ProjectSwitcher } from "./cloud/projects/ProjectSwitcher";
 import { CloudHome } from "./cloud/projects/homeGate";
 import { MetricsPage } from "./cloud/metrics/MetricsPage";
 import { GitHubPage } from "./cloud/github/GitHubPage";
 import { CodeSpacePage } from "./cloud/codespace/CodeSpacePage";
+import { codeOnly } from "./cloud/shared/CodeOnlyGate";
 import { DevicePage } from "./cloud/device/DevicePage";
 import { MembersPage, MembersSection } from "./cloud/members/MembersPage";
-// Importing the appearance module also runs its module-level boot hook
-// (restore the persisted data-skin + kick the /api/prefs sync) at app boot.
+// Importing the appearance module also runs its module-level boot hook: the
+// once-per-load /api/prefs sync. The theme (System / Light / Dark) is applied by
+// shell/theme.ts, which re-applies when the server bag lands; the retired skin
+// is kept (not applied, not deleted) and disclosed in Settings › Interface.
 import { AppearanceSection } from "./cloud/settings/AppearanceSection";
 import { GitHubAccessSection } from "./cloud/settings/GitHubAccessSection";
 import { ProviderKeysSection } from "./cloud/settings/ProviderKeysSection";
-import { PairingButton, PairingSection } from "./cloud/settings/pairing";
+import { PairingSection } from "./cloud/settings/pairing";
 
 export interface ExtensionRoute {
   path: string;
@@ -69,7 +71,19 @@ export interface Extensions {
   routes: ExtensionRoute[];
   nav: ExtensionNavItem[];
   identity?: (cid: string | null) => Promise<Identity | null>;
+  // V2 (QA): after `identity` resolves, was the sign-in TRUSTED (verified proxy
+  // lane)? With a null identity that is the honest viewer (non-member) state —
+  // never the self-host fail-open state, where the legacy human pick applies.
+  identityTrusted?: (cid: string | null) => boolean;
   accountMenu?: (identity: Identity | null) => AccountMenuItem[];
+  // PS-16: a side-channel re-ask of the identity that BYPASSES the provider's
+  // per-page cache. Resolves null when there is no verdict (network, timeout,
+  // non-2xx) — the caller then keeps what it has. When the answer differs from
+  // what is on screen, the caller calls identityInvalidate() and re-runs the
+  // normal identity ask, so a live role change (e.g. demoted to viewer) flips
+  // the open UI without a reload.
+  identityProbe?: (cid: string | null) => Promise<{ identity: Identity | null; trusted: boolean } | null>;
+  identityInvalidate?: () => void;
   settingsSections?: SettingsSection[];
   // General-tab card toggles (consumed by the open SettingsPage): key:false
   // hides the open Anthropic-key card, models:false the model-selection card.
@@ -77,7 +91,22 @@ export interface Extensions {
   // Provider keys section so every provider key has ONE home (vanilla
   // settings.html kept all key cards together under the Workspace tab).
   settingsGeneral?: { key?: boolean; models?: boolean };
-  topbarActions?: ComponentType[];   // rendered in the topbar between the notification pill and the autonomy switch
+  topbarActions?: ComponentType[];   // V2: rendered in the header's compact secondary slot (keep empty unless essential)
+}
+
+/** PS-16: GET /api/me uncached (see Extensions.identityProbe). */
+export function probeMe(cid: string | null): Promise<Me | null> {
+  if (!cid) return Promise.resolve(null);
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const t = ctl ? setTimeout(() => ctl.abort(), 8_000) : null;
+  return fetch("/api/me?cid=" + encodeURIComponent(cid), ctl ? { signal: ctl.signal, cache: "no-store" } : { cache: "no-store" })
+    .then(async (r) => {
+      if (!r.ok) return null;
+      const d = (await r.json()) as { identity?: Me["identity"]; trusted?: boolean } | null;
+      return { identity: (d && d.identity) || null, trusted: !!(d && d.trusted) };
+    })
+    .catch(() => null)
+    .finally(() => { if (t) clearTimeout(t); });
 }
 
 export const extensions: Extensions = {
@@ -85,22 +114,28 @@ export const extensions: Extensions = {
     { path: "/", element: CloudHome },
     { path: "/projects", element: ProjectsPage },
     { path: "/metrics", element: MetricsPage },
-    { path: "/github", element: GitHubPage },
-    { path: "/code", element: CodeSpacePage },
+    // General mode hides these tabs; a direct URL shows a calm notice instead (U04)
+    { path: "/github", element: codeOnly("github", GitHubPage) },
+    { path: "/code", element: codeOnly("code", CodeSpacePage) },
     { path: "/auth/device", element: DevicePage },   // matches the backend page route
     { path: "/members", element: MembersPage },
   ],
-  // No "projects" nav entry: the /projects hub stays routed but is reached via
-  // the topbar ProjectSwitcher's "All projects" row (vanilla-shell parity).
+  // Project-section entries (V2 project tab bar + palette, arch §8; the
+  // sidebar no longer repeats them — D1). No "projects" entry: the /projects
+  // hub is the sidebar's "All projects" footer link. Icons are unique per
+  // destination (git mark for GitHub, bar chart for Metrics; Activity = pulse).
   nav: [
-    { key: "github", href: "/github", ico: "link", label: "GitHub" },
-    { key: "code", href: "/code", ico: "code", label: "Code Space" },
-    { key: "metrics", href: "/metrics", ico: "live", label: "Metrics" },
+    { key: "github", href: "/github", ico: "git", label: "GitHub" },
+    { key: "code", href: "/code", ico: "code", label: "Code" },
+    { key: "metrics", href: "/metrics", ico: "chart", label: "Metrics" },
   ],
   // The /api/me layer + the sign-out account menu (src/cloud/identity.ts —
   // vanilla data.js fetchMe / app-shell.js actingMenuHtml, ported).
   identity: fetchIdentity,
+  identityTrusted: lastTrusted,
   accountMenu,
+  identityProbe: probeMe,
+  identityInvalidate: resetIdentity,
   // Cloud settings tabs, mirroring vanilla settings.html's grouping order —
   // Workspace (keys + models) → Collaboration (Members, Phone pairing) →
   // Appearance. General (models) + Provider keys cover the old Workspace tab;
@@ -114,7 +149,8 @@ export const extensions: Extensions = {
     { key: "appearance", title: "Appearance", element: AppearanceSection },
   ],
   settingsGeneral: { key: false },
-  // The project switcher (vanilla shell's dropdown, topbar-relocated) renders
-  // before the pairing button.
-  topbarActions: [ProjectSwitcher, PairingButton],
+  // V2 (S-17): the project switcher became the sidebar Projects list and "Pair
+  // phone" moved to each project's ⋯ menu + Settings › Devices & pairing, so
+  // the header carries no duplicate switcher. The seam stays for downstreams.
+  topbarActions: [],
 };

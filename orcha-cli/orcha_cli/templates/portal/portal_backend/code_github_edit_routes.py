@@ -96,6 +96,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from fastapi import HTTPException, Request
@@ -103,7 +104,7 @@ from fastapi import HTTPException, Request
 from portal_backend import github_repo_browse_routes as browse
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend.github_hub_routes import _resolve_repo_token
+from portal_backend.github_hub_routes import _no_token, _resolve_repo_token
 from portal_backend.github_repo_browse_routes import (
     GITHUB_API,
     GITHUB_TIMEOUT_SECONDS,
@@ -138,6 +139,7 @@ _LOGIN_SANITIZE_RE = re.compile(r"[^\w-]+")
 # convention and this only needs to catch the common "I copied a commit sha in" case,
 # not exhaustively validate every possible git ref.
 _SHA_LIKE_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _looks_like_sha(ref: str) -> bool:
@@ -393,19 +395,36 @@ def post_github_propose(cid: str, body: GithubProposeCreate, request: Request):
 
     token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
 
     # Step 1: resolve base ref -> base commit sha -> base tree sha. `_resolve_ref` and
     # `_gh_get` are called through the `browse` module object (never imported by name)
     # so a test's `monkeypatch.setattr(browse, "_gh_get", ...)` — the SAME seam
     # test_repo_browser_api.py already uses for these exact helpers — covers every
     # read this route makes, including this one.
+    # C21: "HEAD" is a local-git notion (the Code Space editor's default ref) — on
+    # GitHub it means "the default branch", exactly like an omitted base_ref.
+    base_ref = (body.base_ref or "").strip()
+    if base_ref.upper() == "HEAD":
+        base_ref = ""
     try:
-        base_sha = browse._resolve_ref(repo, token, cid, body.base_ref or "")
-        base_commit = browse._gh_get(f"/repos/{repo}/git/commits/{base_sha}", token)
+        resolved = browse._resolve_ref(repo, token, cid, base_ref)
+        if _FULL_SHA_RE.match(resolved or ""):
+            base_commit = browse._gh_get(f"/repos/{repo}/git/commits/{resolved}", token)
+            base_sha = base_commit.get("sha") or resolved
+            base_tree_sha = (base_commit.get("tree") or {}).get("sha")
+        else:
+            # C21: `_resolve_ref` passes a branch / tag NAME straight through, but the
+            # Git Data API (git/commits/{sha}, commit parents) takes only a commit SHA —
+            # real GitHub 404s a name there. The commits API resolves any ref.
+            commit = browse._gh_get(f"/repos/{repo}/commits/{urllib.parse.quote(resolved, safe='/')}", token)
+            base_sha = commit.get("sha")
+            base_tree_sha = ((commit.get("commit") or {}).get("tree") or {}).get("sha")
     except RuntimeError as exc:
         return _github_error_payload(exc)
-    base_tree_sha = (base_commit.get("tree") or {}).get("sha")
+    if not base_sha:
+        return {"available": True, "ok": False, "reason": "github_error",
+                "detail": "could not resolve the base commit"}
     if not base_tree_sha:
         return {"available": True, "ok": False, "reason": "github_error",
                 "detail": "could not resolve the base commit's tree"}
@@ -462,7 +481,7 @@ def post_github_propose(cid: str, body: GithubProposeCreate, request: Request):
     # base. A caller-supplied plain branch name or tag is used AS GIVEN — `_resolve_ref`
     # passes it straight through unchanged, so `body.base_ref` already IS the right
     # value to hand GitHub's `base` field in that common case.
-    pr_base = body.base_ref or None
+    pr_base = base_ref or None
     if not pr_base or pr_base.startswith("pr/") or _looks_like_sha(pr_base):
         try:
             pr_base = browse._resolve_default_branch(repo, token, cid)

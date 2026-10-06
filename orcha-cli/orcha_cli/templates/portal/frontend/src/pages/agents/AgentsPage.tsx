@@ -9,21 +9,53 @@
  * The live terminal (terminal.js/xterm) is ported: the conversation panel's
  * "Pair in terminal" is the real S3 §3b pairing (see Conversation.tsx +
  * components/terminal/TerminalPane).
+ *
+ * V2 (Agent E, brief §5): a compact roster (AI agents / Humans, filterable,
+ * real status + current activity) and ONE selected-agent workspace whose
+ * sections are tabs — Conversation · Runs · Tasks · Requests · Memory ·
+ * Configuration — mirrored in ?tab= (default: conversation for AI agents,
+ * tasks for humans). The plan/verify gate stays above the tabs. Tabs replace
+ * the old ISS-63 collapse toggles. Below 900 px the roster and the workspace
+ * are separate full views (opening an agent pushes history).
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { getJSON, sendJSON } from "../../api/client";
-import { Avatar, Icon, KindBadge, Pill, useToast } from "../../components/ui";
-import { relTime, shortId, trunc } from "../../lib/format";
-import { leaseOf, statusClass } from "../../lib/status";
+import { Icon, useToast } from "../../components/ui";
+import {
+  Avatar, Button, Chip, EmptyState, IconButton, Menu, MenuButton, PriorityIcon, StatusIcon, TabPanel, Tabs,
+  type MenuItemSpec, type TabSpec,
+} from "../../components/primitives";
+import { ListGroup } from "../../components/primitives";
+import { useMediaQuery, useNarrow } from "../../hooks/useMediaQuery";
+import { payloadText } from "../requests/requestPayload";
+import { runOutcome, type WorkerRun } from "../activity/runModel";
+import { clockTime, relTime, shortId, trunc } from "../../lib/format";
 import { Shell } from "../../shell/Shell";
-import { actingHuman, agentByAlias, planMessageOf, useSnapshot } from "../../state/SnapshotProvider";
+import { CircleIconButton, FilterPills, PageToolbar, Pager, scrollMainTo } from "../../shell/PageChrome";
+import { actingHuman, agentAutonomy, agentByAlias, planAwaitsHuman, planMessageOf, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import type { Identity } from "../../extensions";
 import type { Agent, OrchaRequest, Snapshot, Task } from "../../types";
 import { Conversation } from "./Conversation";
-import { RunsFeed } from "./runlog";
+import { RunsFeed, runReasonText, useAgentRuns } from "./runlog";
+import { modelLabel } from "../../lib/models";
+import { agentPresence, humanizeModelId, type ConvPresence } from "./presence";
 import { SortCtl, sortComparator, type SortAcc } from "../../lib/sort";
+import { SnapshotPending } from "../../components/SnapshotPending";
+import { activityOf, BOARD_FILTERS, columnTasks, canGrant, errDetail, grantDenied, GRANT_REASON, NO_ACTING_HUMAN, type BoardFilter } from "./agentModel";
+import { AgentsBoard, filterCounts } from "./AgentsBoard";
+import { AgentsRoster, RosterSearch } from "./AgentsRoster";
+import { changesTarget, useRunChanges } from "./liveChanges";
+import { LiveChangesContext } from "./liveChangesContext";
+import { LiveChangesButton, LiveChangesPanel } from "./LiveChangesPanel";
+import { AgentBudgetSection, BudgetPausedChip } from "./budget/AgentBudgetSection";
+import { AgentPerformanceCard } from "./performance/AgentPerformanceCard";
+import { autonomyLabelFor, useProjectMode } from "../../lib/projectMode";
+import { pausedById, useContainerBudgets } from "./budget/budgetModel";
+import { AgentConfigHistory } from "./history/AgentConfigHistory";
+import { BrandLogo } from "../../components/primitives/BrandLogo";
+import { ModelPicker, type ManagedRuntime } from "./ModelPicker";
 import "./agents.css";
 
 /* ---------- constants (verbatim from agents.html) ------------------------- */
@@ -103,7 +135,8 @@ function fmtInterval(secs: number | null): string {
 // cadence isn't one of them (an API-set 10m never renders as unselected "Off").
 function awakePresets(current: number | null): { secs: number | null; label: string }[] {
   if (current == null || AWAKE_PRESETS.some((p) => p.secs === current)) return AWAKE_PRESETS;
-  return AWAKE_PRESETS.concat([{ secs: current, label: fmtInterval(current) }]);
+  // sorted by cadence ("Off" first) so an API-set 10m sits between 5m and 15m
+  return AWAKE_PRESETS.concat([{ secs: current, label: fmtInterval(current) }]).sort((x, y) => (x.secs ?? -1) - (y.secs ?? -1));
 }
 
 /* ---------- per-agent autonomy override (mig 043: PATCH /api/agents/{id}) ----
@@ -138,6 +171,7 @@ function containerEnforced(snap: Snapshot | null): boolean {
 // Trust off (no identity registered — the open default) falls back to the
 // permissive owner convention: the acting human whose member_role is 'owner'
 // or absent may act; the server stays the enforcer either way.
+export const OVR_ENFORCED_REASON = "The project enforces its autonomy level — per-agent overrides are ignored";
 function canEditAutOvr(snap: Snapshot | null, identity: Identity | null): boolean {
   const h = actingHuman(snap); // null for a trusted non-member (viewerOnly)
   if (!h || containerEnforced(snap)) return false;
@@ -161,107 +195,113 @@ function autOvrDesc(snap: Snapshot | null, a: Pick<Agent, "autonomy_override" | 
   return eff + (a.autonomy_override ? " — per-agent override" : " — inherits the container level");
 }
 
-/* ---------- ISS-69(a): embodiment lease badge ------------------------------ */
-const EMBOD_LBL: Record<string, string> = { live: "live", resident: "in convo", ephemeral: "task" };
-const EMBOD_TITLE: Record<string, string> = {
-  live: "In a live terminal — busy and can't be woken until the terminal closes",
-  resident: "In a live conversation — busy until the conversation yields or ends",
-  ephemeral: "Running a task — busy until the task completes",
-};
-function EmbodBadge({ a }: { a: Agent }) {
-  const kind = leaseOf(a);
-  if (!kind || kind === "idle") return null;
-  return (
-    <span className={"rlive " + kind} title={EMBOD_TITLE[kind] || ""}>
-      <span className="d" />
-      {EMBOD_LBL[kind] || kind}
-    </span>
-  );
-}
-
-/* ---------- status glyph (app.js glyph, verbatim markup) ------------------- */
-function glyphHtml(cls: string): string {
-  const v = (b: string) =>
-    `<svg class="gl" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`;
-  switch (cls) {
-    case "s-working":
-      return '<svg class="gl" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-opacity=".4" stroke-width="1.3"/><circle class="core" cx="6" cy="6" r="2.3" fill="currentColor"/></svg>';
-    case "s-ok":
-    case "s-done":
-      return v('<path d="M2.6 6.4 5 8.7 9.4 3.6"/>');
-    case "s-ready":
-      return '<svg class="gl" viewBox="0 0 12 12" fill="currentColor"><path d="M3.6 2.6 9.6 6l-6 3.4z"/></svg>';
-    case "s-attn":
-    case "s-warn":
-      return '<svg class="gl" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M6 2 11 10.6H1z"/><path d="M6 5v2.2"/><circle cx="6" cy="9" r=".55" fill="currentColor" stroke="none"/></svg>';
-    case "s-bad":
-      return v('<path d="M3.3 3.3 8.7 8.7M8.7 3.3 3.3 8.7"/>');
-    case "s-acc":
-      return v('<path d="M2.6 6h6.8M6.4 3 9.4 6 6.4 9"/>');
-    default:
-      return '<svg class="gl" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="3.6" stroke-opacity=".55"/><path d="M4.3 6h3.4" stroke-linecap="round"/></svg>';
-  }
-}
-function Glyph({ cls }: { cls: string }) {
-  return <span style={{ display: "contents" }} dangerouslySetInnerHTML={{ __html: glyphHtml(cls) }} />;
-}
+/* ISS-69(a) embodiment lease badge + #340 activityOf: ./agentModel (shared with the roster/board). */
 
 /* ---------- small shared bits ---------------------------------------------- */
 // ISS-68 PR-3: per-section "Load more" (rendered only when more rows exist).
 function MoreBtn({ shown, total, onMore }: { shown: number; total: number; onMore: () => void }) {
   if (total <= shown) return null;
   return (
-    <button className="btn sm ghost" style={{ alignSelf: "flex-start", marginTop: 4 }} data-more onClick={onMore}>
-      Load more · {shown} of {total}
-    </button>
+    <Button variant="ghost" size="sm" icon="chev" className="ag-more" data-more onClick={onMore}>
+      Show more · {shown} of {total}
+    </Button>
   );
 }
 
-// requests mini-row (ISS-38 deeplink to the served route)
-function ReqMini({ r, dir, who }: { r: OrchaRequest; dir: string; who: string }) {
+// requests mini-row (ISS-38 deeplink to the served route). D4: the payload /
+// response are object-or-prose — rendered via payloadText (headline field or
+// "Key: value" pairs), never String(obj) ("[object Object]") or raw JSON.
+function ReqMini({ r, dir, who, snap }: { r: OrchaRequest; dir: string; who: string; snap: Snapshot | null }) {
+  const pl = payloadText(r.payload).replace(/\s+/g, " ").trim();
+  const ans = r.response != null && r.response !== "" ? payloadText(r.response).replace(/\s+/g, " ").trim() : "";
+  const party = agentByAlias(snap, who);
   return (
-    <Link className="rqrow" to={"/requests?req=" + encodeURIComponent(r.id)}>
-      <div className="body">
-        <div className="top">
-          <Pill status={r.escalated ? "escalated" : r.status} />
-          <span className="tag">{r.type}</span>
-          <span className="muted" style={{ fontSize: "11.5px" }}>
-            {dir} <b style={{ color: "var(--text-2)" }}>{who}</b>
+    <Link className="rqrow" to={"/requests?req=" + encodeURIComponent(r.id)} title={pl || undefined}>
+      <StatusIcon status={r.escalated ? "escalated" : r.status} label={r.escalated || r.status === "escalated" ? "Escalated to a human" : undefined} />
+      <span className="rq-main">
+        <span className="pl">{pl ? trunc(pl, 140) : <span className="muted">No details</span>}</span>
+        {ans ? (
+          <span className="ans">
+            <Icon name="check" cls="v2-ico" />
+            {trunc(ans, 110)}
           </span>
-          {r.chain_depth ? <span className="tag" style={{ color: "var(--info)" }}>↳ chain {r.chain_depth}</span> : null}
-          <span className="muted" style={{ fontSize: 11, marginLeft: "auto" }}>{r.created_at ? relTime(r.created_at) : ""}</span>
-        </div>
-        <div className="pl">{trunc(String(r.payload ?? ""), 120)}</div>
-        {r.response != null && r.response !== "" ? <div className="ans">{trunc(String(r.response), 110)}</div> : null}
-      </div>
+        ) : null}
+      </span>
+      <span className="rq-meta">
+        {r.escalated || r.status === "escalated" ? <Chip size="sm" className="rq-esc" title="Escalated to a human">Escalated</Chip> : null}
+        {/* wave-4 (D12): the band already says Incoming / Outgoing, so no "from"/"to" word and no
+            "Info" type word — only a task-type request carries a subtle "Task" chip */}
+        {r.type === "task" ? <Chip size="sm" className="rq-kind" title="Task request — accepting it creates a task">Task</Chip> : null}
+        {r.chain_depth ? <span className="v2-t-meta" title={"Request chain depth " + r.chain_depth}>↳ {r.chain_depth}</span> : null}
+        <span className="rq-who" title={(dir === "from" ? "From " : "To ") + who}>
+          <span className="v2-sr">{dir} </span>
+          <Avatar alias={who} kind={party?.kind === "human" ? "human" : "ai"} size={16} ghLogin={party?.github_login} decorative />
+          <b>{who}</b>
+        </span>
+        <span className="v2-t-meta rq-at">{r.created_at ? relTime(r.created_at) : ""}</span>
+      </span>
     </Link>
   );
 }
 
-/* ---------- gate callout (ISS-33/36 + ISS-41 plan_decision gating) --------- */
-function CalloutCard({ cls, ic, ttl, sub, taskId, cta }: { cls: string; ic: string; ttl: string; sub: string; taskId: string; cta: string }) {
+/** A system prompt as one plain line (markdown heading/list markers dropped). A
+ *  heading starts a new clause joined with " · " — it never runs into the
+ *  sentence before it ("…orcha-web. Responsibilities Break…"). */
+export function plainPrompt(md: string): string {
+  let out = "";
+  for (const raw of md.split("\n")) {
+    const heading = /^\s*#{1,6}\s+/.test(raw);
+    const l = raw.replace(/^\s*(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/, "").trim();
+    if (!l) continue;
+    if (heading) out += (out ? " · " : "") + l.replace(/[:.]+$/, "") + ":";
+    else out += (out ? " " : "") + l;
+  }
+  return out.replace(/:$/, "").replace(/\s+/g, " ");
+}
+
+/* ---------- ⋯ : a 28px circular icon button opening a Menu (D5) ------------- */
+function MoreMenu({ label, items }: { label: string; items: MenuItemSpec[] }) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
   return (
-    <div className={"gatecard " + cls}>
+    <>
+      <IconButton ref={ref} icon="more" label={label} variant="outline" shape="circle" className="ag-more-menu" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} />
+      <Menu anchor={ref} open={open} onClose={() => setOpen(false)} items={items} label={label} placement="bottom-end" />
+    </>
+  );
+}
+
+/* ---------- gate callout (ISS-33/36 + ISS-41 plan_decision gating) --------- */
+function CalloutCard({ cls, ic, ttl, sub, hint, taskId, cta }: { cls: string; ic: string; ttl: string; sub: string; hint: string; taskId: string; cta: string }) {
+  // D12: the task title is the one visible line; the "why am I seeing this" note is the tooltip
+  return (
+    <div className={"gatecard " + cls} role="status" title={hint}>
       <div className="row">
-        <span style={{ color: "var(--warn)" }}>
+        <span className="gate-ic">
           <Icon name={ic} cls="" />
         </span>
         <div className="grow">
           <div className="ttl">{ttl}</div>
           <div className="sub">{sub}</div>
         </div>
-        <Link className="btn sm" to={"/tasks?task=" + encodeURIComponent(taskId)}>
-          {cta} <Icon name="arrow" cls="" />
+        {/* secondary + arrow: the page's single primary is "New agent" (D2) */}
+        <Link className="v2-btn v2-btn-secondary v2-btn-sm" to={"/tasks?task=" + encodeURIComponent(taskId)}>
+          <span className="v2-btn-label">{cta}</span>
+          <Icon name="arrow" cls="v2-ico" />
         </Link>
       </div>
     </div>
   );
 }
-function GateCallout({ a, mine }: { a: Agent; mine: Task[] }) {
+function GateCallout({ a, mine, snap }: { a: Agent; mine: Task[]; snap: Snapshot | null }) {
   // verify gate: any owned task awaiting human verification (status-independent of the agent).
   const verify = mine.find((t) => t.status === "needs_verification");
-  // plan gate: an in-progress task whose agent posted a plan...
-  const planTask = mine.find((t) => t.status === "in_progress" && planMessageOf(t));
+  const pick = pickGatePlan(snap, mine);
+  const planTask = pick.live ?? (verify ? null : pick.decided);
+  // e2e-permissions-34: a viewer / non-member can never approve or verify — the
+  // callout says what is waiting, not that it waits on them, and the CTA only views
+  const authority = useActingAuthority();
+  const canAct = !!actingHuman(snap) && !authority.readOnly && !authority.pending;
   if (planTask) {
     if (!planTask.plan_decision) {
       // undecided -> live approval lives on the Tasks gate (one authoritative surface).
@@ -269,10 +309,11 @@ function GateCallout({ a, mine }: { a: Agent; mine: Task[] }) {
         <CalloutCard
           cls="attn"
           ic="shield"
-          ttl="Plan awaiting your approval"
-          sub={`${planTask.title} — surfaced regardless of ${a.alias}'s status.`}
+          ttl={canAct ? "Plan awaiting your approval" : "Plan awaiting approval"}
+          sub={planTask.title}
+          hint={`Surfaced regardless of ${a.alias}'s status.`}
           taskId={planTask.id}
-          cta="Review plan"
+          cta={canAct ? "Review plan" : "View plan"}
         />
       );
     }
@@ -283,7 +324,7 @@ function GateCallout({ a, mine }: { a: Agent; mine: Task[] }) {
     return (
       <div className="gatecard decided">
         <div className="row">
-          <span style={{ color: pd.decision === "approve" ? "var(--ok)" : "var(--danger)" }}>
+          <span className={"gate-ic " + (pd.decision === "approve" ? "ok" : "bad")}>
             <Icon name={pd.decision === "approve" ? "check" : "x"} cls="" />
           </span>
           <div className="grow">
@@ -294,8 +335,8 @@ function GateCallout({ a, mine }: { a: Agent; mine: Task[] }) {
               {when ? " · " + when : ""}.{pd.reason ? " " + trunc(pd.reason, 120) : ""}
             </div>
           </div>
-          <Link className="btn sm ghost" to={"/tasks?task=" + encodeURIComponent(planTask.id)}>
-            Open task <Icon name="arrow" cls="" />
+          <Link className="v2-btn v2-btn-ghost v2-btn-sm" to={"/tasks?task=" + encodeURIComponent(planTask.id)}>
+            <span className="v2-btn-label">Open task</span>
           </Link>
         </div>
       </div>
@@ -307,19 +348,41 @@ function GateCallout({ a, mine }: { a: Agent; mine: Task[] }) {
         cls="attn"
         ic="check"
         ttl="Task awaiting verification"
-        sub={`${verify.title} — surfaced regardless of ${a.alias}'s status.`}
+        sub={verify.title}
+        hint={`Surfaced regardless of ${a.alias}'s status.`}
         taskId={verify.id}
-        cta="Verify"
+        cta={canAct ? "Verify" : "View task"}
       />
     );
   }
   return null;
 }
 
-/* ---------- snapshot-derived helpers --------------------------------------- */
-function agentTasks(snap: Snapshot | null, alias: string): Task[] {
-  return (snap?.tasks ?? []).filter((t) => (t.assignees || []).indexOf(alias) >= 0);
+/** parity r2: which plan the header gate callout speaks for. It used to take the FIRST
+ *  in-progress plan task in list order, so a stale "Plan approved" (on a task whose
+ *  verification was since rejected) hid a newer decision or even a live plan gate.
+ *    live    — the newest UNDECIDED plan that awaits a human (planAwaitsHuman — an
+ *              undecided plan at pr/full autonomy is a progress note, not a gate);
+ *    decided — the most recent decision (plan_decision.at), skipping tasks whose later
+ *              verification was rejected afterwards (a "[verification rejected]" thread
+ *              marker newer than the decision — the approval is superseded).
+ *  The caller shows live > verify gate > decided note (a quiet note never hides a gate). */
+function verifyRejectedAfter(t: Task, since: number): boolean {
+  return (t.thread || []).some((m) => /^\s*\[verification rejected\]/.test(m.body || "") && (Date.parse(m.at || "") || 0) >= since);
 }
+export function pickGatePlan(snap: Snapshot | null, mine: Task[]): { live: Task | null; decided: Task | null } {
+  const ts = (v?: string | null) => (v ? Date.parse(v) || 0 : 0);
+  const plans = mine.filter((t) => t.status === "in_progress" && planMessageOf(t));
+  const live = plans
+    .filter((t) => !t.plan_decision && planAwaitsHuman(snap, t))
+    .sort((x, y) => ts(planMessageOf(y)?.at) - ts(planMessageOf(x)?.at))[0] ?? null;
+  const decided = plans
+    .filter((t) => !!t.plan_decision && !verifyRejectedAfter(t, ts(t.plan_decision.at)))
+    .sort((x, y) => ts(y.plan_decision?.at) - ts(x.plan_decision?.at))[0] ?? null;
+  return { live, decided };
+}
+
+/* ---------- snapshot-derived helpers --------------------------------------- */
 function reqIn(snap: Snapshot | null, alias: string): OrchaRequest[] {
   return (snap?.requests ?? []).filter((r) => r.to === alias);
 }
@@ -344,15 +407,25 @@ function firstAlias(snap: Snapshot | null): string | null {
   return (ai || ags[0] || ({} as Agent)).alias || null;
 }
 
-/* ---------- ISS-63 collapse state ------------------------------------------ */
-const COLLAPSE_KEY = "orcha:agentWidgetCollapse";
-function readCollapsed(): Record<string, boolean> {
-  try {
-    return (JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}") as Record<string, boolean>) || {};
-  } catch {
-    return {};
-  }
-}
+
+/** Roster-or-detail breakpoint (kept in sync with agents.css). */
+const SPLIT_QUERY = "(max-width: 1099px)";
+
+/* ---------- V2 workspace tabs ---------------------------------------------- */
+type TabKey = "conversation" | "runs" | "tasks" | "requests" | "memory" | "config";
+const AI_TABS: TabKey[] = ["conversation", "runs", "tasks", "requests", "memory", "config"];
+// humans have no conversation panel or worker runs (they are the authority, not workers)
+// and no memory digest or wake/model controls — so only Tasks + Requests (their role and
+// GitHub login live in the header).
+const HUMAN_TABS: TabKey[] = ["tasks", "requests"];
+const TAB_LABEL: Record<TabKey, string> = {
+  conversation: "Conversation",
+  runs: "Runs",
+  tasks: "Tasks",
+  requests: "Requests",
+  memory: "Memory",
+  config: "Configuration",
+};
 
 interface DigestData {
   current_focus?: string | null;
@@ -364,8 +437,27 @@ type DigestEntry = { loading: true } | { loading?: false; digest: DigestData | n
 
 /* ========================================================================== */
 export function AgentsPage() {
-  const { snap, identity } = useSnapshot();
+  const { snap, cid, identity, connection, stale, lastOkAt } = useSnapshot();
+  // General (non-code) projects read "Build to PR" as "Execute"
+  const projMode = useProjectMode(cid).mode;
+  // KG-6/B25/VD-10: ONE budgets read for the page — roster rows, board columns, the
+  // workspace header and the Wake row all say "Budget paused" from the same answer
+  // (refreshed on every budget write via BUDGET_CHANGED_EVENT, else every 60 s)
+  const budgets = useContainerBudgets(snap?.container?.id ?? cid ?? null);
+  const paused = pausedById(budgets.data);
   const toast = useToast();
+  // the ONE "why can't I act" copy: viewer / non-member / pending get their own
+  // authority reason — never "pick an acting human" for a viewer (who IS a human)
+  const authority = useActingAuthority();
+  const noHumanReason = authority.reason || NO_ACTING_HUMAN;
+  // grant-gated affordances (mig 039): null = allowed, else the reason
+  const agentsDenied = grantDenied(snap, identity, "manage_agents", noHumanReason);
+  const autonomyDenied = grantDenied(snap, identity, "manage_autonomy", noHumanReason);
+  const failMsg = (what: string, e: unknown) => {
+    const st = (e as { status?: number }).status;
+    const why = errDetail(e);
+    return what + " failed" + (st ? " (" + st + ")" : ": " + (e as Error).message) + (why ? " — " + why : "");
+  };
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -379,12 +471,13 @@ export function AgentsPage() {
   const [tasksShown, setTasksShown] = useState(TASKS_CAP);
   const [riShown, setRiShown] = useState(REQ_CAP);
   const [roShown, setRoShown] = useState(REQ_CAP);
-  const [digestShown, setDigestShown] = useState(DIGEST_CAP);
+  // per-section digest caps (decisions / learnings / threads each get DIGEST_CAP)
+  const [digestShown, setDigestShown] = useState<Record<string, number>>({});
   const resetCaps = () => {
     setTasksShown(TASKS_CAP);
     setRiShown(REQ_CAP);
     setRoShown(REQ_CAP);
-    setDigestShown(DIGEST_CAP);
+    setDigestShown({});
   };
 
   // per-agent async caches (persona/digest are NOT in the snapshot — fetched
@@ -393,22 +486,13 @@ export function AgentsPage() {
   const [personaOpen, setPersonaOpen] = useState<Record<string, boolean>>({});
   const [digests, setDigests] = useState<Record<string, DigestEntry>>({});
 
-  // ISS-63 collapsible widgets (localStorage, shared by all agents).
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
-  const isCollapsed = (k: string) => !!collapsed[k];
-  const toggleCollapse = (k: string) =>
-    setCollapsed((c) => {
-      const next = { ...c, [k]: !c[k] };
-      try {
-        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
-      } catch { /* private mode */ }
-      return next;
-    });
-  const CollapseBtn = ({ k }: { k: string }) => (
-    <button className="collapse-btn" data-collapse={k} title={isCollapsed(k) ? "Expand" : "Collapse"} aria-label="toggle" onClick={() => toggleCollapse(k)}>
-      <Icon name="chev" cls="" />
-    </button>
-  );
+  const [rosterQ, setRosterQ] = useState("");
+  // Below 1100px the roster and the workspace are separate full views (a 280px roster
+  // beside a ~350px workspace is unusable once the 248px sidebar takes its share).
+  const phoneNarrow = useNarrow();
+  const splitNarrow = useMediaQuery(SPLIT_QUERY);
+  const narrow = phoneNarrow || splitNarrow;
+
 
   // The model control sends the curated MODEL ID (POST /model only accepts ids)
   // while displaying the friendly name.
@@ -431,7 +515,8 @@ export function AgentsPage() {
       })
       .catch(() => { /* keep the seed */ });
   }, []);
-  const [runtimeFilters, setRuntimeFilters] = useState<Record<string, string>>({});
+  // the Provider control opens the model picker on that runtime's group (the runtime follows the model)
+  const [pickerOpenOn, setPickerOpenOn] = useState<{ runtime: ManagedRuntime; n: number } | null>(null);
   // optimistic overrides (reconciled by the next snapshot / reverted on failure)
   const [awakeOverride, setAwakeOverride] = useState<{ aid: string; val: number | null } | null>(null);
   const [modelOverride, setModelOverride] = useState<{ aid: string; model: string } | null>(null);
@@ -453,9 +538,7 @@ export function AgentsPage() {
     const supported = new Set(model.reasoning_efforts);
     return reasoningEfforts.filter((effort) => effort.id == null || supported.has(effort.id));
   };
-  const modelRuntimeForAgent = (ag: Agent): string => {
-    const saved = runtimeFilters[ag.id];
-    if (saved && modelsForRuntime(saved).length) return saved;
+  const modelRuntimeForAgent = (ag: Agent): "claude" | "codex" => {
     const effModel = modelOverride && modelOverride.aid === ag.id ? modelOverride.model : ag.model;
     return modelRuntimeOf(effModel);
   };
@@ -467,7 +550,9 @@ export function AgentsPage() {
 
   /* ---------- selection ---------- */
   const agents = snap?.agents ?? [];
-  const selAlias = sel && snap && agentByAlias(snap, sel) ? sel : firstAlias(snap);
+  // an unknown ?agent= (typo, deleted agent) says so — it never silently opens another agent
+  const selMissing = !!(sel && snap && !agentByAlias(snap, sel));
+  const selAlias = selMissing ? null : sel && snap ? sel : firstAlias(snap);
   const a = agentByAlias(snap, selAlias);
 
   // adopt a deep-link change (e.g. arriving from another page with ?agent=)
@@ -491,10 +576,10 @@ export function AgentsPage() {
     setEffortOverride(null);
     const sp = new URLSearchParams(location.search);
     sp.set("agent", alias);
-    navigate({ pathname: "/agents", search: "?" + sp.toString() }, { replace: true });
-    try {
-      window.scrollTo({ top: 0 });
-    } catch { /* jsdom */ }
+    sp.delete("changes"); // the changes panel speaks for ONE agent's run
+    // narrow widths open the workspace as a full view: PUSH so Back returns to the roster
+    navigate({ pathname: "/agents", search: "?" + sp.toString() }, narrow ? { state: { fromRoster: true } } : { replace: true });
+    scrollMainTo(0); // D5: the content scrolls inside the panel on wide layouts
   };
 
   // ISS-38: anchor the deeplinked/selected row (one-shot)
@@ -505,6 +590,14 @@ export function AgentsPage() {
     const row = rosterRef.current?.querySelector(".rrow.sel");
     if (row && (row as any).scrollIntoView) (row as any).scrollIntoView({ block: "nearest" });
   }, [pendingScroll, selAlias, agents.length]);
+
+  // D5 prev/next: the roster's visible order (AI agents, then humans — AgentsRoster)
+  const rosterOrder = [...agents.filter((x) => x.kind !== "human"), ...agents.filter((x) => x.kind === "human")];
+  const selIdx = a ? rosterOrder.findIndex((x) => x.id === a.id) : -1;
+  const step = (d: number) => {
+    const nx = rosterOrder[selIdx + d];
+    if (nx) select(nx.alias);
+  };
 
   /* ---------- memory digest (lazy /digest) ---------- */
   useEffect(() => {
@@ -517,52 +610,106 @@ export function AgentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [a?.id]);
 
+  /* ---------- the agent's runs: ONE /runs read shared by the header + Runs tab ---------- */
+  const feed = useAgentRuns(a || null);
+  const feedRuns: WorkerRun[] | null = feed && !feed.error ? (feed.runs as WorkerRun[]) : null;
+  // failed agent: why? — the NEWEST finished run explains the failed status when it failed;
+  // otherwise fall back to the newest FAILED run (r2: an earlier ENOENT reason was hidden
+  // behind "No failure reason recorded"). Forward-compat success words are not failures.
+  const lastFailure = (() => {
+    if (!a || a.kind === "human" || a.status !== "failed" || !feedRuns) return null;
+    const isFail = (x: WorkerRun) => x.status !== "running" && runOutcome(x).bucket === "failed" && !/^(completed|succeeded|success|done)$/.test(x.status);
+    const newest = feedRuns.find((x) => x.status !== "running");
+    const r = newest && isFail(newest) ? newest : feedRuns.find(isFail);
+    if (!r) return null;
+    const o = runOutcome(r);
+    const kr = runReasonText(r) || null;
+    return { aid: a.id, rid: String(r.run_id || r.id || ""), label: o.label, reason: kr, at: r.ended_at || r.ended || r.started_at || r.started || null };
+  })();
+  /* ---------- Live changes: the run the button/panel speak for, ONE poller ----------
+     ?changes=<run id> (or "1" = whatever the button would open) keeps the panel on the run
+     it was opened for, so a live run that ends flips to "Final changes" in place. */
+  const changesParam = new URLSearchParams(location.search).get("changes");
+  const pinnedRun = changesParam && changesParam !== "1" && feedRuns ? feedRuns.find((r) => String(r.run_id || r.id || "") === changesParam) || null : null;
+  const changesFor = a && a.kind !== "human"
+    ? pinnedRun ? { run: pinnedRun, live: pinnedRun.status === "running" } : changesTarget(feedRuns)
+    : null;
+  const changesRid = changesFor ? String(changesFor.run.run_id || changesFor.run.id || "") : null;
+  const changesOpen = !!changesFor && !!changesParam;
+  const runChanges = useRunChanges(changesFor && a ? a.id : null, changesRid, { live: !!changesFor?.live, active: changesOpen });
+  const setChangesOpen = (open: boolean) => {
+    const sp = new URLSearchParams(location.search);
+    if (open && changesRid) sp.set("changes", changesRid);
+    else sp.delete("changes");
+    if (selAlias && !sp.get("agent")) sp.set("agent", selAlias);
+    navigate({ pathname: "/agents", search: "?" + sp.toString() }, { replace: true, state: location.state });
+  };
+  const changesSummary = runChanges.payload && runChanges.payload.available ? runChanges.payload.summary : null;
+  // L8: the server says this run recorded no checkout — a button over nothing would lie
+  const noCheckout = !!runChanges.payload && !runChanges.payload.available && runChanges.payload.reason === "no_checkout";
+  const changesBtn = !!changesFor && !(noCheckout && !changesOpen);
+  const changesCtx = changesFor && changesRid && changesBtn
+    ? { runId: changesRid, live: changesFor.live, summary: changesSummary, isOpen: changesOpen, open: () => setChangesOpen(true) }
+    : null;
+
+  // the conversation's presence, lifted from <Conversation> (kept per agent id)
+  const [convPres, setConvPres] = useState<{ aid: string; p: ConvPresence } | null>(null);
+
   /* ---------- persona expand (lazy /persona) ---------- */
+  const loadPersona = (aid: string) => {
+    if (personaFull[aid] !== undefined) return;
+    fetch("/api/agents/" + encodeURIComponent(aid) + "/persona")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d: any) => setPersonaFull((f) => ({ ...f, [aid]: d.system_prompt || "" })))
+      .catch(() => setPersonaFull((f) => ({ ...f, [aid]: "" })));
+  };
   const togglePersona = (ag: Agent) => {
     const open = !personaOpen[ag.id];
     setPersonaOpen((o) => ({ ...o, [ag.id]: open }));
-    if (open && personaFull[ag.id] === undefined) {
-      fetch("/api/agents/" + encodeURIComponent(ag.id) + "/persona")
-        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-        .then((d: any) => setPersonaFull((f) => ({ ...f, [ag.id]: d.system_prompt || "" })))
-        .catch(() => setPersonaFull((f) => ({ ...f, [ag.id]: "" })));
-    }
+    if (open) loadPersona(ag.id);
   };
 
+  // Configuration with no prompt_preview: /persona is the truth for "is a persona set?"
+  // (review: "No persona set" beside a full prompt behind "Show full prompt").
+  const cfgTabOpen = new URLSearchParams(location.search).get("tab") === "config";
+  useEffect(() => {
+    if (!a || a.kind === "human" || !cfgTabOpen) return;
+    if ((a.prompt_preview || "").trim()) return;
+    loadPersona(a.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a?.id, cfgTabOpen]);
+
   /* ---------- controls (human-gated mutations) ---------- */
-  const onRuntimeClick = (ag: Agent, runtime: string) => {
-    const h = actingHuman(snap);
-    if (!h) {
-      toast("Pick an acting human first.", "danger");
+  const onRuntimeClick = (runtime: string) => {
+    if (agentsDenied) {
+      toast(agentsDenied, "danger");
       return;
     }
-    setRuntimeFilters((f) => ({ ...f, [ag.id]: runtime === "codex" ? "codex" : "claude" }));
+    // no provider-only write exists: switching provider = picking one of its models
+    // (POST /model), so open the picker on that runtime's group
+    setPickerOpenOn((cur) => ({ runtime: runtime === "codex" ? "codex" : "claude", n: (cur ? cur.n : 0) + 1 }));
   };
 
   const onModelClick = (ag: Agent, model: string) => {
-    const h = actingHuman(snap);
-    if (!h) {
-      toast("Pick an acting human first.", "danger");
+    if (agentsDenied) {
+      toast(agentsDenied, "danger");
       return;
     }
     const name = (models.find((m) => m.id === model) || { name: model }).name || model;
-    setRuntimeFilters((f) => ({ ...f, [ag.id]: modelRuntimeOf(model) }));
     setModelOverride({ aid: ag.id, model }); // optimistic; the snapshot reconciles
     sendJSON("POST", "/api/agents/" + encodeURIComponent(ag.id) + "/model", { model })
       .then(() => toast("Model → " + name, "ok"))
       .catch((e) => {
         setModelOverride(null);
-        const st = (e as { status?: number }).status;
-        toast(st ? "Failed (" + st + ")" : "Failed: " + (e as Error).message, "danger");
+        toast(failMsg("Model change", e), "danger");
       });
   };
 
   // GH #51: mirrors onModelClick — human-gated, optimistic + revert, reconciled
   // by the next snapshot poll. null means "runtime default" (clear the override).
   const onEffortClick = (ag: Agent, effort: string | null) => {
-    const h = actingHuman(snap);
-    if (!h) {
-      toast("Pick an acting human first.", "danger");
+    if (agentsDenied) {
+      toast(agentsDenied, "danger");
       return;
     }
     const prev = ag.reasoning_effort != null ? ag.reasoning_effort : null;
@@ -574,15 +721,15 @@ export function AgentsPage() {
       .then(() => toast("Reasoning effort → " + name, "ok"))
       .catch((e) => {
         setEffortOverride(null);
-        const st = (e as { status?: number }).status;
-        toast(st ? "Reasoning effort change failed (" + st + ")" : "Reasoning effort change failed: " + (e as Error).message, "danger");
+        toast(failMsg("Reasoning effort change", e), "danger");
       });
   };
 
   const onAwakeClick = (ag: Agent, interval: number | null) => {
     const h = actingHuman(snap);
-    if (!h) {
-      toast("Pick an acting human first.", "danger");
+    // auto-wake is an autonomy write: owner-or-manage_autonomy (agent_wake_policy_routes.py)
+    if (!h || autonomyDenied) {
+      toast(autonomyDenied || noHumanReason, "danger");
       return;
     }
     const prev = ag.auto_wake_interval_secs != null ? ag.auto_wake_interval_secs : null;
@@ -593,8 +740,7 @@ export function AgentsPage() {
       .then(() => toast(interval == null ? "Auto-wake off" : "Auto-wake every " + fmtInterval(interval), "ok"))
       .catch((e) => {
         setAwakeOverride(null); // revert on failure
-        const st = (e as { status?: number }).status;
-        toast(st ? "Auto-wake change failed (" + st + ")" : "Auto-wake change failed: " + (e as Error).message, "danger");
+        toast(failMsg("Auto-wake change", e), "danger");
       });
   };
 
@@ -605,7 +751,7 @@ export function AgentsPage() {
   const onAutOvrClick = (ag: Agent, ovr: string | null) => {
     const h = actingHuman(snap);
     if (!h) {
-      toast("Pick an acting human first.", "danger");
+      toast(noHumanReason, "danger");
       return;
     }
     const prev = ag.autonomy_override != null ? ag.autonomy_override : null;
@@ -616,8 +762,7 @@ export function AgentsPage() {
       .then(() => toast(ovr == null ? "Autonomy · inherits the container level" : "Autonomy override → " + autLevelName(ovr), "ok"))
       .catch((e) => {
         setOvrOverride(null); // revert on failure
-        const st = (e as { status?: number }).status;
-        toast(st ? "Autonomy override change failed (" + st + ")" : "Autonomy override change failed: " + (e as Error).message, "danger");
+        toast(failMsg("Autonomy override change", e), "danger");
       });
   };
 
@@ -629,172 +774,503 @@ export function AgentsPage() {
     const d = c.digest;
     if (!d) return <div className="none">No digest yet — this agent hasn&#39;t snapshotted.</div>;
     const norm = (items?: unknown[]) =>
-      (items || []).map((x) => (x && typeof x === "object" ? (x as any).text || JSON.stringify(x) : String(x))).filter(Boolean) as string[];
-    // ISS-68 PR-3 render cap: a budget over the FLATTENED decisions→learnings→
-    // threads list (Current focus always shows); "Show more" reveals the rest.
+      (items || []).map((x) => (x && typeof x === "object" ? (x as any).text || payloadText(x) : String(x ?? ""))).filter(Boolean) as string[];
+    // ISS-68 PR-3 render cap, per section: each group shows DIGEST_CAP rows with its
+    // own "Show more" (a flattened budget used to starve Open threads).
     const groups = [
-      { label: "Recent decisions", arr: norm(d.decisions), thr: false },
-      { label: "Learnings", arr: norm(d.learnings), thr: false },
-      { label: "Open threads", arr: norm(d.open_threads), thr: true },
+      { key: "decisions", label: "Recent decisions", arr: norm(d.decisions) },
+      { key: "learnings", label: "Learnings", arr: norm(d.learnings) },
+      { key: "threads", label: "Open threads", arr: norm(d.open_threads) },
     ];
-    const total = groups.reduce((n, g) => n + g.arr.length, 0);
-    let remaining = digestShown;
     const groupEls = groups.map((g) => {
       if (!g.arr.length) return null;
-      const take = g.arr.slice(0, Math.max(0, remaining));
-      remaining -= g.arr.length;
-      if (!take.length) return null;
+      const cap = digestShown[g.key] ?? DIGEST_CAP;
       return (
-        <div key={g.label} className={"dgroup " + (g.thr ? "thr" : "")}>
-          <div className="lbl">{g.label}</div>
+        <section key={g.key} className="dgroup" aria-label={g.label}>
+          <div className="lbl">
+            {g.label} <span className="muted">· {g.arr.length}</span>
+          </div>
           <ul>
-            {take.map((s, i) => (
+            {g.arr.slice(0, cap).map((s, i) => (
               <li key={i}>{s}</li>
             ))}
           </ul>
-        </div>
+          <MoreBtn shown={Math.min(cap, g.arr.length)} total={g.arr.length} onMore={() => setDigestShown((m) => ({ ...m, [g.key]: cap + DIGEST_CAP }))} />
+        </section>
       );
     });
+    const empty = !d.current_focus && groups.every((g) => !g.arr.length);
     return (
       <div className="digest">
         {d.current_focus ? (
-          <div className="focus">
-            <div className="lbl">
-              <Icon name="dot" cls="" />
-              Current focus
-            </div>
-            {d.current_focus}
-          </div>
+          <section className="dgroup focus" aria-label="Current focus">
+            <div className="lbl">Current focus</div>
+            <p>{d.current_focus}</p>
+          </section>
         ) : null}
         {groupEls}
-        <MoreBtn shown={Math.min(digestShown, total)} total={total} onMore={() => setDigestShown((n) => n + DIGEST_CAP)} />
+        {empty ? <div className="none">The digest is empty — nothing recorded yet.</div> : null}
       </div>
     );
   };
 
+
+  /* ---------- V2 workspace tabs (?tab=) ---------- */
+  const isHuman = a?.kind === "human";
+  const tabKeys: TabKey[] = isHuman ? HUMAN_TABS : AI_TABS;
+  const tabParam = new URLSearchParams(location.search).get("tab") as TabKey | null;
+  const tab: TabKey = tabParam && tabKeys.indexOf(tabParam) >= 0 ? tabParam : isHuman ? "tasks" : "conversation";
+  // r3 (390): an overflowing tab strip CENTRES the active tab (it used to park flush right
+  // with a clipped fragment at the start). Runs after the Tabs primitive's own nearest-scroll.
+  useLayoutEffect(() => {
+    const strip = document.querySelector<HTMLElement>(".agents-detail .ag-tabs");
+    if (!strip || strip.scrollWidth <= strip.clientWidth + 1) return;
+    const selTab = strip.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!selTab) return;
+    const sr = strip.getBoundingClientRect();
+    const tr = selTab.getBoundingClientRect();
+    const target = strip.scrollLeft + (tr.left - sr.left) - (strip.clientWidth - tr.width) / 2;
+    strip.scrollLeft = Math.max(0, Math.min(target, strip.scrollWidth - strip.clientWidth));
+    strip.dispatchEvent(new Event("scroll")); // re-sync the edge-fade classes
+  }, [tab, a?.id, narrow]);
+  const setTab = (k: string) => {
+    const sp = new URLSearchParams(location.search);
+    sp.set("tab", k);
+    if (selAlias && !sp.get("agent")) sp.set("agent", selAlias);
+    navigate({ pathname: "/agents", search: "?" + sp.toString() }, { replace: true, state: location.state });
+  };
+  // narrow widths: the roster and the workspace are separate full views
+  const backToRoster = () => {
+    if ((location.state as { fromRoster?: boolean } | null)?.fromRoster) {
+      navigate(-1);
+      return;
+    }
+    const sp = new URLSearchParams(location.search);
+    sp.delete("agent");
+    sp.delete("tab");
+    const q = sp.toString();
+    navigate({ pathname: "/agents", search: q ? "?" + q : "" }, { replace: true });
+  };
+
   /* ---------- render ---------- */
-  const ctx = snap ? `${agents.length} agents · ${snap.container?.name ?? ""}` : undefined;
   const canAct = !!actingHuman(snap);
+  const me = actingHuman(snap);
+  // model / effort / provider: owner-or-manage_agents; auto-wake: owner-or-manage_autonomy
+  const canAgents = canGrant(snap, identity, "manage_agents");
+  const canAutonomy = canGrant(snap, identity, "manage_autonomy");
+  const offline = connection === "offline" || stale;
+  // one naming rule app-wide (lib/models modelLabel): the catalog name, else a readable id — never raw
+  const modelName = (id: string | null | undefined): string => modelLabel(id, models);
+  // a legacy / uncurated id reads as a product name ("Opus 4.1 (legacy)"); the raw id is the tooltip
+  // "(legacy)" only when the curated list actually loaded and lacks the id —
+  // an unloaded / failed list is not evidence that a model is legacy
+  const modelDisplay = (id: string): string => (models.some((m) => m.id === id) ? modelName(id) : humanizeModelId(id) + (models.length ? " (legacy)" : ""));
+  const effortName = (id: string | null | undefined): string => (id ? (reasoningEfforts.find((e) => e.id === id) || { name: id }).name : "");
 
   let detail: React.ReactNode = null;
-  if (snap) {
-    if (!a) {
-      detail = (
-        <div className="card pad">
-          <div className="none">Agent not found.</div>
-        </div>
+  if (snap && a) {
+    // A7 (D9): a human's workspace lists the same work as their board column — assigned
+    // tasks plus the tasks they review (marked "Review"); an AI lists its assigned tasks.
+    const colTasks = columnTasks(snap, a);
+    const reviewIds = new Set(colTasks.filter((c) => c.role === "review").map((c) => c.task.id));
+    const mine = colTasks.map((c) => c.task).sort(sortComparator("agent-tasks", taskAcc));
+    // "Needs you" first (a plan awaiting approval, a task to verify, or a task parked on a
+    // human), then Active, then the rest — the review found a waiting plan filed under
+    // "Other tasks" with an empty-circle glyph.
+    // a plan "waits" only when its author runs at plan autonomy (pr/full agents post
+    // progress notes) — the same rule Needs you / the Overview / attention counts use
+    const planGated = (t: Task) => {
+      if (!planMessageOf(t) || t.plan_decision || t.status === "completed" || t.status === "cancelled") return false;
+      const pm = planMessageOf(t);
+      return agentAutonomy(snap, agentByAlias(snap, pm?.from) || agentByAlias(snap, t.assignee)) === "plan";
+    };
+    const needsYou = (t: Task) => t.status === "needs_verification" || t.status === "awaiting_human" || planAwaitsHuman(snap, t) || (t.status === "awaiting_request" && planGated(t));
+    const waiting = mine.filter(needsYou);
+    const current = mine.filter((t) => !needsYou(t) && t.status === "in_progress");
+    const rest = mine.filter((t) => waiting.indexOf(t) < 0 && current.indexOf(t) < 0);
+    // AA-048: Incoming and Outgoing sort independently (old UI keys agent-req-in / -out)
+    const ri = reqIn(snap, a.alias).sort(sortComparator("agent-req-in", reqAcc));
+    const ro = reqOut(snap, a.alias).sort(sortComparator("agent-req-out", reqAcc));
+    const selectedRuntime = modelRuntimeForAgent(a);
+    const modelVal = modelOverride && modelOverride.aid === a.id ? modelOverride.model : a.model;
+    // null model = the runtime default: mark (and light) the default model instead of nothing
+    const litModel = modelVal || defaultModel;
+    const legacyModel = modelVal && models.length > 0 && !models.some((m) => m.id === modelVal) && modelRuntimeOf(modelVal) === selectedRuntime ? modelVal : null;
+    const visibleReasoningEfforts = reasoningEffortsForModel(modelVal);
+    const awakeVal = awakeOverride && awakeOverride.aid === a.id ? awakeOverride.val : a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : null;
+    const effortVal = effortOverride && effortOverride.aid === a.id ? effortOverride.val : a.reasoning_effort != null ? a.reasoning_effort : null;
+    // #64 override segment — graceful absence: an open backend that omits the
+    // mig-043 exposure fields renders NO control (nothing to read or write).
+    const showAutOvr = a.effective_autonomy != null || a.autonomy_override != null;
+    const ovrOptimistic = ovrOverride && ovrOverride.aid === a.id;
+    const ovrVal = ovrOptimistic ? ovrOverride.val : a.autonomy_override != null ? a.autonomy_override : null;
+    // while optimistic, ignore the (stale) server-computed effective level and
+    // apply the same shared rule client-side (vanilla onAutOvrClick parity).
+    const ovrDesc = autOvrDesc(snap, ovrOptimistic ? { autonomy_override: ovrVal, effective_autonomy: null } : a);
+    const canEditOvr = canEditAutOvr(snap, identity);
+    // parity r2: every locked chip names its own reason (like effort / auto-wake), not
+    // only the section's "Read-only" badge — enforced container first, else the grant.
+    const ovrLock = canEditOvr
+      ? ""
+      : containerEnforced(snap) && actingHuman(snap)
+        ? OVR_ENFORCED_REASON
+        : autonomyDenied || (actingHuman(snap) ? GRANT_REASON.manage_autonomy : noHumanReason);
+    const full = personaFull[a.id];
+    const pOpen = !!personaOpen[a.id];
+    const act = activityOf(a);
+    const openReqs = ri.filter((r) => r.status === "open" && !r.escalated).length;
+    const escReqs = ri.filter((r) => r.status === "escalated" || !!r.escalated).length;
+    const tabs: TabSpec[] = tabKeys.map((k) => ({
+      key: k,
+      label: TAB_LABEL[k],
+      count: k === "tasks" ? mine.length : k === "requests" ? ri.length + ro.length : null,
+    }));
+    const fullP = (personaFull[a.id] || "").trim();
+    // the snapshot's prompt_preview is the raw first 160 chars of markdown — flatten it the same way
+    const preview = plainPrompt(a.prompt_preview || "") || (fullP ? plainPrompt(fullP).slice(0, 200) : "");
+    const personaKnownEmpty = !preview && personaFull[a.id] !== undefined; // /persona answered: nothing set
+    const personaLoading = !preview && personaFull[a.id] === undefined;
+    const previewTxt = preview.length >= 160 ? preview.replace(/[\s.,;:!?…]+$/, "") + "…" : preview;
+    const fail = a.status === "failed" && lastFailure && lastFailure.aid === a.id ? lastFailure : null;
+    const aid = a.id;
+    const onConvPresence = (p: ConvPresence) => setConvPres((cur) => (cur && cur.aid === aid && cur.p.presence === p.presence && cur.p.reason === p.reason ? cur : { aid, p }));
+    const pres = isHuman
+      ? null
+      : agentPresence(a, {
+          snap,
+          runs: feedRuns,
+          conv: convPres && convPres.aid === a.id ? convPres.p : null,
+          failReason: fail ? fail.reason || fail.label : null,
+        });
+    // the ONE meta line: role · what it is on right now (from the SAME run list as the Runs
+    // tab) · last active. No "No active run" filler — the status pill already says idle.
+    const liveRun = (feedRuns || []).find((r) => r.status === "running") || null;
+    const liveTaskId = (liveRun && liveRun.task_id) || (a.active_run && a.active_run.task_id) || null;
+    const liveTask = liveTaskId ? (snap.tasks || []).find((t) => t.id === liveTaskId) : null;
+    const nowTxt = liveTask ? trunc(liveTask.title, 56) : act;
+    const metaBits: React.ReactNode[] = [];
+    if (a.role) metaBits.push(<span className="role-t" title={a.role}>{a.role}</span>);
+    if (isHuman && a.member_role && a.member_role.toLowerCase() !== (a.role || "").toLowerCase()) metaBits.push(a.member_role);
+    if (isHuman && a.github_login) metaBits.push("@" + a.github_login);
+    if (!isHuman && nowTxt) {
+      metaBits.push(
+        liveTaskId ? (
+          <Link to={"/tasks?task=" + encodeURIComponent(liveTaskId)} title={nowTxt}>{nowTxt}</Link>
+        ) : (
+          <span title={nowTxt}>{nowTxt}</span>
+        ),
       );
-    } else {
-      const mine = agentTasks(snap, a.alias).sort(sortComparator("agent-tasks", taskAcc));
-      const current = mine.filter((t) => t.status === "in_progress" || t.status === "needs_verification");
-      const ri = reqIn(snap, a.alias).sort(sortComparator("agent-req-in", reqAcc));
-      const ro = reqOut(snap, a.alias).sort(sortComparator("agent-req-out", reqAcc));
-      const selectedRuntime = modelRuntimeForAgent(a);
-      const visibleModels = modelsForRuntime(selectedRuntime);
-      const modelVal = modelOverride && modelOverride.aid === a.id ? modelOverride.model : a.model;
-      const visibleReasoningEfforts = reasoningEffortsForModel(modelVal);
-      const awakeVal = awakeOverride && awakeOverride.aid === a.id ? awakeOverride.val : a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : null;
-      const effortVal = effortOverride && effortOverride.aid === a.id ? effortOverride.val : a.reasoning_effort != null ? a.reasoning_effort : null;
-      // #64 override segment — graceful absence: an open backend that omits the
-      // mig-043 exposure fields renders NO control (nothing to read or write).
-      const showAutOvr = a.effective_autonomy != null || a.autonomy_override != null;
-      const ovrOptimistic = ovrOverride && ovrOverride.aid === a.id;
-      const ovrVal = ovrOptimistic ? ovrOverride.val : a.autonomy_override != null ? a.autonomy_override : null;
-      // while optimistic, ignore the (stale) server-computed effective level and
-      // apply the same shared rule client-side (vanilla onAutOvrClick parity).
-      const ovrDesc = autOvrDesc(snap, ovrOptimistic ? { autonomy_override: ovrVal, effective_autonomy: null } : a);
-      const canEditOvr = canEditAutOvr(snap, identity);
-      const full = personaFull[a.id];
-      const pOpen = !!personaOpen[a.id];
+    }
+    metaBits.push(<span title={a.last_active ? new Date(a.last_active).toLocaleString() : undefined}>{a.last_active ? "active " + relTime(a.last_active) : "never active"}</span>);
+    if (offline) metaBits.push("as of " + (lastOkAt ? clockTime(new Date(lastOkAt).toISOString()) : "unknown") + " (not live)");
+    const copyId = () => {
+      try {
+        void navigator.clipboard.writeText(a.id).then(() => toast("Agent ID copied", "ok"));
+      } catch {
+        toast("Couldn't copy", "danger");
+      }
+    };
+    const toTasks = () => navigate("/tasks?assignee=" + encodeURIComponent(a.alias));
+    const headerMenu: MenuItemSpec[] = isHuman
+      ? [
+          { label: "Requests", icon: "requests", onSelect: () => setTab("requests") },
+          { label: "Show in Tasks", icon: "tasks", onSelect: toTasks },
+          { label: "Copy ID · " + shortId(a.id), icon: "copy", onSelect: copyId },
+        ]
+      : [
+          { label: "Open conversation", icon: "agents", onSelect: () => setTab("conversation") },
+          { label: "Runs", icon: "live", onSelect: () => setTab("runs") },
+          { label: "Requests", icon: "requests", onSelect: () => setTab("requests") },
+          { label: "Memory", icon: "inbox", onSelect: () => setTab("memory") },
+          { label: "Configuration", icon: "sliders", onSelect: () => setTab("config") },
+          { label: "Show in Tasks", icon: "tasks", onSelect: toTasks },
+          { label: "Copy ID · " + shortId(a.id), icon: "copy", onSelect: copyId },
+        ];
+    const needChip = (t: Task): string | null =>
+      t.status === "needs_verification" ? "Verify" : planGated(t) ? "Plan waiting" : null;
+    const taskRow = (t: Task) => (
+      <Link key={t.id} className="ag-trow" to={"/tasks?task=" + encodeURIComponent(t.id)} title={t.title}>
+        <PriorityIcon priority={t.priority} />
+        <span className="ag-trow-id v2-t-id">{shortId(t.id)}</span>
+        <StatusIcon status={planAwaitsHuman(snap, t) ? "awaiting_human" : t.status} />
+        <span className="ag-trow-t">{t.title}</span>
+        {needChip(t) ? <Chip size="sm" className="ag-need">{needChip(t)}</Chip> : null}
+        {reviewIds.has(t.id) ? <Chip size="sm" className="ag-review" title={a.alias + " reviews this task"}>Review</Chip> : null}
+        {t.is_root ? <Chip size="sm" className="ag-root">Root</Chip> : null}
+        <span className="ag-trow-at v2-t-meta">{t.created_at ? relTime(t.created_at) : ""}</span>
+      </Link>
+    );
+    // one honest reason per control class: viewer / no human → the authority reason;
+    // a member without the grant → which permission it needs (the server 403s otherwise)
+    const lockReason = agentsDenied || "";
+    const awakeLock = autonomyDenied || "";
+    const allLocked = !!agentsDenied && !!autonomyDenied;
+    // D9 Configuration: model + reasoning effort are compact dropdowns that always SHOW the
+    // current value (a legacy id outside the curated list, or the runtime default when unset).
+    // the model picker lists EVERY /api/models row grouped by runtime (ModelPicker.tsx);
+    // a legacy id outside the catalog is shown first, current and not pickable
+    const modelLabel = legacyModel ? humanizeModelId(legacyModel) + " (legacy)" : modelName(litModel) + (!modelVal ? " · default" : "");
+    const effortItems: MenuItemSpec[] = visibleReasoningEfforts.map((e) => ({
+      label: e.name,
+      checked: (effortVal || null) === e.id,
+      disabled: !canAgents,
+      disabledReason: lockReason,
+      onSelect: () => onEffortClick(a, e.id),
+    }));
+    const effortLabel = effortVal ? effortName(effortVal) : "Default";
 
-      detail = (
-        <>
-          {/* header */}
-          <div className="card pad" style={{ marginBottom: 18 }}>
-            <div className="ahead">
-              <Avatar alias={a.alias} kind={a.kind} size="lg" ghLogin={a.github_login} />
-              <div className="who grow">
-                <h1>
-                  {a.alias} <KindBadge kind={a.kind} />
-                </h1>
-                <div className="role">{a.role}</div>
-              </div>
-              <Pill status={a.status} size="lg" />
-            </div>
-            <div className="meta" style={{ marginTop: 16, paddingTop: 15, borderTop: "1px solid var(--border)" }}>
-              {a.model ? (
-                <div>
-                  <span className="k">Model</span>
-                  <span className="v">{a.model}</span>
-                </div>
+    detail = (
+      <>
+        {/* header — identity, model and ONE status (review blocker: the status used to be
+            told 4-5 ways). The pill's tooltip carries the reason + the lease. Header +
+            tabs stay pinned while the tab body scrolls. */}
+        <div className="ag-top">
+        <header className="ahead">
+          <Button variant="ghost" size="sm" icon="arrow-left" className="ag-back" onClick={backToRoster}>
+            All agents
+          </Button>
+          <Avatar alias={a.alias} kind={isHuman ? "human" : "ai"} size={32} ghLogin={a.github_login} />
+          <div className="who">
+            <div className="who-row">
+              <h1 className="v2-t-display">
+                <span className="who-nm" title={a.alias}>{a.alias}</span>
+              </h1>
+              {isHuman ? (
+                <Chip size="sm" className="ag-kind" title={me && me.id === a.id ? "This is you — the human authority. Humans have no wake, model or memory controls." : "Human authority — humans have no wake, model or memory controls."}>Human</Chip>
+              ) : a.model ? (
+                <Chip size="sm" className="ag-model" icon={<BrandLogo brand={modelRuntimeOf(a.model)} size={12} className="mpk-logo" />} title={"Model ID " + a.model + (a.reasoning_effort ? " · reasoning effort " + a.reasoning_effort : "")}>
+                  {modelDisplay(a.model)}
+                  {a.reasoning_effort ? <span className="ag-model-effort"> · {effortName(a.reasoning_effort)}</span> : null}
+                </Chip>
               ) : null}
-              <div>
-                <span className="k">Last active</span>
-                <span className="v">{a.last_active ? relTime(a.last_active) : "—"}</span>
-              </div>
-              <div>
-                <span className="k">Origin</span>
-                <span className="v">{a.kind === "human" ? "Human authority" : "Human-created"}</span>
-              </div>
-              <div>
-                <span className="k">Agent ID</span>
-                <span className="v mono">{shortId(a.id)}</span>
-              </div>
+              {isHuman ? null : <BudgetPausedChip status={paused[a.id]} />}
+              {pres ? (
+                <span className={"ag-pres p-" + pres.k + " t-" + pres.tone} id="agentPresence" tabIndex={0} title={pres.reason} aria-label={"Status: " + pres.label + ". " + pres.reason}>
+                  <span className="d" aria-hidden="true" />
+                  {pres.label}
+                </span>
+              ) : null}
+            </div>
+            <div className="role">
+              {metaBits.map((b, i) => (
+                <span key={i} className="role-bit">{b}</span>
+              ))}
             </div>
           </div>
+          {/* D5: "1 / N ↑ ↓" through the roster + ⋯ (same items as the board column menu) */}
+          <div className="ahead-acts">
+            {changesFor && changesBtn ? (
+              <LiveChangesButton
+                live={changesFor.live}
+                summary={changesSummary}
+                open={changesOpen}
+                className="ag-changes-btn"
+                onClick={() => setChangesOpen(!changesOpen)}
+              />
+            ) : null}
+            {rosterOrder.length > 1 ? <Pager index={selIdx} total={rosterOrder.length} onPrev={() => step(-1)} onNext={() => step(1)} noun="agent" /> : null}
+            <MoreMenu label={a.alias + " actions"} items={headerMenu} />
+          </div>
+        </header>
+        {a.status === "failed" && !isHuman ? (
+          // one borderless muted line: "Last failure 3h ago · reason · View run" — the
+          // header pill already says Failed, so this line only adds the why + where
+          <div className="ag-fail" role="status">
+            <Icon name="alert" cls="v2-ico" />
+            <span className="grow" title={fail && fail.reason ? fail.reason : undefined}>
+              {fail ? (
+                <>
+                  <span className="muted">Last failure{fail.at ? " " + relTime(fail.at) : ""} · </span>
+                  {fail.reason ? fail.reason : fail.label + " — no reason recorded"}
+                </>
+              ) : (
+                <span className="muted">No failure reason recorded</span>
+              )}
+            </span>
+            <Button variant="ghost" size="sm" className="ag-fail-go" onClick={() => setTab("runs")}>
+              {fail ? "View run" : "View runs"}
+            </Button>
+          </div>
+        ) : null}
+        {/* gate callout — surfaced REGARDLESS of agent status (ISS-36); kept above the tabs */}
+        <GateCallout a={a} mine={mine} snap={snap} />
 
-          {/* gate callout — surfaced REGARDLESS of agent status (ISS-36) */}
-          <GateCallout a={a} mine={mine} />
+        <Tabs tabs={tabs} value={tab} onChange={setTab} label={a.alias + " workspace"} idPrefix="agtab" className="ag-tabs" />
+        </div>
 
-          {/* persona + controls */}
-          <div className="g2" style={{ marginBottom: 18 }}>
-            <div className="card">
-              <div className="card-h">
-                <h3>{a.kind === "human" ? "Role" : "Persona"}</h3>
-              </div>
-              <div className="card-b" style={{ padding: "14px 16px" }}>
-                <div className="persona-pre">
-                  {a.prompt_preview || a.role || "—"}
-                  {a.prompt_preview && a.prompt_preview.length >= 160 ? "…" : ""}
-                </div>
-                {a.kind !== "human" && (
-                  <>
-                    <div className="persona-expand">
-                      <button className="btn sm ghost" id="personaExpandBtn" onClick={() => togglePersona(a)}>
-                        {pOpen ? "Hide full prompt" : "Expand full prompt"}
-                      </button>
-                    </div>
-                    {pOpen && <div className="persona-full">{full === undefined ? "Loading…" : full || "(no system prompt)"}</div>}
-                  </>
-                )}
-              </div>
+        {/* conversation (S1) stays MOUNTED while other tabs show (hidden, not unmounted) so
+            the composer draft, pending send, scroll and a docked terminal survive tab
+            switches and the 3s poll never clobbers them */}
+        {!isHuman ? (
+          <div
+            id="agtab-panel-conversation"
+            role="tabpanel"
+            aria-labelledby="agtab-tab-conversation"
+            className="v2-tabpanel ag-panel"
+            hidden={tab !== "conversation"}
+          >
+            <div id="convWrap">
+              <LiveChangesContext.Provider value={changesCtx}>
+                <Conversation key={a.id} agent={a} onPresence={onConvPresence} runRunning={!!liveRun} liveRun={liveRun} statusShown={pres ? pres.k : null} />
+              </LiveChangesContext.Provider>
             </div>
-            <div className="card">
-              <div className="card-h">
-                <h3>Controls</h3>
-                <span className="grow" />
-                <span className="muted" style={{ fontSize: "11.5px" }}>human-only</span>
+          </div>
+        ) : null}
+
+        {changesFor && changesOpen ? (
+          <LiveChangesPanel
+            agentAlias={a.alias}
+            agentId={a.id}
+            run={changesFor.run}
+            live={changesFor.live}
+            state={runChanges}
+            onClose={() => setChangesOpen(false)}
+          />
+        ) : null}
+
+        <div id="detailMain">
+          <TabPanel tabKey="runs" idPrefix="agtab" active={tab === "runs" && !isHuman}>
+            <div className="ag-panel" id="runsWrap">
+              <RunsFeed agent={a} feed={feed} />
+            </div>
+          </TabPanel>
+
+          <TabPanel tabKey="tasks" idPrefix="agtab" active={tab === "tasks"}>
+            <div className="ag-panel">
+              {/* the count lives on the tab ("Tasks 2") — the toolbar carries only the sort (D12) */}
+              {mine.length > 1 ? (
+                <div className="ag-toolbar">
+                  <span className="grow" />
+                  <SortCtl name="agent-tasks" onChange={resort} />
+                </div>
+              ) : null}
+              {mine.length ? (
+                <div className="ag-list">
+                  {waiting.length ? (
+                    <ListGroup id="needs" title="Needs you" count={waiting.length} glyph={<StatusIcon status="awaiting_human" decorative />}>
+                      {waiting.map(taskRow)}
+                    </ListGroup>
+                  ) : null}
+                  {current.length ? (
+                    <ListGroup id="active" title="Active" count={current.length} glyph={<StatusIcon status="in_progress" decorative />}>
+                      {current.map(taskRow)}
+                    </ListGroup>
+                  ) : null}
+                  {rest.length ? (
+                    <ListGroup id="rest" title={current.length || waiting.length ? "Other tasks" : "All tasks"} count={rest.length} glyph={<StatusIcon status="ready" decorative />}>
+                      {rest.slice(0, tasksShown).map(taskRow)}
+                      <MoreBtn shown={Math.min(tasksShown, rest.length)} total={rest.length} onMore={() => setTasksShown((n) => n + TASKS_CAP)} />
+                    </ListGroup>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="none">{isHuman ? "No tasks assigned to or reviewed by " + a.alias + "." : "No tasks assigned to " + a.alias + "."}</div>
+              )}
+            </div>
+          </TabPanel>
+
+          <TabPanel tabKey="requests" idPrefix="agtab" active={tab === "requests"}>
+            <div className="ag-panel ag-req">
+              {ri.length + ro.length ? (
+                <div className="ag-toolbar">
+                  {/* incoming only: escalated is counted apart from open (review) */}
+                  <span className="v2-t-meta">{[openReqs ? openReqs + " open" : "", escReqs ? escReqs + " escalated" : ""].filter(Boolean).join(" · ")}</span>
+                  <span className="grow" />
+                </div>
+              ) : null}
+              {ri.length + ro.length ? (
+                <div className="ag-list">
+                  <ListGroup id="in" title="Incoming" count={ri.length} actions={ri.length > 1 ? <SortCtl name="agent-req-in" onChange={resort} menuLabel="Sort incoming requests" /> : undefined}>
+                    {ri.length ? (
+                      <>
+                        {ri.slice(0, riShown).map((r) => (
+                          <ReqMini key={r.id} r={r} dir="from" who={r.from} snap={snap} />
+                        ))}
+                        <MoreBtn shown={Math.min(riShown, ri.length)} total={ri.length} onMore={() => setRiShown((n) => n + REQ_CAP)} />
+                      </>
+                    ) : (
+                      <div className="ag-list-none">No incoming requests.</div>
+                    )}
+                  </ListGroup>
+                  <ListGroup id="out" title="Outgoing" count={ro.length} actions={ro.length > 1 ? <SortCtl name="agent-req-out" onChange={resort} menuLabel="Sort outgoing requests" /> : undefined}>
+                    {ro.length ? (
+                      <>
+                        {ro.slice(0, roShown).map((r) => (
+                          <ReqMini key={r.id} r={r} dir="to" who={r.to} snap={snap} />
+                        ))}
+                        <MoreBtn shown={Math.min(roShown, ro.length)} total={ro.length} onMore={() => setRoShown((n) => n + REQ_CAP)} />
+                      </>
+                    ) : (
+                      <div className="ag-list-none">No outgoing requests.</div>
+                    )}
+                  </ListGroup>
+                </div>
+              ) : (
+                <div className="none">No requests to or from {a.alias}.</div>
+              )}
+            </div>
+          </TabPanel>
+
+          {!isHuman ? (
+            <TabPanel tabKey="memory" idPrefix="agtab" active={tab === "memory"}>
+              <div className="ag-panel">
+                <div className="ag-toolbar">
+                  <span className="v2-t-meta">Memory digest — where {a.alias} left off</span>
+                </div>
+                {digestBlock(a)}
               </div>
-              <div className="card-b" style={{ padding: "13px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-                {a.kind === "human" ? (
-                  <div className="none" style={{ padding: 16 }}>This is you — the human authority. No wake controls.</div>
-                ) : (
-                  <>
+            </TabPanel>
+          ) : null}
+
+          {!isHuman ? (
+            <TabPanel tabKey="config" idPrefix="agtab" active={tab === "config"}>
+              <div className="ag-panel ag-config">
+                <section className="ag-sec">
+                  <h3 className="ag-sec-t">Persona</h3>
+                  {preview ? (
+                    <div className="persona-pre">{previewTxt}</div>
+                  ) : personaLoading ? (
+                    <div className="none">Loading persona…</div>
+                  ) : (
+                    <div className="none">No persona set — {a.alias} runs on its role ({a.role || "no role"}) alone.</div>
+                  )}
+                  {/* never "No persona set" AND a full prompt: the expander shows only when there is one */}
+                  {!personaKnownEmpty && !personaLoading ? (
+                    <div className="persona-expand">
+                      <Button variant="ghost" size="sm" icon={pOpen ? "chev-left" : "chev"} className="ag-linkbtn" id="personaExpandBtn" aria-expanded={pOpen} onClick={() => togglePersona(a)}>
+                        {pOpen ? "Hide full prompt" : "Show full prompt"}
+                      </Button>
+                    </div>
+                  ) : null}
+                  {pOpen && !personaKnownEmpty && <div className="persona-full">{full === undefined ? "Loading…" : full || "(no system prompt)"}</div>}
+                </section>
+                <section className="ag-sec">
+                  <div className="ag-sec-h">
+                    <h3 className="ag-sec-t">Controls</h3>
+                    <span className="grow" />
+                    <span className="ag-lock" id="agCtrlLock" tabIndex={0} title={!lockReason && !awakeLock ? "Only a human can change these settings." : [lockReason, awakeLock && awakeLock !== lockReason ? "Auto-wake: " + awakeLock : ""].filter(Boolean).join(" · ")}>
+                      <Icon name="shield" cls="v2-ico" />
+                      {!lockReason && !awakeLock ? "Human-only" : allLocked || !canAct ? "Read-only" : "Partly read-only"}
+                    </span>
+                  </div>
+                  <div className="ag-ctrls">
                     <div className="ctrl">
                       <div className="grow">
                         <div className="lbl">Provider</div>
                         <div className="desc">Claude Code or Codex</div>
                       </div>
-                      <div className="seg" id="modelRuntimeSeg" aria-label="Model provider">
+                      <div className="seg v2-seg v2-seg-sm" id="modelRuntimeSeg" role="group" aria-label="Model provider">
                         {MODEL_RUNTIMES.map((r) => (
                           <button
                             key={r.id}
                             type="button"
-                            className={r.id === selectedRuntime ? "on" : ""}
+                            className={"v2-seg-item" + (r.id === selectedRuntime ? " on" : "")}
                             aria-pressed={r.id === selectedRuntime}
-                            disabled={!(canAct && modelsForRuntime(r.id).length)}
-                            onClick={() => onRuntimeClick(a, r.id)}
+                            disabled={!(canAgents && modelsForRuntime(r.id).length)}
+                            title={lockReason || undefined}
+                            onClick={() => onRuntimeClick(r.id)}
                           >
+                            <BrandLogo brand={r.id} size={14} className="mpk-logo" />
                             {r.name}
                           </button>
                         ))}
@@ -803,72 +1279,84 @@ export function AgentsPage() {
                     <div className="ctrl model-ctrl">
                       <div className="grow">
                         <div className="lbl">Model</div>
-                        <div className="desc">Which {modelRuntimeName(selectedRuntime)} model this agent wakes as</div>
+                        <div className="desc">
+                          Which {modelRuntimeName(selectedRuntime)} model this agent wakes as
+                          {!modelVal ? " · none set, so the default (" + modelName(defaultModel) + ") applies" : ""}
+                        </div>
                       </div>
-                      <div className="seg" id="modelSeg" aria-label={modelRuntimeName(selectedRuntime) + " model"}>
-                        {visibleModels.length ? (
-                          visibleModels.map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              className={m.id === modelVal ? "on" : ""}
-                              aria-pressed={m.id === modelVal}
-                              title={m.name}
-                              disabled={!canAct}
-                              onClick={() => onModelClick(a, m.id)}
-                            >
-                              {m.name}
-                            </button>
-                          ))
+                      <span className="ag-pick" id="modelSeg" data-model={legacyModel || litModel}>
+                        {models.length || legacyModel ? (
+                          <ModelPicker
+                            agentAlias={a.alias}
+                            models={models}
+                            runtime={selectedRuntime}
+                            currentId={legacyModel || litModel}
+                            legacyId={legacyModel}
+                            legacyLabel={legacyModel ? humanizeModelId(legacyModel) + " (legacy)" : undefined}
+                            defaultId={defaultModel}
+                            label={modelLabel}
+                            title={(legacyModel || litModel) + (lockReason ? " — " + lockReason : "")}
+                            lockReason={canAgents ? "" : lockReason || GRANT_REASON.manage_agents}
+                            effortName={effortName}
+                            openOn={pickerOpenOn}
+                            onPick={(id) => {
+                              if (id !== modelVal) onModelClick(a, id);
+                            }}
+                          />
                         ) : (
-                          <span className="none" style={{ padding: "4px 9px" }}>No models</span>
+                          <span className="none">No models</span>
                         )}
-                      </div>
+                      </span>
                     </div>
                     <div className="ctrl model-ctrl">
                       <div className="grow">
                         <div className="lbl">Reasoning effort</div>
-                        <div className="desc">How hard this agent's worker thinks per spawn (default = runtime default)</div>
+                        <div className="desc">How hard this agent's worker thinks per spawn (Default = the runtime's default)</div>
                       </div>
-                      <div className="seg" id="effortSeg" aria-label="Reasoning effort">
-                        {visibleReasoningEfforts.map((e) => (
-                          <button
-                            key={String(e.id)}
-                            type="button"
-                            className={(effortVal || null) === e.id ? "on" : ""}
-                            data-effort={e.id == null ? "null" : e.id}
-                            aria-pressed={(effortVal || null) === e.id}
-                            disabled={!canAct}
-                            onClick={() => onEffortClick(a, e.id)}
-                          >
-                            {e.name}
-                          </button>
-                        ))}
-                      </div>
+                      <span className="ag-pick" id="effortSeg" data-effort={effortVal == null ? "null" : effortVal}>
+                        <MenuButton
+                          menuLabel="Reasoning effort"
+                          value={effortLabel}
+                          items={effortItems}
+                          size="sm"
+                          placement="bottom-end"
+                          className="ag-pick-btn"
+                          title={lockReason || "Reasoning effort"}
+                        />
+                      </span>
                     </div>
                     <div className="ctrl">
                       <div className="grow">
                         <div className="lbl">Wake</div>
-                        <div className="desc">Daemon may wake this agent on pending work</div>
+                        <div className="desc">Daemon may wake this agent on pending work (read-only here)</div>
                       </div>
-                      <span className={"wakebadge " + (a.wake_enabled ? "on" : "off")}>
-                        <span className="d" />
-                        {a.wake_enabled ? "Enabled" : "Disabled"}
-                      </span>
+                      {a.wake_enabled && paused[a.id] ? (
+                        // VD-10: a budget stop refuses new wakes — never a green "Enabled" beside it
+                        <span className="wakebadge paused" title={paused[a.id].reason || "Monthly budget reached — paused for new runs"}>
+                          <span className="d" />
+                          Paused by budget
+                        </span>
+                      ) : (
+                        <span className={"wakebadge " + (a.wake_enabled ? "on" : "off")}>
+                          <span className="d" />
+                          {a.wake_enabled ? "Enabled" : "Disabled"}
+                        </span>
+                      )}
                     </div>
                     <div className="ctrl">
                       <div className="grow">
                         <div className="lbl">Auto-wake</div>
                         <div className="desc">Clock-driven heartbeat — wake on a fixed cadence even with no pending work</div>
                       </div>
-                      <div className="seg" id="awakeSeg" aria-label="Auto-wake interval">
+                      <div className="seg v2-seg v2-seg-sm" id="awakeSeg" role="group" aria-label="Auto-wake interval">
                         {awakePresets(awakeVal).map((pz) => (
                           <button
                             key={String(pz.secs)}
                             type="button"
-                            className={pz.secs === awakeVal ? "on" : ""}
+                            className={"v2-seg-item" + (pz.secs === awakeVal ? " on" : "")}
                             aria-pressed={pz.secs === awakeVal}
-                            disabled={!canAct}
+                            disabled={!canAutonomy}
+                            title={awakeLock || undefined}
                             onClick={() => onAwakeClick(a, pz.secs)}
                           >
                             {pz.label}
@@ -882,166 +1370,199 @@ export function AgentsPage() {
                           <div className="lbl">Autonomy</div>
                           <div className="desc">{ovrDesc}</div>
                         </div>
-                        <div className="seg" id="autOvrSeg" data-agent={a.id} aria-label="Per-agent autonomy override">
+                        <div className="seg v2-seg v2-seg-sm" id="autOvrSeg" data-agent={a.id} role="group" aria-label="Per-agent autonomy override">
                           {AUT_OVERRIDES.map((o) => (
                             <button
                               key={String(o.id)}
                               type="button"
-                              className={(ovrVal || null) === o.id ? "on" : ""}
+                              className={"v2-seg-item" + ((ovrVal || null) === o.id ? " on" : "")}
                               data-ovr={o.id == null ? "null" : o.id}
                               aria-pressed={(ovrVal || null) === o.id}
                               disabled={!canEditOvr}
+                              title={ovrLock || undefined}
                               onClick={() => onAutOvrClick(a, o.id)}
                             >
-                              {o.name}
+                              {o.id ? autonomyLabelFor(o.id, o.name, projMode) : o.name}
                             </button>
                           ))}
                         </div>
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* current task + memory digest */}
-          <div className="g2" style={{ marginBottom: 18 }}>
-            <div className={"card" + (isCollapsed("currentTask") ? " collapsed" : "")}>
-              <div className="card-h">
-                <h3>Current task</h3>
-                <span className="count">{current.length ? "· " + current.length : ""}</span>
-                <span className="grow" />
-                <SortCtl name="agent-tasks" onChange={resort} />
-                <CollapseBtn k="currentTask" />
-              </div>
-              <div className="card-b" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-                {current.length ? (
-                  current.map((t) => (
-                    <Link key={t.id} className="lrow" style={{ border: "1px solid var(--border)" }} to={"/tasks?task=" + encodeURIComponent(t.id)}>
-                      <div className="grow">
-                        <div className="t1">
-                          {t.is_root ? <span className="tag root" style={{ marginRight: 6 }}>root</span> : null}
-                          {t.title}
-                        </div>
-                        <div className="t2">{trunc(t.definition_of_done, 64)}</div>
-                      </div>
-                      <Pill status={t.status} />
-                    </Link>
-                  ))
-                ) : (
-                  <div className="none">No task in progress.</div>
-                )}
-                {mine.length > 0 && (
-                  <div className="tchips-wrap">
-                    <div className="tchips-lbl">All tasks · {mine.length}</div>
-                    <div className="tchips">
-                      {mine.slice(0, tasksShown).map((t) => (
-                        <Link key={t.id} className="tchip" to={"/tasks?task=" + encodeURIComponent(t.id)} title={t.title}>
-                          <Glyph cls={statusClass(t.status)} />
-                          <span>{trunc(t.title, 30)}</span>
-                        </Link>
-                      ))}
-                    </div>
-                    <MoreBtn shown={Math.min(tasksShown, mine.length)} total={mine.length} onMore={() => setTasksShown((n) => n + TASKS_CAP)} />
                   </div>
-                )}
+                </section>
+                <AgentPerformanceCard agent={a} />
+                <AgentBudgetSection agent={a} />
+                <section className="ag-sec">
+                  <h3 className="ag-sec-t">Details</h3>
+                  <dl className="ag-kv">
+                    <div>
+                      <dt>Origin</dt>
+                      <dd>Human-created</dd>
+                    </div>
+                    <div>
+                      <dt>Agent ID</dt>
+                      <dd className="mono ag-id">
+                        <span title={a.id}>{a.id}</span>
+                        <IconButton icon="copy" label="Copy agent ID" size="sm" onClick={copyId} />
+                      </dd>
+                    </div>
+                    {a.model ? (
+                      <div>
+                        <dt>Model ID</dt>
+                        <dd className="mono">{a.model}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                </section>
+                <AgentConfigHistory agent={a} />
               </div>
-            </div>
-            <div className={"card" + (isCollapsed("memoryDigest") ? " collapsed" : "")}>
-              <div className="card-h">
-                <h3>Memory digest</h3>
-                <span className="grow" />
-                <span className="muted" style={{ fontSize: "11.5px" }}>where it left off</span>
-                <CollapseBtn k="memoryDigest" />
-              </div>
-              <div className="card-b" style={{ padding: "13px 14px" }}>{digestBlock(a)}</div>
-            </div>
-          </div>
-
-          {/* requests in/out (ISS-38) */}
-          <div className="g2" style={{ marginBottom: 18 }}>
-            <div className={"card" + (isCollapsed("incomingReq") ? " collapsed" : "")}>
-              <div className="card-h">
-                <h3>Incoming requests</h3>
-                <span className="count">({ri.length})</span>
-                <span className="grow" />
-                <SortCtl name="agent-req-in" onChange={resort} />
-                <CollapseBtn k="incomingReq" />
-              </div>
-              <div className="card-b" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 9 }}>
-                {ri.length ? (
-                  <>
-                    {ri.slice(0, riShown).map((r) => (
-                      <ReqMini key={r.id} r={r} dir="from" who={r.from} />
-                    ))}
-                    <MoreBtn shown={Math.min(riShown, ri.length)} total={ri.length} onMore={() => setRiShown((n) => n + REQ_CAP)} />
-                  </>
-                ) : (
-                  <div className="none">No incoming requests.</div>
-                )}
-              </div>
-            </div>
-            <div className={"card" + (isCollapsed("outgoingReq") ? " collapsed" : "")}>
-              <div className="card-h">
-                <h3>Outgoing requests</h3>
-                <span className="count">({ro.length})</span>
-                <span className="grow" />
-                <SortCtl name="agent-req-out" onChange={resort} />
-                <CollapseBtn k="outgoingReq" />
-              </div>
-              <div className="card-b" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 9 }}>
-                {ro.length ? (
-                  <>
-                    {ro.slice(0, roShown).map((r) => (
-                      <ReqMini key={r.id} r={r} dir="to" who={r.to} />
-                    ))}
-                    <MoreBtn shown={Math.min(roShown, ro.length)} total={ro.length} onMore={() => setRoShown((n) => n + REQ_CAP)} />
-                  </>
-                ) : (
-                  <div className="none">No outgoing requests.</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </>
-      );
-    }
+            </TabPanel>
+          ) : null}
+        </div>
+      </>
+    );
   }
 
+  const roster = <AgentsRoster agents={agents} selAlias={selAlias} onSelect={select} rosterRef={rosterRef} q={rosterQ} onQ={setRosterQ} search={false} paused={paused} />;
+
+  // creating an agent is owner-or-manage_agents (agent_registration_routes.py): without it the
+  // action stays visible but disabled with the reason — never a form bound to a 403
+  const newAgent = (label: string) =>
+    agentsDenied ? (
+      <button
+        type="button"
+        className="v2-btn v2-btn-primary v2-btn-md ag-new-locked"
+        aria-disabled="true"
+        title={agentsDenied}
+        data-denied={agentsDenied}
+        onClick={() => toast(agentsDenied, "warn")}
+      >
+        <Icon name="plus" cls="v2-ico" />
+        <span className="v2-btn-label">{label}</span>
+      </button>
+    ) : (
+      <Link className="v2-btn v2-btn-primary v2-btn-md" to="/onboarding?new=1">
+        <Icon name="plus" cls="v2-ico" />
+        <span className="v2-btn-label">{label}</span>
+      </Link>
+    );
+
+  /* ---------- D9 view: board (default) | roster list ---------- */
+  const qs = new URLSearchParams(location.search);
+  // a deep link to an agent or a workspace tab always opens the list + workspace
+  const view: AgentsView = dlAgent || qs.get("tab") ? "list" : qs.get("view") === "list" ? "list" : qs.get("view") === "board" ? "board" : storedView();
+  const boardFilter: BoardFilter = (BOARD_FILTERS.find((f) => f.key === qs.get("show")) || BOARD_FILTERS[0]).key;
+  const setView = (v: AgentsView) => {
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch { /* private mode */ }
+    const sp = new URLSearchParams(location.search);
+    sp.delete("agent");
+    sp.delete("tab");
+    sp.set("view", v);
+    navigate({ pathname: "/agents", search: "?" + sp.toString() });
+  };
+  const setBoardFilter = (k: string) => {
+    const sp = new URLSearchParams(location.search);
+    if (k === "all") sp.delete("show");
+    else sp.set("show", k);
+    navigate({ pathname: "/agents", search: sp.toString() ? "?" + sp.toString() : "" }, { replace: true });
+  };
+  const counts = filterCounts(snap);
+  const viewToggle = (
+    <div className="ab-viewtoggle" role="group" aria-label="View">
+      <CircleIconButton glyph={<BoardGlyph />} label="Board view" pressed={view === "board"} onClick={() => view !== "board" && setView("board")} />
+      <CircleIconButton glyph={<ListGlyph />} label="List view" pressed={view === "list"} onClick={() => view !== "list" && setView("list")} />
+    </div>
+  );
+  // narrow agent detail (a full view): no list toolbar — every px goes to the workspace
+  // so the conversation composer stays on screen (review: 390px composer below the fold)
+  const toolbar =
+    snap && agents.length && !(view === "list" && narrow && !!dlAgent) ? (
+      <PageToolbar label={view === "board" ? "Agent task filters" : "Agents view"} end={viewToggle}>
+        {view === "board" ? (
+          <FilterPills
+            label="Show"
+            value={boardFilter}
+            onChange={setBoardFilter}
+            items={BOARD_FILTERS.map((f) => ({ key: f.key, label: f.label, count: counts[f.key] }))}
+          />
+        ) : (
+          // r2: ONE toolbar row in both views — the roster filter sits where the
+          // board's filter pills sit (the band headers already count agents)
+          <RosterSearch q={rosterQ} onQ={setRosterQ} />
+        )}
+      </PageToolbar>
+    ) : undefined;
+
   return (
-    <Shell page="agents" title="Agents" ctx={ctx}>
-      {snap && (
-        <div className="split wide">
-          <aside className="card roster-card stick" id="roster" ref={rosterRef}>
-            <div className="rh">
-              <Icon name="agents" cls="" />
-              Roster · {agents.length}
-              <span style={{ flex: 1 }} />
-              <Link to="/onboarding?new=1" style={{ color: "var(--accent)", fontWeight: 650, textTransform: "none", letterSpacing: 0 }}>
-                + New
-              </Link>
-            </div>
-            {agents.map((ag) => (
-              <button key={ag.id} className={"rrow" + (ag.alias === selAlias ? " sel" : "")} data-alias={ag.alias} onClick={() => select(ag.alias)}>
-                <Avatar alias={ag.alias} kind={ag.kind} ghLogin={ag.github_login} />
-                <span className="grow">
-                  <span className="nm">{ag.alias}</span>
-                  <span className="rl">{ag.role}</span>
-                </span>
-                <EmbodBadge a={ag} />
-                <Glyph cls={statusClass(ag.status)} />
-              </button>
-            ))}
-          </aside>
-          <main>
-            {/* conversation (S1) mounts OUTSIDE the detail so the poll never wipes the composer */}
-            <div id="convWrap">{a && a.kind !== "human" ? <Conversation key={a.id} agent={a} /> : null}</div>
-            <div id="detailMain">{detail}</div>
-            <div id="runsWrap">{a ? <RunsFeed agent={a} /> : null}</div>
-          </main>
+    <Shell
+      page="agents"
+      title="Agents"
+      ctx={snap ? `${agents.length} agents` : undefined}
+      crumbs={view === "list" && a && (dlAgent || !narrow) ? [{ label: a.alias }] : undefined /* board / narrow roster: no selected agent */}
+      primaryAction={newAgent("New agent")}
+      toolbar={toolbar}
+      flush={view === "board" && !!snap && agents.length > 0}
+    >
+      {!snap ? (
+        <SnapshotPending lines={8} label="Loading agents" what="agents" />
+      ) : !agents.length ? (
+        <EmptyState
+          title="No agents yet"
+          body="Create your first agents — each gets a role and a model, and a human decides who joins the roster."
+          action={newAgent("Create agents")}
+        />
+      ) : view === "board" ? (
+        <AgentsBoard snap={snap} filter={boardFilter} canAct={canAct} paused={paused} />
+      ) : (
+        <div className="agents-v2" data-has-agent={dlAgent ? "true" : "false"}>
+          {roster}
+          <div className="agents-detail">
+            {a ? (
+              detail
+            ) : (
+              <>
+                {/* r3 (390): the roster is hidden in this full view — always offer the way back */}
+                <Button variant="ghost" size="sm" icon="arrow-left" className="ag-back ag-back-nf" onClick={backToRoster}>
+                  All agents
+                </Button>
+                <EmptyState title="Agent not found" body={sel ? `No agent named “${sel}” in this project.` : undefined} />
+              </>
+            )}
+          </div>
         </div>
       )}
     </Shell>
+  );
+}
+
+/* ---------- D9 view toggle ---------------------------------------------------- */
+type AgentsView = "board" | "list";
+const VIEW_KEY = "orcha:v2:agentsView";
+function storedView(): AgentsView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
+function BoardGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden="true" focusable="false">
+      <rect x="2" y="2.5" width="3.4" height="11" rx="1" />
+      <rect x="6.3" y="2.5" width="3.4" height="7.5" rx="1" />
+      <rect x="10.6" y="2.5" width="3.4" height="9.5" rx="1" />
+    </svg>
+  );
+}
+function ListGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" aria-hidden="true" focusable="false">
+      <path d="M5.5 4h8M5.5 8h8M5.5 12h8" />
+      <circle cx="2.6" cy="4" r=".6" fill="currentColor" />
+      <circle cx="2.6" cy="8" r=".6" fill="currentColor" />
+      <circle cx="2.6" cy="12" r=".6" fill="currentColor" />
+    </svg>
   );
 }

@@ -98,7 +98,7 @@ points but render a paywall that routes to premium; the server enforces it.
   (hosted boxes set it). `GET /api/plan` →
   `{plan, features: {members: bool}, upgrade_url}`;
   `upgrade_url` from env `ORCHA_UPGRADE_URL`
-  (default `https://orcha.nursoftai.com/#pricing`).
+  (default `https://orcha.quantallabs.ai`).
 - **Server gates (solo)**: member mutations
   (`POST/PATCH/DELETE /api/containers/{cid}/members*`) → **402**
   `{detail: {premium: "members", message, upgrade_url}}`. Roster GET stays

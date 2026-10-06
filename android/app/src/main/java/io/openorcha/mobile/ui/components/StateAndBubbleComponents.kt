@@ -34,6 +34,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -70,18 +74,25 @@ fun StateLayout(
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Linear empty/error state: calm 56dp hairline tile, 16/600 title, muted line.
         Box(
             Modifier
-                .size(72.dp)
-                .background(if (danger) p.dangerSoft else p.surface2, RoundedCornerShape(22.dp))
-                .border(BorderStroke(1.dp, if (danger) p.dangerLine else p.border), RoundedCornerShape(22.dp)),
+                .size(56.dp)
+                .background(p.surface2, RoundedCornerShape(12.dp))
+                .border(BorderStroke(1.dp, if (danger) p.dangerLine else p.border), RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center,
         ) { glyph() }
-        Text(title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.W700), textAlign = TextAlign.Center)
+        Text(
+            title,
+            style = ltype(LType.Headline),
+            color = if (danger) p.danger else p.text,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() },
+        )
         if (sub != null) {
             Text(
-                sub, style = MaterialTheme.typography.bodyMedium, color = p.muted,
-                textAlign = TextAlign.Center, modifier = Modifier.width(270.dp),
+                sub, style = ltype(LType.Meta), color = p.muted,
+                textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 300.dp),
             )
         }
         content()
@@ -92,12 +103,15 @@ fun StateLayout(
 
 @Composable
 fun KVRow(k: String, v: String, mono: Boolean = false, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().padding(vertical = 9.dp, horizontal = 2.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(k, style = MaterialTheme.typography.bodyMedium, color = Orcha.palette.muted)
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 36.dp).padding(vertical = 8.dp, horizontal = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(k, style = ltype(LType.Meta), color = Orcha.palette.muted)
         Spacer(Modifier.weight(1f))
         Text(
             v,
-            style = if (mono) MonoSmStyle.copy(fontSize = 12.sp) else MaterialTheme.typography.bodyMedium,
+            style = if (mono) ltype(LType.Mono) else ltype(LType.Meta),
             color = Orcha.palette.text,
             textAlign = TextAlign.End,
         )
@@ -127,42 +141,43 @@ fun Bubble(
                 tasks,
                 onOpenTask,
                 modifier = Modifier
-                    .border(BorderStroke(1.dp, p.border2), RoundedCornerShape(10.dp))
+                    .background(p.surface2, RoundedCornerShape(p.radiusCard.dp))
+                    .border(BorderStroke(1.dp, p.border), RoundedCornerShape(p.radiusCard.dp))
                     .padding(horizontal = 12.dp, vertical = 7.dp),
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W500, letterSpacing = 0.sp, fontSize = 12.sp),
+                style = ltype(LType.Meta),
                 color = p.muted,
             )
         }
         else -> {
             val mine = kind == BubbleKind.Mine
             val shape = RoundedCornerShape(
-                topStart = 16.dp, topEnd = 16.dp,
-                bottomStart = if (mine) 16.dp else 6.dp,
-                bottomEnd = if (mine) 6.dp else 16.dp,
+                topStart = 14.dp, topEnd = 14.dp,
+                bottomStart = if (mine) 14.dp else 4.dp,
+                bottomEnd = if (mine) 4.dp else 14.dp,
             )
             Row(modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
                 Column(
                     Modifier
                         .fillMaxWidth(0.82f)
-                        .background(if (mine) p.accent else p.surface2, shape)
+                        .background(if (mine) p.lPrimaryFill else p.surface, shape)
                         .let { if (!mine) it.border(BorderStroke(1.dp, p.border), shape) else it }
                         .padding(horizontal = 13.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     if (!mine && author != null) {
-                        Text(author, style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 0.2.sp), color = p.accent)
+                        Text(author, style = ltype(LType.Meta).copy(fontWeight = FontWeight.SemiBold), color = p.text2)
                     }
                     LinkifiedText(
                         body,
                         tasks,
                         onOpenTask,
-                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 14.5.sp),
-                        color = if (mine) p.accentInk else p.text,
+                        style = ltype(LType.Body),
+                        color = if (mine) p.lPrimaryText else p.text,
                     )
                     if (time != null) {
                         Text(
-                            time, style = MonoSmStyle,
-                            color = if (mine) p.accentInk.copy(alpha = 0.55f) else p.faint,
+                            time, style = ltype(LType.Micro).copy(fontWeight = FontWeight.Normal),
+                            color = if (mine) p.lPrimaryText.copy(alpha = 0.65f) else p.faint,
                         )
                     }
                     trailingContent?.invoke(this)

@@ -100,7 +100,9 @@ def test_s3_integration_visible_connect_states():
     # they must be DISTINGUISHED (Page diagnosis) — busy keys off `holder`, denial is the rest.
     assert 'code === 4409 || (state === "lease_denied" && holder)' in c, "busy not gated on a held lease (holder/4409)"
     assert 'code === 4403 || state === "lease_denied"' in c, "not-human denial (4403 / holderless lease_denied) not surfaced"
-    assert "Couldn't pair as" in c and "acting human" in c, "denial message doesn't point at the human actor"
+    # (parity r1: the copy points at the sidebar's "acting as" control, not the old header)
+    assert "Couldn't pair as" in c and ("acting human" in c or "acting as" in c), \
+        "denial message doesn't point at the human actor"
     assert 'state === "lease_denied" || code === 4409' not in c, "regressed: any lease_denied still lumped as busy"
     # the lock only engages once truly connected (a bridge-down panel must not freeze the composer)
     conv = (FRONTEND / "pages" / "agents" / "Conversation.tsx").read_text()
@@ -162,8 +164,11 @@ def test_iss69_contention_ux_names_holder_and_handles_yield():
     assert 'setSaving("handoff")' in c and "Handing off — saving session" in c, "hand-off overlay reuses the close copy"
     assert "Closing — saving session" in c, "close flow lost its own overlay copy"
     # (a) roster surfaces the embodiment kind from the read payload, colour-coded by kind
-    roster = (FRONTEND / "pages" / "agents" / "AgentsPage.tsx").read_text()
-    assert "function EmbodBadge" in roster and "leaseOf(a)" in roster, "roster doesn't surface the embodiment lease"
+    # Linear pop round 1: EmbodBadge moved to agentModel.tsx (shared by the roster + workspace)
+    model = (FRONTEND / "pages" / "agents" / "agentModel.tsx").read_text()
+    roster = (FRONTEND / "pages" / "agents" / "AgentsRoster.tsx").read_text()
+    assert "function EmbodBadge" in model and "leaseOf(a)" in model, "roster doesn't surface the embodiment lease"
+    assert "<EmbodBadge" in roster, "roster doesn't render the embodiment lease badge"
     css = (FRONTEND / "pages" / "agents" / "agents.css").read_text()
     assert ".rrow .rlive.resident" in css and ".rrow .rlive.ephemeral" in css, "roster badge not colour-coded by embodiment kind"
 
@@ -174,7 +179,10 @@ def test_conversation_locks_while_agent_in_live_terminal():
     # locked while a live lease is held — by another embodiment OR our own CONNECTED pair session
     assert 'leaseOf(agent) === "live"' in conv and "(pairing.paired && pairing.termConnected)" in conv, \
         "lock not driven by live lease / our connected pair"
-    assert "disabled={locked}" in conv, "composer not disabled while locked"
+    # (parity r1 perm-26: a viewer's composer is read-only too)
+    assert ("disabled={locked}" in conv or "disabled={locked || unavailable}" in conv
+            or "disabled={locked || unavailable || readOnly}" in conv), \
+        "composer not disabled while locked"
     assert composer.count("disabled={disabled}") >= 2, "shared composer input / attachment controls do not lock"
     assert "disabled={disabled || sending}" in composer, "shared composer Send control does not lock"
     assert "conversation paused" in conv, "no lock banner copy"
@@ -221,8 +229,8 @@ def test_iss71_wiring():
     assert "MAX_SESSIONS" in t and "evictBeyondCap" in t, "retained-session cap missing"
     # Forge caveat: a backgrounded live session is surfaced in the roster — the React roster
     # reads the server-side `embodiment` lease (EmbodBadge), which a live PTY session holds.
-    roster = (FRONTEND / "pages" / "agents" / "AgentsPage.tsx").read_text()
-    assert "EmbodBadge" in roster, "no roster indicator for a live/backgrounded terminal lease"
+    roster = (FRONTEND / "pages" / "agents" / "AgentsRoster.tsx").read_text()
+    assert "<EmbodBadge" in roster, "no roster indicator for a live/backgrounded terminal lease"
     css = (FRONTEND / "pages" / "agents" / "agents.css").read_text()
     assert ".rrow .rlive" in css, "no roster live-badge styling"
 

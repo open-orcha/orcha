@@ -7,8 +7,8 @@ import type {
 } from '../shared/types'
 
 /** Guided installer for the host prerequisites a fresh Mac needs before Orcha agents run:
- *  Homebrew → the Docker engine (Colima) → the orcha CLI → Claude Code → an Anthropic API
- *  key. Everything here is PURE (plan building, command + AppleScript construction, the
+ *  Homebrew → the Docker engine (Colima) → the orcha CLI → Claude Code. (An API key is not a
+ *  host prerequisite: Settings › API keys stores it on each project.) Everything here is PURE (plan building, command + AppleScript construction, the
  *  run orchestration over injected deps) so it's unit-testable without touching the machine;
  *  the real exec + native dialogs live in main/index.ts. */
 
@@ -42,7 +42,7 @@ export function homebrewPrefix(arch: string): string {
  *  real git checkout — needed for `brew update` and for tapping open-orcha/orcha. */
 export function homebrewStep(arch: string, user: string): InstallStep {
   const detail =
-    'The package manager Orcha uses to install everything else. Creating its folder needs ' +
+    'The package manager Embodent uses to install everything else. Creating its folder needs ' +
     'your Mac password once.'
   const installer = `NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL ${BREW_INSTALLER})"`
   if (arch === 'arm64') {
@@ -77,7 +77,7 @@ export function dockerEngineStep(): InstallStep {
   return {
     id: 'dockerEngine',
     title: 'Docker engine',
-    detail: 'Runs Orcha’s projects in the background (via Colima — no Docker Desktop needed).',
+    detail: 'Runs Embodent’s projects in the background (via Colima — no Docker Desktop needed).',
     actions: [{ kind: 'user', script: 'brew install colima docker docker-compose && colima start' }]
   }
 }
@@ -117,17 +117,6 @@ export function claudeStep(): InstallStep {
   }
 }
 
-/** The Anthropic API key. No shell actions — the orchestrator prompts for it and stores it
- *  (see runInstall). */
-export function apiKeyStep(): InstallStep {
-  return {
-    id: 'apiKey',
-    title: 'Anthropic API key',
-    detail: 'Lets your agents talk to Claude. Stored only on this Mac.',
-    actions: []
-  }
-}
-
 /** Ordered install plan: only the missing prerequisites, in dependency order (Homebrew first
  *  since the engine/orcha installs use it). */
 export function planInstall(probe: PrereqProbe, opts: { arch: string; user: string }): InstallStep[] {
@@ -136,44 +125,30 @@ export function planInstall(probe: PrereqProbe, opts: { arch: string; user: stri
   if (!probe.dockerEngine) steps.push(dockerEngineStep())
   if (!probe.orcha) steps.push(orchaCliStep())
   if (!probe.claude) steps.push(claudeStep())
-  if (!probe.apiKey) steps.push(apiKeyStep())
   return steps
 }
 
 /** Injectable surface so runInstall is testable without spawning processes or popping
- *  dialogs. `runAdmin` receives the raw script (the caller wraps it via adminOsascriptArgs);
- *  `promptSecret` returns the API key or null if the user cancels. */
+ *  dialogs. `runAdmin` receives the raw script (the caller wraps it via adminOsascriptArgs). */
 export interface InstallDeps {
   runUser: (script: string, onLine: (line: string) => void) => Promise<void>
   runAdmin: (script: string) => Promise<void>
-  promptSecret: () => Promise<string | null>
-  persistApiKey: (key: string) => Promise<void>
   onProgress: (e: InstallProgress) => void
 }
 
 const FAIL_TAIL = 600
 
 /** Run the plan step by step, streaming progress. Stops at the first failed step and returns
- *  what completed (installs are independent + idempotent, so a re-run resumes from there). A
- *  cancelled API-key prompt is a soft skip, not a failure — the portal still works, agents
- *  just won't run until a key is added. Never throws. */
+ *  what completed (installs are independent + idempotent, so a re-run resumes from there).
+ *  Never throws. */
 export async function runInstall(steps: InstallStep[], deps: InstallDeps): Promise<InstallResult> {
   const completed: Prereq[] = []
   for (const step of steps) {
     deps.onProgress({ id: step.id, status: 'start', title: step.title })
     try {
-      if (step.id === 'apiKey') {
-        const key = await deps.promptSecret()
-        if (!key) {
-          deps.onProgress({ id: step.id, status: 'skip', title: step.title })
-          continue
-        }
-        await deps.persistApiKey(key)
-      } else {
-        for (const action of step.actions) {
-          if (action.kind === 'admin') await deps.runAdmin(action.script)
-          else await deps.runUser(action.script, (line) => deps.onProgress({ id: step.id, status: 'log', line }))
-        }
+      for (const action of step.actions) {
+        if (action.kind === 'admin') await deps.runAdmin(action.script)
+        else await deps.runUser(action.script, (line) => deps.onProgress({ id: step.id, status: 'log', line }))
       }
       deps.onProgress({ id: step.id, status: 'ok', title: step.title })
       completed.push(step.id)

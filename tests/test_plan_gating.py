@@ -32,7 +32,7 @@ async def test_plan_solo_default(client, solo_plan):
     body = r.json()
     assert body["plan"] == "solo"
     assert body["features"] == {"members": False}
-    assert body["upgrade_url"] == "https://orcha.nursoftai.com/#pricing"
+    assert body["upgrade_url"] == "https://orcha.quantallabs.ai"
 
 
 async def test_plan_team(client, team_plan):
@@ -41,7 +41,7 @@ async def test_plan_team(client, team_plan):
     body = r.json()
     assert body["plan"] == "team"
     assert body["features"] == {"members": True}
-    assert body["upgrade_url"] == "https://orcha.nursoftai.com/#pricing"
+    assert body["upgrade_url"] == "https://orcha.quantallabs.ai"
 
 
 async def test_plan_unknown_value_defaults_solo(client, monkeypatch):
@@ -70,7 +70,7 @@ async def test_member_invite_402_under_solo(client, container, make_agent, solo_
     detail = r.json()["detail"]
     assert detail["premium"] == "members"
     assert isinstance(detail["message"], str) and "Team" in detail["message"]
-    assert detail["upgrade_url"] == "https://orcha.nursoftai.com/#pricing"
+    assert detail["upgrade_url"] == "https://orcha.quantallabs.ai"
 
 
 async def test_member_patch_402_under_solo(client, container, make_agent, solo_plan):

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+from . import personal_session
+
 
 def format_brief(brief: dict) -> str:
     """Render an agent rehydration response as compact plain text."""
@@ -38,6 +40,13 @@ def format_brief(brief: dict) -> str:
                 f"{(item.get('payload') or '')[:120]}  "
                 f"(id {str(item.get('id'))[:8]})"
             )
+            if item.get("agent_payload"):
+                # mig 065: `payload` above is already the agent-facing text; point at the
+                # full instructions (e.g. a code thread's reply endpoint) past the 120 chars.
+                lines.append(
+                    "        ↳ carries its own reply instructions — read them in full via "
+                    "/orcha-inbox (agent_payload)"
+                )
     outbox = brief.get("outbox") or []
     if outbox:
         lines.append(f"  Your asks now answered ({len(outbox)}):")
@@ -83,6 +92,8 @@ def format_brief(brief: dict) -> str:
 
 def rehydrate(args, services) -> None:
     """Best-effort fetch and print of the bound agent's continuity brief."""
+    if personal_session.active():  # a personal desktop tab never becomes an agent
+        return
     if services._skip_managed_embodiment_hook("rehydrate"):
         return
     try:

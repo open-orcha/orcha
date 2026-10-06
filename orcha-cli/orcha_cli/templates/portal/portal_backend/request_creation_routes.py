@@ -3,12 +3,13 @@
 import json
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event as _publish_event
+from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.guards import (
     agent_participates_in_task as _agent_participates_in_task,
     pick_human as _pick_human,
@@ -19,19 +20,26 @@ from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
 from portal_backend.limits import MAX_DOD_LEN, MAX_NAME_LEN
+from portal_backend.org_chart import route_via_manager, stamp_routing
 from portal_backend.push_outbox import push_request as _push_request
 from portal_backend.request_classification import classify_request_type
 from portal_backend.schemas.requests import RequestCreate, TaskRequestPayload
 
 
 @app.post("/api/containers/{cid}/requests", status_code=201)
-def create_request(cid: str, body: RequestCreate):
+def create_request(cid: str, body: RequestCreate, request: Request):
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if not _valid_uuid(body.requester_agent_id):
         raise HTTPException(400, "requester_agent_id is not a valid UUID")
 
     with db_cursor() as (conn, cur):
+        # RQ-16 / PS-05: a signed-in (proxy-verified) human IS the requester — a viewer or
+        # non-member is refused (403) and a member can never post as another agent. The
+        # header-less agent/daemon lane is unchanged (claimed requester kept).
+        body.requester_agent_id = _trusted_actor(
+            cur, request, cid, body.requester_agent_id
+        )
         _require_container_active(
             cur, cid, body.requester_agent_id
         )  # GH #24 (was _require_container)
@@ -44,6 +52,7 @@ def create_request(cid: str, body: RequestCreate):
 
         target_id: Optional[str] = None
         target_alias: Optional[str] = None
+        org_routing: Optional[dict] = None
         if body.target_agent_id and body.target_alias:
             raise HTTPException(
                 400, "specify target_agent_id OR target_alias, not both"
@@ -62,7 +71,44 @@ def create_request(cid: str, body: RequestCreate):
         else:
             # Orcha#30: no target specified == escalate-to-human at birth.
             # We never write NULL into requests.target_id anymore; pick the human row.
-            target_id = _pick_human(cur, cid)
+            # Org chart (mig 052): the requester's manager chain first — the nearest
+            # actionable human manager (viewers / AI managers skipped) — else the
+            # project-wide pick. The routing reason is stamped on detail after insert.
+            target_id, org_routing = route_via_manager(
+                cur, cid, body.requester_agent_id, exclude_ids=(body.requester_agent_id,)
+            )
+            if target_id is None:
+                # PS-36: never route a human's own untargeted ask back to them.
+                target_id = _pick_human(cur, cid, exclude_id=body.requester_agent_id)
+
+        # Parity r1 (e2e-permissions-19): a request addressed straight at a read-only
+        # VIEWER would be parked on someone who can never answer it (every viewer write
+        # 403s) and would sit outside every actor's "waiting on you". Route it to the
+        # human who can act instead — the same find_actionable_human ranking untargeted
+        # asks use (pick_human 409s when every live human is a viewer, so the ask is
+        # refused rather than orphaned). The original addressee is kept in the audit
+        # event and echoed back as `rerouted_from_alias`.
+        rerouted_from_alias: Optional[str] = None
+        if target_id is not None:
+            cur.execute(
+                "SELECT alias, kind, member_role FROM agents WHERE id=%s", (target_id,)
+            )
+            tgt = cur.fetchone()
+            if tgt and tgt["kind"] == "human" and tgt["member_role"] == "viewer":
+                rerouted_from_alias = tgt["alias"]
+                target_id = _pick_human(cur, cid, exclude_id=body.requester_agent_id)  # PS-36
+                cur.execute("SELECT alias FROM agents WHERE id=%s", (target_id,))
+                target_alias = cur.fetchone()["alias"]
+
+        # Parity r2: the response echoes WHO actually holds the ask. An untargeted ask
+        # (Orcha#30) is routed to a concrete human, so name them instead of returning
+        # null. The audit `created` event keeps `target_alias` as the CALLER named it
+        # (null = born escalated) — request_ownership reads that as the original addressee.
+        resolved_target_alias: Optional[str] = target_alias
+        if resolved_target_alias is None and target_id is not None:
+            cur.execute("SELECT alias FROM agents WHERE id=%s", (target_id,))
+            _ra = cur.fetchone()
+            resolved_target_alias = _ra["alias"] if _ra else None
 
         # parent_request_id handling (Orcha#1: request chains)
         parent_request_id: Optional[str] = None
@@ -120,10 +166,22 @@ def create_request(cid: str, body: RequestCreate):
         # TaskRequestPayload (title = first line of payload truncated; dod = the payload;
         # priority = the request priority) and route it through the SAME task-detail build
         # path below, then stamp the audit fields onto `detail`.
+        # Mig 065: agent-only instructions ride their own column; an empty/duplicate value
+        # collapses to NULL so "null = the agent reads payload" stays the single rule.
+        agent_payload: Optional[str] = (
+            body.agent_payload if (body.agent_payload or "").strip() else None
+        )
+        if agent_payload == body.payload:
+            agent_payload = None
+
         effective_type = body.type
         effective_task = body.task
         promoted_verb: Optional[str] = None
-        if body.type == "info" and body.task is None:
+        # Mig 065: a request that carries its OWN agent instructions (agent_payload — e.g. a
+        # code-thread question, answered in its thread) already says how the target answers;
+        # the work-verb backstop is for bare info asks and would turn "Fix this?" into a task
+        # request the thread can never settle.
+        if body.type == "info" and body.task is None and agent_payload is None:
             verdict, matched_verb = classify_request_type(body.payload)
             if verdict == "task":
                 effective_type = "task"
@@ -171,9 +229,9 @@ def create_request(cid: str, body: RequestCreate):
             """INSERT INTO requests
                  (container_id, type, requester_id, target_id, priority, status,
                   payload, expires_at, parent_request_id, chain_depth, detail,
-                  originating_task_id)
+                  originating_task_id, agent_payload)
                VALUES (%s, %s, %s, %s, %s, 'open', %s,
-                       now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s)
+                       now() + (%s || ' minutes')::interval, %s, %s, %s::jsonb, %s, %s)
                RETURNING id, expires_at""",
             (
                 cid,
@@ -187,10 +245,12 @@ def create_request(cid: str, body: RequestCreate):
                 chain_depth,
                 json.dumps(detail) if detail is not None else None,
                 originating_task_id,
+                agent_payload,
             ),
         )
         row = cur.fetchone()
         rid = str(row["id"])
+        stamp_routing(cur, rid, org_routing)
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)  # → awaiting_request
         log_event(
@@ -210,6 +270,8 @@ def create_request(cid: str, body: RequestCreate):
                 "chain_depth": chain_depth,
                 "task_title": detail["title"] if detail else None,
                 "promoted_from_info": promoted_verb is not None,
+                "rerouted_from_viewer": rerouted_from_alias,
+                "routed_via": org_routing.get("routed_via") if org_routing else None,
             },
         )  # GH #71
         _publish_event(
@@ -221,7 +283,9 @@ def create_request(cid: str, body: RequestCreate):
                 "request_id": rid,
                 "type": effective_type,
                 "from_agent_id": body.requester_agent_id,
-                "preview": body.payload[:120],
+                # The TARGET's bus event: the agent-facing text (mig 065), so the wake
+                # manifest preview is exactly what it was before the human/agent split.
+                "preview": (agent_payload or body.payload)[:120],
             },
         )
         conn.commit()
@@ -236,10 +300,21 @@ def create_request(cid: str, body: RequestCreate):
         "request_id": rid,
         "type": effective_type,  # GH #71: reflects auto-promotion (info → task) when it fired
         "status": "open",
-        "target_alias": target_alias,  # null when the request was born already targeting the human (Orcha#30)
+        # The resolved addressee's alias — for an untargeted ask (Orcha#30), the human
+        # the request was routed to (parity r2; was null).
+        "target_alias": resolved_target_alias,
         "expires_at": row["expires_at"].isoformat(),
         "parent_request_id": parent_request_id,
         "chain_depth": chain_depth,
         "originating_task_id": originating_task_id,  # GH #56: task the answer's wake will attach to (or null)
         "task": detail,  # null for info; full task body for type='task'
+        # Mig 065: echoed so a caller can confirm what the target agent receives.
+        "agent_payload": agent_payload,
+        # Parity r1: set when the named target was a read-only viewer and the request was
+        # routed to the actionable human (target_alias) instead; null otherwise.
+        "rerouted_from_alias": rerouted_from_alias,
+        # Org chart (mig 052): "reports_to" when the untargeted ask went to the requester's
+        # nearest actionable manager, "fallback" when the chain had nobody who could act,
+        # null when no chain applied (explicit target, or no reporting line).
+        "routed_via": org_routing.get("routed_via") if org_routing else None,
     }

@@ -80,7 +80,7 @@ describe('orchaCliStep', () => {
 })
 
 describe('planInstall', () => {
-  const all: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: true, claude: true, codex: true, apiKey: true }
+  const all: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: true, claude: true, codex: true }
   const opts = { arch: 'arm64', user: 'alice' }
 
   it('returns nothing when everything is already present', () => {
@@ -88,19 +88,23 @@ describe('planInstall', () => {
   })
 
   it('emits only the missing steps, in dependency order (Homebrew first)', () => {
-    const probe: PrereqProbe = { homebrew: false, dockerEngine: false, orcha: false, claude: false, codex: false, apiKey: false }
+    const probe: PrereqProbe = { homebrew: false, dockerEngine: false, orcha: false, claude: false, codex: false }
     expect(planInstall(probe, opts).map((s) => s.id)).toEqual([
       'homebrew',
       'dockerEngine',
       'orcha',
-      'claude',
-      'apiKey'
+      'claude'
     ])
   })
 
-  it('skips Homebrew/engine when present but still installs the CLIs + key', () => {
-    const probe: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: false, claude: false, codex: false, apiKey: false }
-    expect(planInstall(probe, opts).map((s) => s.id)).toEqual(['orcha', 'claude', 'apiKey'])
+  it('never plans an API-key step: keys live on each project (Settings › API keys)', () => {
+    const probe: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: true, claude: true, codex: false }
+    expect(planInstall(probe, opts)).toEqual([])
+  })
+
+  it('skips Homebrew/engine when present but still installs the CLIs', () => {
+    const probe: PrereqProbe = { homebrew: true, dockerEngine: true, orcha: false, claude: false, codex: false }
+    expect(planInstall(probe, opts).map((s) => s.id)).toEqual(['orcha', 'claude'])
   })
 })
 
@@ -110,8 +114,6 @@ describe('runInstall', () => {
     const d: InstallDeps = {
       runUser: vi.fn(async () => undefined),
       runAdmin: vi.fn(async () => undefined),
-      promptSecret: vi.fn(async () => 'sk-ant-test'),
-      persistApiKey: vi.fn(async () => undefined),
       onProgress: (e) => events.push(e),
       ...over
     }
@@ -125,23 +127,6 @@ describe('runInstall', () => {
     expect(d.runAdmin).toHaveBeenCalledWith('mkdir -p /opt/homebrew && chown -R alice:admin /opt/homebrew')
     expect(d.runUser).toHaveBeenCalledOnce()
     expect(events.map((e) => e.status)).toContain('ok')
-  })
-
-  it('prompts for and persists the API key', async () => {
-    const { d } = deps()
-    const apiKey: InstallStep = { id: 'apiKey', title: 'Anthropic API key', detail: '', actions: [] }
-    const res = await runInstall([apiKey], d)
-    expect(res.ok).toBe(true)
-    expect(d.persistApiKey).toHaveBeenCalledWith('sk-ant-test')
-  })
-
-  it('treats a cancelled API-key prompt as a soft skip, not a failure', async () => {
-    const { d, events } = deps({ promptSecret: vi.fn(async () => null) })
-    const apiKey: InstallStep = { id: 'apiKey', title: 'Anthropic API key', detail: '', actions: [] }
-    const res = await runInstall([apiKey], d)
-    expect(res).toEqual({ ok: true, completed: [] })
-    expect(d.persistApiKey).not.toHaveBeenCalled()
-    expect(events.some((e) => e.status === 'skip')).toBe(true)
   })
 
   it('stops at the first failed step, surfacing the (trimmed) error and what completed', async () => {

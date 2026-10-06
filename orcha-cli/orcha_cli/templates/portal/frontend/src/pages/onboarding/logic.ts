@@ -11,7 +11,7 @@ import { sendJSON } from "../../api/client";
 import { trunc } from "../../lib/format";
 
 /* ---- O3: concierge first-agent system prompt (v1 SEED, verbatim) --------- */
-export const CONCIERGE_TEMPLATE = `You are the concierge agent — the first agent in a brand-new, empty Orcha workspace.
+export const CONCIERGE_TEMPLATE = `You are the concierge agent — the first agent in a brand-new, empty Embodent workspace.
 
 Your job is to help the operator (the human authority) figure out what this workspace
 needs, then help them staff it. Concretely:
@@ -22,7 +22,7 @@ needs, then help them staff it. Concretely:
 3. When the workspace needs more agents, SUGGEST them via the /orcha-suggest-agent
    skill — propose the role, model, and a draft system prompt — and let the operator
    decide. You propose teammates; you do NOT create them yourself.
-4. Cooperate with other agents through Orcha requests (/orcha-ask) rather than acting
+4. Cooperate with other agents through Embodent requests (/orcha-ask) rather than acting
    on their behalf.
 
 You are human-authoritative. Never self-certify: your work stops at needs_verification
@@ -68,17 +68,45 @@ export interface OnbState {
   _propose?: ProposeState;
   _roster?: Roster | null;
   _walk?: Walk | null;
+  /** the roster walk handed its last standalone tasks to create-tasks: Continue
+   *  there ends setup on the Overview instead of another create-agent form. */
+  _walkDone?: boolean;
 }
 
+/** Legacy (pre-V2 / classic page) key — carries NO project scope. */
 export const KEY = "orcha:onboarding";
+/** V2 project-scoped key (arch §4: storage that carries project data includes cid). */
+export function scopedKey(cid: string): string {
+  return "orcha:v2:onboarding:" + cid + ":state";
+}
 
-export function loadState(): OnbState {
-  let s: Partial<OnbState>;
-  try { s = (JSON.parse(localStorage.getItem(KEY) || "null") as Partial<OnbState>) || {}; } catch { s = {}; }
+/**
+ * Load the flow state for ONE project. Queued tasks, the AI roster proposal
+ * and the agent draft must never resume in another project (QA). The legacy
+ * unscoped key is only adopted on a single-container stack (`multi` false),
+ * where it can only have been written for this project; on multi-project
+ * origins it is ignored (never deleted — rollback-safe). Without a cid (not
+ * yet resolved) the fresh default is returned.
+ */
+export function loadState(cid?: string | null, multi = false): OnbState {
+  let s: Partial<OnbState> = {};
+  const read = (k: string): Partial<OnbState> | null => {
+    try { return JSON.parse(localStorage.getItem(k) || "null") as Partial<OnbState> | null; } catch { return null; }
+  };
+  if (cid) {
+    s = read(scopedKey(cid)) ?? (!multi ? read(KEY) : null) ?? {};
+  }
   return Object.assign({ step: "welcome", tasks: [], lastAgentAlias: null, _agentDraft: null }, s) as OnbState;
 }
-export function saveState(s: OnbState): void {
-  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* private mode */ }
+/** Persist for `cid`; on a single-container stack also mirror to the legacy
+ *  key so a rollback build (classic page) still resumes the same draft. */
+export function saveState(s: OnbState, cid?: string | null, multi = false): void {
+  if (!cid) return; // never persist unscoped project data
+  try {
+    const v = JSON.stringify(s);
+    localStorage.setItem(scopedKey(cid), v);
+    if (!multi) localStorage.setItem(KEY, v);
+  } catch { /* private mode */ }
 }
 
 /* ---- PURE step-machine transition logic ---------------------------------- */
@@ -190,11 +218,20 @@ export function parseSSE(bufferIn: string): { frames: SSEFrame[]; rest: string }
 //   · dangling assignee (not a roster name) → unassigned
 //   · depends_on keeps only EARLIER titles (no forward refs / cycles)
 //   · at most ONE kickoff per assignee
-export function normalizeRoster(payload: unknown, defaultModel: string | null): Roster {
+//
+// `opts.aliases` (used ONLY on the model's fresh proposal, never on the
+// operator's edits): proposed display names ("Forge-backend-webhooks-builder")
+// become the lowercase alias that will actually be created ("forge-backend-
+// webhooks-builder"), and task assignees are mapped the same way so refs hold.
+export function normalizeRoster(payload: unknown, defaultModel: string | null, opts?: { aliases?: boolean }): Roster {
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const r = (payload || {}) as any;
+  const nm = (v: unknown): string => {
+    const raw = String(v || "").trim();
+    return opts && opts.aliases ? toAlias(raw) || raw : raw;
+  };
   const agents: RosterAgent[] = (Array.isArray(r.agents) ? r.agents : []).map((a: any) => ({
-    name: String((a && a.name) || "").trim(),
+    name: nm(a && a.name),
     role: String((a && a.role) || "").trim(),
     charter: String((a && a.charter) || "").trim(),
     model: (a && a.model_hint) || defaultModel || null,
@@ -205,7 +242,7 @@ export function normalizeRoster(payload: unknown, defaultModel: string | null): 
   const haveKickoff: Record<string, boolean> = {};
   const tasks: RosterTask[] = (Array.isArray(r.tasks) ? r.tasks : []).map((t: any) => {
     const title = String((t && t.title) || "").trim();
-    let assignee: string | null = (t && t.assignee) || null;
+    let assignee: string | null = (t && t.assignee) ? nm(t.assignee) || null : null;
     if (assignee && !names[assignee]) assignee = null; // drop dangling ref
     const deps: string[] = (Array.isArray(t && t.depends_on) ? t.depends_on : [])
       .filter((d: string) => seenTitles.indexOf(d) !== -1); // earlier titles only
@@ -269,12 +306,13 @@ export const ERR_COPY: Record<string, string> = {
 /* ---- HTTP: vanilla postJSON semantics over the shared sendJSON ------------ */
 // onboarding.js postJSON never throws — it returns {ok, status, body} so every
 // caller can toast the vanilla copy ("Create failed (404)") verbatim.
-export async function postJSON<T = unknown>(url: string, body: unknown): Promise<{ ok: boolean; status: number; body: T | null }> {
+export async function postJSON<T = unknown>(url: string, body: unknown): Promise<{ ok: boolean; status: number; body: T | null; detail?: string }> {
   try {
     const res = await sendJSON<T>("POST", url, body);
     return { ok: true, status: 200, body: res };
   } catch (e) {
-    return { ok: false, status: (e as { status?: number }).status ?? 0, body: null };
+    const err = e as { status?: number; detail?: string };
+    return { ok: false, status: err.status ?? 0, body: null, ...(err.detail ? { detail: err.detail } : {}) };
   }
 }
 
@@ -351,15 +389,139 @@ function demoPropose(
       event: "roster",
       rationale: "A concierge to plan and delegate, plus one builder to execute the first slice — the smallest team that can move “" + trunc(goal, 60) + "” forward.",
       agents: [
-        { name: "Atlas", role: "Concierge · planning & orchestration", charter: CONCIERGE_TEMPLATE, model_hint: defaultModel },
-        { name: "Forge", role: "Builder · implementation", charter: "You are a builder agent. Take a task with a clear definition of done, implement it, and stop at needs_verification for the operator to verify. Cooperate with teammates via /orcha-ask; never self-certify.", model_hint: defaultModel },
+        { name: "atlas", role: "Concierge · planning & orchestration", charter: CONCIERGE_TEMPLATE, model_hint: defaultModel },
+        { name: "forge", role: "Builder · implementation", charter: "You are a builder agent. Take a task with a clear definition of done, implement it, and stop at needs_verification for the operator to verify. Cooperate with teammates via /orcha-ask; never self-certify.", model_hint: defaultModel },
       ],
       tasks: [
-        { title: "Map the current onboarding flow", definition_of_done: "A written breakdown of every first-run step and where users drop off, approved by the operator.", assignee: "Atlas", depends_on: [], protocol: null, is_kickoff: true },
-        { title: "Ship the highest-impact fix", definition_of_done: "The top drop-off point from the map is fixed and verified in the running app.", assignee: "Forge", depends_on: ["Map the current onboarding flow"], protocol: null, is_kickoff: true },
+        { title: "Map the current onboarding flow", definition_of_done: "A written breakdown of every first-run step and where users drop off, approved by the operator.", assignee: "atlas", depends_on: [], protocol: null, is_kickoff: true },
+        { title: "Ship the highest-impact fix", definition_of_done: "The top drop-off point from the map is fixed and verified in the running app.", assignee: "forge", depends_on: ["Map the current onboarding flow"], protocol: null, is_kickoff: true },
       ],
     });
   };
   setTimeout(tick, 200);
   return function abort() { stopped = true; };
+}
+
+/* ---- V2 presentation helpers (pure; unit-tested in logic.test.ts) -------- */
+
+/** A proposed agent name → the alias Orcha creates: lowercase, spaces and
+ *  underscores → "-", only [a-z0-9-] kept, no leading/trailing/double "-". */
+export function toAlias(name: string): string {
+  return String(name || "").trim().toLowerCase()
+    .replace(/[\s_]+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// Model display helpers moved to lib/models (shared with Metrics/Agents so a
+// model id reads the same everywhere); re-exported for existing importers.
+export { normalizeModels, prettyModelId, modelLabel, modelProvider, groupModels } from "../../lib/models";
+export type { ModelInfo } from "../../lib/models";
+
+/** "Agent created" sentence derived from the agent's LIVE status (never
+ *  claims "idle" while the card beside it says Working). */
+export function createdLede(alias: string, status: string | null | undefined, firstTask?: string | null): string {
+  // P-10c: the snapshot's status is LIVENESS (working only while a run holds
+  // the lease), so a just-created agent whose first task is already assigned
+  // reads "idle" until its first wake — say the task is queued, never "idle
+  // until you give it work" when it has work.
+  const idleLike = status === "idle" || status === "pending" || status === "ready" || status == null || status === "";
+  if (firstTask && idleLike) {
+    return alias + " has its first task — “" + firstTask + "” — and starts on it at its next wake. Follow along in its conversation.";
+  }
+  switch (status) {
+    case "working":
+    case "in_progress":
+      return alias + " is already working — it picked up its first task. Follow along in its conversation.";
+    case "blocked":
+    case "failed":
+    case "awaiting_human":
+    case "awaiting_request":
+      return alias + " needs attention before it can continue — open its conversation to see why.";
+    case "idle":
+    case "pending":
+    case "ready":
+    case null:
+    case undefined:
+    case "":
+      return alias + " is standing by — idle until you give it work. The best first move is to think out loud with it.";
+    default:
+      return alias + " is set up. Open its conversation to see what it's doing.";
+  }
+}
+
+/** Error copy for a failed proposal: our guidance first, the server's raw
+ *  message only as secondary detail (and only when it adds something). */
+export function proposeErrorCopy(err: ProposeError | null | undefined): { code: string; copy: string; detail: string | null } {
+  const code = (err && err.code) || "model_error";
+  const copy = ERR_COPY[code] || (err && err.message) || ERR_COPY.model_error;
+  const raw = err && err.message ? String(err.message).trim() : "";
+  return { code, copy, detail: raw && raw !== copy ? raw : null };
+}
+
+/* ---- who may add agents (e2e-permissions-14) ----------------------------- */
+/** Mirrors the backend gate on POST /api/containers/{cid}/agents
+ *  (identity_routes.enforce_grant 'manage_agents'): with a signed-in project
+ *  identity only an owner or a member holding `manage_agents` may register
+ *  agents — a viewer never. No identity (trust off / self-host, or the
+ *  fresh-bootstrap lane) is not gated here; the server stays the enforcer. */
+export const AGENT_GRANT_REASON = "Adding agents needs the owner role or the Agents permission — ask a project owner";
+export const AGENT_VIEWER_REASON = "Your role on this project is viewer (read-only) — you can't add agents";
+export function agentCreateDenial(
+  identity: { member_role?: string | null; grants?: string[] | null } | null | undefined,
+): string | null {
+  if (!identity) return null;
+  if (identity.member_role === "viewer") return AGENT_VIEWER_REASON;
+  if (identity.member_role === "owner") return null;
+  return (identity.grants || []).indexOf("manage_agents") >= 0 ? null : AGENT_GRANT_REASON;
+}
+
+/** Rename proposed agent i and carry its tasks (kickoff included) along: every
+ *  task assigned to the old name follows the new one, so normalizeRoster never
+ *  sees it as dangling and drops the kickoff (P-26d). */
+export function renameRosterAgent(roster: Roster, i: number, name: string): void {
+  const a = roster.agents[i];
+  if (!a) return;
+  const old = a.name;
+  a.name = name;
+  if (old === name) return;
+  // another agent still named `old` (a duplicate) keeps its tasks
+  if (roster.agents.some((x, j) => j !== i && x.name === old)) return;
+  roster.tasks.forEach((t) => { if (t.assignee === old) t.assignee = name; });
+}
+
+export const TASK_VIEWER_REASON = "Your role on this project is viewer (read-only) — you can't add tasks";
+export const FORK_VIEWER_REASON = "Your role on this project is viewer (read-only) — you can't add agents or tasks";
+
+/** Why this identity may NOT create tasks (viewer only — every member role but
+ *  viewer can create tasks), else null. */
+export function taskCreateDenial(
+  identity: { member_role?: string | null } | null | undefined,
+): string | null {
+  return identity && identity.member_role === "viewer" ? TASK_VIEWER_REASON : null;
+}
+
+/** Copy for a failed batch of task creates: a permission refusal is not
+ *  retryable, so it never says "retry the rest" (P-29b). */
+export function taskBatchFailCopy(created: number, failed: number, statuses: number[], reason?: string | null): string {
+  if (statuses.length && statuses.every((s) => s === 403)) {
+    return (created ? created + " created; " : "") + (reason || "You don't have permission to add tasks to this project") + ".";
+  }
+  return created + " created, " + failed + " failed — retry the rest";
+}
+
+/** Steps that create agents (or lead only to creating them). */
+export const AGENT_STEPS = ["create-agent", "propose-goal", "propose-stream", "propose-roster"];
+
+/** The fork's "This project has N agents and M tasks": the project's ROOT task
+ *  (its objective) is not a work item — the same count the Projects table shows. */
+export function forkCounts(snap: { agents?: { kind?: string }[]; tasks?: { is_root?: boolean }[] } | null | undefined): { agents: number; tasks: number } {
+  return {
+    agents: (snap?.agents ?? []).filter((a) => a.kind !== "human").length,
+    tasks: (snap?.tasks ?? []).filter((t) => !t.is_root).length,
+  };
+}
+
+/** The roster review's primary label: it opens a per-agent confirm walk, so it
+ *  says how many agents you'll review — never "create the team" (one click ≠ N). */
+export function commitLabel(nAgents: number): string {
+  return "Looks good — review " + nAgents + " agent" + (nAgents === 1 ? "" : "s");
 }

@@ -65,11 +65,14 @@ export function loginShellPath(): string | null {
  *  script), every agent run silently fails "Invalid API key" even though the user is
  *  properly subscribed. Local runs are subscription-first: a deliberate key comes from the
  *  stack's own .env / Settings (read explicitly by whatever needs it), never from ambient
- *  env inheritance. Pure — returns a new object, never mutates `env`. */
+ *  env inheritance. Also drops ORCHA_PERSONAL_SESSION (a personal-tab marker). Pure — returns a new object, never mutates `env`. */
 export function scrubWorkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = { ...env }
   delete next.ANTHROPIC_API_KEY
   delete next.ORCHA_LLM_API_KEY
+  // The desktop itself may have been started from one of its own (personal) terminal tabs;
+  // the notifier and its agent workers are managed sessions and must not inherit that marker.
+  delete next.ORCHA_PERSONAL_SESSION
   for (const key of Object.keys(next)) {
     if (key.startsWith('CLAUDE_CODE_')) delete next[key]
   }

@@ -9,33 +9,73 @@ struct SearchTabView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     @State private var query = ""
+    /// Recent queries, newest first (per-device, small).
+    @AppStorage("search.recents") private var recentsRaw = ""
 
     private var trimmed: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var recents: [String] {
+        recentsRaw.split(separator: "\n").map(String.init)
+    }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 10) {
+            LazyVStack(alignment: .leading, spacing: LSpace.xl) {
+                LSearchField("Search tasks, agents, requests", text: $query)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Search")
+                    .onSubmit(rememberQuery)
                 if trimmed.isEmpty {
-                    StateLayout(
-                        title: "Search this workspace",
-                        sub: "Tasks, agents, and requests — matches open the same detail screens as the tabs."
-                    ) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 28))
-                            .foregroundStyle(p.muted)
-                    } actions: {
-                        EmptyView()
-                    }
-                    .padding(.top, 60)
+                    idle
                 } else {
                     results
                 }
             }
-            .padding(16)
+            .padding(.horizontal, LSpace.l)
+            .padding(.vertical, LSpace.m)
         }
-        .searchable(text: $query, prompt: "Search tasks, agents, requests")
+        .scrollDismissesKeyboard(.interactively)
+        .background(p.bg)
+    }
+
+    @ViewBuilder
+    private var idle: some View {
+        if recents.isEmpty {
+            LEmptyState(
+                icon: "magnifyingglass",
+                title: "Search this workspace",
+                message: "Tasks, agents, and requests — matches open the same detail screens as the tabs."
+            )
+            .padding(.top, 40)
+        } else {
+            LSection("Recent", count: recents.count, trailing: AnyView(
+                Button("Clear") { recentsRaw = "" }
+                    .ltype(.meta)
+                    .foregroundStyle(p.muted)
+                    .frame(minHeight: 44)
+            )) {
+                VStack(spacing: 0) {
+                    ForEach(Array(recents.enumerated()), id: \.element) { index, recent in
+                        Button { query = recent } label: {
+                            LRow(title: recent) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .foregroundStyle(p.muted)
+                                    .accessibilityHidden(true)
+                            } trailing: {
+                                Image(systemName: "arrow.up.left")
+                                    .foregroundStyle(p.faint)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .buttonStyle(.lRow)
+                        .accessibilityHint("Search again")
+                        .shellRowEntrance(index)
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -46,78 +86,84 @@ struct SearchTabView: View {
         let requests = matchRequests(snapshot?.requests ?? [])
 
         if tasks.isEmpty && agents.isEmpty && requests.isEmpty {
-            OrchaCard {
-                Text("No matches for “\(trimmed)”.")
-                    .foregroundStyle(p.muted)
-            }
+            LEmptyState(
+                icon: "text.magnifyingglass",
+                title: "No matches",
+                message: "Nothing matches “\(trimmed)”. Try a title, an agent, or a status."
+            )
+            .padding(.top, 24)
         }
         if !tasks.isEmpty {
-            SectionH(title: "Tasks", count: "\(tasks.count)")
-            ForEach(tasks) { task in
-                NavigationLink(value: WorkspaceRoute.task(task.id)) {
-                    OrchaCard {
-                        HStack {
-                            StatusPill(status: task.status, domain: .task)
-                            Spacer()
-                            MetaTag(text: "P\(task.priority ?? 100)", mono: true)
+            LSection("Tasks", count: tasks.count) {
+                VStack(spacing: 0) {
+                    ForEach(Array(tasks.enumerated()), id: \.element.id) { index, task in
+                        NavigationLink(value: WorkspaceRoute.task(task.id)) {
+                            LRow(title: task.title, subtitle: MobileUx.statusCopy(task.status)) {
+                                HStack(spacing: LSpace.s) {
+                                    LPriorityGlyph(priority: task.priority)
+                                    LStatusGlyph(status: task.status)
+                                }
+                            } trailing: {
+                                Text(task.shortId)
+                                    .ltype(.mono)
+                            }
+                            .accessibilityElement(children: .combine)
                         }
-                        Text(task.title)
-                            .font(p.uiFont(15, .semibold))
-                            .foregroundStyle(p.text)
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(2)
+                        .buttonStyle(.lRow)
+                        .simultaneousGesture(TapGesture().onEnded(rememberQuery))
+                        .shellRowEntrance(index)
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
         if !agents.isEmpty {
-            SectionH(title: "Agents", count: "\(agents.count)")
-            ForEach(agents) { agent in
-                NavigationLink(value: WorkspaceRoute.agent(agent.id)) {
-                    OrchaCard {
-                        HStack(spacing: 10) {
-                            AgentAvatar(alias: agent.alias, human: agent.kind == "human", githubLogin: agent.githubLogin, size: 30)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(agent.alias)
-                                    .font(p.uiFont(15, .semibold))
-                                    .foregroundStyle(p.text)
-                                if let role = agent.role, !role.isEmpty {
-                                    Text(role)
-                                        .font(p.uiFont(12))
-                                        .foregroundStyle(p.muted)
-                                        .lineLimit(1)
-                                }
+            LSection("Agents", count: agents.count) {
+                VStack(spacing: 0) {
+                    ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
+                        NavigationLink(value: WorkspaceRoute.agent(agent.id)) {
+                            LRow(title: agent.alias, subtitle: agent.role) {
+                                LAvatar(name: agent.alias, isAI: agent.kind != "human", size: 24, status: agent.status)
+                            } trailing: {
+                                Text(MobileUx.statusCopy(agent.status ?? "idle"))
                             }
-                            Spacer()
-                            StatusPill(status: agent.status ?? "idle", domain: .agent)
+                            .accessibilityElement(children: .combine)
                         }
+                        .buttonStyle(.lRow)
+                        .simultaneousGesture(TapGesture().onEnded(rememberQuery))
+                        .shellRowEntrance(index)
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
         if !requests.isEmpty {
-            SectionH(title: "Requests", count: "\(requests.count)")
-            ForEach(requests) { req in
-                NavigationLink(value: WorkspaceRoute.request(req.id)) {
-                    OrchaCard {
-                        HStack {
-                            StatusPill(status: req.status, domain: .request)
-                            Spacer()
-                            Text(MobileUx.agoLabel(req.createdAt) ?? "")
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundStyle(p.faint)
+            LSection("Requests", count: requests.count) {
+                VStack(spacing: 0) {
+                    ForEach(Array(requests.enumerated()), id: \.element.id) { index, req in
+                        NavigationLink(value: WorkspaceRoute.request(req.id)) {
+                            LRow(title: req.payload, subtitle: "\(req.requesterAlias ?? "agent") → \(req.targetAlias ?? "you")") {
+                                Image(systemName: MobileUx.requestStatusGlyph(req.status, escalated: req.targetId == nil))
+                                    .foregroundStyle(p.muted)
+                                    .accessibilityHidden(true)
+                            } trailing: {
+                                Text(MobileUx.agoLabel(req.createdAt) ?? "")
+                            }
+                            .accessibilityElement(children: .combine)
                         }
-                        Text(req.payload)
-                            .font(p.uiFont(14))
-                            .foregroundStyle(p.text2)
-                            .lineLimit(2)
+                        .buttonStyle(.lRow)
+                        .simultaneousGesture(TapGesture().onEnded(rememberQuery))
+                        .shellRowEntrance(index)
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Pushes the current query to the front of the recents (deduped, max 6).
+    private func rememberQuery() {
+        let q = trimmed
+        guard !q.isEmpty else { return }
+        let next = [q] + recents.filter { $0.caseInsensitiveCompare(q) != .orderedSame }
+        recentsRaw = next.prefix(6).joined(separator: "\n")
     }
 
     // Case-insensitive contains over the fields a human would scan for.

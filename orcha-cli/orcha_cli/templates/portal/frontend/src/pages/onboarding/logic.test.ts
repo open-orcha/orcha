@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 import {
   CONCIERGE_TEMPLATE,
   normalizeRoster,
+  normalizeModels,
+  prettyModelId,
+  modelLabel,
+  toAlias,
   parseSSE,
   railKeyFor,
   reconcileDemoFlag,
@@ -158,5 +162,71 @@ describe("#293 rosterToWalk / walkAgentToDraft (commit reuses existing POSTs)", 
     expect(d0._taskTitle).toBe("Plan"); // proposed title preserved (submitAgent honors it)
     expect(d0.alias).toBe("Atlas");
     expect(d0.model).toBe("m");
+  });
+});
+
+import { createdLede, groupModels, modelProvider, proposeErrorCopy, ERR_COPY as COPY } from "./logic";
+
+describe("V2 presentation helpers", () => {
+  it("groups models by provider in server order", () => {
+    expect(modelProvider("claude-opus-5-5")).toBe("Anthropic");
+    expect(modelProvider("gpt-5")).toBe("OpenAI");
+    expect(modelProvider("grok-4")).toBe("xAI");
+    expect(modelProvider("mystery")).toBe("Other");
+    const g = groupModels([{ id: "claude-a" }, { id: "gpt-5" }, { id: "claude-b" }]);
+    expect(g.map((x) => x.provider)).toEqual(["Anthropic", "OpenAI"]);
+    expect(g[0].models.map((m) => m.id)).toEqual(["claude-a", "claude-b"]);
+  });
+
+  it("derives the created sentence from the live status (never 'idle' while working)", () => {
+    expect(createdLede("Atlas", "working")).toMatch(/already working/);
+    expect(createdLede("Atlas", "working")).not.toMatch(/idle/);
+    expect(createdLede("Atlas", "idle")).toMatch(/idle until you give it work/);
+    expect(createdLede("Atlas", null)).toMatch(/standing by/);
+    expect(createdLede("Atlas", "blocked")).toMatch(/needs attention/);
+    // P-10c: an idle (not yet woken) agent WITH its first task is not "idle until you give it work"
+    expect(createdLede("atlas", "idle", "Set up CI")).toMatch(/has its first task — “Set up CI”/);
+    expect(createdLede("atlas", "idle", "Set up CI")).not.toMatch(/idle until/);
+    expect(createdLede("atlas", "working", "Set up CI")).toMatch(/already working/);
+  });
+
+  it("prefers our guidance copy over the raw server message", () => {
+    const e = proposeErrorCopy({ code: "rate_limited", message: "429 from provider" });
+    expect(e.copy).toBe(COPY.rate_limited);
+    expect(e.detail).toBe("429 from provider");
+    expect(proposeErrorCopy({ code: "weird", message: "boom" }).copy).toBe("boom");
+    expect(proposeErrorCopy(null)).toEqual({ code: "model_error", copy: COPY.model_error, detail: null });
+  });
+});
+
+describe("V2 roster/model display helpers", () => {
+  it("toAlias lowercases proposed names into the alias that is created", () => {
+    expect(toAlias("Forge-backend-webhooks-builder")).toBe("forge-backend-webhooks-builder");
+    expect(toAlias("  QA Sentinel_bot ")).toBe("qa-sentinel-bot");
+    expect(toAlias("Atlas!")).toBe("atlas");
+  });
+  it("normalizeRoster({aliases}) maps agent names AND assignee refs; default keeps edits verbatim", () => {
+    const payload = {
+      agents: [{ name: "Forge Builder", role: "B", charter: "c" }],
+      tasks: [{ title: "T", definition_of_done: "d", assignee: "Forge Builder", is_kickoff: true }],
+    };
+    const r = normalizeRoster(payload, "m", { aliases: true });
+    expect(r.agents[0].name).toBe("forge-builder");
+    expect(r.tasks[0].assignee).toBe("forge-builder");
+    expect(r.tasks[0].is_kickoff).toBe(true);
+    expect(normalizeRoster(payload, "m").agents[0].name).toBe("Forge Builder");
+  });
+  it("normalizeModels tolerates bare string ids; modelLabel prefers the catalog name", () => {
+    const ms = normalizeModels([{ id: "claude-opus-5", name: "Opus 5" }, "claude-sonnet", null, { name: "x" }]);
+    expect(ms).toEqual([{ id: "claude-opus-5", name: "Opus 5" }, { id: "claude-sonnet" }]);
+    expect(modelLabel("claude-opus-5", ms)).toBe("Opus 5");
+    expect(modelLabel("claude-sonnet", ms)).toBe("Sonnet");
+    expect(modelLabel(null, ms)).toBe("");
+  });
+  it("prettyModelId reads like a model name", () => {
+    expect(prettyModelId("claude-opus-5-5")).toBe("Opus 5.5");
+    expect(prettyModelId("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+    expect(prettyModelId("gpt-5")).toBe("GPT-5");
+    expect(prettyModelId("gpt-5-mini")).toBe("GPT-5 Mini");
   });
 });

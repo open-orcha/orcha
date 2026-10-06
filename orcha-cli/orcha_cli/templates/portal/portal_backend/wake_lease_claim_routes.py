@@ -1,11 +1,13 @@
 """Claim one of an agent's independent wake leases before starting work."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.budget_routes import agent_budget_block
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
+from portal_backend.identity_routes import require_machine_lane_member
 from portal_backend.schemas.wakes import WakeClaim
 
 
@@ -23,7 +25,7 @@ def resolve_claim_lane(body) -> str:
 
 
 @app.post("/api/agents/{aid}/wake-claim", status_code=200)
-def wake_claim(aid: str, body: WakeClaim):
+def wake_claim(aid: str, body: WakeClaim, request: Request):
     """R2.4: atomic single-flight claim — the daemon MUST win this before spawning a worker.
 
     The runaway happened because nothing stopped the daemon from spawning a second
@@ -41,6 +43,7 @@ def wake_claim(aid: str, body: WakeClaim):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         agent = require_agent(cur, aid)
+        require_machine_lane_member(cur, request, str(agent["container_id"]))  # PS-07
         cur.execute(
             "SELECT status, wakes_enabled FROM containers WHERE id=%s",
             (agent["container_id"],),
@@ -69,6 +72,20 @@ def wake_claim(aid: str, body: WakeClaim):
                 "reason": "wake disabled for this agent (opt-out)",
             }
         lane = resolve_claim_lane(body)
+        # Budget hard stop (KG-1 / B07 / PS-17): the wake-scan withholds should_wake from a
+        # budget-paused agent, but a caller that goes straight to wake-claim must be refused
+        # too — on BOTH lanes. A human-opened live terminal (lease_kind='live') is exempt: it
+        # is the human's explicit choice to work with the agent, not an autonomous new run.
+        if body.lease_kind != "live":
+            budget_reason = agent_budget_block(cur, str(agent["container_id"]), aid)
+            if budget_reason:
+                return {
+                    "agent_id": aid,
+                    "claimed": False,
+                    "reason": "budget: " + budget_reason,
+                    "budget_paused": True,
+                    "lane": lane,
+                }
         if lane == "conversation":
             cur.execute(
                 """INSERT INTO agent_wake_state

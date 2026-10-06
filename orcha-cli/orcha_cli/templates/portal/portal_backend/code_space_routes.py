@@ -86,12 +86,15 @@ import urllib.parse
 
 from fastapi import HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from psycopg.types.json import Jsonb
 
 from portal_backend import local_git, request_creation_routes
-from portal_backend.agent_status import bump_agent, log_event
+from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
+from portal_backend.event_acknowledgement import _ack_events_handled
+from portal_backend.events import publish_event as _publish_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend.github_hub_routes import _detail_error_payload, _error_payload
+from portal_backend.github_hub_routes import _browse_error_payload, _error_payload, _no_token
 from portal_backend.github_repo_browse_routes import (
     LOCAL_REPO,
     _fetch_full_tree,
@@ -227,28 +230,132 @@ def _resolve_commit_sha(repo: str, token: str, cid: str, ref) -> str:
     return sha
 
 
-def _render_wake_payload(thread_id: str, anchor: dict, kind: str, body: str) -> str:
-    """The directed request's `payload` text — the ONLY thing the tagged agent's wake
-    prompt actually renders (request_nudge_routes / the wake manifest surface a
-    request's payload preview verbatim). Carries the anchor (repo/sha/path/lines),
+# Learn-mode kinds: a `teach` / `why` thread is rendered by the portal's Learn tab as a
+# stepped LESSON (LessonCard.tsx / lesson.ts parse this exact shape: title, one-line
+# summary, numbered steps citing line refs, key concepts, follow-up questions). The
+# guide below is appended to those kinds' wake payload ONLY — question/note payloads
+# are byte-identical to before — and it is a nudge, not a contract: the portal falls
+# back to paragraph-by-paragraph stepping for a plain-prose answer, so an agent that
+# ignores it (or predates it) still renders fine.
+LESSON_KINDS = ("teach", "why")
+LESSON_FORMAT_GUIDE = (
+    "answer as a short lesson in markdown so the portal can walk the reader through it:\n"
+    "# <lesson title>\n"
+    "> <one-line summary>\n"
+    "## Steps\n"
+    "1. **<step title>** (L<start>-<end>) <what those lines do, and why>\n"
+    "2. ... one step per idea, in reading order; cite the lines each step covers as "
+    "L12-18 (or other/file.ts:12-18 for another file)\n"
+    "## Key concepts\n"
+    "- <concept>\n"
+    "## Follow-ups\n"
+    "- <a question the reader could ask next>\n"
+    "plain prose is still accepted; this structure just turns it into a guided walkthrough."
+)
+
+
+def _render_wake_payload(thread_id: str, anchor: dict, kind: str, body: str,
+                         max_len: int = MAX_PAYLOAD_LEN) -> str:
+    """The directed request's AGENT text — stored as `requests.agent_payload` (mig 065) and
+    delivered on every agent read path (the request_created wake preview, /inbox, /outbox,
+    /rehydrate, nudges), exactly as it was when it was the request's `payload`. People never
+    see it: the request's `payload` is just the question, with `detail.display_title` /
+    `detail.code_thread` for the portal (see code_thread_request_detail). Carries the anchor (repo/sha/path/lines),
     the thread kind, the human/agent's question body, and the literal reply
     instruction — naming the REAL thread id, since it already exists by the time this
     is called — so the woken agent knows exactly how to answer without guessing an
-    endpoint shape. Also appends a portal deep-link line so a human reading the
-    conversation/request surface can jump straight to the thread in Code Space; the
-    conversation UI's linkify (lib/format.ts) only turns http(s) URLs into anchors,
-    not portal-relative paths, so this renders as copyable plain text there — the
-    reverse direction (thread -> request) is a clickable chip in ThreadView instead
-    (see ThreadView.tsx's "via request <id>" chip), giving bidirectional linking
-    without inventing a second portal-relative-link renderer."""
+    endpoint shape. Also appends the portal deep link to the thread (the agent can hand
+    it to a person); the human-facing request carries the same link as
+    `detail.code_thread.link`, rendered as an "Open thread in Code" chip.
+
+    `teach` / `why` threads additionally carry LESSON_FORMAT_GUIDE (between the
+    question and the reply instruction). The result never exceeds `max_len`: when it
+    would, the QUESTION BODY is shortened (with an ellipsis) — the anchor header, the
+    lesson guide and the reply/deep-link lines always survive, so a long question can
+    never truncate away the instructions the agent needs to answer."""
     location = f"{anchor['path']}:{anchor['start_line']}-{anchor['end_line']}"
     deep_link = f"/code?path={urllib.parse.quote(anchor['path'])}&thread={thread_id}"
-    return (
-        f"[code thread — {kind}] {anchor['repo']}@{anchor['sha'][:7]} {location}\n"
-        f"{body}\n\n"
+    header = f"[code thread — {kind}] {anchor['repo']}@{anchor['sha'][:7]} {location}\n"
+    guide = f"{LESSON_FORMAT_GUIDE}\n\n" if kind in LESSON_KINDS else ""
+    trailer = (
+        f"\n\n{guide}"
         f"reply via POST /api/code/threads/{thread_id}/messages with your agent id as actor_agent_id\n"
         f"view/reply in the portal: {deep_link}"
     )
+    room = max_len - len(header) - len(trailer)
+    if room < len(body):
+        body = body[: max(room - 1, 0)] + "…" if room > 0 else ""
+    return (header + body + trailer)[:max_len]
+
+
+# ---- human-facing request text (mig 065) --------------------------------------------------
+# The directed request a code thread opens has two audiences. The TAGGED AGENT still gets the
+# full `_render_wake_payload` text (anchor, lesson guide, reply instruction, deep link) — stored
+# as the request's `agent_payload` and delivered on every agent read path. A PERSON reading the
+# request sees only the question as `payload`, a clean `detail.display_title`
+# ("Teach · Tour of the deploy/ folder — docker-compose.yml L1"), and `detail.code_thread`
+# (thread id + anchor + portal link) so the portal renders an "Open thread in Code" chip.
+# frontend/src/lib/requestText.ts mirrors `_question_summary` / `code_thread_title` for rows
+# stored before the split.
+THREAD_KIND_LABELS = {"question": "Question", "why": "Why", "teach": "Teach", "note": "Note"}
+_POLITE_LEAD_RE = re.compile(
+    r"^(?:please\s+)?(?:give me|show me|walk me through|teach me|tell me|can you|could you|please)\s+"
+    r"(?:(?:a|an)\s+)?",
+    re.IGNORECASE,
+)
+_CLAUSE_END_RE = re.compile(r"(?:[:,;?!]|\.(?=\s|$)|\s[—–-]\s)")
+SUMMARY_MAX = 60
+
+
+def _question_summary(question: str) -> str:
+    """The question's gist for a title: first line, polite lead-in dropped, cut at the first
+    clause break, capitalised, word-truncated to SUMMARY_MAX. "" when nothing is left."""
+    line = next((ln.strip() for ln in (question or "").splitlines() if ln.strip()), "")
+    line = _POLITE_LEAD_RE.sub("", line)
+    m = _CLAUSE_END_RE.search(line)
+    if m:
+        line = line[: m.start()]
+    line = line.strip()
+    if len(line) > SUMMARY_MAX:
+        cut = line[: SUMMARY_MAX - 1].rsplit(" ", 1)[0] or line[: SUMMARY_MAX - 1]
+        line = cut.rstrip() + "…"
+    return line[:1].upper() + line[1:]
+
+
+def _line_label(start: int, end: int) -> str:
+    return f"L{start}" if start == end else f"L{start}–{end}"
+
+
+def code_thread_title(kind: str, path: str, start: int, end: int, question: str) -> str:
+    """ "<Kind> · <question gist> — <file> L<lines>" (the gist is dropped when empty)."""
+    label = THREAD_KIND_LABELS.get(kind, (kind or "Question").capitalize())
+    base = (path or "").rstrip("/").rsplit("/", 1)[-1] or path
+    where = f"{base} {_line_label(start, end)}"
+    gist = _question_summary(question)
+    return f"{label} · {gist} — {where}" if gist else f"{label} · {where}"
+
+
+def code_thread_link(path: str, thread_id: str) -> str:
+    """The portal deep link to a thread — the same string the agent's wake text carries."""
+    return f"/code?path={urllib.parse.quote(path)}&thread={thread_id}"
+
+
+def code_thread_request_detail(thread_id: str, anchor: dict, kind: str, question: str) -> dict:
+    return {
+        "display_title": code_thread_title(
+            kind, anchor["path"], anchor["start_line"], anchor["end_line"], question
+        ),
+        "code_thread": {
+            "thread_id": thread_id,
+            "kind": kind,
+            "repo": anchor["repo"],
+            "sha": anchor["sha"],
+            "path": anchor["path"],
+            "start_line": anchor["start_line"],
+            "end_line": anchor["end_line"],
+            "link": code_thread_link(anchor["path"], thread_id),
+        },
+    }
 
 
 @app.post("/api/containers/{cid}/code/threads")
@@ -292,11 +399,11 @@ def create_code_thread(cid: str, body: CodeThreadCreate, request: Request):
             return _not_connected()
         token = _resolve_token_for(repo, cid)
         if not token:
-            return _not_connected()
+            return _no_token(repo)
         try:
             resolved_sha = _resolve_commit_sha(repo, token, cid, body.ref)
         except RuntimeError as exc:
-            return {**_detail_error_payload(exc), "repo": repo}
+            return {**_browse_error_payload(exc), "repo": repo}
 
         clean_path = (body.path or "").strip("/")
         if not clean_path:
@@ -339,7 +446,12 @@ def create_code_thread(cid: str, body: CodeThreadCreate, request: Request):
             "repo": repo, "sha": resolved_sha, "path": clean_path,
             "start_line": body.start_line, "end_line": body.end_line,
         }
+        # Agent-facing: byte-identical to the pre-split payload (the agent's instructions).
         payload_text = _render_wake_payload(thread_id, anchor, body.kind, body.body)[:MAX_PAYLOAD_LEN]
+        # Human-facing: just the question (mig 065).
+        human_text = (body.body or "").strip()[:MAX_PAYLOAD_LEN] or code_thread_title(
+            body.kind, clean_path, body.start_line, body.end_line, ""
+        )
 
         # request_creation_routes.create_request is the REAL route function, called
         # in-process (not reimplemented) so the tagged agent is woken through the exact
@@ -351,15 +463,24 @@ def create_code_thread(cid: str, body: CodeThreadCreate, request: Request):
             RequestCreate(
                 requester_agent_id=body.actor_agent_id,
                 target_agent_id=body.tagged_agent_id,
-                payload=payload_text,
+                payload=human_text,
+                agent_payload=payload_text,
                 type="info",
             ),
+            request,  # RQ-16 / PS-05: same trusted-actor resolution as the HTTP route
         )
         request_id = req_result["request_id"]
         with db_cursor() as (conn, cur):
             cur.execute(
                 "UPDATE code_threads SET request_id=%s, updated_at=now() WHERE id=%s",
                 (request_id, thread_id),
+            )
+            cur.execute(
+                "UPDATE requests SET detail = COALESCE(detail, '{}'::jsonb) || %s WHERE id=%s",
+                (
+                    Jsonb(code_thread_request_detail(thread_id, anchor, body.kind, body.body)),
+                    request_id,
+                ),
             )
             conn.commit()
 
@@ -471,10 +592,24 @@ def list_code_threads(
         query += " ORDER BY created_at ASC"
         cur.execute(query, params)
         thread_rows = cur.fetchall()
+        # C14b: the file's thread rows say what each thread is about — the same
+        # first-message snippet the recent= branch returns (one DISTINCT ON query).
+        first_body_by_thread: dict = {}
+        if thread_rows:
+            cur.execute(
+                """SELECT DISTINCT ON (thread_id) thread_id, body
+                     FROM code_thread_messages
+                    WHERE thread_id = ANY(%s)
+                    ORDER BY thread_id, created_at ASC""",
+                ([r["id"] for r in thread_rows],),
+            )
+            first_body_by_thread = {str(r["thread_id"]): r["body"] for r in cur.fetchall()}
 
     threads = [_thread_row_to_dict(r) for r in thread_rows]
     if not threads:
         return {"threads": []}
+    for t in threads:
+        t["first_message"] = first_body_by_thread.get(t["id"])
 
     if not repo:
         for t in threads:
@@ -567,6 +702,89 @@ def get_code_thread(tid: str, request: Request):
     return thread
 
 
+# Auto-resolve (owner request): a code-thread question's conversation LIVES IN THE THREAD, so
+# the directed request it opened is bookkeeping, not a second inbox item. Before this, the tagged
+# agent answered in the thread (never via /respond), the request sat 'open' on the agent and the
+# expiry sweep escalated it to a human an hour later — an unanswerable duplicate of a question
+# that had already been answered. Now, in the SAME transaction as the thread post:
+#   * the tagged agent's first reply records that reply as the request's answer (status
+#     'answered', request_answered to the asker, the agent's request_created acked), and — when
+#     the asker is a PERSON — closes it straight away (detail.auto_resolved='thread_answered').
+#     The person reads the answer in the thread (Code › Learn) and still gets the
+#     request_answered notification. An AI asker keeps the normal answered → close loop.
+#   * a human resolving the thread closes the request too (auto_resolved='thread_resolved').
+AUTO_RESOLVED_ANSWERED = "thread_answered"
+AUTO_RESOLVED_RESOLVED = "thread_resolved"
+
+
+def _settle_thread_request(cur, rid: str, actor_id: str, reply: str, *, human_resolved: bool):
+    """Answer and/or close a code thread's linked request. Returns the request's new status,
+    or None when it was already settled (idempotent — a retried post changes nothing)."""
+    cur.execute(
+        """SELECT id, container_id, status, requester_id, target_id, originating_task_id
+             FROM requests WHERE id=%s FOR UPDATE""",
+        (rid,),
+    )
+    r = cur.fetchone()
+    if not r or r["status"] not in ("open", "accepted", "answered"):
+        return None
+    cid = str(r["container_id"])
+    requester_id = str(r["requester_id"]) if r["requester_id"] else None
+    target_id = str(r["target_id"]) if r["target_id"] else None
+    cur.execute("SELECT kind FROM agents WHERE id=%s", (requester_id,))
+    rk = cur.fetchone()
+    requester_is_human = bool(rk) and rk["kind"] == "human"
+    was_open = r["status"] in ("open", "accepted")
+
+    if not human_resolved:
+        if not was_open:
+            return None
+        cur.execute(
+            "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
+            (reply[:MAX_PAYLOAD_LEN], rid),
+        )
+        log_event(
+            cur, cid, "ai", actor_id, "request", rid, "answered",
+            {"preview": reply[:120], "via": "code_thread"},
+        )
+        if requester_id:
+            _publish_event(
+                cur, cid, requester_id, "request_answered",
+                {
+                    "request_id": rid,
+                    "preview": reply[:120],
+                    "originating_task_id": str(r["originating_task_id"])
+                    if r["originating_task_id"] else None,
+                },
+            )
+        # the agent answered its ask: its request_created stops re-waking it
+        _ack_events_handled(cur, target_id, "request_created", "request_id", rid)
+        recompute_agent_status(cur, actor_id)
+        if not requester_is_human:
+            if requester_id:
+                recompute_agent_status(cur, requester_id)
+            return "answered"
+
+    reason = AUTO_RESOLVED_RESOLVED if human_resolved else AUTO_RESOLVED_ANSWERED
+    cur.execute(
+        """UPDATE requests SET status='closed', closed_at=now(),
+                  detail = COALESCE(detail, '{}'::jsonb) || %s
+            WHERE id=%s""",
+        (Jsonb({"auto_resolved": reason}), rid),
+    )
+    log_event(
+        cur, cid, "human" if human_resolved else "ai", actor_id, "request", rid, "closed",
+        {"by_human": human_resolved, "auto_resolved": reason},
+    )
+    if human_resolved and was_open and target_id:
+        # closed before the agent answered: tell it, and stop its request_created re-waking
+        _publish_event(cur, cid, target_id, "request_closed", {"request_id": rid})
+        _ack_events_handled(cur, target_id, "request_created", "request_id", rid)
+    if requester_id:
+        recompute_agent_status(cur, requester_id)
+    return "closed"
+
+
 @app.post("/api/code/threads/{tid}/messages", status_code=201)
 def post_code_thread_message(tid: str, body: CodeThreadMessageCreate, request: Request):
     if not _valid_uuid(tid):
@@ -617,6 +835,18 @@ def post_code_thread_message(tid: str, body: CodeThreadMessageCreate, request: R
             )
         else:
             cur.execute("UPDATE code_threads SET updated_at=now() WHERE id=%s", (tid,))
+
+        if thread["request_id"] and new_status != thread["status"]:
+            if new_status == "answered":
+                _settle_thread_request(
+                    cur, str(thread["request_id"]), body.actor_agent_id, body.body,
+                    human_resolved=False,
+                )
+            elif new_status == "resolved":
+                _settle_thread_request(
+                    cur, str(thread["request_id"]), body.actor_agent_id, body.body,
+                    human_resolved=True,
+                )
 
         bump_agent(cur, body.actor_agent_id)
         log_event(
@@ -689,6 +919,44 @@ def _symbol_cache_get(cid: str, ref: str):
 
 def _symbol_cache_put(cid: str, ref: str, payload) -> None:
     _SYMBOL_TREE_CACHE[(cid, ref)] = (time.monotonic() + SYMBOL_CACHE_TTL_SECONDS, payload)
+
+
+# C08: outline-only languages — a file OUTLINE (headings) but never part of the
+# workspace symbol index (README headings are not code symbols).
+OUTLINE_ONLY_LANGUAGE_BY_EXTENSION = {".md": "markdown", ".markdown": "markdown"}
+_MD_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
+_MD_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def _outline_language_for_path(path: str):
+    for ext, lang in OUTLINE_ONLY_LANGUAGE_BY_EXTENSION.items():
+        if path.lower().endswith(ext):
+            return lang
+    return _language_for_path(path)
+
+
+def _markdown_outline(text: str) -> list:
+    """ATX headings (`# Title` … `###### Title`) as outline entries {name, kind:'heading',
+    line, level}, skipping fenced code blocks (a `# comment` in a code sample is not a
+    heading)."""
+    out = []
+    fence = None
+    for i, raw in enumerate(text.split("\n"), start=1):
+        m = _MD_FENCE_RE.match(raw)
+        if m:
+            mark = m.group(1)
+            if fence is None:
+                fence = mark[0] * 3
+            elif mark.startswith(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        h = _MD_HEADING_RE.match(raw)
+        if h:
+            out.append({"name": h.group(2).strip(), "kind": "heading", "line": i,
+                        "level": len(h.group(1))})
+    return out
 
 
 def _language_for_path(path: str):
@@ -825,7 +1093,9 @@ def _extract_definitions(text: str, language: str) -> list:
     for pattern, kind in patterns:
         for match in pattern.finditer(text):
             name = match.group(1)
-            line = text.count("\n", 0, match.start()) + 1
+            # C11/C12: count lines up to the NAME, not the match start — the patterns'
+            # leading `^\s*` also swallows blank lines above a definition.
+            line = text.count("\n", 0, match.start(1)) + 1
             key = (name, line)
             if key in seen:
                 continue
@@ -930,11 +1200,11 @@ def search_code_symbols(cid: str, request: Request, ref: str = Query(default="")
         return _not_connected()
     token = _resolve_token_for(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         resolved_ref = _resolve_ref(repo, token, cid, ref)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
 
     # Cold-start indexing. Snapshot-first (docs/code-space-indexing-research.md §3 Phase
     # A): a single tarball fetch + in-memory extraction can index the WHOLE repo within
@@ -1048,13 +1318,13 @@ def get_code_outline(cid: str, request: Request, ref: str = Query(default=""), p
         return _not_connected()
     token = _resolve_token_for(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         resolved_ref = _resolve_ref(repo, token, cid, ref)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
 
-    language = _language_for_path(clean_path)
+    language = _outline_language_for_path(clean_path)  # C08: markdown outlines too
     if language is None:
         return {
             "available": True, "repo": repo, "ref": resolved_ref, "path": clean_path,
@@ -1063,13 +1333,16 @@ def get_code_outline(cid: str, request: Request, ref: str = Query(default=""), p
     try:
         text = _fetch_source_file(repo, resolved_ref, token, clean_path)
     except RuntimeError as exc:
-        return {**_detail_error_payload(exc), "repo": repo}
+        return {**_browse_error_payload(exc), "repo": repo}
     if text is None:
         return {
             "available": True, "repo": repo, "ref": resolved_ref, "path": clean_path,
             "language": language, "symbols": [],
         }
-    symbols = _extract_definitions(text, language)
+    if language == "markdown":
+        symbols = _markdown_outline(text)
+    else:
+        symbols = _extract_definitions(text, language)
     return {
         "available": True, "repo": repo, "ref": resolved_ref, "path": clean_path,
         "language": language, "symbols": symbols,

@@ -126,7 +126,7 @@ export async function provision(
         'PROVISION_FAILED',
         `This project is on a NEWER Orcha than this app (project migrations reach ` +
           `${String(stackTip).padStart(3, '0')}, the app ships ${String(cliTip).padStart(3, '0')}). ` +
-          `Upgrading now would downgrade the portal — update the Orcha app first, then retry.`
+          `Upgrading now would downgrade the portal — update the Embodent app first, then retry.`
       )
     }
   }

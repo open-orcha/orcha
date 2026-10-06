@@ -49,10 +49,15 @@ import io.openorcha.mobile.domain.PullsInvolvement
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.BannerKind
-import io.openorcha.mobile.ui.components.NeutralButton
-import io.openorcha.mobile.ui.components.OrchaCard
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LChip
+import io.openorcha.mobile.ui.components.LEmptyState
+import io.openorcha.mobile.ui.components.LSize
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.Skeleton
-import io.openorcha.mobile.ui.components.StateLayout
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -64,17 +69,16 @@ internal fun ListScroll(isEmpty: Boolean, emptyNoun: String, mine: Boolean, cont
     val p = Orcha.palette
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = LSpace.xs),
     ) {
         if (isEmpty) {
             item {
-                OrchaCard {
-                    Text(
-                        if (mine) "Nothing here is assigned to you right now." else "No open $emptyNoun in this repository.",
-                        color = p.muted,
-                    )
-                }
+                LEmptyState(
+                    icon = OrchaIcons.GitHub,
+                    title = if (mine) "Nothing assigned to you" else "No open $emptyNoun",
+                    message = if (mine) "Nothing here is assigned to you right now." else "No open $emptyNoun in this repository.",
+                    modifier = Modifier.padding(top = 40.dp),
+                )
             }
         } else {
             content()
@@ -84,24 +88,48 @@ internal fun ListScroll(isEmpty: Boolean, emptyNoun: String, mine: Boolean, cont
 
 @Composable
 internal fun GitHubLoadingList() {
-    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        repeat(4) { Skeleton(height = 92.dp) }
+    Column(Modifier.fillMaxWidth().padding(LSpace.l), verticalArrangement = Arrangement.spacedBy(LSpace.s)) {
+        repeat(6) { Skeleton(height = 56.dp) }
     }
 }
 
 @Composable
 internal fun GitHubUnavailableState(reason: String?, detail: String?) {
-    StateLayout(
-        title = if (reason == "not_found") "Not on GitHub" else "GitHub isn't connected",
-        sub = GitHubHubUx.unavailableCopy(reason, detail),
+    val (title, message) = githubUnavailableCopy(reason, detail)
+    LEmptyState(
+        icon = OrchaIcons.GitHub,
+        title = title,
+        message = message,
+        modifier = Modifier.padding(top = 40.dp),
     )
+}
+
+internal const val GITHUB_APP_MISSING_TITLE = "GitHub isn't connected on this server"
+internal const val GITHUB_APP_MISSING_MESSAGE = "An admin can install the Embodent GitHub App from the portal under Settings › GitHub."
+
+/** True when the server can't talk to GitHub at all (no GitHub App installed / no
+ *  credential) — as opposed to a repo not being bound, rate limits, etc. */
+internal fun isGitHubAppMissing(reason: String?, detail: String?): Boolean {
+    if (reason == "no_token" || reason == "app_not_installed" || reason == "not_configured") return true
+    if (reason in setOf("repo_not_connected", "rate_limited", "not_found", "unreachable")) return false
+    val d = detail?.lowercase() ?: return false
+    return listOf("installation", "token", "github app", "wired", "not configured").any { it in d }
+}
+
+/** Title + message for an `available:false` state — friendly, no server jargon. */
+internal fun githubUnavailableCopy(reason: String?, detail: String?): Pair<String, String> = when {
+    isGitHubAppMissing(reason, detail) -> GITHUB_APP_MISSING_TITLE to GITHUB_APP_MISSING_MESSAGE
+    reason == "not_found" -> "Not on GitHub" to GitHubHubUx.unavailableCopy(reason, detail)
+    reason == "repo_not_connected" -> "No repository connected" to
+        "No GitHub repository is connected to this project yet. Connect one from the Home tab to see its issues and pull requests here."
+    else -> "GitHub isn't available" to GitHubHubUx.unavailableCopy(reason, detail).replace("this Embodent", "this server")
 }
 
 @Composable
 internal fun GitHubFailedState(message: String, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(LSpace.l), verticalArrangement = Arrangement.spacedBy(LSpace.m)) {
         Banner(BannerKind.Danger, message)
-        NeutralButton("Try again", onRetry)
+        LButton("Try again", onRetry, icon = OrchaIcons.Refresh, kind = LButtonKind.Secondary, size = LSize.Small)
     }
 }
 
@@ -111,19 +139,11 @@ internal fun GitHubFailedState(message: String, onRetry: () -> Unit) {
  *  [GitHubInvolvementRow]) rather than requiring a tap to discover it. */
 @Composable
 internal fun GitHubFilterChip(label: String, on: Boolean, disabled: Boolean = false, onClick: () -> Unit) {
-    val p = Orcha.palette
-    val fill = if (on) p.accentSoft else p.surface2
-    val line = if (on) p.accentLine else p.border2
-    Text(
+    LChip(
         label,
-        modifier = Modifier
-            .alpha(if (disabled) 0.5f else 1f)
-            .background(fill, RoundedCornerShape(999.dp))
-            .border(BorderStroke(1.dp, line), RoundedCornerShape(999.dp))
-            .clickable(enabled = !disabled, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        style = MaterialTheme.typography.labelMedium,
-        color = if (on) p.accent else p.muted,
+        modifier = Modifier.alpha(if (disabled) 0.5f else 1f),
+        selected = on,
+        onClick = if (disabled) null else onClick,
     )
 }
 
@@ -199,7 +219,7 @@ internal fun GitHubPullsFilterRow(
         }
         val caption = identityDetail ?: if (disabled) "Connect a GitHub login to use these filters." else null
         if (caption != null) {
-            Text(caption, style = MaterialTheme.typography.labelSmall, color = p.faint)
+            Text(caption, style = ltype(LType.Micro), color = p.faint)
         }
     }
 }
@@ -254,12 +274,12 @@ internal fun GitHubCompactField(
 internal fun GitHubLoadMoreFooter(shown: Int, totalCount: Int?, hasMore: Boolean, loading: Boolean, onLoadMore: () -> Unit) {
     if (!hasMore) return
     val p = Orcha.palette
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(LSpace.l), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             totalCount?.let { "$shown of ~$it" } ?: "$shown so far",
-            style = MaterialTheme.typography.labelMedium, color = p.faint,
+            style = ltype(LType.Micro), color = p.faint,
         )
-        NeutralButton(if (loading) "Loading…" else "Load more", onLoadMore, enabled = !loading)
+        LButton(if (loading) "Loading…" else "Load more", onLoadMore, kind = LButtonKind.Secondary, size = LSize.Small, enabled = !loading)
     }
 }
 
@@ -267,20 +287,12 @@ internal fun GitHubLoadMoreFooter(shown: Int, totalCount: Int?, hasMore: Boolean
  *  tonal action). Detail screens for both issues and PRs use this. */
 @Composable
 internal fun OpenOnGitHubLink(url: String) {
-    val p = Orcha.palette
     val context = LocalContext.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(p.surface2, RoundedCornerShape(12.dp))
-            .border(BorderStroke(1.dp, p.border2), RoundedCornerShape(12.dp))
-            .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("Open on GitHub", style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.W600), color = p.text)
-        Spacer(Modifier.weight(1f))
-        Icon(OrchaIcons.OpenInNew, contentDescription = null, tint = p.text, modifier = Modifier.size(18.dp))
-    }
+    LButton(
+        "Open on GitHub",
+        { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
+        modifier = Modifier.fillMaxWidth(),
+        icon = OrchaIcons.OpenInNew,
+        kind = LButtonKind.Secondary,
+    )
 }

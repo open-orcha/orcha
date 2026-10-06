@@ -11,6 +11,11 @@ Multiple Claude Code sessions collaborate on a high-level objective through a
 shared Postgres database; the human holds standing authority (approve,
 reprioritise, reassign, arbitrate) over every subtask.
 
+> **Product name: Embodent** (formerly Quorate). The portal, desktop and mobile
+> apps are branded Embodent; the `orcha` CLI command, the `ORCHA_*` env vars,
+> API paths, the `orcha://` URL scheme and the `open-orcha/orcha` repo keep
+> their names.
+
 This repo is **the Orcha tool source** — the installable CLI, the per-project
 backing service (FastAPI + Postgres), and the slash-command skill templates
 that ship with it. End users don't read this repo; they install it once and run

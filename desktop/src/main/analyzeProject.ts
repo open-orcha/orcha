@@ -4,8 +4,9 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { scrubWorkerEnv } from './hostWorker'
 import type { AnalyzeAgentSuggestion, AnalyzeProjectResult } from '../shared/types'
 
-/** Deep roster analysis of a project via the user's own local Claude Code SUBSCRIPTION (not
- *  an API key) — the flagship of the desktop onboarding wave. Builds a compact prompt from
+/** Deep roster analysis of a project via the user's own local Claude Code sign-in — a Claude
+ *  or ChatGPT subscription, or an API key the user signed `claude` in with (never an ambient
+ *  ANTHROPIC_API_KEY: the env is scrubbed, see scrubWorkerEnv) — the flagship of the desktop onboarding wave. Builds a compact prompt from
  *  the project's README + a shallow tree listing, spawns the host `claude` CLI once
  *  (`-p <prompt> --output-format json --max-turns 1`), and parses its answer into a plain
  *  summary + suggested fleet. Everything here is best-effort: on ANY failure (claude not on

@@ -13,6 +13,8 @@ struct ContainerHealth: Equatable {
     var needsYou: Int = 0
     /// The bound GitHub repo ("owner/name"), shown on the card's secondary line.
     var githubRepo: String?
+    /// D14 project icon from the snapshot's container (nil = unset).
+    var icon: ProjectIcon?
 }
 
 /// Flow 09: lazily-fetched agent-detail sections (each best-effort).
@@ -47,6 +49,8 @@ final class AppModel {
     // `internal` (not `private`): the per-feature `AppModel+*` extensions live in their
     // own files and drive their loads through this same client (github hub).
     let api = OrchaApiClient()
+    /// Desktop-published Claude / Codex plan limits (Projects card, Settings › Plan usage).
+    let planUsage = PlanUsageModel()
     private let webAuth = WebAuthSession()
     private var pollTask: Task<Void, Never>?
     /// Issue 3 — the live run-log collector; cancelled on leaving RunDetailScreen.
@@ -313,7 +317,7 @@ final class AppModel {
             let probeApi = token == nil ? api : OrchaApiClient(bearerToken: token)
             let listed = try await probeApi.listContainers(base).containers
             guard !listed.isEmpty else {
-                error = "No Orcha project was found at this address."
+                error = "No Embodent project was found at this address."
                 return false
             }
             let primary = listed.first { $0.id == payload.containerId } ?? listed[0]
@@ -346,7 +350,7 @@ final class AppModel {
                 connectNeedsToken = true
                 connectDraft = raw
                 self.error = token == nil
-                    ? "This Orcha is protected — enter its team access token to connect."
+                    ? "This Embodent is protected — enter its team access token to connect."
                     : "That access token wasn't accepted. Check it and try again."
             } else {
                 self.error = friendly(error)
@@ -568,7 +572,8 @@ final class AppModel {
                 containerHealth[stored.id] = ContainerHealth(
                     state: "polling", agents: snap.agents.count, tasks: snap.taskOpenTotal,
                     needsYou: plans.count + verifs.count + reqs.count,
-                    githubRepo: snap.container.githubRepo
+                    githubRepo: snap.container.githubRepo,
+                    icon: snap.container.icon
                 )
             } catch {
                 containerHealth[stored.id] = ContainerHealth(state: "unreachable")
@@ -909,7 +914,7 @@ final class AppModel {
     private func humanAction(_ success: String, _ block: (String, String) async throws -> Void) async -> Bool {
         guard let sel = selectedContainer else { return false }
         guard let actor = sel.humanAgentId else {
-            error = "Pairing is missing the human identity. Reconnect this Orcha first."
+            error = "Pairing is missing the human identity. Reconnect this Embodent first."
             return false
         }
         actionInFlight = true
@@ -1047,7 +1052,7 @@ final class AppModel {
     func nudgeRequest(_ rid: String, note: String?) async -> Bool {
         guard let sel = selectedContainer else { return false }
         guard let actor = sel.humanAgentId else {
-            error = "Pairing is missing the human identity. Reconnect this Orcha first."
+            error = "Pairing is missing the human identity. Reconnect this Embodent first."
             return false
         }
         actionInFlight = true
@@ -1140,7 +1145,7 @@ final class AppModel {
     func sendTurn(_ agentId: String, content: String) async -> Bool {
         guard let sel = selectedContainer else { return false }
         guard let actor = sel.humanAgentId else {
-            error = "Pairing is missing the human identity. Reconnect this Orcha first."
+            error = "Pairing is missing the human identity. Reconnect this Embodent first."
             return false
         }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1273,6 +1278,6 @@ final class AppModel {
         if let e = error as? OrchaApiError {
             return e.localizedDescription
         }
-        return "Could not reach Orcha at this address. Check the address and that your Orcha is up."
+        return "Could not reach Embodent at this address. Check the address and that your Embodent is up."
     }
 }

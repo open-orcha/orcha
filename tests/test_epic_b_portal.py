@@ -107,10 +107,11 @@ async def test_verify_reject_sends_back_with_feedback(client, make_agent, make_t
     assert r.json()["status"] == "in_progress"
     row = db.execute("SELECT status FROM tasks WHERE id=%s", (tid,))[0]
     assert row["status"] == "in_progress"
-    # feedback is posted to the thread as a human (NULL-author) message
+    # feedback is posted to the thread ATTRIBUTED to the verifying human (parity r2 — was a
+    # NULL-author post that hid who rejected the work)
     msgs = db.execute(
         "SELECT author_id, body FROM task_messages WHERE task_id=%s ORDER BY created_at", (tid,))
-    assert any(m["author_id"] is None and "missing tests" in m["body"] for m in msgs)
+    assert any(str(m["author_id"]) == human_id and "missing tests" in m["body"] for m in msgs)
     assigned = await next_event(client, worker_id)
     assert assigned["event"] == "task_assigned"
     ev = await next_event(client, worker_id, since_ts=assigned["ts"])

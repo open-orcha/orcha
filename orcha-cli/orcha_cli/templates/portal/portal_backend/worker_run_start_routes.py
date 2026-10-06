@@ -2,17 +2,20 @@
 
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
+from portal_backend import stream_signal
+from portal_backend.events import publish_event
 from portal_backend.guards import (
     require_agent,
     require_container,
     require_task,
     valid_uuid,
 )
+from portal_backend.identity_routes import require_machine_lane_member, require_member_read
 from portal_backend.schemas.worker_runs import WorkerRunStart
 from portal_backend.worker_run_support import (
     infer_agent_active_task,
@@ -22,7 +25,7 @@ from portal_backend.worker_run_support import (
 
 
 @app.post("/api/agents/{aid}/runs", status_code=201)
-def start_worker_run(aid: str, body: WorkerRunStart):
+def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
     """A2: the notifier records a worker it just spawned (status=running). Returns run_id;
     the daemon stores it and calls /finish on reap. Keeps the 'only the API touches the
     DB' invariant — the notifier never writes worker_runs directly."""
@@ -34,6 +37,7 @@ def start_worker_run(aid: str, body: WorkerRunStart):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         agent = require_agent(cur, aid)
+        require_machine_lane_member(cur, request, str(agent["container_id"]))  # PS-07
         task_id = body.task_id
         lazy_attributed = False
         if task_id is not None:
@@ -102,12 +106,27 @@ def start_worker_run(aid: str, body: WorkerRunStart):
                 "lazy_attributed": lazy_attributed,
             },
         )
+        # Live chat: container-wide only (never agent-targeted, so it wakes no one) — an
+        # open portal re-reads runs at once and shows the live turn without a poll delay.
+        publish_event(
+            cur,
+            str(agent["container_id"]),
+            None,
+            "worker_run_started",
+            {
+                "run_id": str(row["run_id"]),
+                "agent_id": aid,
+                "lane": body.lane,
+                "conversation_id": body.conversation_id,
+            },
+        )
         conn.commit()
+    stream_signal.notify(f"c:{agent['container_id']}")
     return run_row(row)
 
 
 @app.get("/api/agents/{aid}/resident-runs")
-def list_resident_runs(aid: str, status: Optional[str] = None):
+def list_resident_runs(aid: str, request: Request, status: Optional[str] = None):
     """919050a5: the notifier's cross-daemon single-flight read — this agent's RESIDENT worker_runs
     with their host `pid`, so the host (the only side that can evaluate os.kill(pid,0); the API runs
     in Docker and can't see host PIDs) can detect a run whose row says 'running' but whose backing
@@ -116,7 +135,8 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        require_agent(cur, aid)
+        agent = require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
         # Resident-lane sandbox (remote-runner un-deferral): sandbox_container_id
         # rides along so the host reaper can tell a container-backed resident row
         # (whose liveness is docker's, not the host pid's) from a host-pid one.
@@ -150,7 +170,7 @@ def list_resident_runs(aid: str, status: Optional[str] = None):
 
 
 @app.get("/api/containers/{cid}/running-runs")
-def list_container_running_runs(cid: str):
+def list_container_running_runs(cid: str, request: Request):
     """#342: every worker_run still status='running' across this container's (live) agents, with its
     host `pid` — so the notifier (the only side that can os.kill(pid,0); the API runs in Docker and
     can't see host PIDs) can detect a run whose row says 'running' but whose process is DEAD and
@@ -168,6 +188,7 @@ def list_container_running_runs(cid: str):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
         require_container(cur, cid)
+        require_member_read(cur, request, cid)  # PS-08
         # Remote-runner Task 5: `sandbox_container_id` marks a row whose liveness is the
         # CONTAINER's (docker inspect), not the host pid's — the docker-run client pid dies
         # with a daemon restart while the detached container keeps working (adoption, §3.3c).

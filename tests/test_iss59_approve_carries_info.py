@@ -22,7 +22,7 @@ def test_action_queue_approve_offers_optional_answer():
     home = (SRC / "pages" / "home" / "HomePage.tsx").read_text()
     # plan approve is no longer a silent one-click send — it opens a modal with an
     # optional answer field first (setApproveFor -> Modal -> sendPlanDecision)
-    assert "setApproveFor({ taskId: t.id, authorId })" in home, "plan approve doesn't route through the answer modal"
+    assert "setApproveFor({ taskId: t.id, authorId" in home, "plan approve doesn't route through the answer modal"
     assert 'id="ans"' in home and "Answer / additional info for the agent (optional)" in home, \
         "no optional answer field on approve"
     assert "sendPlanDecision(p.taskId, p.authorId, true, answer)" in home, "the typed answer isn't sent with the approval"
@@ -31,7 +31,7 @@ def test_action_queue_approve_offers_optional_answer():
 
 
 def test_task_gate_approve_offers_optional_answer_plan_only():
-    tasks = (SRC / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    tasks = "".join((SRC / "pages" / "tasks" / f).read_text() for f in ("TasksPage.tsx", "TaskDetail.tsx"))
     # plan approve gets an optional answer body; verify-complete stays a plain confirm
     assert "Answer / additional info for the agent (optional)" in tasks, "plan approve has no optional answer field"
     assert 'id={"ans-" + t.id}' in tasks, "no answer textarea id"

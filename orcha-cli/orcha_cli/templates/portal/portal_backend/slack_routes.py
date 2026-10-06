@@ -414,7 +414,7 @@ def create_github_issue(cur, container_id, title: str, body: str, member,
         repo = row["github_repo"] if row else None
         if not repo:
             raise ValueError("no_repo")
-        token = _hub._resolve_repo_token(repo)
+        token = _hub._resolve_repo_token(repo, str(container_id))  # C01: Settings PAT too
         if not token:
             raise ValueError("no_token")
     who = member.get("github_login") or member.get("alias") or "an Orcha member"
@@ -1088,7 +1088,7 @@ def _run_issue_only_pipeline(prepared: dict, bot_token: str) -> None:
         cur.execute("SELECT github_repo FROM containers WHERE id=%s", (cid,))
         crow = cur.fetchone()
         repo = crow["github_repo"] if crow else None
-        token = _hub._resolve_repo_token(repo) if repo else None
+        token = _hub._resolve_repo_token(repo, cid) if repo else None  # C01
 
         images = _fetch_and_land_images(
             cur, cid, repo, token, files, _issue_slug(title, None), bot_token,

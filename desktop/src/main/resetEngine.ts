@@ -83,7 +83,7 @@ function orchaArtifacts(folder: string, deps: ResetDeps): { dirs: string[]; file
 /** Best-effort: pull current_container_id out of folder/.claude/orcha.json for daemon
  *  matching. Returns null on any failure (missing file, unreadable, malformed JSON, absent
  *  key) — daemon cleanup degrades to "skip the notifier match" rather than throwing. */
-function readContainerId(folder: string, deps: ResetDeps): string | null {
+export function readContainerId(folder: string, deps: Pick<ResetDeps, "readFile">): string | null {
   if (!deps.readFile) return null
   try {
     const raw = deps.readFile(path.join(folder, '.claude', 'orcha.json'))

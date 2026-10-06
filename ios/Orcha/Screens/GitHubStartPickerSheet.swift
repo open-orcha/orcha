@@ -26,41 +26,55 @@ struct GitHubStartPickerSheet: View {
         NavigationStack {
             OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("START AS A TASK")
-                            .font(p.uiFont(11, .bold)).tracking(0.8)
-                            .foregroundStyle(p.violet)
-                        Text("Turn \(kind == .pulls ? "PR" : "issue") #\(number) into an Orcha task. Assign an agent to wake it now, or leave it unassigned for the backlog.")
-                            .font(p.uiFont(13))
-                            .foregroundStyle(p.muted)
-
-                        row(id: nil, title: "Unassigned", sub: "Parked in the backlog") {
-                            Image(systemName: "tray")
-                                .font(p.uiFont(13))
-                                .foregroundStyle(p.muted)
-                                .frame(width: 30, height: 30)
-                                .background(p.surface2, in: Circle())
-                                .overlay(Circle().strokeBorder(p.border2, lineWidth: 1))
-                                .accessibilityHidden(true)
-                        }
-
-                        SectionH(title: "Agents", count: "\(agents.count)")
-                        if agents.isEmpty {
-                            Text("No AI agents are active in this Orcha yet.")
-                                .font(p.uiFont(13))
+                    VStack(alignment: .leading, spacing: LSpace.l) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(kind == .pulls ? "PR" : "Issue") #\(number)")
+                                .ltype(.mono)
                                 .foregroundStyle(p.faint)
+                            Text(title)
+                                .ltype(.headline)
+                                .foregroundStyle(p.text)
+                                .lineLimit(2)
+                            Text("Turn it into a Embodent task. Assign an agent to wake it now, or leave it unassigned for the backlog.")
+                                .ltype(.meta)
+                                .foregroundStyle(p.muted)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        ForEach(agents) { agent in
-                            row(id: agent.id, title: agent.alias, sub: MobileUx.statusCopy(agent.status ?? "idle")) {
-                                AgentAvatar(alias: agent.alias, size: 30)
+
+                        LCard(padding: 0) {
+                            row(id: nil, title: "Unassigned", sub: "Parked in the backlog") {
+                                Image(systemName: "tray")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(p.muted)
+                                    .frame(width: 26, height: 26)
+                                    .background(p.surface2, in: Circle())
+                                    .overlay(Circle().strokeBorder(p.border2, lineWidth: 1))
+                                    .accessibilityHidden(true)
                             }
                         }
 
-                        KitButton(
-                            title: confirmTitle,
-                            role: .primary,
-                            enabled: !model.actionInFlight
-                        ) {
+                        LSection("Agents", count: agents.count) {
+                            if agents.isEmpty {
+                                LCard {
+                                    Text("No AI agents are active in this Embodent yet.")
+                                        .ltype(.meta)
+                                        .foregroundStyle(p.faint)
+                                }
+                            } else {
+                                LCard(padding: 0) {
+                                    VStack(spacing: 0) {
+                                        ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
+                                            if index > 0 { LDivider() }
+                                            row(id: agent.id, title: agent.alias, sub: MobileUx.statusCopy(agent.status ?? "idle")) {
+                                                LAvatar(name: agent.alias, isAI: true, size: 26, status: agent.status)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        LButton(confirmTitle, icon: "play.fill", kind: .primary) {
                             Task {
                                 if let response = await model.startGithubItem(
                                     kind: kind, number: number,
@@ -72,16 +86,22 @@ struct GitHubStartPickerSheet: View {
                                 }
                             }
                         }
+                        .disabled(model.actionInFlight)
+                        .frame(maxWidth: .infinity)
                         if let error = model.error {
                             Banner(kind: .danger, text: error)
                         }
                     }
-                    .padding(16)
+                    .padding(LSpace.l)
                 }
+                .background(p.bg)
             }
+            .navigationTitle("Start task")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+        .presentationBackground(p.bg)
     }
 
     private var confirmTitle: String {
@@ -96,23 +116,18 @@ struct GitHubStartPickerSheet: View {
         @ViewBuilder avatar: () -> some View
     ) -> some View {
         Button { picked = id } label: {
-            HStack(spacing: 10) {
-                Image(systemName: picked == id ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(picked == id ? p.accent : p.border2)
+            LRow(title: title, subtitle: sub) {
                 avatar()
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(p.uiFont(15, .semibold))
-                        .foregroundStyle(p.text)
-                    Text(sub)
-                        .font(p.uiFont(12))
-                        .foregroundStyle(p.muted)
-                }
-                Spacer()
+            } trailing: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(p.accent)
+                    .opacity(picked == id ? 1 : 0)
+                    .accessibilityHidden(true)
             }
-            .contentShape(Rectangle())
+            .background(picked == id ? p.lSelected : .clear)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.lRow)
         .accessibilityAddTraits(picked == id ? [.isSelected] : [])
     }
 }

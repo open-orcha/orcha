@@ -136,7 +136,9 @@ async def test_get_unconfigured(client, container, monkeypatch):
     monkeypatch.delenv("ORCHA_LLM_API_KEY", raising=False)
     r = await client.get(f"/api/containers/{container['id']}/settings/llm-key")
     assert r.status_code == 200, r.text
-    assert r.json() == {"configured": False, "source": None, "masked": None, "set_at": None}
+    assert r.json() == {"configured": False, "source": None, "masked": None, "set_at": None,
+                        # migration 071 (additive): the agent-run opt-in for this key
+                        "stored": False, "use_for_agents": False, "agent_runtime": "claude"}
 
 
 @pytest.mark.asyncio

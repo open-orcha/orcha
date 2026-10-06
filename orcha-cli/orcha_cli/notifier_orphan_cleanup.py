@@ -12,6 +12,7 @@ from typing import Optional
 # Imported as a module so tests can monkeypatch `_sandbox.probe` etc. (attribute
 # lookup at call time).
 from . import sandbox as _sandbox
+from . import notifier_embodiment as _embodiment
 
 # M7 (remote-runner deferred follow-up, field bug "first chat message dies as
 # 'sandbox container vanished'"): minimum age before the sweep may take a
@@ -93,6 +94,13 @@ def reap_orphan_leases(api_base: str, cid: str, quiet: bool, services) -> None:
     res = services._post_json(
         f"{api_base}/api/containers/{cid}/reap-orphan-leases", {}
     )
+    if res and res.get("stranded") and not quiet:
+        for row in res["stranded"]:
+            print(
+                f"[notifier] server reconciled STRANDED {row.get('lane')}-lane run "
+                f"{row.get('run_id')} for {row.get('alias')} (no lease, silent "
+                f"{float(row.get('idle_seconds') or 0):.0f}s) — marked orphaned"
+            )
     if res and res.get("reaped") and not quiet:
         for row in res["reaped"]:
             print(
@@ -213,6 +221,18 @@ def _reconcile_sandbox_run(
     return 1
 
 
+def _completed_successfully(row: dict, services) -> bool:
+    """Whether a dead run's own log ends in a successful terminal result."""
+    log_path = row.get("log_path")
+    terminal_status = getattr(services, "_terminal_status", None)
+    if not log_path or terminal_status is None:
+        return False
+    try:
+        return terminal_status(log_path) == "success"
+    except Exception:  # noqa: BLE001 - a log read must never break the sweep
+        return False
+
+
 def reap_orphaned_runs(
     api_base: str,
     cid: str,
@@ -258,7 +278,13 @@ def reap_orphaned_runs(
 
     def alive(row):
         pid = row.get("pid")
-        return (pid in live_pids) or services._run_pid_alive(pid)
+        if pid in live_pids:
+            return True
+        # A pid recycled by an unrelated program is not this run's process — without
+        # this a stranded row whose pid got reused would read as busy forever.
+        return services._run_pid_alive(pid) and not _embodiment.run_pid_reused(
+            pid, row.get("started_at")
+        )
 
     reaped = 0
     seen_sandbox: set = set()
@@ -324,22 +350,29 @@ def reap_orphaned_runs(
             diff = _capture_recovered_diff(
                 row, checkout_users, unknown_checkout_users, services
             )
-            ok = services._finish_run(
-                api_base,
-                row.get("run_id"),
-                "killed",
-                -1,
-                row.get("log_path"),
-                diff,
-                kill_reason=json.dumps(
-                    {
-                        "run_id": str(row.get("run_id")),
-                        "agent_id": agent_id,
-                        "cause": "host_process_missing_after_notifier_restart",
-                        "detail": "host process missing after notifier restart",
-                    }
-                ),
-            )
+            if _completed_successfully(row, services):
+                # The worker finished its turn (terminal success result in its log)
+                # but nobody recorded the exit — say so instead of calling it killed.
+                ok = services._finish_run(
+                    api_base, row.get("run_id"), "exited", 0, row.get("log_path"), diff
+                )
+            else:
+                ok = services._finish_run(
+                    api_base,
+                    row.get("run_id"),
+                    "killed",
+                    -1,
+                    row.get("log_path"),
+                    diff,
+                    kill_reason=json.dumps(
+                        {
+                            "run_id": str(row.get("run_id")),
+                            "agent_id": agent_id,
+                            "cause": "host_process_missing_after_notifier_restart",
+                            "detail": "host process missing after notifier restart",
+                        }
+                    ),
+                )
             if ok:
                 finished += 1
             else:

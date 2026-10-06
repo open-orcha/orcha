@@ -3,7 +3,7 @@
  * postNewProject parity) — POST /api/containers {additional:true}. On success
  * it flags the one-time portal-only dashboard notice for the NEW cid, persists
  * orcha:cid, and lands INSIDE the new project (/?cid=<id>, full navigation).
- * Used by both the /projects hub (ProjectsPage) and the topbar ProjectSwitcher.
+ * Used by the /projects hub (ProjectsPage) and the V2 sidebar "+" (new project).
  */
 import { useState } from "react";
 import { Modal, useToast } from "../../components/ui";

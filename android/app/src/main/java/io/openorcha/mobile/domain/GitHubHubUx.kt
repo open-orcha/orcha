@@ -300,14 +300,14 @@ object GitHubHubUx {
     /** A short human line for an `available:false` reason — the empty-state copy. */
     fun unavailableCopy(reason: String?, detail: String?): String = when (reason) {
         "repo_not_connected" ->
-            "No GitHub repository is connected to this Orcha yet. Connect one from the Home tab to see its issues and pull requests here."
+            "No GitHub repository is connected to this Embodent yet. Connect one from the Home tab to see its issues and pull requests here."
         "rate_limited" ->
             "GitHub is rate-limiting requests right now. This will clear on its own — try again in a few minutes."
         "not_found" ->
             "That item no longer exists on GitHub, or the repository binding changed."
         "unreachable" ->
-            "Couldn't reach GitHub from this Orcha. Check the server's connection and try again."
+            "Couldn't reach GitHub from this Embodent. Check the server's connection and try again."
         "github_error" -> detail ?: "GitHub returned an error. Try again shortly."
-        else -> detail ?: "The GitHub surface isn't available for this Orcha right now."
+        else -> detail ?: "The GitHub surface isn't available for this Embodent right now."
     }
 }

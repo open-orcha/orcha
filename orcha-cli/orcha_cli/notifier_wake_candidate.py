@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from . import notifier_wake_worker
 
+# B27: {agent_id: budget_reason} last logged as a budget skip, so a paused agent's skip
+# line prints once per reason instead of on every scan. Cleared when the pause lifts.
+_BUDGET_SKIP_LOGGED: dict = {}
+
 
 def _skipped_record(candidate, event, *, command, tier):
     """Describe a candidate handled without a full worker boot."""
@@ -170,6 +174,21 @@ def process_candidate(
     services,
 ):
     """Process one eligible candidate, returning its public wake record."""
+    # Budget hard stop: the portal's wake-scan (budget_routes.apply_budget_gate) already
+    # withholds should_wake for a paused agent; honor the flag explicitly too, so a paused
+    # agent can never be spawned even if should_wake were set. In-flight runs are untouched.
+    budget_key = candidate.get("agent_id") or candidate.get("alias")
+    if candidate.get("budget_paused"):
+        reason = candidate.get("budget_reason") or "monthly budget reached"
+        # B27: say it once per (agent, reason) — the scan repeats every few seconds, so an
+        # unconditional print floods the daemon log for as long as the pause lasts.
+        if candidate.get("budget_held_wake") and _BUDGET_SKIP_LOGGED.get(budget_key) != reason:
+            _BUDGET_SKIP_LOGGED[budget_key] = reason
+            if not quiet:
+                print(f"[notifier] skip {candidate.get('alias')} — {reason}")
+        return None
+    # Pause lifted (override / raised cap / new month): re-arm the one-shot skip line.
+    _BUDGET_SKIP_LOGGED.pop(budget_key, None)
     if not candidate.get("should_wake") or _held(candidate, context, quiet):
         return None
     prompt = services.build_wake_prompt(candidate)
@@ -189,6 +208,16 @@ def process_candidate(
             candidate["tmux_target"], prompt, dry_run
         )
     elif kind == "ephemeral":
+        if live_workers is not None and candidate["agent_id"] in live_workers:
+            # This daemon still owns a worker for the agent (its lease can lapse during a
+            # long tick). Spawning now would overwrite — and so lose — that worker's Popen
+            # handle: it would exit unreaped and its run would never be closed.
+            if not quiet:
+                print(
+                    f"[notifier] skip {candidate.get('alias')} — its previous worker "
+                    "is still tracked by this daemon"
+                )
+            return None
         spawned = notifier_wake_worker.spawn(
             api_base,
             candidate,

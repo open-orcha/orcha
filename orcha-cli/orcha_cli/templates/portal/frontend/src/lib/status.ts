@@ -10,7 +10,7 @@ export const STAT: Record<string, { l: string; c: string }> = {
   blocked: { l: "Blocked", c: "s-bad" },
   awaiting_request: { l: "Waiting", c: "s-warn" },
   awaiting_human: { l: "Needs human", c: "s-warn" },
-  needs_verification: { l: "Needs verify", c: "s-attn" },
+  needs_verification: { l: "Needs verification", c: "s-attn" },
   completed: { l: "Completed", c: "s-done" },
   cancelled: { l: "Cancelled", c: "s-idle" },
   failed: { l: "Failed", c: "s-bad" },
@@ -22,6 +22,14 @@ export const STAT: Record<string, { l: string; c: string }> = {
   converted_to_task: { l: "Converted", c: "s-acc" },
   closed: { l: "Closed", c: "s-idle" },
   escalated: { l: "Escalated", c: "s-bad" },
+  offline: { l: "Offline", c: "s-idle" },
+  active: { l: "Active", c: "s-ok" },
+  // project lifecycle (SG-06): a paused project is a warning, never "unknown"
+  paused: { l: "Paused", c: "s-warn" },
+  // run / task states the backend emits that used to render raw (tasks r1)
+  rate_limited: { l: "Rate limited", c: "s-warn" },
+  orphaned: { l: "Orphaned", c: "s-bad" },
+  not_ready: { l: "On hold", c: "s-idle" },
 };
 
 export function statusMeta(status: string | null | undefined): { l: string; c: string } {
