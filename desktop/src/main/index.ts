@@ -1942,6 +1942,10 @@ app.whenReady().then(() => {
       renameSync(`${keysFile}.tmp`, keysFile)
     },
     canSeal: () => {
+      // On macOS the Keychain is always there, and asking safeStorage reads the
+      // "Embodent Safe Storage" item — a password prompt at launch (and every refresh)
+      // for someone who never saved a key. Only seal/unseal touch the Keychain.
+      if (process.platform === 'darwin') return true
       try {
         return safeStorage.isEncryptionAvailable()
       } catch {
