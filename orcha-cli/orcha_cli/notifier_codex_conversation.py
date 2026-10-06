@@ -5,6 +5,12 @@ from __future__ import annotations
 import os
 import time
 
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
+
 
 def maybe_pin_session(api_base: str, conversation_id: str, resident: dict, services):
     """Persist a newly observed Codex session so the next turn can resume it."""
@@ -31,8 +37,20 @@ def finish(
     teardown_worktree: bool = False,
 ) -> bool:
     """Publish the final reply, finish its run, and release the conversation lease."""
-    diff = services._capture_diff(
-        resident.get("worktree") or resident.get("base_cwd")
+    snapshot = record_stopped_checkout_snapshot(
+        resident,
+        resident["agent_id"],
+        services,
+        api_base=api_base,
+    )
+    if stopped_snapshot_requires_retry(snapshot):
+        resident["snapshot_retry_pending"] = snapshot.code
+        return False
+    resident.pop("snapshot_retry_pending", None)
+    diff = capture_stopped_checkout_diff(
+        snapshot,
+        resident.get("worktree") or resident.get("base_cwd"),
+        services,
     )
     posted = False
     real_text = (

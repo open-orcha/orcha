@@ -5,6 +5,11 @@ from __future__ import annotations
 import time
 
 from . import notifier_resident_turn as _turn
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
 
 
 def advance_live_resident(
@@ -20,6 +25,27 @@ def advance_live_resident(
     dry_run,
 ) -> None:
     """Capture results, renew leases, and arbitrate stop or idle transitions."""
+    retry_close = resident.get("snapshot_retry_close")
+    if isinstance(retry_close, dict):
+        if services._close_resident(
+            api_base,
+            resident,
+            reason=retry_close.get("reason", "snapshot_retry"),
+            teardown_worktree=bool(
+                retry_close.get("teardown_worktree", False)
+            ),
+            stamp_woken=bool(retry_close.get("stamp_woken", True)),
+        ):
+            _retire_after_close(
+                services,
+                api_base,
+                conv_id,
+                resident,
+                live_residents,
+                retry_close.get("reason"),
+            )
+        return
+
     process = resident["proc"]
     desired_runtime = (
         services._normalize_runtime(candidate.get("model_runtime"))
@@ -37,12 +63,13 @@ def advance_live_resident(
                 f"{services._resident_runtime(resident)}→{desired_runtime} — "
                 "releasing old resident lease"
             )
-        services._close_resident(
+        if services._close_resident(
             api_base, resident, reason="runtime_changed"
-        )
-        services._retire_resident(
-            api_base, live_residents, conv_id
-        )
+        ):
+            _retire_after_close(
+                services, api_base, conv_id, resident,
+                live_residents, "runtime_changed"
+            )
         return
 
     desired_model = candidate.get("model") if candidate else None
@@ -59,11 +86,13 @@ def advance_live_resident(
                 f"{resident.get('model')}→{desired_model} — recycling for "
                 "cold reboot (GH#88)"
             )
-        services._RESIDENT_RESUME_FAILED.add(conv_id)
-        services._close_resident(
+        if services._close_resident(
             api_base, resident, reason="model_changed"
-        )
-        live_residents.pop(conv_id, None)
+        ):
+            _retire_after_close(
+                services, api_base, conv_id, resident,
+                live_residents, "model_changed"
+            )
         return
 
     if services._resident_runtime(resident) == services.RUNTIME_CODEX:
@@ -88,17 +117,17 @@ def advance_live_resident(
         )
         return
     if conv_id not in active_ids:
-        services._close_resident(
+        closed = services._close_resident(
             api_base,
             resident,
             reason="conversation_ended",
             teardown_worktree=True,
         )
-        services._RESIDENT_RESUME_FAILED.discard(conv_id)
-        services._RESIDENT_DRAIN_YIELD.pop(conv_id, None)
-        services._retire_resident(
-            api_base, live_residents, conv_id
-        )
+        if closed:
+            _retire_after_close(
+                services, api_base, conv_id, resident,
+                live_residents, "conversation_ended"
+            )
         return
 
     if resident.get("awaiting_result"):
@@ -127,21 +156,36 @@ def advance_live_resident(
                 "releasing lease (ISS-60)"
             )
         if resident.get("current_run_id"):
+            # Stop the writer before claiming an immutable stopped-run view.
+            services._kill_worker(process, graceful=True)
+            snapshot = record_stopped_checkout_snapshot(
+                resident,
+                resident["agent_id"],
+                services,
+                api_base=api_base,
+            )
+            if stopped_snapshot_requires_retry(snapshot):
+                resident["snapshot_retry_pending"] = snapshot.code
+                return
+            resident.pop("snapshot_retry_pending", None)
             services._finish_run(
                 api_base,
                 resident["current_run_id"],
                 "killed",
                 -1,
                 resident.get("log_path"),
-                services._capture_diff(
-                    resident.get("worktree") or resident.get("base_cwd")
+                capture_stopped_checkout_diff(
+                    snapshot,
+                    resident.get("worktree") or resident.get("base_cwd"),
+                    services,
                 ),
             )
             resident["current_run_id"] = None
-        services._close_resident(api_base, resident, reason="hung")
-        services._retire_resident(
-            api_base, live_residents, conv_id
-        )
+        if services._close_resident(api_base, resident, reason="hung"):
+            _retire_after_close(
+                services, api_base, conv_id, resident,
+                live_residents, "hung"
+            )
         return
 
     renew = services._post_json(
@@ -180,13 +224,13 @@ def advance_live_resident(
                 "digest than its pinned session — checkpointing and "
                 "cold-restarting before the next turn (#222)"
             )
-        services._PERSONA_CACHE.pop(resident.get("agent_id"), None)
-        services._close_resident(
+        if services._close_resident(
             api_base, resident, reason="digest_resync"
-        )
-        services._retire_resident(
-            api_base, live_residents, conv_id
-        )
+        ):
+            _retire_after_close(
+                services, api_base, conv_id, resident,
+                live_residents, "digest_resync"
+            )
         return
     if (
         renew
@@ -200,12 +244,13 @@ def advance_live_resident(
                 "live terminal (preempt=1, idle) — snapshot + release lease "
                 "(ISS-69b)"
             )
-        services._close_resident(
+        if services._close_resident(
             api_base, resident, reason="preempted"
-        )
-        services._retire_resident(
-            api_base, live_residents, conv_id
-        )
+        ):
+            _retire_after_close(
+                services, api_base, conv_id, resident,
+                live_residents, "preempted"
+            )
         return
     services._resident_idle.service_idle_resident(
         api_base,
@@ -221,20 +266,59 @@ def advance_live_resident(
     )
 
 
+def _retire_after_close(
+    services,
+    api_base,
+    conv_id,
+    resident,
+    live_residents,
+    reason,
+) -> None:
+    """Apply reason-specific state only after snapshot-backed close succeeds."""
+    if reason == "model_changed":
+        services._RESIDENT_RESUME_FAILED.add(conv_id)
+    elif reason == "conversation_ended":
+        services._RESIDENT_RESUME_FAILED.discard(conv_id)
+        services._RESIDENT_DRAIN_YIELD.pop(conv_id, None)
+    elif reason == "digest_resync":
+        services._PERSONA_CACHE.pop(resident.get("agent_id"), None)
+    services._retire_resident(api_base, live_residents, conv_id)
+
+
 def _handle_exited(
     services, api_base, conv_id, resident, live_residents, quiet
 ) -> None:
     process = resident["proc"]
+    if resident.get("checkout_activity") is not None and not resident.get(
+        "current_run_id"
+    ):
+        if services._close_resident(
+            api_base, resident, reason="exited", stamp_woken=False
+        ):
+            services._retire_resident(api_base, live_residents, conv_id)
+        return
     finished = True
     if resident.get("current_run_id"):
+        snapshot = record_stopped_checkout_snapshot(
+            resident,
+            resident["agent_id"],
+            services,
+            api_base=api_base,
+        )
+        if stopped_snapshot_requires_retry(snapshot):
+            resident["snapshot_retry_pending"] = snapshot.code
+            return
+        resident.pop("snapshot_retry_pending", None)
         finished = services._finish_run(
             api_base,
             resident["current_run_id"],
             "killed",
             process.returncode,
             resident.get("log_path"),
-            services._capture_diff(
-                resident.get("worktree") or resident.get("base_cwd")
+            capture_stopped_checkout_diff(
+                snapshot,
+                resident.get("worktree") or resident.get("base_cwd"),
+                services,
             ),
         )
     # I4 (resident lane): the docker client exited → the sandboxed session is

@@ -46,14 +46,20 @@ def _finish_sidecar(api_base, resident, sidecar, *, quiet, services) -> None:
         )
 
 
-def _yield_for_work(api_base, conv_id, resident, live_residents, *, reason, quiet, services) -> None:
+def _yield_for_work(
+    api_base, conv_id, resident, live_residents, *, reason, quiet, services
+) -> bool:
     if not quiet:
         print(
             f"[notifier] resident {resident.get('alias')} {reason} — yielding the "
             "conversation lease for an isolated work worker"
         )
-    services._close_resident(api_base, resident, reason="inbox_drain_yield")
-    services._retire_resident(api_base, live_residents, conv_id)
+    closed = services._close_resident(
+        api_base, resident, reason="inbox_drain_yield"
+    )
+    if closed:
+        services._retire_resident(api_base, live_residents, conv_id)
+    return bool(closed)
 
 
 def _maybe_drain_inbox(
@@ -182,10 +188,11 @@ def service_idle_resident(
                 f"[notifier] resident {resident.get('alias')} idle + auto-wake due — "
                 "yielding without resetting the clock"
             )
-        services._close_resident(
+        closed = services._close_resident(
             api_base, resident, reason="auto_wake_yield", stamp_woken=False
         )
-        services._retire_resident(api_base, live_residents, conv_id)
+        if closed:
+            services._retire_resident(api_base, live_residents, conv_id)
         return
 
     is_idle = (
@@ -195,5 +202,5 @@ def service_idle_resident(
         > services.RESIDENT_IDLE_REAP_SECS
     )
     if is_idle:
-        services._close_resident(api_base, resident, reason="idle")
-        services._retire_resident(api_base, live_residents, conv_id)
+        if services._close_resident(api_base, resident, reason="idle"):
+            services._retire_resident(api_base, live_residents, conv_id)

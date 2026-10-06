@@ -7,9 +7,65 @@ import sys
 import time
 from typing import Optional
 
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
+
 
 def _compat():
     return sys.modules["orcha_cli.notifier"]
+
+
+def _ensure_idle_snapshot_run(api_base: str, resident: dict, compat) -> bool:
+    """Give a stopped, idle shared-checkout resident a durable snapshot row."""
+    activity = resident.get("checkout_activity")
+    if activity is None or resident.get("current_run_id"):
+        return True
+    run_id = resident.get("snapshot_run_id_pending")
+    if not run_id:
+        try:
+            run = compat._post_json(
+                f"{api_base}/api/agents/{resident['agent_id']}/runs",
+                {
+                    "wake_kind": "resident",
+                    "wake_event": "resident_checkout_snapshot",
+                    "log_path": str(resident["log_path"])
+                    if resident.get("log_path")
+                    else None,
+                    "pid": getattr(resident.get("proc"), "pid", None),
+                    "conversation_id": resident.get("conversation_id"),
+                    "worktree": resident.get("worktree"),
+                    "branch": resident.get("branch"),
+                    "base_cwd": resident.get("base_cwd"),
+                    "lane": "conversation",
+                    "sandbox_container_id": resident.get("sandbox_container_id"),
+                },
+            )
+        except Exception:
+            run = None
+        run_id = (run or {}).get("run_id")
+        if not run_id:
+            resident["snapshot_retry_pending"] = "snapshot_run_registration_failed"
+            return False
+        resident["snapshot_run_id_pending"] = run_id
+    try:
+        bound = compat._bind_checkout_activity(
+            activity,
+            run_id=run_id,
+            pid=getattr(resident.get("proc"), "pid", None),
+            sandbox_container_id=resident.get("sandbox_container_id"),
+        )
+    except Exception:
+        bound = False
+    if not bound:
+        resident["snapshot_retry_pending"] = "checkout_activity_bind_failed"
+        return False
+    resident["current_run_id"] = run_id
+    resident["run_id"] = run_id
+    resident.pop("snapshot_run_id_pending", None)
+    return True
 
 
 def _close_resident(
@@ -18,36 +74,74 @@ def _close_resident(
     reason: str = "idle",
     teardown_worktree: bool = False,
     stamp_woken: bool = True,
-) -> None:
+) -> bool:
     """Close a resident process and its lease while preserving resumable work."""
     compat = _compat()
-    process = resident.get("proc")
-    try:
-        if process is not None and getattr(process, "stdin", None) is not None:
-            process.stdin.close()
-    except OSError:
-        pass
-    if process is not None:
-        compat._kill_worker(process, graceful=True)
+    retry = resident.get("snapshot_retry_close")
+    if isinstance(retry, dict):
+        # Keep the original close semantics across retries.  A routing toggle
+        # that promised to preserve its old worktree must never later inherit a
+        # default teardown from a different lifecycle branch.
+        reason = retry.get("reason", reason)
+        teardown_worktree = bool(
+            retry.get("teardown_worktree", teardown_worktree)
+        )
+        stamp_woken = bool(retry.get("stamp_woken", stamp_woken))
 
-    sidecar = resident.get("sidecar")
-    if isinstance(sidecar, dict) and sidecar.get("proc") is not None:
-        compat._kill_worker(sidecar["proc"], graceful=True)
-        # I4 (resident lane): the sidecar is row-less by design AND label-exempt
-        # from the orphan pass — killing its docker client here without reaping
-        # would leak its sandbox container forever. No-op for host mode.
-        compat._reap_sandbox_artifacts(sidecar)
-        resident["sidecar"] = None
+    if not resident.get("snapshot_writer_stopped"):
+        process = resident.get("proc")
+        try:
+            if process is not None and getattr(process, "stdin", None) is not None:
+                process.stdin.close()
+        except OSError:
+            pass
+        if process is not None:
+            compat._kill_worker(process, graceful=True)
+
+        sidecar = resident.get("sidecar")
+        if isinstance(sidecar, dict) and sidecar.get("proc") is not None:
+            compat._kill_worker(sidecar["proc"], graceful=True)
+            # I4 (resident lane): the sidecar is row-less by design AND label-exempt
+            # from the orphan pass — killing its docker client here without reaping
+            # would leak its sandbox container forever. No-op for host mode.
+            compat._reap_sandbox_artifacts(sidecar)
+            resident["sidecar"] = None
+        resident["snapshot_writer_stopped"] = True
+    if not _ensure_idle_snapshot_run(api_base, resident, compat):
+        resident["snapshot_retry_close"] = {
+            "reason": reason,
+            "teardown_worktree": bool(teardown_worktree),
+            "stamp_woken": bool(stamp_woken),
+        }
+        return False
     finished = True
     if resident.get("current_run_id"):
+        snapshot = record_stopped_checkout_snapshot(
+            resident,
+            resident["agent_id"],
+            compat,
+            api_base=api_base,
+        )
+        if stopped_snapshot_requires_retry(snapshot):
+            resident["snapshot_retry_pending"] = snapshot.code
+            resident["snapshot_retry_close"] = {
+                "reason": reason,
+                "teardown_worktree": bool(teardown_worktree),
+                "stamp_woken": bool(stamp_woken),
+            }
+            return False
+        resident.pop("snapshot_retry_pending", None)
+        resident.pop("snapshot_retry_close", None)
         finished = compat._finish_run(
             api_base,
             resident["current_run_id"],
             "exited",
             0,
             resident.get("log_path"),
-            compat._capture_diff(
-                resident.get("worktree") or resident.get("base_cwd")
+            capture_stopped_checkout_diff(
+                snapshot,
+                resident.get("worktree") or resident.get("base_cwd"),
+                compat,
             ),
         )
     # I4 (resident lane): the warm session's container is spawned without --rm by
@@ -72,6 +166,7 @@ def _close_resident(
             "lane": "conversation",
         },
     )
+    return True
 
 
 def _spawn_drain_sidecar(
@@ -95,6 +190,20 @@ def _spawn_drain_sidecar(
         base_cwd = resident.get("base_cwd")
         if not base_cwd or not pathlib.Path(base_cwd).is_dir():
             return False
+        sidecar_cwd = resident.get("worktree") or base_cwd
+        checkout_activity = resident.get("checkout_activity")
+        shared_git = False
+        if not resident.get("worktree"):
+            checker = getattr(compat, "_is_git_repo", None)
+            try:
+                shared_git = bool(checker(sidecar_cwd)) if callable(checker) else False
+            except (OSError, TypeError, ValueError):
+                shared_git = False
+        if shared_git and checkout_activity is None:
+            # A row-less sidecar cannot establish its own stopped-run identity.
+            # It may share the owning resident's barrier, but must never launch
+            # as an untracked writer in a shared Git checkout.
+            return False
         persona = compat._build_persona(api_base, resident["agent_id"])
         log_path = (
             pathlib.Path(base_cwd)
@@ -114,7 +223,7 @@ def _spawn_drain_sidecar(
         # with no open run row → stop) would kill it mid-drain.
         _side_info: dict = {}
         sent, _, process = compat.spawn_headless(
-            base_cwd,
+            sidecar_cwd,
             prompt,
             None,
             False,
@@ -126,6 +235,7 @@ def _spawn_drain_sidecar(
             log_path=log_path,
             sandbox_sidecar=True,
             spawn_info=_side_info,
+            checkout_activity=checkout_activity,
         )
         if not sent or process is None:
             return False
@@ -140,6 +250,8 @@ def _spawn_drain_sidecar(
             # the handle is the only place its name survives.
             "sandbox_container_id": _side_info.get("sandbox_container_id"),
             "base_cwd": base_cwd,
+            "worktree": resident.get("worktree"),
+            "checkout_activity": checkout_activity,
         }
         if not quiet:
             print(

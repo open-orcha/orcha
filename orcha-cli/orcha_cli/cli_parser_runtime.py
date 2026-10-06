@@ -122,6 +122,38 @@ def register_runtime_commands(
     )
     notifier.set_defaults(func=handlers["notifier"])
 
+    handoff_doctor = sub.add_parser(
+        "handoff-doctor",
+        help="inspect whether checkout state can be handed off safely without "
+        "changing files or Git metadata",
+    )
+    handoff_doctor.add_argument(
+        "source",
+        help="saved source checkout whose state would be carried forward",
+    )
+    handoff_doctor.add_argument(
+        "destination",
+        help="selected destination checkout that would receive the state",
+    )
+    handoff_doctor.add_argument(
+        "--owner-key",
+        required=True,
+        help="logical task, conversation, or terminal stream owner key",
+    )
+    handoff_doctor.add_argument(
+        "--snapshot-run-id",
+        "--run-id",
+        dest="snapshot_run_id",
+        default=None,
+        help="stopped worker run whose immutable stream snapshot must be verified",
+    )
+    handoff_doctor.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the complete machine-readable result as JSON",
+    )
+    handoff_doctor.set_defaults(func=handlers["handoff-doctor"])
+
     bridge = sub.add_parser(
         "terminal-bridge",
         help="S3 §3b: run the host-side PTY/websocket bridge for the LIVE embedded-terminal "

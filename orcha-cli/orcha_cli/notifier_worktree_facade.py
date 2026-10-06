@@ -157,12 +157,176 @@ def _capture_diff(worktree, cap: int = 200_000):
     return _cleanup.capture_diff(worktree, _compat(), cap)
 
 
+def _handoff_record_bytes(cwd):
+    return _cleanup.handoff_record_bytes(cwd, _compat())
+
+
+def _checkout_activity_status(
+    cwd, *, ignore_reservation_id=None, ignore_run_id=None
+):
+    return _cleanup.checkout_activity_status(
+        cwd,
+        _compat(),
+        ignore_reservation_id=ignore_reservation_id,
+        ignore_run_id=ignore_run_id,
+    )
+
+
+def _reserve_checkout_activity(cwd, owner_key, *, checkout_guard=None):
+    return _cleanup.reserve_checkout_activity(
+        cwd,
+        owner_key,
+        _compat(),
+        checkout_guard=checkout_guard,
+    )
+
+
+def _bind_checkout_activity(
+    activity, *, run_id=None, pid=None, sandbox_container_id=None
+):
+    return _cleanup.bind_checkout_activity(
+        activity,
+        run_id=run_id,
+        pid=pid,
+        sandbox_container_id=sandbox_container_id,
+    )
+
+
+def _mark_checkout_activity_routed(
+    activity, *, source=None, patch_sha256=None
+):
+    return _cleanup.mark_checkout_activity_routed(
+        activity,
+        _compat(),
+        source=source,
+        patch_sha256=patch_sha256,
+    )
+
+
+def _release_checkout_activity(
+    cwd, *, activity=None, reservation_id=None, run_id=None
+):
+    return _cleanup.release_checkout_activity(
+        cwd,
+        _compat(),
+        activity=activity,
+        reservation_id=reservation_id,
+        run_id=run_id,
+    )
+
+
+def _reconcile_checkout_activities(
+    api_base, base_cwd, *, container_id=None, local_workers=None
+):
+    from .notifier_routing_handoff import reconcile_checkout_activities
+
+    return reconcile_checkout_activities(
+        api_base,
+        base_cwd,
+        _compat(),
+        container_id=container_id,
+        local_workers=local_workers,
+    )
+
+
+def _retirement_record_status(base_cwd, checkout, branch):
+    return _cleanup.retirement_record_status(
+        base_cwd, checkout, branch, _compat()
+    )
+
+
+def _clear_retirement_record(base_cwd, checkout):
+    return _cleanup.clear_retirement_record(
+        base_cwd, checkout, _compat()
+    )
+
+
+def _record_checkout_stream_snapshot(
+    cwd,
+    owner_key,
+    *,
+    run_id=None,
+):
+    return _cleanup.record_checkout_stream_snapshot(
+        cwd,
+        owner_key,
+        _compat(),
+        run_id=run_id,
+    )
+
+
+def _checkout_overlap_evidence(cwd):
+    return _cleanup.checkout_overlap_evidence(cwd, _compat())
+
+
+def _record_checkout_overlap_evidence(
+    cwd,
+    owner_key,
+    *,
+    run_id,
+    agent_id=None,
+    other_rows=(),
+    unknown_checkout_user=False,
+    reason="concurrent_or_unidentified_checkout_user",
+):
+    return _cleanup.record_checkout_overlap_evidence(
+        cwd,
+        owner_key,
+        _compat(),
+        run_id=run_id,
+        agent_id=agent_id,
+        other_rows=other_rows,
+        unknown_checkout_user=unknown_checkout_user,
+        reason=reason,
+    )
+
+
+def _inspect_worktree_handoff(
+    source_cwd,
+    destination_cwd,
+    *,
+    owner_key=None,
+    source_owner_verified=False,
+    snapshot_run_id=None,
+):
+    return _cleanup.inspect_handoff(
+        source_cwd,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+        source_owner_verified=source_owner_verified,
+        snapshot_run_id=snapshot_run_id,
+    )
+
+
+def _handoff_worktree_changes_result(
+    source_cwd,
+    destination_cwd,
+    *,
+    owner_key=None,
+    source_owner_verified=False,
+    snapshot_run_id=None,
+    checkout_guard=None,
+):
+    return _cleanup.handoff_changes_result(
+        source_cwd,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+        source_owner_verified=source_owner_verified,
+        snapshot_run_id=snapshot_run_id,
+        checkout_guard=checkout_guard,
+    )
+
+
 def _handoff_worktree_changes(
     source_cwd,
     destination_cwd,
     *,
     owner_key=None,
     source_owner_verified=False,
+    snapshot_run_id=None,
+    checkout_guard=None,
 ) -> bool:
     return _cleanup.handoff_changes(
         source_cwd,
@@ -170,11 +334,13 @@ def _handoff_worktree_changes(
         _compat(),
         owner_key=owner_key,
         source_owner_verified=source_owner_verified,
+        snapshot_run_id=snapshot_run_id,
+        checkout_guard=checkout_guard,
     )
 
 
 def _handoff_branch_changes(
-    base_cwd, branch, destination_cwd, *, owner_key=None
+    base_cwd, branch, destination_cwd, *, owner_key=None, checkout_guard=None
 ) -> bool:
     return _cleanup.handoff_branch_changes(
         base_cwd,
@@ -182,15 +348,29 @@ def _handoff_branch_changes(
         destination_cwd,
         _compat(),
         owner_key=owner_key,
+        checkout_guard=checkout_guard,
     )
 
 
-def _branch_commit_count(base_cwd, branch) -> int:
+def _handoff_branch_changes_result(
+    base_cwd, branch, destination_cwd, *, owner_key=None, checkout_guard=None
+):
+    return _cleanup.handoff_branch_changes_result(
+        base_cwd,
+        branch,
+        destination_cwd,
+        _compat(),
+        owner_key=owner_key,
+        checkout_guard=checkout_guard,
+    )
+
+
+def _branch_commit_count(base_cwd, branch) -> int | None:
     return _cleanup.branch_commit_count(base_cwd, branch, _compat())
 
 
 def _teardown_worktree(base_cwd, worktree, branch):
-    _cleanup.teardown_worktree(base_cwd, worktree, branch, _compat())
+    return _cleanup.teardown_worktree(base_cwd, worktree, branch, _compat())
 
 
 def _is_git_repo(cwd) -> bool:

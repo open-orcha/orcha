@@ -12,6 +12,11 @@ from typing import Optional
 # Imported as a module so tests can monkeypatch `_sandbox.probe` etc. (attribute
 # lookup at call time).
 from . import sandbox as _sandbox
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    record_stopped_checkout_snapshot,
+    stopped_snapshot_requires_retry,
+)
 
 # M7 (remote-runner deferred follow-up, field bug "first chat message dies as
 # 'sandbox container vanished'"): minimum age before the sweep may take a
@@ -57,6 +62,70 @@ def _capture_recovered_diff(
     ):
         return None
     return services._capture_diff(cwd)
+
+
+def _snapshot_recovered_run(
+    api_base,
+    cid,
+    row,
+    quiet,
+    services,
+    *,
+    checkout_users,
+    unknown_checkout_users,
+):
+    """Archive state or durable ambiguity proof before restart recovery closes a run.
+
+    ``record_stopped_checkout_snapshot`` performs the authoritative live-run
+    check itself.  Calling it even when this sweep already sees another checkout
+    user is intentional: that path writes append-only overlap evidence before
+    the dead row is finalized.  Otherwise a later sweep could see the surviving
+    row as the sole owner and incorrectly snapshot the combined checkout as its
+    private state.
+    """
+    worker = {
+        **row,
+        "api_base": api_base,
+        "container_id": cid,
+        "respawn_ctx": {"task_id": row.get("task_id")},
+    }
+    result = record_stopped_checkout_snapshot(
+        worker,
+        row.get("agent_id"),
+        services,
+        api_base=api_base,
+        container_id=cid,
+    )
+    if result is not None and not result.ok and not quiet:
+        print(
+            "[notifier] restart recovery could not archive checkout provenance "
+            f"for run {row.get('run_id')}: {result.code} — {result.guidance}"
+        )
+    return result
+
+
+def _recovered_run_diff(
+    row: dict,
+    snapshot,
+    checkout_users: Counter,
+    unknown_checkout_users: int,
+    services,
+):
+    """Derive the persisted result from the same view used for provenance.
+
+    Shared-main snapshots carry a bounded display diff captured from their
+    immutable file view.  Dedicated worktrees do not need a sidecar snapshot,
+    so they retain the existing sole-checkout recovery guard.
+    """
+    if snapshot is not None:
+        return capture_stopped_checkout_diff(
+            snapshot,
+            row.get("worktree") or row.get("base_cwd"),
+            services,
+        )
+    return _capture_recovered_diff(
+        row, checkout_users, unknown_checkout_users, services
+    )
 
 
 def _age_secs(iso_ts) -> Optional[float]:
@@ -105,6 +174,7 @@ def reap_orphan_leases(api_base: str, cid: str, quiet: bool, services) -> None:
 
 def _reconcile_sandbox_run(
     api_base: str,
+    cid: str,
     r: dict,
     sbx: str,
     *,
@@ -143,11 +213,27 @@ def _reconcile_sandbox_run(
         # container gone without a trace (removed out-of-band; the C2 daemon gate in
         # the caller already ruled out "docker down", so None here means GONE) —
         # finish the row so the agent stops reading as busy forever (#342 semantics).
+        snapshot = _snapshot_recovered_run(
+            api_base,
+            cid,
+            r,
+            quiet,
+            services,
+            checkout_users=checkout_users,
+            unknown_checkout_users=unknown_checkout_users,
+        )
+        if stopped_snapshot_requires_retry(snapshot):
+            return 0
+        diff = _recovered_run_diff(
+            r,
+            snapshot,
+            checkout_users,
+            unknown_checkout_users,
+            services,
+        )
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
-            _capture_recovered_diff(
-                r, checkout_users, unknown_checkout_users, services
-            ),
+            diff,
             kill_reason=json.dumps({"run_id": str(run_id),
                                     "agent_id": r.get("agent_id"),
                                     "cause": "sandbox_container_vanished",
@@ -180,8 +266,23 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
-    diff = _capture_recovered_diff(
-        r, checkout_users, unknown_checkout_users, services
+    snapshot = _snapshot_recovered_run(
+        api_base,
+        cid,
+        r,
+        quiet,
+        services,
+        checkout_users=checkout_users,
+        unknown_checkout_users=unknown_checkout_users,
+    )
+    if stopped_snapshot_requires_retry(snapshot):
+        return 0
+    diff = _recovered_run_diff(
+        r,
+        snapshot,
+        checkout_users,
+        unknown_checkout_users,
+        services,
     )
     if state.oom_killed:
         ok = services._finish_run(
@@ -240,7 +341,13 @@ def reap_orphaned_runs(
     additionally honor ORPHAN_BOOT_GRACE_SECS — during a cold boot the container and its
     run row become visible at independent times, and neither half may be reaped while the
     other is still being born. Returns the number of dead runs reaped."""
-    data = services._get_json(f"{api_base}/api/containers/{cid}/running-runs")
+    # Retired agents can still own stale ``running`` rows after a daemon crash.
+    # The live-check path deliberately includes those rows, so the reconciler
+    # must see and finish them too; otherwise they become permanent handoff
+    # blockers that no sweep can clear.
+    data = services._get_json(
+        f"{api_base}/api/containers/{cid}/running-runs?include_retired=true"
+    )
     if data is None:
         # API unreachable/booting — decide NOTHING this tick. Especially not the orphan
         # pass below: an empty view from a dead API must never stop live containers.
@@ -281,6 +388,7 @@ def reap_orphaned_runs(
         try:
             finished = _reconcile_sandbox_run(
                 api_base,
+                cid,
                 row,
                 sbx,
                 checkout_users=checkout_users,
@@ -321,8 +429,24 @@ def reap_orphaned_runs(
         finished = 0
         all_finished = True
         for row in dead:
-            diff = _capture_recovered_diff(
-                row, checkout_users, unknown_checkout_users, services
+            snapshot = _snapshot_recovered_run(
+                api_base,
+                cid,
+                row,
+                quiet,
+                services,
+                checkout_users=checkout_users,
+                unknown_checkout_users=unknown_checkout_users,
+            )
+            if stopped_snapshot_requires_retry(snapshot):
+                all_finished = False
+                continue
+            diff = _recovered_run_diff(
+                row,
+                snapshot,
+                checkout_users,
+                unknown_checkout_users,
+                services,
             )
             ok = services._finish_run(
                 api_base,

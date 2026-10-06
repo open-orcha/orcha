@@ -9,6 +9,7 @@ answers from a canned JSON payload, `ps` from a canned names+labels table
 import json
 import os
 import stat
+import subprocess
 
 from orcha_cli import sandbox
 
@@ -64,6 +65,123 @@ def test_probe_garbled_inspect_payload_returns_none(tmp_path, monkeypatch):
     f.chmod(f.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{d}:{os.environ['PATH']}")
     assert sandbox.probe("orcha-run-x") is None
+
+
+def test_structured_probe_distinguishes_running_and_exited(monkeypatch):
+    responses = iter([
+        subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps([{"State": {
+                "Status": "running", "OOMKilled": False, "ExitCode": 0,
+                "StartedAt": "2026-07-29T00:00:00Z",
+            }}]), stderr="",
+        ),
+        subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps([{"State": {
+                "Status": "exited", "OOMKilled": True, "ExitCode": 137,
+                "StartedAt": "2026-07-29T00:00:00Z",
+            }}]), stderr="",
+        ),
+    ])
+    monkeypatch.setattr(sandbox, "_docker", lambda *a, **k: next(responses))
+
+    running = sandbox.probe_container("orcha-run-x")
+    exited = sandbox.probe_container("orcha-run-y")
+
+    assert running.status is sandbox.SandboxProbeStatus.RUNNING
+    assert running.state is not None and running.state.running is True
+    assert exited.status is sandbox.SandboxProbeStatus.EXITED
+    assert exited.state is not None and exited.state.exit_code == 137
+    assert exited.state.oom_killed is True
+
+
+def test_structured_probe_requires_successful_exact_listing_for_missing(monkeypatch):
+    calls = []
+
+    def _docker(args, timeout=10):
+        calls.append(args)
+        if args[0] == "inspect":
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="missing")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox, "_docker", _docker)
+    result = sandbox.probe_container("orcha-run-x")
+
+    assert result.status is sandbox.SandboxProbeStatus.DEFINITIVELY_MISSING
+    assert result.state is None
+    assert calls == [
+        ["inspect", "orcha-run-x"],
+        ["container", "ls", "-a", "--filter", "name=^/orcha\\-run\\-x$",
+         "--format", "{{.Names}}"],
+    ]
+    # The legacy API keeps its original state-or-None behavior.
+    assert sandbox.probe("orcha-run-x") is None
+
+
+def test_structured_probe_existing_container_with_failed_inspect_is_unknown(monkeypatch):
+    responses = iter([
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="inspect failed"),
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="orcha-run-x\n", stderr=""),
+    ])
+    monkeypatch.setattr(sandbox, "_docker", lambda *a, **k: next(responses))
+
+    result = sandbox.probe_container("orcha-run-x")
+
+    assert result.status is sandbox.SandboxProbeStatus.UNKNOWN
+    assert result.state is None
+    assert "exists" in result.reason
+
+
+def test_structured_probe_failures_timeouts_and_malformed_data_are_unknown(monkeypatch):
+    cases = [
+        # An inspect timeout is already ambiguous; do not reinterpret it as absence.
+        [subprocess.CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")],
+        # A failed exact-name listing cannot prove that the object is absent.
+        [
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="missing"),
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="daemon down"),
+        ],
+        # Successful inspect with malformed JSON is not evidence of absence.
+        [subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr="")],
+        # A successful listing with an unexpected name is malformed/ambiguous.
+        [
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="missing"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="some-other-container\n", stderr=""),
+        ],
+        # A successful process result with non-text output is still malformed.
+        [
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="missing"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=None, stderr=""),
+        ],
+    ]
+
+    for responses in cases:
+        pending = iter(responses)
+        monkeypatch.setattr(sandbox, "_docker", lambda *a, _pending=pending, **k: next(_pending))
+        result = sandbox.probe_container("orcha-run-x")
+        assert result.status is sandbox.SandboxProbeStatus.UNKNOWN
+        assert result.state is None
+
+
+def test_structured_probe_nonterminal_docker_state_is_unknown(monkeypatch):
+    payload = json.dumps([{"State": {
+        "Status": "restarting", "OOMKilled": False, "ExitCode": 0,
+        "StartedAt": "2026-07-29T00:00:00Z",
+    }}])
+    monkeypatch.setattr(
+        sandbox, "_docker",
+        lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr=""),
+    )
+
+    result = sandbox.probe_container("orcha-run-x")
+
+    assert result.status is sandbox.SandboxProbeStatus.UNKNOWN
+    # Compatibility: the historical probe API maps every non-running Docker
+    # status to a non-running SandboxState rather than exposing the distinction.
+    legacy = sandbox.probe("orcha-run-x")
+    assert legacy is not None and legacy.running is False and legacy.exit_code == 0
 
 
 def test_stop_past_deadline(tmp_path, monkeypatch):

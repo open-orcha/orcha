@@ -6,7 +6,7 @@ import time
 
 
 def feed(services, api_base, conv_id, candidate, resident) -> None:
-    """Send first, then persist the run so broken pipes cannot orphan rows."""
+    """Register and bind a turn before allowing the resident to consume it."""
     next_turn = services._next_human_turn(
         api_base, conv_id, resident["serviced_seq"]
     )
@@ -23,11 +23,6 @@ def feed(services, api_base, conv_id, candidate, resident) -> None:
             if next_turn["content"]
             else attachment_feed
         )
-    if not services._send_user_turn(
-        resident["proc"],
-        services._wrap_conversation_turn(next_turn["content"]),
-    ):
-        return
     _run_payload = {
         "wake_kind": "resident",
         "wake_event": "conversation_turn",
@@ -37,7 +32,10 @@ def feed(services, api_base, conv_id, candidate, resident) -> None:
             else None
         ),
         "pid": getattr(resident.get("proc"), "pid", None),
+        "conversation_id": conv_id,
+        "conversation_ack_ts": candidate.get("conversation_ack_ts"),
         "worktree": resident.get("worktree"),
+        "branch": resident.get("branch"),
         "base_cwd": resident.get("base_cwd"),
         "lane": "conversation",
     }
@@ -51,15 +49,59 @@ def feed(services, api_base, conv_id, candidate, resident) -> None:
     # host resident as an owner of a shared main checkout too.
     if resident.get("sandbox_container_id"):
         _run_payload["sandbox_container_id"] = resident["sandbox_container_id"]
-    run = services._post_json(
-        f"{api_base}/api/agents/{candidate['agent_id']}/runs",
-        _run_payload,
-    )
+    try:
+        run = services._post_json(
+            f"{api_base}/api/agents/{candidate['agent_id']}/runs",
+            _run_payload,
+        )
+    except Exception:
+        run = None
     run_id = (run or {}).get("run_id")
+    if not run_id:
+        services._kill_worker(resident["proc"], graceful=True)
+        resident["snapshot_writer_stopped"] = True
+        return False if services._close_resident(
+            api_base,
+            resident,
+            reason="run_registration_failed",
+            stamp_woken=False,
+        ) else None
+    activity = resident.get("checkout_activity")
+    if activity is not None:
+        try:
+            bound = services._bind_checkout_activity(
+                activity,
+                run_id=run_id,
+                pid=getattr(resident.get("proc"), "pid", None),
+                sandbox_container_id=resident.get("sandbox_container_id"),
+            )
+        except Exception:
+            bound = False
+        if not bound:
+            resident.update({"current_run_id": run_id, "run_id": run_id})
+            services._kill_worker(resident["proc"], graceful=True)
+            resident["snapshot_writer_stopped"] = True
+            return False if services._close_resident(
+                api_base,
+                resident,
+                reason="activity_bind_failed",
+                stamp_woken=False,
+            ) else None
+    resident.update({"current_run_id": run_id, "run_id": run_id})
+    if not services._send_user_turn(
+        resident["proc"],
+        services._wrap_conversation_turn(next_turn["content"]),
+    ):
+        services._kill_worker(resident["proc"], graceful=True)
+        resident["snapshot_writer_stopped"] = True
+        return False if services._close_resident(
+            api_base,
+            resident,
+            reason="turn_delivery_failed",
+            stamp_woken=False,
+        ) else None
     resident.update(
         {
-            "current_run_id": run_id,
-            "run_id": run_id,
             "lines_seq": 1,
             "current_run_kind": "conversation",
             "conversation_ack_ts": candidate.get(
@@ -71,3 +113,4 @@ def feed(services, api_base, conv_id, candidate, resident) -> None:
             "last_activity_ts": time.time(),
         }
     )
+    return True

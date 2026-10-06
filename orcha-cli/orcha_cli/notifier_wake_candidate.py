@@ -227,6 +227,10 @@ def process_candidate(
         "auto_start_task_ids": candidate.get("auto_start_task_ids"),
         "event": event,
     }
+    if kind == "ephemeral":
+        for field in ("handoff_failed", "handoff_code", "handoff_guidance"):
+            if field in spawned:
+                record[field] = spawned[field]
     if not quiet:
         tag = (
             "DRY-RUN would wake"

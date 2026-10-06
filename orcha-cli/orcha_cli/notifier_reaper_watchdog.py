@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import json
 
-from .notifier_reaper_completion import _save_task_result
+from .notifier_reaper_completion import (
+    _save_task_result,
+    _snapshot_diff,
+    _snapshot_pending,
+    _snapshot_stopped_worker,
+)
 
 
 def handle_terminal_result(
@@ -36,9 +41,12 @@ def handle_terminal_result(
     if now - seen <= services.GRACEFUL_EXIT_SECS:
         return True
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(
-        worker.get("worktree") or worker.get("base_cwd")
-    )
+    snapshot = _snapshot_stopped_worker(api_base, worker, aid, quiet, services)
+    if _snapshot_pending(snapshot):
+        worker["snapshot_retry_pending"] = snapshot.code
+        return True
+    worker.pop("snapshot_retry_pending", None)
+    diff = _snapshot_diff(snapshot, worker, services)
     drain_status = "exited"
     if runtime == services.RUNTIME_CODEX:
         drain_status = services._codex_exit_status(
@@ -135,9 +143,12 @@ def kill_stalled(
         "last_event_type": services._last_event_type(log_path),
     }
     services._kill_worker(proc, graceful=True)
-    diff = services._capture_diff(
-        worker.get("worktree") or worker.get("base_cwd")
-    )
+    snapshot = _snapshot_stopped_worker(api_base, worker, aid, False, services)
+    if _snapshot_pending(snapshot):
+        worker["snapshot_retry_pending"] = snapshot.code
+        return
+    worker.pop("snapshot_retry_pending", None)
+    diff = _snapshot_diff(snapshot, worker, services)
     if services._finish_run(
         api_base,
         worker.get("run_id"),

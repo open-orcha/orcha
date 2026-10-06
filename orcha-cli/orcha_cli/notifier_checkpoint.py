@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from .notifier_routing_handoff import checkout_owner_key
+from .notifier_routing_handoff import (
+    capture_stopped_checkout_diff,
+    checkout_live_guard,
+    checkout_owner_key,
+    record_stopped_checkout_snapshot,
+    reserve_checkout_start,
+    stopped_snapshot_requires_retry,
+)
+from .notifier_wake_worker import _stop_unregistered_worker
 
 
 def checkpoint_and_respawn(
@@ -21,10 +29,25 @@ def checkpoint_and_respawn(
     branch = worker.get("branch")
     respawns = worker.get("respawns", 0) + 1
     cap = worker.get("cap", services.HARD_CAP_MIN_SECS)
+    current_run = _current_run(api_base, agent_id, worker, services)
 
     services._kill_worker(process, graceful=True)
     source_cwd = worktree or base_cwd
-    diff = services._capture_diff(source_cwd)
+    snapshot = record_stopped_checkout_snapshot(
+        worker, agent_id, services, api_base=api_base
+    )
+    if snapshot is not None and not snapshot.ok and not quiet:
+        print(
+            f"[notifier] checkpoint provenance capture for {agent_id} failed: "
+            f"{snapshot.code} — {snapshot.guidance}"
+        )
+    if stopped_snapshot_requires_retry(snapshot):
+        # Keep the open run and lease as durable retry state. The normal reaper
+        # sees the now-stopped process and retries capture on its next pass.
+        worker["snapshot_retry_pending"] = snapshot.code
+        return
+    worker.pop("snapshot_retry_pending", None)
+    diff = capture_stopped_checkout_diff(snapshot, source_cwd, services)
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -35,7 +58,6 @@ def checkpoint_and_respawn(
     ):
         # I4: the OLD wake's container, once stamped
         services._reap_sandbox_artifacts(worker)
-    current_run = _current_run(api_base, agent_id, worker, services)
     task_id = (
         current_run.get("task_id")
         if current_run is not None
@@ -51,16 +73,68 @@ def checkpoint_and_respawn(
         services,
     )
     destination_cwd = worktree or base_cwd
-    if not services._handoff_worktree_changes(
-        source_cwd,
-        destination_cwd,
-        owner_key=checkout_owner_key(
+    checkout_activity = None
+    git_checker = getattr(services, "_is_git_repo", None)
+    shared_git_checkout = False
+    if not worktree and destination_cwd and callable(git_checker):
+        try:
+            shared_git_checkout = bool(git_checker(destination_cwd))
+        except (OSError, TypeError, ValueError):
+            shared_git_checkout = False
+    if shared_git_checkout:
+        checkout_activity = reserve_checkout_start(
+            api_base,
+            destination_cwd,
+            checkout_owner_key(agent_id, task_id=task_id, lane="work"),
+            services,
+            container_id=worker.get("container_id")
+            or context.get("container_id"),
+            local_workers=live_workers,
+        )
+        if not checkout_activity:
+            _handle_handoff_failure(
+                api_base,
+                agent_id,
+                worker,
+                live_workers,
+                task_id,
+                diff,
+                quiet,
+                services,
+                handoff=checkout_activity,
+            )
+            return
+    handoff_call = getattr(services, "_handoff_worktree_changes_result", None)
+    handoff_kwargs = {
+        "owner_key": checkout_owner_key(
             agent_id,
             task_id=task_id,
             lane="work",
         ),
-        source_owner_verified=source_owner_verified,
-    ):
+        "source_owner_verified": source_owner_verified,
+        "snapshot_run_id": worker.get("run_id"),
+        "checkout_guard": checkout_live_guard(
+            api_base,
+            services,
+            container_id=worker.get("container_id") or context.get("container_id"),
+            ignore_activity_id=getattr(
+                checkout_activity, "reservation_id", None
+            ),
+        ),
+    }
+    if handoff_call is not None:
+        handoff = handoff_call(source_cwd, destination_cwd, **handoff_kwargs)
+    else:
+        handoff = services._handoff_worktree_changes(
+            source_cwd, destination_cwd, **handoff_kwargs
+        )
+    if not handoff:
+        if checkout_activity is not None:
+            released = services._release_checkout_activity(
+                destination_cwd, activity=checkout_activity
+            )
+            if released is not None and not released:
+                handoff = released
         _handle_handoff_failure(
             api_base,
             agent_id,
@@ -70,29 +144,82 @@ def checkpoint_and_respawn(
             diff,
             quiet,
             services,
+            handoff=handoff,
         )
         return
+    if checkout_activity is not None:
+        marker = getattr(services, "_mark_checkout_activity_routed", None)
+        try:
+            marked = bool(
+                marker(
+                    checkout_activity,
+                    source=source_cwd,
+                    patch_sha256=getattr(handoff, "patch_sha256", None),
+                )
+            ) if callable(marker) else False
+        except (OSError, TypeError, ValueError):
+            marked = False
+        if not marked:
+            services._release_checkout_activity(
+                destination_cwd, activity=checkout_activity
+            )
+            _handle_handoff_failure(
+                api_base,
+                agent_id,
+                worker,
+                live_workers,
+                task_id,
+                diff,
+                quiet,
+                services,
+                handoff=None,
+            )
+            return
 
     services._revoke_or_defer(api_base, worker.get("run_token"))
-    new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
+    new_token = services._mint_embodiment_token(
+        api_base, agent_id, "work", "headless"
+    )
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
     log_path = _next_log_path(base_cwd, context, services)
     _spawn_info: dict = {}
-    sent, _command, new_process = services.spawn_headless(
-        worktree or base_cwd,
-        context.get("prompt", ""),
-        context.get("flags"),
-        False,
-        alias=context.get("alias"),
-        system_prompt=persona,
-        model=context.get("model"),
-        reasoning_effort=context.get("reasoning_effort"),
-        runtime=context.get("model_runtime"),
-        log_path=log_path,
-        run_token=new_token,
-        spawn_info=_spawn_info,
-    )
+    try:
+        sent, _command, new_process = services.spawn_headless(
+            worktree or base_cwd,
+            context.get("prompt", ""),
+            context.get("flags"),
+            False,
+            alias=context.get("alias"),
+            system_prompt=persona,
+            model=context.get("model"),
+            reasoning_effort=context.get("reasoning_effort"),
+            runtime=context.get("model_runtime"),
+            log_path=log_path,
+            run_token=new_token,
+            spawn_info=_spawn_info,
+            checkout_activity=checkout_activity,
+        )
+    except Exception:
+        # The transport may have created a child before raising. Keep the
+        # reservation as a fail-closed recovery marker when no process handle
+        # was returned.
+        _handle_spawn_failure(
+            api_base,
+            agent_id,
+            worker,
+            live_workers,
+            context,
+            diff,
+            new_token,
+            quiet,
+            services,
+        )
+        raise
     if not (sent and new_process is not None):
+        if checkout_activity is not None:
+            services._release_checkout_activity(
+                destination_cwd, activity=checkout_activity
+            )
         _handle_spawn_failure(
             api_base,
             agent_id,
@@ -105,6 +232,40 @@ def checkpoint_and_respawn(
             services,
         )
         return
+
+    if checkout_activity is not None:
+        try:
+            activity_bound = services._bind_checkout_activity(
+                checkout_activity,
+                pid=new_process.pid,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            )
+        except Exception:
+            activity_bound = False
+        if not activity_bound:
+            evidence = _stop_unregistered_worker(
+                api_base,
+                {
+                    "agent_id": agent_id,
+                    "alias": context.get("alias"),
+                    "headless_cwd": base_cwd,
+                },
+                process=new_process,
+                token=new_token,
+                worktree=worktree,
+                branch=branch,
+                task_worktree=task_worktree,
+                run_task_id=task_id,
+                log_path=log_path,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+                services=services,
+            )
+            if evidence is not None and bool(evidence):
+                services._release_checkout_activity(
+                    destination_cwd, activity=checkout_activity
+                )
+            services._retire_headless(api_base, live_workers, agent_id)
+            return
 
     _run_payload = {
         "wake_kind": "ephemeral",
@@ -125,14 +286,61 @@ def checkpoint_and_respawn(
     if _spawn_info.get("sandbox_container_id"):
         _run_payload["sandbox_container_id"] = _spawn_info["sandbox_container_id"]
         _run_payload["wake_kind"] = "sandbox"
-    run = services._post_json(f"{api_base}/api/agents/{agent_id}/runs", _run_payload)
+    try:
+        run = services._post_json(
+            f"{api_base}/api/agents/{agent_id}/runs", _run_payload
+        )
+    except Exception:
+        run = None
+    run_id = (run or {}).get("run_id")
+    if not run_id:
+        evidence = _stop_unregistered_worker(
+            api_base,
+            {
+                "agent_id": agent_id,
+                "alias": context.get("alias"),
+                "headless_cwd": base_cwd,
+            },
+            process=new_process,
+            token=new_token,
+            worktree=worktree,
+            branch=branch,
+            task_worktree=task_worktree,
+            run_task_id=task_id,
+            log_path=log_path,
+            sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            services=services,
+        )
+        if (
+            checkout_activity is not None
+            and evidence is not None
+            and bool(evidence)
+        ):
+            services._release_checkout_activity(
+                destination_cwd, activity=checkout_activity
+            )
+        services._retire_headless(api_base, live_workers, agent_id)
+        return
+    activity_bound = True
+    if checkout_activity is not None:
+        try:
+            activity_bound = services._bind_checkout_activity(
+                checkout_activity,
+                run_id=run_id,
+                pid=new_process.pid,
+                sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            )
+        except Exception:
+            activity_bound = False
+    if not activity_bound:
+        services._kill_worker(new_process, graceful=True)
     now = services.time.time()
     live_workers[agent_id] = {
         "proc": new_process,
         "hard_deadline": now + cap,
         "last_size": 0,
         "last_progress_ts": now,
-        "run_id": (run or {}).get("run_id"),
+        "run_id": run_id,
         "log_path": log_path,
         "worktree": worktree,
         "branch": branch,
@@ -154,11 +362,19 @@ def checkpoint_and_respawn(
         "respawn_ctx": context,
         "lane": worker.get("lane", "work"),
         "worktrees_disabled": worktrees_disabled,
+        "api_base": api_base,
+        "container_id": worker.get("container_id")
+        or context.get("container_id"),
         # I4: the NEW wake's sandbox container rides the record so every
         # Popen-completion path can reap it (container + api-config) after stamping.
         "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
         "run_token": new_token,
+        "checkout_activity": checkout_activity,
     }
+    if not activity_bound:
+        # The stopped replacement remains registered under its real run id so
+        # the normal reaper can snapshot and release the fail-closed barrier.
+        return
     services._post_json(
         f"{api_base}/api/agents/{agent_id}/wake-ack",
         {
@@ -220,7 +436,17 @@ def _current_run(api_base, agent_id, worker, services):
     if data and data.get("runs"):
         for run in data["runs"]:
             if run.get("run_id") == run_id:
-                return run
+                merged = dict(run)
+                context = worker.get("respawn_ctx") or {}
+                for key, value in (
+                    ("worktree", worker.get("worktree")),
+                    ("base_cwd", worker.get("base_cwd")),
+                    ("branch", worker.get("branch")),
+                    ("task_id", context.get("task_id")),
+                ):
+                    if merged.get(key) is None and value is not None:
+                        merged[key] = value
+                return merged
     return None
 
 
@@ -290,7 +516,7 @@ def _handle_spawn_failure(
                 human,
             )
     else:
-        services._teardown_worktree(
+        services._safe_teardown_worktree(
             worker.get("base_cwd"),
             worker.get("worktree"),
             worker.get("branch"),
@@ -324,6 +550,8 @@ def _handle_handoff_failure(
     diff,
     quiet,
     services,
+    *,
+    handoff=None,
 ) -> None:
     """Stop visibly when a checkout switch cannot preserve the worker's file view."""
     if worker.get("task_worktree"):
@@ -349,6 +577,8 @@ def _handle_handoff_failure(
         )
 
     if task_id:
+        guidance = getattr(handoff, "guidance", "")
+        reason = getattr(handoff, "code", "handoff_failed")
         services._post_json(
             f"{api_base}/api/tasks/{task_id}/messages",
             {
@@ -356,7 +586,8 @@ def _handle_handoff_failure(
                 "body": (
                     "Checkpoint replacement paused because Orcha could not safely carry "
                     "the in-progress files into the checkout selected by the project setting. "
-                    "The existing files remain preserved, and no replacement worker was started."
+                    "The existing files remain preserved, and no replacement worker was started. "
+                    f"Reason: {reason}. {guidance}".rstrip()
                 ),
             },
         )

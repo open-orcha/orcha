@@ -11,7 +11,9 @@ def saved_ref(worker, checkpoint_sha, diff, services) -> dict:
         "branch": branch,
         "worktree": worker.get("worktree"),
         "checkpoint_sha": checkpoint_sha,
-        "has_commits": bool(checkpoint_sha) or commit_count > 0,
+        # Unknown must stay on the preservation side of this signal: callers
+        # must not describe a branch as safely empty when Git could not inspect it.
+        "has_commits": bool(checkpoint_sha) or commit_count is None or commit_count > 0,
         "patch_captured": bool((diff or "").strip()),
     }
 
@@ -20,7 +22,10 @@ def saved_human_line(base_cwd, branch, sha, services) -> str:
     """Explain where work was saved without exposing implementation identifiers."""
     if sha:
         return f"work saved on branch {branch} (checkpoint {sha})"
-    if services._branch_commit_count(base_cwd, branch) > 0:
+    commit_count = services._branch_commit_count(base_cwd, branch)
+    if commit_count is None:
+        return f"work saved on branch {branch} (commit state could not be inspected, preserved)"
+    if commit_count > 0:
         return f"work saved on branch {branch} (committed on the branch, preserved)"
     return f"work saved on branch {branch} (uncommitted, preserved)"
 
@@ -31,8 +36,7 @@ def reclaim_task_worktree(base_cwd, worktree, branch, services) -> str:
         return "noop"
     if services._worktree_is_dirty(worktree, excludes=services._DIFF_EXCLUDES):
         return "preserved-dirty"
-    services._teardown_worktree(base_cwd, worktree, branch)
-    return "removed"
+    return services._safe_teardown_worktree(base_cwd, worktree, branch)
 
 
 def record_task_saved_ref(api_base, worker, saved, human_line, services) -> None:

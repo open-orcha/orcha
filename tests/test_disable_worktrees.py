@@ -9,13 +9,39 @@ from orcha_cli import (
     notifier,
     notifier_checkpoint,
     notifier_codex_conversation,
+    notifier_orphan_cleanup,
     notifier_reaper_completion,
     notifier_resident_claude_start,
     notifier_wake_worker,
     terminal_bridge_api,
     terminal_bridge_connection,
 )
-from orcha_cli.notifier_routing_handoff import carry_previous_checkout
+from orcha_cli.notifier_routing_handoff import (
+    CheckoutStartPreparation,
+    carry_previous_checkout,
+    previous_run,
+    retained_branch_exists,
+)
+from orcha_cli.notifier_worktree_cleanup import HandoffResult
+
+
+def _checkout_preparation(
+    ok,
+    *,
+    code=None,
+    guidance="",
+    activity=None,
+):
+    """Build the structured result returned by the current start-routing seam."""
+    return CheckoutStartPreparation(
+        HandoffResult(
+            ok=ok,
+            code=code or ("transferred" if ok else "handoff_failed"),
+            phase="test",
+            guidance=guidance,
+        ),
+        activity,
+    )
 
 
 async def _set(client, cid, human_id, disabled):
@@ -188,7 +214,7 @@ class _Proc:
     pid = 4321
 
 
-def test_main_routed_task_exit_captures_base_checkout_diff():
+def test_main_routed_task_exit_captures_base_checkout_diff(monkeypatch):
     captured = []
     finished = []
     worker = {
@@ -211,6 +237,11 @@ def test_main_routed_task_exit_captures_base_checkout_diff():
         _post_json=lambda *args: {},
         _retire_headless=lambda _api, workers, aid: workers.pop(aid, None),
     )
+    monkeypatch.setattr(
+        notifier_reaper_completion,
+        "record_stopped_checkout_snapshot",
+        lambda *args, **kwargs: None,
+    )
 
     notifier_reaper_completion.handle_exited(
         "http://orcha",
@@ -228,7 +259,7 @@ def test_main_routed_task_exit_captures_base_checkout_diff():
     assert finished[0][0][5] == "main diff"
 
 
-def test_main_routed_conversation_completion_captures_base_checkout_diff():
+def test_main_routed_conversation_completion_captures_base_checkout_diff(monkeypatch):
     captured = []
     finished = []
     resident = {
@@ -243,6 +274,11 @@ def test_main_routed_conversation_completion_captures_base_checkout_diff():
         _reap_sandbox_artifacts=lambda *args: None,
         _post_json=lambda *args: {},
         _conversation_ack_body=lambda kind, **kwargs: {"kind": kind, **kwargs},
+    )
+    monkeypatch.setattr(
+        notifier_codex_conversation,
+        "record_stopped_checkout_snapshot",
+        lambda *args, **kwargs: None,
     )
 
     posted = notifier_codex_conversation.finish(
@@ -286,6 +322,11 @@ def _orphan_recovery_services(monkeypatch, row):
     monkeypatch.setattr(notifier, "_post_json", post_json)
     monkeypatch.setattr(notifier, "_capture_diff", capture_diff)
     monkeypatch.setattr(notifier, "_finish_run", finish_run)
+    monkeypatch.setattr(
+        notifier_orphan_cleanup,
+        "record_stopped_checkout_snapshot",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(notifier._sandbox, "daemon_reachable", lambda: True)
     monkeypatch.setattr(notifier._sandbox, "managed_containers", lambda _cid: [])
     return captured, finished, posts, events
@@ -486,7 +527,31 @@ def _checkpoint_services(*, disabled, spawned, provisioned):
 
     def get_json(url):
         if url.endswith("/runs?limit=20"):
-            return {"runs": [{"run_id": "run-1", "task_id": "task-1"}]}
+            return {
+                "runs": [
+                    {
+                        "run_id": "run-1",
+                        "agent_id": "agent-1",
+                        "task_id": "task-1",
+                        "lane": "work",
+                        "worktree": None,
+                        "base_cwd": "/project/main",
+                    }
+                ]
+            }
+        if url.endswith("/running-runs?include_retired=true"):
+            return {
+                "runs": [
+                    {
+                        "run_id": "run-1",
+                        "agent_id": "agent-1",
+                        "task_id": "task-1",
+                        "lane": "work",
+                        "worktree": None,
+                        "base_cwd": "/project/main",
+                    }
+                ]
+            }
         if url.endswith("/persona"):
             return {"worktrees_disabled": disabled}
         return None
@@ -502,6 +567,13 @@ def _checkpoint_services(*, disabled, spawned, provisioned):
         time=time,
         _kill_worker=lambda *args, **kwargs: None,
         _capture_diff=lambda worktree: "saved diff" if worktree else None,
+        _record_checkout_stream_snapshot=lambda *args, **kwargs: SimpleNamespace(
+            ok=True,
+            code="snapshot_recorded",
+            details={"captured_diff": "saved diff"},
+        ),
+        _checkout_overlap_evidence=lambda *_args: {"status": "none"},
+        _container_id_for=lambda _cwd: "container-1",
         _handoff_worktree_changes=lambda *args, **kwargs: True,
         _finish_run=lambda *args, **kwargs: True,
         _reap_sandbox_artifacts=lambda *args, **kwargs: None,
@@ -571,6 +643,77 @@ def test_checkpoint_resume_rechecks_toggle_and_moves_to_main_without_cleanup():
     assert live["agent-1"]["worktree"] is None
     assert live["agent-1"]["task_worktree"] is False
     assert live["agent-1"]["worktrees_disabled"] is True
+
+
+def test_checkpoint_to_shared_main_reserves_and_binds_activity(monkeypatch):
+    spawned, provisioned = [], []
+    activity = object()
+    binds = []
+    marks = []
+    spawn_kwargs = []
+    services = _checkpoint_services(
+        disabled=True, spawned=spawned, provisioned=provisioned
+    )
+    original_get_json = services._get_json
+    services._get_json = lambda url: (
+        {"runs": []}
+        if url.endswith("/running-runs?include_retired=true")
+        else original_get_json(url)
+    )
+    services._is_git_repo = lambda cwd: cwd == "/project/main"
+    services._reserve_checkout_activity = lambda *args, **kwargs: activity
+    services._mark_checkout_activity_routed = lambda value, **kwargs: (
+        marks.append((value, kwargs)) or True
+    )
+    services._bind_checkout_activity = lambda value, **kwargs: (
+        binds.append((value, kwargs)) or True
+    )
+    services._release_checkout_activity = lambda *args, **kwargs: SimpleNamespace(
+        ok=True
+    )
+    services.spawn_headless = lambda cwd, *args, **kwargs: (
+        spawn_kwargs.append(kwargs) or spawned.append(cwd) or (True, "command", _Proc())
+    )
+    monkeypatch.setattr(
+        notifier_checkpoint,
+        "reserve_checkout_start",
+        lambda *args, **kwargs: activity,
+    )
+    worker = _checkpoint_worker(
+        disabled=False,
+        worktree="/project/.orcha-worktrees/task-1",
+        branch="orcha/task-1",
+        task_worktree=True,
+    )
+    live = {"agent-1": worker}
+
+    notifier_checkpoint.checkpoint_and_respawn(
+        "http://orcha", "agent-1", worker, live, True, services
+    )
+
+    assert spawned == ["/project/main"]
+    assert spawn_kwargs[0]["checkout_activity"] is activity
+    assert marks == [
+        (
+            activity,
+            {
+                "source": "/project/.orcha-worktrees/task-1",
+                "patch_sha256": None,
+            },
+        )
+    ]
+    assert binds == [
+        (activity, {"pid": 4321, "sandbox_container_id": None}),
+        (
+            activity,
+            {
+                "run_id": "run-2",
+                "pid": 4321,
+                "sandbox_container_id": None,
+            },
+        ),
+    ]
+    assert live["agent-1"]["checkout_activity"] is activity
 
 
 def test_checkpoint_resume_rechecks_toggle_off_and_restores_task_routing():
@@ -651,10 +794,47 @@ def _checkpoint_repo(tmp_path):
     return main
 
 
-def _real_checkpoint_services(*, disabled, spawned):
+def _real_checkpoint_services(
+    *, disabled, spawned, active_cwd=None, active_run_id="run-1"
+):
     services = _checkpoint_services(disabled=disabled, spawned=spawned, provisioned=[])
+    finished = {"value": False}
+    original_get_json = services._get_json
+
+    def get_json(url):
+        if "/running-runs" in url:
+            return {
+                "runs": (
+                    [
+                        {
+                            "run_id": active_run_id,
+                            "agent_id": "agent-1",
+                            "task_id": "task-1",
+                            "lane": "work",
+                            "worktree": None,
+                            "base_cwd": str(active_cwd),
+                        }
+                    ]
+                    if active_cwd is not None and not finished["value"]
+                    else []
+                )
+            }
+        return original_get_json(url)
+
+    services._get_json = get_json
+    services._finish_run = (
+        lambda *_args, **_kwargs: finished.update(value=True) or True
+    )
+    services._checkpoint_finished = finished
     services._capture_diff = notifier._capture_diff
     services._handoff_worktree_changes = notifier._handoff_worktree_changes
+    services._handoff_worktree_changes_result = (
+        notifier._handoff_worktree_changes_result
+    )
+    services._record_checkout_stream_snapshot = (
+        notifier._record_checkout_stream_snapshot
+    )
+    services._container_id_for = lambda _cwd: "container-1"
     services._provision_task_worktree = notifier._provision_task_worktree
     services._provision_worktree = notifier._provision_worktree
     return services
@@ -702,7 +882,12 @@ def test_checkpoint_toggle_back_to_worktree_carries_main_files(tmp_path):
         worker,
         live,
         True,
-        _real_checkpoint_services(disabled=False, spawned=spawned),
+        _real_checkpoint_services(
+            disabled=False,
+            spawned=spawned,
+            active_cwd=main,
+            active_run_id=worker["run_id"],
+        ),
     )
 
     destination = pathlib.Path(spawned[0])
@@ -729,6 +914,22 @@ def test_checkpoint_carries_task_files_main_to_worktree_to_main(tmp_path):
     services = _real_checkpoint_services(disabled=False, spawned=spawned)
 
     def get_json(url):
+        if "/running-runs" in url:
+            if services._checkpoint_finished["value"]:
+                return {"runs": []}
+            active = live["agent-1"]
+            return {
+                "runs": [
+                    {
+                        "run_id": active["run_id"],
+                        "agent_id": "agent-1",
+                        "task_id": "task-1",
+                        "lane": "work",
+                        "worktree": active.get("worktree"),
+                        "base_cwd": active.get("base_cwd"),
+                    }
+                ]
+            }
         if url.endswith("/runs?limit=20"):
             return history
         if url.endswith("/persona"):
@@ -745,6 +946,10 @@ def test_checkpoint_carries_task_files_main_to_worktree_to_main(tmp_path):
 
     services._get_json = get_json
     services._post_json = post_json
+    services._record_checkout_stream_snapshot = (
+        notifier._record_checkout_stream_snapshot
+    )
+    services._container_id_for = lambda _cwd: "container-1"
     worker = _checkpoint_worker(
         disabled=True, worktree=None, branch=None, task_worktree=False
     )
@@ -801,7 +1006,12 @@ def test_checkpoint_toggle_round_trip_reuses_preserved_task_worktree(tmp_path):
         main_worker,
         live,
         True,
-        _real_checkpoint_services(disabled=False, spawned=spawned),
+        _real_checkpoint_services(
+            disabled=False,
+            spawned=spawned,
+            active_cwd=main,
+            active_run_id=main_worker["run_id"],
+        ),
     )
 
     assert spawned == [worktree]
@@ -816,16 +1026,25 @@ def test_checkpoint_repeated_toggle_after_initial_clean_handoff(tmp_path):
         str(main), "builder", "task-1"
     )
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is True
     main_file = main / "wip.txt"
     main_file.write_text("first main edit\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "legacy-unscoped", run_id="main-run-1"
+    ).ok
 
-    assert notifier._handoff_worktree_changes(str(main), worktree) is True
+    assert notifier._handoff_worktree_changes(
+        str(main), worktree, snapshot_run_id="main-run-1"
+    ) is True
     task_file = pathlib.Path(worktree) / "wip.txt"
     assert task_file.read_text() == "first main edit\n"
     task_file.write_text("later task edit\n")
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is True
     assert main_file.read_text() == "later task edit\n"
 
 
@@ -860,7 +1079,12 @@ def test_checkpoint_toggle_round_trip_keeps_main_checkout_deletion(tmp_path):
         main_worker,
         live,
         True,
-        _real_checkpoint_services(disabled=False, spawned=spawned),
+        _real_checkpoint_services(
+            disabled=False,
+            spawned=spawned,
+            active_cwd=main,
+            active_run_id=main_worker["run_id"],
+        ),
     )
 
     assert spawned == [worktree]
@@ -901,7 +1125,12 @@ def test_checkpoint_toggle_round_trip_replaces_old_task_files(tmp_path):
         main_worker,
         live,
         True,
-        _real_checkpoint_services(disabled=False, spawned=spawned),
+        _real_checkpoint_services(
+            disabled=False,
+            spawned=spawned,
+            active_cwd=main,
+            active_run_id=main_worker["run_id"],
+        ),
     )
 
     destination = pathlib.Path(worktree)
@@ -922,7 +1151,9 @@ def test_handoff_does_not_delete_unknown_destination_work(tmp_path):
     human_file = main / "human-work.txt"
     human_file.write_text("independent main checkout work\n")
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is False
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is False
     assert task_file.read_text() == "agent work\n"
     assert human_file.read_text() == "independent main checkout work\n"
     assert not (main / "task-work.txt").exists()
@@ -938,10 +1169,14 @@ def test_handoff_does_not_claim_unknown_identical_main_checkout(tmp_path):
     main_file.write_text("independently created\n")
     task_file.write_text("independently created\n")
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is True
     task_file.write_text("later task edit\n")
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is False
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is False
     assert main_file.read_text() == "independently created\n"
     assert task_file.read_text() == "later task edit\n"
 
@@ -963,7 +1198,9 @@ def test_handoff_does_not_overwrite_unknown_ignored_destination(tmp_path):
         ["diff", "--cached", "--binary"], cwd=str(main)
     )[1]
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is False
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is False
     assert source_file.read_text() == "SOURCE=worker\n"
     assert destination_file.read_text() == "SOURCE=human\n"
     assert (
@@ -981,13 +1218,20 @@ def test_round_trip_preserves_new_independent_destination_work(tmp_path):
     old_task_file = destination / "old-task.txt"
     old_task_file.write_text("old task work\n")
 
-    assert notifier._handoff_worktree_changes(worktree, str(main)) is True
+    assert notifier._handoff_worktree_changes(
+        worktree, str(main), source_owner_verified=True
+    ) is True
     (main / "old-task.txt").unlink()
     (main / "new-task.txt").write_text("replacement task work\n")
     independent_file = destination / "human-work.txt"
     independent_file.write_text("independent destination work\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "legacy-unscoped", run_id="main-run-1"
+    ).ok
 
-    assert notifier._handoff_worktree_changes(str(main), worktree) is True
+    assert notifier._handoff_worktree_changes(
+        str(main), worktree, snapshot_run_id="main-run-1"
+    ) is True
     assert not old_task_file.exists()
     assert (destination / "new-task.txt").read_text() == "replacement task work\n"
     assert independent_file.read_text() == "independent destination work\n"
@@ -1007,6 +1251,7 @@ def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
     assert notifier._run_git(["commit", "-m", "checkpoint"], cwd=worktree)[0] == 0
 
     previous = {
+        "run_id": "worktree-run-1",
         "task_id": "task-1",
         "worktree": worktree,
         "base_cwd": str(main),
@@ -1026,7 +1271,11 @@ def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
     assert main_file.read_text() == "saved by first task wake\n"
 
     main_file.write_text("edited by main-checkout wake\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "task:task-1", run_id="main-run-1"
+    ).ok
     previous = {
+        "run_id": "main-run-1",
         "task_id": "task-1",
         "worktree": None,
         "base_cwd": str(main),
@@ -1042,6 +1291,7 @@ def test_ordinary_task_wakes_carry_checkpointed_state_across_repeated_toggles(
 
     task_file.write_text("edited by later worktree wake\n")
     previous = {
+        "run_id": "worktree-run-2",
         "task_id": "task-1",
         "worktree": worktree,
         "base_cwd": str(main),
@@ -1080,6 +1330,9 @@ async def test_ordinary_wake_carries_task_files_main_to_worktree_to_main(
         },
     )
     assert started.status_code == 201, started.text
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), f"task:{task['id']}", run_id=started.json()["run_id"]
+    ).ok
     history = (await client.get(f"/api/agents/{agent['agent_id']}/runs")).json()
     assert history["runs"][0]["lane"] == "work"
 
@@ -1183,7 +1436,9 @@ def test_ordinary_task_wake_handoff_failure_stops_before_spawn(monkeypatch):
     posts = []
     spawned = []
     monkeypatch.setattr(
-        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(False),
     )
 
     def post_json(url, body):
@@ -1236,6 +1491,65 @@ def test_ordinary_task_wake_handoff_failure_stops_before_spawn(monkeypatch):
     )
 
 
+def test_ordinary_task_wake_reports_the_source_owner_conflict(monkeypatch):
+    notifier_wake_worker.reset_notice_state()
+    posts = []
+    monkeypatch.setattr(
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(
+            False,
+            code="foreign_source_owner",
+            guidance=(
+                "The foreign ownership proof and source checkout were preserved; "
+                "ask the project owner which saved state to resume."
+            ),
+        ),
+    )
+
+    def post_json(url, body):
+        posts.append((url, body))
+        return {"claimed": True} if url.endswith("/wake-claim") else {}
+
+    services = SimpleNamespace(
+        HARD_CAP_MIN_SECS=1200,
+        WAKE_LEASE_TTL_SECS=120,
+        pathlib=pathlib,
+        _post_json=post_json,
+        _build_persona=lambda *args, **kwargs: "persona",
+        _provision_task_worktree=lambda *args: ("/project/task", "orcha/task"),
+        _provision_worktree=lambda *args: ("/project/agent", "orcha/agent"),
+        spawn_headless=lambda *args, **kwargs: pytest.fail("must not spawn"),
+    )
+    candidate = {
+        "agent_id": "agent-1",
+        "alias": "builder",
+        "headless_cwd": "/project/main",
+        "context_task_id": "task-1",
+        "pending_events": 1,
+        "worktrees_disabled": False,
+    }
+
+    result = notifier_wake_worker.spawn(
+        "http://orcha",
+        candidate,
+        prompt="continue",
+        event="task_message",
+        dry_run=False,
+        quiet=True,
+        lease_ttl=120,
+        live_workers={},
+        services=services,
+    )
+
+    assert result["handoff_code"] == "foreign_source_owner"
+    notices = [body["body"] for url, body in posts if "/tasks/" in url]
+    assert len(notices) == 1
+    assert "foreign ownership proof" in notices[0]
+    assert "source checkout" in notices[0]
+    assert "commit/stash" not in notices[0]
+
+
 def test_resident_toggle_carries_preserved_worktree_state_to_main(
     monkeypatch, tmp_path
 ):
@@ -1272,11 +1586,34 @@ def test_resident_toggle_carries_preserved_worktree_state_to_main(
         WAKE_LEASE_TTL_SECS=120,
         RUNTIME_CLAUDE="claude",
         _RESIDENT_RESUME_FAILED=set(),
-        _close_resident=lambda *args, **kwargs: None,
+        _close_resident=lambda *args, **kwargs: True,
         _reap_dead_pid_resident_runs=lambda *args, **kwargs: None,
         _post_json=post_json,
         _get_json=lambda url: (
-            {"turns": []} if url.endswith("conversation?limit=200") else None
+            {"turns": []}
+            if url.endswith("conversation?limit=200")
+            else (
+                {
+                    "query_complete": True,
+                    "runs": [
+                        {
+                            "run_id": "run-1",
+                            "agent_id": "agent-1",
+                            "conversation_id": "conv-1",
+                            "wake_kind": "resident",
+                            "lane": "conversation",
+                            "worktree": worktree,
+                            "base_cwd": str(main),
+                        }
+                    ],
+                }
+                if "/api/agents/agent-1/runs?" in url
+                else (
+                    {"runs": []}
+                    if url.endswith("/running-runs?include_retired=true")
+                    else None
+                )
+            )
         ),
         _build_persona=lambda *args, **kwargs: "persona",
         _format_history=None,
@@ -1286,6 +1623,16 @@ def test_resident_toggle_carries_preserved_worktree_state_to_main(
             "disabled routing must not provision"
         ),
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_worktree_changes_result=notifier._handoff_worktree_changes_result,
+        _handoff_branch_changes=notifier._handoff_branch_changes,
+        _handoff_branch_changes_result=notifier._handoff_branch_changes_result,
+        _retirement_record_status=notifier._retirement_record_status,
+        _checkout_activity_status=notifier._checkout_activity_status,
+        _reserve_checkout_activity=notifier._reserve_checkout_activity,
+        _mark_checkout_activity_routed=notifier._mark_checkout_activity_routed,
+        _bind_checkout_activity=notifier._bind_checkout_activity,
+        _release_checkout_activity=notifier._release_checkout_activity,
+        _container_id_for=lambda _cwd: "container-1",
         _mint_embodiment_token=lambda *args: "token",
         spawn_resident=lambda cwd, **kwargs: (
             spawned.append(cwd) or (True, "command", _Proc())
@@ -1381,6 +1728,9 @@ async def test_live_terminal_carries_state_main_to_worktree_to_main(
     assert spawned == [str(main)]
     main_file = main / "terminal.txt"
     main_file.write_text("edited in main terminal\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "terminal:agent-1", run_id=first["run_id"]
+    ).ok
 
     second = await terminal_bridge_connection._start_session(
         Bridge(),
@@ -1537,11 +1887,17 @@ def test_handoff_ownership_prevents_one_task_replacing_another(tmp_path):
     (pathlib.Path(second_worktree) / "second.txt").write_text("second task\n")
 
     assert notifier._handoff_worktree_changes(
-        first_worktree, str(main), owner_key="task:task-1"
+        first_worktree,
+        str(main),
+        owner_key="task:task-1",
+        source_owner_verified=True,
     )
     assert (
         notifier._handoff_worktree_changes(
-            second_worktree, str(main), owner_key="task:task-2"
+            second_worktree,
+            str(main),
+            owner_key="task:task-2",
+            source_owner_verified=True,
         )
         is False
     )
@@ -1549,6 +1905,119 @@ def test_handoff_ownership_prevents_one_task_replacing_another(tmp_path):
     assert (main / "first.txt").read_text() == "first task\n"
     assert not (main / "second.txt").exists()
     assert (pathlib.Path(second_worktree) / "second.txt").read_text() == "second task\n"
+
+
+def test_foreign_shared_owner_uses_exact_stream_snapshot_after_restart(tmp_path):
+    """A second shared-main stream can return without replacing the first proof."""
+    main = _checkpoint_repo(tmp_path)
+    (main / ".gitignore").write_text(".env\n")
+    assert notifier._run_git(["add", ".gitignore"], cwd=main)[0] == 0
+    assert notifier._run_git(["commit", "-m", "ignore local state"], cwd=main)[0] == 0
+    assert notifier._run_git(["push", "origin", "main"], cwd=main)[0] == 0
+    first, _ = notifier._provision_task_worktree(str(main), "builder", "task-a")
+    second, _ = notifier._provision_task_worktree(str(main), "builder", "task-b")
+
+    (pathlib.Path(first) / "first.txt").write_text("first stream\n")
+    assert notifier._handoff_worktree_changes(
+        first,
+        str(main),
+        owner_key="task:task-a",
+        source_owner_verified=True,
+    )
+    owner_record = notifier._handoff_record_bytes(str(main))
+
+    (main / "second.txt").write_text("second stream\n")
+    (main / ".env").write_bytes(b"SECOND=\xff\n")
+    snapshot = notifier._record_checkout_stream_snapshot(
+        str(main), "task:task-b", run_id="run-b"
+    )
+    assert snapshot.ok is True
+
+    # The durable sidecar, not in-memory daemon state, must prove the handoff.
+    result = notifier._handoff_worktree_changes_result(
+        str(main), second, owner_key="task:task-b", source_owner_verified=True,
+        snapshot_run_id="run-b",
+    )
+    assert result.ok is True
+    assert result.code == "transferred"
+    assert (pathlib.Path(second) / "first.txt").read_text() == "first stream\n"
+    assert (pathlib.Path(second) / "second.txt").read_text() == "second stream\n"
+    assert (pathlib.Path(second) / ".env").read_bytes() == b"SECOND=\xff\n"
+    assert notifier._handoff_record_bytes(str(main)) == owner_record
+
+
+def test_foreign_shared_owner_snapshot_stays_exact_after_source_moves(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    first, _ = notifier._provision_task_worktree(str(main), "builder", "task-a")
+    second, _ = notifier._provision_task_worktree(str(main), "builder", "task-b")
+    (pathlib.Path(first) / "first.txt").write_text("first stream\n")
+    assert notifier._handoff_worktree_changes(
+        first,
+        str(main),
+        owner_key="task:task-a",
+        source_owner_verified=True,
+    )
+    (main / "second.txt").write_text("snapshotted\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "task:task-b", run_id="run-b"
+    ).ok
+    (main / "second.txt").write_text("changed after snapshot\n")
+    before_destination = notifier._run_git(
+        ["status", "--porcelain=v1", "--ignored"], cwd=second
+    )[1]
+    owner_record = notifier._handoff_record_bytes(str(main))
+
+    result = notifier._handoff_worktree_changes_result(
+        str(main), second, owner_key="task:task-b", source_owner_verified=True,
+        snapshot_run_id="run-b",
+    )
+
+    assert result.ok is True
+    assert result.code == "transferred"
+    assert notifier._handoff_record_bytes(str(main)) == owner_record
+    assert before_destination == ""
+    assert (pathlib.Path(second) / "second.txt").read_text() == "snapshotted\n"
+
+
+def test_checkout_handoff_preflight_is_non_mutating(tmp_path):
+    main = _checkpoint_repo(tmp_path)
+    first, _ = notifier._provision_task_worktree(str(main), "builder", "task-a")
+    second, _ = notifier._provision_task_worktree(str(main), "builder", "task-b")
+    (pathlib.Path(first) / "first.txt").write_text("first stream\n")
+    assert notifier._handoff_worktree_changes(
+        first,
+        str(main),
+        owner_key="task:task-a",
+        source_owner_verified=True,
+    )
+    (main / "second.txt").write_text("second stream\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "task:task-b", run_id="run-b"
+    ).ok
+    source_record = notifier._handoff_record_bytes(str(main))
+    destination_record = notifier._handoff_record_bytes(second)
+    before_source = notifier._run_git(
+        ["status", "--porcelain=v1", "--ignored"], cwd=main
+    )[1]
+    before_destination = notifier._run_git(
+        ["status", "--porcelain=v1", "--ignored"], cwd=second
+    )[1]
+
+    result = notifier._inspect_worktree_handoff(
+        str(main), second, owner_key="task:task-b", snapshot_run_id="run-b"
+    )
+
+    assert result.ok is True
+    assert result.code == "ready_from_stream_snapshot"
+    assert result.mutated is False
+    assert notifier._handoff_record_bytes(str(main)) == source_record
+    assert notifier._handoff_record_bytes(second) == destination_record
+    assert notifier._run_git(
+        ["status", "--porcelain=v1", "--ignored"], cwd=main
+    )[1] == before_source
+    assert notifier._run_git(
+        ["status", "--porcelain=v1", "--ignored"], cwd=second
+    )[1] == before_destination
 
 
 def test_rejected_handoff_does_not_change_destination_index(tmp_path):
@@ -1581,6 +2050,9 @@ def test_rejected_handoff_does_not_change_destination_index(tmp_path):
 def test_taskless_prompt_wake_carries_main_state_back_to_worktree(tmp_path):
     main = _checkpoint_repo(tmp_path)
     (main / "prompt-work.txt").write_text("saved by direct prompt\n")
+    assert notifier._record_checkout_stream_snapshot(
+        str(main), "work:agent-1:taskless", run_id="run-1"
+    ).ok
     spawned = []
     posts = []
 
@@ -1695,6 +2167,7 @@ def test_taskless_prompt_success_preserves_ignored_files_for_later_switch_to_mai
         _provision_worktree=notifier._provision_worktree,
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
         _handoff_branch_changes=notifier._handoff_branch_changes,
+        _retirement_record_status=notifier._retirement_record_status,
         _mint_embodiment_token=lambda *args: "token",
         _revoke_or_defer=lambda *args: None,
         _teardown_worktree=notifier._teardown_worktree,
@@ -1836,6 +2309,11 @@ async def test_direct_prompt_with_active_task_remains_taskless_and_carries_files
         json={"status": "exited"},
     )
     assert finished.status_code == 200, finished.text
+    assert notifier._record_checkout_stream_snapshot(
+        str(main),
+        f"work:{agent['agent_id']}:taskless",
+        run_id=started.json()["run_id"],
+    ).ok
     history = (await client.get(f"/api/agents/{agent['agent_id']}/runs")).json()
     assert history["runs"][0]["task_id"] is None
 
@@ -1860,6 +2338,7 @@ async def test_direct_prompt_with_active_task_remains_taskless_and_carries_files
         ),
         _provision_worktree=notifier._provision_worktree,
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_worktree_changes_result=notifier._handoff_worktree_changes_result,
         _handoff_branch_changes=notifier._handoff_branch_changes,
         _mint_embodiment_token=lambda *args: "token",
         _revoke_or_defer=lambda *args: None,
@@ -1897,7 +2376,9 @@ def test_taskless_prompt_handoff_failure_stops_without_invalid_task_post(monkeyp
     posts = []
     spawned = []
     monkeypatch.setattr(
-        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(False),
     )
 
     def post_json(url, body):
@@ -1914,6 +2395,7 @@ def test_taskless_prompt_handoff_failure_stops_without_invalid_task_post(monkeyp
             "taskless prompt must not provision a task worktree"
         ),
         _provision_worktree=lambda *args: ("/project/agent", "orcha/agent"),
+        _safe_teardown_worktree=lambda *args: "removed",
         spawn_headless=lambda *args, **kwargs: spawned.append(args),
     )
     candidate = {
@@ -1946,6 +2428,45 @@ def test_taskless_prompt_handoff_failure_stops_without_invalid_task_post(monkeyp
         and body["release_lease"] is True
         for url, body in posts
     )
+
+
+# --- Run-history provenance must stay narrower than progress feeds ---------------
+
+
+def test_previous_run_rejects_another_tasks_primary_checkout_pin():
+    requested_urls = []
+    services = SimpleNamespace(
+        _get_json=lambda url: requested_urls.append(url)
+        or {
+            "query_complete": True,
+            "runs": [
+                {
+                    "run_id": "wrong-run",
+                    "task_id": "task-other",
+                    "worktree": "/project/wrong-task",
+                    "lane": "work",
+                },
+                {
+                    "run_id": "right-run",
+                    "task_id": "task-requested",
+                    "worktree": "/project/right-task",
+                    "lane": "work",
+                },
+            ],
+        }
+    )
+
+    run = previous_run(
+        "http://orcha",
+        "agent-1",
+        services,
+        task_id="task-requested",
+        lane="work",
+    )
+
+    assert run["run_id"] == "right-run"
+    assert "task_id=task-requested" in requested_urls[0]
+    assert "provenance_only=true" in requested_urls[0]
 
 
 # --- Stale checkout records must not block wakes forever -------------------------
@@ -1994,6 +2515,7 @@ def test_wake_carries_nothing_when_recorded_branch_was_already_deleted(
         _run_git=notifier._run_git,
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
         _handoff_branch_changes=notifier._handoff_branch_changes,
+        _retirement_record_status=notifier._retirement_record_status,
     )
     destination = (
         str(main)
@@ -2062,11 +2584,32 @@ def test_branch_recovery_still_runs_when_existence_is_unknowable():
     assert calls == [("/project/main", "orcha/task-builder-task-1", "/project/main")]
 
 
+@pytest.mark.parametrize(
+    ("return_code", "expected"),
+    [(0, True), (1, False), (128, None)],
+)
+def test_retained_branch_inspection_distinguishes_missing_from_git_failure(
+    return_code, expected
+):
+    services = SimpleNamespace(
+        _run_git=lambda *args, **kwargs: (return_code, "inspection result")
+    )
+
+    assert (
+        retained_branch_exists(
+            services, "/project/main", "orcha/task-builder-task-1"
+        )
+        is expected
+    )
+
+
 def test_handoff_failure_notice_is_not_repeated_every_tick(monkeypatch):
     notifier_wake_worker.reset_notice_state()
     posts = []
     monkeypatch.setattr(
-        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(False),
     )
 
     def post_json(url, body):
@@ -2236,7 +2779,9 @@ def test_shared_checkout_siblings_only_count_other_tasks_in_main():
 def test_shared_checkout_advisory_posted_once_and_wake_proceeds(monkeypatch):
     notifier_wake_worker.reset_notice_state()
     monkeypatch.setattr(
-        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: True
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(True),
     )
     posts, spawned = [], []
     services = _shared_checkout_services(posts, spawned)
@@ -2280,7 +2825,9 @@ def test_shared_checkout_advisory_posted_once_and_wake_proceeds(monkeypatch):
 def test_no_advisory_when_alone_or_when_worktrees_are_on(monkeypatch):
     notifier_wake_worker.reset_notice_state()
     monkeypatch.setattr(
-        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: True
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(True),
     )
     posts, spawned = [], []
     services = _shared_checkout_services(posts, spawned)
@@ -2361,6 +2908,15 @@ def _consent_services(main, history, turns, spawned, posts):
             return {"turn": {"seq": 99}}
         return {}
 
+    def get_json(url):
+        if url.endswith("conversation?limit=200"):
+            return {"turns": turns}
+        if url.endswith("/running-runs?include_retired=true"):
+            # The prior resident is stopped; this endpoint contains only live
+            # checkout users, not the historical row used for provenance.
+            return {"runs": []}
+        return {**history, "query_complete": True}
+
     return SimpleNamespace(
         WAKE_LEASE_TTL_SECS=120,
         RUNTIME_CLAUDE="claude",
@@ -2368,16 +2924,22 @@ def _consent_services(main, history, turns, spawned, posts):
         _close_resident=lambda *args, **kwargs: None,
         _reap_dead_pid_resident_runs=lambda *args, **kwargs: None,
         _post_json=post_json,
-        _get_json=lambda url: (
-            {"turns": turns} if url.endswith("conversation?limit=200") else history
-        ),
+        _get_json=get_json,
         _build_persona=lambda *args, **kwargs: "persona",
         _format_history=None,
         _resident_log_path=lambda *args: None,
         _is_git_repo=lambda _cwd: True,
         _provision_resident_worktree=lambda *args: pytest.fail("disabled routing"),
         _handoff_worktree_changes=notifier._handoff_worktree_changes,
+        _handoff_worktree_changes_result=notifier._handoff_worktree_changes_result,
         _handoff_branch_changes=notifier._handoff_branch_changes,
+        _retirement_record_status=notifier._retirement_record_status,
+        _checkout_activity_status=notifier._checkout_activity_status,
+        _reserve_checkout_activity=notifier._reserve_checkout_activity,
+        _mark_checkout_activity_routed=notifier._mark_checkout_activity_routed,
+        _bind_checkout_activity=notifier._bind_checkout_activity,
+        _release_checkout_activity=notifier._release_checkout_activity,
+        _container_id_for=lambda _cwd: "container-1",
         _run_git=notifier._run_git,
         _discard_worktree=notifier._discard_worktree,
         _mint_embodiment_token=lambda *args: "token",
@@ -2720,11 +3282,13 @@ def test_wake_tick_recovers_from_a_crashing_candidate(monkeypatch, capsys):
     assert "UnicodeDecodeError" in capsys.readouterr().err or True
 
 
-def test_worktrees_disabled_starts_in_main_when_carry_is_refused(monkeypatch):
-    """A shared main checkout with unrelated changes must not block wakes forever."""
+def test_worktrees_disabled_pauses_when_carry_is_refused(monkeypatch):
+    """An unproven shared-main handoff fails closed without starting a worker."""
     notifier_wake_worker.reset_notice_state()
     monkeypatch.setattr(
-        notifier_wake_worker, "carry_previous_checkout", lambda *args, **kwargs: False
+        notifier_wake_worker,
+        "prepare_checkout_start",
+        lambda *args, **kwargs: _checkout_preparation(False),
     )
     posts, spawned = [], []
     services = _shared_checkout_services(posts, spawned)
@@ -2751,17 +3315,14 @@ def test_worktrees_disabled_starts_in_main_when_carry_is_refused(monkeypatch):
             live_workers={},
             services=services,
         )
-        assert result["sent"] is True
-        assert "handoff_failed" not in result
+        assert result["sent"] is False
+        assert result["handoff_failed"] is True
 
-    assert spawned == ["/project/main", "/project/main"]
-    notices = [
-        body for url, body in posts
-        if url.endswith("/tasks/task-1/messages") and "without carrying" in body["body"]
-    ]
+    assert spawned == []
+    notices = [body for url, body in posts if url.endswith("/tasks/task-1/messages")]
     assert len(notices) == 1
-    assert "/project/.orcha-worktrees/task-1" in notices[0]["body"]
-    assert not any(
+    assert "no worker was started" in notices[0]["body"]
+    assert any(
         url.endswith("/wake-ack") and body.get("kind") == "worker_routing_handoff_failed"
         for url, body in posts
     )
