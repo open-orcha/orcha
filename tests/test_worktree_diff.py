@@ -284,12 +284,17 @@ def _wire_spawn(monkeypatch, posts, run_resp):
 
 def test_event_wake_records_run_and_logs_failure(monkeypatch, capsys):
     """ISS-8.2: a DAEMON-LOOP event-wake (no auto_start) records a worker_run; a failed
-    POST /runs is logged, not swallowed."""
+    POST /runs is logged, not swallowed — and the unrecorded worker is stopped rather than left
+    writing invisibly to every live-checkout guard."""
     posts = []
     _wire_spawn(monkeypatch, posts, run_resp=None)   # /runs fails → returns None
-    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=False, live_workers={})
+    killed = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc))
+    live = {}
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=False, live_workers=live)
     assert any(u.endswith("/runs") for u in posts)               # recorded on event-wake
-    assert "worker_run NOT recorded" in capsys.readouterr().err  # failure logged
+    assert "durable run record could not be created" in capsys.readouterr().err  # failure logged
+    assert len(killed) == 1 and live == {}                       # unseen worker stopped, not tracked
 
 
 def test_once_path_does_not_create_dangling_run(monkeypatch):

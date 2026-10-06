@@ -97,8 +97,11 @@ def _success_log(tmp_path, name="ok.log"):
 
 
 def _wire(monkeypatch, posts, *, digest=None):
+    # A respawned worker must get a durable run row (the server answers POST /runs with an id);
+    # without one the notifier now stops the unseen writer instead of tracking it.
     monkeypatch.setattr(notifier, "_post_json",
-                        lambda url, body, **k: posts.append((url, body)) or {})
+                        lambda url, body, **k: posts.append((url, body))
+                        or ({"run_id": "RUN-NEW"} if url.endswith("/runs") else {}))
     monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: {"digest": digest}))
 
 
@@ -613,6 +616,8 @@ async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
             return {"claimed": True}
         if "reachability" in url:
             return {"headless_cwd": str(work)}   # spawnable in the throwaway repo THIS tick
+        if url.endswith("/runs"):
+            return {"run_id": "RUN-TICK"}         # durable run row (else the writer is stopped)
         return {}
 
     monkeypatch.setattr(notifier, "_get_json", _get)
