@@ -1,119 +1,379 @@
-import type { ProgressEvent } from '../../../../shared/types'
-import { Card } from '../../ui/Card'
-import { Button } from '../../ui/Button'
-import ShowcaseCarousel from '../showcase/ShowcaseCarousel'
-import { Check, Loader2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { Check, ChevronDown, ChevronRight, Copy, X } from 'lucide-react'
+import type { ProgressEvent, ProvisionMode, ProvisionStep as StepId } from '../../../../shared/types'
+import type { ProvisionFailure } from '../provisionError'
+import { InlineText, Notice, ObButton, StatusGlyph, StepFooter, StepHeader, type GlyphState } from '../ui'
+import { formatElapsed, useElapsed } from '../motion'
 
-const STEP_LABELS: Record<string, string> = {
-  'clone-repo': 'Clone repository',
-  'render-compose': 'Render compose file',
-  'copy-templates': 'Copy templates',
-  'compose-up': 'Start containers',
-  'wait-portal': 'Wait for portal',
-  'create-container': 'Create container',
-  'register-human': 'Register you',
-  'start-daemons': 'Start the agent worker'
+export type ProvisionStatus = 'idle' | 'running' | 'done' | 'failed'
+
+const STEPS: { id: StepId; label: string }[] = [
+  { id: 'clone-repo', label: 'Clone the repository' },
+  { id: 'preflight', label: 'Check this Mac' },
+  { id: 'migrate', label: 'Move the project off Docker' },
+  { id: 'ports', label: 'Pick free ports' },
+  { id: 'config', label: 'Write project settings' },
+  { id: 'service', label: 'Set Orcha to start at login' },
+  { id: 'start', label: 'Start Orcha in the background' },
+  { id: 'wait-portal', label: 'Wait for the portal' },
+  { id: 'create-container', label: 'Create the project' },
+  { id: 'register-human', label: 'Register you' },
+  { id: 'start-daemons', label: 'Start the agent worker' }
+]
+
+/** Steps a fresh `orcha init` walks; clone/preflight rows only appear when they apply. */
+const CORE_INIT = new Set<StepId>([
+  'ports',
+  'config',
+  'service',
+  'start',
+  'wait-portal',
+  'create-container',
+  'register-human',
+  'start-daemons'
+])
+
+/** Reconnecting an existing project is one `orcha up`; moving one off Docker is one
+ *  `orcha migrate-runtime` (GH #258 D2). */
+const CORE: Record<ProvisionMode, Set<StepId>> = {
+  init: CORE_INIT,
+  upgrade: new Set<StepId>(['start', 'start-daemons']),
+  migrate: new Set<StepId>(['migrate', 'start-daemons'])
 }
 
+const ASIDE: Record<GlyphState, string> = {
+  todo: '',
+  running: 'Running…',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+  warning: ''
+}
+
+/** Create: a live launch view for provisioning (and cloning). A status orb, the stage in
+ *  progress, elapsed time and an overall progress bar sit over a slow, subtle light field;
+ *  below, a stepped timeline of the REAL provisioning stages (driven by the progress stream)
+ *  fills its rail as each stage lands, with per-stage durations. Completion gets one calm
+ *  moment — the orb resolves into a check with a single ripple.
+ *
+ *  Honest by design: the live log on demand, and — when it fails — a readable reason, the
+ *  raw details on demand, Try again and Back. Never a dead end, and the title always matches
+ *  what actually happened. */
 export default function ProvisionStep({
+  projectName,
   events,
-  done,
-  error,
+  status,
+  failure,
   warnings = [],
   gitTip = null,
   withClone = false,
-  onContinue
+  mode = 'init',
+  onContinue,
+  onRetry,
+  onBack
 }: {
+  projectName: string
   events: ProgressEvent[]
-  done: boolean
-  error: string | null
+  status: ProvisionStatus
+  failure: ProvisionFailure | null
   warnings?: string[]
-  /** One-line note shown in the success state when the provisioned folder isn't a git
-   *  repo yet. Orcha never runs git itself — this is informational only. */
   gitTip?: string | null
-  /** True for the "From GitHub" source: shows the "Clone repository" row ahead of the
-   *  usual provision steps. Local-folder provisioning never emits a clone-repo event, so
-   *  this stays false there and the row is omitted rather than sitting permanently hollow. */
   withClone?: boolean
-  onContinue?: () => void
+  mode?: ProvisionMode
+  onContinue: () => void
+  onRetry: () => void
+  onBack: () => void
 }) {
-  // Latest status per step.
-  const status = new Map<string, string>()
+  const stepState = new Map<StepId, GlyphState>()
   const logs: string[] = []
   for (const e of events) {
-    if (e.status === 'log' && 'line' in e) logs.push(e.line)
-    else status.set(e.step, e.status)
+    if (e.status === 'log') logs.push(e.line)
+    else
+      stepState.set(
+        e.step,
+        e.status === 'ok' ? 'done' : e.status === 'fail' ? 'failed' : e.status === 'skip' ? 'skipped' : 'running'
+      )
   }
-  const visibleSteps = Object.entries(STEP_LABELS).filter(([step]) => withClone || step !== 'clone-repo')
+  // A step still "running" when the attempt failed is the one that failed (the engine
+  // doesn't always emit an explicit fail event before rejecting).
+  if (status === 'failed') {
+    for (const [k, v] of stepState) if (v === 'running') stepState.set(k, 'failed')
+    if (failure?.step && !stepState.has(failure.step)) stepState.set(failure.step, 'failed')
+  }
+  const visible = STEPS.filter((s) => CORE[mode].has(s.id) || stepState.has(s.id) || (s.id === 'clone-repo' && withClone))
+  const finished = visible.filter((s) => {
+    const st = stepState.get(s.id)
+    return st === 'done' || st === 'skipped'
+  }).length
+  const current = visible.find((s) => stepState.get(s.id) === 'running')
+
+  // When each stage started / finished, as seen by this view (events carry no timestamps).
+  const [timing, setTiming] = useState<Map<StepId, { start?: number; end?: number }>>(new Map())
+  useEffect(() => {
+    if (events.length === 0) {
+      setTiming((t) => (t.size ? new Map() : t))
+      return
+    }
+    setTiming((prev) => {
+      const next = new Map(prev)
+      const now = Date.now()
+      let changed = false
+      for (const e of events) {
+        if (e.status === 'log') continue
+        const t = next.get(e.step) ?? {}
+        if (e.status === 'start' && t.start === undefined) {
+          next.set(e.step, { ...t, start: now })
+          changed = true
+        } else if (e.status !== 'start' && t.end === undefined) {
+          next.set(e.step, { ...t, end: now })
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [events])
+
+  // Elapsed time for the current attempt (restarts on Try again).
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  useEffect(() => {
+    if (status === 'running') setStartedAt(Date.now())
+  }, [status])
+  const elapsed = useElapsed(startedAt, status === 'running')
+
+  const [showLog, setShowLog] = useState(false)
+  const logOpen = showLog || status === 'failed'
+  const logRef = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [logOpen, logs.length])
+  const [showDetail, setShowDetail] = useState(false)
+  const [hideSteps, setHideSteps] = useState(false)
+  const notes = warnings.length + (gitTip ? 1 : 0)
+  // Once done, the timeline stays in view for the completion moment; when there is
+  // something to read (warnings / the git tip) it folds away so that comes first.
+  const stepsOpen = status !== 'done' || (notes === 0 ? !hideSteps : hideSteps)
+
+  const title =
+    status === 'failed'
+      ? `Couldn’t create ${projectName}`
+      : status === 'done'
+        ? `${projectName} is ready`
+        : `Creating ${projectName}`
+  const subtitle =
+    status === 'failed'
+      ? 'Nothing you entered is lost. Fix the problem below, then try again — or go back and change your choices.'
+      : status === 'done'
+        ? notes === 0
+          ? 'The project is running. Next up: your agents.'
+          : `The project is running. ${notes > 1 ? 'A few things' : 'One thing'} to know before you add agents:`
+        : `Step ${Math.min(finished + 1, visible.length)} of ${visible.length}${current ? ` · ${current.label}` : ''}. This usually takes a minute or two.`
+
+  const progress = status === 'done' ? 1 : visible.length ? finished / visible.length : 0
+  const failedStep = visible.find((s) => stepState.get(s.id) === 'failed')
+  const stageLabel =
+    status === 'done'
+      ? 'Everything is up'
+      : status === 'failed'
+        ? (failedStep?.label ?? 'Stopped')
+        : (current?.label ?? (finished === 0 ? 'Getting ready' : 'Finishing up'))
+  const lastLog = logs.length ? logs[logs.length - 1].trim() : ''
+
   return (
-    <div className="onb-two-col grid grid-cols-1 items-center gap-10 lg:grid-cols-2">
-      <div className="flex flex-col gap-5 animate-slide-in">
-        <div className="flex flex-col gap-1">
-          <span className="onb-eyebrow">Create</span>
-          <h2 className="onb-title text-2xl">{done ? 'Project ready' : 'Creating your project…'}</h2>
+    <>
+      <StepHeader title={title} subtitle={subtitle} />
+
+      <section className="ob-launch" data-status={status} aria-label="Creation progress">
+        <div className="ob-launch-field" aria-hidden="true">
+          <span className="ob-launch-glow" data-n="1" />
+          <span className="ob-launch-glow" data-n="2" />
         </div>
-        <Card className="onb-checklist flex flex-col gap-3 p-5">
-          {visibleSteps.map(([step, label]) => {
-            const s = status.get(step)
+        <div className="ob-launch-head">
+          <span className="ob-orb" aria-hidden="true">
+            <span className="ob-orb-ring" />
+            <span className="ob-orb-arc" />
+            {status === 'done' && (
+              <>
+                <span className="ob-orb-ripple" />
+                <span className="ob-orb-core ob-pop">
+                  <Check className="h-4 w-4" strokeWidth={2.75} />
+                </span>
+              </>
+            )}
+            {status === 'failed' && (
+              <span className="ob-orb-core ob-pop" data-tone="danger">
+                <X className="h-4 w-4" strokeWidth={2.75} />
+              </span>
+            )}
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span key={stageLabel} className="ob-launch-stage ob-swap">
+              {stageLabel}
+            </span>
+            <span className="ob-meta truncate" title={status === 'running' ? lastLog : undefined}>
+              {status === 'running'
+                ? lastLog || `${finished} of ${visible.length} stages done`
+                : status === 'done'
+                  ? `Up and running in ${formatElapsed(elapsed)}`
+                  : `${finished} of ${visible.length} stages finished`}
+            </span>
+          </span>
+          <span className="ob-launch-time" aria-label={`Elapsed ${formatElapsed(elapsed)}`}>
+            {formatElapsed(elapsed)}
+          </span>
+        </div>
+        <div className="ob-launch-bar" aria-hidden="true">
+          <span className="ob-launch-bar-fill" style={{ transform: `scaleX(${progress})` }} />
+        </div>
+      </section>
+
+      {status === 'failed' && failure && (
+        <Notice
+          tone="danger"
+          title={<InlineText text={failure.message} />}
+          action={
+            <div className="flex items-center gap-1.5">
+              <ObButton variant="ghost" onClick={onBack}>
+                Back
+              </ObButton>
+              <ObButton variant="primary" data-onb-primary="true" onClick={onRetry}>
+                Try again
+              </ObButton>
+            </div>
+          }
+        >
+          {(failure.cause || failure.detail) && (
+            <div className="flex flex-col gap-1.5">
+              {failure.cause && (
+                <span className="ob-notice-cause" data-testid="failure-cause">
+                  {failure.cause}
+                </span>
+              )}
+              {failure.detail && (
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    className="ob-disclosure"
+                    aria-expanded={showDetail}
+                    onClick={() => setShowDetail((v) => !v)}
+                  >
+                    {showDetail ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    {showDetail ? 'Hide details' : 'Show details'}
+                  </button>
+                  {showDetail && <pre className="ob-log max-h-40">{failure.detail.slice(-4000)}</pre>}
+                </div>
+              )}
+            </div>
+          )}
+        </Notice>
+      )}
+
+      {status === 'done' && notes > 0 && (
+        <div className="flex flex-col gap-2">
+          {warnings.map((w, i) => (
+            <Notice key={i} tone="warning">
+              <InlineText text={w} />
+            </Notice>
+          ))}
+          {gitTip && (
+            <Notice>
+              <InlineText text={gitTip} />
+            </Notice>
+          )}
+        </div>
+      )}
+
+      {status === 'done' && (
+        <button
+          type="button"
+          className="ob-disclosure"
+          aria-expanded={stepsOpen}
+          onClick={() => setHideSteps((v) => !v)}
+        >
+          {stepsOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          All {visible.length} steps finished
+        </button>
+      )}
+      {stepsOpen && (
+        <div className="ob-timeline" aria-label="Progress" role="list">
+          {visible.map((s, i) => {
+            const st = stepState.get(s.id) ?? 'todo'
+            const t = timing.get(s.id)
+            const took =
+              t?.start !== undefined && t.end !== undefined && (st === 'done' || st === 'failed')
+                ? Math.max(0, Math.round((t.end - t.start) / 1000))
+                : null
+            const next = visible[i + 1]
+            const nextState = next ? (stepState.get(next.id) ?? 'todo') : null
             return (
-              <div key={step} className="flex items-center gap-3 text-[15px]">
-                {s === 'ok' ? (
-                  <span className="onb-check-pop onb-check-badge">
-                    <Check className="h-3.5 w-3.5" />
+              <div
+                key={s.id}
+                role="listitem"
+                className="ob-tl-item"
+                data-state={st}
+                style={{ '--i': i } as CSSProperties}
+              >
+                <span className="ob-tl-node">
+                  <StatusGlyph key={st} state={st} />
+                </span>
+                {next && (
+                  <span
+                    className="ob-tl-rail"
+                    aria-hidden="true"
+                    data-filled={st === 'done' || st === 'skipped'}
+                    data-live={nextState === 'running'}
+                  >
+                    <span className="ob-tl-rail-fill" />
                   </span>
-                ) : s === 'fail' ? (
-                  <X className="h-5 w-5 text-danger" />
-                ) : s === 'start' ? (
-                  <span className="onb-spin flex h-5 w-5 items-center justify-center">
-                    <Loader2 className="h-5 w-5 text-accent" />
-                  </span>
-                ) : (
-                  <span className="h-5 w-5 rounded-full border border-border" />
                 )}
-                <span className={s === 'skip' ? 'text-text/40' : 'text-text/80'}>{label}</span>
+                <span className={`ob-tl-label ${st === 'todo' || st === 'skipped' ? 'text-text-3' : 'text-text'}`}>
+                  {s.label}
+                </span>
+                <span className={`ob-row-aside tabular-nums ${st === 'failed' ? 'text-danger' : ''}`}>
+                  {took !== null && st === 'done' ? `${took}s` : ASIDE[st]}
+                </span>
               </div>
             )
           })}
-        </Card>
-        {error && <Card className="border-danger/40 text-sm text-danger">{error}</Card>}
-        {done && !error && (warnings.length > 0 || gitTip) && (
-          <Card className="flex flex-col gap-3 border-warning/40 text-sm">
-            {warnings.length > 0 && (
-              <>
-                <span className="font-medium">Your project is ready — one thing to know:</span>
-                <ul className="flex flex-col gap-2 text-text/80">
-                  {warnings.map((w, i) => (
-                    <li key={i} className="flex gap-2">
-                      <span aria-hidden>•</span>
-                      <span>{w}</span>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-            {gitTip && <span className="text-text/60">{gitTip}</span>}
-            {onContinue && (
-              <div className="flex justify-end">
-                <Button data-onb-primary="true" onClick={onContinue}>
-                  Continue
-                </Button>
-              </div>
-            )}
-          </Card>
-        )}
-        {logs.length > 0 && (
-          <details className="text-xs text-text/50">
-            <summary className="cursor-pointer">Build log</summary>
-            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-mono">
-              {logs.slice(-200).join('\n')}
-            </pre>
-          </details>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className="hidden lg:block">
-        <ShowcaseCarousel />
-      </div>
-    </div>
+      {logs.length > 0 && (status !== 'done' || stepsOpen) && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              className="ob-disclosure"
+              aria-expanded={logOpen}
+              onClick={() => setShowLog((v) => !v)}
+            >
+              {logOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Log · {logs.length} {logs.length === 1 ? 'line' : 'lines'}
+            </button>
+            {logOpen && (
+              <button
+                type="button"
+                className="ob-disclosure"
+                onClick={() => void navigator.clipboard?.writeText(logs.join('\n'))}
+              >
+                <Copy className="h-3 w-3" /> Copy log
+              </button>
+            )}
+          </div>
+          {logOpen && (
+            <pre ref={logRef} className="ob-log" aria-label="Provisioning log">
+              {logs.slice(-400).join('\n')}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {status === 'done' && (
+        <StepFooter>
+          <ObButton variant="primary" data-onb-primary="true" onClick={onContinue}>
+            Continue
+          </ObButton>
+        </StepFooter>
+      )}
+    </>
   )
 }

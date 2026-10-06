@@ -1,10 +1,13 @@
 # Orcha Desktop
 
-Electron + React + TypeScript stack manager for `orcha-*` Docker stacks:
-see every stack on the machine (running or stopped), start/stop them, open
-each stack's portal in an app window, and get tray + Notification Center
-alerts when something needs the human (open requests, `needs_verification`
-tasks, stacks going down).
+Electron + React + TypeScript manager for the Orcha projects on this Mac: see
+every project (running or stopped), start/stop it, open its portal in an app
+window, and get tray + Notification Center alerts when something needs the human
+(plan approvals, `needs_verification` tasks, requests open to a human or
+escalated, projects going down). Since GH #258 projects run **natively** (no
+Docker, no Postgres): the app brings its own Python + `orcha` CLI and drives the
+CLI for everything. Older Docker projects still show up (when Docker is running)
+and can be moved off Docker from Home.
 
 Design spec: `../docs/superpowers/specs/2026-06-11-desktop-app-design.md`
 (§9 covers the tray/notifications addendum). Tracking: Orcha#237.
@@ -16,7 +19,7 @@ npm install
 # If Electron fails to start with "Electron uninstall", the binary download
 # was skipped during install:
 node node_modules/electron/install.js
-# Re-signs the dev Electron binary and brands it with the Orcha icon — needed
+# Re-signs the dev Electron binary and brands it with the Embodent icon — needed
 # for notifications and the dock/banner icon in dev (re-run after any npm
 # install that touches electron):
 ./scripts/sign-dev-electron.sh
@@ -25,41 +28,74 @@ npm run dev            # add "-- --watch" to hot-restart main-process changes
 
 `npm test` (vitest), `npm run typecheck`, `npm run build`.
 
+## Window layout (Orcha V2)
+
+The window has a persistent host-owned **left sidebar** (every local project across all
+stacks, "Needs you", the open project's sections and live agents, stack start/stop) with the
+open project's portal in a native `WebContentsView` to its right. Portals get a dedicated,
+origin-checked preload (`src/preload/portal.ts` → `window.orchaHost`) and a typed message
+contract (`src/shared/embed.ts`); a V2 portal answers `ready` and renders header + content
+only. An older portal that doesn't answer within 3 s gets the pre-V2 layout (slim top bar,
+no host sidebar). Details: `../docs/orcha-v2-architecture.md` → "Desktop host (Agent C)".
+
+"Needs you" counts decisions only — plan approvals (autonomy `plan`), verifications (unless
+autonomy `full`) and requests open to a human or escalated. Follow-ups (answered requests you
+raised) are listed in the tray but never counted.
+
 ## Onboarding & New Project
 
-The app can provision a brand-new Orcha project end-to-end — no terminal, no
-Homebrew, no `orcha` CLI. On first launch with **zero** `orcha-*` stacks the
-onboarding wizard opens automatically; otherwise use **File → New Project**
-(Cmd+N) or the **Create your first project** button on the empty manager.
+On first launch with no projects the onboarding wizard opens; otherwise use
+**File → New Project** (Cmd+N) or **Create your first project** on Home. Setup
+needs only an AI coding agent (Claude Code or Codex) — no Homebrew, no Docker, no
+Python: the `orcha` helper ships inside the app.
 
-The wizard runs Docker **preflight** (detects the daemon, auto-starts Docker
-Desktop and polls if it's down), lets you pick a folder, then **provisions
-natively** — it reimplements `orcha init`'s orchestration in the main process
-(`src/main/initEngine.ts`) over template assets copied from the CLI at build
-time into `resources/orcha-templates/` (`scripts/copy-orcha-templates.mjs`, run
-by the `prebuild`/`predist` hooks; byte-parity enforced by
-`templates.parity.test.ts`). It renders the compose file, lays down
-migrations/portal/skills + a `.orcha/.env` secret, runs `docker compose up -d
---build`, waits for the portal, creates the container and registers the first
-human, then hands off to the portal's `/onboarding` roster wizard. Host
-notifier/bridge daemons are **not** started by the app (run `orcha up` in a
-terminal if you need them). The same engine powers upgrade (ports preserved, no
-data wipe) and reset-data (explicit `down -v` first).
+**How the app finds `orcha`** (`src/main/hostWorker.ts` `resolveOrcha`):
+1. the bundled runtime, `Orcha.app/Contents/Resources/orcha-runtime/bin/orcha`;
+2. `~/.local/bin/orcha`;
+3. `orcha` on the host-tool PATH (dev builds).
 
-### Onboarding (manual smoke — requires real Docker)
+On launch a packaged app links `~/.local/bin/orcha` to the bundled launcher
+(`src/main/orchaLink.ts`) unless a different `orcha` is already there, so
+developers get the same CLI in Terminal. `orcha update` inside the bundled
+runtime only says to update the app — an app update is a CLI update.
 
-These cannot run in CI (they need a real Docker daemon and a packaged build):
+**Provisioning is the CLI's job.** `src/main/initEngine.ts` is a thin driver:
+- new project → `orcha init --runtime native --progress-json …`, whose JSON
+  progress lines become the wizard's steps;
+- reconnect an existing project → `orcha up`;
+- "Move this project off Docker" (Home card) → `orcha migrate-runtime --json`
+  (Docker must be on once, to copy the data out; the Docker copy is kept).
 
-1. With Docker running and zero `orcha-*` stacks, `npm run dev` → the wizard
-   opens automatically. Preflight shows Docker ok → Continue → choose an empty
-   folder → Create project. Watch the streamed compose-up log; on success the
-   portal `/onboarding` window opens.
-2. Stop Docker; relaunch `npm run dev` → preflight reports the daemon down and
-   attempts to auto-start Docker, polling up to ~60s.
-3. File → New Project (Cmd+N) on a folder that already has `.orcha/` →
-   `inspectFolder` reports it initialized (no clobber).
-4. `npm run dist:mac` → install the DMG → first launch with no stacks opens the
-   wizard end-to-end (the bundled `orcha-templates` ship via `extraResources`).
+Project discovery (`src/main/nativeStacks.ts` + `discovery.ts`) reads the CLI's
+registry (`~/.orcha/stacks.json`) and each project's `.orcha/state.json`, plus
+`<userData>/native-projects.json` so a project stopped with `orcha down` stays
+listed. `docker ps` is only asked about older Docker projects; a Mac without
+Docker never hears about it. Reset = `orcha down -v --yes` + `orcha service
+uninstall` (`src/main/resetEngine.ts`).
+
+### Manual smoke checklist (packaged arm64 build)
+
+CI cannot see these. Run them on the signed DMG and record the result in the PR:
+
+1. `spctl -a -vv /Applications/Orcha.app` → `accepted`, `source=Notarized
+   Developer ID`; `xcrun stapler validate` on the DMG passes.
+2. `codesign -dv --verbose=4` on
+   `Orcha.app/Contents/Resources/orcha-runtime/bin/python3` and on one `.so`
+   under `lib/python3.*/site-packages` → `flags=0x10000(runtime)` (hardened).
+3. `Orcha.app/Contents/Resources/orcha-runtime/bin/orcha --version` runs with an
+   empty `PATH` (no system Python needed).
+4. **Clean macOS account** (no Homebrew, Docker or Python): first open shows one
+   Gatekeeper "downloaded from the internet" dialog, nothing else. The wizard asks
+   only for an AI agent; pick an empty folder → Create project → the portal opens.
+5. After that first launch, `~/.local/bin/orcha` points into `Orcha.app`, and
+   `orcha status` in Terminal lists the project.
+6. Quit the app → the project's portal still answers (agents keep running under
+   the project's launchd service). Reboot → it is back without opening the app.
+7. Stop / Start the project from Home → it stays listed while stopped.
+8. With a Docker project and Docker running → Home shows "Move … off Docker";
+   do it on a **throwaway copy** → the project comes back native with its data.
+9. Reset a throwaway native project → its `.orcha/` data and service are gone,
+   your own files are untouched.
 
 ## Dev-mode caveats
 
@@ -70,28 +106,33 @@ These cannot run in CI (they need a real Docker daemon and a packaged build):
 
 Packaging is driven by [electron-builder](https://www.electron.build/),
 configured in `electron-builder.yml` (appId `io.openorcha.desktop`,
-productName `Orcha`, the `orcha://` deep-link protocol, and the app icon).
+productName `Orcha`, the `orcha://` deep-link protocol, and the app icon). The
+release build is **Apple Silicon only** (GH #258; Intel later).
 
 ```bash
 npm install
-./scripts/dist-mac-signed.sh   # signed + notarized universal .dmg + .zip
-# or, for a faster local build that only targets this machine's arch:
+./scripts/dist-mac-signed.sh          # signed + notarized arm64 .dmg + .zip
+# unsigned local build for this machine:
 npm run dist:mac:arm64
 ```
 
-`dist-mac-signed.sh` loads signing credentials from `.env.signing.local` and
-then runs `npm run dist:mac` (universal Intel + Apple Silicon). Running
-`npm run dist:mac` directly works too, but only signs/notarizes if those
-environment variables are already set.
+`predist:mac:arm64` runs `scripts/build-orcha-runtime.mjs`: it downloads a
+pinned `python-build-standalone` (URL + sha256 in the script), pip-installs the
+repo's `orcha-cli` into it, strips what a runtime doesn't need, and writes the
+`bin/orcha` launcher (`ORCHA_SIDECAR=1`) into `resources/orcha-runtime/`
+(gitignored). electron-builder ships it as `Contents/Resources/orcha-runtime`
+(`extraResources`) and signs every nested Mach-O with the hardened runtime.
+`npm run dist:mac` (universal) still exists for a future Intel build but carries
+no runtime — that build needs `orcha` from elsewhere.
 
-Outputs land in `desktop/dist/` (gitignored):
+`dist-mac-signed.sh` loads signing credentials from `.env.signing.local`, runs
+the build, then signs the DMG. Outputs land in `desktop/dist/` (gitignored):
 
-- `Orcha-<version>-universal.dmg` — drag-to-Applications installer
-- `Orcha-<version>-universal-mac.zip` — zip of `Orcha.app` (used by the
-  Homebrew cask/formula)
+- `Orcha-<version>-arm64.dmg` — drag-to-Applications installer
+- `Orcha-<version>-arm64-mac.zip` — zip of `Orcha.app`
 
-The version comes from `package.json`'s `version` field — bump it there before
-a release and tag the matching `vX.Y.Z` on the GitHub Release.
+The version comes from `package.json`'s `version` field — bump it in the same PR
+as the feature.
 
 **Signing & notarization:** release builds are **signed with a Developer ID
 Application certificate and notarized by Apple**, so Gatekeeper opens the app on
@@ -108,8 +149,9 @@ committed**:
 
 Copy `.env.signing.example` to `.env.signing.local` (gitignored), fill in the
 paths, and build via `./scripts/dist-mac-signed.sh`. Notarization uploads the
-app to Apple's notary service and waits for the malware scan, so a clean build
-takes a few minutes and needs network access.
+app to Apple's notary service and waits for the malware scan (about 4 minutes
+for the app and 3–4 for the DMG with the runtime inside), so it needs network
+access.
 
 ## Desktop widget
 

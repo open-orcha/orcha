@@ -1,0 +1,119 @@
+/* Run-log follow + expandable tool details (Agent E) — shared by the agent Runs tab,
+   conversation work logs and Activity (imported by runlog.tsx). V2 tokens only.
+   Selectors are scoped under .log-follow / .runs-feed so they out-rank the legacy
+   open-base.css rules (loaded later, via /assets/styles.css) on specificity. */
+.log-follow { position: relative; }
+.log-jump { position: absolute; right: var(--v2-space-3); bottom: var(--v2-space-3); z-index: 2; box-shadow: var(--v2-shadow-pop); }
+
+/* ---- log lines (D3: no coloured left stripes — the muted type label carries the kind) ---- */
+.log-follow .log { font-family: var(--v2-font-mono); font-size: 12px; line-height: 1.5; background: var(--v2-canvas); padding: 4px 0; scroll-behavior: auto; }
+.log-follow .log .ln { display: grid; grid-template-columns: 12px 88px minmax(0, 1fr); gap: 8px; align-items: baseline;
+  padding: 2px var(--v2-space-3); border-left: 0; }
+.log-follow .log .ln:hover { background: var(--v2-hover); }
+.log-follow .log .ln .gut { color: var(--v2-text-3); opacity: .6; text-align: right; }
+/* plain output lines: no "log" type label (the label column collapses) */
+.log-follow .log .ln.is-plain { grid-template-columns: 12px minmax(0, 1fr); }
+.log-follow .log .ln.is-plain .ty { display: none; }
+.log-follow .log .ln .ty { align-self: baseline; font-size: 10.5px; font-weight: var(--v2-fw-semibold); letter-spacing: 0; text-transform: none;
+  color: var(--v2-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--v2-font-sans); }
+.log-follow .log .ln .tx { color: var(--v2-text-2); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.log-follow .log .ln.t-tool .ty { color: var(--v2-info); }
+.log-follow .log .ln.t-subagent .ty { color: var(--v2-accent); }
+.log-follow .log .ln.t-decision .ty { color: var(--v2-warn); }
+.log-follow .log .ln.t-boot .ty, .log-follow .log .ln.t-done .ty { color: var(--v2-ok); }
+.log-follow .log .ln.t-narrate .tx { color: var(--v2-text); }
+.log-follow .log .ln.t-think .tx { color: var(--v2-text-3); font-style: italic; }
+.log-follow .log .ln.t-error .ty, .log-follow .log .ln.t-error .tx { color: var(--v2-danger); }
+.log-follow .log .ln.t-done .tx { color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+@media (max-width: 600px) {
+  .log-follow .log .ln { grid-template-columns: 64px minmax(0, 1fr); gap: 6px; padding: 2px var(--v2-space-2); }
+  .log-follow .log .ln .gut { display: none; }
+  .log-follow .log .ln.is-plain { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* tool details: a ghost chip with a focus ring; the body is capped + copyable */
+.log .det-x { margin-top: 2px; }
+.log .det-x > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; width: max-content;
+  color: var(--v2-text-2); font-family: var(--v2-font-sans); font-size: 11.5px; font-weight: var(--v2-fw-medium); padding: 1px 6px; margin-left: -6px; border-radius: 4px; }
+.log .det-x > summary::-webkit-details-marker { display: none; }
+.log .det-x > summary::before { content: "▸"; font-size: 10px; color: var(--v2-text-3); }
+.log .det-x[open] > summary::before { content: "▾"; }
+.log .det-x > summary:hover { color: var(--v2-text); background: var(--v2-hover); }
+.log .det-x > summary:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.log-follow .log .ln .tx .det, .log .det-x .det { display: block; margin-top: 3px; padding: 6px 8px; max-height: 240px; overflow: auto;
+  background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control); color: var(--v2-text-2);
+  font-size: 11.5px; white-space: pre-wrap; }
+.log .det-w { position: relative; display: block; }
+.log .det-copy { position: absolute; top: 6px; right: 6px; height: 22px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--v2-border);
+  background: var(--v2-raised); color: var(--v2-text-2); font: inherit; font-family: var(--v2-font-sans); font-size: 11px; cursor: pointer; }
+.log .det-copy:hover { color: var(--v2-text); background: var(--v2-hover); }
+.log .det-copy:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+/* ---- Runs tab: flat run rows with hairline separators (no card-in-card) ---- */
+.runs-feed { display: flex; flex-direction: column; gap: var(--v2-space-3); }
+.runs-h { display: flex; align-items: center; gap: var(--v2-space-1); font-size: var(--v2-fs-meta); }
+.runs-h .grow { flex: 1; }
+.runs-list { border-top: 1px solid var(--v2-border); border-bottom: 1px solid var(--v2-border); }
+.runs-feed .run { border: 0; border-radius: 0; margin: 0; background: transparent; overflow: visible; padding: var(--v2-space-2) 0; }
+.runs-feed .run + .run { border-top: 1px solid var(--v2-border); }
+.runs-feed .run .run-h { display: flex; align-items: center; flex-wrap: nowrap; gap: var(--v2-space-2); padding: 2px var(--v2-space-2) 2px 0; min-height: 32px; min-width: 0; }
+.runs-feed .run .run-h > * { flex: none; }
+.run-toggle { width: 20px; height: 20px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent;
+  color: var(--v2-text-3); cursor: pointer; }
+.run-toggle:hover { background: var(--v2-hover); color: var(--v2-text); }
+.run-toggle:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.run.is-open > .run-h > .run-toggle > .run-chev { transform: none; }
+.runs-feed .run .run-h .v2-status { flex: none; font-size: var(--v2-fs-body); color: var(--v2-text); }
+.runs-feed .run .run-kind { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.runs-feed .run .run-h .when { margin-left: 0; color: var(--v2-text-3); font-family: var(--v2-font-sans); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; }
+.runs-feed .run .run-h .grow { flex: 1 1 auto; }
+.run-stop .v2-ico { color: var(--v2-danger); }
+/* the failure reason rides the run row: the flexible slot, ellipsized (full text in its tooltip) */
+.runs-feed .run .run-h > .run-reason { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--v2-text-2); font-size: var(--v2-fs-meta); }
+.runs-feed .run .run-h > .run-reason::before { content: "·"; margin-right: var(--v2-space-2); color: var(--v2-text-4, var(--v2-text-3)); }
+.run-links { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--v2-space-3); font-size: var(--v2-fs-meta); }
+.run-links a { color: var(--v2-text-2); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+.run-links a:hover { color: var(--v2-text); text-decoration: underline; text-underline-offset: 2px; }
+.run-links a:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: 3px; }
+.run-links .v2-ico { width: 12px; height: 12px; }
+.run-body { padding: 0 0 var(--v2-space-1); }
+.run-diff, .run-log { margin: 2px 0 0 28px; }
+.run-log-h { color: var(--v2-text-3); font-size: var(--v2-fs-meta); padding: 2px 0; }
+.run-diff > summary, .run-log > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; list-style: none;
+  color: var(--v2-text-2); font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); padding: 2px 6px; border-radius: 4px; border: 0; }
+.run-diff > summary::-webkit-details-marker, .run-log > summary::-webkit-details-marker { display: none; }
+.run-diff > summary:hover, .run-log > summary:hover { background: var(--v2-hover); color: var(--v2-text); }
+.run-diff > summary:focus-visible, .run-log > summary:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.run-chev { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform var(--v2-dur-fast) var(--v2-ease); }
+details[open] > summary > .run-chev { transform: none; }
+.runs-feed .run-log .log { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control); margin: 4px 0 var(--v2-space-1); max-height: 360px; overflow: auto; }
+.run-diff-b { padding: var(--v2-space-1) 0 var(--v2-space-2); }
+@media (max-width: 600px) {
+  .run-diff, .run-log { margin-left: 0; }
+  /* 390: the row never wraps — kind + links go, Stop is a 28px circular icon (name stays for SR) */
+  .runs-feed .run .run-h .run-kind, .runs-feed .run .run-h .run-links { display: none; }
+  .runs-feed .run .run-h .when { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+  .runs-feed .run-stop { width: 28px; height: 28px; padding: 0; border-radius: 50%; justify-content: center; margin-left: auto; }
+  .runs-feed .run-stop .v2-btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+/* a just-started stream with no lines yet: say so instead of an empty box */
+.runs-feed .run-log .log:empty::before, .turn .log:empty::before, .conv-working .log:empty::before { content: "Waiting for output…"; display: block; padding: 4px var(--v2-space-3);
+  color: var(--v2-text-3); font-family: var(--v2-font-sans); font-size: var(--v2-fs-meta); }
+/* r3: the whole run header row toggles the run (links / Stop keep their own clicks) */
+.runs-feed .run .run-h { cursor: pointer; border-radius: var(--v2-radius-control); }
+.runs-feed .run .run-h:hover { background: var(--v2-hover); }
+.runs-feed .run .run-h a, .runs-feed .run .run-h button { cursor: pointer; }
+/* Stop-run dialog: one line of body, the mechanics behind an info glyph */
+.run-stop-desc { display: inline; }
+.run-stop-info { display: inline-flex; vertical-align: -2px; margin-left: 6px; color: var(--v2-text-3); cursor: help; border-radius: 4px; }
+.run-stop-info:hover { color: var(--v2-text-2); }
+.run-stop-info:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.run-stop-info .v2-ico { width: 13px; height: 13px; }
+/* wave-4: the Runs tab renders the shared Activity RunLogView — here it sits inline under a
+   run row, so it is height-capped instead of filling an inspector pane */
+.runs-feed .run-log .act-log { min-height: 0; margin: 4px 0 var(--v2-space-1); }
+.runs-feed .run-log .act-log-b { flex: none; max-height: 360px; }
+/* the run's task title is the link text (ellipsized; full title in the tooltip) */
+.run-links a.run-task { min-width: 0; max-width: 240px; }
+.run-task-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

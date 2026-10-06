@@ -12,10 +12,12 @@ from portal_backend.events import poke_path_forward as _poke_path_forward
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import (
     pick_human as _pick_human,
+    find_actionable_human,
     require_container_active as _require_container_active,
     resolve_alias as _resolve_alias,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.org_chart import clear_routing, route_via_manager
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import AgentSuggestion, TaskRequestReject
 
@@ -126,12 +128,38 @@ def suggest_agent(rid: str, body: AgentSuggestion):
         existing["proposed_role"] = body.proposed_role
         existing["proposed_prompt"] = body.proposed_prompt
         existing["rationale"] = body.rationale
+        # UO-11b: a NEW suggestion reopens the decision (an earlier one was stamped).
+        existing.pop("suggestion_decided", None)
         # Orcha#30: re-target at the container's human instead of nulling target_id.
         # detail.proposed_alias is what distinguishes a suggestion from a plain re-target.
-        human_id = _pick_human(cur, str(r["container_id"]))
+        # Org chart (mig 052) — "approve hires": the suggestion goes to the requester's
+        # nearest manager who can APPROVE it (owner or manage_agents — the gate
+        # decide(kind='create') enforces), viewers / AI managers skipped; else the
+        # project-wide pick. Agents never create agents: a human decides.
+        human_id, org_routing = route_via_manager(
+            cur,
+            str(r["container_id"]),
+            body.requester_agent_id,
+            exclude_ids=(body.requester_agent_id,),
+            grant="manage_agents",
+        )
+        if human_id is None:
+            # RT-19: no approving manager in the chain — prefer the freshest human who
+            # can actually APPROVE a hire (owner / manage_agents), never a plain member
+            # whose Approve button is disabled. _pick_human only if nobody qualifies.
+            human_id = find_actionable_human(
+                cur, str(r["container_id"]), body.requester_agent_id, grant="manage_agents"
+            )
+            if human_id is not None:
+                org_routing = {**(org_routing or {}), "routed_via": "fallback"}
+            else:
+                human_id = _pick_human(cur, str(r["container_id"]))
+        existing = clear_routing(existing)
+        if org_routing:
+            existing.update(org_routing)
         cur.execute(
             """UPDATE requests
-                 SET target_id=%s, status='open', detail=%s::jsonb
+                 SET target_id=%s, status='open', detail=%s
                  WHERE id=%s""",
             (human_id, json.dumps(existing), rid),
         )

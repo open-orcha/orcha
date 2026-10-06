@@ -33,6 +33,9 @@ jobs:
           python -m venv .smoke-venv
           ./.smoke-venv/bin/pip install dist/*.whl
           ./.smoke-venv/bin/orcha --version
+          # GH #258: the wheel must carry the runnable portal for `orcha portal`.
+          ./.smoke-venv/bin/orcha portal --help
+          ./.smoke-venv/bin/python -c "from orcha_cli.cli_portal import portal_dir as d; assert (d() / 'main.py').is_file() and (d() / 'static' / 'dist' / 'index.html').is_file(), d()"
 
       - name: Clean up
         if: always()

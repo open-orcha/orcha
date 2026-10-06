@@ -6,7 +6,7 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { extensions } from "../../extensions";
-import { HashRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
@@ -70,13 +70,15 @@ function installFetch() {
   vi.stubGlobal("fetch", vi.fn(impl));
 }
 
-function renderPage() {
+// V2 sections: deep-link straight to the section under test (#tab=<key>).
+function renderPage(tab = "provider-keys") {
+  window.history.replaceState(null, "", window.location.pathname + "#tab=" + tab);
   return render(
     <ToastProvider>
       <SnapshotProvider>
-        <HashRouter>
+        <MemoryRouter>
           <SettingsPage />
-        </HashRouter>
+        </MemoryRouter>
       </SnapshotProvider>
     </ToastProvider>,
   );
@@ -93,21 +95,34 @@ beforeEach(() => {
 });
 
 describe("SettingsPage worktree routing", () => {
-  it("defaults off and clearly warns that concurrent agents share the checkout", async () => {
-    renderPage();
-    const toggle = await screen.findByRole("switch", { name: "Disable worktrees" });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(/Concurrent agents may edit the same checkout/)).toBeInTheDocument();
+  it("defaults to isolated worktrees and warns about a shared checkout only when turning isolation off", async () => {
+    rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
+    renderPage("execution");
+    const toggle = await screen.findByRole("switch", { name: "Isolated worktrees" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // the conflict warning is not shown permanently…
+    expect(screen.queryByText(/Existing worktrees are not removed/)).not.toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector("#execFacts")).not.toBeNull()); // snapshot (and so the acting human) loaded
+    fireEvent.click(toggle);
+    // …only in the confirm step, and nothing is posted until confirmed
+    expect(await screen.findByText(/Concurrent agents may edit the same checkout/)).toBeInTheDocument();
     expect(screen.getByText(/Existing worktrees are not removed/)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/worktrees"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
+    await waitFor(() => {
+      const post = calls.find((c) => c.method === "POST" && c.url === "/api/containers/c1/worktrees");
+      expect(post!.body).toEqual({ disabled: true, actor_agent_id: "h1" });
+    });
   });
 
   it("persists toggles with the acting human and renders an enabled project", async () => {
     worktreesDisabled = true;
     rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
-    renderPage();
-    const toggle = await screen.findByRole("switch", { name: "Disable worktrees" });
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    renderPage("execution");
+    const toggle = await screen.findByRole("switch", { name: "Isolated worktrees" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
 
+    // turning isolation back ON needs no confirmation
     fireEvent.click(toggle);
     await waitFor(() => {
       const post = calls.find((c) => c.method === "POST" && c.url === "/api/containers/c1/worktrees");
@@ -116,13 +131,16 @@ describe("SettingsPage worktree routing", () => {
     });
   });
 
-  it("requires an acting human before changing the project setting", async () => {
+  it("requires an acting human before changing the project setting (switch locked with the reason)", async () => {
     rawAgents = [{ id: "a1", alias: "forge", kind: "ai", status: "active" }];
-    renderPage();
-    fireEvent.click(await screen.findByRole("switch", { name: "Disable worktrees" }));
-    await waitFor(() =>
-      expect(screen.getByText("Pick an acting human to change worktree routing")).toBeInTheDocument(),
-    );
+    renderPage("execution");
+    const sw = await screen.findByRole("switch", { name: "Isolated worktrees" });
+    await waitFor(() => expect(sw).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(sw);
+    expect(screen.queryByText(/Concurrent agents may edit the same checkout/)).toBeNull();
+    fireEvent.pointerEnter(sw);
+    fireEvent.focus(sw);
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/Pick an acting human first/));
     expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/worktrees"))).toBe(false);
   });
 });
@@ -135,8 +153,10 @@ afterEach(() => {
 describe("SettingsPage key card", () => {
   it("renders the configured-key banner and masked key from the GET", async () => {
     keyStatus = { configured: true, masked: "sk-...abcd", source: "db" };
+    rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
     renderPage();
-    await waitFor(() => expect(screen.getByText("Anthropic API key configured")).toBeInTheDocument());
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/containers/c1")).toBe(true));
+    await waitFor(() => expect(screen.getByText("(Anthropic API key)")).toBeInTheDocument());
     expect(screen.getByText("sk-...abcd")).toBeInTheDocument();
     // db mode → editable with a Replace affordance + Remove
     expect(screen.getByText("Replace key")).toBeInTheDocument();
@@ -146,26 +166,24 @@ describe("SettingsPage key card", () => {
 
   it("renders the warn banner when no key is configured", async () => {
     keyStatus = { configured: false, masked: null, source: null };
+    rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
     renderPage();
-    await waitFor(() => expect(screen.getByText("No Anthropic API key configured.")).toBeInTheDocument());
-    expect(screen.getByText("Save key")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("(No Anthropic API key)")).toBeInTheDocument());
+    expect(await screen.findByText("Save key")).toBeInTheDocument();
     expect(screen.queryByText("Remove")).not.toBeInTheDocument();
   });
 
-  it("blocks Save with a warning toast when there is no acting human (PR #315 gate)", async () => {
+  it("renders read-only with the reason when there is no acting human (PR #315 gate)", async () => {
     keyStatus = { configured: true, masked: "sk-...abcd", source: "db" };
     rawAgents = [{ id: "a1", alias: "forge", kind: "ai", status: "active" }]; // no human registered
     renderPage();
-    await waitFor(() => expect(screen.getByText("Anthropic API key configured")).toBeInTheDocument());
-
-    fireEvent.change(screen.getByPlaceholderText("Paste a new key to replace…"), {
-      target: { value: "sk-ant-test-1234" },
-    });
-    fireEvent.click(screen.getByText("Replace key"));
-
-    await waitFor(() =>
-      expect(screen.getByText("Pick an acting human to save the key")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("(Anthropic API key)")).toBeInTheDocument());
+    // the status still shows; no field / Replace / Remove to press, and the
+    // reason is said once for the section
+    await waitFor(() => expect(document.querySelector("#keysLocked")).toHaveTextContent(/Pick an acting human first/));
+    expect(screen.queryByPlaceholderText("Paste a new key to replace…")).toBeNull();
+    expect(screen.queryByText("Replace key")).toBeNull();
+    expect(screen.queryByText("Remove")).toBeNull();
     expect(calls.some((c) => c.method === "PUT" && c.url.endsWith("/settings/llm-key"))).toBe(false);
   });
 
@@ -176,7 +194,7 @@ describe("SettingsPage key card", () => {
       { id: "h1", alias: "kedar", kind: "human", status: "active" },
     ];
     renderPage();
-    await waitFor(() => expect(screen.getByText("Anthropic API key configured")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("(Anthropic API key)")).toBeInTheDocument());
     // the snapshot (and thus the acting human) must have arrived before mutating
     await waitFor(() => expect(calls.some((c) => c.url === "/api/containers/c1")).toBe(true));
 
@@ -200,10 +218,17 @@ describe("SettingsPage key card", () => {
     await waitFor(() =>
       expect(screen.getByText(/from the environment/)).toBeInTheDocument(),
     );
+    // the key controls live in the Anthropic row's expand panel (image-33 rows)
+    fireEvent.click(screen.getByRole("button", { name: "Show Anthropic settings" }));
     expect(screen.getByText("Test stored key")).toBeInTheDocument();
     expect(screen.queryByText("Save key")).not.toBeInTheDocument();
     expect(screen.queryByText("Replace key")).not.toBeInTheDocument();
     expect(screen.queryByText("Remove")).not.toBeInTheDocument();
+    // D12 (review r2): how to change the env key is a tooltip beside Test,
+    // not a boilerplate sentence under the status line
+    expect(screen.queryByText(/To change it, update/)).toBeNull();
+    const help = screen.getByRole("button", { name: "About changing the environment key" });
+    expect(help.closest(".sc-acts")).toContainElement(screen.getByText("Test stored key"));
   });
 });
 

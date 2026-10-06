@@ -30,7 +30,7 @@ private fun lucide(name: String, autoMirror: Boolean, vararg d: String): ImageVe
     for (p in d) b.addPath(
         pathData = addPathNodes(p),
         stroke = SolidColor(Color.Black),
-        strokeLineWidth = 2f,
+        strokeLineWidth = 1.75f,   // Linear: slightly lighter than Lucide's 2px default
         strokeLineCap = StrokeCap.Round,
         strokeLineJoin = StrokeJoin.Round,
     )

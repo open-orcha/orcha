@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
@@ -74,7 +74,11 @@ function mount(snapshot = BASE_SNAPSHOT, holdPost = false) {
 
 const messagePosts = (calls: Call[]) => calls.filter((call) => call.url === "/api/tasks/t1/messages" && call.method === "POST");
 
-describe("Task thread composer parity", () => {
+const sendBtn = (c: HTMLElement) => within(c.querySelector("#replyWrap") as HTMLElement).getByRole("button", { name: "Post comment" }) as HTMLButtonElement;
+const attachBtn = (c: HTMLElement) => within(c.querySelector("#replyWrap") as HTMLElement).getByRole("button", { name: "Attach files" }) as HTMLButtonElement;
+const fileInput = (c: HTMLElement) => c.querySelector('#replyWrap input[type="file"]') as HTMLInputElement;
+
+describe("Task thread composer parity (Linear 'Leave a comment…' composer)", () => {
   beforeEach(() => {
     window.scrollTo = vi.fn();
   });
@@ -86,21 +90,18 @@ describe("Task thread composer parity", () => {
     localStorage.clear();
   });
 
-  it("uses the shared multiline layout and grows to the Conversation height cap", async () => {
+  it("uses the shared Composer primitive (rounded field, attach + circular send) and grows to its height cap", async () => {
     const { container } = mount();
     await waitFor(() => expect(container.querySelector("#reply")).toBeTruthy());
     const input = container.querySelector("#reply") as HTMLTextAreaElement;
     expect(input.tagName).toBe("TEXTAREA");
-    expect(input.rows).toBe(1);
-    expect(input.className).toContain("message-composer__input");
-    expect(container.querySelector("#replyWrap .message-composer")).toBeTruthy();
-    expect(container.querySelector("#attachBtn")?.className).toContain("message-composer__attach");
-    expect(container.querySelector("#replyBtn")).toHaveAttribute("data-task", "t1");
-    const composer = container.querySelector("#replyWrap .message-composer") as HTMLElement;
-    const composerStyle = getComputedStyle(composer);
-    expect(composerStyle.paddingTop).toBe("0px");
-    expect(composerStyle.paddingRight).toBe("0px");
-    expect(composerStyle.borderTopWidth).toBe("0px");
+    expect(input.getAttribute("placeholder")).toBe("Leave a comment…");
+    expect(input.className).toContain("v2-composer-input");
+    expect(container.querySelector("#replyWrap .v2-composer")).toBeTruthy();
+    expect(attachBtn(container).className).toContain("v2-iconbtn");
+    expect(sendBtn(container).className).toContain("v2-iconbtn-circle");
+    // empty draft: nothing to post
+    expect(sendBtn(container).disabled).toBe(true);
 
     let scrollHeight = 92;
     Object.defineProperty(input, "scrollHeight", { configurable: true, get: () => scrollHeight });
@@ -118,7 +119,7 @@ describe("Task thread composer parity", () => {
     const { container, calls, releasePost } = mount(BASE_SNAPSHOT, true);
     await waitFor(() => expect(container.querySelector("#reply")).toBeTruthy());
     const input = container.querySelector("#reply") as HTMLTextAreaElement;
-    const button = container.querySelector("#replyBtn") as HTMLButtonElement;
+    const button = sendBtn(container);
 
     fireEvent.change(input, { target: { value: "first line\nsecond line" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
@@ -129,20 +130,21 @@ describe("Task thread composer parity", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(messagePosts(calls)).toHaveLength(1));
     expect(messagePosts(calls)[0].body).toEqual({ body: "first line\nsecond line", author_agent_id: "h1" });
+    // in flight: the send button is busy + disabled
     expect(button.disabled).toBe(true);
-    expect(button.textContent).toContain("Posting");
-    expect(button.closest(".message-composer")).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveAttribute("aria-busy", "true");
 
     await waitFor(() => expect(input.value).toBe(""));
     fireEvent.change(input, { target: { value: "follow-up draft" } });
     const followUp = new File(["notes"], "follow-up.txt", { type: "text/plain" });
-    fireEvent.change(container.querySelector("#attachInput") as HTMLInputElement, { target: { files: [followUp] } });
+    fireEvent.change(fileInput(container), { target: { files: [followUp] } });
     await waitFor(() => expect(container.querySelector("#attachTray")?.textContent).toContain("follow-up.txt"));
 
     releasePost();
-    await waitFor(() => expect(button.disabled).toBe(false));
+    await waitFor(() => expect(sendBtn(container).disabled).toBe(false));
     expect(input.value).toBe("follow-up draft");
     expect(container.querySelector("#attachTray")?.textContent).toContain("follow-up.txt");
+    expect(messagePosts(calls)).toHaveLength(1);
   });
 
   it("keeps task-thread controls disabled while the assignee owns a live terminal", async () => {
@@ -154,8 +156,10 @@ describe("Task thread composer parity", () => {
     await waitFor(() => expect(container.querySelector("#reply")).toBeTruthy());
     const input = container.querySelector("#reply") as HTMLTextAreaElement;
     expect(input.disabled).toBe(true);
-    expect((container.querySelector("#attachBtn") as HTMLButtonElement).disabled).toBe(true);
-    expect((container.querySelector("#replyBtn") as HTMLButtonElement).disabled).toBe(true);
+    expect(attachBtn(container).disabled).toBe(true);
+    expect(sendBtn(container).disabled).toBe(true);
+    // the reason is announced, never silent
     expect(container.querySelector("#replyWrap")?.textContent).toContain("thread composer is paused");
+    expect(input.getAttribute("aria-describedby")).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { existsSync, readdirSync } from 'node:fs'
 import type { Exec } from './dockerExec'
-import { sanitizeName } from './templates'
+import { sanitizeName } from './folderModes'
 import type { GhRepo } from '../shared/types'
 
 /** "Add project → From GitHub": listing the host's `gh`-authenticated repos, and picking a

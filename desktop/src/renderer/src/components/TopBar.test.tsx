@@ -14,6 +14,8 @@ function stack(over: Partial<Stack> = {}): Stack {
     portalStatus: 'Up',
     running: true,
     folder: '/tmp/demo',
+    runtime: 'docker',
+    health: 'ok',
     ...over
   }
 }

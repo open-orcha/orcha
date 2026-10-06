@@ -22,7 +22,7 @@ TASKS_DIR = FRONTEND / "pages" / "tasks"
 
 
 def _page() -> str:
-    return (TASKS_DIR / "TasksPage.tsx").read_text()
+    return "".join((TASKS_DIR / f).read_text() for f in ("TasksPage.tsx", "TaskDetail.tsx"))
 
 
 def _panel() -> str:
@@ -44,11 +44,14 @@ def test_proto_empty_truth_table():
         "protoEmpty predicate changed — all four keys must gate the empty state"
     t = (TASKS_DIR / "TasksPage.spec4.test.tsx").read_text()
     assert "protoEmpty truth table" in t, "protoEmpty Vitest scenario missing"
+    # Linear round 3 (D12): the empty state is ONE short value ("Project defaults");
+    # the "No protocol set" sentence moved into its tooltip.
     for beat in (
         "protocol: null",                                       # null -> empty state
-        'toContain("No protocol set — using container defaults.")',
+        'expect(panel.textContent).toContain("Project defaults")',
+        '.getAttribute("title")).toContain("No protocol set")',
         "a PARTIAL protocol (any key carrying text) renders the panel rows",
-        'not.toContain("No protocol set")',
+        'expect(panel.textContent).not.toContain("Project defaults")',
     ):
         assert beat in t, f"protoEmpty harness lost a beat: {beat}"
 
@@ -56,14 +59,29 @@ def test_proto_empty_truth_table():
 # ---------- Part B: placement + wiring ----------
 
 def test_protocol_panel_placed_between_gate_and_assignment():
-    """SPEC-4: the panel renders directly UNDER the gate / ABOVE Assignment."""
+    """SPEC-4: the panel renders directly UNDER the gate / ABOVE Assignment.
+
+    Linear round 3 (D10): task detail became a Linear issue — the gate is a compact card
+    in the MAIN column, and assignment + protocol moved into the right PropertyRail
+    (the separate AssignSurface block is gone: the Assignee property value IS the
+    editor). The equivalent ordering invariant: the gate lives in the main column
+    (read first), and in the rail the protocol sits after the Assignee property and
+    before the close/cancel card."""
     page = _page()
-    body = page[page.index("{/* gate -> protocol -> thread -> assignment -> close */}"):]
-    i_gate = body.index("<GateSurface")
-    i_proto = body.index("<ProtocolPanel")
-    i_assign = body.index("<AssignSurface")
-    assert i_gate < i_proto < i_assign, \
-        f"protocol panel out of place (gate<protocol<assignment): {i_gate},{i_proto},{i_assign}"
+    body = page[page.index('<div className="wk-detail td-body"'):]
+    i_main = body.index('<div className="td-main">')
+    i_rail = body.index('<div className="td-rail">')
+    main = body[i_main:i_rail]
+    assert "{full ? description : gate}" in main and "{full ? gate : description}" in main, \
+        "gate must render in the main column (above the rail)"
+    assert "<GateSurface" in page[page.index("const gate = ("):page.index('<div className="wk-detail td-body"')], \
+        "the main-column gate must be the GateSurface"
+    rail = body[i_rail:body.index("</PropertyRail>")]
+    i_assign = rail.index('label={all.length > 1 ? "Assignees" : "Assignee"}')
+    i_proto = rail.index("<ProtocolPanel")
+    i_close = rail.index("<CloseCard")
+    assert i_assign < i_proto < i_close, \
+        f"protocol panel out of place (assignee<protocol<close): {i_assign},{i_proto},{i_close}"
 
 
 def test_protocol_panel_rows_and_markdown_notes():
@@ -79,8 +97,9 @@ def test_protocol_panel_rows_and_markdown_notes():
     assert "p.autonomy" in surf and "L1" not in surf, "autonomy should be free-text, not enum-bound"
     # header chips visible even collapsed (handoff + autonomy)
     assert 'className="pchip"' in surf and "pchip aut" in surf, "header chips missing"
-    # empty state copy
-    assert "No protocol set — using container defaults." in surf, "empty-state copy missing"
+    # empty state copy (D12: short value visible, the sentence in its tooltip)
+    assert 'title="No protocol set on this task — the assignee follows the project defaults."' in surf \
+        and ">Project defaults</p>" in surf, "empty-state copy missing"
 
 
 def test_protocol_edit_patches_human_gated():
@@ -92,11 +111,13 @@ def test_protocol_edit_patches_human_gated():
     assert 'patchReq("/api/tasks/" + encodeURIComponent(t.id) + "/protocol"' in surf, \
         "save doesn't PATCH the protocol route"
     assert "actor_agent_id: h.id" in surf, "PATCH body omits the acting human (audit gate)"
-    # save + edit-open are gated on an acting human
-    assert "const h = actingHuman(snap);\n    if (!h || !draft) return;" in surf, "save not gated on an acting human"
-    assert "if (!actingHuman(snap))" in surf, "Edit-open not gated on an acting human"
+    # save + edit-open are gated on an acting human — PS-29: the connection-aware actor
+    # (useActor(): null while offline / read-only), not the raw snapshot's human
+    assert "const actor = useActor();" in surf, "panel doesn't resolve the connection-aware actor"
+    assert "const h = actor;\n    if (!h || !draft) return;" in surf, "save not gated on an acting human"
+    assert "if (!actor)" in surf, "Edit-open not gated on an acting human"
     # Edit/Set buttons only render for the acting human (canEdit gate)
-    assert "const canEdit = !!actingHuman(snap)" in surf, "Edit affordance not gated on acting human"
+    assert "const canEdit = !!actor" in surf, "Edit affordance not gated on acting human"
     assert "canEdit ?" in surf, "Edit/Set buttons not behind the canEdit gate"
     # behavioral proof of the exact PATCH body (all four keys; '' clears) is Vitest:
     t = (TASKS_DIR / "TasksPage.spec4.test.tsx").read_text()

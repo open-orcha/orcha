@@ -1,0 +1,29 @@
+/* Settings › Voice (VoiceSection.tsx) — token-only, light + dark. */
+.voice-select { min-width: 180px; height: 28px; }
+.voice-kbd {
+  font-family: var(--v2-font-sans); font-size: 11px; color: var(--v2-text-2);
+  border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); padding: 0 4px;
+}
+.voice-tag {
+  margin-left: 8px; font-size: 11px; color: var(--v2-text-3);
+  border: 1px solid var(--v2-border); border-radius: var(--v2-radius-full); padding: 0 6px;
+}
+.voice-prov-ctl { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.voice-prov-ctl .sc-banner { margin: 0; }
+.voice-key-row { display: flex; align-items: center; gap: 8px; }
+.voice-key-row .sc-row { flex: 1 1 auto; }
+.voice-muted { color: var(--v2-text-3); font-size: 13px; }
+.voice-pad { padding: 8px 12px; }
+.voice-privacy { margin: 0; color: var(--v2-text-2); font-size: 13px; line-height: 20px; }
+.voice-progress { width: 160px; height: 6px; accent-color: var(--v2-accent); }
+.voice-meter-row { display: flex; align-items: center; gap: 10px; }
+.voice-meter {
+  position: relative; width: 160px; height: 6px; overflow: hidden;
+  border-radius: var(--v2-radius-full); background: var(--v2-border);
+}
+.voice-meter-fill {
+  position: absolute; inset: 0; transform-origin: left center; background: var(--v2-ok);
+  transition: transform 80ms linear;
+}
+.voice-try { width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; }
+@media (prefers-reduced-motion: reduce) { .voice-meter-fill { transition: none; } }

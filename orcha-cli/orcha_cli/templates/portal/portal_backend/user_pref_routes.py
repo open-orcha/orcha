@@ -146,11 +146,11 @@ def put_prefs(request: Request, body: PrefsBody):
             raise HTTPException(
                 403,
                 f"your GitHub account ('{login}') is not a member of any project "
-                "on this Orcha",
+                "on this Embodent",
             )
         cur.execute(
             """INSERT INTO user_prefs (github_login, prefs, updated_at)
-               VALUES (%s, %s::jsonb, now())
+               VALUES (%s, %s, now())
                ON CONFLICT (github_login)
                DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()""",
             (login.lower(), json.dumps(body.prefs)),

@@ -1,8 +1,9 @@
 """Container, credential, model-setting, and onboarding API schemas."""
 
-from typing import Literal, Optional
+from datetime import datetime
+from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from portal_backend.limits import MAX_DESC_LEN, MAX_NAME_LEN, MAX_PAYLOAD_LEN
 
@@ -107,6 +108,71 @@ class LlmKeyTest(BaseModel):
     )
 
 
+class ProviderKeyAgentUse(BaseModel):
+    """Opt one stored provider key in (or out) of AGENT RUNS (PUT .../settings/provider-keys/
+    {provider}/agent-use, migration 071). HUMAN-AUTHORITY gated + audit-logged, same gate as
+    storing the key. When on, the notifier injects the stored key into every agent run on this
+    project for the matching runtime (anthropic -> Claude, openai -> Codex), so the run bills the
+    API key instead of a Claude/ChatGPT subscription. Strict: a JSON boolean only."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    actor_agent_id: str = Field(
+        ...,
+        description="UUID of the human agent performing the action (kind='human')",
+    )
+    use_for_agents: bool = Field(
+        ...,
+        description="true = agent runs on this project bill this API key; false = subscription (default)",
+    )
+
+
+class ProviderKeyAgentUseOut(BaseModel):
+    """Response of PUT .../settings/provider-keys/{provider}/agent-use."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    use_for_agents: bool
+    agent_runtime: Optional[Literal["claude", "codex"]] = Field(
+        default=None,
+        description="the agent runtime this provider's key is injected into, or null if none",
+    )
+
+
+class ProviderKeyStatus(BaseModel):
+    """One provider row of GET .../settings/provider-keys. NEVER carries a secret."""
+
+    provider: str
+    name: str
+    configured: bool
+    source: Optional[Literal["db", "env"]] = None
+    masked: Optional[str] = None
+    set_at: Optional[datetime] = None
+    stored: bool = Field(
+        default=False,
+        description="a key is stored (sealed) on this project — required for use_for_agents",
+    )
+    use_for_agents: bool = Field(
+        default=False,
+        description="agent runs on this project bill this stored key instead of a subscription",
+    )
+    agent_runtime: Optional[Literal["claude", "codex"]] = Field(
+        default=None,
+        description="the agent runtime this key can serve (anthropic->claude, openai->codex), else null",
+    )
+    agent_only: bool = Field(
+        default=False,
+        description="this provider's key is used ONLY for agent runs (no Embodent helper uses it yet)",
+    )
+
+
+class ProviderKeyList(BaseModel):
+    """GET .../settings/provider-keys."""
+
+    keys: list[ProviderKeyStatus]
+
+
 class GithubPatUpdate(BaseModel):
     """Orcha Cloud local run gap #1: store a per-container GitHub personal access token
     (PUT .../settings/github-pat). HUMAN-AUTHORITY gated + audit-logged — writing a
@@ -203,3 +269,78 @@ class ProposeBody(BaseModel):
     cid: str = Field(..., description="container id for the workspace being staffed")
     goal: str = Field(..., max_length=MAX_PAYLOAD_LEN)
     dialogue: list[ProposeDialogueTurn] = Field(default_factory=list)
+
+
+class ContainerIconUpdate(BaseModel):
+    """D14: set (or with null, clear) a project's icon — cosmetic, shared by the portal
+    and the desktop app. Validated server-side (portal_backend/project_icons.py)."""
+
+    icon: Optional[Dict[str, Any]] = Field(
+        ...,
+        description=(
+            '{"kind":"emoji","value":"🚀"} or {"kind":"glyph","value":"<name>",'
+            '"color":0-9|null}; null resets to the default glyph'
+        ),
+        examples=[{"kind": "emoji", "value": "🚀"}],
+    )
+    actor_agent_id: Optional[str] = Field(
+        default=None, description="who changed it (for the audit row)"
+    )
+
+
+class ContainerIconResponse(BaseModel):
+    container_id: str
+    icon: Optional[Dict[str, Any]] = None
+
+
+class ContainerObjectiveUpdate(BaseModel):
+    """Set (or with null / blank, clear) the project's stated objective — what the
+    Overview's summary line and every task's goal chain read (``containers.description``,
+    mirrored onto the root task's description as template apply does)."""
+
+    objective: Optional[str] = Field(
+        ...,
+        max_length=MAX_DESC_LEN,
+        description="the objective in plain words; null or blank clears it",
+        examples=["Ship a checkout that never lets a cart exceed stock."],
+    )
+    actor_agent_id: Optional[str] = Field(
+        default=None, description="who changed it (for the audit row)"
+    )
+
+
+class ContainerObjectiveResponse(BaseModel):
+    container_id: str
+    objective: Optional[str] = Field(None, description="the stored objective; null when none is set")
+
+
+# Agent limit (mig 056): containers.max_auto_agents — how many live AI agents created
+# FROM suggestions (agents.is_auto_created) the project may hold. Bounds match the UI.
+MAX_AUTO_AGENTS_MIN = 1
+MAX_AUTO_AGENTS_MAX = 50
+
+
+class ContainerLimitsUpdate(BaseModel):
+    """PUT /api/containers/{cid}/limits — owner-or-manage_agents, audited."""
+
+    max_auto_agents: int = Field(
+        ...,
+        ge=MAX_AUTO_AGENTS_MIN,
+        le=MAX_AUTO_AGENTS_MAX,
+        description="how many agents created from suggestions this project may hold (1-50)",
+    )
+    actor_agent_id: str = Field(
+        ...,
+        description="UUID of the human (kind='human') changing the limit — an agent can "
+        "never raise its own project's cap",
+    )
+
+
+class ContainerLimitsResponse(BaseModel):
+    container_id: str
+    max_auto_agents: int
+    auto_agents_in_use: int = Field(
+        ..., description="live AI agents created from suggestions (counted against the limit)"
+    )
+    min_max_auto_agents: int = MAX_AUTO_AGENTS_MIN
+    max_max_auto_agents: int = MAX_AUTO_AGENTS_MAX

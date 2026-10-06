@@ -33,6 +33,22 @@ def register_project_commands(
         default=None,
         help="host port for the live-terminal bridge (default: first free 8765+)",
     )
+    init.add_argument(
+        "--runtime", choices=("docker", "native"), default="native",
+        help="native (default): run the portal, notifier and bridge on this machine under "
+             "`orcha serve`, with a SQLite file (GH #258). docker: Postgres + portal in Docker "
+             "(deprecated; kept for one release)",
+    )
+    init.add_argument(
+        "--no-service", action="store_true",
+        help="native runtime: do not install the macOS background service (launchd), so "
+             "Orcha does not start at login",
+    )
+    init.add_argument(
+        "--progress-json", action="store_true",
+        help="print one JSON line per step on stdout ({\"step\", \"status\", \"detail\"}); "
+             "the usual messages go to stderr (for the Mac app)",
+    )
     init.add_argument("--force", action="store_true", help="overwrite existing .orcha/")
     init.add_argument(
         "--reset-data",
@@ -99,6 +115,10 @@ def register_project_commands(
         "-v", "--volumes", action="store_true", help="also drop the DB volume"
     )
     down.add_argument(
+        "--yes", action="store_true",
+        help="native runtime: confirm `-v` (delete the database file) without a prompt",
+    )
+    down.add_argument(
         "--project",
         default=None,
         help="target a specific project by name (sans 'orcha-' prefix); works from any directory",
@@ -112,6 +132,29 @@ def register_project_commands(
         "automatically; use this for an explicit, on-demand apply.",
     )
     migrate.set_defaults(func=handlers["migrate"])
+
+    mig_rt = sub.add_parser(
+        "migrate-runtime",
+        help="move this Docker/Postgres project to the native runtime (SQLite, no Docker); "
+        "the Docker copy is kept until --purge-docker",
+    )
+    mig_rt.add_argument("--pg-url", default=None,
+                        help="source Postgres URL (default: localhost:<db_port> from orcha.json)")
+    mig_rt.add_argument("--keep-docker-running", action="store_true",
+                        help="leave the Docker database container running after the copy")
+    mig_rt.add_argument("--no-service", action="store_true",
+                        help="do not install the background service")
+    mig_rt.add_argument("--rollback", action="store_true",
+                        help="go back to the Docker stack (the SQLite file is renamed, not deleted)")
+    mig_rt.add_argument("--purge-docker", action="store_true",
+                        help="delete the old Docker containers, image and Postgres volume "
+                        "(asks first; only once the native portal answers)")
+    mig_rt.add_argument("--yes", action="store_true", help="answer yes to --purge-docker's question")
+    mig_rt.add_argument("--json", action="store_true",
+                        help="machine-readable output: one JSON object per line")
+    mig_rt.add_argument("--project-dir", default=None,
+                        help="project root (default: the current directory)")
+    mig_rt.set_defaults(func=handlers["migrate-runtime"])
 
     upgrade = sub.add_parser(
         "upgrade",

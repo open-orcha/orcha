@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from portal_backend import sql
+
 
 def run_row(row: dict) -> dict:
     """Serialize a worker-run database row for the API."""
@@ -64,6 +66,6 @@ def revoke_tokens_for_runs(cur, run_ids) -> None:
     if run_ids:
         cur.execute(
             "UPDATE embodiment_tokens SET revoked_at=now() "
-            "WHERE run_id = ANY(%s) AND revoked_at IS NULL",
-            (list(run_ids),),
+            f"WHERE {sql.in_list('run_id')} AND revoked_at IS NULL",
+            (sql.list_param(run_ids),),
         )

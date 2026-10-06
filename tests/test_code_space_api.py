@@ -270,8 +270,11 @@ async def test_tagged_create_makes_directed_request_with_anchor_and_wakes(
     assert req.json()["target_id"] == tagged["agent_id"]
     assert req.json()["status"] == "open"
 
-    payload_rows = db.execute("SELECT payload FROM requests WHERE id=%s", (request_id,))
-    payload_text = payload_rows[0]["payload"]
+    # mig 065: the AGENT's text (anchor + question + reply instruction) is agent_payload;
+    # people see just the question as payload.
+    payload_rows = db.execute("SELECT payload, agent_payload FROM requests WHERE id=%s", (request_id,))
+    assert payload_rows[0]["payload"] == "why did we do it this way?"
+    payload_text = payload_rows[0]["agent_payload"]
     assert "src/a.py:10-12" in payload_text
     assert "why did we do it this way?" in payload_text
     assert f"POST /api/code/threads/{thread_id}/messages" in payload_text
@@ -316,9 +319,11 @@ async def test_wake_payload_deep_link_url_encodes_path(client, db, container, ma
     thread_id = r.json()["id"]
     request_id = r.json()["request_id"]
 
-    payload_rows = db.execute("SELECT payload FROM requests WHERE id=%s", (request_id,))
-    payload_text = payload_rows[0]["payload"]
+    payload_rows = db.execute("SELECT agent_payload, detail FROM requests WHERE id=%s", (request_id,))
+    payload_text = payload_rows[0]["agent_payload"]
     assert f"view/reply in the portal: /code?path=src/my%20file.py&thread={thread_id}" in payload_text
+    # the human-facing link (detail.code_thread.link) is the same well-formed string
+    assert payload_rows[0]["detail"]["code_thread"]["link"] == f"/code?path=src/my%20file.py&thread={thread_id}"
 
 
 async def test_untagged_create_makes_no_request(client, db, container, make_agent, token_env, monkeypatch):
@@ -718,6 +723,8 @@ async def test_list_by_path_returns_threads(client, container, make_agent, token
     body = r.json()
     assert len(body["threads"]) == 1
     assert body["threads"][0]["path"] == "src/a.py"
+    # C14b: the path= rows carry the opening message like the recent= rows do
+    assert body["threads"][0]["first_message"] == "t1"
 
 
 async def test_list_without_path_returns_per_file_counts(client, container, make_agent, token_env, monkeypatch):
@@ -1293,11 +1300,52 @@ async def test_outline_unsupported_extension_empty(client, container, token_env,
 
     _stub_gh(monkeypatch, fake_get)
     r = await client.get(
-        f"/api/containers/{cid}/code/outline", params={"path": "README.md"})
+        f"/api/containers/{cid}/code/outline", params={"path": "notes.txt"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["language"] is None
     assert body["symbols"] == []
+
+
+MD_SAMPLE = (
+    "# Orcha\n\n"
+    "Intro.\n\n"
+    "## Install ##\n\n"
+    "```bash\n"
+    "# not a heading\n"
+    "```\n\n"
+    "### Usage\n"
+)
+
+
+async def test_outline_markdown_headings(client, container, token_env, monkeypatch):
+    """C08: a markdown file's outline lists its ATX headings with source lines,
+    skipping `#` lines inside fenced code."""
+    cid = container["id"]
+    await _bind_repo(client, cid)
+
+    def fake_get(path, token):
+        if "/commits/" in path:
+            return {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        if path == "/repos/acme/site":
+            return {"default_branch": "main"}
+        assert path.startswith("/repos/acme/site/contents/README.md?ref=main")
+        return _content_response(MD_SAMPLE)
+
+    _stub_gh(monkeypatch, fake_get)
+    body = (await client.get(f"/api/containers/{cid}/code/outline", params={"path": "README.md"})).json()
+    assert body["language"] == "markdown"
+    assert [(s["name"], s["line"], s["level"], s["kind"]) for s in body["symbols"]] == [
+        ("Orcha", 1, 1, "heading"), ("Install", 5, 2, "heading"), ("Usage", 11, 3, "heading")]
+
+
+def test_definition_line_is_the_name_line_not_the_blank_above():
+    """C11/C12: `^\\s*` swallowed the blank lines before a def, reporting line 4 for a
+    def on line 5."""
+    from portal_backend.code_space_routes import _extract_definitions
+    text = "class Server:\n    def start(self):\n        pass\n\ndef helper():\n    pass\n\ndef extra():\n    pass\n"
+    got = {d["name"]: d["line"] for d in _extract_definitions(text, "python")}
+    assert got == {"Server": 1, "start": 2, "helper": 5, "extra": 8}
 
 
 async def test_outline_skips_oversized_file(client, container, token_env, monkeypatch):

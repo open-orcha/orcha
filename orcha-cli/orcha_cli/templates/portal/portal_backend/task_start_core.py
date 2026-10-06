@@ -43,9 +43,10 @@ import json
 import urllib.error
 import urllib.request
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event, recompute_agent_status
+from portal_backend.database import after_commit
 from portal_backend.events import publish_event
-from portal_backend.github_routes import _read_token, _read_token_map
 
 GITHUB_API = "https://api.github.com"
 GITHUB_COMMENT_TIMEOUT_SECONDS = 10
@@ -137,16 +138,15 @@ def build_task_fields(kind: str, number: int, gh_title: str, body_excerpt: str,
     return {"title": title, "description": description, "definition_of_done": dod}
 
 
-def _resolve_repo_token(repo: str):
-    """The installation token that can read/write `owner/name`, or None when the App
-    isn't wired for this owner. Duplicates github_hub_routes._resolve_repo_token's
-    logic (rather than importing it) to avoid a circular import: github_hub_routes
-    already imports THIS module. Same multi-org-then-legacy-file resolution."""
-    owner = (repo or "").split("/", 1)[0].lower()
-    token_map = _read_token_map()
-    if token_map and owner in token_map:
-        return token_map[owner]
-    return _read_token()
+def _resolve_repo_token(repo: str, container_id=None):
+    """The token that can read/write `owner/name`, or None when nothing is wired for it.
+
+    G05b/C01: delegates to github_hub_routes._resolve_repo_token WITH the project id so a
+    token saved in Settings (the per-project PAT) participates, exactly like every hub /
+    browse route. Imported lazily: github_hub_routes imports THIS module at load time."""
+    from portal_backend.github_hub_routes import _resolve_repo_token as _hub_resolve
+
+    return _hub_resolve(repo, str(container_id) if container_id else None)
 
 
 def _gh_post_comment(repo: str, number: int, token: str, body: str) -> None:
@@ -194,6 +194,10 @@ def _post_start_comment(cur, container_id, kind: str, number: int, task_id: str,
     bound repo, no installation token, or any GitHub/network failure is caught and
     swallowed — a dead comment must never break task creation. Runs from the shared
     core so every dispatch path (hub, Slack) gets it exactly once.
+
+    GH #258 S3 note 4: the token lookup and the POST run via database.after_commit, i.e.
+    once the caller's scope has committed — never under the write lock, and never for a
+    task whose insert rolled back.
     """
     try:
         cur.execute("SELECT github_repo FROM containers WHERE id=%s", (container_id,))
@@ -201,18 +205,24 @@ def _post_start_comment(cur, container_id, kind: str, number: int, task_id: str,
         repo = row["github_repo"] if row else None
         if not repo:
             return
-        token = _resolve_repo_token(repo)
-        if not token:
-            return
         assignee_alias = None
         if assignee_agent_id:
             cur.execute("SELECT alias FROM agents WHERE id=%s", (assignee_agent_id,))
             arow = cur.fetchone()
             assignee_alias = arow["alias"] if arow else None
         body = _compose_start_comment(task_id, assignee_alias)
-        _gh_post_comment(repo, number, token, body)
     except Exception:
-        pass  # best-effort by contract — a GitHub comment failure never breaks the start
+        return  # best-effort by contract — a GitHub comment failure never breaks the start
+
+    def _post() -> None:
+        try:
+            token = _resolve_repo_token(repo, container_id)
+            if token:
+                _gh_post_comment(repo, number, token, body)
+        except Exception:
+            pass  # best-effort, as above
+
+    after_commit(_post)
 
 
 def find_open_gh_tasks(cur, container_id, numbers) -> dict:
@@ -228,26 +238,29 @@ def find_open_gh_tasks(cur, container_id, numbers) -> dict:
     tracked, or vice versa).
 
     Matches each number's `GH #<number>: ` title prefix (the exact string
-    build_task_fields writes) via a single unnest()+LATERAL join — a LIKE-per-number
-    loop would be N queries; this is one, regardless of how many numbers are asked
+    build_task_fields writes) via a single query (a bound int-list row source plus a
+    correlated first-match subquery) — a LIKE-per-number loop would be N queries; this is one, regardless of how many numbers are asked
     about. Only non-terminal statuses count (mirrors find_open_gh_task). Numbers list
     may be empty (returns {} without a query).
     """
     numbers = [int(n) for n in (numbers or [])]
     if not numbers:
         return {}
+    # Placeholders in text order: the correlated subquery's three, then int_rows' list.
     cur.execute(
-        """SELECT v.number AS number, t.id AS task_id
-             FROM (SELECT unnest(%s::int[]) AS number) v
-             JOIN LATERAL (
-               SELECT id FROM tasks
-                WHERE container_id=%s
-                  AND status = ANY(%s)
-                  AND title LIKE %s || v.number::text || ': %%'
-                ORDER BY created_at ASC, id ASC
-                LIMIT 1
-             ) t ON true""",
-        (numbers, container_id, list(_OPEN_STATUSES), GH_TITLE_PREFIX),
+        f"""SELECT m.number, m.task_id FROM (
+               SELECT v.number AS number,
+                      (SELECT id FROM tasks
+                        WHERE container_id=%s
+                          AND {sql.in_list('status')}
+                          AND title LIKE %s || CAST(v.number AS TEXT) || ': %%'
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT 1) AS task_id
+                 FROM {sql.int_rows('number')} v
+             ) m
+            WHERE m.task_id IS NOT NULL""",
+        (container_id, sql.list_param(_OPEN_STATUSES), GH_TITLE_PREFIX,
+         sql.list_param(numbers)),
     )
     return {int(row["number"]): str(row["task_id"]) for row in cur.fetchall()}
 
@@ -337,10 +350,11 @@ def find_orchestrator_agent(cur, container_id):
     container with no orchestrator persona at all) — callers must treat it as a
     graceful no-op, never an error.
     """
+    like_op = sql.ilike()  # case-insensitive LIKE (hoisted: the SQL lint reads f-string fields)
     cur.execute(
-        """SELECT id FROM agents
+        f"""SELECT id FROM agents
             WHERE container_id=%s AND kind='ai' AND terminated_at IS NULL
-              AND role ILIKE %s
+              AND role {like_op} %s
             ORDER BY created_at ASC, id ASC
             LIMIT 1""",
         (container_id, "%orchestrat%"),

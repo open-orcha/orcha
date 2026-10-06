@@ -37,6 +37,9 @@ jobs:
           --health-retries 10
 
     env:
+      # GH #258 PR 7b: the suite defaults to SQLite; this job keeps the Postgres leg alive
+      # (full suite + test_schema_parity) until the cleanup PR removes it.
+      ORCHA_TEST_BACKEND: postgres
       ORCHA_TEST_ADMIN_URL: postgresql://orcha:orcha@localhost:5432/postgres
       ORCHA_TEST_DATABASE_URL: postgresql://orcha:orcha@localhost:5432/orcha_test
 
@@ -64,9 +67,63 @@ jobs:
           pytest --cov=main --cov-report=term-missing --cov-fail-under=70 \
                  --timeout=180 -p no:cacheprovider
 
+      # GH #258: the portal must boot as a plain host process from the installed CLI
+      # (`orcha portal`, no container), apply every migration to a fresh database,
+      # serve the React shell, and answer an API write. The project is the committed
+      # tests/fixtures/native-project (orcha.json + .orcha/.env only), copied out of
+      # the checkout because `orcha portal` appends a secret key to its .env.
+      - name: Smoke-test `orcha portal` as a host process
+        run: |
+          pip install -e orcha-cli
+          python -c "import psycopg; c = psycopg.connect('$ORCHA_TEST_ADMIN_URL', autocommit=True); c.execute('CREATE DATABASE orcha_portal_smoke')"
+          cp -R tests/fixtures/native-project "$RUNNER_TEMP/native-project"
+          (cd /tmp && orcha portal --project-dir "$RUNNER_TEMP/native-project" > "$RUNNER_TEMP/portal.log" 2>&1 &)
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null http://127.0.0.1:8123/ \
+            || { cat "$RUNNER_TEMP/portal.log"; exit 1; }
+          curl -fsS http://127.0.0.1:8123/ | grep -q '<div id="root"></div>'
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+               -d '{"name":"smoke","root_objective":"smoke"}' http://127.0.0.1:8123/api/containers
+          grep -q "\[migrate\] applied: \[.001_init.sql" "$RUNNER_TEMP/portal.log" || { cat "$RUNNER_TEMP/portal.log"; exit 1; }
+
       # Reuse the .coverage file from the test step — do NOT re-run the suite
       # (a second full pytest pass here doubled the billed runtime of every job).
       - name: Coverage summary (PR)
+        if: always()
+        run: |
+          coverage report | tail -5 >> "$GITHUB_STEP_SUMMARY" || true
+
+  # GH #258 PR 7b: the SQLite leg is the default backend and a required check — no service
+  # container; each session gets a temp database file. Coverage spans main + portal_backend.
+  pytest-sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    env:
+      ORCHA_TEST_BACKEND: sqlite
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements.txt \
+                      -r orcha-cli/orcha_cli/templates/portal/requirements.txt \
+                      pytest-cov pytest-timeout
+
+      - name: Run the suite on SQLite + coverage gate (>=70% of main.py + portal_backend)
+        run: |
+          pytest --cov=main --cov=portal_backend --cov-report=term-missing --cov-fail-under=70 \
+                 --timeout=180 -p no:cacheprovider
+
+      - name: Coverage summary
         if: always()
         run: |
           coverage report | tail -5 >> "$GITHUB_STEP_SUMMARY" || true

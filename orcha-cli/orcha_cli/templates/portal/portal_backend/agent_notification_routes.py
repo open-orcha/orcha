@@ -4,10 +4,16 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
+from portal_backend import notification_prefs as _np
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
-from portal_backend.identity_routes import trusted_actor
+from portal_backend.identity_routes import (
+    require_machine_lane_member,
+    require_member_read,
+    trusted_actor,
+)
 from portal_backend.notification_formatting import _classify_notification
 from portal_backend.notification_taxonomy import _NOTIF_ACTOR_FIELDS
 from portal_backend.schemas.agent_state import NotificationsRead
@@ -16,6 +22,7 @@ from portal_backend.schemas.agent_state import NotificationsRead
 @app.get("/api/agents/{aid}/notifications")
 def agent_notifications(
     aid: str,
+    request: Request,
     zone: Optional[str] = None,
     limit: int = 50,
     before_ts: Optional[float] = None,
@@ -46,8 +53,20 @@ def agent_notifications(
         raise HTTPException(400, "zone must be 'needs_you' or 'earlier'")
     limit = max(1, min(limit, 200))
     fetch_cap = limit * 4
-    with db_cursor() as (_, cur):
-        require_agent(cur, aid)
+    with db_cursor(readonly=True) as (_, cur):
+        agent = require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
+        # mig 063: a HUMAN's bell honours their notification settings (should_notify on
+        # the in_app channel). AI feeds are machine state and are never filtered. The
+        # Needs-you queue does not read this feed, so muting never hides a decision.
+        cur.execute(
+            "SELECT id, alias, github_login, member_role, kind FROM agents WHERE id=%s",
+            (aid,),
+        )
+        me = cur.fetchone()
+        prefs = (
+            _np.effective_for_member(cur, me) if me and me["kind"] == "human" else None
+        )
         cur.execute(
             "SELECT read_through_ts FROM agent_notification_state WHERE agent_id=%s",
             (aid,),
@@ -81,8 +100,8 @@ def agent_notifications(
         people: dict[str, dict] = {}
         if actor_ids:
             cur.execute(
-                "SELECT id, alias, kind FROM agents WHERE id = ANY(%s)",
-                (list(actor_ids),),
+                f"SELECT id, alias, kind FROM agents WHERE {sql.in_list('id')}",
+                (sql.list_param(actor_ids),),
             )
             people = {str(agent["id"]): agent for agent in cur.fetchall()}
 
@@ -107,6 +126,13 @@ def agent_notifications(
         if notification is None:
             continue
         if zone is not None and notification["zone"] != zone:
+            continue
+        if prefs is not None and not _np.should_notify(
+            prefs,
+            # the feed is keyed on this human, so every row is addressed to them
+            {"kind": row["event_name"], "mine": True},
+            "in_app",
+        ):
             continue
         actor = (
             people.get(notification["actor_ref"]) or {}
@@ -144,6 +170,17 @@ def agent_notifications(
         next_before_id = None
     return {
         "notifications": notifications,
+        # mig 063: lets the bell say "Paused until …" / "This project is muted" instead of
+        # looking empty. null for AI feeds.
+        "prefs_state": (
+            {
+                "paused": _np.is_paused(prefs),
+                "paused_until": (prefs.get("pause") or {}).get("until"),
+                "muted": bool(prefs.get("muted")),
+            }
+            if prefs is not None
+            else None
+        ),
         "read_through_ts": read_through,
         "next_before_ts": next_before_ts,
         "next_before_id": next_before_id,
@@ -177,6 +214,10 @@ def agent_notifications_read(aid: str, body: NotificationsRead, request: Request
                 raise HTTPException(
                     403, "you can only mark your own notifications read"
                 )
+        else:
+            # PS-07: an AI agent's cursor is machine-lane state — a trusted human must be
+            # a non-viewer member of its project. Header-less agent lane unchanged.
+            require_machine_lane_member(cur, request, str(agent["container_id"]))
         target = body.through_ts
         if target is None:
             cur.execute(
@@ -184,12 +225,17 @@ def agent_notifications_read(aid: str, body: NotificationsRead, request: Request
                 (aid,),
             )
             target = cur.fetchone()["mx"]
+        # Each nullable operand falls back to the other, so a NULL is ignored exactly as
+        # Postgres GREATEST ignores it (SQLite max() would return NULL).
+        advance_expr = sql.greatest(
+            "COALESCE(agent_notification_state.read_through_ts, EXCLUDED.read_through_ts)",
+            "COALESCE(EXCLUDED.read_through_ts, agent_notification_state.read_through_ts)",
+        )
         cur.execute(
-            """INSERT INTO agent_notification_state (agent_id, read_through_ts, updated_at)
+            f"""INSERT INTO agent_notification_state (agent_id, read_through_ts, updated_at)
                VALUES (%s, %s, now())
                ON CONFLICT (agent_id) DO UPDATE
-                 SET read_through_ts = GREATEST(agent_notification_state.read_through_ts,
-                                                EXCLUDED.read_through_ts),
+                 SET read_through_ts = {advance_expr},
                      updated_at = now()
                RETURNING read_through_ts""",
             (aid, target),

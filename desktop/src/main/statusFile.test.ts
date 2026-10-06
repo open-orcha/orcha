@@ -10,7 +10,9 @@ const stack: Stack = {
   dbPort: 5435,
   portalStatus: 'Up 4 hours',
   running: true,
-  folder: null
+  folder: null,
+  runtime: 'docker',
+  health: 'ok'
 }
 const item: AttentionItem = {
   project: 'orcha-acme-ehr',
@@ -30,6 +32,15 @@ const stackDetail: StackAttention = {
 }
 
 describe('buildStatus', () => {
+  it('counts decisions only — follow-ups are listed after them but never counted', () => {
+    const followUp: AttentionItem = { ...item, id: 'f1', kind: 'request_close', title: 'Close my ask' }
+    const plan: AttentionItem = { ...item, id: 'p1', kind: 'task_plan', title: 'Approve plan' }
+    const status = buildStatus([stack], [followUp, plan], new Map(), new Date('2026-06-11T22:00:00Z'))
+    expect(status.totalAttention).toBe(1)
+    expect(status.stacks[0].attention).toBe(1)
+    expect(status.attention.map((a) => a.kind)).toEqual(['task_plan', 'request_close'])
+  })
+
   it('emits schema v3: per-stack roster (with model + task) + pipeline counts, attention titles', () => {
     const status = buildStatus(
       [stack, { ...stack, project: 'orcha-idle', projectShort: 'idle', running: false, apiPort: null }],

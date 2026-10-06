@@ -9,6 +9,8 @@ import shutil
 import sys
 from typing import Callable, Optional
 
+from . import personal_session
+
 RUNTIME_CLAUDE = "claude"
 RUNTIME_CODEX = "codex"
 ORCHA_CLAUDE_EXEC = "ORCHA_CLAUDE_EXEC"
@@ -221,7 +223,7 @@ def exec_live_session(
             f"error: `{exec_cmd}` not found on PATH — cannot start the live session."
         )
     argv[0] = exec_cmd
-    env = dict(os.environ)
+    env = personal_session.strip(dict(os.environ))
     env["ORCHA_ALIAS"] = alias
     env["ORCHA_AGENT_RUNTIME"] = runtime
     os.execvpe(exec_cmd, argv, env)

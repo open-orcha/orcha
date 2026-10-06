@@ -124,7 +124,7 @@ struct OrchaAgentsWidget: Widget {
     StaticConfiguration(kind: "OrchaAgentsWidget", provider: Provider()) { entry in
       OrchaAgentsWidgetView(entry: entry)
     }
-    .configurationDisplayName("Orcha Agents")
+    .configurationDisplayName("Embodent Agents")
     .description("Who's working across your stacks.")
     .supportedFamilies([.systemMedium, .systemLarge])
   }

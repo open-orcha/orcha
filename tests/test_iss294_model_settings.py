@@ -231,8 +231,7 @@ async def test_wake_scan_surfaces_configured_triage_model(client, container, mak
 # ============================ migration 022 shape ============================
 
 def test_migration_022_table_exists(db):
-    cols = {row["column_name"] for row in db.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name='container_model_settings'")}
+    cols = {row["column_name"] for row in db.columns("container_model_settings")}
     assert {"container_id", "use_case_key", "provider", "model", "set_at"} <= cols
 
 

@@ -115,9 +115,11 @@ describe("TasksPage", () => {
     // both tasks appear in the list once the snapshot lands
     expect((await screen.findAllByText("Verify me")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText("Second task")).length).toBeGreaterThan(0);
-    // grouped by status with the vanilla group headers
-    expect(screen.getByText("Needs verification")).toBeInTheDocument();
-    expect(screen.getByText("In progress")).toBeInTheDocument();
+    // grouped by status with the vanilla group headers (in GRP order)
+    const heads = Array.from(document.querySelectorAll(".tl-grp .v2-group-toggle")).map((h) => h.textContent);
+    expect(heads).toEqual(["Needs verification1", "In progress1"]);
+    // every row carries its exact status label (never colour-only)
+    expect(document.querySelector('.trow[data-id="t2"] [data-status="in_progress"]')?.textContent).toContain("In progress");
   });
 
   it("selects the task from the ?task= deep link", async () => {

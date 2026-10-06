@@ -121,3 +121,43 @@ export function navigateScoped(href: string): void {
   const s = _currentScope;
   window.location.href = s.multi && s.cid ? withCid(href, s.cid) : href;
 }
+
+/* ---- V2 project switching (docs/orcha-v2-architecture.md §4) -------------
+ * Switching projects stays a FULL navigation with ?cid=<target> — the
+ * guarantee that no in-memory state (snapshot, identity, drafts, streams)
+ * from project A survives into project B. The landing path keeps the current
+ * section when it is project-scoped, and drops entity params (an entity id
+ * from project A is meaningless in project B). */
+export const PROJECT_SECTIONS = [
+  "/", "/tasks", "/agents", "/requests", "/needs", "/activity",
+  "/code", "/github", "/metrics", "/settings", "/members",
+];
+export const ENTITY_PARAMS = ["task", "req", "agent", "pr", "issue", "path", "line", "thread", "run", "item", "ref", "browse", "new"];
+
+/** The URL a project switch lands on (pure; exported for tests). */
+export function projectSwitchHref(cid: string, fromPath?: string, fromSearch?: string): string {
+  const path = fromPath ?? window.location.pathname;
+  const section = PROJECT_SECTIONS.includes(path) ? path : "/";
+  const q = new URLSearchParams(section === path ? (fromSearch ?? window.location.search) : "");
+  ENTITY_PARAMS.forEach((k) => q.delete(k));
+  q.set("cid", cid);
+  return section + "?" + q.toString();
+}
+
+/** Full-navigation project switch (`path` overrides the landing path). */
+export function switchProject(cid: string, path?: string): void {
+  const href = path ? withCidForced(path, cid) : projectSwitchHref(cid);
+  window.location.assign(href);
+}
+
+/** Like withCid, but REPLACES an existing cid (target project wins). */
+export function withCidForced(href: string, cid: string): string {
+  let u: URL;
+  try {
+    u = new URL(href, window.location.href);
+  } catch {
+    return href;
+  }
+  u.searchParams.set("cid", cid);
+  return u.pathname + u.search + u.hash;
+}

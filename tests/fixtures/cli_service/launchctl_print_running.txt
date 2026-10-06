@@ -1,0 +1,32 @@
+gui/501/io.openorcha.demo = {
+	active count = 1
+	path = /Users/tester/Library/LaunchAgents/io.openorcha.demo.plist
+	type = LaunchAgent
+	state = running
+
+	program = /opt/orcha/venv/bin/python
+	arguments = {
+		/opt/orcha/venv/bin/python
+		-m
+		orcha_cli
+		serve
+		--project-dir
+		/Users/tester/demo
+	}
+
+	working directory = /Users/tester/demo
+
+	stdout path = /Users/tester/demo/.orcha/logs/launchd.log
+	stderr path = /Users/tester/demo/.orcha/logs/launchd.log
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	domain = gui/501 [100017]
+	runs = 1
+	pid = 4242
+	immediate reason = speculative
+	forks = 3
+	execs = 1
+	last exit code = (never exited)
+}

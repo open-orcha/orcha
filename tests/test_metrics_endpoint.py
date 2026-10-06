@@ -12,6 +12,8 @@ import json
 import uuid
 
 from portal_backend.container_metrics_routes import parse_output_tail
+from conftest import ts_ago
+from portal_backend import sql
 
 CLAUDE_TAIL = (
     '{"type":"system","subtype":"init"}\n'
@@ -133,8 +135,8 @@ async def test_metrics_window_filters_out_old_runs(client, container, make_agent
     inside = await _run(client, aid, output=CLAUDE_TAIL)
     outside = await _run(client, aid, output=CLAUDE_TAIL)
     db.execute(
-        "UPDATE worker_runs SET started_at=now() - interval '9 days', "
-        "ended_at=now() - interval '9 days' WHERE run_id=%s", (outside,))
+        f"UPDATE worker_runs SET started_at={ts_ago(777600)}, "
+        f"ended_at={ts_ago(777600)} WHERE run_id=%s", (outside,))
     d = await _metrics(client, cid, days=7)
     assert d["totals"]["runs"] == 1 and d["totals"]["est_cost_usd"] == 0.25
     d30 = await _metrics(client, cid, days=30)
@@ -169,8 +171,8 @@ async def test_metrics_daily_gap_fill_and_bucketing(client, container, make_agen
     today_run = await _run(client, aid, output=CLAUDE_TAIL)
     old_run = await _run(client, aid, output=CLAUDE_TAIL)
     db.execute(
-        "UPDATE worker_runs SET started_at=now() - interval '3 days', "
-        "ended_at=now() - interval '3 days' WHERE run_id=%s", (old_run,))
+        f"UPDATE worker_runs SET started_at={ts_ago(259200)}, "
+        f"ended_at={ts_ago(259200)} WHERE run_id=%s", (old_run,))
     d = await _metrics(client, cid, days=7)
     days = d["daily"]
     assert len(days) == 7                                             # full window, gaps filled
@@ -189,8 +191,8 @@ async def test_metrics_sandbox_seconds_only_from_sandbox_rows(client, container,
     sbx = await _run(client, aid, wake_kind="sandbox")
     eph = await _run(client, aid, wake_kind="ephemeral")
     db.execute(
-        "UPDATE worker_runs SET started_at=ended_at - interval '90 seconds' "
-        "WHERE run_id IN (%s, %s)", (sbx, eph))
+        "UPDATE worker_runs SET started_at=%s, ended_at=%s "
+        "WHERE run_id IN (%s, %s)", (sql.ago(90), sql.utcnow(), sbx, eph))
     d = await _metrics(client, cid)
     assert d["totals"]["sandbox_seconds"] == 90.0                     # ephemeral time excluded
     assert d["per_agent"][0]["sandbox_seconds"] == 90.0
@@ -209,9 +211,9 @@ async def test_metrics_tasks_completed_and_verified_in_window(
                               json={"actor_agent_id": human, "approve": True})
         assert r.status_code == 200, r.text
     # push one completion + its audit event out of the window
-    db.execute("UPDATE tasks SET completed_at=now() - interval '9 days' WHERE id=%s", (t2,))
+    db.execute(f"UPDATE tasks SET completed_at={ts_ago(777600)} WHERE id=%s", (t2,))
     db.execute(
-        "UPDATE events SET created_at=now() - interval '9 days' "
+        f"UPDATE events SET created_at={ts_ago(777600)} "
         "WHERE entity_type='task' AND entity_id=%s AND event_type='verified'", (t2,))
     d = await _metrics(client, cid, days=7)
     assert d["totals"]["tasks_completed"] == 1
@@ -249,3 +251,20 @@ async def test_metrics_output_tail_is_capped_in_sql(client, container, make_agen
     d = await _metrics(client, cid)
     assert d["totals"]["est_cost_usd"] == 0.25
     assert d["totals"]["runs_with_cost"] == 1
+
+
+async def test_metrics_runs_with_tokens_distinguishes_not_reported(client, container, make_agent):
+    """M02b: an agent whose runs reported no token counts has runs_with_tokens 0 (the UI
+    says 'not reported'), never an indistinguishable '0 in · 0 out'."""
+    cid = container["id"]
+    quiet = (await make_agent("Quill", "eng"))["agent_id"]
+    loud = (await make_agent("Forge", "eng"))["agent_id"]
+    await _run(client, quiet)
+    await _run(client, quiet, output="garbage")
+    await _run(client, loud, finish_extra={"input_tokens": 10, "output_tokens": 20})
+    await _run(client, loud)
+    d = await _metrics(client, cid)
+    by = {a["alias"]: a for a in d["per_agent"]}
+    assert by["Quill"]["runs_with_tokens"] == 0 and by["Quill"]["tokens_in"] == 0
+    assert by["Forge"]["runs_with_tokens"] == 1
+    assert d["totals"]["runs_with_tokens"] == 1

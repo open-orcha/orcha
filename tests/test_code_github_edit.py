@@ -87,7 +87,10 @@ def _default_gh_get(existing_paths_and_shas=None):
         if path == "/repos/acme/site":
             return {"default_branch": "main"}
         if path == f"/repos/acme/site/git/commits/main":
-            return {"sha": BASE_COMMIT_SHA, "tree": {"sha": BASE_TREE_SHA}}
+            # C21: real GitHub 404s a branch NAME on the Git Data commits API
+            raise RuntimeError("github_status:404")
+        if path == f"/repos/acme/site/commits/main":
+            return {"sha": BASE_COMMIT_SHA, "commit": {"tree": {"sha": BASE_TREE_SHA}}}
         if path == f"/repos/acme/site/git/commits/{BASE_COMMIT_SHA}":
             return {"sha": BASE_COMMIT_SHA, "tree": {"sha": BASE_TREE_SHA}}
         if path == f"/repos/acme/site/git/trees/main?recursive=1":
@@ -300,7 +303,8 @@ async def test_propose_happy_path_full_call_sequence(client, container, token_en
     # is the branch NAME "main" (not a fabricated sha) — commit parents are keyed on
     # whatever _resolve_ref actually returned, exactly as the real Git Data API
     # sequence would use it.
-    assert commit_payload["parents"] == ["main"]
+    # C21: parents are the resolved commit SHA, never the branch name.
+    assert commit_payload["parents"] == [BASE_COMMIT_SHA]
     assert commit_payload["tree"] == "newtree0000sha"
     assert commit_payload["message"] == "Add greeting\n\nSome extra body detail."
 
@@ -552,12 +556,11 @@ async def test_propose_explicit_base_ref_used_as_pr_base(client, container, toke
     await _bind_repo(client, cid)
 
     def fake_get(path, token):
-        # `_resolve_ref` passes a real branch name straight through UNCHANGED (never
-        # resolved to a sha) — so `base_sha` here is literally "feature-x", and both
-        # the commit and tree lookups are keyed on that ref name, not a sha.
-        if path == "/repos/acme/site/git/commits/feature-x":
-            return {"sha": "featurebasesha", "tree": {"sha": "featuretreesha"}}
-        if path == "/repos/acme/site/git/trees/feature-x?recursive=1":
+        # C21: `_resolve_ref` passes the branch NAME through; the route resolves it to a
+        # commit SHA via the commits API (real GitHub 404s a name on git/commits).
+        if path == "/repos/acme/site/commits/feature-x":
+            return {"sha": "featurebasesha", "commit": {"tree": {"sha": "featuretreesha"}}}
+        if path == "/repos/acme/site/git/trees/featurebasesha?recursive=1":
             return {"tree": [], "truncated": False}
         raise AssertionError(path)
 
@@ -570,11 +573,8 @@ async def test_propose_explicit_base_ref_used_as_pr_base(client, container, toke
             assert payload["base_tree"] == "featuretreesha"
             return {"sha": "treesha"}
         if path == "/repos/acme/site/git/commits":
-            # parents=[base_sha] uses the RESOLVED ref string ("feature-x"), not the
-            # base commit object's own `sha` field — see the module docstring: the
-            # route never re-fetches a sha from the commit object, it commits on top
-            # of whatever `_resolve_ref` handed back.
-            assert payload["parents"] == ["feature-x"]
+            # C21: parents are the resolved commit SHA, never the branch name.
+            assert payload["parents"] == ["featurebasesha"]
             return {"sha": "commitsha"}
         if path == "/repos/acme/site/git/refs":
             return {"ref": payload["ref"]}
@@ -591,3 +591,29 @@ async def test_propose_explicit_base_ref_used_as_pr_base(client, container, toke
     )
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True
+
+
+
+async def test_propose_with_head_base_ref_uses_default_branch_sha(client, container, monkeypatch, token_env):
+    """C21: the Code Space editor sends base_ref 'HEAD' — on GitHub that means the default
+    branch; the commit parent is its SHA and the PR base is the branch NAME."""
+    cid = container["id"]
+    await _bind_repo(client, cid)
+    _resolve_ref_via_default_branch(monkeypatch)
+    calls = []
+
+    def fake_post(path, token, payload):
+        calls.append((path, payload))
+        return {"/repos/acme/site/git/blobs": {"sha": "b1"}, "/repos/acme/site/git/trees": {"sha": "t1"},
+                "/repos/acme/site/git/commits": {"sha": "c1"}, "/repos/acme/site/git/refs": {"ref": "x"},
+                "/repos/acme/site/pulls": {"number": 9, "html_url": "u"}}[path]
+
+    monkeypatch.setattr(edit, "_gh_post", fake_post)
+    r = await client.post(f"/api/containers/{cid}/code/github/propose", json={
+        "base_ref": "HEAD", "message": "m",
+        "files": [{"path": "n.py", "content": "x\n", "base_hash": None}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()
+    by = dict(calls)
+    assert by["/repos/acme/site/git/commits"]["parents"] == [BASE_COMMIT_SHA]
+    assert by["/repos/acme/site/pulls"]["base"] == "main"

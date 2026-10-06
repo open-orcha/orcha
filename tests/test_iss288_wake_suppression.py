@@ -22,6 +22,7 @@ autocommit connection; we drive non-API state through the `db` fixture.
 """
 import pathlib
 import sys
+import time
 import uuid
 
 import pytest
@@ -204,9 +205,9 @@ async def test_wakescan_no_hint_when_a_ready_task_is_also_pending(
     db.execute("UPDATE tasks SET status='ready' WHERE id=%s", (t["id"],))
     # advance Asker's wake cursor to NOW so the earlier task_assigned event is already delivered
     db.execute("INSERT INTO agent_wake_state (agent_id, delivered_ts) "
-               "VALUES (%s, extract(epoch from now())) "
+               "VALUES (%s, %s) "
                "ON CONFLICT (agent_id) DO UPDATE SET delivered_ts=EXCLUDED.delivered_ts",
-               (a["agent_id"],))
+               (a["agent_id"], time.time()))
     req = await make_request(a["agent_id"], "q", target_alias="Teller")
     await client.post(f"/api/requests/{req['id']}/respond",
                       json={"responder_agent_id": b["agent_id"], "response": "ok"})
@@ -258,9 +259,9 @@ async def test_wakescan_approval_with_note_carries_feedback_end_to_end(
     # Advance Worker's wake cursor to NOW so the earlier task_assigned event is already delivered and
     # the ONLY fresh event after the verify is task_verified (the narrow single-signal hint window).
     db.execute("INSERT INTO agent_wake_state (agent_id, delivered_ts) "
-               "VALUES (%s, extract(epoch from now())) "
+               "VALUES (%s, %s) "
                "ON CONFLICT (agent_id) DO UPDATE SET delivered_ts=EXCLUDED.delivered_ts",
-               (worker["agent_id"],))
+               (worker["agent_id"], time.time()))
 
     note = "approved — now also wire the follow-up X before closing out"
     rv = await client.post(f"/api/tasks/{t['id']}/verify",

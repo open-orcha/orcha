@@ -1,5 +1,7 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import { dockerPath } from './dockerExec'
 
 /** What actually runs an agent is a host-side `claude -p` process spawned by the orcha
@@ -65,11 +67,14 @@ export function loginShellPath(): string | null {
  *  script), every agent run silently fails "Invalid API key" even though the user is
  *  properly subscribed. Local runs are subscription-first: a deliberate key comes from the
  *  stack's own .env / Settings (read explicitly by whatever needs it), never from ambient
- *  env inheritance. Pure — returns a new object, never mutates `env`. */
+ *  env inheritance. Also drops ORCHA_PERSONAL_SESSION (a personal-tab marker). Pure — returns a new object, never mutates `env`. */
 export function scrubWorkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = { ...env }
   delete next.ANTHROPIC_API_KEY
   delete next.ORCHA_LLM_API_KEY
+  // The desktop itself may have been started from one of its own (personal) terminal tabs;
+  // the notifier and its agent workers are managed sessions and must not inherit that marker.
+  delete next.ORCHA_PERSONAL_SESSION
   for (const key of Object.keys(next)) {
     if (key.startsWith('CLAUDE_CODE_')) delete next[key]
   }
@@ -113,6 +118,42 @@ export function workerStartResult(probe: WorkerProbe): { started: boolean; reaso
   return { started: true }
 }
 
+/** Where the app looks for the `orcha` CLI (GH #258 plan D3), first hit wins:
+ *  1. the runtime bundled in the app (`<resources>/orcha-runtime/bin/orcha`), so the app and
+ *     the CLI it drives can never be different versions;
+ *  2. `~/.local/bin/orcha` (the link the app creates for Terminal use, or a developer's own);
+ *  3. plain `orcha`, found on the host-tool PATH at spawn time (Homebrew / pipx installs).
+ *  Pure over `exists`; `resourcesPath` is null outside a packaged app (dev, tests). */
+export function resolveOrcha(opts: {
+  resourcesPath: string | null
+  home: string
+  exists: (p: string) => boolean
+}): string {
+  const candidates = [
+    opts.resourcesPath ? path.join(opts.resourcesPath, 'orcha-runtime', 'bin', 'orcha') : null,
+    path.join(opts.home, '.local', 'bin', 'orcha')
+  ]
+  for (const c of candidates) if (c && opts.exists(c)) return c
+  return 'orcha'
+}
+
+/** Production resolveOrcha: the packaged app's resources dir and the real home folder. */
+export function orchaBin(): string {
+  const resourcesPath = (process as { resourcesPath?: string }).resourcesPath ?? null
+  return resolveOrcha({
+    resourcesPath,
+    home: os.homedir(),
+    exists: (p) => {
+      try {
+        fs.accessSync(p, fs.constants.X_OK)
+        return true
+      } catch {
+        return false
+      }
+    }
+  })
+}
+
 /** Injectable surface for testing startHostWorker without touching the real machine. */
 export interface HostWorkerDeps {
   /** Resolve a command to an absolute path, or null if not on PATH (like `which`). */
@@ -120,12 +161,15 @@ export interface HostWorkerDeps {
   /** Run `orcha up` in `folder`; resolve on success, reject with {stderr} on failure. */
   orchaUp: (folder: string, pathEnv: string) => Promise<void>
   pathEnv?: string
+  /** resolveOrcha's answer; defaults to orchaBin(). */
+  orchaBin?: () => string
 }
 
 /** Start the host agent worker for a freshly-provisioned project. Never throws. */
 export async function startHostWorker(folder: string, deps: HostWorkerDeps): Promise<{ started: boolean; reason?: string }> {
   const pathEnv = deps.pathEnv ?? hostToolPath()
-  const orcha = await deps.which('orcha', pathEnv).catch(() => null)
+  const bin = (deps.orchaBin ?? orchaBin)()
+  const orcha = bin === 'orcha' ? await deps.which('orcha', pathEnv).catch(() => null) : bin
   if (!orcha) return workerStartResult({ orchaFound: false, claudeFound: false })
   let upError: string | undefined
   try {
@@ -151,16 +195,58 @@ export const nodeHostWorkerDeps: HostWorkerDeps = {
         resolve(err ? null : stdout.trim() || null)
       )
     }),
-  orchaUp: (folder, pathEnv) =>
-    new Promise((resolve, reject) => {
-      // scrubWorkerEnv: this daemon freezes its env for every agent worker it later spawns
-      // (see hostToolPath's doc comment) — an inherited ANTHROPIC_API_KEY here breaks every
-      // subsequent run for the lifetime of the daemon, not just this one `orcha up`.
-      execFile(
-        'orcha',
-        ['up'],
-        { cwd: folder, env: { ...scrubWorkerEnv(process.env), PATH: pathEnv }, encoding: 'utf8' },
-        (err, _stdout, stderr) => (err ? reject(Object.assign(err, { stderr })) : resolve())
-      )
+  orchaUp: (folder, pathEnv) => execOrcha(folder, ['up'], pathEnv)
+}
+
+// scrubWorkerEnv: the daemon `orcha up` starts freezes its env for every agent worker it later
+// spawns (see hostToolPath's doc comment) — an inherited ANTHROPIC_API_KEY here breaks every
+// subsequent run for the lifetime of the daemon, not just this one `orcha up`.
+function execOrcha(folder: string, args: string[], pathEnv: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      orchaBin(),
+      args,
+      { cwd: folder, env: { ...scrubWorkerEnv(process.env), PATH: pathEnv }, encoding: 'utf8' },
+      (err, _stdout, stderr) => (err ? reject(Object.assign(err, { stderr })) : resolve())
+    )
+  })
+}
+
+/** Run `orcha <args>` in a project folder; rejects with {stderr} on a non-zero exit. */
+export type OrchaRun = (folder: string, args: string[]) => Promise<void>
+
+/** Production OrchaRun (native start/stop, GH #258 D1), with the same PATH + scrubbed env as
+ *  the worker start. The PATH is resolved per call (one login-shell read, ≤ 4 s) — start/stop
+ *  are user clicks, not a poll. */
+export const runOrcha: OrchaRun = (folder, args) => execOrcha(folder, args, nodeHostWorkerDeps.pathEnv ?? hostToolPath())
+
+/** `orcha <args>` in a project folder with each stdout line streamed to `onLine` (GH #258 D2:
+ *  `orcha init --progress-json`, `orcha migrate-runtime --json`). Same PATH + scrubbed env as
+ *  runOrcha; rejects with {stderr} (the last 4 KB) on a non-zero exit or a missing CLI. */
+export function streamOrcha(folder: string, args: string[], onLine: (line: string) => void): Promise<void> {
+  const pathEnv = nodeHostWorkerDeps.pathEnv ?? hostToolPath()
+  return new Promise((resolve, reject) => {
+    const child = spawn(orchaBin(), args, { cwd: folder, env: { ...scrubWorkerEnv(process.env), PATH: pathEnv } })
+    let buf = ''
+    let tail = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      buf += chunk
+      let nl: number
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        onLine(buf.slice(0, nl))
+        buf = buf.slice(nl + 1)
+      }
     })
+    child.stderr.on('data', (chunk: string) => {
+      tail = (tail + chunk).slice(-4000)
+    })
+    child.on('error', (err) => reject(Object.assign(err, { stderr: `orcha could not be started: ${err.message}` })))
+    child.on('close', (code) => {
+      if (buf) onLine(buf)
+      if (code === 0) resolve()
+      else reject(Object.assign(new Error(`orcha ${args[0]} exited ${code}`), { stderr: tail.trim() }))
+    })
+  })
 }

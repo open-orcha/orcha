@@ -47,6 +47,9 @@ struct Palette {
     var pillMono = false
     var flatChrome = false   // Swiss: no brand radial glows behind content
     var displayFamily: String?   // Swiss: bundled Space Grotesk; nil = SF
+    /// Linear: the primary-button fill (web `--v2-primary-bg`) when it differs
+    /// from the text-safe `accent`; nil = fill with `accent`/`accentInk`.
+    var primaryFill: Color?
 
     /// Minimalist only: bundled static Hanken Grotesk cuts keyed by the
     /// PostScript name iOS needs for `Font.custom`/`UIFont(name:)`, chosen by
@@ -360,6 +363,114 @@ struct Palette {
         displayFacesByWeight = Palette.hankenGroteskFacesByWeight
     }
 
+    // MARK: Linear (default skin) — web v2 tokens 1:1
+
+    /// Inter static cuts (bundled), keyed by weight like Hanken Grotesk.
+    static let interFacesByWeight: [Font.Weight: String] = [
+        .regular: "Inter-Regular",
+        .medium: "Inter-Medium",
+        .semibold: "Inter-SemiBold",
+        .bold: "Inter-Bold",
+        .heavy: "Inter-Bold",
+    ]
+
+    /// Linear dark (`v2-tokens.css` dark block): near-black window, hairline
+    /// borders, indigo accent (text-safe `#8D93F7`; buttons fill `#5E6AD2`).
+    static let linearDark: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0x0E0F10),
+            surface: Color(hex: 0x151618),
+            surface2: Color(hex: 0x1C1D21),
+            surface3: Color(hex: 0x232427),
+            raised: Color(hex: 0x1E1F23),
+            border: Color(hex: 0x25262A),
+            border2: Color(hex: 0x33353A),
+            text: Color(hex: 0xEEEFF1),
+            text2: Color(hex: 0xB4B7BE),
+            muted: Color(hex: 0x8A8F98),
+            faint: Color(hex: 0x82868D),
+            accent: Color(hex: 0x8D93F7),
+            accentInk: Color(hex: 0x0E0F10),
+            accentSoft: Color(hex: 0x8D93F7, alpha: 0.14),
+            accentLine: Color(hex: 0x8D93F7, alpha: 0.34),
+            ok: Color(hex: 0x4CB782),
+            okSoft: Color(hex: 0x4CB782, alpha: 0.14),
+            okLine: Color(hex: 0x4CB782, alpha: 0.32),
+            info: Color(hex: 0x4EA7FC),
+            infoSoft: Color(hex: 0x4EA7FC, alpha: 0.14),
+            infoLine: Color(hex: 0x4EA7FC, alpha: 0.32),
+            warn: Color(hex: 0xE2A336),
+            warnSoft: Color(hex: 0xE2A336, alpha: 0.14),
+            warnLine: Color(hex: 0xE2A336, alpha: 0.34),
+            danger: Color(hex: 0xEE7070),
+            dangerSoft: Color(hex: 0xEE7070, alpha: 0.14),
+            dangerLine: Color(hex: 0xEE7070, alpha: 0.32),
+            violet: Color(hex: 0xA78BFA),
+            violetSoft: Color(hex: 0xA78BFA, alpha: 0.14),
+            violetLine: Color(hex: 0xA78BFA, alpha: 0.32),
+            idle: Color(hex: 0x8A8F98),
+            idleSoft: Color(hex: 0x8A8F98, alpha: 0.14),
+            idleLine: Color(hex: 0x8A8F98, alpha: 0.30),
+            isDark: true
+        )
+        p.primaryFill = Color(hex: 0x5E6AD2)
+        p.applyLinearTraits()
+        return p
+    }()
+
+    /// Linear light (`v2-tokens.css` light block).
+    static let linearLight: Palette = {
+        var p = Palette(
+            bg: Color(hex: 0xF4F4F5),
+            surface: .white,
+            surface2: Color(hex: 0xF7F7F8),
+            surface3: Color(hex: 0xEDEDEF),
+            raised: .white,
+            border: Color(hex: 0xE6E6E9),
+            border2: Color(hex: 0xD5D6DA),
+            text: Color(hex: 0x1C1D1F),
+            text2: Color(hex: 0x4E525A),
+            muted: Color(hex: 0x62666E),
+            faint: Color(hex: 0x6D7077),
+            accent: Color(hex: 0x505AC9),
+            accentInk: .white,
+            accentSoft: Color(hex: 0x505AC9, alpha: 0.10),
+            accentLine: Color(hex: 0x505AC9, alpha: 0.30),
+            ok: Color(hex: 0x187A4C),
+            okSoft: Color(hex: 0x187A4C, alpha: 0.10),
+            okLine: Color(hex: 0x187A4C, alpha: 0.28),
+            info: Color(hex: 0x1A68BA),
+            infoSoft: Color(hex: 0x1A68BA, alpha: 0.10),
+            infoLine: Color(hex: 0x1A68BA, alpha: 0.26),
+            warn: Color(hex: 0x955500),
+            warnSoft: Color(hex: 0x955500, alpha: 0.10),
+            warnLine: Color(hex: 0x955500, alpha: 0.30),
+            danger: Color(hex: 0xC23434),
+            dangerSoft: Color(hex: 0xC23434, alpha: 0.09),
+            dangerLine: Color(hex: 0xC23434, alpha: 0.30),
+            violet: Color(hex: 0x6E56CF),
+            violetSoft: Color(hex: 0x6E56CF, alpha: 0.10),
+            violetLine: Color(hex: 0x6E56CF, alpha: 0.26),
+            idle: Color(hex: 0x62666E),
+            idleSoft: Color(hex: 0x62666E, alpha: 0.10),
+            idleLine: Color(hex: 0x62666E, alpha: 0.26),
+            isDark: false
+        )
+        p.primaryFill = Color(hex: 0x5E6AD2)
+        p.applyLinearTraits()
+        return p
+    }()
+
+    private mutating func applyLinearTraits() {
+        radiusCard = 10
+        radiusButton = 7
+        radiusTag = 5
+        pillMono = false
+        flatChrome = true
+        displayFamily = nil
+        displayFacesByWeight = Palette.interFacesByWeight
+    }
+
     /// Resolve for an explicit theme mode + skin; Auto resolves per system in
     /// views via the environment (see `OrchaThemed`).
     static func current(_ mode: ThemeMode, skin: SkinMode = .classic, systemDark: Bool = true) -> Palette {
@@ -369,7 +480,7 @@ struct Palette {
         case .light: false
         }
         return switch skin {
-        case .classic: dark ? .dark : .light
+        case .classic: dark ? .linearDark : .linearLight
         case .swiss: dark ? .swissDark : .swissLight
         case .minimal: dark ? .minimalDark : .minimalLight
         }

@@ -28,6 +28,15 @@ You are executing `/orcha-inbox`.
    - `/inbox` returns `{"open_requests": [...]}` — requests addressed to me, status `open`
    - `/outbox?status=answered` returns `{"outgoing_requests": [...]}` — my asks that have been answered (each row includes `target_alias`, `parent_request_id`, `chain_depth`, `response`)
 
+   **`agent_payload` — instructions addressed to YOU.** A row may carry `agent_payload` next to
+   `payload`. `payload` is the human-readable ask (what a person sees in the portal);
+   `agent_payload`, when non-null, is the FULL text addressed to you — e.g. a code-thread question's
+   anchor (`[code thread — teach] repo@sha path:lines`), the lesson format to answer in, and the
+   exact reply endpoint (`reply via POST /api/code/threads/<id>/messages …`). Read and follow
+   `agent_payload` in full whenever it is present: answer the way it says (a code-thread question is
+   answered IN ITS THREAD, not with `/orcha-respond` — posting there records the answer on the
+   request automatically). Treat it as the request text; never show it to a person as their ask.
+
 4. **Pretty-print as two sections**. Don't dump raw JSON.
 
    ```
@@ -36,6 +45,7 @@ You are executing `/orcha-inbox`.
    ── INCOMING (need to answer) ──
      • <short-rid>  pri=<n>  from <requester_alias>   chain_depth=<d>  (expires <ts>)
        <payload-first-line-truncated-to-~120-chars>
+       (when the row has `agent_payload`: also print it IN FULL, indented — it is how you must answer)
      ...
      (or "(none — nothing addressed to you)" if empty)
 

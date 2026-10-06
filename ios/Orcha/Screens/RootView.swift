@@ -13,6 +13,7 @@ struct RootView: View {
                     WorkspaceScreen()
                 }
             }
+            .lAnimation(.lQuick, value: model.selectedContainer?.id)
             .toastOverlay()
         }
     }
@@ -26,16 +27,17 @@ private struct ToastOverlay: ViewModifier {
     func body(content: Content) -> some View {
         content.overlay(alignment: .top) {
             if let toast = model.toast {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark")
-                        .font(p.uiFont(13, .bold))
+                HStack(spacing: LSpace.s) {
+                    Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(p.ok)
+                        .accessibilityHidden(true)
                     Text(toast)
-                        .font(p.uiFont(13, .semibold))
+                        .ltype(.bodyEmph)
                         .foregroundStyle(p.text)
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
+                .padding(.horizontal, LSpace.l)
+                .padding(.vertical, LSpace.s + 2)
+                .accessibilityElement(children: .combine)
                 .modifier(ToastSurface(raised: p.raised, border: p.border2))
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -45,7 +47,7 @@ private struct ToastOverlay: ViewModifier {
                 }
             }
         }
-        .animation(.spring(duration: 0.35), value: model.toast != nil)
+        .lAnimation(.lSpring, value: model.toast != nil)
     }
 }
 
@@ -67,7 +69,7 @@ private struct ToastSurface: ViewModifier {
             content
                 .background(raised, in: Capsule())
                 .overlay(Capsule().strokeBorder(border, lineWidth: 1))
-                .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         }
     }
 }

@@ -18,16 +18,19 @@ struct ChecksChip: View {
                 Image(systemName: verdictGlyph(summary.verdict))
                     .font(.system(size: 9, weight: .bold))
                 Text(summary.label)
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .ltype(.micro)
+                    .monospaced()
+                    .fontWeight(.semibold)
             }
             .foregroundStyle(tint)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: p.radiusTag))
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 5))
             .overlay(
-                RoundedRectangle(cornerRadius: p.radiusTag)
-                    .strokeBorder(tint.opacity(0.34), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(p.border, lineWidth: 1)
             )
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel(summary))
         }
     }
@@ -64,18 +67,22 @@ struct MergeStateChip: View {
 
     var body: some View {
         if let label = GitHubHubUx.mergeStateLabel(mergeableState) {
-            let tint = tintColor
-            Text(label)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .overlay(
-                    RoundedRectangle(cornerRadius: p.radiusTag)
-                        .strokeBorder(tint.opacity(0.4), lineWidth: 1)
-                )
-                .lineLimit(1)
-                .accessibilityLabel("Merge state: \(label)")
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(tintColor)
+                    .frame(width: 6, height: 6)
+                Text(label)
+                    .ltype(.micro)
+                    .fontWeight(.medium)
+                    .foregroundStyle(p.text2)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(p.border, lineWidth: 1))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Merge state: \(label)")
         }
     }
 
@@ -94,25 +101,26 @@ struct GitHubLabelChip: View {
     let label: GitHubLabel
 
     var body: some View {
-        // Real repo label colors when the server sends them (Android parity);
-        // the house violet is the fallback for colorless labels / older servers.
-        if let rgb = label.rgb {
-            let tint = Color(hex: rgb)
-            chip(text: tint, fill: tint.opacity(0.15), line: tint.opacity(0.4))
-        } else {
-            chip(text: p.violet, fill: p.violetSoft, line: p.violetLine)
+        // Linear-style label: a neutral tag led by the repo's own label colour as a
+        // dot (Android parity on the colour); house violet for colourless labels.
+        let dot = label.rgb.map { Color(hex: $0) } ?? p.violet
+        HStack(spacing: 5) {
+            Circle()
+                .fill(dot)
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+            Text(label.name)
+                .ltype(.micro)
+                .fontWeight(.medium)
+                .foregroundStyle(p.text2)
+                .lineLimit(1)
         }
-    }
-
-    private func chip(text: Color, fill: Color, line: Color) -> some View {
-        Text(label.name)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(text)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(fill, in: Capsule())
-            .overlay(Capsule().strokeBorder(line, lineWidth: 1))
-            .lineLimit(1)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2.5)
+        .background(p.surface2, in: Capsule())
+        .overlay(Capsule().strokeBorder(p.border, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Label \(label.name)")
     }
 }
 

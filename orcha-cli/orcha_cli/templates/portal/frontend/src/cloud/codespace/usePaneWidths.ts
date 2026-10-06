@@ -20,7 +20,7 @@ export interface PaneWidths {
   rail: number;
 }
 
-export const DEFAULT_WIDTHS: PaneWidths = { tree: 280, rail: 340 };
+export const DEFAULT_WIDTHS: PaneWidths = { tree: 240, rail: 320 };
 export const MIN_WIDTHS: PaneWidths = { tree: 160, rail: 240 };
 // The code pane's own min-width (320px per spec) is enforced by the CALLER
 // (CodeSpacePage.tsx), which knows the container's total width and can

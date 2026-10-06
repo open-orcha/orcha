@@ -7,6 +7,7 @@ consumer no longer re-derives "who holds the ball" per surface. These tests pin 
 four data surfaces (inbox, outbox, container list, snapshot) agree.
 """
 import uuid
+from conftest import ts_ago
 
 
 async def _list_rows(client, cid):
@@ -84,7 +85,7 @@ async def test_expired_open_request_is_stale_everywhere(client, make_agent, make
     rid = req["request_id"]
     # the create endpoint clamps expires_minutes >= 0, so backdate the expiry directly to
     # simulate an open request that nobody answered before it lapsed.
-    db.execute("UPDATE requests SET expires_at = now() - interval '1 hour' WHERE id=%s", (rid,))
+    db.execute(f"UPDATE requests SET expires_at = {ts_ago(3600)} WHERE id=%s", (rid,))
 
     inb = (await client.get(f"/api/agents/{b['agent_id']}/inbox")).json()["open_requests"]
     assert next(x for x in inb if x["id"] == rid)["is_stale"] is True

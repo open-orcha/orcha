@@ -9,10 +9,10 @@ def earliest_actionable_answer_ts(cur, aid: str, delivered_ts):
         """SELECT min(e.ts) AS floor_ts
              FROM agent_events e
              LEFT JOIN requests r
-               ON r.id::text = NULLIF(e.payload->>'request_id', '')
+               ON CAST(r.id AS TEXT) = NULLIF(e.payload->>'request_id', '')
             WHERE e.event_key = %s AND e.ts > %s
               AND e.event_name IN ('request_answered', 'request_closed')
-              AND ( (r.type = 'task' AND r.requester_id::text = %s)
+              AND ( (r.type = 'task' AND CAST(r.requester_id AS TEXT) = %s)
                     OR (e.payload->>'originating_task_id') IS NOT NULL )""",
         (aid, delivered_ts, aid),
     )

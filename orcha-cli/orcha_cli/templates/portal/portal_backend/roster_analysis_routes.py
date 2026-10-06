@@ -75,7 +75,7 @@ def put_roster_analysis(cid: str, body: RosterAnalysisPut, request: Request):
         cur.execute(
             """INSERT INTO roster_analysis
                    (container_id, summary, suggestions, source, model, created_at, updated_at)
-               VALUES (%s, %s, %s::jsonb, %s, %s, now(), now())
+               VALUES (%s, %s, %s, %s, %s, now(), now())
                ON CONFLICT (container_id) DO UPDATE SET
                    summary=EXCLUDED.summary,
                    suggestions=EXCLUDED.suggestions,

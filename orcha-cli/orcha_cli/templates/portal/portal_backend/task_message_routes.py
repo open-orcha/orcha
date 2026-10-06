@@ -101,14 +101,33 @@ def post_message(tid: str, body: TaskMessage, request: Request):
         # until they happened to look. Publish a targeted `task_message` event to every
         # assignee except the author so the daemon/listen loop wakes them out-of-band.
         cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s", (tid,))
+        notified = 0
         for row in cur.fetchall():
             target = str(row["agent_id"])
             if target == body.author_agent_id:
                 continue  # don't wake yourself for your own message
+            notified += 1
             _publish_event(
                 cur,
                 str(t["container_id"]),
                 target,
+                "task_message",
+                {
+                    "task_id": tid,
+                    "message_id": mid,
+                    "from_agent_id": body.author_agent_id,
+                    "preview": body.body[:120],
+                },
+            )
+        if not notified:
+            # Parity r2: with no other assignee to wake (the author's own task, or an
+            # unassigned one) nothing reached the container /events SSE, so open portals
+            # saw the post only on their next poll. Container-only event: no agent target,
+            # so it wakes nobody — it only pushes the thread update to live views.
+            _publish_event(
+                cur,
+                str(t["container_id"]),
+                None,
                 "task_message",
                 {
                     "task_id": tid,
@@ -175,7 +194,7 @@ def get_task_messages(
         "(m.author_id IS NOT NULL AND ma.kind = 'human') AS is_human, m.body, "
         # #301: COALESCE so pre-migration rows surface [] (their column existed only
         # after mig 025; the DEFAULT covers new rows but be explicit for the read path).
-        "COALESCE(m.attachments, '[]'::jsonb) AS attachments, m.created_at"
+        "COALESCE(m.attachments, '[]') AS attachments, m.created_at"
     )
     with db_cursor() as (_, cur):
         t = _require_task(cur, tid)

@@ -16,19 +16,21 @@
  * back with the authoritative list (matched by body+author, since the
  * optimistic row has no real id yet).
  */
+import { Avatar, Button } from "../../components/primitives";
+import { ChatBubble, ChatThread } from "../../components/primitives";
+import { Composer } from "../../components/primitives";
 import { useEffect, useRef, useState } from "react";
-import { relTime } from "../../lib/format";
-import { useToast, Md } from "../../components/ui";
+import { Icon, useToast, Md } from "../../components/ui";
 import { nearBottom, pinToBottom } from "../../lib/logScroll";
 import { actingHuman, useSnapshot } from "../../state/SnapshotProvider";
 import { fetchThread, postThreadMessage } from "./codespaceApi";
 import {
   anchorLabel,
-  kindLabel,
   shortSha,
   type CodeThreadDetailPayload,
   type CodeThreadMessage,
 } from "./codespaceTypes";
+import { actorKind, KindChip, ThreadStatusIcon } from "./threadBits";
 
 export interface ThreadViewProps {
   threadId: string;
@@ -97,8 +99,8 @@ export function ThreadView({ threadId, onBack, onJumpToPinnedSha, seed }: Thread
   if (!detail.thread) {
     return (
       <div className="cs-thread-view">
-        <button type="button" className="cs-thread-back" onClick={onBack}>&larr; Back to threads</button>
-        <div className="none" style={{ padding: 14 }}>Couldn&#39;t load this thread.</div>
+        <Button size="sm" variant="ghost" pill icon="arrow-left" className="cs-thread-back" onClick={onBack}>Back to threads</Button>
+        <div className="cs-empty-line">Couldn&#39;t load this thread.</div>
       </div>
     );
   }
@@ -143,72 +145,99 @@ export function ThreadView({ threadId, onBack, onJumpToPinnedSha, seed }: Thread
       });
   };
 
+  const agents = snap?.agents ?? [];
+  const authorOf = (m: CodeThreadMessage): string => {
+    if (m.author_alias) return m.author_alias;
+    const a = m.author_agent_id ? agents.find((x) => x.id === m.author_agent_id) : undefined;
+    return a?.alias || (m.is_human ? "human" : "agent");
+  };
+
+  // Linear agent panel (D9, images 10/16): the human's messages are right-
+  // aligned bubbles, an agent's reply is plain text under its round avatar,
+  // and the reply composer is a rounded field with a circular send button.
   return (
     <div className="cs-thread-view">
-      <button type="button" className="cs-thread-back" onClick={onBack}>&larr; Back to threads</button>
+      <div className="cs-thread-top">
+        <Button size="sm" variant="ghost" pill icon="arrow-left" className="cs-thread-back" onClick={onBack}>Back to threads</Button>
+        <span className="grow" />
+        <ThreadStatusIcon status={thread.status} showLabel />
+      </div>
       <div className="cs-thread-head">
         <div className="row1">
-          <span className={"kind-tag " + thread.kind}>{kindLabel(thread.kind)}</span>
-          <span className="anchor mono">{thread.path}:{anchorLabel(thread.start_line, thread.end_line)}</span>
+          <KindChip kind={thread.kind} />
+          <span className="anchor mono" title={thread.path + ":" + anchorLabel(thread.start_line, thread.end_line)}>{thread.path}:{anchorLabel(thread.start_line, thread.end_line)}</span>
         </div>
-        <span className="status-tag">{thread.status}</span>
-        {thread.request_id ? (
-          // Item 2 (thread -> request direction): the request/wake payload
-          // already links BACK to this thread (a plain "/code?..." path, since
-          // the conversation UI's linkify only anchors http(s) URLs); this chip
-          // closes the loop the other way — jump to the underlying request.
-          <a className="cs-request-chip" href={"/requests?req=" + encodeURIComponent(thread.request_id)}>
-            via request {thread.request_id.slice(0, 8)}
-          </a>
-        ) : null}
-        {outdated ? (
-          <div className="outdated-chip">
-            outdated — pinned to {shortSha(thread.sha)}
-            {onJumpToPinnedSha ? (
-              <button type="button" className="cs-thread-back" onClick={() => onJumpToPinnedSha(thread.sha)}>
-                jump to pinned sha
-              </button>
+        {thread.request_id || outdated ? (
+          <div className="cs-thread-flags">
+            {thread.request_id ? (
+              // Item 2 (thread -> request direction): the request/wake payload
+              // already links BACK to this thread (a plain "/code?..." path, since
+              // the conversation UI's linkify only anchors http(s) URLs); this chip
+              // closes the loop the other way — jump to the underlying request.
+              <a className="cs-request-chip v2-chip v2-chip-sm is-interactive" href={"/requests?req=" + encodeURIComponent(thread.request_id)}>
+                via request {thread.request_id.slice(0, 8)}
+              </a>
+            ) : null}
+            {outdated ? (
+              <span className="outdated-chip">
+                <Icon name="alert" cls="v2-ico" />
+                outdated — pinned to {shortSha(thread.sha)}
+                {onJumpToPinnedSha ? (
+                  <Button size="sm" variant="link" className="cs-thread-pinned" onClick={() => onJumpToPinnedSha(thread.sha)}>
+                    Jump to pinned sha
+                  </Button>
+                ) : null}
+              </span>
             ) : null}
           </div>
         ) : null}
       </div>
       <div className="cs-messages" ref={messagesRef}>
-        {(messages ?? []).map((m) => (
-          // Panel improvements item 2 — every bubble always carries
-          // cs-message-mount: a CSS mount-triggered keyframe only ever
-          // plays once per DOM node's lifetime, and each message's stable
-          // key={m.id} means an already-on-screen bubble never remounts/
-          // replays it — no need to distinguish "just arrived" from
-          // "already there" at the React layer.
-          <div key={m.id} className={"cs-message cs-message-mount" + (m.is_human ? " human" : "") + (m.id.startsWith("optimistic-") ? " pending" : "")}>
-            <div className="cs-message-meta">
-              <span>{m.is_human ? "human" : m.author_alias || "agent"}</span>
-              <span>{m.id.startsWith("optimistic-") ? "sending…" : relTime(m.created_at)}</span>
-            </div>
-            <Md text={m.body} tasks={snapTasks} className="cs-message-body tx md" />
-          </div>
-        ))}
+        <ChatThread label="Thread messages">
+          {(messages ?? []).map((m) => {
+            const pending = m.id.startsWith("optimistic-");
+            const who = authorOf(m);
+            // Panel improvements item 2 — every bubble always carries
+            // cs-message-mount: a CSS mount-triggered keyframe only ever
+            // plays once per DOM node's lifetime, and each message's stable
+            // key={m.id} means an already-on-screen bubble never remounts/
+            // replays it — no need to distinguish "just arrived" from
+            // "already there" at the React layer.
+            return (
+              <ChatBubble
+                key={m.id}
+                from={m.is_human ? "user" : "agent"}
+                className={"cs-message cs-message-mount" + (m.is_human ? " human" : "") + (pending ? " pending" : "")}
+                author={who}
+                avatar={m.is_human ? undefined : <Avatar alias={who} kind={actorKind(agents, m.author_agent_id, who) ?? "ai"} size={20} decorative />}
+                at={pending ? undefined : m.created_at}
+                status={pending ? "Sending…" : undefined}
+              >
+                <Md text={m.body} tasks={snapTasks} className="cs-message-body tx md" />
+              </ChatBubble>
+            );
+          })}
+        </ChatThread>
       </div>
       {thread.status !== "resolved" ? (
-        <div className="cs-reply-row">
-          <textarea
-            className="cs-composer-body"
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            placeholder="Reply…"
-            aria-label="Reply to thread"
-          />
-          <div className="cs-reply-actions">
-            <button type="button" className="btn approve sm" disabled={busy} onClick={() => submitReply(false)}>
-              Reply
-            </button>
-            <button type="button" className="btn ghost sm" disabled={busy} onClick={() => submitReply(true)}>
+        <Composer
+          className="cs-reply-row"
+          label="Reply to thread"
+          placeholder="Reply…"
+          value={reply}
+          onChange={setReply}
+          onSubmit={() => submitReply(false)}
+          busy={busy}
+          submitLabel="Reply"
+          minRows={2}
+          leading={
+            <Button size="sm" variant="ghost" pill icon="check" className="cs-resolve-btn" disabled={busy} onClick={() => submitReply(true)}>
               Resolve
-            </button>
-          </div>
-        </div>
+            </Button>
+          }
+        />
       ) : (
-        <div className="muted" style={{ fontSize: 12.5 }}>This thread is resolved.</div>
+        <div className="cs-resolved-note"><Icon name="check" cls="v2-ico" /> This thread is resolved.</div>
       )}
     </div>
   );

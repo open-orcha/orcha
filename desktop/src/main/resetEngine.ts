@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { dockerExec, type Exec } from './dockerExec'
 import { killLingeringDaemons, nodeProcessDeps, type ProcessDeps } from './daemonCleanup'
+import type { StackRuntime } from '../shared/types'
 
 /** Same orcha-* guard the lifecycle/discovery code uses — argv must name a known orcha stack. */
 const SAFE_PROJECT = /^orcha-[A-Za-z0-9_-]+$/
@@ -83,7 +84,7 @@ function orchaArtifacts(folder: string, deps: ResetDeps): { dirs: string[]; file
 /** Best-effort: pull current_container_id out of folder/.claude/orcha.json for daemon
  *  matching. Returns null on any failure (missing file, unreadable, malformed JSON, absent
  *  key) — daemon cleanup degrades to "skip the notifier match" rather than throwing. */
-function readContainerId(folder: string, deps: ResetDeps): string | null {
+export function readContainerId(folder: string, deps: Pick<ResetDeps, "readFile">): string | null {
   if (!deps.readFile) return null
   try {
     const raw = deps.readFile(path.join(folder, '.claude', 'orcha.json'))
@@ -117,7 +118,29 @@ async function tryCliTeardown(folder: string, deps: ResetDeps): Promise<boolean>
   }
 }
 
-/** Fully delete an orcha stack so the project can be re-created clean:
+/** Native project (GH #258 D2): `orcha down -v --yes` stops `orcha serve` (and its launchd
+ *  service) and deletes the SQLite database — fatal on failure, since a still-running serve
+ *  would keep the old database open; then `orcha service uninstall` so it doesn't come back at
+ *  login (best-effort: there may be no service). */
+async function nativeTeardown(folder: string, deps: ResetDeps): Promise<void> {
+  const opts = { cwd: folder, env: { ...(deps.hostEnv ?? process.env), PATH: deps.pathEnv ?? process.env.PATH ?? '' } }
+  if (!deps.execHost) throw { code: 'ORCHA_FAILED', stderr: 'no way to run the orcha CLI' } as const
+  try {
+    await deps.execHost('orcha', ['down', '-v', '--yes'], opts)
+  } catch (err) {
+    const stderr = String((err as { stderr?: string }).stderr ?? (err as Error)?.message ?? '')
+    throw { code: 'ORCHA_FAILED', stderr: stderr.slice(-STDERR_TAIL) } as const
+  }
+  try {
+    await deps.execHost('orcha', ['service', 'uninstall'], opts)
+  } catch {
+    // no service installed (or not macOS) — nothing to remove.
+  }
+}
+
+/** Fully delete an orcha stack so the project can be re-created clean.
+ *  Native (`runtime: 'native'`, GH #258 D2): `orcha down -v --yes` + `orcha service
+ *  uninstall`, then steps 3-4 below; no docker step runs. Docker:
  *   0. (when `folder` known) `orcha down -v` from the folder — CLI-faithful daemon-stop +
  *      compose-down-v. Tolerant of a missing `orcha` binary or nonzero exit.
  *   1. docker compose down -v   (containers + network + the pgdata volume — the data wipe;
@@ -130,10 +153,17 @@ async function tryCliTeardown(folder: string, deps: ResetDeps): Promise<boolean>
 export async function resetStack(
   project: string,
   folder: string | null,
-  deps: ResetDeps = defaultDeps()
+  deps: ResetDeps = defaultDeps(),
+  runtime: StackRuntime = 'docker'
 ): Promise<void> {
   if (!SAFE_PROJECT.test(project)) {
     throw { code: 'UNKNOWN_STACK' } as const
+  }
+  if (runtime === 'native') {
+    if (!folder) throw { code: 'UNKNOWN_STACK' } as const
+    await nativeTeardown(folder, deps)
+    await cleanupFolder(folder, deps)
+    return
   }
 
   // 0. CLI-first teardown (daemon-stop + compose down -v in one CLI-faithful step). Tolerant
@@ -158,16 +188,15 @@ export async function resetStack(
     // ignore — a missing/used image must not fail the reset.
   }
 
-  // 3. belt-and-braces daemon cleanup (best-effort; never throws — see killLingeringDaemons).
-  if (folder) {
-    const containerId = readContainerId(folder, deps)
-    await killLingeringDaemons(folder, containerId, deps.processDeps ?? nodeProcessDeps)
-  }
+  if (folder) await cleanupFolder(folder, deps)
+}
 
-  // 4. on-disk artifacts (only when we know the folder).
-  if (folder) {
-    const { dirs, files } = orchaArtifacts(folder, deps)
-    for (const d of dirs) deps.rmrf(d)
-    for (const f of files) deps.rmFile(f)
-  }
+/** 3. belt-and-braces daemon cleanup (best-effort; never throws — see killLingeringDaemons);
+ *  4. the on-disk Orcha artifacts (`.orcha/` holds the SQLite file, state.json and logs/). */
+async function cleanupFolder(folder: string, deps: ResetDeps): Promise<void> {
+  const containerId = readContainerId(folder, deps)
+  await killLingeringDaemons(folder, containerId, deps.processDeps ?? nodeProcessDeps)
+  const { dirs, files } = orchaArtifacts(folder, deps)
+  for (const d of dirs) deps.rmrf(d)
+  for (const f of files) deps.rmFile(f)
 }

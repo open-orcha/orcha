@@ -10,7 +10,9 @@ const stackUp: Stack = {
   dbPort: 5433,
   portalStatus: 'Up 1 hour',
   running: true,
-  folder: null
+  folder: null,
+  runtime: 'docker',
+  health: 'ok'
 }
 const stackDown: Stack = { ...stackUp, running: false, apiPort: null, portalStatus: 'Exited (0)' }
 
@@ -143,5 +145,122 @@ describe('AttentionPoller', () => {
     await first
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(poller.current()).toEqual([item('r1')])
+  })
+
+  it('snapshot() reports per-stack availability: ok with container counts, or failed (not zero)', async () => {
+    let fail = false
+    const { poller } = makePoller({
+      fetchStackAttention: vi.fn(async () => {
+        if (fail) throw new Error('down')
+        return { ...detail([item('a')]), containers: [
+            {
+              cid: 'c1',
+              name: 'Demo',
+              count: 1,
+              partial: false,
+              live: [{ alias: 'lead', state: 'working' as const, task: 'Fix it', lastActive: null, branch: 'main' }],
+              liveTotal: 1,
+              checkouts: [{ branch: 'main', primary: true, detached: false, repo: 'acme/web' }]
+            }
+          ],
+          unavailable: []
+        }
+      })
+    })
+    await poller.tick()
+    const first = poller.snapshot()
+    expect(first.items.map((i) => i.id)).toEqual(['a'])
+    expect(first.projects).toHaveLength(1)
+    expect(first.projects[0]).toMatchObject({ project: 'orcha-demo', ok: true, containers: [{ cid: 'c1', count: 1 }] })
+    // D11: the container's live agents ride the same typed snapshot to the host sidebar.
+    expect(first.projects[0].containers[0].live).toEqual([{ alias: 'lead', state: 'working', task: 'Fix it', lastActive: null, branch: 'main' }])
+    expect(first.projects[0].containers[0].liveTotal).toBe(1)
+    // D14: the real checkouts ride the same typed snapshot too.
+    expect(first.projects[0].containers[0].checkouts).toEqual([{ branch: 'main', primary: true, detached: false, repo: 'acme/web' }])
+    const okAt = first.projects[0].fetchedAt
+    expect(okAt).not.toBeNull()
+
+    fail = true
+    await poller.tick()
+    const second = poller.snapshot()
+    expect(second.projects[0]).toMatchObject({ project: 'orcha-demo', ok: false, containers: [] }) // unreachable → no (stale or fake) agents
+    expect(second.projects[0].fetchedAt).toBe(okAt) // last GOOD fetch time is kept
+  })
+
+  it('snapshot() omits stopped stacks (the UI shows them as stopped, not as zero)', async () => {
+    const { poller } = makePoller({ listStacks: vi.fn(async () => [stackDown]) })
+    await poller.tick()
+    expect(poller.snapshot().projects).toEqual([])
+  })
+})
+
+describe('AttentionPoller.forget (project removed)', () => {
+  it('drops the project’s cached items and status, and a re-added stack starts silently', async () => {
+    let stacks = [stackUp]
+    const { poller, notify } = makePoller({
+      listStacks: vi.fn(async () => stacks),
+      fetchStackAttention: vi.fn(async () => detail([item('r1')]))
+    })
+    await poller.tick()
+    expect(poller.current()).toHaveLength(1)
+    poller.forget('orcha-demo')
+    expect(poller.current()).toEqual([])
+    expect(poller.snapshot().projects).toEqual([])
+    // removed, then added back stopped: no "went down" alert from the stale running state
+    stacks = [stackDown]
+    await poller.tick()
+    expect(notify).not.toHaveBeenCalled()
+  })
+})
+
+describe('AttentionPoller — no notification flood when a stack drops and comes back', () => {
+  const items = [item('r1'), item('r2'), item('r3')]
+
+  it('a failed fetch (portal restarting on upgrade) keeps the seen items: no flood on recovery', async () => {
+    let fail = false
+    const { poller, notify } = makePoller({
+      fetchStackAttention: vi.fn(async () => {
+        if (fail) throw new Error('ECONNREFUSED')
+        return detail(items)
+      })
+    })
+    await poller.tick() // baseline
+    fail = true
+    await poller.tick() // portal restarting
+    fail = false
+    await poller.tick() // back up, same queue
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('a stack unreachable at startup baselines silently on its first successful fetch', async () => {
+    let fail = true
+    const { poller, notify } = makePoller({
+      fetchStackAttention: vi.fn(async () => {
+        if (fail) throw new Error('down')
+        return detail(items)
+      })
+    })
+    await poller.tick()
+    fail = false
+    await poller.tick()
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('a genuinely new item after recovery still notifies, once', async () => {
+    let phase = 0
+    const { poller, notify } = makePoller({
+      fetchStackAttention: vi.fn(async () => {
+        if (phase === 1) throw new Error('blip')
+        return detail(phase === 2 ? [...items, item('r4')] : items)
+      })
+    })
+    await poller.tick()
+    phase = 1
+    await poller.tick()
+    phase = 2
+    await poller.tick()
+    await poller.tick()
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0][0]).toEqual(item('r4'))
   })
 })

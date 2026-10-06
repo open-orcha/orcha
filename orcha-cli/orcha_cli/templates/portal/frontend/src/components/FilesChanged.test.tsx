@@ -127,6 +127,30 @@ describe("FilesChanged full view", () => {
     expect(container.querySelector(".dfv-full")).toBeNull();
   });
 
+  it("Escape is consumed by the full view: a page-level 'Escape closes the detail' handler sees defaultPrevented (TSK-129)", () => {
+    const { container } = render(<FilesChanged diff={MULTI} />);
+    fireEvent.click(container.querySelector(".dfv-max")!);
+    let pageSaw: boolean | null = null;
+    const page = (e: KeyboardEvent) => { if (e.key === "Escape") pageSaw = e.defaultPrevented; };
+    window.addEventListener("keydown", page); // bubbles after the document listener
+    try {
+      fireEvent.keyDown(document, { key: "Escape" });
+    } finally { window.removeEventListener("keydown", page); }
+    expect(pageSaw).toBe(true);
+    expect(container.querySelector(".dfv-full")).toBeNull();
+  });
+
+  it("an Escape an inner popover already handled leaves the full view open", () => {
+    const { container } = render(<FilesChanged diff={MULTI} />);
+    fireEvent.click(container.querySelector(".dfv-max")!);
+    const inner = (e: KeyboardEvent) => e.preventDefault();
+    document.body.addEventListener("keydown", inner);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    } finally { document.body.removeEventListener("keydown", inner); }
+    expect(container.querySelector(".dfv-full")).not.toBeNull();
+  });
+
   it("full view restores body scrolling on collapse", () => {
     const { container } = render(<FilesChanged diff={MULTI} />);
     fireEvent.click(container.querySelector(".dfv-max")!);

@@ -19,6 +19,7 @@ import time
 import pytest
 
 from orcha_cli import notifier  # noqa: E402  (notifier lives in the CLI package)
+from conftest import ts_ago
 
 
 class FakeProc:
@@ -62,7 +63,7 @@ async def test_expired_lease_can_be_reclaimed(client, make_agent, db):
     aid = a["agent_id"]
     assert (await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})).json()["claimed"]
     # Force the lease into the past (crash-safe TTL expiry, without a real sleep).
-    db.execute("UPDATE agent_wake_state SET wake_lease_until = now() - interval '1 second' "
+    db.execute(f"UPDATE agent_wake_state SET wake_lease_until = {ts_ago(1)} "
                "WHERE agent_id = %s", (aid,))
     r = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
     assert r.json()["claimed"] is True                          # expiry frees the agent
@@ -88,7 +89,7 @@ async def test_wake_renew_does_not_revive_expired_lease(client, make_agent, db):
     a = await make_agent("A")
     aid = a["agent_id"]
     assert (await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 1})).json()["claimed"]
-    db.execute("UPDATE agent_wake_state SET wake_lease_until = now() - interval '1 second' "
+    db.execute(f"UPDATE agent_wake_state SET wake_lease_until = {ts_ago(1)} "
                "WHERE agent_id = %s", (aid,))
     r = await client.post(f"/api/agents/{aid}/wake-renew", json={"lease_ttl": 300})
     assert r.status_code == 200 and r.json()["renewed"] is False     # not revived
@@ -296,7 +297,7 @@ async def test_wake_scan_hides_lease_kind_once_lease_expired(client, container, 
     _, cand = await _scan(client, container["id"], b["agent_id"])
     assert cand["lease_active"] is True and cand["lease_kind"] == "ephemeral"
     # Force the lease into the past (crash-safe TTL expiry, row left intact — no release).
-    db.execute("UPDATE agent_wake_state SET wake_lease_until = now() - interval '1 second' "
+    db.execute(f"UPDATE agent_wake_state SET wake_lease_until = {ts_ago(1)} "
                "WHERE agent_id = %s", (b["agent_id"],))
     # cooldown=0 isolates the lease behaviour from the post-claim debounce window.
     r = await client.get(f"/api/containers/{container['id']}/wake-scan",

@@ -1,0 +1,70 @@
+/* Templates + project mode (V2 "Linear pop"): calm column, flat rows, hairlines,
+   compact 32px controls, rounded-full chips. Every value is a --v2-* token. */
+.tpl-flow { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.tpl-h { margin: 0; font-size: var(--v2-fs-title); font-weight: var(--v2-fw-semibold); color: var(--v2-text); letter-spacing: var(--v2-ls-title, -0.01em); outline: none; }
+.tpl-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tpl-head .tpl-change { margin-left: auto; }
+.tpl-lede { margin: -8px 0 0; color: var(--v2-text-2); font-size: var(--v2-fs-body); line-height: var(--v2-lh-body, 1.5); max-width: 64ch; }
+.tpl-notice { margin: 0; padding: 8px 12px; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control); background: var(--v2-warn-soft); color: var(--v2-text); font-size: var(--v2-fs-body); }
+.tpl-err { margin: 0; color: var(--v2-danger); font-size: var(--v2-fs-body); }
+
+/* gallery */
+.tpl-gallery { list-style: none; margin: 0; padding: 0; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface); overflow: hidden; }
+.tpl-gallery li + li { border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.tpl-card { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.tpl-card:hover { background: var(--v2-hover); }
+.tpl-card:focus-visible { outline: none; box-shadow: var(--v2-focus-ring-inset, var(--v2-focus-ring)); }
+.tpl-card-ic { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--v2-radius-control); border: 1px solid var(--v2-border); background: var(--v2-canvas); color: var(--v2-text-2); }
+.tpl-card-b { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.tpl-card-t { display: flex; align-items: center; gap: 8px; font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); color: var(--v2-text); }
+.tpl-card-s { color: var(--v2-text-2); font-size: var(--v2-fs-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpl-card-m { color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; }
+.tpl-card-go { flex: none; width: 14px; height: 14px; color: var(--v2-text-3); }
+
+/* sections + rows */
+.tpl-sec { display: flex; flex-direction: column; gap: 6px; }
+.tpl-sec h3 { margin: 0; font-size: var(--v2-fs-body); font-weight: var(--v2-fw-semibold); color: var(--v2-text); display: flex; align-items: baseline; gap: 8px; }
+.tpl-opt, .tpl-count { font-weight: var(--v2-fw-regular); color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; }
+.tpl-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface); }
+.tpl-row { display: flex; align-items: center; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; min-height: 36px; padding: 6px 12px; font-size: var(--v2-fs-body); min-width: 0; }
+.tpl-row + .tpl-row { border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.tpl-row-t { color: var(--v2-text); font-weight: var(--v2-fw-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tpl-row-s { color: var(--v2-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tpl-row-m { color: var(--v2-text-3); font-size: var(--v2-fs-meta); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tpl-row > .tpl-row-t, .tpl-row > .tpl-row-s { flex: 0 1 auto; max-width: 40%; }
+.tpl-row > .tpl-row-m:last-child { margin-left: auto; flex: 1 1 0; text-align: right; white-space: nowrap; }
+.tpl-check { display: inline-flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+.tpl-check input { margin: 0; accent-color: var(--v2-accent); width: 14px; height: 14px; flex: none; }
+.tpl-line { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; padding: 4px 0; margin: 0; }
+.tpl-ico { width: 14px; height: 14px; color: var(--v2-text-3); flex: none; }
+.tpl-prompt { flex-basis: 100%; }
+.tpl-prompt summary { width: max-content; color: var(--v2-text-3); font-size: var(--v2-fs-meta); cursor: pointer; padding-left: 22px; }
+.tpl-prompt summary:hover { color: var(--v2-text-2); }
+.tpl-prompt pre { margin: 6px 0 4px 22px; padding: 8px 10px; white-space: pre-wrap; font: inherit; font-size: var(--v2-fs-meta); line-height: 1.5; color: var(--v2-text-2); background: var(--v2-canvas); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control); max-height: 220px; overflow: auto; }
+
+.tpl-inline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 4px 0; }
+.tpl-tz { margin-left: auto; }
+.tpl-sel, .tpl-txa { background-color: var(--v2-canvas); border: 1px solid var(--v2-border); color: var(--v2-text); border-radius: var(--v2-radius-control); font: inherit; font-size: var(--v2-fs-body); outline: none; }
+.tpl-sel { height: var(--v2-control-h-sm, 28px); padding: 0 8px; max-width: 220px; }
+.tpl-txa { width: 100%; padding: 6px 10px; line-height: 1.5; resize: vertical; min-height: 56px; }
+.tpl-sel:focus, .tpl-txa:focus { border-color: var(--v2-accent); box-shadow: 0 0 0 1px var(--v2-accent); }
+.tpl-txa::placeholder { color: var(--v2-text-3); }
+.tpl-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.tpl-examples .v2-chip { max-width: 100%; }
+.tpl-examples .v2-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tpl-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.tpl-plan { display: flex; flex-direction: column; gap: 14px; }
+
+/* project mode (settings) */
+.pm-mode { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.pm-mode-note { color: var(--v2-text-3); font-size: var(--v2-fs-meta); text-align: right; max-width: 40ch; }
+
+@media (max-width: 720px) {
+  .tpl-row > .tpl-row-m:last-child { margin-left: 0; flex-basis: 100%; text-align: left; white-space: normal; }
+  .tpl-row > .tpl-row-t, .tpl-row > .tpl-row-s { max-width: 100%; }
+  .tpl-tz { margin-left: 0; }
+  .tpl-card-s { white-space: normal; }
+  .pm-mode { align-items: flex-start; }
+  .pm-mode-note { text-align: left; }
+}

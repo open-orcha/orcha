@@ -56,7 +56,8 @@ def test_adapter_present_and_maps_the_real_shapes():
     assert "Array.isArray(t.runs)" in client_ts and "runs_summary" in client_ts, \
         "D7 runs-summary not distinguished from the run array"
     assert "r.task_link ||" in client_ts, "doesn't prefer D7's resolved task_link object"
-    assert 'r.target_id) || "human"' in client_ts, "null request target not resolved to human"
+    # a NULL target resolves to "human"; UR-08: a present-but-unknown id is a retired agent, never "human"
+    assert '(r.target_id != null ? "retired agent" : "human")' in client_ts, "null request target not resolved to human"
     # D1 review (P2): mapped requests keep the raw ids the shell classifies by
     assert "requester_id: r.requester_id," in client_ts and "target_id: r.target_id," in client_ts, \
         "mapped requests drop raw ids"
@@ -77,7 +78,7 @@ def test_no_html_filename_deeplinks_in_the_react_source():
             if bad in src:
                 offenders.append(f"{p.name}: {bad}")
     assert not offenders, f"React source still links *.html routes: {offenders}"
-    tasks_page = (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    tasks_page = "".join((FRONTEND / "pages" / "tasks" / f).read_text() for f in ("TasksPage.tsx", "TaskDetail.tsx"))
     assert '"/agents?agent="' in tasks_page, "agent deeplinks not on the served route"
     home = (FRONTEND / "pages" / "home" / "HomePage.tsx").read_text()
     assert '"/tasks?task="' in home and '"/requests?req="' in home, "deeplinks not on served routes"

@@ -1,0 +1,102 @@
+{
+  "_doc": "GH #258 D2: the runtime rule (detect_runtime / is_project) as data, shared by tests/test_cli_runtime_mode.py and desktop/src/main/folderModes.test.ts so the CLI and the Mac app cannot drift. runtime 'error' = detect_runtime raises.",
+  "cases": [
+    {
+      "name": "empty folder",
+      "orcha_json": null,
+      "compose": false,
+      "runtime": "native",
+      "is_project": false
+    },
+    {
+      "name": "compose, no orcha.json (pre-#258 gate)",
+      "orcha_json": null,
+      "compose": true,
+      "runtime": "docker",
+      "is_project": true
+    },
+    {
+      "name": "every pre-#258 stack",
+      "orcha_json": {
+        "project_name": "demo"
+      },
+      "compose": true,
+      "runtime": "docker",
+      "is_project": true
+    },
+    {
+      "name": "half-initialised: no key, no compose",
+      "orcha_json": {
+        "project_name": "demo"
+      },
+      "compose": false,
+      "runtime": "native",
+      "is_project": false
+    },
+    {
+      "name": "says docker, compose present",
+      "orcha_json": {
+        "runtime": "docker"
+      },
+      "compose": true,
+      "runtime": "docker",
+      "is_project": true
+    },
+    {
+      "name": "says docker, compose deleted",
+      "orcha_json": {
+        "runtime": "docker"
+      },
+      "compose": false,
+      "runtime": "docker",
+      "is_project": false
+    },
+    {
+      "name": "native",
+      "orcha_json": {
+        "runtime": "native"
+      },
+      "compose": false,
+      "runtime": "native",
+      "is_project": true
+    },
+    {
+      "name": "explicit key outranks the file",
+      "orcha_json": {
+        "runtime": "native"
+      },
+      "compose": true,
+      "runtime": "native",
+      "is_project": true
+    },
+    {
+      "name": "`orcha connect` client folder",
+      "orcha_json": {
+        "connected": true,
+        "api_port": 8004
+      },
+      "compose": false,
+      "runtime": "native",
+      "is_project": false
+    },
+    {
+      "name": "connected native client",
+      "orcha_json": {
+        "runtime": "native",
+        "connected": true
+      },
+      "compose": false,
+      "runtime": "native",
+      "is_project": false
+    },
+    {
+      "name": "unknown runtime is an error, not a project",
+      "orcha_json": {
+        "runtime": "podman"
+      },
+      "compose": true,
+      "runtime": "error",
+      "is_project": false
+    }
+  ]
+}

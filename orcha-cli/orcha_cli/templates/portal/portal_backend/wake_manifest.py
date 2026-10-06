@@ -1,5 +1,6 @@
 """Build a ranked notification manifest for worker wake prompts."""
 
+from portal_backend import sql
 from portal_backend.drain_classification import _drain_class
 from portal_backend.event_policy import _NON_WAKING_EVENTS
 from portal_backend.guards import valid_uuid as _valid_uuid
@@ -32,13 +33,13 @@ def _wake_notification_manifest(
     backlog can hide a newer interrupt/human request from the wake prompt.
     """
     cur.execute(
-        """SELECT e.id, e.event_name, e.ts, e.payload, e.target_id
+        f"""SELECT e.id, e.event_name, e.ts, e.payload, e.target_id
            FROM agent_events e
-           WHERE e.event_key = %s AND e.ts > %s AND e.event_name <> ALL(%s)
+           WHERE e.event_key = %s AND e.ts > %s AND {sql.not_in_list('e.event_name')}
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id = %s AND a.event_id = e.id)
            ORDER BY e.ts ASC, e.id ASC""",
-        (aid, delivered_ts, list(_NON_WAKING_EVENTS), aid),
+        (aid, delivered_ts, sql.list_param(_NON_WAKING_EVENTS), aid),
     )
     raw = cur.fetchall()
 
@@ -51,7 +52,8 @@ def _wake_notification_manifest(
     people: dict[str, dict] = {}
     if ids:
         cur.execute(
-            "SELECT id, alias, kind FROM agents WHERE id = ANY(%s)", (list(ids),)
+            f"SELECT id, alias, kind FROM agents WHERE {sql.in_list('id')}",
+            (sql.list_param(ids),),
         )
         people = {str(a["id"]): a for a in cur.fetchall()}
 
@@ -111,14 +113,16 @@ def _wake_notification_manifest(
     object_priorities: dict[tuple[str, str], int] = {}
     if task_ids:
         cur.execute(
-            "SELECT id, priority FROM tasks WHERE id = ANY(%s)", (list(task_ids),)
+            f"SELECT id, priority FROM tasks WHERE {sql.in_list('id')}",
+            (sql.list_param(task_ids),),
         )
         object_priorities.update(
             {("task", str(r["id"])): r["priority"] for r in cur.fetchall()}
         )
     if request_ids:
         cur.execute(
-            "SELECT id, priority FROM requests WHERE id = ANY(%s)", (list(request_ids),)
+            f"SELECT id, priority FROM requests WHERE {sql.in_list('id')}",
+            (sql.list_param(request_ids),),
         )
         object_priorities.update(
             {("request", str(r["id"])): r["priority"] for r in cur.fetchall()}

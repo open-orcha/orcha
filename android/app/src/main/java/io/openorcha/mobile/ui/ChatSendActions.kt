@@ -22,7 +22,7 @@ internal interface ChatSendActions : OrchaViewModelAccess {
 fun sendConversationTurn(content: String) {
     val selected = _uiState.value.selectedContainer ?: return
     val actor = selected.humanAgentId ?: run {
-        _uiState.update { it.copy(error = "Pairing is missing the human identity. Reconnect this Orcha first.") }
+        _uiState.update { it.copy(error = "Pairing is missing the human identity. Reconnect this Embodent first.") }
         return
     }
     val agent = _uiState.value.selectedAgent ?: return

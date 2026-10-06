@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -120,8 +121,8 @@ def auth_check(request: Request, response: Response):
         cur.execute(
             """UPDATE device_tokens SET last_used_at=now()
                WHERE id=%s AND (last_used_at IS NULL
-                                OR last_used_at < now() - %s * interval '1 second')""",
-            (row["id"], _TOUCH_THROTTLE_SECS),
+                                OR last_used_at < %s)""",
+            (row["id"], sql.ago(_TOUCH_THROTTLE_SECS)),
         )
         if cur.rowcount:
             conn.commit()
@@ -136,10 +137,10 @@ def list_device_tokens(request: Request):
     with db_cursor() as (_, cur):
         _, memberships = _acting_memberships(cur, request)
         cur.execute(
-            """SELECT id, label, created_at, last_used_at FROM device_tokens
-               WHERE agent_id = ANY(%s) AND revoked_at IS NULL
+            f"""SELECT id, label, created_at, last_used_at FROM device_tokens
+               WHERE {sql.in_list('agent_id')} AND revoked_at IS NULL
                ORDER BY created_at DESC, id DESC""",
-            ([m["id"] for m in memberships],),
+            (sql.list_param([m["id"] for m in memberships]),),
         )
         return {"tokens": cur.fetchall()}
 

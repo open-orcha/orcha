@@ -1,5 +1,6 @@
 """Persist per-event acknowledgements and advance contiguous delivery cursors."""
 
+from portal_backend import sql
 from portal_backend.event_policy import _WORK_NON_WAKING_EVENTS
 from portal_backend.guards import valid_uuid as _valid_uuid
 
@@ -22,11 +23,11 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
     row = cur.fetchone()
     delivered = (row["d"] if row else 0.0) or 0.0
     cur.execute(
-        """SELECT min(e.ts) AS m FROM agent_events e
-           WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
+        f"""SELECT min(e.ts) AS m FROM agent_events e
+           WHERE e.event_key=%s AND e.ts > %s AND {sql.not_in_list('e.event_name')}
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id=%s AND a.event_id=e.id)""",
-        (aid, delivered, list(_WORK_NON_WAKING_EVENTS), aid),
+        (aid, delivered, sql.list_param(_WORK_NON_WAKING_EVENTS), aid),
     )
     min_unhandled = cur.fetchone()["m"]
     if min_unhandled is None:
@@ -47,10 +48,15 @@ def _recompute_delivered_floor(cur, aid: str) -> float:
         new_floor = cur.fetchone()["m"]
     if new_floor is None or new_floor <= delivered:
         return delivered
+    # new_floor is non-NULL here; a NULL stored cursor falls back to it (Postgres GREATEST
+    # ignores the NULL, SQLite max() would return NULL).
+    advanced = sql.greatest(
+        "COALESCE(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)", "EXCLUDED.delivered_ts"
+    )
     cur.execute(
-        """INSERT INTO agent_wake_state (agent_id, delivered_ts) VALUES (%s, %s)
+        f"""INSERT INTO agent_wake_state (agent_id, delivered_ts) VALUES (%s, %s)
            ON CONFLICT (agent_id) DO UPDATE SET
-             delivered_ts = GREATEST(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)""",
+             delivered_ts = {advanced}""",
         (aid, new_floor),
     )
     return new_floor

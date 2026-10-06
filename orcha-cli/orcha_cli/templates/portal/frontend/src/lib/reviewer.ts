@@ -30,10 +30,29 @@ export function reviewerRef(t: Pick<Task, "reviewer">): ReviewerRef | null {
   return r as ReviewerRef;
 }
 
-/** Chip label — vanilla: r.github_login || r.alias. */
+/** Legacy label — vanilla: r.github_login || r.alias (kept for the surfaces
+ *  and tests that still read the login). New chips use reviewerName. */
 export function reviewerLabel(r: ReviewerRef | null): string {
   if (!r) return "";
   return r.github_login || r.alias || "";
+}
+
+/** Chip name: the project alias (how every other surface — filter menu,
+ *  Agents board, avatars — names the person), else the GitHub login. The
+ *  login moves to the tooltip (reviewerTitle) so the same person never
+ *  appears under two names (wave-4 review, Tasks list). */
+export function reviewerName(r: ReviewerRef | null): string {
+  if (!r) return "";
+  return r.alias || r.github_login || "";
+}
+
+/** Tooltip for a reviewer chip: "Reviewer: amina (@amina-yusuf)" — the login
+ *  only when it adds information. */
+export function reviewerTitle(r: ReviewerRef | null): string {
+  if (!r) return "";
+  const label = reviewerName(r);
+  const login = r.github_login && r.github_login !== label ? " (@" + r.github_login + ")" : "";
+  return "Reviewer: " + label + login;
 }
 
 /** app-data.js actingOwner, trust-off branch: the acting human's snapshot
@@ -66,5 +85,7 @@ export function reviewFor(t: Pick<Task, "reviewer" | "reviewer_agent_id">, h: Ag
   if (rid == null) return null;
   if (String(h.id) === String(rid)) return null; // it's YOUR review
   if (isActingOwner(h)) return null; // owners see every card normally
-  return reviewerLabel(r);
+  // parity r2: name the reviewer by project alias like every other chip
+  // (reviewerName), not the GitHub login — one person, one name.
+  return reviewerName(r) || null;
 }

@@ -2,13 +2,42 @@
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.autonomy import effective_autonomy
 from portal_backend.database import db_cursor
 from portal_backend.guards import valid_uuid as _valid_uuid
 from portal_backend.identity_routes import require_member_read as _require_member_read
-from portal_backend.request_ownership import _annotate_request_ownership
+from portal_backend.request_ownership import (
+    REQUEST_CLOSE_COLUMNS,
+    REQUEST_ESCALATION_COLUMNS,
+    REQUEST_ESCALATION_JOIN,
+    _annotate_request_ownership,
+)
 from portal_backend.task_list_query import _task_list_sql
+
+
+# The portal's "a host runtime serves this project" window (frontend
+# pages/agents/presence.ts WAKES_SERVED_WINDOW_MS = 2 min) — kept in lockstep.
+RUNTIME_SERVED_WINDOW_SECS = 120
+
+
+def _wakes_paused_reason(container, agent):
+    """Why NEW wakes are refused for this agent right now, else None.
+
+    Mirrors wake_claim's refusal order exactly: the project is not active
+    (``project_status``), the project-wide kill-switch is off
+    (``project_wakes_off``), or this agent opted out (``agent_wakes_off``).
+    Humans are never woken, so they are never "paused"."""
+    if agent.get("kind") == "human":
+        return None
+    if container["status"] != "active":
+        return "project_status"
+    if not container["wakes_enabled"]:
+        return "project_wakes_off"
+    if agent.get("wake_enabled") is False:
+        return "agent_wakes_off"
+    return None
 
 
 @app.get("/api/containers/{cid}")
@@ -31,20 +60,36 @@ def get_container(
         raise HTTPException(400, "container_id is not a valid UUID")
     task_limit = max(1, min(task_limit, 1000))
     request_limit = max(1, min(request_limit, 1000))
-    with db_cursor() as (_, cur):
+    with db_cursor(readonly=True) as (_, cur):  # the 3 s dashboard poll: no write lock
         # Access model: reads are project-isolated — a trusted non-member is 403'd
         # (trust off / no header, and the unmapped bootstrap state, unchanged).
         _require_member_read(cur, request, cid)
         cur.execute(
-            """SELECT id, name, description, status, root_task_id,
+            f"""SELECT id, name, description, status, root_task_id,
                       max_auto_agents, max_tasks, execution_mode, wakes_enabled,
+                      -- mig 056 agent limit: the live AI agents created from suggestions,
+                      -- i.e. what max_auto_agents is checked against (Settings → Execution)
+                      (SELECT COUNT(*) FROM agents ag
+                        WHERE ag.container_id = containers.id AND ag.terminated_at IS NULL
+                          AND ag.kind = 'ai' AND ag.is_auto_created) AS auto_agents_in_use,
                       autonomy_level, autonomy_enforced, worktrees_disabled, github_repo,
+                      -- mig 050 (D14): the project's cosmetic icon (NULL = default glyph)
+                      icon,
+                      -- mig 057: where finished work goes for verification + AI pre-review
+                      review_route, ai_manager_prereview,
                       -- mig 037: the notifier's last wake-scan poll — recent means a
                       -- host daemon serves THIS project's wakes (switcher/notice signal).
                       last_wake_scan_at,
+                      -- Additive (agent-status parity): the SERVER's reading of "is a host
+                      -- runtime serving this project" (a wake-scan within the portal's 2-min
+                      -- window, on the DB clock — no browser clock skew) so the header, the
+                      -- roster, the board and the sidebar all read ONE fact.
+                      (last_wake_scan_at IS NOT NULL
+                       AND last_wake_scan_at > %s) AS runtime_served,
+                      {sql.age_secs("last_wake_scan_at")} AS wake_scan_age_secs,
                       created_at, completed_at
                FROM containers WHERE id=%s""",
-            (cid,),
+            (sql.ago(RUNTIME_SERVED_WINDOW_SECS), cid),
         )
         c = cur.fetchone()
         if not c:
@@ -54,13 +99,27 @@ def get_container(
         # D7: additionally surface model (D7), wake_enabled (reachability join),
         # current_task (the actively-worked task) and last_active (latest of heartbeat /
         # worker-run start) so the redesign can render agent cards without extra calls.
+        # GH #258 S2b: dialect spellings built once, outside the SQL text.
+        neg_inf = sql.ts_neg_infinity()
+        prompt_preview_expr = sql.left("a.system_prompt", 160)
+        # Postgres GREATEST ignores NULLs, SQLite max() does not: COALESCE each operand to
+        # -infinity, and NULLIF restores the all-NULL -> NULL result (never beat, never ran).
+        last_active_expr = "NULLIF(" + sql.greatest(
+            f"COALESCE(a.last_heartbeat_at, {neg_inf})",
+            "COALESCE((SELECT max(wr.started_at) FROM worker_runs wr"
+            f" WHERE wr.agent_id = a.id), {neg_inf})",
+        ) + f", {neg_inf})"
+        payload_preview_expr = sql.left("r.payload", 120)
         cur.execute(
-            """SELECT a.id, a.alias, a.role, a.kind, a.turns_used, a.turn_budget,
+            f"""SELECT a.id, a.alias, a.role, a.kind, a.turns_used, a.turn_budget,
                       a.last_heartbeat_at, a.is_auto_created, a.created_at, a.terminated_at,
                       a.model, a.reasoning_effort,
                       -- Collab v1: GitHub identity + project role so the portal renders
                       -- member chips/avatars and owner-only affordances off the same poll.
                       a.github_login, a.member_role,
+                      -- mig 052 (org chart): who this agent reports to (NULL = root). Humans
+                      -- set it via PUT /api/agents/{{aid}}/reports-to; escalations walk it.
+                      a.reports_to_agent_id AS reports_to,
                       -- mig 043: this agent's per-agent autonomy override (NULL = inherit the
                       -- container level). The roster card renders a small badge when non-NULL;
                       -- the effective level is computed below (container-enforced aware).
@@ -69,15 +128,41 @@ def get_container(
                       -- portal can render/edit it on the agent card without a second call.
                       a.auto_wake_interval_secs,
                       -- A short glanceable prompt preview for the agent view; the FULL
-                      -- system_prompt stays on GET /api/agents/{aid}/persona (lazy-loaded
+                      -- system_prompt stays on GET /api/agents/{{aid}}/persona (lazy-loaded
                       -- on expand) so we don't ride 8KB x N prompts on every roster poll.
-                      LEFT(a.system_prompt, 160) AS prompt_preview,
+                      {prompt_preview_expr} AS prompt_preview,
                       COALESCE(r.wake_enabled, true) AS wake_enabled,
-                      GREATEST(
-                          a.last_heartbeat_at,
-                          (SELECT max(wr.started_at) FROM worker_runs wr WHERE wr.agent_id = a.id)
-                      ) AS last_active,
-                      (SELECT json_build_object('task_id', t2.id, 'title', t2.title)
+                      -- Additive (agent-status parity): the newest worker_run whose row says
+                      -- 'running' — the SAME predicate GET /api/agents/{{aid}}/runs reports as
+                      -- running (so the roster/board can agree with the workspace header,
+                      -- which reads that list) — REGARDLESS of lease. `lease_live` says
+                      -- whether the agent's lane lease is still live; a false value marks a
+                      -- probable orphan the host reaper has not reconciled yet (active_run,
+                      -- below, stays lease-gated and unchanged).
+                      -- L13b: worktree/base_cwd ride along -- the board gates "Live changes"
+                      -- on a readable checkout, like the workspace's hasCheckout().
+                      (SELECT {sql.json_object(
+                                  "'run_id'", "rr.run_id",
+                                  "'lane'", "rr.lane",
+                                  "'wake_kind'", "rr.wake_kind",
+                                  "'runtime'", "rr.runtime",
+                                  "'task_id'", "rr.task_id",
+                                  "'task_title'", "rt.title",
+                                  "'started_at'", "rr.started_at",
+                                  "'worktree'", "rr.worktree",
+                                  "'base_cwd'", "rr.base_cwd",
+                                  "'lease_live'",
+                                  sql.json_bool(
+                                      "CASE WHEN rr.lane = 'conversation'"
+                                      " THEN COALESCE(ws.conv_lease_until > now(), false)"
+                                      " ELSE COALESCE(ws.wake_lease_until > now(), false) END"
+                                  ))}
+                         FROM worker_runs rr
+                         LEFT JOIN tasks rt ON rt.id = rr.task_id
+                        WHERE rr.agent_id = a.id AND rr.status = 'running'
+                        ORDER BY rr.started_at DESC LIMIT 1) AS running_run,
+                      {last_active_expr} AS last_active,
+                      (SELECT {sql.json_object("'task_id'", "t2.id", "'title'", "t2.title")}
                          FROM agent_tasks at2 JOIN tasks t2 ON t2.id = at2.task_id
                         WHERE at2.agent_id = a.id AND at2.assignment_status = 'working'
                         ORDER BY at2.assigned_at DESC LIMIT 1) AS current_task,
@@ -96,15 +181,15 @@ def get_container(
                       -- it correctly reads idle, consistent with the live-recomputed `status`. When
                       -- the live run IS a task, task_id + task_title are carried so the card shows the
                       -- worked task directly (no dependence on current_task matching).
-                      (SELECT json_build_object(
-                                  'run_id', wr.run_id,
-                                  'wake_event', wr.wake_event,
-                                  'wake_kind', wr.wake_kind,
-                                  'runtime', wr.runtime,
-                                  'task_id', wr.task_id,
-                                  'task_title', t3.title,
-                                  'has_conversation', wr.conversation_id IS NOT NULL,
-                                  'started_at', wr.started_at)
+                      (SELECT {sql.json_object(
+                                  "'run_id'", "wr.run_id",
+                                  "'wake_event'", "wr.wake_event",
+                                  "'wake_kind'", "wr.wake_kind",
+                                  "'runtime'", "wr.runtime",
+                                  "'task_id'", "wr.task_id",
+                                  "'task_title'", "t3.title",
+                                  "'has_conversation'", sql.json_bool("wr.conversation_id IS NOT NULL"),
+                                  "'started_at'", "wr.started_at")}
                          FROM worker_runs wr
                          LEFT JOIN tasks t3 ON t3.id = wr.task_id
                         WHERE wr.agent_id = a.id AND wr.status = 'running'
@@ -168,28 +253,36 @@ def get_container(
                       -- ISS-16/#89: RAW heartbeat freshness (seconds since the last keep-alive ping;
                       -- NULL if the agent never beat). No threshold — humans/clients decide what
                       -- 'stale' means; a 'stalled' badge that needs a threshold rides ISS-31 (Q2).
-                      EXTRACT(EPOCH FROM (now() - a.last_heartbeat_at)) AS heartbeat_age_secs,
-                      COALESCE(w.waiting_on, '[]'::json) AS waiting_on
+                      {sql.age_secs("a.last_heartbeat_at")} AS heartbeat_age_secs,
+                      COALESCE(w.waiting_on, '[]') AS waiting_on
                FROM agents a
                LEFT JOIN agent_reachability r ON r.agent_id = a.id
                LEFT JOIN agent_wake_state ws ON ws.agent_id = a.id
+               -- GH #258 S2b: no ORDER BY inside the aggregate (SQLite < 3.44). One row per
+               -- requester with open requests; its list is aggregated from a per-requester
+               -- subquery that orders by created_at, so the GROUP BY never reorders it.
                LEFT JOIN (
-                   SELECT r.requester_id,
-                          json_agg(json_build_object(
-                              'request_id', r.id,
-                              'target_alias', COALESCE(t.alias, '(escalated to human)'),
-                              'payload_preview', LEFT(r.payload, 120),
-                              'chain_depth', r.chain_depth,
-                              'created_at', r.created_at,
-                              'expires_at', r.expires_at
-                          ) ORDER BY r.created_at) AS waiting_on
-                   FROM requests r LEFT JOIN agents t ON t.id = r.target_id
-                   WHERE r.status='open' AND r.container_id=%s
-                   GROUP BY r.requester_id
+                   SELECT q.requester_id,
+                          (SELECT {sql.json_array_agg("s.x")} FROM (
+                               SELECT {sql.json_object(
+                                   "'request_id'", "r.id",
+                                   "'target_alias'", "COALESCE(t.alias, '(escalated to human)')",
+                                   "'payload_preview'", payload_preview_expr,
+                                   "'chain_depth'", "r.chain_depth",
+                                   "'created_at'", "r.created_at",
+                                   "'expires_at'", "r.expires_at",
+                               )} AS x
+                                 FROM requests r LEFT JOIN agents t ON t.id = r.target_id
+                                WHERE r.status='open' AND r.container_id=%s
+                                  AND r.requester_id = q.requester_id
+                                ORDER BY r.created_at) s) AS waiting_on
+                   FROM requests q
+                   WHERE q.status='open' AND q.container_id=%s
+                   GROUP BY q.requester_id
                ) w ON w.requester_id = a.id
                WHERE a.container_id=%s AND a.terminated_at IS NULL
                ORDER BY a.created_at""",
-            (cid, cid),
+            (cid, cid, cid),
         )
         agents = cur.fetchall()
 
@@ -205,6 +298,14 @@ def get_container(
             _a["effective_autonomy"] = effective_autonomy(
                 _cl, _ce, _a.get("autonomy_override")
             )
+            # Additive (agent-status parity): the explicit PAUSE fact, so no surface
+            # guesses it. Pause semantics, per the enforcement code: a pause only
+            # REFUSES NEW wake claims (wake_lease_claim_routes.wake_claim: container
+            # not active / wakes_enabled=false / agent wake_enabled=false). It never
+            # stops a run already in flight — that run keeps working until it exits.
+            _a["wakes_paused_reason"] = _wakes_paused_reason(c, _a)
+            _a["wakes_paused"] = _a["wakes_paused_reason"] is not None
+            _a["pause_stops_running_run"] = False
 
         # ISS-68: TRIMMED, priority-ordered, capped task rows (same shape as GET
         # /api/containers/{cid}/tasks — message_summary + plan_message, NO full thread).
@@ -212,9 +313,13 @@ def get_container(
         # (one extra FILTER column, not a second query) — non-terminal statuses (everything
         # but completed/cancelled). This is the one authoritative "open tasks" number; the
         # sidebar badge AND the page header both read it so they can never diverge again.
+        # Parity r2: the container's ROOT task is excluded — it is the project itself, not
+        # a unit of work (the hub list, the onboarding checklist and every task board
+        # already skip it), so a brand-new project reads "0 open tasks", not 1.
         cur.execute(
             """SELECT count(*) AS n,
-                      count(*) FILTER (WHERE t.status NOT IN ('completed', 'cancelled')) AS open_n
+                      count(*) FILTER (WHERE t.status NOT IN ('completed', 'cancelled')
+                                         AND NOT t.is_root) AS open_n
                FROM tasks t WHERE t.container_id = %s""",
             (cid,),
         )
@@ -243,22 +348,44 @@ def get_container(
         request_total = _request_counts["n"]
         request_open_total = _request_counts["open_n"]
         cur.execute(
-            """SELECT id, type, status, priority, requester_id, target_id,
+            f"""SELECT id, type, status, priority, requester_id, target_id,
                       payload, response, rejection_reason, spawned_task_id,
                       expires_at, created_at, responded_at, closed_at,
                       parent_request_id, chain_depth, detail,
                       -- D7: resolve the spawned task into a light link so the portal can
                       -- navigate request → task without a second call. (Shape pending Tim;
                       -- default = the spawned task.) NULL when the request spawned none.
-                      (SELECT json_build_object('task_id', st.id, 'title', st.title, 'status', st.status)
+                      (SELECT {sql.json_object("'task_id'", "st.id", "'title'", "st.title", "'status'", "st.status")}
                          FROM tasks st WHERE st.id = requests.spawned_task_id) AS task_link,
                       -- ISS-47: alias of the agent who owns the next action (open→target,
                       -- answered→requester) so the mixed all-request view is unambiguous.
                       (SELECT a.alias FROM agents a
                          WHERE a.id = CASE requests.status WHEN 'open' THEN requests.target_id
                                                            WHEN 'answered' THEN requests.requester_id END)
-                        AS owner_alias
-               FROM requests WHERE container_id=%s
+                        AS owner_alias,
+                      -- UR-08: the requester/target aliases resolved here — the snapshot
+                      -- roster omits retired agents, so the client can't map their ids
+                      -- (a retired requester used to render as the acting human). Retired
+                      -- rows still resolve; *_retired flags them.
+                      (SELECT ra.alias FROM agents ra WHERE ra.id = requests.requester_id)
+                        AS requester_alias,
+                      (SELECT ra.kind FROM agents ra WHERE ra.id = requests.requester_id)
+                        AS requester_kind,
+                      (SELECT ra.terminated_at IS NOT NULL FROM agents ra
+                         WHERE ra.id = requests.requester_id) AS requester_retired,
+                      (SELECT ta.alias FROM agents ta WHERE ta.id = requests.target_id)
+                        AS target_alias,
+                      (SELECT ta.terminated_at IS NOT NULL FROM agents ta
+                         WHERE ta.id = requests.target_id) AS target_retired,
+                      """
+            + REQUEST_ESCALATION_COLUMNS
+            + ","
+            + REQUEST_CLOSE_COLUMNS
+            + """
+               FROM requests"""
+            + REQUEST_ESCALATION_JOIN
+            + """
+               WHERE container_id=%s
                ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'answered' THEN 1 ELSE 2 END,
                         priority, created_at DESC, id
                LIMIT %s OFFSET 0""",

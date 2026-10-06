@@ -1,22 +1,25 @@
 """Read wake state and pending work without deciding whether to wake."""
 
+from portal_backend import sql
+from portal_backend.stranded_runs import last_activity_expr
+
 
 def list_wake_agents(cur, cid: str, cooldown: float):
     """Return active AI agents with both wake-lane liveness projections."""
     cur.execute(
-        """SELECT a.id, a.alias, a.model, a.reasoning_effort, a.last_heartbeat_at,
+        f"""SELECT a.id, a.alias, a.model, a.reasoning_effort, a.last_heartbeat_at,
                   a.turns_used, a.turn_budget, a.auto_wake_interval_secs,
                   a.autonomy_override,
                   COALESCE(r.wake_enabled, true) AS wake_enabled,
                   r.tmux_target, r.headless_cwd, r.headless_flags,
                   COALESCE(w.delivered_ts, 0) AS delivered_ts,
                   w.last_woken_at, w.work_last_heartbeat_at,
-                  EXTRACT(EPOCH FROM (now() - w.work_last_heartbeat_at))
+                  {sql.age_secs("w.work_last_heartbeat_at")}
                     AS work_idle_seconds,
-                  EXTRACT(EPOCH FROM (now() - a.last_heartbeat_at)) AS idle_seconds,
-                  EXTRACT(EPOCH FROM (now() - w.last_woken_at)) AS secs_since_woken,
+                  {sql.age_secs("a.last_heartbeat_at")} AS idle_seconds,
+                  {sql.age_secs("w.last_woken_at")} AS secs_since_woken,
                   (w.last_woken_at IS NOT NULL
-                   AND EXTRACT(EPOCH FROM (now() - w.last_woken_at)) < %s)
+                   AND {sql.age_secs("w.last_woken_at")} < %s)
                     AS in_cooldown,
                   (w.wake_lease_until IS NOT NULL
                    AND w.wake_lease_until > now()) AS lease_active,
@@ -31,6 +34,14 @@ def list_wake_agents(cur, cid: str, cooldown: float):
                     WHERE wr.agent_id = a.id AND wr.status = 'running'
                       AND wr.lane = 'work'
                   ) AS embodiment_running,
+                  -- how long the newest running work row (and its lane) has been silent;
+                  -- lets the wake reason say when a stranded run will be reconciled
+                  (SELECT {sql.age_secs(last_activity_expr("work"))}
+                     FROM worker_runs wr
+                    WHERE wr.agent_id = a.id AND wr.status = 'running'
+                      AND wr.lane = 'work'
+                    ORDER BY wr.started_at DESC LIMIT 1
+                  ) AS embodiment_silent_seconds,
                   EXISTS (
                     SELECT 1 FROM worker_runs wr
                     WHERE wr.agent_id = a.id AND wr.status = 'running'
@@ -49,10 +60,10 @@ def list_wake_agents(cur, cid: str, cooldown: float):
 
 def pending_event_summary(cur, aid: str, delivered_ts, non_waking_events):
     """Return count, ceiling, newest event name, and newest payload."""
-    excluded = list(non_waking_events)
+    excluded = sql.list_param(non_waking_events)
     cur.execute(
-        """SELECT count(*) FILTER (
-                    WHERE e.event_name <> ALL(%s)
+        f"""SELECT count(*) FILTER (
+                    WHERE {sql.not_in_list('e.event_name')}
                       AND NOT EXISTS (
                         SELECT 1 FROM agent_event_acks a
                         WHERE a.agent_id = %s AND a.event_id = e.id
@@ -69,9 +80,9 @@ def pending_event_summary(cur, aid: str, delivered_ts, non_waking_events):
     latest_payload = None
     if pending:
         cur.execute(
-            """SELECT e.event_name, e.payload FROM agent_events e
+            f"""SELECT e.event_name, e.payload FROM agent_events e
                WHERE e.event_key = %s AND e.ts > %s
-                 AND e.event_name <> ALL(%s)
+                 AND {sql.not_in_list('e.event_name')}
                  AND NOT EXISTS (
                    SELECT 1 FROM agent_event_acks a
                    WHERE a.agent_id = %s AND a.event_id = e.id

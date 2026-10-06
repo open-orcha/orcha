@@ -1,6 +1,4 @@
 import path from 'node:path'
-import { dockerExec, type Exec } from './dockerExec'
-import { renderCompose } from './templates'
 import type {
   BridgeError,
   ProgressEvent,
@@ -9,19 +7,9 @@ import type {
   ProvisionStep
 } from '../shared/types'
 
-/** Minimal fs surface the engine needs, injectable for tests. */
-export interface EngineFs {
-  readFile(p: string): string
-  writeFile(p: string, c: string): void
-  copyTree(src: string, dst: string): void
-  mkdirp(p: string): void
-  chmod(p: string, mode: number): void
-  exists(p: string): boolean
-  /** Names in a directory; [] when the dir is missing/unreadable. */
-  readDir(p: string): string[]
-}
-
-export type FetchJson = (url: string, init?: { method?: string; body?: unknown }) => Promise<unknown>
+/** Run `orcha <args>` in a folder, handing each stdout line to `onLine`; rejects with
+ *  {stderr} on a non-zero exit (GH #258 D2: the CLI owns provisioning, the app drives it). */
+export type OrchaLines = (folder: string, args: string[], onLine: (line: string) => void) => Promise<void>
 
 /** Best-effort start of the host-side agent worker (the orcha CLI's notifier daemon,
  *  which is what actually spawns `claude -p` runs). Returns started=false with a
@@ -30,25 +18,31 @@ export type FetchJson = (url: string, init?: { method?: string; body?: unknown }
 export type StartWorker = (folder: string) => Promise<{ started: boolean; reason?: string }>
 
 export interface EngineDeps {
-  exec: Exec
-  fetchJson: FetchJson
-  fs: EngineFs
-  templatesRoot: () => string
-  findFreePort: (start: number) => number
-  readComposeTemplate: () => string
-  genSecret: () => string
+  orcha: OrchaLines
+  /** The project's `.claude/orcha.json`, or null when missing/unreadable. */
+  readConfig: (folder: string) => Record<string, unknown> | null
+  /** Ports the app reserved (free on the host and not published by Docker); omitted → the
+   *  CLI picks its own. */
+  ports?: { api: number; bridge: number }
   user: string
   startWorker?: StartWorker
-  waitPortalTimeoutMs?: number
-  waitPortalPollMs?: number
-  /** Host GitHub token (from `gh auth token`) to hand the compose-up call, one-shot — NEVER
-   *  persisted to .env or any file, NEVER logged. Parity with the CLI's `orcha up`, which
-   *  does the same host-side lookup. Optional so unit tests can omit it. */
-  ghAuthToken?: () => Promise<string | null>
 }
 
 const STDERR_TAIL = 500
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** `orcha init --progress-json` step names; the app's ProvisionStep ids match them 1:1. */
+const CLI_STEPS = new Set<ProvisionStep>([
+  'ports',
+  'config',
+  'service',
+  'start',
+  'wait-portal',
+  'create-container',
+  'register-human'
+])
+
+/** Steps whose `error` line the CLI treats as a warning and carries on past. */
+const NON_FATAL = new Set<ProvisionStep>(['service', 'register-human'])
 
 function fail(step: ProvisionStep, code: BridgeError['code'], detail: string): never {
   if (code === 'PROVISION_FAILED') {
@@ -57,14 +51,28 @@ function fail(step: ProvisionStep, code: BridgeError['code'], detail: string): n
   throw { code, detail } as unknown as BridgeError
 }
 
-/** docker compose -f <composeFile> <args...> from the project's .orcha dir. `extraEnv`
- *  (e.g. a one-shot ORCHA_GITHUB_PAT) flows straight to the exec, never touching a file. */
-async function compose(exec: Exec, orchaDir: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<string> {
-  const file = path.join(orchaDir, 'docker-compose.yml')
-  const res = await exec('docker', ['compose', '-f', file, ...args], extraEnv)
-  return res.stdout
+function parseLine(line: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(line) as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
 }
 
+function portOf(url: unknown): number | null {
+  const m = typeof url === 'string' ? /:(\d{2,5})(?:\/|$)/.exec(url) : null
+  return m ? Number(m[1]) : null
+}
+
+const errText = (err: unknown): string =>
+  String((err as { stderr?: string })?.stderr || (err as Error)?.message || err)
+
+/** Provision a project folder through the orcha CLI (GH #258 D2):
+ *  - `init`    — `orcha init --runtime native --progress-json …` (fresh folder)
+ *  - `upgrade` — `orcha up` (an existing project, either runtime)
+ *  - `migrate` — `orcha migrate-runtime --json` (move a Docker project onto the native
+ *                runtime; the Docker copy is kept until the user deletes it). */
 export async function provision(
   opts: ProvisionOptions,
   onProgress: (e: ProgressEvent) => void,
@@ -73,211 +81,135 @@ export async function provision(
   const runId = `${opts.folder}:${opts.mode}:${Date.now()}`
   const emit = (step: ProvisionStep, status: ProgressEvent['status'], extra?: Partial<ProgressEvent>): void =>
     onProgress({ runId, step, status, ...(extra as object) } as ProgressEvent)
-
-  const { fs } = deps
-  const orchaDir = path.join(opts.folder, '.orcha')
-  const claudeDir = path.join(opts.folder, '.claude')
-  const configPath = path.join(claudeDir, 'orcha.json')
   const warnings: string[] = []
 
-  // Resolve project name + ports. upgrade preserves from orcha.json; init/reset pick fresh.
-  let projectName: string
-  let apiPort: number
-  let dbPort: number
-  let bridgePort: number
-  if (opts.mode === 'upgrade') {
-    const cfg = JSON.parse(fs.readFile(configPath)) as Record<string, number | string>
-    projectName = String(cfg.project_name)
-    apiPort = Number(cfg.api_port)
-    dbPort = Number(cfg.db_port)
-    bridgePort = Number(cfg.bridge_port) || deps.findFreePort(8765)
-  } else {
-    projectName = opts.name ?? path.basename(opts.folder)
-    dbPort = deps.findFreePort(5432)
-    apiPort = deps.findFreePort(8000)
-    bridgePort = deps.findFreePort(8765)
-  }
-  const apiBase = `http://localhost:${apiPort}`
-  const project = `orcha-${projectName}`
+  let apiBase: unknown = null
+  if (opts.mode === 'init') apiBase = await runInit(opts, deps, emit, warnings)
+  else if (opts.mode === 'migrate') await runMigrate(opts, deps, emit)
+  else await runUp(opts, deps, emit)
 
-  // reset: wipe the volume FIRST (explicit only).
-  if (opts.mode === 'reset') {
-    try {
-      await compose(deps.exec, orchaDir, ['down', '-v'])
-    } catch {
-      // a not-yet-existing stack down -v is fine; continue.
-    }
-  }
+  const cfg = deps.readConfig(opts.folder) ?? {}
+  const name = typeof cfg.project_name === 'string' ? cfg.project_name : opts.name ?? path.basename(opts.folder)
+  const apiPort =
+    (typeof cfg.api_port === 'number' ? cfg.api_port : null) ?? portOf(apiBase) ?? portOf(cfg.api_base_url)
+  if (apiPort === null) fail('config', 'PROVISION_FAILED', `no api_port in ${path.join(opts.folder, '.claude', 'orcha.json')}`)
 
-  // Downgrade guard (parity with the CLI's `orcha upgrade`): the migration chain is a
-  // monotonic stamp on BOTH sides — the app's bundled templates and the stack's
-  // .orcha/migrations copy. An older app whose tip is below the stack's would re-copy
-  // older templates over a newer portal (silent downgrade). Refuse before any writes.
-  if (opts.mode === 'upgrade') {
-    const tip = (dir: string): number =>
-      deps.fs
-        .readDir(dir)
-        .reduce((t, n) => Math.max(t, Number(/^(\d+)_.*\.sql$/.exec(n)?.[1] ?? 0)), 0)
-    const cliTip = tip(path.join(deps.templatesRoot(), 'migrations'))
-    const stackTip = tip(path.join(orchaDir, 'migrations'))
-    if (cliTip < stackTip) {
-      fail(
-        'render-compose',
-        'PROVISION_FAILED',
-        `This project is on a NEWER Orcha than this app (project migrations reach ` +
-          `${String(stackTip).padStart(3, '0')}, the app ships ${String(cliTip).padStart(3, '0')}). ` +
-          `Upgrading now would downgrade the portal — update the Orcha app first, then retry.`
-      )
-    }
-  }
-
-  // 1. render compose
-  emit('render-compose', 'start')
-  const rendered = renderCompose(deps.readComposeTemplate(), { projectName, dbPort, apiPort, bridgePort })
-  fs.mkdirp(orchaDir)
-  fs.writeFile(path.join(orchaDir, 'docker-compose.yml'), rendered)
-  emit('render-compose', 'ok')
-
-  // 2. copy templates (migrations/, portal/, skills, prefs) + ensure secret + bind dirs
-  emit('copy-templates', 'start')
-  const root = deps.templatesRoot()
-  fs.copyTree(path.join(root, 'migrations'), path.join(orchaDir, 'migrations'))
-  fs.copyTree(path.join(root, 'portal'), path.join(orchaDir, 'portal'))
-  // The portal container does `import secret_box` / `import llm_util` / `import digest_curate`
-  // (they sit next to main.py). Those modules live OUTSIDE templates/ in the CLI (orcha_cli/),
-  // so the build copies them into resources/orcha-templates/portal-shared/; merge them into
-  // the deployed portal/ here. Without this the portal crashes ModuleNotFoundError on startup
-  // and wait-portal times out. (mirrors the CLI's _install_llm_util.)
-  fs.copyTree(path.join(root, 'portal-shared'), path.join(orchaDir, 'portal'))
-  // .env secret (mirrors _ensure_secret_key): write only if absent.
-  const envFile = path.join(orchaDir, '.env')
-  if (!fs.exists(envFile)) {
-    fs.writeFile(envFile, `# Generated by Orcha — secrets for docker compose. Do NOT commit.\nORCHA_SECRET_KEY=${deps.genSecret()}\n`)
-    fs.chmod(envFile, 0o600)
-  }
-  // pre-create host bind dirs so Linux doesn't bind-create them as root.
-  fs.mkdirp(path.join(claudeDir, '.orcha-wakes'))
-  fs.mkdirp(path.join(claudeDir, '.orcha-attachments'))
-  // write/refresh orcha.json
-  fs.mkdirp(claudeDir)
-  const config: Record<string, unknown> = {
-    api_base_url: apiBase,
-    project_name: projectName,
-    api_port: apiPort,
-    db_port: dbPort,
-    bridge_port: bridgePort
-  }
-  if (opts.mode === 'upgrade' && fs.exists(configPath)) {
-    const prev = JSON.parse(fs.readFile(configPath)) as Record<string, unknown>
-    if (prev.current_container_id) config.current_container_id = prev.current_container_id
-  }
-  fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n')
-  emit('copy-templates', 'ok')
-
-  // 3. compose up -d --build (stream stdout lines). Parity with the CLI's `orcha up`: when
-  //    the host hasn't set ORCHA_GITHUB_PAT itself, pull one from `gh auth token` (host-side,
-  //    already-logged-in gh CLI) and pass it to JUST this compose invocation — never written
-  //    to .orcha/.env or any other file, never logged (only the resolved boolean matters here).
-  emit('compose-up', 'start')
-  let composeEnv: NodeJS.ProcessEnv | undefined
-  if (!process.env.ORCHA_GITHUB_PAT && deps.ghAuthToken) {
-    const token = await deps.ghAuthToken().catch(() => null)
-    if (token) composeEnv = { ORCHA_GITHUB_PAT: token }
-  }
-  try {
-    const out = await compose(deps.exec, orchaDir, ['up', '-d', '--build'], composeEnv)
-    for (const line of out.split('\n').filter(Boolean)) emit('compose-up', 'log', { line })
-    emit('compose-up', 'ok')
-  } catch (err) {
-    const stderr = String((err as { stderr?: string }).stderr ?? (err as Error).message)
-    emit('compose-up', 'fail', { code: 'PROVISION_FAILED', detail: stderr })
-    fail('compose-up', 'PROVISION_FAILED', stderr)
-  }
-
-  // 4. wait for portal
-  emit('wait-portal', 'start')
-  const timeout = deps.waitPortalTimeoutMs ?? 30000
-  const poll = deps.waitPortalPollMs ?? 500
-  const deadline = Date.now() + timeout
-  let portalUp = false
-  while (Date.now() < deadline) {
-    try {
-      await deps.fetchJson(`${apiBase}/`)
-      portalUp = true
-      break
-    } catch {
-      await sleep(poll)
-    }
-  }
-  if (!portalUp) {
-    emit('wait-portal', 'fail', { code: 'PORTAL_TIMEOUT', detail: `no 200 from ${apiBase}/ in ${timeout}ms` })
-    fail('wait-portal', 'PORTAL_TIMEOUT', 'portal did not come up')
-  }
-  emit('wait-portal', 'ok')
-
-  // 5. create container (skip on upgrade)
-  let containerId: string | undefined
-  if (opts.mode === 'upgrade') {
-    emit('create-container', 'skip')
-  } else {
-    emit('create-container', 'start')
-    const objective = (opts.objective ?? '').trim() || path.basename(opts.folder)
-    try {
-      const data = (await deps.fetchJson(`${apiBase}/api/containers`, {
-        method: 'POST',
-        body: { name: objective }
-      })) as { container_id: string }
-      containerId = data.container_id
-      config.current_container_id = containerId
-      fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n')
-      emit('create-container', 'ok')
-    } catch (err) {
-      const msg = (err as Error).message
-      const status = (err as { status?: number }).status
-      if (status === 409 || /already has a container|409/.test(msg)) {
-        emit('create-container', 'fail', { code: 'CONTAINER_EXISTS', detail: msg })
-        fail('create-container', 'CONTAINER_EXISTS', msg)
-      }
-      emit('create-container', 'fail', { code: 'PROVISION_FAILED', detail: msg })
-      fail('create-container', 'PROVISION_FAILED', msg)
-    }
-  }
-
-  // 6. register first human (non-fatal; skip on upgrade)
-  if (opts.mode === 'upgrade' || !containerId) {
-    emit('register-human', 'skip')
-  } else {
-    emit('register-human', 'start')
-    const alias = (opts.alias ?? deps.user ?? 'operator').trim() || 'operator'
-    try {
-      await deps.fetchJson(`${apiBase}/api/containers/${containerId}/agents`, {
-        method: 'POST',
-        body: { alias, role: 'operator', kind: 'human' }
-      })
-      emit('register-human', 'ok')
-    } catch (err) {
-      warnings.push(`human registration failed (${(err as Error).message}); register later in the portal`)
-      emit('register-human', 'ok') // non-fatal: report ok with a warning surfaced separately
-    }
-  }
-
-  // 7. start the agent worker — the thing that actually RUNS agents is a host-side
-  //    `claude -p` spawned by the orcha CLI's notifier daemon; the Docker stack only
-  //    runs the portal + db (nothing in-container runs an agent). Provisioning the
-  //    portal alone leaves assigned tasks with no worker to pick them up, so start the
-  //    host worker here (best-effort, non-fatal). When a prerequisite is missing the
-  //    dep returns a plain-language reason we surface as a warning instead of failing.
+  // The agent worker: on the native runtime `orcha serve` already supervises the notifier,
+  // so this is an idempotent `orcha up` whose real value is the plain-language caveats
+  // (Claude Code missing, no API key) it surfaces as warnings.
   if (deps.startWorker) {
     emit('start-daemons', 'start')
     const res = await deps.startWorker(opts.folder)
     emit('start-daemons', res.started ? 'ok' : 'skip')
-    // A reason can accompany either outcome: not-started (CLI missing) OR started-with-caveat
-    // (daemon up but Claude Code/API key not yet configured, so runs would still stall).
     if (res.reason) warnings.push(res.reason)
   } else {
     emit('start-daemons', 'skip')
-    warnings.push('Host notifier/bridge daemons are started by the CLI; the desktop app relies on the portal. Run `orcha up` in a terminal if you need the host daemons.')
   }
 
-  return { project, apiPort, warnings }
+  return { project: `orcha-${name}`, apiPort, warnings }
+}
+
+type Emit = (step: ProvisionStep, status: ProgressEvent['status'], extra?: Partial<ProgressEvent>) => void
+
+/** Returns the `api_base_url` from the CLI's final `done` line. */
+async function runInit(opts: ProvisionOptions, deps: EngineDeps, emit: Emit, warnings: string[]): Promise<unknown> {
+  const args = ['init', '--runtime', 'native', '--progress-json']
+  if (opts.name) args.push('--name', opts.name)
+  const objective = (opts.objective ?? '').trim()
+  if (objective) args.push('--objective', objective)
+  args.push('--as', (opts.alias ?? deps.user ?? 'operator').trim() || 'operator')
+  if (deps.ports) args.push('--api-port', String(deps.ports.api), '--bridge-port', String(deps.ports.bridge))
+
+  let current: ProvisionStep = 'ports'
+  // `as` keeps TS from narrowing these to null: the onLine callback assigns them.
+  let done = null as Record<string, unknown> | null
+  let failure = null as { step: ProvisionStep | null; error: string } | null
+  const onLine = (line: string): void => {
+    const ev = parseLine(line)
+    if (!ev || typeof ev.step !== 'string') {
+      if (line.trim()) emit(current, 'log', { line })
+      return
+    }
+    const detail = ev.detail
+    if (ev.step === 'done') {
+      if (ev.status === 'ok') done = (detail as Record<string, unknown>) ?? {}
+      else {
+        const d = (detail ?? {}) as { failed_step?: unknown; error?: unknown }
+        const step = typeof d.failed_step === 'string' && CLI_STEPS.has(d.failed_step as ProvisionStep)
+          ? (d.failed_step as ProvisionStep)
+          : null
+        failure = { step, error: String(d.error ?? 'orcha init failed') }
+      }
+      return
+    }
+    if (!CLI_STEPS.has(ev.step as ProvisionStep)) return
+    const step = ev.step as ProvisionStep
+    current = step
+    if (ev.status === 'start' || ev.status === 'ok' || ev.status === 'skip') emit(step, ev.status)
+    else if (ev.status === 'error' && NON_FATAL.has(step)) {
+      warnings.push(
+        step === 'service'
+          ? `Orcha won’t start by itself after a restart (background service not installed: ${String(detail)}).`
+          : `Couldn’t register you in the project (${String(detail)}); register later in the portal.`
+      )
+      emit(step, step === 'register-human' ? 'ok' : 'skip')
+    }
+  }
+
+  let stderr = ''
+  try {
+    await deps.orcha(opts.folder, args, onLine)
+  } catch (err) {
+    stderr = errText(err)
+    failure ??= { step: null, error: stderr }
+  }
+  if (failure || !done) {
+    const f = failure ?? { step: null, error: stderr || 'orcha init ended without finishing' }
+    const step = f.step ?? current
+    const detail = stderr && !f.error.includes(stderr) ? `${f.error}\n${stderr}` : f.error
+    const code: BridgeError['code'] =
+      step === 'create-container' && /already has a container|409/.test(detail)
+        ? 'CONTAINER_EXISTS'
+        : step === 'wait-portal' && !/address already in use|port is already/i.test(detail)
+          ? 'PORTAL_TIMEOUT'
+          : 'PROVISION_FAILED'
+    emit(step, 'fail', { code, detail })
+    fail(step, code, detail)
+  }
+  return done?.api_base_url ?? null
+}
+
+async function runUp(opts: ProvisionOptions, deps: EngineDeps, emit: Emit): Promise<void> {
+  emit('start', 'start')
+  try {
+    await deps.orcha(opts.folder, ['up'], (line) => line.trim() && emit('start', 'log', { line }))
+  } catch (err) {
+    const detail = errText(err)
+    emit('start', 'fail', { code: 'PROVISION_FAILED', detail })
+    fail('start', 'PROVISION_FAILED', detail)
+  }
+  emit('start', 'ok')
+}
+
+async function runMigrate(opts: ProvisionOptions, deps: EngineDeps, emit: Emit): Promise<void> {
+  emit('migrate', 'start')
+  let error = null as string | null
+  let ok = false as boolean
+  try {
+    await deps.orcha(opts.folder, ['migrate-runtime', '--json'], (line) => {
+      const ev = parseLine(line)
+      if (!ev) return void (line.trim() && emit('migrate', 'log', { line }))
+      if (ev.event === 'progress') emit('migrate', 'log', { line: String(ev.message ?? ev.stage ?? '') })
+      else if (ev.event === 'result') ok = true
+      else if (ev.event === 'error') error = String(ev.error ?? 'migrate-runtime failed')
+    })
+  } catch (err) {
+    error ??= errText(err)
+  }
+  if (error || !ok) {
+    const detail = error ?? 'orcha migrate-runtime ended without a result'
+    emit('migrate', 'fail', { code: 'PROVISION_FAILED', detail })
+    fail('migrate', 'PROVISION_FAILED', detail)
+  }
+  emit('migrate', 'ok')
 }

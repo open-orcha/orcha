@@ -17,9 +17,12 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass
 from typing import Optional, Sequence
+
+from orcha_cli import cli_runtime_mode
 
 DEFAULT_IMAGE = "orcha/runner:0.5"
 DEFAULT_MEMORY = "4g"
@@ -56,6 +59,10 @@ ENV_PASSTHROUGH = (
     "ORCHA_ALIAS", "ORCHA_RUN_TOKEN", "ORCHA_AGENT_RUNTIME",
     "ORCHA_HEADLESS_WORKER", "ORCHA_CONVERSATION_WORKER",
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ORCHA_LLM_API_KEY",
+    # Codex's own API-key env auth (`codex exec` reads CODEX_API_KEY; an agent run opted in to
+    # the project's OpenAI key gets it injected by notifier_agent_keys). The container has no
+    # ~/.codex mount, so env auth is the only way Codex authenticates in a sandbox.
+    "CODEX_API_KEY",
     # Subscription (BYOC) auth: a `claude setup-token` long-lived OAuth token
     # reaches the container exactly like an API key does.
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -104,9 +111,56 @@ class SandboxConfig:
         )
 
 
+# GH #258 X2 (plan X-D3): under the native runtime the portal is a HOST process, not the
+# compose service `portal:8000`. Linux runs the sandbox on the host network; Docker Desktop
+# (macOS/Windows) reaches the host through host.docker.internal, which only works when the
+# portal listens beyond loopback (`bind: "lan"`).
+HOST_GATEWAY = "host.docker.internal:host-gateway"
+LOOPBACK_BIND_REASON = (
+    "the Docker sandbox on macOS/Windows needs the portal reachable from Docker Desktop, "
+    "but it only listens on localhost; set \"bind\": \"lan\" in .claude/orcha.json, "
+    "then `orcha down && orcha up`"
+)
+
+
+def _native(project_dir: str | pathlib.Path) -> bool:
+    """Native runtime only by the explicit `runtime` key: a connected or BYOC workspace has
+    no compose file either, yet its portal is still a container on a Docker network."""
+    root = workspace_root_for(project_dir)
+    return cli_runtime_mode.read_config(root).get("runtime") == cli_runtime_mode.NATIVE
+
+
+def _linux(platform: Optional[str] = None) -> bool:
+    return (platform or sys.platform).startswith("linux")
+
+
+def network_for(project_dir: str | pathlib.Path, cfg: SandboxConfig,
+                platform: Optional[str] = None) -> "tuple[Optional[str], tuple[str, ...]]":
+    """(`--network`, `--add-host` entries) for a sandboxed wake; `cfg.network` still wins."""
+    if not _native(project_dir):
+        return cfg.network or compose_network(project_dir), ()
+    if _linux(platform):
+        return cfg.network or "host", ()
+    return cfg.network, (HOST_GATEWAY,)
+
+
+def sandbox_api_base(project_dir: str | pathlib.Path, cfg: dict,
+                     platform: Optional[str] = None) -> str:
+    """The portal address as seen from INSIDE the sandbox container."""
+    if not _native(project_dir):
+        return "http://portal:8000"
+    if _linux(platform):
+        # --network host: the host's own address works unchanged.
+        return cfg.get("api_base_url") or f"http://127.0.0.1:{cfg.get('api_port')}"
+    return f"http://host.docker.internal:{cfg.get('api_port')}"
+
+
 def compose_network(project_dir: str | pathlib.Path) -> Optional[str]:
     """The stack's default network: `<compose name>_default`, read from the
-    `name:` line of .orcha/docker-compose.yml (rendered by `orcha init`)."""
+    `name:` line of .orcha/docker-compose.yml (rendered by `orcha init`).
+    None under the native runtime: there is no compose network to join."""
+    if _native(project_dir):
+        return None
     f = pathlib.Path(project_dir) / ".orcha" / "docker-compose.yml"
     try:
         for line in f.read_text().splitlines():
@@ -121,7 +175,8 @@ def new_container_name() -> str:
     return "orcha-run-" + uuid.uuid4().hex[:12]
 
 
-def write_api_config(project_dir: str | pathlib.Path, name: str) -> str:
+def write_api_config(project_dir: str | pathlib.Path, name: str,
+                     platform: Optional[str] = None) -> str:
     """A sandbox-scoped copy of .claude/orcha.json with api_base_url rewritten
     to the in-network portal address. Bind-mounted read-only OVER the workspace
     copy so skills inside the container reach the portal without mutating any
@@ -129,7 +184,7 @@ def write_api_config(project_dir: str | pathlib.Path, name: str) -> str:
     which is unreachable from inside a container — spec §3.3b)."""
     project_dir = pathlib.Path(project_dir)
     cfg = json.loads((project_dir / ".claude" / "orcha.json").read_text())
-    cfg["api_base_url"] = "http://portal:8000"
+    cfg["api_base_url"] = sandbox_api_base(project_dir, cfg, platform)
     out_dir = project_dir / ".orcha" / "sandbox"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{name}.json"
@@ -198,7 +253,8 @@ def build_docker_argv(inner_argv: "Sequence[str]", *, cfg: SandboxConfig, name: 
                       api_config_mount: str,
                       extra_labels: "Sequence[str]" = (),
                       interactive: bool = False,
-                      workdir: Optional[str] = None) -> "list[str]":
+                      workdir: Optional[str] = None,
+                      add_hosts: "Sequence[str]" = ()) -> "list[str]":
     """PATH-IDENTICAL mounting: `workspace` (the ROOT — see workspace_root_for)
     is mounted at its own host path and `-w` is the actual spawn cwd
     (`workdir`, default = root). This keeps git-worktree `.git` pointer files,
@@ -252,6 +308,8 @@ def build_docker_argv(inner_argv: "Sequence[str]", *, cfg: SandboxConfig, name: 
     ]
     if network:
         argv += ["--network", network]
+    for host in add_hosts:
+        argv += ["--add-host", host]
     for key in ENV_PASSTHROUGH:
         argv += ["-e", key]
     argv.append(cfg.image)
@@ -287,11 +345,15 @@ def _docker(args: list[str], timeout: int = 10) -> subprocess.CompletedProcess:
                                            stdout="", stderr=str(e))
 
 
-def preflight(cfg: SandboxConfig, workspace: str) -> Optional[str]:
+def preflight(cfg: SandboxConfig, workspace: str,
+              platform: Optional[str] = None) -> Optional[str]:
     """None = good to spawn; otherwise a human-readable reason. The caller
     MUST fail the wake on a reason — de-sandboxing is never an error path."""
     if shutil.which("docker") is None:
         return "docker CLI not installed on this host"
+    if (_native(workspace) and not _linux(platform)
+            and cli_runtime_mode.read_config(workspace_root_for(workspace)).get("bind") != "lan"):
+        return LOOPBACK_BIND_REASON
     info = _docker(["info", "--format", "{{.ServerVersion}}"])
     if info.returncode != 0:
         return f"docker daemon unreachable: {(info.stderr or '').strip()[:200]}"

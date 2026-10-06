@@ -3,15 +3,15 @@
 
 from typing import Optional
 
-import psycopg
 from fastapi import HTTPException, Request
-from psycopg.types.json import Jsonb
 
+from portal_backend import sql
 from portal_backend.agent_profile_routes import retire_agent_record
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend.guards import require_container, valid_uuid
+from portal_backend.events import publish_event
+from portal_backend.guards import require_container, reroute_open_requests, valid_uuid
 from portal_backend.identity_routes import (
     container_mapped,
     has_grant,
@@ -168,7 +168,7 @@ def invite_member(cid: str, body: MemberCreate, request: Request):
             cur.execute(
                 f"""UPDATE agents
                        SET terminated_at=NULL, status='idle', member_role=%s,
-                           grants='[]'::jsonb, last_heartbeat_at=NULL
+                           grants={sql.json_cast("'[]'")}, last_heartbeat_at=NULL
                      WHERE id=%s
                  RETURNING {_MEMBER_FIELDS}""",
                 (body.role, retired["id"]),
@@ -182,7 +182,9 @@ def invite_member(cid: str, body: MemberCreate, request: Request):
                        RETURNING {_MEMBER_FIELDS}""",
                     (cid, body.github_login, body.github_login, body.role),
                 )
-            except psycopg.errors.UniqueViolation:
+            except Exception as exc:  # noqa: BLE001 — re-raised unless a unique violation
+                if not sql.is_unique_violation(exc):
+                    raise
                 raise HTTPException(
                     409,
                     f"'{body.github_login}' is already a member "
@@ -247,7 +249,7 @@ def update_member_role(cid: str, aid: str, body: MemberRoleUpdate, request: Requ
             _require_owner_actor(actor, "changing permissions")
             deduped = sorted(set(body.grants))
             sets.append("grants=%s")
-            params.append(Jsonb(deduped))
+            params.append(sql.json_param(deduped))
             detail["grants"] = deduped
         if not sets:
             return member  # no-op (e.g. re-asserting the current role)
@@ -258,6 +260,23 @@ def update_member_role(cid: str, aid: str, body: MemberRoleUpdate, request: Requ
             params,
         )
         updated = cur.fetchone()
+        cleared_reviews: list[str] = []
+        moved = {"rerouted": [], "unrouted": []}
+        if detail.get("to") == "viewer":
+            # Parity r3 (e2e-permissions-24): a viewer is read-only — every write 403s —
+            # so nothing may stay parked on them. Mirror remove_member: their delegated
+            # reviews revert to reviewer=anyone (PUT /reviewer refuses a viewer anyway),
+            # and their open asks move to a human who can answer them.
+            cur.execute(
+                "UPDATE tasks SET reviewer_agent_id=NULL "
+                "WHERE container_id=%s AND reviewer_agent_id=%s RETURNING id",
+                (cid, aid),
+            )
+            cleared_reviews = [str(r["id"]) for r in cur.fetchall()]
+            moved = reroute_open_requests(cur, cid, aid)
+            detail["cleared_reviewer_on"] = cleared_reviews
+            detail["rerouted_requests"] = moved["rerouted"]
+            detail["unrouted_requests"] = moved["unrouted"]
         log_event(
             cur,
             cid,
@@ -268,7 +287,23 @@ def update_member_role(cid: str, aid: str, body: MemberRoleUpdate, request: Requ
             "member_role_changed" if "to" in detail else "member_grants_changed",
             detail,
         )
+        for m in moved["rerouted"]:
+            log_event(
+                cur, cid, "human", str(actor["id"]), "request", m["request_id"],
+                "rerouted",
+                {"from_target_id": aid, "to_human_id": m["to_agent_id"],
+                 "reason": "member_demoted_to_viewer"},
+            )
+            publish_event(
+                cur, cid, m["to_agent_id"], "request_created",
+                {"request_id": m["request_id"], "via": "rerouted"},
+            )
         conn.commit()
+    if detail.get("to") == "viewer":
+        # additive: the settings UI can say what moved
+        return {**updated, "cleared_reviewer_on": cleared_reviews,
+                "rerouted_requests": moved["rerouted"],
+                "unrouted_requests": moved["unrouted"]}
     return updated
 
 

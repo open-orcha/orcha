@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Query, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
@@ -31,17 +32,18 @@ MEASURED_USAGE = (
     "OR wr.total_cost_usd IS NOT NULL)"
 )
 
-WINDOW_INTERVALS = {"5h": "5 hours", "7d": "7 days"}
+WINDOW_SECS = {"5h": 5 * 3600, "7d": 7 * 86400, "30d": 30 * 86400}
 
 # Insight rules need enough runs that a ratio isn't just sampling noise.
 MIN_RUNS_FOR_RULE = 5
 
 
-def _window_clause(window: str) -> str:
-    """SQL boolean literal (or a real predicate) gating rows into a window."""
+def _window_clause(window: str) -> tuple[str, tuple]:
+    """SQL boolean literal (or a real predicate) gating rows into a window, and its params
+    (append them after the query's other params: the clause is always the last predicate)."""
     if window == "all":
-        return "TRUE"
-    return f"wr.ended_at >= now() - interval '{WINDOW_INTERVALS[window]}'"
+        return "TRUE", ()
+    return "wr.ended_at >= %s", (sql.ago(WINDOW_SECS[window]),)
 
 
 def _totals_row(row) -> dict:
@@ -57,6 +59,7 @@ def _totals_row(row) -> dict:
         "total_tokens": it + ot + crt + cct,
         "total_cost_usd": float(row["cost"]),
         "runs": int(row["runs"]),
+        "runs_with_cost": int(row["runs_with_cost"]),  # additive: runs that recorded a cost
     }
 
 
@@ -65,7 +68,7 @@ def agent_spend(
     cid: str,
     aid: str,
     request: Request,
-    window: str = Query(default="all", pattern="^(5h|7d|all)$"),
+    window: str = Query(default="all", pattern="^(5h|7d|30d|all)$"),
 ):
     """One agent's measured spend, broken down by task, for the metrics drilldown.
 
@@ -75,7 +78,7 @@ def agent_spend(
     Same NULL-as-0 + measured-usage-only semantics: a worker_run with every usage
     column NULL (pre-mig-019 or a usage-less clean exit) does not contribute and does
     not count toward `runs`. Windows: `5h` / `7d` mirror the meter's rolling
-    quota windows; `all` is since the container was created (the default here, unlike
+    quota windows; `30d` matches the Metrics summary's 30-day view; `all` is since the container was created (the default here, unlike
     the meter, since a drilldown is usually opened to understand the whole picture).
 
     `tasks` is sorted by total_tokens desc, one row per task the agent has runs
@@ -102,7 +105,7 @@ def agent_spend(
         if not agent_row:
             raise HTTPException(404, f"agent {aid} not found in container {cid}")
 
-        win_clause = _window_clause(window)
+        win_clause, win_params = _window_clause(window)
         cur.execute(
             f"""SELECT
                     count(*) AS runs,
@@ -110,11 +113,12 @@ def agent_spend(
                     COALESCE(sum(COALESCE(wr.output_tokens,0)),0) AS ot,
                     COALESCE(sum(COALESCE(wr.cache_read_input_tokens,0)),0) AS crt,
                     COALESCE(sum(COALESCE(wr.cache_creation_input_tokens,0)),0) AS cct,
-                    COALESCE(sum(COALESCE(wr.total_cost_usd,0)),0) AS cost
+                    COALESCE(sum(COALESCE(wr.total_cost_usd,0)),0) AS cost,
+                    count(wr.total_cost_usd) AS runs_with_cost
                 FROM worker_runs wr
                WHERE wr.agent_id=%s AND wr.ended_at IS NOT NULL AND {MEASURED_USAGE}
                  AND {win_clause}""",
-            (aid,),
+            (aid, *win_params),
         )
         totals = _totals_row(cur.fetchone())
 
@@ -126,6 +130,7 @@ def agent_spend(
                        COALESCE(sum(COALESCE(wr.cache_read_input_tokens,0)),0) AS crt,
                        COALESCE(sum(COALESCE(wr.cache_creation_input_tokens,0)),0) AS cct,
                        COALESCE(sum(COALESCE(wr.total_cost_usd,0)),0) AS cost,
+                       count(wr.total_cost_usd) AS runs_with_cost,
                        min(wr.started_at) AS first_run_at,
                        max(COALESCE(wr.ended_at, wr.started_at)) AS last_run_at
                   FROM worker_runs wr
@@ -137,7 +142,7 @@ def agent_spend(
                            + COALESCE(sum(COALESCE(wr.output_tokens,0)),0)
                            + COALESCE(sum(COALESCE(wr.cache_read_input_tokens,0)),0)
                            + COALESCE(sum(COALESCE(wr.cache_creation_input_tokens,0)),0)) DESC""",
-            (aid,),
+            (aid, *win_params),
         )
         tasks = []
         for row in cur.fetchall():
@@ -153,6 +158,10 @@ def agent_spend(
                 "cache_creation_input_tokens": cct,
                 "total_tokens": it + ot + crt + cct,
                 "total_cost_usd": float(row["cost"]),
+                # additive: how many of `runs` recorded a cost (non-NULL). Fewer
+                # than `runs` means part of the dollar figure is NOT reported
+                # (subscription billing / unpriced model) — never proof of $0.
+                "runs_with_cost": int(row["runs_with_cost"]),
                 "first_run_at": row["first_run_at"].isoformat() if row["first_run_at"] else None,
                 "last_run_at": row["last_run_at"].isoformat() if row["last_run_at"] else None,
             })
@@ -210,7 +219,7 @@ def metrics_insights(
     with db_cursor() as (_, cur):
         require_container(cur, cid)
         require_member_read(cur, request, cid)
-        win_clause = _window_clause(window)
+        win_clause, win_params = _window_clause(window)
         cur.execute(
             f"""SELECT wr.run_id, wr.agent_id, wr.task_id, a.alias, a.model,
                        COALESCE(wr.input_tokens,0) AS it,
@@ -224,7 +233,7 @@ def metrics_insights(
                   LEFT JOIN tasks t ON t.id = wr.task_id
                  WHERE a.container_id=%s AND wr.ended_at IS NOT NULL AND {MEASURED_USAGE}
                    AND {win_clause}""",
-            (cid,),
+            (cid, *win_params),
         )
         rows = cur.fetchall()
 

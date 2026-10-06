@@ -1,7 +1,8 @@
 """List active conversation sessions and their current embodiment state."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.attachment_references import (
     render_attachment_feed_line as _render_attachment_feed_line,
@@ -23,6 +24,7 @@ from portal_backend.guards import (
     require_container as _require_container,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import require_member_read
 from portal_backend.orphan_lease_routes import ORPHAN_LEASE_SECS
 from portal_backend.limits import MAX_PROMPT_BATCH_CHARS
 from portal_backend.model_policy import (
@@ -51,7 +53,7 @@ def configure_compatibility(supported_models):
 
 
 @app.get("/api/containers/{cid}/active-conversations")
-def active_conversations(cid: str):
+def active_conversations(cid: str, request: Request):
     """E3: the resident-session manager's read-only discovery scan. Every ACTIVE
     conversation in the container with its last-turn {role, seq}, so the daemon can
     find conversations whose latest turn is an unanswered HUMAN turn (`pending_human`)
@@ -74,24 +76,25 @@ def active_conversations(cid: str):
     fallback (which still wakes on conversation_turn when no resident is live)."""
     if not _valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    excl = (
+    excl = sql.list_param(
         list(_NON_WAKING_EVENTS)
         + ["conversation_turn"]
         + list(_RESIDENT_DRAIN_AUDIT_EVENTS)
     )
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
+        require_member_read(cur, request, cid)  # PS-08
         cur.execute("SELECT worktrees_disabled FROM containers WHERE id=%s", (cid,))
         worktrees_disabled = bool(cur.fetchone()["worktrees_disabled"])
         cur.execute(
-            """SELECT cv.id AS conversation_id, cv.agent_id, a.alias AS agent_alias, a.model,
+            f"""SELECT cv.id AS conversation_id, cv.agent_id, a.alias AS agent_alias, a.model,
                       a.reasoning_effort,
                       cv.session_id, cv.status, cv.last_turn_at,
                       -- #266: the clock-driven auto-wake inputs, so an idle warm resident can YIELD
                       -- its lease when the cadence is due (the wake then fires ephemeral, never
                       -- injected — ISS-78). Same truth table as wake_scan's auto_wake_due.
                       a.auto_wake_interval_secs, a.turns_used, a.turn_budget,
-                      EXTRACT(EPOCH FROM (now() - ws.last_woken_at)) AS _secs_since_woken,
+                      {sql.age_secs("ws.last_woken_at")} AS _secs_since_woken,
                       -- ISS-70: force a one-shot COLD boot when this agent's latest memory digest is
                       -- NEWER than when the resident's session was pinned (a digest written by another
                       -- embodiment the warm --resume would never re-read). FALSE when no session is
@@ -104,12 +107,18 @@ def active_conversations(cid: str):
                         ELSE COALESCE(
                             (SELECT max(d.snapshot_ts) FROM agent_memory_digests d
                               WHERE d.agent_id = cv.agent_id)
-                            > extract(epoch FROM cv.session_pinned_at), false)
+                            > {sql.epoch("cv.session_pinned_at")}, false)
                       END AS cold_required,
-                      t.seq AS last_turn_seq, t.role AS last_turn_role,
+                      -- GH #258 S2b: two correlated scalar subqueries (SQLite-portable).
+                      (SELECT ct.seq FROM conversation_turns ct
+                        WHERE ct.conversation_id = cv.id
+                        ORDER BY ct.seq DESC LIMIT 1) AS last_turn_seq,
+                      (SELECT ct.role FROM conversation_turns ct
+                        WHERE ct.conversation_id = cv.id
+                        ORDER BY ct.seq DESC LIMIT 1) AS last_turn_role,
                       COALESCE(ws.delivered_ts, 0) AS _delivered_ts,
                       (SELECT max(ev.ts) FROM agent_events ev
-                         WHERE ev.event_key = cv.agent_id::text
+                         WHERE ev.event_key = CAST(cv.agent_id AS TEXT)
                            AND ev.ts > COALESCE(ws.conv_delivered_ts, 0)
                            AND ev.event_name = 'conversation_turn') AS conversation_ack_ts,
                       -- GH #58 (review fix): anti-join agent_event_acks so an ALREADY-handled row
@@ -120,26 +129,22 @@ def active_conversations(cid: str):
                       -- then kept spawning no-op drain sidecars. Now consistent with the floor
                       -- recompute, the manifest, _collect_directed_messages and drain_ackable_ids.
                       COALESCE((SELECT count(*) FROM agent_events ev
-                                 WHERE ev.event_key = cv.agent_id::text
+                                 WHERE ev.event_key = CAST(cv.agent_id AS TEXT)
                                    AND ev.ts > COALESCE(ws.delivered_ts, 0)
-                                   AND ev.event_name <> ALL(%s)
+                                   AND {sql.not_in_list('ev.event_name')}
                                    AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                                                     WHERE a.agent_id = cv.agent_id
                                                       AND a.event_id = ev.id)), 0) AS pending_inbox,
                       (SELECT max(ev.ts) FROM agent_events ev
-                         WHERE ev.event_key = cv.agent_id::text
+                         WHERE ev.event_key = CAST(cv.agent_id AS TEXT)
                            AND ev.ts > COALESCE(ws.delivered_ts, 0)
-                           AND ev.event_name <> ALL(%s)
+                           AND {sql.not_in_list('ev.event_name')}
                            AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                                             WHERE a.agent_id = cv.agent_id
                                               AND a.event_id = ev.id)) AS _inbox_max_ts
                FROM conversations cv
                JOIN agents a ON a.id = cv.agent_id
                LEFT JOIN agent_wake_state ws ON ws.agent_id = cv.agent_id
-               LEFT JOIN LATERAL (
-                   SELECT seq, role FROM conversation_turns
-                   WHERE conversation_id = cv.id ORDER BY seq DESC LIMIT 1
-               ) t ON true
                WHERE cv.container_id = %s AND cv.status = 'active'
                ORDER BY cv.last_turn_at ASC NULLS FIRST""",
             (excl, excl, cid),
@@ -183,9 +188,9 @@ def active_conversations(cid: str):
                 )
                 if floor is not None:
                     cur.execute(
-                        """SELECT count(*) AS n, max(ts) AS mx FROM agent_events
+                        f"""SELECT count(*) AS n, max(ts) AS mx FROM agent_events
                            WHERE event_key = %s AND ts > %s AND ts < %s
-                             AND event_name <> ALL(%s)""",
+                             AND {sql.not_in_list('event_name')}""",
                         (str(r["agent_id"]), r["_delivered_ts"], floor, excl),
                     )
                     drow = cur.fetchone()
@@ -217,8 +222,8 @@ def active_conversations(cid: str):
             drain_ackable_ids: list[int] = []
             if r["pending_inbox"]:
                 cur.execute(
-                    """SELECT e.id, e.event_name, e.payload, e.target_id FROM agent_events e
-                       WHERE e.event_key=%s AND e.ts > %s AND e.event_name <> ALL(%s)
+                    f"""SELECT e.id, e.event_name, e.payload, e.target_id FROM agent_events e
+                       WHERE e.event_key=%s AND e.ts > %s AND {sql.not_in_list('e.event_name')}
                          AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                                           WHERE a.agent_id=%s AND a.event_id=e.id)
                        ORDER BY e.ts, e.id""",

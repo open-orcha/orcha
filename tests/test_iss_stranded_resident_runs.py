@@ -20,6 +20,7 @@ import io
 import pytest
 
 from orcha_cli import notifier
+from conftest import ts_ago
 
 
 # ======================== Part 1 — notifier send-first reorder ========================
@@ -240,8 +241,8 @@ async def test_orphan_lease_reaper_reconciles_running_run(client, make_agent, co
                              json={"wake_kind": "resident", "lane": "conversation"})).json()["run_id"]
     # conversation branch keys on conv_last_heartbeat_at; stale IT (a once-alive-now-gone conv lease).
     # GH #138: also backdate conv_last_woken_at (the reaper floors idle at claim time now).
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
-               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
+    db.execute(f"UPDATE agent_wake_state SET conv_last_heartbeat_at = {ts_ago(2000)}, "
+               f"conv_last_woken_at = {ts_ago(2000)} WHERE agent_id=%s", (aid,))
 
     r = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
     assert [x["agent_id"] for x in r.json()["reaped"]] == [aid]

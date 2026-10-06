@@ -7,6 +7,7 @@ from typing import Optional
 
 # Remote-runner spec §3.2–3.4: sandbox wake execution. Imported as a module so
 # tests can monkeypatch `_sandbox.preflight` etc. (attribute lookup at call time).
+from . import personal_session
 from . import sandbox as _sandbox
 
 
@@ -234,11 +235,13 @@ def spawn_headless(
             # Task-5 REQUIREMENT: the drain sidecar's container is label-exempt
             # from the reaper's orphan pass (it owns no run row by design).
             sbx_labels.append(_sandbox.LABEL_SIDECAR)
+        # Resolved at the ROOT (worktrees never carry the generated compose file or the
+        # runtime key). GH #258 X2: compose network, host network (native Linux) or host gateway.
+        network, add_hosts = _sandbox.network_for(ws_root, sandbox_cfg)
         argv = _sandbox.build_docker_argv(
             argv, cfg=sandbox_cfg, name=sbx_name, workspace=ws_root, workdir=cwd,
-            # The stack's compose file lives at the ROOT (worktrees never carry
-            # the generated .orcha/docker-compose.yml).
-            network=sandbox_cfg.network or _sandbox.compose_network(ws_root),
+            network=network,
+            add_hosts=add_hosts,
             api_config_mount=api_cfg,
             extra_labels=tuple(sbx_labels),
         )
@@ -258,7 +261,7 @@ def spawn_headless(
     ):
         return False, repr_, None
 
-    env = dict(services.os.environ)
+    env = personal_session.strip(dict(services.os.environ))
     if alias:
         env["ORCHA_ALIAS"] = alias
     if run_token:
@@ -269,6 +272,12 @@ def spawn_headless(
         env.pop("ORCHA_CONVERSATION_WORKER", None)
     env["ORCHA_AGENT_RUNTIME"] = runtime
     env["ORCHA_HEADLESS_WORKER"] = "1"
+    # Agent runs on an API key (migration 071): when this project opted its provider key in, the
+    # key goes into THIS child env only (opened in memory; sandbox mode forwards it with `-e`).
+    # Off → env untouched (subscription). Never in argv, the repr, or any log line.
+    inject_key = getattr(services, "_inject_agent_key", None)
+    if inject_key is not None:
+        inject_key(env, runtime, cwd)
     out = services.subprocess.DEVNULL
     if log_path is not None:
         try:

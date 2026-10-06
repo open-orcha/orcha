@@ -11,6 +11,8 @@ function stack(over: Partial<Stack> = {}): Stack {
     portalStatus: 'Up',
     running: true,
     folder: '/tmp/demo',
+    runtime: 'docker',
+    health: 'ok',
     ...over
   }
 }
@@ -63,4 +65,19 @@ describe('loadProjectCards', () => {
     const portalGet = vi.fn().mockResolvedValue({})
     expect(await loadProjectCards([s], portalGet)).toEqual([])
   })
+
+  it('D14: reads `icon` off the polled list, validated; an absent key stays absent (older portal)', async () => {
+    const portalGet = vi.fn(async () => ({
+      containers: [
+        { id: 'c1', name: 'A', icon: { kind: 'glyph', value: 'database', color: 3 } },
+        { id: 'c2', name: 'B', icon: null },
+        { id: 'c3', name: 'C', icon: { kind: 'emoji', value: '<script>' } },
+        { id: 'c4', name: 'D' }
+      ]
+    }))
+    const cards = await loadProjectCards([stack()], portalGet)
+    expect(cards.map((c) => c.container.icon)).toEqual([{ kind: 'glyph', value: 'database', color: 3 }, null, null, undefined])
+    expect('icon' in cards[3].container).toBe(false)
+  })
 })
+

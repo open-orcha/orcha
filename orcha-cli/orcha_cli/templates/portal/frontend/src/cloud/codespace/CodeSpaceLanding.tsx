@@ -2,13 +2,15 @@
  * Code Space nav build, item 2 — the content pane's landing state (no file
  * open yet): recent threads (repo-wide, same fetchRecentThreads +
  * RecentThreadsList the rail's own Recent quick-jump uses — one card, not a
- * reimplementation), recently-viewed files (localStorage via recentFiles.ts,
- * "record on every file open"), and quick actions (search symbols, a tree
- * hint). Same card/list idioms as the rest of the app — .gh-empty/.card-empty
+ * reimplementation) and recently-viewed files (localStorage via
+ * recentFiles.ts, "record on every file open"). The old "Quick actions" row
+ * (Search symbols / Browse files) is gone: it repeated the toolbar's symbol
+ * search and the tree right next to it (D12, screen review r1). Same card/list idioms as the rest of the app — .gh-empty/.card-empty
  * degrade shell, .cs-recent-list rows, house `muted`/`none` text classes —
  * nothing new invented.
  */
 import { useEffect, useRef, useState } from "react";
+import { Icon } from "../../components/ui";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import { relTime } from "../../lib/format";
 import { fetchRecentThreads } from "./codespaceApi";
@@ -20,16 +22,10 @@ export interface CodeSpaceLandingProps {
   cid: string;
   onNavigateToThread: (thread: CodeThreadSummary) => void;
   onOpenFile: (path: string) => void;
-  onSearchSymbols: () => void;
-  // "browse tree hint" quick action scrolls the tree pane's first row into
-  // view with a highlight pulse, pointing a human at the tree instead of
-  // leaving them to hunt for it (see CodeSpacePage.tsx's focusTree for why
-  // this isn't a real DOM .focus() — BrowseTree's rows aren't focusable).
-  onFocusTree: () => void;
 }
 
-export function CodeSpaceLanding({ cid, onNavigateToThread, onOpenFile, onSearchSymbols, onFocusTree }: CodeSpaceLandingProps) {
-  const { bump } = useSnapshot();
+export function CodeSpaceLanding({ cid, onNavigateToThread, onOpenFile }: CodeSpaceLandingProps) {
+  const { snap, bump } = useSnapshot();
   const [recentThreads, setRecentThreads] = useState<CodeThreadSummary[]>([]);
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([]);
   const token = useRef(0);
@@ -51,35 +47,20 @@ export function CodeSpaceLanding({ cid, onNavigateToThread, onOpenFile, onSearch
     setRecentFiles(loadRecentFiles(cid));
   }, [cid]);
 
+  // V2 (screen review S3): flat hairline sections, no card-in-card; the
+  // repo-wide recent threads live HERE only (the rail shows a hint instead of
+  // repeating the same list — see ThreadRail's landingOwnsRecent).
   return (
     <div className="cs-landing">
-      <div className="cs-landing-card">
-        <div className="cs-landing-card-head">
-          <span className="t1">Quick actions</span>
-        </div>
-        <div className="cs-landing-actions">
-          <button type="button" className="cs-landing-action" onClick={onSearchSymbols}>
-            Search symbols <span className="muted">Ctrl/Cmd+P</span>
-          </button>
-          <button type="button" className="cs-landing-action" onClick={onFocusTree}>
-            Browse the file tree <span className="muted">&larr;</span>
-          </button>
-        </div>
-      </div>
+      <section className="cs-landing-section" aria-labelledby="cs-landing-threads-h">
+        <h2 className="cs-landing-h" id="cs-landing-threads-h"><span>Recent threads</span>{recentThreads.length ? <span className="cs-landing-count tnum" aria-hidden="true">{recentThreads.length}</span> : null}</h2>
+        <RecentThreadsList threads={recentThreads} agents={snap?.agents} onOpen={onNavigateToThread} emptyLabel="No threads yet. Click a line number in any file to start one." />
+      </section>
 
-      <div className="cs-landing-card">
-        <div className="cs-landing-card-head">
-          <span className="t1">Recent threads</span>
-        </div>
-        <RecentThreadsList threads={recentThreads} onOpen={onNavigateToThread} emptyLabel="No threads yet — open a file and start one." />
-      </div>
-
-      <div className="cs-landing-card">
-        <div className="cs-landing-card-head">
-          <span className="t1">Recent files</span>
-        </div>
+      <section className="cs-landing-section" aria-labelledby="cs-landing-files-h">
+        <h2 className="cs-landing-h" id="cs-landing-files-h"><span>Recent files</span>{recentFiles.length ? <span className="cs-landing-count tnum" aria-hidden="true">{recentFiles.length}</span> : null}</h2>
         {!recentFiles.length ? (
-          <div className="none" style={{ padding: 10 }}>Files you open will show up here.</div>
+          <div className="cs-empty-line">Files you open will show up here.</div>
         ) : (
           <div className="cs-landing-files">
             {recentFiles.map((f) => (
@@ -91,13 +72,14 @@ export function CodeSpaceLanding({ cid, onNavigateToThread, onOpenFile, onSearch
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenFile(f.path); } }}
               >
+                <Icon name="code" cls="v2-ico cs-landing-file-ico" />
                 <span className="cs-landing-file-path mono" title={f.path}>{f.path}</span>
                 <span className="cs-landing-file-time muted">{relTime(f.viewedAt)}</span>
               </div>
             ))}
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

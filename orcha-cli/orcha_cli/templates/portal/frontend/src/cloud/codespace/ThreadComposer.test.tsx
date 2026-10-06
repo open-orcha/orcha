@@ -69,9 +69,9 @@ describe("ThreadComposer", () => {
   it("posts the exact spec body on submit", async () => {
     const calls = stubFetch();
     mount();
-    await screen.findByText("Post"); // wait for snapshot/acting-human to settle
+    await screen.findByRole("button", { name: "Post" }); // wait for snapshot/acting-human to settle
     fireEvent.change(screen.getByLabelText(/thread message/i), { target: { value: "How does auth work here?" } });
-    fireEvent.click(screen.getByText("Post"));
+    fireEvent.click(screen.getByRole("button", { name: "Post" }));
     await Promise.resolve();
     const postCall = await waitForPost(calls);
     expect(postCall.url).toBe("/api/containers/c1/code/threads");
@@ -91,7 +91,7 @@ describe("ThreadComposer", () => {
   it("templates set kind and seed the starter body", async () => {
     stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     const textarea = screen.getByLabelText(/thread message/i) as HTMLTextAreaElement;
     expect(textarea.value).toBe("How does this work?"); // default template (question)
 
@@ -106,10 +106,10 @@ describe("ThreadComposer", () => {
   it("sends the picked kind through to the POST body", async () => {
     const calls = stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     fireEvent.click(screen.getByText("Why this decision?"));
     fireEvent.change(screen.getByLabelText(/thread message/i), { target: { value: "why though" } });
-    fireEvent.click(screen.getByText("Post"));
+    fireEvent.click(screen.getByRole("button", { name: "Post" }));
     const postCall = await waitForPost(calls);
     expect(postCall.body).toMatchObject({ kind: "why", body: "why though" });
   });
@@ -117,10 +117,10 @@ describe("ThreadComposer", () => {
   it("includes tagged_agent_id when an agent is picked", async () => {
     const calls = stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     fireEvent.change(screen.getByLabelText(/tag an agent/i), { target: { value: "a1" } });
     fireEvent.change(screen.getByLabelText(/thread message/i), { target: { value: "tag test" } });
-    fireEvent.click(screen.getByText("Post"));
+    fireEvent.click(screen.getByRole("button", { name: "Post" }));
     const postCall = await waitForPost(calls);
     expect(postCall.body).toMatchObject({ tagged_agent_id: "a1" });
   });
@@ -132,14 +132,14 @@ describe("ThreadComposer", () => {
   it("shows the routing hint naming the first AI agent for the default (untagged) question kind", async () => {
     stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     expect(screen.getByText("Will ask @forge")).toBeInTheDocument();
   });
 
   it("shows the routing hint for why/teach kinds too", async () => {
     stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     fireEvent.click(screen.getByText("Why this decision?"));
     expect(screen.getByText("Will ask @forge")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Teach me this concept"));
@@ -149,7 +149,7 @@ describe("ThreadComposer", () => {
   it("hides the routing hint for note kind (stays untargeted by design)", async () => {
     stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     fireEvent.click(screen.getByText("Note"));
     expect(screen.queryByText(/will ask/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/wait unanswered/i)).not.toBeInTheDocument();
@@ -158,7 +158,7 @@ describe("ThreadComposer", () => {
   it("hides the routing hint once an agent is explicitly tagged", async () => {
     stubFetch();
     mount();
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     expect(screen.getByText("Will ask @forge")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/tag an agent/i), { target: { value: "a1" } });
     expect(screen.queryByText(/will ask/i)).not.toBeInTheDocument();
@@ -174,29 +174,31 @@ describe("ThreadComposer", () => {
   it("blocks a question when the roster has no AI agents: warning + disabled Post", async () => {
     const calls = stubFetch();
     mount({ agents: [{ id: "h1", alias: "kedar", kind: "human", status: "idle" } as Agent] });
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     // The honest gate: nobody can answer, so say it loudly and refuse the post.
     expect(screen.getByRole("alert")).toHaveTextContent(/No AI agent in this workspace/);
     expect(screen.getByText("Register an agent")).toBeInTheDocument();
-    expect(screen.getByText("Post")).toBeDisabled();
-    fireEvent.click(screen.getByText("Post"));
+    expect(screen.getByRole("button", { name: "Post" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Post" }));
     expect(calls.filter((c) => c.method === "POST").length).toBe(0);
   });
 
   it("no-AI roster still allows a note (untargeted by design)", async () => {
     stubFetch();
     mount({ agents: [{ id: "h1", alias: "kedar", kind: "human", status: "idle" } as Agent] });
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     fireEvent.click(screen.getByText("Note"));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByText("Post")).not.toBeDisabled();
+    // a note starts empty (send stays disabled until there is text) — never blocked
+    fireEvent.change(screen.getByLabelText(/thread message/i), { target: { value: "remember to rename this" } });
+    expect(screen.getByRole("button", { name: "Post" })).not.toBeDisabled();
   });
 
   it("raise-hand mode: pre-tags the agent, hides the template picker, shows the honesty caption", async () => {
     stubFetch();
     mount({ preTaggedAgentId: "a1" });
     await screen.findByText(/queued — the agent addresses this at its next checkpoint/i);
-    expect(screen.queryByRole("group", { name: /question templates/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: /question templates/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/tag an agent/i)).not.toBeInTheDocument();
     expect(screen.getByText("@forge")).toBeInTheDocument();
   });
@@ -208,7 +210,7 @@ describe("ThreadComposer", () => {
     stubFetch();
     const onCancel = vi.fn();
     mount({ onCancel });
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -216,7 +218,7 @@ describe("ThreadComposer", () => {
   it("Escape is a no-op when no onCancel is provided (no crash)", async () => {
     stubFetch();
     mount({ onCancel: undefined });
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     expect(() => fireEvent.keyDown(document, { key: "Escape" })).not.toThrow();
   });
 
@@ -227,12 +229,12 @@ describe("ThreadComposer", () => {
   it("wholeDocument labels the anchor \"whole document\" instead of \"line 1\", but still posts start/end_line=1", async () => {
     const calls = stubFetch();
     mount({ startLine: 1, endLine: 1, wholeDocument: true });
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     expect(screen.getByText(/whole document/i)).toBeInTheDocument();
     expect(screen.queryByText(/line 1\b/i)).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/thread message/i), { target: { value: "what's this doc about?" } });
-    fireEvent.click(screen.getByText("Post"));
+    fireEvent.click(screen.getByRole("button", { name: "Post" }));
     const postCall = await waitForPost(calls);
     expect(postCall.body).toMatchObject({ start_line: 1, end_line: 1 });
   });
@@ -240,7 +242,7 @@ describe("ThreadComposer", () => {
   it("without wholeDocument, an actual line-1 selection still labels normally as \"line 1\"", async () => {
     stubFetch();
     mount({ startLine: 1, endLine: 1 });
-    await screen.findByText("Post");
+    await screen.findByRole("button", { name: "Post" });
     expect(screen.getByText(/line 1\b/i)).toBeInTheDocument();
     expect(screen.queryByText(/whole document/i)).not.toBeInTheDocument();
   });

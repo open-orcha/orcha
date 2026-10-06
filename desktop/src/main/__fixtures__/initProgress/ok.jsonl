@@ -1,0 +1,12 @@
+{"step": "ports", "status": "ok", "detail": {"api": 8095, "bridge": 8798, "db": null}}
+{"step": "config", "status": "ok", "detail": "/work/proj/.claude/orcha.json"}
+{"step": "service", "status": "skip", "detail": "--no-service"}
+{"step": "start", "status": "start", "detail": null}
+{"step": "start", "status": "ok", "detail": null}
+{"step": "wait-portal", "status": "start", "detail": "http://localhost:8095"}
+{"step": "wait-portal", "status": "ok", "detail": "http://localhost:8095"}
+{"step": "create-container", "status": "start", "detail": null}
+{"step": "create-container", "status": "ok", "detail": "c-1"}
+{"step": "register-human", "status": "start", "detail": "kedar"}
+{"step": "register-human", "status": "ok", "detail": "kedar"}
+{"step": "done", "status": "ok", "detail": {"project_dir": "/work/proj", "api_base_url": "http://localhost:8095", "runtime": "native", "db_path": "/work/proj/.orcha/orcha.db", "container_id": "c-1", "human_alias": "kedar"}}

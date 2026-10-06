@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { parseHostPort, parseDockerPs, listStacks } from './discovery'
+import { parseHostPort, parseDockerPs, listStacks, discoverStacks } from './discovery'
+import type { Stack } from '../shared/types'
 
 // Real output shape from this machine (docker ps -a --format with tab separators).
 // 5th column is the compose working_dir label (<project>/.orcha).
@@ -50,7 +51,9 @@ describe('parseDockerPs', () => {
         dbPort: 5435,
         portalStatus: 'Up 4 hours',
         running: true,
-        folder: '/Users/me/acme-ehr'
+        folder: '/Users/me/acme-ehr',
+        runtime: 'docker',
+        health: 'ok'
       }
     ])
   })
@@ -67,7 +70,9 @@ describe('parseDockerPs', () => {
       dbPort: null,
       portalStatus: 'Exited (0) 2 days ago',
       running: false,
-      folder: '/Users/me/todo-app'
+      folder: '/Users/me/todo-app',
+      runtime: 'docker',
+      health: 'stopped'
     })
   })
   it('skips malformed lines', () => {
@@ -98,5 +103,58 @@ describe('listStacks', () => {
   it('maps exec failure to DOCKER_UNAVAILABLE', async () => {
     const exec = vi.fn().mockRejectedValue(new Error('spawn docker ENOENT'))
     await expect(listStacks(exec)).rejects.toEqual({ code: 'DOCKER_UNAVAILABLE' })
+  })
+  it('flags a timed-out (hung) docker CLI as unresponsive, not merely down', async () => {
+    const exec = vi.fn().mockRejectedValue(Object.assign(new Error('killed'), { timedOut: true }))
+    await expect(listStacks(exec)).rejects.toEqual({ code: 'DOCKER_UNAVAILABLE', unresponsive: true })
+  })
+})
+
+describe('discoverStacks (native + docker, GH #258)', () => {
+  const native = (name: string, running: boolean): Stack => ({
+    project: `orcha-${name}`,
+    projectShort: name,
+    apiPort: running ? 8010 : null,
+    dbPort: null,
+    portalStatus: running ? 'Up (native)' : 'Down',
+    running,
+    folder: `/Users/me/${name}`,
+    runtime: 'native',
+    health: running ? 'ok' : 'stopped'
+  })
+  const dockerDown = vi.fn().mockRejectedValue(new Error('Cannot connect to the Docker daemon'))
+
+  it('lists native projects with no Docker and reports dockerAvailable: false', async () => {
+    const d = await discoverStacks({ exec: dockerDown, listNative: async () => [native('notes', true)] })
+    expect(d).toEqual({
+      stacks: [native('notes', true)],
+      dockerAvailable: false,
+      dockerUnresponsive: false,
+      dockerMissing: false
+    })
+  })
+  it('a Mac with no docker binary at all reports dockerMissing (Home says nothing about Docker)', async () => {
+    const noDocker = vi.fn().mockRejectedValue(Object.assign(new Error('spawn docker ENOENT'), { code: 'ENOENT' }))
+    const d = await discoverStacks({ exec: noDocker, listNative: async () => [] })
+    expect(d).toMatchObject({ stacks: [], dockerAvailable: false, dockerMissing: true })
+  })
+  it('listStacks does not throw DOCKER_UNAVAILABLE when native projects exist', async () => {
+    await expect(listStacks({ exec: dockerDown, listNative: async () => [native('notes', false)] })).resolves.toEqual([
+      native('notes', false)
+    ])
+  })
+  it('listStacks still throws DOCKER_UNAVAILABLE on a Docker-only machine with Docker down', async () => {
+    await expect(listStacks({ exec: dockerDown, listNative: async () => [] })).rejects.toEqual({
+      code: 'DOCKER_UNAVAILABLE'
+    })
+  })
+  it('merges docker stacks and keeps the native row when a name is in both', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: REAL_OUTPUT, stderr: '' })
+    const d = await discoverStacks({ exec, listNative: async () => [native('acme-ehr', true), native('zeta', false)] })
+    expect(d.dockerAvailable).toBe(true)
+    expect(d.stacks.map((s) => [s.projectShort, s.runtime])).toEqual([
+      ['acme-ehr', 'native'],
+      ['zeta', 'native']
+    ])
   })
 })

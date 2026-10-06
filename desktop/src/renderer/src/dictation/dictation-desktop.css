@@ -1,0 +1,28 @@
+/* The portal's dictation.css reads --v2-* tokens; map them onto the desktop's tokens
+   (light + dark come for free from styles.css). Scoped to the dictation UI only. */
+.dict-ui {
+  --v2-font-sans: inherit;
+  --v2-font-features: normal;
+  --v2-raised: var(--color-raised);
+  --v2-surface: var(--color-card);
+  --v2-text: var(--color-text);
+  --v2-text-2: var(--color-text-2);
+  --v2-text-3: var(--color-text-3);
+  --v2-border: var(--color-border);
+  --v2-border-subtle: var(--color-border);
+  --v2-border-strong: var(--color-border-strong);
+  --v2-hover: var(--color-hover);
+  --v2-hover-solid: var(--color-hover);
+  --v2-accent: var(--color-accent);
+  --v2-focus-color: var(--color-accent);
+  --v2-primary-text: var(--color-bg);
+  --v2-danger: var(--color-danger);
+  --v2-danger-soft: color-mix(in srgb, var(--color-danger) 16%, transparent);
+  --v2-ok: var(--color-ok);
+  --v2-ok-soft: color-mix(in srgb, var(--color-ok) 16%, transparent);
+  --v2-shadow-palette: var(--shadow-pop);
+  --v2-radius-sm: 4px;
+  --v2-radius-control: 6px;
+  --v2-radius-card: 8px;
+  --v2-radius-full: 999px;
+}

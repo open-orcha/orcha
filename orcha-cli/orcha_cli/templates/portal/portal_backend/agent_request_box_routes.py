@@ -3,22 +3,28 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent as _require_agent
 from portal_backend.guards import valid_uuid as _valid_uuid
+from portal_backend.identity_routes import require_member_read
+from portal_backend.schemas.requests import AgentInboxResponse, AgentOutboxResponse
 from portal_backend.request_ownership import (
     _annotate_request_ownership,
 )
 
-_REQUEST_COLUMNS = """r.id, r.type, r.status, r.priority, r.payload, r.response,
-                      r.created_at, r.responded_at, r.expires_at"""
+# Mig 065: `agent_payload` is the full text addressed to the agent (e.g. a code-thread
+# question's anchor + reply instructions + lesson guide); null = `payload` is all there is.
+# The /orcha-inbox and /orcha-checkpoint skills tell the agent to act on it when present.
+_REQUEST_COLUMNS = """r.id, r.type, r.status, r.priority, r.payload, r.agent_payload, r.response,
+                      r.created_at, r.responded_at, r.expires_at, r.detail"""
 
 
-@app.get("/api/agents/{aid}/inbox")
-def agent_inbox(aid: str, since: Optional[str] = None):
+@app.get("/api/agents/{aid}/inbox", responses={200: {"model": AgentInboxResponse}})
+def agent_inbox(aid: str, request: Request, since: Optional[str] = None):
     """Open requests addressed to this agent (incoming side of the inbox).
 
     Orcha#33: `?since=<ISO-8601 timestamp>` returns only requests with
@@ -34,8 +40,10 @@ def agent_inbox(aid: str, since: Optional[str] = None):
         except ValueError:
             raise HTTPException(400, "`since` must be an ISO-8601 timestamp")
     with db_cursor() as (_, cur):
-        _require_agent(cur, aid)
-        since_clause = "AND r.created_at > %s::timestamptz" if since else ""
+        agent = _require_agent(cur, aid)
+        # PS-08: project isolation — a trusted non-member cannot read another project's asks.
+        require_member_read(cur, request, str(agent["container_id"]))
+        since_clause = f"AND r.created_at > {sql.ts_param()}" if since else ""
         params = (aid, since) if since else (aid,)
         cur.execute(
             f"""SELECT {_REQUEST_COLUMNS},
@@ -50,8 +58,10 @@ def agent_inbox(aid: str, since: Optional[str] = None):
         return {"open_requests": _annotate_request_ownership(cur.fetchall())}
 
 
-@app.get("/api/agents/{aid}/outbox")
-def agent_outbox(aid: str, status: Optional[str] = None, include_closed: bool = False):
+@app.get("/api/agents/{aid}/outbox", responses={200: {"model": AgentOutboxResponse}})
+def agent_outbox(
+    aid: str, request: Request, status: Optional[str] = None, include_closed: bool = False
+):
     """Outgoing requests where this agent is the requester.
 
     Use `?status=answered` to see only requests waiting for me to close (or resume the parent).
@@ -64,7 +74,8 @@ def agent_outbox(aid: str, status: Optional[str] = None, include_closed: bool = 
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        _require_agent(cur, aid)
+        agent = _require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
         if status:
             status_clause = "AND r.status = %s"
             params = (aid, status)

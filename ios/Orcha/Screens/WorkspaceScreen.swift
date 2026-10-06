@@ -25,7 +25,10 @@ struct WorkspaceScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     @State private var showCreateTask = false
-    @State private var showSettings = false
+    // Dev/UI-test seam: `-orchaOpenSettings` opens Settings over the workspace on launch
+    // (the toolbar menu isn't reachable from UI automation behind the glass group).
+    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("-orchaOpenSettings")
+    @State private var showMetrics = false
 
     private var requestGroups: RequestGroups {
         MobileUx.requestGroups(model.snapshot?.requests ?? [], humanId: model.humanId)
@@ -64,9 +67,14 @@ struct WorkspaceScreen: View {
         .sheet(isPresented: $showSettings) {
             SettingsScreen()
         }
+        .sheet(isPresented: $showMetrics) {
+            MetricsScreen()
+        }
         .sheet(isPresented: Bindable(model).showContainerControls) {
             ContainerControlsSheet()
         }
+        .tint(p.accent)
+        .sensoryFeedback(.selection, trigger: model.selectedTab)
         .task { await model.refresh() }
     }
 
@@ -76,16 +84,16 @@ struct WorkspaceScreen: View {
     private var modernTabs: some View {
         @Bindable var model = model
         return TabView(selection: $model.selectedTab) {
-            Tab("Home", systemImage: "house.fill", value: WorkspaceTab.home) {
-                workspaceTab(path: $model.homePath) { HomeTabView(showCreateTask: $showCreateTask) }
+            Tab("Home", systemImage: "house", value: WorkspaceTab.home) {
+                workspaceTab(path: $model.homePath) { HomeTabView(showCreateTask: $showCreateTask, showMetrics: $showMetrics) }
             }
             .badge(needsYouCount)
 
-            Tab("Tasks", systemImage: "checklist", value: WorkspaceTab.tasks) {
+            Tab("Tasks", systemImage: "circle.dashed.inset.filled", value: WorkspaceTab.tasks) {
                 workspaceTab { TasksTabView(showCreateTask: $showCreateTask) }
             }
 
-            Tab("Requests", systemImage: "tray.full.fill", value: WorkspaceTab.requests) {
+            Tab("Requests", systemImage: "tray", value: WorkspaceTab.requests) {
                 workspaceTab { RequestsTabView(groups: requestGroups) }
             }
             .badge(requestGroups.badgeCount)
@@ -103,17 +111,17 @@ struct WorkspaceScreen: View {
     private var legacyTabs: some View {
         @Bindable var model = model
         return TabView(selection: $model.selectedTab) {
-            workspaceTab(path: $model.homePath) { HomeTabView(showCreateTask: $showCreateTask) }
-                .tabItem { Label("Home", systemImage: "house.fill") }
+            workspaceTab(path: $model.homePath) { HomeTabView(showCreateTask: $showCreateTask, showMetrics: $showMetrics) }
+                .tabItem { Label("Home", systemImage: "house") }
                 .badge(needsYouCount)
                 .tag(WorkspaceTab.home)
 
             workspaceTab { TasksTabView(showCreateTask: $showCreateTask) }
-                .tabItem { Label("Tasks", systemImage: "checklist") }
+                .tabItem { Label("Tasks", systemImage: "circle.dashed.inset.filled") }
                 .tag(WorkspaceTab.tasks)
 
             workspaceTab { RequestsTabView(groups: requestGroups) }
-                .tabItem { Label("Requests", systemImage: "tray.full.fill") }
+                .tabItem { Label("Requests", systemImage: "tray") }
                 .badge(requestGroups.badgeCount)
                 .tag(WorkspaceTab.requests)
 
@@ -145,54 +153,37 @@ struct WorkspaceScreen: View {
         OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 content()
             }
-            .navigationTitle(model.selectedContainer?.displayName ?? "Orcha")
+            .navigationTitle(model.selectedContainer?.displayName ?? "Embodent")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(p.surface, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    // Icon-only: the title label ("My Orchas") crowded the inline
-                    // title into truncating ("Ship the new…"). VoiceOver keeps the name.
-                    Button("My Orchas", systemImage: "chevron.backward") { model.closeWorkspace() }
+                    // Icon-only back to the projects list; VoiceOver keeps the name.
+                    Button("All projects", systemImage: "chevron.backward") { model.closeWorkspace() }
                         .labelStyle(.iconOnly)
                 }
                 ToolbarItem(placement: .principal) {
-                    // Presence-style status: a tiny colored dot folded into the
-                    // title (chat-app pattern) replaces the orphan toolbar chip —
-                    // green connected, amber paused, red unreachable. VoiceOver
-                    // reads name + state; long names scale before truncating.
-                    HStack(spacing: 6) {
-                        PulseDot(color: titleDotColor, animated: false)
-                            .scaleEffect(0.8)
-                        Text(model.selectedContainer?.displayName ?? "Orcha")
-                            .font(p.uiFont(16, .bold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(model.selectedContainer?.displayName ?? "Orcha"), \(titleDotState)")
-                    .accessibilityAddTraits(.isHeader)
+                    ProjectSwitcherMenu(dotColor: titleDotColor, dotState: titleDotState)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    // GH #148 — entry point to the Notifier/Autonomy sheet; tinted by the
-                    // notifier's current state (the power switch), independent of connectivity.
-                    Button {
+                    // GH #148 — the execution chip opens the Notifier/Autonomy sheet;
+                    // it reads the notifier's power switch, independent of connectivity.
+                    ExecutionChip(running: isRunning) {
                         model.showContainerControls = true
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                            .foregroundStyle((model.snapshot?.container.wakesEnabled ?? true) ? p.text2 : p.danger)
                     }
-                    .accessibilityLabel("Autonomy & Notifier")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Settings") { showSettings = true }
-                        Button("Switch container") { model.closeWorkspace() }
-                        Button("Disconnect", role: .destructive) {
+                        Button("Metrics & usage", systemImage: "chart.bar") { showMetrics = true }
+                        Button("Settings", systemImage: "gearshape") { showSettings = true }
+                        Button("All projects", systemImage: "square.grid.2x2") { model.closeWorkspace() }
+                        Button("Disconnect", systemImage: "xmark.circle", role: .destructive) {
                             if let id = model.selectedContainer?.id {
                                 model.forgetContainer(id)
                             }
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Label("More", systemImage: "ellipsis")
                     }
                 }
             }
@@ -211,6 +202,12 @@ struct WorkspaceScreen: View {
                     }
                 }
             }
+    }
+
+    /// Running = the project is active and its notifier is on (agents wake).
+    private var isRunning: Bool {
+        guard let container = model.snapshot?.container else { return true }
+        return container.status == "active" && (container.wakesEnabled ?? true)
     }
 
     private var connState: String {
@@ -233,6 +230,121 @@ struct WorkspaceScreen: View {
 }
 
 
+/// Principal-slot project switcher: presence dot + project name + chevron; the
+/// menu lists every paired project (the web sidebar's project picker).
+private struct ProjectSwitcherMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    let dotColor: Color
+    let dotState: String
+
+    private var name: String { model.selectedContainer?.displayName ?? "Embodent" }
+
+    var body: some View {
+        Menu {
+            Section("Switch project") {
+                ForEach(model.containers) { container in
+                    Button {
+                        if container.id != model.selectedContainer?.id {
+                            model.openContainer(container.id)
+                        }
+                    } label: {
+                        projectMenuLabel(container)
+                    }
+                }
+            }
+            Button("All projects", systemImage: "square.grid.2x2") { model.closeWorkspace() }
+        } label: {
+            HStack(spacing: 6) {
+                // The status dot rides on the icon's corner so the switcher stays compact
+                // next to a crowded toolbar (Tasks adds filter + new).
+                ProjectIconView(icon: model.projectIcon(for: model.selectedContainer?.id), size: 20, tile: false)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(dotColor)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().strokeBorder(p.bg, lineWidth: 1.5))
+                            .offset(x: 2, y: 2)
+                    }
+                    .accessibilityHidden(true)
+                Text(name)
+                    .ltype(.headline)
+                    .foregroundStyle(p.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 120, alignment: .leading)
+                    .layoutPriority(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(p.muted)
+            }
+            // Leave a gap before the trailing toolbar group so the chevron never touches it.
+            .padding(.trailing, LSpace.s)
+            .contentShape(.rect)
+        }
+        .accessibilityLabel("\(name), \(dotState)")
+        .accessibilityHint("Switch project")
+        .accessibilityShowsLargeContentViewer()
+    }
+
+    /// Menu row: the project's icon (emoji inline, glyph as its SF Symbol); a checkmark
+    /// marks the open project. Menus render only Text/Image, so the glyph tint is dropped.
+    @ViewBuilder
+    private func projectMenuLabel(_ container: StoredContainer) -> some View {
+        let icon = model.projectIcon(for: container.id)
+        let isOpen = container.id == model.selectedContainer?.id
+        if isOpen {
+            Label(container.displayName, systemImage: "checkmark")
+        } else if case let .emoji(value) = icon {
+            Text("\(value)  \(container.displayName)")
+        } else {
+            Label(container.displayName, systemImage: ProjectIconUx.sfSymbol(for: icon))
+        }
+    }
+}
+
+/// Compact execution capsule (Running / Paused) — opens the Autonomy & Notifier sheet.
+private struct ExecutionChip: View {
+    @Environment(\.palette) private var p
+    let running: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            // A crowded toolbar (Tasks adds filter + new) would truncate the label to
+            // "…" — fall back to the bare status dot instead.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 5) {
+                    dot
+                    Text(running ? "Running" : "Paused")
+                        .ltype(.micro)
+                        .foregroundStyle(running ? p.text2 : p.warn)
+                        .fixedSize()
+                }
+                dot
+            }
+            .padding(.horizontal, LSpace.s)
+            .frame(height: 24)
+            .background(running ? p.surface2 : p.warnSoft, in: Capsule())
+            .overlay(Capsule().strokeBorder(running ? p.border : p.warnLine, lineWidth: 1))
+            .frame(minHeight: 44)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .animation(.lQuick, value: running)
+        .accessibilityLabel("Autonomy & Notifier")
+        .accessibilityValue(running ? "Running" : "Paused")
+        .accessibilityShowsLargeContentViewer()
+    }
+
+    private var dot: some View {
+        Circle()
+            .fill(running ? p.ok : p.warn)
+            .frame(width: 6, height: 6)
+    }
+}
+
 /// The shared connection banner row (flow 04 H8/H10): polling is the honest v1
 /// state (SSE is the listed follow-up); paused blocks agent action.
 ///
@@ -246,7 +358,7 @@ struct ConnectionBanners: View {
     var body: some View {
         if let snapshot = model.snapshot {
             if snapshot.container.status != "active" {
-                Banner(kind: .info, text: "This Orcha is paused or stopped on the laptop — resume it there to continue.")
+                Banner(kind: .info, text: "This Embodent is paused or stopped on the laptop — resume it there to continue.")
             } else if !(snapshot.container.wakesEnabled ?? true) {
                 Banner(kind: .warn, text: "Notifier paused — agents won't wake.", action: "Resume") {
                     model.showContainerControls = true
@@ -265,7 +377,7 @@ struct UnreachableState: View {
 
     var body: some View {
         StateLayout(
-            title: "Can't reach this Orcha",
+            title: "Can't reach this Embodent",
             sub: "\(model.selectedContainer?.baseUrl ?? "The container") didn't answer. Your work is safe — the phone just can't see it right now.",
             danger: true
         ) {
@@ -276,7 +388,7 @@ struct UnreachableState: View {
             VStack(spacing: 12) {
                 OrchaCard {
                     Text("1  Are you online? The portal needs an internet connection.")
-                    Text("2  Is the deployment up — or, self-hosting, is the computer awake with Orcha running?")
+                    Text("2  Is the deployment up — or, self-hosting, is the computer awake with Embodent running?")
                     Text("3  Access token rotated? Update it in Settings → Containers.")
                 }
                 .font(p.uiFont(13))

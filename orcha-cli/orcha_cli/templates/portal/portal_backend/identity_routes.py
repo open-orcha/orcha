@@ -337,6 +337,44 @@ def require_member_read(cur, request: Request, container_id):
     )
 
 
+def require_machine_lane_member(cur, request: Request, container_id, grant="manage_agents"):
+    """Close a MACHINE-LANE endpoint (embodiment tokens, wake-claim, run start/lines/
+    finish, reachability, notifications/read, orphan-lease reaping) to trusted humans
+    who may not act on this project (PS-07).
+
+    These routes serve the header-less agent/daemon lane and keep it byte-for-byte: no
+    header ⇒ passthrough. When a trusted login IS present (a browser session, or a
+    desktop device token the perimeter turns into the same header), the caller must be
+    a NON-VIEWER member of the target project — the same rule as any work write
+    (trusted_actor): viewers, non-members and members of another project get 403. The
+    fresh unmapped-bootstrap exemption applies as everywhere else. Returns the member
+    row when one resolved, else None.
+
+    PS-37: acting on the machine lane means acting AS an AI agent (minting its work
+    token, starting / finishing its runs, claiming its wake), and the audit trail then
+    records the AI, not the human. That is agent management: a trusted human also needs
+    `grant` (default manage_agents; owners hold every grant). A plain member gets 403."""
+    login = proxy_login(request)
+    if not login:
+        return None
+    member = find_member_by_login(cur, container_id, login)
+    if member is None:
+        if not container_mapped(cur, container_id):
+            return None
+        raise HTTPException(
+            403,
+            f"your GitHub account ('{login}') is not a member of this project "
+            "— ask an owner for an invite",
+        )
+    _forbid_viewer_write(member)
+    if grant is not None and not has_grant(member, grant):
+        raise HTTPException(
+            403,
+            f"acting as an AI agent requires the owner role or the '{grant}' permission",
+        )
+    return member
+
+
 def _identity_payload(member):
     login = member["github_login"]
     return {

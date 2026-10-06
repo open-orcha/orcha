@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "orcha-cli"))
 from orcha_cli import __main__ as cli  # noqa: E402
 from orcha_cli import notifier  # noqa: E402
+from conftest import ts_ago
 
 
 async def _scan(client, cid, aid, *, cooldown=0.0, min_idle=0.0):
@@ -73,7 +74,7 @@ async def test_due_self_wake_scans_protocols_and_clears_only_with_task_id(
     r = await _schedule(client, aid, tid, await work_headers(aid),
                         context="check the pull request checks")
     assert r.status_code == 200, r.text
-    db.execute("UPDATE agent_self_wake SET resume_at=now() - interval '1 second' "
+    db.execute(f"UPDATE agent_self_wake SET resume_at={ts_ago(1)} "
                "WHERE agent_id=%s AND task_id=%s", (aid, tid))
 
     _, cand = await _scan(client, container["id"], aid)
@@ -117,7 +118,7 @@ async def test_self_wake_defers_behind_auto_start_and_pending_task_request(
     tid_a = task_a["task_id"]
     db.execute("DELETE FROM agent_events")
     assert (await _schedule(client, aid, tid_a, await work_headers(aid))).status_code == 200
-    db.execute("UPDATE agent_self_wake SET resume_at=now() - interval '1 second' "
+    db.execute(f"UPDATE agent_self_wake SET resume_at={ts_ago(1)} "
                "WHERE agent_id=%s AND task_id=%s", (aid, tid_a))
 
     ready = await make_task("new ready task", "done")
@@ -159,7 +160,7 @@ async def test_directed_task_without_self_wake_does_not_consume_other_due_row(
 
     assert (await _schedule(client, aid, tid_a, await work_headers(aid),
                             context="check task A")).status_code == 200
-    db.execute("UPDATE agent_self_wake SET resume_at=now() - interval '1 second' "
+    db.execute(f"UPDATE agent_self_wake SET resume_at={ts_ago(1)} "
                "WHERE agent_id=%s AND task_id=%s", (aid, tid_a))
     msg = await client.post(f"/api/tasks/{tid_b}/messages",
                             json={"body": "please inspect task B"})
@@ -200,7 +201,7 @@ async def test_directed_task_with_due_self_wake_clears_only_that_task(
                             context="check task A")).status_code == 200
     assert (await _schedule(client, aid, tid_b, headers,
                             context="check task B")).status_code == 200
-    db.execute("UPDATE agent_self_wake SET resume_at=now() - interval '1 second' "
+    db.execute(f"UPDATE agent_self_wake SET resume_at={ts_ago(1)} "
                "WHERE agent_id=%s", (aid,))
     msg = await client.post(f"/api/tasks/{tid_b}/messages",
                             json={"body": "please inspect task B"})
@@ -241,7 +242,7 @@ async def test_done_clears_scheduled_self_wake(
     headers = await work_headers(aid)
     assert (await _schedule(client, aid, tid, headers,
                             context="check deploy")).status_code == 200
-    db.execute("UPDATE agent_self_wake SET resume_at=now() - interval '1 second' "
+    db.execute(f"UPDATE agent_self_wake SET resume_at={ts_ago(1)} "
                "WHERE agent_id=%s AND task_id=%s", (aid, tid))
 
     done = await client.post(f"/api/tasks/{tid}/done",

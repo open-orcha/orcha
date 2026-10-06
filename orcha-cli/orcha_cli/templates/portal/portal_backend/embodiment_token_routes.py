@@ -2,16 +2,17 @@
 
 import secrets
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
+from portal_backend.identity_routes import require_machine_lane_member
 from portal_backend.schemas.wakes import EmbodimentTokenMint
 
 
 @app.post("/api/agents/{aid}/embodiment-tokens", status_code=201)
-def mint_embodiment_token(aid: str, body: EmbodimentTokenMint):
+def mint_embodiment_token(aid: str, body: EmbodimentTokenMint, request: Request):
     """GH #91/#90: mint a run_token for a spawn about to happen. run_id/pid stay NULL until the run
     is created and binds the token (start_worker_run). The token_id returned IS the run_token — there
     is no separate id column; the daemon carries it as the handle for the bind + revoke calls.
@@ -19,7 +20,8 @@ def mint_embodiment_token(aid: str, body: EmbodimentTokenMint):
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (connection, cur):
-        require_agent(cur, aid)
+        agent = require_agent(cur, aid)
+        require_machine_lane_member(cur, request, str(agent["container_id"]))  # PS-07
         token = secrets.token_urlsafe(32)
         cur.execute(
             """INSERT INTO embodiment_tokens (run_token, agent_id, lane, kind)
@@ -52,15 +54,17 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
     if not token or not task_id:
         return False
     cur.execute(
-        """UPDATE worker_runs wr SET task_id=%s
-             FROM embodiment_tokens et
-            WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
-              AND et.revoked_at IS NULL AND et.run_id IS NOT NULL
-              AND wr.run_id=et.run_id AND wr.agent_id=et.agent_id
+        # No UPDATE ... FROM: SQLite's RETURNING can't name the alias, and Postgres would find
+        # a bare run_id ambiguous with the joined token row.
+        """UPDATE worker_runs AS wr SET task_id=%s
+            WHERE EXISTS (SELECT 1 FROM embodiment_tokens et
+                           WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
+                             AND et.revoked_at IS NULL AND et.run_id IS NOT NULL
+                             AND et.run_id=wr.run_id AND et.agent_id=wr.agent_id)
               AND wr.status='running' AND wr.task_id IS NULL
               AND EXISTS (SELECT 1 FROM tasks t
                            WHERE t.id=%s AND t.status='in_progress')
-        RETURNING wr.run_id""",
+        RETURNING run_id""",
         (task_id, token, aid, task_id),
     )
     pinned = cur.fetchone() is not None

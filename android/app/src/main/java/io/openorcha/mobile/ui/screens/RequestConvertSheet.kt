@@ -69,6 +69,13 @@ import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.TonalButton
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LChip
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 
 /* =============================================================================
    Flow 07 — Request detail: flow header, chain context, payload, response quote,
@@ -87,7 +94,7 @@ internal fun ConvertSheet(
     var title by remember { mutableStateOf("") }
     var dod by remember { mutableStateOf("") }
     var assignee by remember { mutableStateOf<String?>(null) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.raised) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.surface) {
         // A1: same scroll guard as TextSheet — field + button stay reachable with keyboard open
         Column(
             Modifier
@@ -97,10 +104,11 @@ internal fun ConvertSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("CONVERT TO TASK", style = MaterialTheme.typography.labelMedium, color = p.violet)
+            Text("Turn into a task", style = ltype(LType.Headline), color = p.text, modifier = Modifier.semantics { heading() })
+            Text("Closes this request and creates a task from it.", style = ltype(LType.Meta), color = p.muted)
             OrchaField(title, { title = it }, label = "Task title")
             OrchaField(dod, { dod = it }, label = "Definition of done", minLines = 3)
-            SectionH("Assign to", assignee ?: "unassigned")
+            Text("Assign to", style = ltype(LType.Meta), color = p.muted, modifier = Modifier.semantics { heading() })
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
                     AssigneeChip("Unassigned", assignee == null) { assignee = null }
@@ -109,9 +117,10 @@ internal fun ConvertSheet(
                     AssigneeChip(agents[i], assignee == agents[i]) { assignee = agents[i] }
                 }
             }
-            PrimaryButton(
-                "Convert", { onConfirm(title.trim(), dod.trim(), assignee) },
+            LButton(
+                "Create task", { onConfirm(title.trim(), dod.trim(), assignee) },
                 Modifier.fillMaxWidth(),
+                kind = LButtonKind.Primary,
                 enabled = title.isNotBlank() && dod.isNotBlank() && !busy,
             )
         }
@@ -120,15 +129,5 @@ internal fun ConvertSheet(
 
 @Composable
 fun AssigneeChip(label: String, on: Boolean, onClick: () -> Unit) {
-    val p = Orcha.palette
-    Text(
-        label,
-        modifier = Modifier
-            .background(if (on) p.accentSoft else p.surface2, RoundedCornerShape(999.dp))
-            .border(BorderStroke(1.dp, if (on) p.accentLine else p.border), RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W600),
-        color = if (on) p.accent else p.muted,
-    )
+    LChip(label, selected = on, onClick = onClick)
 }

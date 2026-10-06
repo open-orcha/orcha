@@ -12,10 +12,16 @@ def _checkpoint_task_worktree(
     if not worktree:
         return None
     compat = sys.modules["orcha_cli.notifier"]
-    excludes = compat._DIFF_EXCLUDES
-    compat._run_git(["add", "-A", "--", *excludes], cwd=worktree)
+    from orcha_cli.notifier_worktree_cleanup import SCAFFOLD_UNSTAGE
+
+    # stage real work, then drop Embodent's scaffolding (see SCAFFOLD_UNSTAGE for why this is
+    # not done with :(exclude) pathspecs on `git add`)
+    return_code, _ = compat._run_git(["add", "-A", "--", "."], cwd=worktree)
+    if return_code != 0:
+        return None
+    compat._run_git(["reset", "-q", "--", *SCAFFOLD_UNSTAGE], cwd=worktree)
     return_code, staged = compat._run_git(
-        ["diff", "--cached", "--name-only", "--", *excludes],
+        ["diff", "--cached", "--name-only"],
         cwd=worktree,
     )
     if return_code != 0 or not staged.strip():

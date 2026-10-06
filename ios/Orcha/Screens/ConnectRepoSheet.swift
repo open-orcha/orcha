@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The Connect-repo sheet — the portal's Connect-repo modal (`home-github.js`)
-/// in house sheet form: loading skeletons → the graceful "App isn't wired" off
-/// state, or a searchable repo list with the current binding checkmarked and an
+/// in house sheet form: loading skeletons → the graceful "GitHub isn't connected"
+/// off state, or a searchable repo list with the current binding checkmarked and an
 /// Unbind row. Picking a row PUTs the binding; the snapshot refresh then updates
 /// every surface (Home chip, containers-home card) through the normal machinery.
 struct ConnectRepoSheet: View {
@@ -19,8 +19,9 @@ struct ConnectRepoSheet: View {
         NavigationStack {
             OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 content
+                    .background(p.bg)
             }
-            .navigationTitle("Connect a GitHub repo")
+            .navigationTitle("Connect repository")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -29,6 +30,7 @@ struct ConnectRepoSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationBackground(p.bg)
         .task { phase = await model.loadGithubRepos() }
     }
 
@@ -36,8 +38,8 @@ struct ConnectRepoSheet: View {
         switch phase {
         case .loading:
             loadingState
-        case let .unavailable(detail):
-            offState(detail)
+        case .unavailable:
+            offState
         case let .failed(message):
             failedState(message)
         case let .ready(repos):
@@ -49,12 +51,11 @@ struct ConnectRepoSheet: View {
 
     private var loadingState: some View {
         ScrollView {
-            VStack(spacing: 10) {
-                SkeletonBlock(height: 64)
-                SkeletonBlock(height: 64)
-                SkeletonBlock(height: 64)
+            VStack(spacing: LSpace.s) {
+                SkeletonBlock(height: 36)
+                SkeletonBlock(height: 168)
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading repositories")
@@ -62,22 +63,17 @@ struct ConnectRepoSheet: View {
 
     // MARK: off state — self-hosters without the App land here, on purpose
 
-    private func offState(_ detail: String?) -> some View {
+    private var offState: some View {
         StateLayout(
-            title: "The GitHub App isn't wired on the server yet",
-            sub: "No installation token was found, so this Orcha can't list repositories. Self-hosting without the App is fully supported — everything else keeps working; repo-connect simply stays off."
+            title: "GitHub isn't connected on this server",
+            sub: "An admin can install the Embodent GitHub App from the portal under Settings › GitHub."
         ) {
             GitHubMark()
                 .frame(width: 34, height: 34)
                 .foregroundStyle(p.muted)
+                .accessibilityHidden(true)
         } actions: {
-            if let detail, detail.isEmpty == false {
-                Text(detail)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(p.faint)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 290)
-            }
+            EmptyView()
         }
     }
 
@@ -93,13 +89,12 @@ struct ConnectRepoSheet: View {
                 .frame(width: 34, height: 34)
                 .foregroundStyle(p.danger)
         } actions: {
-            KitButton(title: "Try again", role: .neutral) {
+            LButton("Try again", icon: "arrow.clockwise", kind: .secondary) {
                 Task {
                     phase = .loading
                     phase = await model.loadGithubRepos()
                 }
             }
-            .frame(maxWidth: 220)
         }
     }
 
@@ -108,70 +103,69 @@ struct ConnectRepoSheet: View {
     private func repoList(_ repos: [GithubRepoDto]) -> some View {
         let visible = RepoConnect.filter(repos, query: query)
         return ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Bind this workspace to a repository the Orcha GitHub App is installed on.")
-                    .font(p.uiFont(13))
+            VStack(alignment: .leading, spacing: LSpace.l) {
+                Text("Bind this workspace to a repository the Embodent GitHub App is installed on.")
+                    .ltype(.meta)
                     .foregroundStyle(p.muted)
                 if repos.isEmpty {
-                    OrchaCard {
-                        Text("The App is installed, but on no repositories yet.")
-                            .font(p.uiFont(13))
-                            .foregroundStyle(p.muted)
-                    }
+                    LEmptyState(
+                        icon: "shippingbox",
+                        title: "No repositories yet",
+                        message: "The App is installed, but on no repositories yet."
+                    )
                 } else {
-                    searchField
-                    SectionH(title: "Repositories", count: "\(visible.count)")
-                    if visible.isEmpty {
-                        OrchaCard {
-                            Text("No repository matches “\(query)”.")
-                                .font(p.uiFont(13))
-                                .foregroundStyle(p.muted)
-                        }
-                    }
-                    ForEach(visible) { repo in
-                        RepoRow(
-                            repo: repo,
-                            bound: repo.fullName == boundRepo,
-                            disabled: model.actionInFlight
-                        ) {
-                            save(repo.fullName)
+                    LSearchField("Search repositories", text: $query)
+                    LSection("Repositories", count: visible.count) {
+                        if visible.isEmpty {
+                            LCard {
+                                Text("No repository matches “\(query)”.")
+                                    .ltype(.meta)
+                                    .foregroundStyle(p.muted)
+                            }
+                        } else {
+                            LCard(padding: 0) {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, repo in
+                                        if index > 0 { LDivider() }
+                                        RepoRow(
+                                            repo: repo,
+                                            bound: repo.fullName == boundRepo,
+                                            disabled: model.actionInFlight
+                                        ) {
+                                            save(repo.fullName)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 if let bound = boundRepo {
-                    KitButton(
-                        title: "Unbind \(bound)",
-                        role: .dangerTonal,
-                        small: true,
-                        enabled: model.actionInFlight == false
-                    ) {
-                        save(nil)
+                    LSection("Connected") {
+                        HStack(spacing: LSpace.m) {
+                            Text(bound)
+                                .ltype(.mono)
+                                .foregroundStyle(p.text2)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            LButton("Unbind", icon: "xmark", kind: .danger, size: .small) {
+                                save(nil)
+                            }
+                            .disabled(model.actionInFlight)
+                            .accessibilityLabel("Unbind \(bound)")
+                        }
+                        .padding(LSpace.m)
+                        .background(p.surface, in: RoundedRectangle(cornerRadius: p.radiusCard, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: p.radiusCard, style: .continuous).strokeBorder(p.border, lineWidth: 1))
                     }
-                    .padding(.top, 4)
                 }
                 if let error = model.error {
                     Banner(kind: .danger, text: error)
                 }
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(p.faint)
-                .accessibilityHidden(true)
-            TextField("", text: $query, prompt: Text("Search repositories"))
-                .font(p.uiFont(14))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityLabel("Search repositories")
-        }
-        .padding(11)
-        .background(p.surface2, in: RoundedRectangle(cornerRadius: p.radiusCard))
-        .overlay(RoundedRectangle(cornerRadius: p.radiusCard).strokeBorder(p.border2, lineWidth: 1))
     }
 
     private func save(_ repo: String?) {
@@ -195,43 +189,42 @@ private struct RepoRow: View {
 
     var body: some View {
         Button(action: action) {
-            OrchaCard(
-                borderColor: bound ? p.accentLine : nil,
-                container: bound ? p.accentSoft : nil
-            ) {
-                HStack(alignment: .top, spacing: 10) {
-                    GitHubMark()
-                        .frame(width: 15, height: 15)
-                        .foregroundStyle(p.muted)
-                        .padding(.top, 1)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(repo.fullName)
-                                .font(.system(size: 13, design: .monospaced))
-                                .foregroundStyle(p.text)
-                                .lineLimit(1)
-                            if repo.isPrivate {
-                                MetaTag(text: "private", tint: p.warn)
-                            }
-                        }
-                        if let description = repo.description, description.isEmpty == false {
-                            Text(description)
-                                .font(p.uiFont(12.5))
-                                .foregroundStyle(p.muted)
-                                .lineLimit(2)
+            HStack(alignment: .top, spacing: LSpace.m) {
+                GitHubMark()
+                    .frame(width: 15, height: 15)
+                    .foregroundStyle(p.muted)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(repo.fullName)
+                            .ltype(.mono)
+                            .foregroundStyle(p.text)
+                            .lineLimit(1)
+                        if repo.isPrivate {
+                            LTag("private", tint: p.warn)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if bound {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(p.accent)
-                            .accessibilityHidden(true)
+                    if let description = repo.description, description.isEmpty == false {
+                        Text(description)
+                            .ltype(.meta)
+                            .foregroundStyle(p.muted)
+                            .lineLimit(2)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if bound {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(p.accent)
+                        .accessibilityHidden(true)
+                }
             }
+            .padding(LSpace.m)
+            .frame(minHeight: 52)
+            .background(bound ? p.lSelected : .clear)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.lRow)
         .disabled(disabled)
         .accessibilityLabel(accessibilityText)
         .accessibilityHint(bound ? "Currently connected" : "Connects this workspace to the repository")

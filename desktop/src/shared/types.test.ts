@@ -7,8 +7,8 @@ import type {
 
 describe('shared onboarding types', () => {
   it('ProgressEvent variants carry a runId and step', () => {
-    const ok: ProgressEvent = { runId: 'r1', step: 'compose-up', status: 'ok' }
-    const log: ProgressEvent = { runId: 'r1', step: 'compose-up', status: 'log', line: 'pulling' }
+    const ok: ProgressEvent = { runId: 'r1', step: 'start', status: 'ok' }
+    const log: ProgressEvent = { runId: 'r1', step: 'start', status: 'log', line: 'pulling' }
     const fail: ProgressEvent = {
       runId: 'r1',
       step: 'wait-portal',
@@ -20,7 +20,7 @@ describe('shared onboarding types', () => {
   })
 
   it('ProvisionMode is the three supported modes', () => {
-    const modes: ProvisionMode[] = ['init', 'upgrade', 'reset']
+    const modes: ProvisionMode[] = ['init', 'upgrade', 'migrate']
     expect(modes).toHaveLength(3)
   })
 

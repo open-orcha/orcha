@@ -21,21 +21,36 @@
  * and every `.md-h` span is addressed purely by its DOM-order index among
  * its siblings, computed at click time (cheap: rendered docs are short).
  */
-import { useRef } from "react";
-import { Md } from "../../components/ui";
+import { useMemo, useRef } from "react";
+import { renderMdDoc } from "./mdDoc";
 import { resolveHeadingLine } from "./mdHeadingAnchor";
 
 export interface MdRenderedPaneProps {
   content: string;
+  /** repo path of the document — relative `[text](path)` links resolve against its directory */
+  path?: string;
+  /** opens a repo-relative link target in Code Space (same ref) */
+  onOpenPath?: (path: string) => void;
   onDiscussHeading: (line: number) => void;
   onAmbiguousHeading: () => void;
 }
 
-export function MdRenderedPane({ content, onDiscussHeading, onAmbiguousHeading }: MdRenderedPaneProps) {
+export function MdRenderedPane({ content, path = "", onOpenPath, onDiscussHeading, onAmbiguousHeading }: MdRenderedPaneProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const html = useMemo(() => renderMdDoc(content, path), [content, path]);
 
   const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
+    const link = target.closest("a");
+    if (link) {
+      // A link inside a heading navigates; it never starts a thread.
+      const repoPath = link.getAttribute("data-md-path");
+      if (repoPath && onOpenPath && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+        e.preventDefault();
+        onOpenPath(repoPath);
+      }
+      return;
+    }
     const heading = target.closest(".md-h");
     const wrap = wrapRef.current;
     if (!heading || !wrap) return;
@@ -55,7 +70,7 @@ export function MdRenderedPane({ content, onDiscussHeading, onAmbiguousHeading }
       className="cs-md-rendered cs-md-rendered-anchorable"
       onClick={onClick}
     >
-      <Md text={content} className="tx cs-md-body" />
+      <div className="tx md cs-md-body" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }

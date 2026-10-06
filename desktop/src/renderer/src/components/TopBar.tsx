@@ -16,7 +16,7 @@ export default function TopBar({ stack, onBack }: { stack: Stack; onBack: () => 
       <button
         type="button"
         onClick={onBack}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-text/60 transition-colors hover:bg-card hover:text-text"
+        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-text-2 transition-colors hover:bg-card hover:text-text"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         Projects

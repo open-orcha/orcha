@@ -21,6 +21,7 @@ import pathlib
 import sys
 
 import pytest
+from conftest import ts_ago
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "orcha-cli"))
 
@@ -45,7 +46,7 @@ def _lapsed_lease(db, aid, kind="resident"):
     lease_kind survives expiry by design, so the row still reports a stale embodiment label."""
     db.execute(
         "INSERT INTO agent_wake_state (agent_id, wake_lease_until, last_woken_at, lease_kind) "
-        "VALUES (%s, now() - interval '120 seconds', now() - interval '300 seconds', %s) "
+        f"VALUES (%s, {ts_ago(120)}, {ts_ago(300)}, %s) "
         "ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until=EXCLUDED.wake_lease_until, "
         "last_woken_at=EXCLUDED.last_woken_at, lease_kind=EXCLUDED.lease_kind",
         (aid, kind),
@@ -60,7 +61,7 @@ def _null_lease(db, aid, kind="resident"):
     exercises the parenthesization the NOT-EXISTS belt depends on."""
     db.execute(
         "INSERT INTO agent_wake_state (agent_id, wake_lease_until, last_woken_at, lease_kind) "
-        "VALUES (%s, NULL, now() - interval '300 seconds', %s) "
+        f"VALUES (%s, NULL, {ts_ago(300)}, %s) "
         "ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until=NULL, "
         "last_woken_at=EXCLUDED.last_woken_at, lease_kind=EXCLUDED.lease_kind",
         (aid, kind),

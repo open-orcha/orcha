@@ -36,6 +36,14 @@ describe("RecentThreadsList", () => {
     expect(screen.getByText("@forge")).toBeInTheDocument();
   });
 
+  it("dates a row by its last activity (same age the rail shows for the same thread)", () => {
+    const created = new Date(Date.now() - 5 * 3600_000).toISOString();
+    const updated = new Date(Date.now() - 3 * 3600_000).toISOString();
+    render(<RecentThreadsList threads={[{ ...THREAD, created_at: created, updated_at: updated }]} />);
+    const time = document.querySelector(".cs-recent-side .cs-recent-time");
+    expect(time?.textContent).toMatch(/^3h/);
+  });
+
   it("falls back to the kind label when first_message is absent", () => {
     render(<RecentThreadsList threads={[{ ...THREAD, first_message: undefined }]} />);
     expect(screen.getByText("Why", { selector: ".cs-recent-snippet" })).toBeInTheDocument();

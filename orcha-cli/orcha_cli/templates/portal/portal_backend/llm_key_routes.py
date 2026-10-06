@@ -65,6 +65,13 @@ def get_container_llm_key(cid: str, request: Request):
         row = _provider_stored_row(
             cur, cid, "anthropic"
         )  # unified table (migration 027)
+    # Agent runs on an API key (migration 071) — additive: whether a key is STORED here (the
+    # opt-in needs one; the env override never reaches agents) and whether it is opted in.
+    agent = {
+        "stored": bool(row and row["key_enc"]),
+        "use_for_agents": bool(row and row["key_enc"] and row.get("use_for_agents")),
+        "agent_runtime": "claude",
+    }
     env_override = os.environ.get("ORCHA_LLM_API_KEY")
     if env_override:
         return {
@@ -72,6 +79,7 @@ def get_container_llm_key(cid: str, request: Request):
             "source": "env",
             "masked": _mask_llm_key(secret_box.last4(env_override)),
             "set_at": None,
+            **agent,
         }
     if row and row["key_enc"]:
         return {
@@ -79,8 +87,9 @@ def get_container_llm_key(cid: str, request: Request):
             "source": "db",
             "masked": _mask_llm_key(row["key_hint"]),
             "set_at": row["set_at"],
+            **agent,
         }
-    return {"configured": False, "source": None, "masked": None, "set_at": None}
+    return {"configured": False, "source": None, "masked": None, "set_at": None, **agent}
 
 
 @app.put("/api/containers/{cid}/settings/llm-key", status_code=200)

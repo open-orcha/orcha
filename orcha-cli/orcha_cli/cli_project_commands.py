@@ -6,6 +6,8 @@ import json
 import pathlib
 import sys
 
+from orcha_cli import cli_migrate_runtime, cli_native_lifecycle, cli_runtime_mode
+
 
 def cmd_up(args: argparse.Namespace, services) -> None:
     if args.project:
@@ -17,12 +19,15 @@ def cmd_up(args: argparse.Namespace, services) -> None:
         services._by_project(args.project, "up", "-d")
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"
-    if not (orcha_dir / "docker-compose.yml").exists():
-        sys.exit(
-            "error: no .orcha/docker-compose.yml here — run `orcha init` first, "
-            "or pass `--project <name>` to target a specific stack from anywhere."
-        )
+    runtime = cli_runtime_mode.require_project(
+        pathlib.Path.cwd(),
+        "error: no .orcha/docker-compose.yml here — run `orcha init` first, "
+        "or pass `--project <name>` to target a specific stack from anywhere.",
+    )
+    if runtime == cli_runtime_mode.NATIVE:  # serve owns the notifier + bridge children
+        return cli_native_lifecycle.up(pathlib.Path.cwd())
     services._compose(orcha_dir, "up", "-d")
+    print(cli_migrate_runtime.docker_nudge())
     # #298: backfill the project-preferences file if a pre-#298 project is missing it.
     prefs_path = services._install_project_preferences(pathlib.Path.cwd())
     if prefs_path:
@@ -41,6 +46,11 @@ def cmd_up(args: argparse.Namespace, services) -> None:
 
 def cmd_down(args: argparse.Namespace, services) -> None:
     extra = ["-v"] if args.volumes else []
+    if not args.project and cli_runtime_mode.is_native_project(pathlib.Path.cwd()):
+        # serve fans SIGTERM out to its own notifier + bridge; stopping them here first
+        # would only make serve restart them mid-shutdown.
+        return cli_native_lifecycle.down(pathlib.Path.cwd(), volumes=args.volumes,
+                                         yes=getattr(args, "yes", False))
     # Epic A: the wake daemon dies with the stack — otherwise a daemon would keep
     # polling a DB that's going away (and, with -v, a wiped one). Best-effort, local
     # cwd only (a --project down from elsewhere can't locate that project's pidfile).
@@ -63,11 +73,11 @@ def cmd_down(args: argparse.Namespace, services) -> None:
         services._by_project(args.project, "down", *extra)
         return
     orcha_dir = pathlib.Path.cwd() / ".orcha"
-    if not (orcha_dir / "docker-compose.yml").exists():
-        sys.exit(
-            "error: no .orcha/docker-compose.yml here — nothing to bring down. "
-            "Pass `--project <name>` to target a specific stack from anywhere."
-        )
+    cli_runtime_mode.require_project(
+        pathlib.Path.cwd(),
+        "error: no .orcha/docker-compose.yml here — nothing to bring down. "
+        "Pass `--project <name>` to target a specific stack from anywhere.",
+    )
     services._compose(orcha_dir, "down", *extra)
 
 
@@ -102,9 +112,17 @@ def cmd_upgrade(args: argparse.Namespace, services) -> None:
     cwd = pathlib.Path.cwd()
     orcha_dir = cwd / ".orcha"
     config_path = cwd / ".claude" / "orcha.json"
-    if not (orcha_dir / "docker-compose.yml").exists() or not config_path.exists():
+    runtime = cli_runtime_mode.require_project(
+        cwd,
+        "error: no .orcha/ + .claude/orcha.json here — `orcha upgrade` is for an "
+        "existing project (run `orcha init` to bootstrap a new one).",
+    )
+    if not config_path.exists():
         sys.exit("error: no .orcha/ + .claude/orcha.json here — `orcha upgrade` is for an "
                  "existing project (run `orcha init` to bootstrap a new one).")
+    if runtime == cli_runtime_mode.NATIVE:
+        return cli_native_lifecycle.upgrade(
+            cwd, services, allow_downgrade=getattr(args, "allow_downgrade", False))
     cfg = json.loads(config_path.read_text())
     project_name = cfg.get("project_name") or services._sanitize_name(cwd.name)
     db_port, api_port = cfg.get("db_port"), cfg.get("api_port")
@@ -160,9 +178,11 @@ def cmd_upgrade(args: argparse.Namespace, services) -> None:
     # hooks (e.g. C1's SessionEnd `orcha snapshot`) reach an EXISTING workspace on
     # upgrade — init/connect call this, but upgrade previously didn't, so new hooks
     # never landed without a manual `orcha enable-hook`. Idempotent + additive: only
-    # missing hooks are added; existing settings.json entries are untouched.
+    # missing hooks are added, and already-registered ORCHA hooks get their template
+    # `timeout` refreshed; user-authored settings.json entries are untouched.
     if services._write_hook_config(config_path.parent):
-        print("[orcha] registered newly-shipped notification hooks in .claude/settings.json")
+        print("[orcha] registered newly-shipped notification hooks / refreshed hook timeouts "
+              "in .claude/settings.json")
     else:
         print("[orcha] notification hooks already up to date (.claude/settings.json)")
     print("[orcha] rebuilding portal (data preserved — no volume wipe) ...")

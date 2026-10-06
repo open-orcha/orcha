@@ -59,7 +59,7 @@ async def _seed(client, db, container, make_agent, make_task, make_request):
         (cid, task["id"]))
     db.execute(
         "INSERT INTO roster_analysis (container_id, summary, suggestions, source) "
-        "VALUES (%s,'s','[]'::jsonb,'llm')", (cid,))
+        "VALUES (%s,'s','[]','llm')", (cid,))
     return {"human": human, "ai": ai, "cid": cid, "aid": aid, "task": task}
 
 

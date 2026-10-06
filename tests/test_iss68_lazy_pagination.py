@@ -10,12 +10,17 @@ lands in PR-2). Covered here:
   GET /api/containers/{cid}/requests?limit=&offset=&agent=&direction=   status order
   GET /api/tasks/{tid}/messages?limit=&before=                 thread cursor (newest-first page)
 """
+import asyncio
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _post_msg(client, tid, body, author_id=None):
+    # 2 ms apart: SQLite's created_at default is millisecond-precision, and posts that share a
+    # created_at order by their random id, not by post order
+    await asyncio.sleep(0.002)
     r = await client.post(f"/api/tasks/{tid}/messages",
                           json={"author_agent_id": author_id, "body": body})
     assert r.status_code == 201, r.text
@@ -213,8 +218,9 @@ async def test_snapshot_request_order_is_id_stable_on_full_tie(
     for i in range(8):
         await make_request(a["agent_id"], f"tied {i}", target_alias="Answerer")
     # collapse every distinguishing sort key EXCEPT id, so only the id tiebreaker decides order
-    db.execute("UPDATE requests SET status='open', priority=50, created_at=now() "
-               "WHERE container_id=%s", (cid,))
+    # (one bound instant: SQLite's now() UDF is wall-clock per row, Postgres's is per transaction)
+    db.execute("UPDATE requests SET status='open', priority=50, created_at=%s "
+               "WHERE container_id=%s", (db.ago(0), cid))
 
     snap = (await client.get(f"/api/snapshot/{cid}")).json()
     ids = [r["id"] for r in snap["requests"]]

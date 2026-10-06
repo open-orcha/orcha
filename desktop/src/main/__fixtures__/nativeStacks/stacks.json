@@ -1,0 +1,18 @@
+{
+  "notes": {
+    "api_port": 8010,
+    "bridge_port": 8770,
+    "cli_version": "0.5.0",
+    "path": "__ROOT__/notes",
+    "runtime": "native",
+    "updated_at": "2026-10-06T15:00:00+00:00"
+  },
+  "wedged": {
+    "api_port": 8011,
+    "bridge_port": 8771,
+    "cli_version": "0.5.0",
+    "path": "__ROOT__/wedged",
+    "runtime": "native",
+    "updated_at": "2026-10-06T15:00:00+00:00"
+  }
+}

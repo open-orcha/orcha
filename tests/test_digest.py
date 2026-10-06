@@ -249,7 +249,7 @@ async def test_non_waking_event_excluded_from_wake_count(client, container, make
     aid = a["agent_id"]
     db.execute(
         """INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload)
-           VALUES (%s, %s, %s, 'digest_snapshotted', %s, '{}'::jsonb)""",
+           VALUES (%s, %s, %s, 'digest_snapshotted', %s, '{}')""",
         (container["id"], aid, aid, _t.time()),
     )
     cand = await _scan_cand(client, container["id"], aid)

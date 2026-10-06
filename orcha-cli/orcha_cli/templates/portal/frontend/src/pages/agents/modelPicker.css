@@ -1,0 +1,58 @@
+/* Agent Configuration — Provider marks + the Linear-style model picker (ModelPicker.tsx).
+   Marks come from components/primitives/BrandLogo (the Settings → Models & providers set). */
+.mpk-logo { flex: none; display: block; }
+.seg .v2-seg-item .mpk-logo { width: 14px; height: 14px; }
+.v2-seg-item:disabled .mpk-logo { opacity: .8; }
+
+.mpk-trigger { gap: 6px; }
+.mpk-trigger .mpk-logo { width: 14px; height: 14px; }
+
+/* header chip: a 12px mark before the model name (the chip's icon slot) */
+.ahead .ag-model .v2-chip-ico { display: inline-flex; }
+.ahead .ag-model .mpk-logo { width: 12px; height: 12px; }
+
+.v2-popover.mpk-pop { padding: 0; width: 440px; max-width: calc(100vw - 16px); overflow: hidden; display: flex; flex-direction: column; }
+.mpk { display: flex; flex-direction: column; min-height: 0; max-height: min(460px, calc(100vh - 80px)); }
+
+.mpk-q { display: flex; align-items: center; gap: var(--v2-space-2); height: 38px; padding: 0 var(--v2-space-3);
+  border-bottom: 1px solid var(--v2-border); color: var(--v2-text-3); flex: none; }
+.mpk-q .v2-ico { width: 14px; height: 14px; flex: none; }
+.mpk-q input { flex: 1 1 auto; min-width: 0; height: 100%; border: 0; outline: none; background: transparent;
+  color: var(--v2-text); font: inherit; font-size: 13px; padding: 0; box-shadow: none; }
+.mpk-q input:focus, .mpk-q input:focus-visible { outline: none; box-shadow: none; }
+.mpk-q input::placeholder { color: var(--v2-text-3); }
+
+.mpk-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--v2-space-1); }
+.mpk-group + .mpk-group { margin-top: var(--v2-space-1); padding-top: var(--v2-space-1); border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.mpk-gh { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 var(--v2-space-2);
+  font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); color: var(--v2-text-2); }
+.mpk-gh .mpk-logo { width: 13px; height: 13px; }
+.mpk-gh-cur { margin-left: auto; color: var(--v2-text-3); font-weight: var(--v2-fw-regular); }
+
+.mpk-opt { display: flex; align-items: center; gap: var(--v2-space-2); height: 32px; padding: 0 var(--v2-space-2);
+  border-radius: var(--v2-radius-control); font-size: 13px; color: var(--v2-text); cursor: pointer; white-space: nowrap; }
+.mpk-opt.is-active { background: var(--v2-hover); }
+.mpk-opt[aria-disabled="true"] { color: var(--v2-text-3); cursor: not-allowed; }
+.mpk-opt[aria-disabled="true"] .mpk-logo { opacity: .6; }
+.mpk-opt .grow { flex: 1 1 auto; }
+.mpk-name { flex: none; font-weight: var(--v2-fw-medium, 500); }
+.mpk-def { color: var(--v2-text-3); font-weight: var(--v2-fw-regular); }
+.mpk-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--v2-font-mono); font-size: 11.5px; color: var(--v2-text-3); }
+.mpk-hint { flex: none; font-size: var(--v2-fs-meta); color: var(--v2-text-3); }
+.mpk-check { flex: none; width: 14px; display: inline-flex; color: var(--v2-accent); }
+.mpk-check .v2-ico { width: 14px; height: 14px; }
+.mpk-none { padding: var(--v2-space-3) var(--v2-space-2); color: var(--v2-text-3); font-size: 13px; }
+
+.mpk-foot { flex: none; padding: 8px var(--v2-space-3); border-top: 1px solid var(--v2-border); font-size: var(--v2-fs-meta);
+  color: var(--v2-text-3); line-height: 1.4; }
+.mpk-lock { display: inline-flex; align-items: center; gap: 6px; }
+.mpk-lock .v2-ico { width: 13px; height: 13px; flex: none; }
+
+.mpk-confirm { flex: none; display: flex; align-items: center; gap: var(--v2-space-2); padding: 8px var(--v2-space-2) 8px var(--v2-space-3);
+  border-top: 1px solid var(--v2-border); background: var(--v2-surface); font-size: 13px; }
+.mpk-confirm .grow { flex: 1 1 auto; }
+.mpk-confirm-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text); }
+
+@media (max-width: 560px) {
+  .mpk-id, .mpk-hint { display: none; }
+}

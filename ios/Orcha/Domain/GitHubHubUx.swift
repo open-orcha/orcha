@@ -387,17 +387,17 @@ enum GitHubHubUx {
     static func unavailableCopy(reason: String?, detail: String?) -> String {
         switch reason {
         case "repo_not_connected":
-            return "No GitHub repository is connected to this Orcha yet. Connect one from the Home tab to see its issues and pull requests here."
+            return "No GitHub repository is connected to this Embodent yet. Connect one from the Home tab to see its issues and pull requests here."
         case "rate_limited":
             return "GitHub is rate-limiting requests right now. This will clear on its own — try again in a few minutes."
         case "not_found":
             return "That item no longer exists on GitHub, or the repository binding changed."
         case "unreachable":
-            return "Couldn't reach GitHub from this Orcha. Check the server's connection and try again."
+            return "Couldn't reach GitHub from this Embodent. Check the server's connection and try again."
         case "github_error":
             return detail ?? "GitHub returned an error. Try again shortly."
         default:
-            return detail ?? "The GitHub surface isn't available for this Orcha right now."
+            return detail ?? "The GitHub surface isn't available for this Embodent right now."
         }
     }
 }

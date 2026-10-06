@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "orcha-cli"))
 from orcha_cli import notifier  # noqa: E402
+from portal_backend import sql  # noqa: E402
 
 
 async def _scan(client, cid, aid, *, cooldown=15.0, min_idle=0.0):
@@ -36,9 +37,9 @@ def _set_last_woken(db, aid, seconds_ago):
     """Seed the wake clock anchor `seconds_ago` in the past (NULL row created if absent)."""
     db.execute(
         "INSERT INTO agent_wake_state (agent_id, last_woken_at) "
-        "VALUES (%s, now() - make_interval(secs => %s)) "
+        "VALUES (%s, %s) "
         "ON CONFLICT (agent_id) DO UPDATE SET last_woken_at = EXCLUDED.last_woken_at",
-        (aid, float(seconds_ago)),
+        (aid, sql.ago(float(seconds_ago))),
     )
 
 
@@ -150,10 +151,10 @@ async def test_auto_wake_suppressed_by_live_lease(client, container, make_agent,
     _set_interval(db, aid, 60)
     db.execute(
         "INSERT INTO agent_wake_state (agent_id, wake_lease_until, lease_kind) "
-        "VALUES (%s, now() + make_interval(secs => 300), 'ephemeral') "
+        "VALUES (%s, %s, 'ephemeral') "
         "ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until=EXCLUDED.wake_lease_until, "
         "lease_kind=EXCLUDED.lease_kind",
-        (aid,),
+        (aid, db.from_now(300)),
     )
     _, cand = await _scan(client, container["id"], aid)
     assert cand["auto_wake_due"] is True           # the clock IS due …
@@ -301,8 +302,8 @@ async def test_wake_ack_stamp_woken_false_preserves_clock(client, container, mak
     _set_interval(db, aid, 60)
     _set_last_woken(db, aid, seconds_ago=120)        # cadence is due
     db.execute(
-        "UPDATE agent_wake_state SET wake_lease_until=now() + make_interval(secs => 300), "
-        "lease_kind='resident' WHERE agent_id=%s", (aid,))
+        "UPDATE agent_wake_state SET wake_lease_until=%s, "
+        "lease_kind='resident' WHERE agent_id=%s", (sql.from_now(300), aid))
     before = db.execute("SELECT last_woken_at FROM agent_wake_state WHERE agent_id=%s",
                         (aid,))[0]["last_woken_at"]
 

@@ -25,6 +25,10 @@ from .containers import (
     ModelSettingsUpdate,
     ProposeBody,
     ProposeDialogueTurn,
+    ProviderKeyAgentUse,
+    ProviderKeyAgentUseOut,
+    ProviderKeyList,
+    ProviderKeyStatus,
 )
 from .tasks import ProtocolFields, ProtocolUpdate, TaskCreateBody
 
@@ -51,6 +55,10 @@ __all__ = [
     "ModelSettingsUpdate",
     "ProposeBody",
     "ProposeDialogueTurn",
+    "ProviderKeyAgentUse",
+    "ProviderKeyAgentUseOut",
+    "ProviderKeyList",
+    "ProviderKeyStatus",
     "ProtocolFields",
     "ProtocolUpdate",
     "TaskCreateBody",

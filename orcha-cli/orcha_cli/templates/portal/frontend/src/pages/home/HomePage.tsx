@@ -1,122 +1,105 @@
 /**
- * Home / Dashboard — React port of static/home.html (its self-contained inline
- * script), emitting the SAME class names + DOM structure so the shared
- * styles.css skins it identically. The page-scoped <style> block from
- * home.html rides along verbatim (it lived in that file, not styles.css).
+ * Project Overview (Orcha V2; parity H-01…H-07, R-01). The project's `/`.
  *
- * Backend UNCHANGED: every endpoint/method/body below is copied from the
- * vanilla script — POST /api/decisions (plan_approval) and
- * POST /api/tasks/{tid}/verify, both carrying the acting human's id.
+ * D10 "Pulse-like and much simpler" — one centred column:
+ *   1. summary: the objective line and ONE muted facts line (AI agents ·
+ *      people · open tasks · open requests, plus blocked / failed only when
+ *      non-zero — each a link to that filtered list). No per-status stat wall:
+ *      the full breakdown lives on Tasks;
+ *   2. setup checklist — ONLY for an empty project (then nothing else renders);
+ *   3. Needs you (top few) — a D8 band + Inbox-style one-line rows;
+ *   4. Active work — a D8 band + My-issues-style one-line rows (status glyph,
+ *      title, live pill / assignee avatar, age). A plan waiting on a human is
+ *      listed under Needs you only, never again here;
+ *   5. Updates — the same band, then a Timeline feed grouped under Today /
+ *      Yesterday / date dividers (messages, requests asked/answered, finished).
+ * Facts the header already shows (Notifier state + autonomy live in the
+ * header's Execution chip) are NOT repeated here (D12 "same fact twice").
+ * Every section links to its full view:
+ *   Agents        → /agents   (People → /settings#tab=members)
+ *   Open tasks    → /tasks?status=pending,ready,in_progress,blocked,needs_verification
+ *                   (the backend's task_open_total = everything but completed/cancelled)
+ *   Open requests → /requests?filter=open   (request_open_total = status "open")
+ *   Needs you     → /needs when that page exists, else this page's queue
+ *   Blocked/failed → /tasks?status=<status>
+ *   Updates       → /activity
+ * (The `status` / `filter` params are the V2 Tasks/Requests URL contract, arch §2.1.)
+ *
+ * Needs you uses the ONE attention definition (state/attention.ts): plans at
+ * autonomy "plan", verifications unless "full", requests open to a human or
+ * escalated; someone else's review is listed de-emphasized but not counted.
+ * When the dedicated /needs queue exists the Overview shows compact preview
+ * rows that open the exact item there (`/needs?item=<kind>:<id>`) — the
+ * decision itself (with full context) happens once, on /needs. Without it the
+ * Overview keeps the inline gate actions (backend UNCHANGED, bodies verbatim
+ * from the pre-V2 dashboard): POST /api/decisions (plan_approval) and
+ * POST /api/tasks/{tid}/verify, both carrying the acting human's id;
+ * rejection always requires a typed reason.
  */
-import { useEffect, useState } from "react";
-import { navigateScoped } from "../../lib/scope";
-import { sendJSON } from "../../api/client";
-import { esc, relTime, trunc } from "../../lib/format";
+import { useEffect, useMemo, useState, type AnchorHTMLAttributes } from "react";
+import { Link } from "react-router-dom";
+import { getJSON, sendJSON } from "../../api/client";
+import { relTime, shortId, trunc } from "../../lib/format";
 import { reviewFor } from "../../lib/reviewer";
+import { actingHuman, agentByAlias, useSnapshot } from "../../state/SnapshotProvider";
+import { openWorkCounts, useAttention, type AttentionItem } from "../../state/attention";
+import { Icon, Linkified, useToast } from "../../components/ui";
 import {
-  actingHuman,
-  agentByAlias,
-  attnItems,
-  useSnapshot,
-} from "../../state/SnapshotProvider";
-import { Avatar, Icon, Linkified, Modal, Pill, useToast } from "../../components/ui";
-import { Shell } from "../../shell/Shell";
+  Avatar, AvatarStack, Button, ButtonLink, Chip, Dialog, EmptyState, LivePill, PriorityIcon, Skeleton, StatusGlyph, StatusIcon, Tooltip,
+  payloadTitle, statusLabel,
+} from "../../components/primitives";
+import { HelpTip, ListGroup } from "../../components/primitives";
+import { FilterPills } from "../../components/primitives";
+import { RelTime, Timeline, TimelineDivider, TimelineEvent } from "../../components/primitives";
+import { HAS_NEEDS_PAGE } from "../../shell/optionalPages";
+import { Shell, snapshotErrorKind } from "../../shell/Shell";
+import { useProjects } from "../../state/projects";
+import { useOpenCompose } from "../../shell/chrome";
 import type { ActiveRun, Agent, OrchaRequest, Snapshot, Task } from "../../types";
+import { plainPreview } from "../needs/plainPreview";
+import { requestAnsweredBy } from "../activity/events";
+import { notifierState } from "../../lib/notifier";
+import { projectStatusMeta } from "../../cloud/projects/projectStatus";
+import "./overview.css";
 
-/* ---- dashboard-specific layout (verbatim from home.html's <style>) ------- */
-const PAGE_CSS = `
-  .dash-grid { display: grid; grid-template-columns: minmax(0,1fr) 372px; gap: 18px; align-items: start; }
-  @media (max-width: 1080px) { .dash-grid { grid-template-columns: 1fr; } }
+/** Non-terminal task statuses — the backend's "open" (everything but completed/cancelled). */
+export const OPEN_TASK_STATUSES = ["pending", "ready", "in_progress", "blocked", "needs_verification"];
+export const OPEN_TASKS_HREF = "/tasks?status=" + OPEN_TASK_STATUSES.join(",");
+export const OPEN_REQUESTS_HREF = "/requests?filter=open";
+export const MEMBERS_HREF = "/settings#tab=members";
+export const DONE_TASKS_HREF = "/tasks?status=completed,cancelled";
+export const statusHref = (s: string) => "/tasks?status=" + encodeURIComponent(s);
+/** `/needs?item=<kind>:<id>` — the ':' stays readable in the URL. */
+export const needsItemHref = (key: string) => "/needs?item=" + encodeURIComponent(key).replace(/%3A/gi, ":");
+/** Items shown inline on the Overview when the dedicated /needs queue exists. */
+const NEEDS_PREVIEW = 5;
+/** Active-work rows shown before "View all". */
+const ACTIVE_PREVIEW = 6;
+/** Band collapse state persists per section under `${OV_GROUP_KEY}:<id>`. */
+export const OV_GROUP_KEY = "orcha:v2:ovGroups";
 
-  .ctxbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 18px; margin-bottom: 22px;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm); }
-  .ctxbar .nm { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
-  .ctxbar .desc { color: var(--muted); font-size: 12.5px; max-width: 60ch; }
-  .ctxbar .sep { width: 1px; height: 26px; background: var(--border); }
-  .ctxbar .stat { display: flex; flex-direction: column; gap: 1px; }
-  .ctxbar .stat .n { font-size: 16px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1; }
-  .ctxbar .stat .l { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+export { notifierState, type NotifierState } from "../../lib/notifier";
 
-  /* first-run get-started CTA (empty workspace — no AI agents) */
-  .onb-cta { display: flex; align-items: center; gap: 16px; padding: 18px 20px; margin-bottom: 22px; border-radius: 15px;
-    background: linear-gradient(180deg, var(--accent-soft), transparent); border: 1px solid var(--accent-line); box-shadow: var(--shadow-sm); }
-  .onb-cta .oic { width: 46px; height: 46px; border-radius: 13px; flex: none; display: grid; place-items: center;
-    background: var(--accent); color: var(--accent-ink); }
-  .onb-cta .oic svg { width: 23px; height: 23px; }
-  .onb-cta .body { flex: 1; min-width: 0; }
-  .onb-cta .t1 { font-size: 16px; font-weight: 740; letter-spacing: -.01em; }
-  .onb-cta .t2 { color: var(--muted); font-size: 13px; margin-top: 3px; line-height: 1.5; }
+/* ---- in-app link: SPA navigation (the persistent sidebar stays mounted; the
+ * shell re-pins ?cid= after every route change). Same href as before. ----- */
+function Go({ href, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
+  return <Link to={href} {...rest} />;
+}
 
-  /* action queue */
-  .hero-h { display: flex; align-items: center; gap: 11px; margin: 2px 2px 14px; }
-  .hero-h .t { font-size: 18px; font-weight: 720; letter-spacing: -.02em; }
-  .hero-h .badge { background: var(--warn); color: #1c1304; font-weight: 800; font-size: 12px; border-radius: 999px;
-    min-width: 22px; height: 22px; padding: 0 7px; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
-  .hero-h .sub { color: var(--muted); font-size: 13px; }
-
-  .aq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; margin-bottom: 30px; }
-  .aq-empty { color: var(--muted); font-size: 13px; padding: 14px 2px; }
-  .aq { display: flex; flex-direction: column; gap: 11px; padding: 16px 17px; border-radius: 15px;
-    background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm); position: relative; overflow: hidden; }
-  .aq::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
-  .aq.plan::before { background: var(--amber); }
-  .aq.verify::before { background: var(--warn); }
-  .aq.esc::before { background: var(--danger); }
-  .aq .type { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 750;
-    letter-spacing: .05em; text-transform: uppercase; }
-  .aq.plan .type { color: var(--amber); } .aq.verify .type { color: var(--warn); } .aq.esc .type { color: var(--danger); }
-  .aq .type svg { width: 14px; height: 14px; }
-  .aq .ttl { font-size: 15px; font-weight: 680; line-height: 1.3; letter-spacing: -.01em; }
-  .aq .who { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
-  .aq .ctx { color: var(--text-2); font-size: 12.5px; line-height: 1.5; background: var(--surface-2);
-    border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
-  .aq .ctx .lbl { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 650; display: block; margin-bottom: 3px; }
-  .aq .acts { display: flex; gap: 8px; margin-top: auto; padding-top: 3px; flex-wrap: wrap; }
-  /* collab v1 (cloud pages/home.css): someone-else's-review de-emphasis */
-  .aq.verify.other-review { opacity: .55; }
-  .aq.verify.other-review:hover { opacity: .85; }
-  .aq .type .tag.review-for { margin-left: 7px; text-transform: none; letter-spacing: 0; }
-
-  /* kanban */
-  .kanban { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 13px; }
-  @media (max-width: 1180px) { .kanban { grid-template-columns: repeat(2, 1fr); } }
-  .kcol { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; }
-  .kcol .kh { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
-  .kcol .kh .ct { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums;
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
-  .kcol .kb { padding: 9px; display: flex; flex-direction: column; gap: 8px; min-height: 50px; max-height: 460px; overflow: auto; }
-  .kcard { display: flex; flex-direction: column; gap: 8px; padding: 11px 12px; border-radius: 11px; background: var(--surface-2);
-    border: 1px solid var(--border); cursor: pointer; transition: border-color .12s, transform .06s; }
-  .kcard:hover { border-color: var(--accent-line); transform: translateY(-1px); }
-  .kcard .kt { font-size: 12.5px; font-weight: 620; line-height: 1.35; }
-  .kcard .kf { display: flex; align-items: center; gap: 8px; }
-  .kcard .kf .prio { margin-left: auto; }
-
-  /* activity */
-  .act-list { display: flex; flex-direction: column; max-height: 540px; overflow: auto; }
-  .act { display: flex; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--border); align-items: flex-start; }
-  .act:last-child { border-bottom: 0; }
-  .act .body { flex: 1; min-width: 0; }
-  .act .top { display: flex; align-items: center; gap: 7px; }
-  .act .nm { font-size: 12.5px; font-weight: 650; }
-  .act .when { margin-left: auto; color: var(--faint); font-size: 11px; white-space: nowrap; }
-  .act .ty { font-size: 9.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 5px; }
-  .act .txt { font-size: 12.5px; color: var(--text-2); margin-top: 2px; line-height: 1.45; }
-`;
-
-const asText = (v: unknown): string => (v == null ? "" : String(v));
-
-/* ---- deeplink helper (port of app.js agentLink) -------------------------- */
+/* ---- deeplink helper ------------------------------------------------------ */
 function AgentLink({ snap, alias }: { snap: Snapshot | null; alias: string | null | undefined }) {
   const a = agentByAlias(snap, alias);
-  if (!a) return <>{alias || "—"}</>;
+  if (!a) return <>{alias || "Unknown"}</>;
   return (
-    <a className="dlink" href={"/agents?agent=" + encodeURIComponent(alias!)}>
-      <Avatar alias={alias} kind={a.kind} />
+    <Go className="dlink" href={agentHref(alias!)}>
+      <Avatar alias={alias} kind={a.kind} size={16} decorative />
       <span>{alias}</span>
-    </a>
+    </Go>
   );
 }
+
+/** `/agents?agent=<alias>` — the agent deep link (only for an agent that exists). */
+export const agentHref = (alias: string) => "/agents?agent=" + encodeURIComponent(alias);
 
 /* ---- ISS-68 plan text/author (thread-free via plan_message) -------------- */
 function planText(t: Task): string {
@@ -139,131 +122,220 @@ const RUN_LABELS: Record<string, string> = {
   task_verified: "Verifying a task", live_terminal: "Live terminal",
   task_assigned: "Starting a task", decision_made: "Acting on a decision", prompt: "Working",
 };
-function runLabel(ar: ActiveRun): string {
+export function runLabel(ar: ActiveRun): string {
   if (ar.has_conversation) return RUN_LABELS.conversation_turn;
   return RUN_LABELS[ar.wake_event || ""] || (ar.wake_event ? ar.wake_event.replace(/_/g, " ") : "Working");
 }
-// #340: the Activity label is driven by the LIVE worker run, falling back to
-// the persistent assigned task only when no run is live.
-function activityOf(a: Agent): { text: string; isTask: boolean } | null {
-  const ar = a.active_run;
-  if (ar) {
-    if (ar.task_id) {
-      const title = ar.task_title || (a.current_task && a.current_task.title) || "On a task";
-      return { text: trunc(title, 32), isTask: true };
-    }
-    return { text: runLabel(ar), isTask: false };
-  }
-  const ct = a.current_task;
-  if (ct && ct.task_id) return { text: trunc(ct.title || "", 32), isTask: true };
-  return null;
+const ts = (iso: string | null | undefined) => {
+  const n = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(n) ? n : 0;
+};
+
+/* ---- updates feed: synthesized from the snapshot (SSE is escalations-only) */
+type ActKind = "post" | "decision" | "request" | "answer" | "outcome";
+export interface ActEvent {
+  who: string | null; human: boolean; kind: ActKind; ctx: string; text: string; at: string; link: string;
+  /** exact task status for "outcome" events (completed / cancelled — never merged) */
+  status?: string;
+}
+/** Feed filter pills. */
+export type FeedFilter = "all" | "messages" | "requests" | "outcomes";
+const FEED_OF: Record<ActKind, FeedFilter> = { post: "messages", decision: "messages", request: "requests", answer: "requests", outcome: "outcomes" };
+/** Events considered (per filter) and shown on the Overview; the full history is on /activity. */
+export const FEED_LIMIT = 60;
+export const FEED_SHOWN = 12;
+
+const isMessage = (e: ActEvent) => e.kind === "post" || e.kind === "decision";
+/**
+ * The events a feed filter shows (newest first). "All" is a summary, not the
+ * full log (that is /activity): messages are the most frequent event, so they
+ * may fill at most two thirds of the shown lines while requests, answers and
+ * finished tasks exist in the window — otherwise "All" reads as a wall of
+ * "X posted on Y" and the other kinds only surface through their pills.
+ */
+export function pickFeed(evs: ActEvent[], filter: FeedFilter, n = FEED_SHOWN): ActEvent[] {
+  if (filter !== "all") return evs.filter((e) => FEED_OF[e.kind] === filter).slice(0, n);
+  const msgs = evs.filter(isMessage), others = evs.filter((e) => !isMessage(e));
+  const reserve = Math.min(others.length, Math.ceil(n / 3));
+  const takeMsgs = Math.min(msgs.length, n - reserve);
+  const takeOthers = Math.min(others.length, n - takeMsgs);
+  return [...msgs.slice(0, takeMsgs), ...others.slice(0, takeOthers)].sort((a, b) => ts(b.at) - ts(a.at));
 }
 
-/* ---- live activity: synthesized from the snapshot (SSE is escalations-only) */
-const TYC: Record<string, string> = { post: "var(--text)", decision: "var(--amber)", request: "var(--info)", answer: "var(--ok)" };
-const TYBG: Record<string, string> = { post: "var(--surface-2)", decision: "var(--warn-soft)", request: "var(--info-soft)", answer: "var(--ok-soft)" };
-interface ActEvent { who: string; kind: "post" | "decision" | "request" | "answer"; text: string; at: string; link: string }
-function activityEvents(tasks: Task[], requests: OrchaRequest[]): ActEvent[] {
+export function activityEvents(tasks: Task[], requests: OrchaRequest[], limit = FEED_LIMIT): ActEvent[] {
   const out: ActEvent[] = [];
   // ISS-68: no full threads in the snapshot — use message_summary.last per task;
   // fall back to an expanded thread if one is present.
   tasks.forEach((t) => {
+    const link = "/tasks?task=" + encodeURIComponent(t.id);
     const thread = t.thread || [];
     if (thread.length) {
       thread.forEach((m) => out.push({
-        who: m.is_human ? "human" : m.from || "—", kind: m.is_human ? "decision" : "post",
-        text: trunc(m.body || "", 120), at: m.at || "", link: "/tasks?task=" + encodeURIComponent(t.id),
+        who: m.from || (m.is_human ? "human" : null), human: !!m.is_human, kind: m.is_human ? "decision" : "post",
+        ctx: t.title, text: trunc(plainPreview(m.body || ""), 160), at: m.at || "", link,
       }));
-      return;
+    } else {
+      const last = t.message_summary && t.message_summary.last;
+      if (last) {
+        const lastAt = (last as { created_at?: string; at?: string }).created_at ?? last.at ?? "";
+        out.push({
+          who: last.author_alias || (last.is_human ? "human" : null), human: !!last.is_human,
+          kind: last.is_human ? "decision" : "post",
+          ctx: t.title, text: trunc(plainPreview(last.body || ""), 160), at: lastAt, link,
+        });
+      }
     }
-    const last = t.message_summary && t.message_summary.last;
-    if (last) {
-      const lastAt = (last as { created_at?: string; at?: string }).created_at ?? last.at ?? "";
-      out.push({
-        who: last.is_human ? "human" : last.author_alias || "—", kind: last.is_human ? "decision" : "post",
-        text: trunc(last.body || "", 120), at: lastAt, link: "/tasks?task=" + encodeURIComponent(t.id),
-      });
+    // a finished task is an update — dated by its real completion stamp only
+    if ((t.status === "completed" || t.status === "cancelled") && t.completed_at) {
+      out.push({ who: null, human: false, kind: "outcome", status: t.status, ctx: t.title, text: "", at: t.completed_at, link });
     }
   });
   requests.forEach((r) => {
-    out.push({ who: r.from, kind: "request", text: trunc(asText(r.payload), 110), at: r.created_at || "", link: "/requests?req=" + encodeURIComponent(r.id) });
-    if (r.responded_at) out.push({ who: r.to, kind: "answer", text: trunc(asText(r.response), 110), at: r.responded_at, link: "/requests?req=" + encodeURIComponent(r.id) });
+    const link = "/requests?req=" + encodeURIComponent(r.id);
+    const title = trunc(r.title || payloadTitle(r.payload, (r.type || "request") + " request"), 90);
+    out.push({ who: r.from || null, human: r.from === "human", kind: "request", ctx: title, text: "", at: r.created_at || "", link });
+    if (r.responded_at) {
+      // parity r2: an answer given before an escalation belongs to the agent it was
+      // escalated away from, not the human it now targets (same rule as Activity).
+      const by = requestAnsweredBy(r);
+      out.push({ who: by, human: by === "human", kind: "answer", ctx: title, text: trunc(payloadTitle(r.response), 160), at: r.responded_at, link });
+    }
   });
   return out
-    .filter((e) => e.at)
-    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
-    .slice(0, 14);
+    .filter((e) => ts(e.at) > 0)
+    .sort((a, b) => ts(b.at) - ts(a.at))
+    .slice(0, limit);
 }
 
-/* ---- tasks-by-status kanban ---------------------------------------------- */
-const COLS: { key: string; label: string; cls: string; match: (t: Task) => boolean }[] = [
-  { key: "needs", label: "Needs verify", cls: "s-attn", match: (t) => t.status === "needs_verification" },
-  { key: "work", label: "In progress", cls: "s-working", match: (t) => t.status === "in_progress" },
-  { key: "ready", label: "Ready", cls: "s-ready", match: (t) => t.status === "ready" || t.status === "pending" },
-  { key: "blocked", label: "Blocked", cls: "s-bad", match: (t) => t.status === "blocked" || t.status === "failed" },
-  { key: "done", label: "Done", cls: "s-done", match: (t) => t.status === "completed" || t.status === "cancelled" },
-];
-// status glyph markup (verbatim from app.js glyph — not exported by ui.tsx)
-function glyphHtml(cls: string): string {
-  const v = (b: string) =>
-    `<svg class="gl" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`;
-  switch (cls) {
-    case "s-working":
-      return '<svg class="gl" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-opacity=".4" stroke-width="1.3"/><circle class="core" cx="6" cy="6" r="2.3" fill="currentColor"/></svg>';
-    case "s-ok":
-    case "s-done":
-      return v('<path d="M2.6 6.4 5 8.7 9.4 3.6"/>');
-    case "s-ready":
-      return '<svg class="gl" viewBox="0 0 12 12" fill="currentColor"><path d="M3.6 2.6 9.6 6l-6 3.4z"/></svg>';
-    case "s-attn":
-    case "s-warn":
-      return '<svg class="gl" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M6 2 11 10.6H1z"/><path d="M6 5v2.2"/><circle cx="6" cy="9" r=".55" fill="currentColor" stroke="none"/></svg>';
-    case "s-bad":
-      return v('<path d="M3.3 3.3 8.7 8.7M8.7 3.3 3.3 8.7"/>');
-    default:
-      return '<svg class="gl" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="3.6" stroke-opacity=".55"/><path d="M4.3 6h3.4" stroke-linecap="round"/></svg>';
-  }
+/** Day divider label for the feed: "Today", "Yesterday", else a short date (local time). */
+export function dayLabel(at: string, now: Date = new Date()): string {
+  const d = new Date(at);
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOf(now) - startOf(d)) / 86400000);
+  if (diff <= 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+}
+
+/** Group feed events (already newest-first) under consecutive day labels. */
+export function groupByDay(evs: ActEvent[], now: Date = new Date()): { day: string; events: ActEvent[] }[] {
+  const out: { day: string; events: ActEvent[] }[] = [];
+  evs.forEach((e) => {
+    const day = dayLabel(e.at, now);
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.events.push(e);
+    else out.push({ day, events: [e] });
+  });
+  return out;
+}
+
+/* ---- task-status breakdown (exact statuses, never merged) ----------------- */
+const STATUS_ORDER = ["needs_verification", "in_progress", "ready", "pending", "blocked", "failed", "completed", "cancelled"];
+export function statusBreakdown(tasks: Task[]): { status: string; tasks: Task[] }[] {
+  const by = new Map<string, Task[]>();
+  // the root/objective task is the project itself, not a unit of work — it is
+  // excluded here exactly as it is from "Active work" (one number per fact)
+  tasks.forEach((t) => { if (t.is_root) return; const k = t.status || "unknown"; by.set(k, [...(by.get(k) || []), t]); });
+  const keys = [...by.keys()].sort((a, b) => {
+    const ia = STATUS_ORDER.indexOf(a), ib = STATUS_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+  return keys.map((k) => ({ status: k, tasks: by.get(k)! }));
+}
+
+/* ---- provider-key status for the empty-project checklist ------------------- */
+type KeyCheck = { state: "loading" } | { state: "ok"; source: string } | { state: "missing" } | { state: "unknown"; why: string };
+function useProviderKeyCheck(cid: string | null, enabled: boolean): KeyCheck {
+  const [chk, setChk] = useState<KeyCheck>({ state: "loading" });
+  useEffect(() => {
+    if (!enabled || !cid) return;
+    let alive = true;
+    setChk({ state: "loading" });
+    getJSON<{ configured?: boolean; source?: string | null }>("/api/containers/" + encodeURIComponent(cid) + "/settings/llm-key")
+      .then((d) => {
+        if (!alive) return; // project switched / unmounted: drop the stale answer
+        const src = d && (d.source === "db" || d.source === "env") ? d.source : null;
+        setChk(src || (d && d.configured) ? { state: "ok", source: src || "configured" } : { state: "missing" });
+      })
+      .catch((e) => {
+        if (!alive) return;
+        const m = /→ (\d{3})$/.exec(e instanceof Error ? e.message : "");
+        setChk({ state: "unknown", why: m ? "HTTP " + m[1] : "network error" });
+      });
+    return () => { alive = false; };
+  }, [cid, enabled]);
+  return chk;
+}
+
+/* ---- Needs-you kind presentation (icon chip; no stripes, no coloured slabs) */
+function kindOf(it: AttentionItem): { label: string; short: string; icon: string; tone: "warn" | "danger" | "info" } {
+  if (it.kind === "plan") return { label: "Plan approval", short: "Plan", icon: "flag", tone: "warn" };
+  if (it.kind === "verify") return { label: "Verify task", short: "Verify", icon: "check", tone: "warn" };
+  if (it.request && (it.request.status === "escalated" || it.request.escalated)) return { label: "Escalated", short: "Escalated", icon: "alert", tone: "danger" };
+  return { label: "Request", short: "Request", icon: "requests", tone: "info" };
+}
+/** Kind chip: the full label on wide screens, a one-word label on narrow ones
+ * (never an icon alone — plan vs verify must stay readable at 390px). */
+function KindChip({ it }: { it: AttentionItem }) {
+  const k = kindOf(it);
+  return (
+    <Chip size="sm" className={"aq-type v2-tone-" + k.tone} icon={<Icon name={k.icon} cls="v2-ico aq-type-ico" />}>
+      <span className="aq-l-long">{k.label}</span>
+      {/* always rendered: at 390 the long label is visually hidden, so a
+          one-word kind whose short == long (Escalated) must still show */}
+      <span className="aq-l-short" aria-hidden="true">{k.short}</span>
+    </Chip>
+  );
+}
+/** A quiet ? that carries the explanation a line of copy used to (D12). */
+const Help = ({ text }: { text: string }) => <HelpTip tip={text} />;
+const plural = (n: number, one: string, many = one + "s") => (n === 1 ? one : many);
+function itemTitle(it: AttentionItem): string {
+  if (it.request) return it.request.title || payloadTitle(it.request.payload, it.title);
+  return it.title;
 }
 
 /* ========================================================================== */
 
 export function HomePage() {
-  const { snap } = useSnapshot();
+  const { snap, cid, error, refresh } = useSnapshot();
   const toast = useToast();
+  const attention = useAttention();
+  const openCompose = useOpenCompose();
 
   // P2: tasks acted on THIS session (plan approved/rejected, or verified) —
-  // suppress their cards immediately so the 3s repaint can't re-submit before
+  // suppress their rows immediately so the 3s repaint can't re-submit before
   // the snapshot reflects the decision. Pruned the moment the id leaves the
   // actionable set, so a reject→rework cycle reappears (review P2:173).
   const [acted, setActed] = useState<Set<string>>(new Set());
   // local UI drafts survive the 3s poll (controlled inputs in React state)
   const [reasonOpen, setReasonOpen] = useState<Record<string, boolean>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [approveFor, setApproveFor] = useState<{ taskId: string; authorId: string } | null>(null);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [approveFor, setApproveFor] = useState<{ taskId: string; authorId: string; who: string } | null>(null);
   const [answer, setAnswer] = useState("");
+  const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
 
   const c = snap?.container ?? null;
   const agents = snap?.agents ?? [];
   const tasks = snap?.tasks ?? [];
   const requests = snap?.requests ?? [];
-  const aq = attnItems(snap);
 
   // prune the acted-suppression set against the live actionable set
   useEffect(() => {
-    const a = attnItems(snap);
-    const actionable = new Set([...a.plans, ...a.verifs].map((t) => t.id));
+    const actionable = new Set(attention.items.filter((i) => i.kind !== "request").map((i) => i.id));
     setActed((prev) => {
       let changed = false;
       const next = new Set<string>();
       prev.forEach((id) => { if (actionable.has(id)) next.add(id); else changed = true; });
       return changed ? next : prev;
     });
-  }, [snap]);
+  }, [attention]);
 
   /* ---- gate actions (HUMAN-GATED; endpoints/bodies verbatim) -------------- */
   const actorOrWarn = (): Agent | null => {
     const h = actingHuman(snap);
-    if (!h) { toast("Pick who you are (top-right) first.", "danger"); return null; }
+    if (!h) { toast("Choose who you are (account menu) before deciding.", "danger"); return null; }
     return h;
   };
   const markActed = (taskId: string) => {
@@ -271,11 +343,13 @@ export function HomePage() {
     setReasonOpen((p) => ({ ...p, [taskId]: false }));
     setDrafts((p) => ({ ...p, [taskId]: "" }));
   };
+  // a failed decision keeps the typed reason and the row (the draft is untouched)
   const failToast = (e: unknown) =>
-    toast("Failed (" + ((e as { status?: number }).status ?? "network") + ")", "danger");
+    toast("Failed (" + ((e as { status?: number }).status ?? "network") + ") — nothing was changed; your input is kept.", "danger");
 
   const sendPlanDecision = async (taskId: string, authorId: string, approve: boolean, reason?: string) => {
     const h = actorOrWarn(); if (!h) return;
+    setBusy((p) => ({ ...p, [taskId]: true }));
     try {
       await sendJSON("POST", "/api/decisions", {
         subject_type: "plan_approval", subject_id: taskId, decision: approve ? "approve" : "reject",
@@ -283,17 +357,22 @@ export function HomePage() {
       });
       toast(approve ? "Plan approved — routed to the agent." : "Plan rejected — reason sent.", "ok");
       markActed(taskId);
+      void refresh();
     } catch (e) { failToast(e); }
+    setBusy((p) => ({ ...p, [taskId]: false }));
   };
   const sendVerify = async (taskId: string, approve: boolean, feedback?: string) => {
     const h = actorOrWarn(); if (!h) return;
+    setBusy((p) => ({ ...p, [taskId]: true }));
     try {
       await sendJSON("POST", "/api/tasks/" + encodeURIComponent(taskId) + "/verify", {
         approve, actor_agent_id: h.id, feedback: approve ? undefined : feedback || "",
       });
       toast(approve ? "Accepted — task completed." : "Rejected — sent back with feedback.", "ok");
       markActed(taskId);
+      void refresh();
     } catch (e) { failToast(e); }
+    setBusy((p) => ({ ...p, [taskId]: false }));
   };
 
   const openReject = (taskId: string) => {
@@ -311,350 +390,614 @@ export function HomePage() {
     else void sendVerify(taskId, false, v);
   };
 
-  /* ---- action-queue card pieces ------------------------------------------ */
-  // the vanilla `.gate .reason` reject flow, inlined per card (the .gate
-  // wrapper exists purely so the shared `.gate .reason …` selectors apply;
-  // its own chrome is neutralized inline).
   const reasonBox = (taskId: string, isPlan: boolean, authorId: string) =>
     reasonOpen[taskId] ? (
-      <div className="gate" style={{ border: 0, borderRadius: 0, overflow: "visible" }}>
-        <div className={"reason show"} id={"reason-" + taskId}>
-          <textarea
-            id={"rt-" + taskId}
-            placeholder={isPlan ? "Why are you rejecting? (required)" : "What needs fixing? (required)"}
-            value={drafts[taskId] || ""}
-            onChange={(e) => setDrafts((p) => ({ ...p, [taskId]: e.target.value }))}
-          />
-          <div className="hint"><Icon name="flag" cls="" /> A typed reason is required to reject.</div>
-          <div style={{ display: "flex", gap: 9, marginTop: 11 }}>
-            <button
-              className="btn danger" type="button" id={"cr-" + taskId}
-              disabled={!(drafts[taskId] || "").trim()}
-              onClick={() => submitReject(taskId, isPlan, authorId)}
-            >
-              Submit rejection
-            </button>
-            <button className="btn subtle" type="button" onClick={() => cancelReject(taskId)}>Cancel</button>
-          </div>
+      <div className="aq-reason" id={"reason-" + taskId}>
+        <label className="v2-sr" htmlFor={"rt-" + taskId}>{isPlan ? "Reason for rejecting the plan" : "What needs fixing"}</label>
+        <textarea
+          id={"rt-" + taskId}
+          className="ov-input"
+          placeholder={isPlan ? "Why are you rejecting? (required)" : "What needs fixing? (required)"}
+          value={drafts[taskId] || ""}
+          onChange={(e) => setDrafts((p) => ({ ...p, [taskId]: e.target.value }))}
+        />
+        <div className="aq-reason-acts">
+          <Button variant="ghost" size="sm" onClick={() => cancelReject(taskId)}>Cancel</Button>
+          <Button
+            variant="danger" size="sm" id={"cr-" + taskId} busy={!!busy[taskId]}
+            disabled={!(drafts[taskId] || "").trim()}
+            title="A typed reason is required to reject."
+            onClick={() => submitReject(taskId, isPlan, authorId)}
+          >
+            Submit rejection
+          </Button>
         </div>
       </div>
     ) : null;
 
-  const plans = aq.plans.filter((t) => !acted.has(t.id));
-  const verifs = aq.verifs.filter((t) => !acted.has(t.id));
-  const badge = plans.length + verifs.length + aq.escs.length;
+  /* ---- attention rows ----------------------------------------------------- */
+  const shown = attention.items.filter((i) => { const t = i.task; return !t || !acted.has(t.id); });
+  // The band count is "mine" (someone else's review is never counted), so the
+  // preview lists ONLY mine — oldest first, the item that has waited longest
+  // leads — and "N more" is computed from the same set (count == rows + more).
+  // Other reviewers' items are named separately, never folded into "more".
+  const mine = shown.filter((i) => !i.assignedToOther).sort((a, b) => ts(a.since) - ts(b.since));
+  const othersCount = shown.length - mine.length;
+  const mineCount = mine.length;
+  const preview = mine.slice(0, NEEDS_PREVIEW);
+  const moreMine = mineCount - preview.length;
+  const badge = attention.count == null ? null : String(mineCount) + (attention.partial ? "+" : "");
 
-  const planCard = (t: Task) => {
+  /* compact Inbox-style row → the exact item on /needs (the decision happens there) */
+  const previewRow = (it: AttentionItem) => {
+    const other = it.task ? reviewFor(it.task, actingHuman(snap)) : it.assignedToOther ? it.request?.to || null : null;
+    const title = itemTitle(it);
+    const a = agentByAlias(snap, it.agentAlias);
+    return (
+      <li key={it.key} className={"nq" + (it.assignedToOther ? " other-review" : "")}>
+        {/* the actor links to their agent page (AgentLink parity, AA-118) — a
+            sibling of the row link, never nested inside it */}
+        {it.agentAlias && a ? (
+          <Go className="nq-av" href={agentHref(it.agentAlias)} title={"Open " + it.agentAlias} aria-label={"Open agent " + it.agentAlias}>
+            <Avatar alias={it.agentAlias} kind={a.kind ?? "ai"} status={a.status} size={20} decorative />
+          </Go>
+        ) : (
+          <span className="nq-av">
+            {it.agentAlias ? (
+              <Avatar alias={it.agentAlias} kind="ai" size={20} />
+            ) : (
+              <span className="ov-av-none" aria-hidden="true"><Icon name="inbox" cls="v2-ico" /></span>
+            )}
+          </span>
+        )}
+        <Go className="nq-row ov-row" href={needsItemHref(it.key)} title={title}>
+          <span className="nq-t ov-row-t">{title}</span>
+          {other ? <Chip size="sm" className="review-for" title={"Assigned reviewer: " + other}>review: {other}</Chip> : null}
+          <KindChip it={it} />
+          <span className="ov-age">{it.since ? <RelTime at={it.since} /> : null}</span>
+        </Go>
+      </li>
+    );
+  };
+
+  /* compact inline gate cards — only when the dedicated /needs page is absent */
+  const cardHead = (it: AttentionItem, title: string, href: string, review: string | null, alias: string | null | undefined, extra?: string | null) => (
+    <div className="aq-top">
+      <Go className="aq-title" href={href}>{title}</Go>
+      {review ? <span className="tag review-for">review: {review}</span> : null}
+      <KindChip it={it} />
+      <span className="aq-who">
+        {alias ? <AgentLink snap={snap} alias={alias} /> : <span className="ov-meta">Unassigned</span>}
+        {extra ? <span className="ov-meta" title="Model">{extra}</span> : null}
+        <span className="ov-meta">{relTime(it.since)}</span>
+      </span>
+    </div>
+  );
+
+  const planCard = (t: Task, it: AttentionItem) => {
     const who = planAuthor(t);
     const a = agentByAlias(snap, who);
     const authorId = a?.id || "";
+    const href = "/tasks?task=" + encodeURIComponent(t.id);
     return (
-      <div className="aq plan" key={"p-" + t.id}>
-        <span className="type"><Icon name="shield" cls="" />Plan approval</span>
-        <div className="ttl">{t.title}</div>
-        <div className="who">
-          <AgentLink snap={snap} alias={who} /><span>·</span>
-          <span className="tag model">{a?.model || "—"}</span>
+      <div className={"aq plan" + (it.assignedToOther ? " other-review" : "")} key={"p-" + t.id}>
+        {cardHead(it, t.title, href, null, who, a?.model)}
+        {/* P1: FULL plan body in a bounded scroll box — review the whole proposal */}
+        <div className="aq-ctx aq-plan" tabIndex={0} aria-label={"Proposed plan for " + t.title}>
+          <span className="lbl">Proposed plan</span>
+          <Linkified text={planText(t)} tasks={tasks} />
         </div>
-        {/* P1: FULL plan body in the scrollable .ctx — review the whole proposal */}
-        <div className="ctx">
-          <span className="lbl">Proposed plan — full text</span>
-          <Linkified text={planText(t)} />
-        </div>
-        <div className="acts" data-kind="plan" data-task={t.id} data-author={authorId}>
-          <button
-            className="btn sm approve" type="button"
-            onClick={() => { if (actorOrWarn()) { setAnswer(""); setApproveFor({ taskId: t.id, authorId }); } }}
+        <div className="aq-acts" data-kind="plan" data-task={t.id} data-author={authorId}>
+          <ButtonLink variant="ghost" size="sm" to={href}>Open task</ButtonLink>
+          <span className="grow" />
+          <Button variant="secondary" size="sm" onClick={() => openReject(t.id)}>Reject…</Button>
+          <Button
+            variant="secondary" size="sm" icon="check" busy={!!busy[t.id]}
+            onClick={() => { if (actorOrWarn()) { setAnswer(""); setApproveFor({ taskId: t.id, authorId, who: who || "The agent" }); } }}
           >
-            <Icon name="shield" cls="" />Approve plan
-          </button>
-          <button className="btn sm danger" type="button" onClick={() => openReject(t.id)}>Reject…</button>
-          <a className="btn sm ghost" href={"/tasks?task=" + encodeURIComponent(t.id)}>Open task</a>
+            Approve plan
+          </Button>
         </div>
         {reasonBox(t.id, true, authorId)}
       </div>
     );
   };
 
-  const verifyCard = (t: Task) => {
+  const verifyCard = (t: Task, it: AttentionItem) => {
     const who = (t.assignees || [])[0];
-    const a = agentByAlias(snap, who);
-    // Collab v1 (home-state.js): a task with an owner-assigned reviewer is
-    // SOMEONE's review. The assigned reviewer (or any owner — permissive when
-    // member_role is absent, i.e. open backends) sees the card normally;
-    // everyone else gets it de-emphasized + labeled. Frontend-only: the
-    // backend verify gate stays permissive (any human CAN verify).
+    // Collab v1: a task with an owner-assigned reviewer is SOMEONE's review.
+    // The assigned reviewer (or any owner — permissive when member_role is
+    // absent, i.e. open backends) sees it normally; everyone else gets it
+    // de-emphasized + labeled. The backend verify gate decides who may act.
     const revLabel = reviewFor(t, actingHuman(snap));
+    const href = "/tasks?task=" + encodeURIComponent(t.id);
     return (
       <div className={"aq verify" + (revLabel ? " other-review" : "")} key={"v-" + t.id}>
-        <span className="type">
-          <Icon name="check" cls="" />Verify task
-          {revLabel ? <span className="tag review-for">review: {revLabel}</span> : null}
-        </span>
-        <div className="ttl">{t.title}</div>
-        <div className="who">
-          {who ? <AgentLink snap={snap} alias={who} /> : "—"}<span>·</span>
-          <span className="tag model">{a?.model || "—"}</span><span>·</span>
-          <span>{relTime(t.started_at)}</span>
-        </div>
-        <div className="ctx">
-          <span className="lbl">Definition of done</span>
-          {t.definition_of_done || "—"}
-        </div>
-        <div className="acts" data-kind="verify" data-task={t.id}>
-          <button className="btn sm approve" type="button" onClick={() => void sendVerify(t.id, true)}>
-            <Icon name="check" cls="" />Accept
-          </button>
-          <button className="btn sm danger" type="button" onClick={() => openReject(t.id)}>Reject…</button>
-          <a className="btn sm ghost" href={"/tasks?task=" + encodeURIComponent(t.id)}>Open task</a>
+        {cardHead(it, t.title, href, revLabel, who)}
+        <dl className="aq-lines">
+          {t.result ? (<><dt>Result</dt><dd title={t.result}>{t.result}</dd></>) : null}
+          <dt>Done when</dt><dd>{t.definition_of_done || <span className="ov-muted">No definition of done written</span>}</dd>
+        </dl>
+        <div className="aq-acts" data-kind="verify" data-task={t.id}>
+          <ButtonLink variant="ghost" size="sm" to={href}>Open task · evidence</ButtonLink>
+          <span className="grow" />
+          <Button variant="secondary" size="sm" onClick={() => openReject(t.id)}>Reject…</Button>
+          <Button variant="secondary" size="sm" icon="check" busy={!!busy[t.id]} onClick={() => void sendVerify(t.id, true)}>Accept</Button>
         </div>
         {reasonBox(t.id, false, "")}
       </div>
     );
   };
 
-  const escCard = (r: OrchaRequest) => {
+  const escCard = (r: OrchaRequest, it: AttentionItem) => {
     const href = "/requests?req=" + encodeURIComponent(r.id);
     return (
-      <div className="aq esc" key={"e-" + r.id}>
-        <span className="type"><Icon name="flag" cls="" />Escalation</span>
-        <div className="ttl">{trunc(asText(r.payload), 96)}</div>
-        <div className="who">
-          <AgentLink snap={snap} alias={r.from} />
-          <span><Icon name="arrow" cls="" /></span><span>you</span><span>·</span>
-          <span>{relTime(r.created_at)}</span>
-        </div>
-        <div className="ctx">
-          <span className="lbl">Blocks</span>
-          {r.task_link ? r.task_link.title || "—" : "—"}
-        </div>
-        <div className="acts">
-          <a className="btn sm" href={href}><Icon name="arrow" cls="" />Resolve</a>
-          <a className="btn sm ghost" href={href}>Open request</a>
+      <div className={"aq esc" + (it.assignedToOther ? " other-review" : "")} key={"e-" + r.id}>
+        {cardHead(it, trunc(itemTitle(it), 96), href, it.assignedToOther ? r.to || null : null, r.from)}
+        {r.task_link ? (
+          <dl className="aq-lines"><dt>Blocks</dt><dd>{r.task_link.title || "Untitled task"}</dd></dl>
+        ) : null}
+        <div className="aq-acts">
+          <span className="grow" />
+          <ButtonLink variant="secondary" size="sm" iconRight="arrow" to={href}>Open request</ButtonLink>
         </div>
       </div>
     );
   };
 
-  /* ---- page ---------------------------------------------------------------*/
-  const paused = !!(c && (c as { wakes_enabled?: boolean }).wakes_enabled === false);
-  const openReq = requests.filter((r) => r.status === "open").length;
-  const noAi = agents.filter((a) => a.kind !== "human").length === 0;
-  const evs = activityEvents(tasks, requests);
+  const renderCard = (it: AttentionItem) => {
+    if (it.kind === "plan" && it.task) return planCard(it.task, it);
+    if (it.kind === "verify" && it.task) return verifyCard(it.task, it);
+    if (it.kind === "request" && it.request) return escCard(it.request, it);
+    return null;
+  };
+
+  /* ---- derived page data -------------------------------------------------- */
+  const notifier = notifierState(c);
+  const aiAgents = agents.filter((a) => a.kind !== "human");
+  const noAi = aiAgents.length === 0;
+  const empty = !!snap && (noAi || tasks.length === 0);
+  // the root/objective task is the project itself — never "your first task"
+  const workTasks = tasks.filter((t) => !t.is_root);
+  const keyCheck = useProviderKeyCheck(cid, empty);
+  const open = openWorkCounts(snap);
+  // A plan waiting on a human is listed under Needs you (mine or another
+  // reviewer's) — not again as ordinary in-progress work (D12: one fact once).
+  const planWaiting = useMemo(
+    () => new Set(attention.items.filter((i) => i.kind === "plan").map((i) => i.id)),
+    [attention],
+  );
+  const planHeld = tasks.filter((t) => t.status === "in_progress" && !t.is_root && planWaiting.has(String(t.id))).length;
+  const inProgress = useMemo(
+    () => tasks
+      .filter((t) => t.status === "in_progress" && !t.is_root && !planWaiting.has(String(t.id)))
+      .sort((a, b) => ts(b.started_at) - ts(a.started_at)),
+    [tasks, planWaiting],
+  );
+  // the agent working on a task — the SAME "working" rule as the sidebar's
+  // live agents (shell/liveAgents: a live run, or a working status on its
+  // current task), so every row the sidebar calls working gets the pill here
+  const liveOn = useMemo(() => liveWorkByTask(agents), [agents]);
+  const allEvs = useMemo(() => activityEvents(tasks, requests), [tasks, requests]);
+  const evs = pickFeed(allEvs, feedFilter);
+  const days = groupByDay(evs);
+  const breakdown = statusBreakdown(tasks);
+  const humans = agents.length - aiAgents.length;
+  // D10: no per-status stat wall — only the states that need attention (blocked /
+  // failed), and only when non-zero, as muted glyph + number links on the facts line
+  const troubled = breakdown.filter((g) => g.status === "blocked" || g.status === "failed");
+  const partialTasks = snap?.task_total != null && snap.task_total > tasks.length;
+  const rootTask = c?.root_task_id ? tasks.find((t) => String(t.id) === String(c.root_task_id)) ?? null : null;
+  const aiFirst = useMemo(
+    () => [...agents].sort((a, b) => Number(b.kind !== "human") - Number(a.kind !== "human") || Number(!!b.active_run) - Number(!!a.active_run)),
+    [agents],
+  );
+
+  // "New task" stays in the header on every project so the header keeps one
+  // shape. On an empty project the checklist's next step is the ONE primary,
+  // so the header button is quiet (secondary) there.
+  const primary = snap
+    ? <Button variant={empty ? "secondary" : "primary"} size="sm" icon="plus" aria-keyshortcuts="c" title="Create a new task (C)" onClick={() => openCompose()}>New task</Button>
+    : undefined;
+  // checklist: the first unfinished step gets the primary button
+  const nextStep = keyCheck.state !== "ok" && keyCheck.state !== "loading" ? 1 : noAi ? 2 : !workTasks.length ? 3 : 0;
+  const stepVariant = (n: number) => (n === nextStep ? "primary" : "secondary") as "primary" | "secondary";
+
+  const summary = (
+    <section className="ov-sum" id="ctxbar" aria-label="Project summary">
+      {c?.description ? (
+        <p className="ov-obj">{c.description}</p>
+      ) : rootTask ? (
+        <p className="ov-obj">Objective: <Go href={"/tasks?task=" + encodeURIComponent(rootTask.id)}>{rootTask.title}</Go></p>
+      ) : (
+        <p className="ov-obj ov-muted">No objective written for this project yet.</p>
+      )}
+      <div className="ov-facts">
+        {/* every live project is "active" — the status is a fact only when it is not */}
+        {c?.status && c.status !== "active" ? (
+          <span className="ov-fi ov-fi-status">
+            {/* the ONE project-status map (label + tone) the All-projects table,
+                Settings and Needs-you use — "paused" reads the same everywhere */}
+            <Chip size="sm" dot={projectStatusMeta(c.status).tone} className="ov-pstatus">
+              {"Project " + projectStatusMeta(c.status).label.toLowerCase()}
+            </Chip>
+          </span>
+        ) : null}
+        {/* AI agents and people are counted apart: an empty project with only
+            its owner has 0 agents, matching the checklist's "No AI agents yet".
+            "+ New agent" sits right after the agents fact it adds to. */}
+        <span className="ov-fi">
+          <Go className="stat ov-fact" href="/agents" title="AI agents in this project">
+            {aiAgents.length ? (
+              <AvatarStack actors={aiFirst.filter((a) => a.kind !== "human").map((a) => ({ alias: a.alias, kind: a.kind, ghLogin: a.github_login }))} size={16} max={4} label="Agents" />
+            ) : null}
+            <span className="n tnum">{aiAgents.length}</span> <span className="l">{plural(aiAgents.length, "agent")}</span>
+          </Go>
+          <Tooltip label="New agent" placement="bottom">
+            <Link className="ov-newagent" to="/onboarding?new=1" aria-label="New agent">
+              <Icon name="plus" cls="v2-ico" />
+            </Link>
+          </Tooltip>
+        </span>
+        {humans ? (
+          <span className="ov-fi">
+            <Go className="stat ov-fact" href={MEMBERS_HREF} title="People (human members) of this project — manage in Settings › Members">
+              <span className="n tnum">{humans}</span> <span className="l">{plural(humans, "person", "people")}</span>
+            </Go>
+          </span>
+        ) : null}
+        <span className="ov-fi">
+          <Go className="stat ov-fact" href={OPEN_TASKS_HREF} title="Open tasks: every status except completed and cancelled">
+            <span className="n tnum">{open.tasks ?? "–"}</span> <span className="l">{plural(open.tasks ?? 2, "open task")}</span>
+          </Go>
+        </span>
+        <span className="ov-fi">
+          <Go className="stat ov-fact" href={OPEN_REQUESTS_HREF} title="Requests with status open">
+            <span className="n tnum">{open.requests ?? "–"}</span> <span className="l">{plural(open.requests ?? 2, "open request")}</span>
+          </Go>
+        </span>
+        {!empty && troubled.map((g) => (
+          <span className="ov-fi" key={g.status}>
+            <Go
+              className="stat ov-fact ov-fact-st" href={statusHref(g.status)}
+              title={`${statusLabel(g.status)}: ${g.tasks.length} ${plural(g.tasks.length, "task")}${partialTasks ? ` (of the first ${tasks.length} loaded)` : ""} — open this list in Tasks`}
+            >
+              <StatusGlyph status={g.status} size={13} />
+              <span className="n tnum">{g.tasks.length}{partialTasks ? "+" : ""}</span> <span className="l">{statusLabel(g.status).toLowerCase()}</span>
+            </Go>
+          </span>
+        ))}
+      </div>
+    </section>
+  );
 
   return (
-    <Shell page="home" title="Dashboard" ctx={c?.name}>
-      <style>{PAGE_CSS}</style>
-      {c && (
-        <>
-          {/* ---- context strip ---- */}
-          <div className="ctxbar" id="ctxbar">
-            <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-              <Pill status={c.status === "active" ? "working" : c.status} size="lg" />
-            </div>
-            <div className="sep" />
-            <div style={{ minWidth: 0 }}>
-              <div className="nm">{c.name}</div>
-              <div className="desc">{c.description || "—"}</div>
-            </div>
-            <div className="grow" />
-            <div className="stat"><span className="n">{agents.length}</span><span className="l">Agents</span></div>
-            <div className="sep" />
-            <div className="stat"><span className="n">{tasks.length}</span><span className="l">Tasks</span></div>
-            <div className="sep" />
-            <div className="stat"><span className="n">{openReq}</span><span className="l">Open req</span></div>
-            <div className="sep" />
-            <div className="stat">
-              <span className="n" style={{ color: paused ? "var(--danger)" : "var(--ok)" }}>{paused ? "Paused" : "Running"}</span>
-              <span className="l">Notifier</span>
-            </div>
-          </div>
+    <Shell page="home" title="Overview" ctx={c?.name} primaryAction={primary}>
+      {!snap ? (
+        error ? (
+          <LoadError error={error} cid={cid} />
+        ) : (
+          <Skeleton lines={8} label="Loading project overview" />
+        )
+      ) : (
+        <div className="ov">
+          <h1 className="v2-sr">Overview{c?.name ? " — " + c.name : ""}</h1>
+          {summary}
 
-          {/* ---- first-run CTA (no AI agents yet) ---- */}
-          <div id="onbCta">
-            {noAi && (
-              <div className="onb-cta">
-                <span className="oic"><Icon name="spark" cls="" /></span>
-                <div className="body">
-                  <div className="t1">Get started — set up your workspace</div>
-                  <div className="t2">No AI agents yet. Create your first agent (or capture tasks) in the guided first-run flow.</div>
-                </div>
-                <a className="btn" href="/onboarding"><Icon name="arrow" cls="" />Get started</a>
-              </div>
-            )}
-          </div>
-
-          {/* ---- action queue (THE hero) ---- */}
-          <section id="needs">
-            <div className="hero-h">
-              <span className="t">Needs your attention</span>
-              <span className="badge tnum" id="aqBadge">{badge}</span>
-              <span className="sub">Plans to approve and tasks to verify — one click from acting. Nothing ships on an agent&#39;s say-so.</span>
+          {/* ---- empty project: the next useful actions, in order (nothing else) ---- */}
+          {empty && (
+            <div id="onbCta">
+              <section className="ov-setup" aria-labelledby="ovSetupH">
+                <h2 id="ovSetupH" className="ov-h">Get this project working</h2>
+                <ol className="ov-steps">
+                  <li className={keyCheck.state === "ok" ? "done" : ""}>
+                    <span className="ov-step-n" aria-hidden="true">{keyCheck.state === "ok" ? <Icon name="check" cls="ov-step-ico" /> : "1"}</span>
+                    <div className="ov-step-b">
+                      <div className="ov-step-t">Model provider</div>
+                      <div className="ov-step-d">
+                        {keyCheck.state === "loading" ? "Checking the provider key…"
+                          : keyCheck.state === "ok" ? `Anthropic API key configured (${keyCheck.source === "env" ? "from the environment" : "stored here"}).`
+                          : keyCheck.state === "missing" ? <>No Anthropic API key yet. <Help text="AI-assisted setup and Embodent's model-powered helpers need one." /></>
+                          : `Couldn't check the provider key (${keyCheck.why}).`}
+                      </div>
+                    </div>
+                    {keyCheck.state !== "ok" && <ButtonLink variant={stepVariant(1)} size="sm" to="/settings#tab=provider-keys">Provider keys</ButtonLink>}
+                  </li>
+                  <li className={noAi ? "" : "done"}>
+                    <span className="ov-step-n" aria-hidden="true">{noAi ? "2" : <Icon name="check" cls="ov-step-ico" />}</span>
+                    <div className="ov-step-b">
+                      <div className="ov-step-t">Agents</div>
+                      <div className="ov-step-d">
+                        {noAi ? <>No AI agents yet. <Help text="Describe the project and review a proposed roster, or create agents by hand." /></>
+                          : `${aiAgents.length} AI ${plural(aiAgents.length, "agent")} ready.`}
+                      </div>
+                    </div>
+                    {noAi && <ButtonLink variant={stepVariant(2)} size="sm" href="/onboarding">Set up agents</ButtonLink>}
+                  </li>
+                  <li className={workTasks.length ? "done" : ""} data-step="first-task">
+                    <span className="ov-step-n" aria-hidden="true">{workTasks.length ? <Icon name="check" cls="ov-step-ico" /> : "3"}</span>
+                    <div className="ov-step-b">
+                      <div className="ov-step-t">First task with a definition of done</div>
+                      <div className="ov-step-d">
+                        {workTasks.length ? `${workTasks.length} ${plural(workTasks.length, "task")} created.`
+                          : "Say what “done” means so the result can be verified."}
+                      </div>
+                    </div>
+                    {!workTasks.length && <Button variant={stepVariant(3)} size="sm" icon="plus" onClick={() => openCompose()}>Create a task</Button>}
+                  </li>
+                  <li className={notifier === "running" ? "done" : ""} data-notifier={notifier}>
+                    <span className="ov-step-n" aria-hidden="true">{notifier === "running" ? <Icon name="check" cls="ov-step-ico" /> : "4"}</span>
+                    <div className="ov-step-b">
+                      <div className="ov-step-t">Let the work start</div>
+                      <div className="ov-step-d">
+                        {notifier === "paused" ? "Wakes are paused — assigned agents won't wake."
+                          : notifier === "running" ? `Running — the wake service checked this project ${relTime(c?.last_wake_scan_at)}.`
+                          : notifier === "stale" ? `Wake service last seen ${relTime(c?.last_wake_scan_at)} — agents are not being woken right now.`
+                          : notifier === "on" ? "Wakes are enabled."
+                          : "No wake service is serving this project yet."}
+                        {" "}<Help
+                          text={(notifier === "none" || notifier === "stale" ? "Run `orcha up` on a machine bound to this project. " : "")
+                            + "Assigned agents wake while the notifier is running; plans to approve and results to verify then appear under Needs you."}
+                        />
+                      </div>
+                    </div>
+                  </li>
+                </ol>
+              </section>
             </div>
-            <div className="aq-grid" id="aqGrid">
-              {badge ? (
-                <>
-                  {plans.map(planCard)}
-                  {verifs.map(verifyCard)}
-                  {aq.escs.map(escCard)}
-                </>
-              ) : (
-                <div className="aq-empty">✓ Nothing needs you right now.</div>
-              )}
-            </div>
-          </section>
+          )}
 
-          <div className="dash-grid">
-            {/* ---- agents at a glance ---- */}
-            <div className="card">
-              <div className="card-h">
-                <h2>Agents at a glance</h2><span className="count" id="agCount">({agents.length})</span>
-                <span className="grow"></span>
-                <a className="seeall" href="/onboarding?new=1">+ New agent</a>
-                <a className="seeall" href="/agents" style={{ marginLeft: 12 }}>All agents ↗</a>
-              </div>
-              <div className="card-b flush" style={{ overflowX: "auto" }}>
-                <table className="tbl" id="agTbl">
-                  <thead>
-                    <tr><th>Agent</th><th>Status</th><th>Activity</th><th>Model</th><th>Wake</th><th>Active</th></tr>
-                  </thead>
-                  <tbody>
-                    {agents.map((a) => {
-                      const act = activityOf(a);
+          {/* ---- Needs you (an empty project shows it only when something waits) ---- */}
+          {!empty || shown.length ? (
+            <section id="needs" className="ov-sec" aria-label="Needs you">
+              <ListGroup
+                id="needs" level={2} storageKey={OV_GROUP_KEY}
+                title="Needs you"
+                glyph={<Icon name="inbox" cls="v2-ico ov-band-ico" />}
+                count={badge}
+                actions={HAS_NEEDS_PAGE && shown.length > 0 ? <Go className="ov-link" href="/needs">Open queue</Go> : undefined}
+              >
+                {attention.partial ? (
+                  <p className="ov-note">Counted from the first {tasks.length} tasks and {requests.length} requests loaded; the project has more.</p>
+                ) : null}
+                {HAS_NEEDS_PAGE && shown.length ? (
+                  <ul className="ov-rows" id="aqGrid" aria-label="Decisions waiting">
+                    {preview.length ? preview.map(previewRow) : (
+                      <li className="ov-empty"><Icon name="check" cls="v2-ico ov-empty-ico" />Nothing needs you right now.</li>
+                    )}
+                    {moreMine > 0 || othersCount > 0 ? (
+                      <li className="ov-more">
+                        {moreMine > 0 ? <Go className="ov-link" href="/needs">{moreMine} more in the queue</Go> : null}
+                        {othersCount > 0 ? (
+                          <Go
+                            className="ov-link ov-link-other" href="/needs"
+                            title={attention.readOnly
+                              ? "View-only: nothing here is yours to decide — listed on the queue for context"
+                              : "Reviews and requests assigned to someone else — listed on the queue, not counted as yours"}
+                          >
+                            {attention.readOnly ? `${othersCount} waiting (view-only)` : `${othersCount} assigned to someone else`}
+                          </Go>
+                        ) : null}
+                      </li>
+                    ) : null}
+                  </ul>
+                ) : !shown.length ? (
+                  <div className="ov-empty" id="aqGrid"><Icon name="check" cls="v2-ico ov-empty-ico" />Nothing needs you right now.</div>
+                ) : (
+                  <div className="aq-list" id="aqGrid">{shown.map(renderCard)}</div>
+                )}
+              </ListGroup>
+            </section>
+          ) : null}
+
+          {/* ---- active work ---- */}
+          {!empty && (
+            <section className="ov-sec" aria-label="Active work" id="activeWork">
+              <ListGroup
+                id="active" level={2} storageKey={OV_GROUP_KEY}
+                title="Active work"
+                glyph={<StatusGlyph status="in_progress" size={14} />}
+                count={String(inProgress.length) + (partialTasks ? "+" : "")}
+                actions={inProgress.length ? <Go className="ov-link" href={statusHref("in_progress")}>View all</Go> : undefined}
+              >
+                {inProgress.length ? (
+                  <ul className="ov-rows" aria-label="Tasks in progress">
+                    {inProgress.slice(0, ACTIVE_PREVIEW).map((t) => {
+                      const who = t.assignee || (t.assignees || [])[0];
+                      const a = agentByAlias(snap, who);
+                      const live = liveOn.get(String(t.id));
+                      const last = t.message_summary?.last?.at || t.started_at;
                       return (
-                        <tr
-                          className="clickable" key={a.id}
-                          onClick={() => { navigateScoped("/agents?agent=" + encodeURIComponent(a.alias)); }}
-                        >
-                          <td>
-                            <div className="row">
-                              <Avatar alias={a.alias} kind={a.kind} ghLogin={a.github_login} />
-                              <div><div className="t1">{a.alias}</div><div className="t2">{a.role || "—"}</div></div>
-                            </div>
-                          </td>
-                          <td><Pill status={a.status} /></td>
-                          <td>
-                            {act ? (
-                              act.isTask
-                                ? <span className="t1" style={{ fontWeight: 550, fontSize: 12.5 }}>{act.text}</span>
-                                : <span className="t2" style={{ fontStyle: "italic" }}>{act.text}</span>
-                            ) : <span className="t2">—</span>}
-                          </td>
-                          <td>{a.model ? <span className="tag model">{a.model}</span> : <span className="t2">—</span>}</td>
-                          <td>
-                            {a.kind === "human"
-                              ? <span className="t2">—</span>
-                              : a.wake_enabled
-                                ? <span className="tag wake-on">on</span>
-                                : <span className="tag wake-off">off</span>}
-                          </td>
-                          <td className="t2 num">{relTime(a.last_active)}</td>
-                        </tr>
+                        <li key={t.id}>
+                          <Go className="ov-row" href={"/tasks?task=" + encodeURIComponent(t.id)} title={t.title}>
+                            <PriorityIcon priority={t.priority} className="ov-prio" />
+                            <span className="ov-id" aria-hidden="true">{shortId(t.id)}</span>
+                            <StatusIcon status={t.status} />
+                            <span className="ov-row-t">{t.title}</span>
+                            {live ? (
+                              <LivePill state="working" actors={[{ alias: live.alias, kind: live.kind, ghLogin: live.github_login }]} />
+                            ) : who ? (
+                              <Avatar alias={who} kind={a?.kind} ghLogin={a?.github_login} size={20} label={"Assignee: " + who} />
+                            ) : (
+                              <span className="ov-meta">Unassigned</span>
+                            )}
+                            <span className="ov-age"><RelTime at={last} /></span>
+                          </Go>
+                        </li>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                    {inProgress.length > ACTIVE_PREVIEW ? (
+                      <li className="ov-more"><Go className="ov-link" href={statusHref("in_progress")}>{inProgress.length - ACTIVE_PREVIEW} more in progress</Go></li>
+                    ) : null}
+                  </ul>
+                ) : (
+                  <p className="ov-empty">
+                    {planHeld
+                      ? <>Nothing else in progress — {planHeld} {plural(planHeld, "task")} waiting on a plan decision (under Needs you).</>
+                      : "No task is in progress."}
+                  </p>
+                )}
+              </ListGroup>
+            </section>
+          )}
 
-            {/* ---- live activity ---- */}
-            <div className="card stick">
-              <div className="card-h">
-                <h2>Live activity</h2>
-                <span className="grow"></span>
-                <span className="live accent"><span className="d"></span>live</span>
-              </div>
-              <div className="card-b">
-                <div className="act-list" id="actList">
-                  {evs.length ? evs.map((e, i) => {
-                    const a = agentByAlias(snap, e.who);
-                    return (
-                      <a className="act" href={e.link} key={i} style={{ color: "inherit" }}>
-                        <Avatar alias={e.who} kind={a ? a.kind : "human"} size="sm" />
-                        <div className="body">
-                          <div className="top">
-                            <span className="nm">{e.who}</span>
-                            <span className="ty" style={{ color: TYC[e.kind], background: TYBG[e.kind] }}>{e.kind}</span>
-                            <span className="when">{relTime(e.at)}</span>
-                          </div>
-                          <div className="txt">{e.text}</div>
-                        </div>
-                      </a>
-                    );
-                  }) : <div className="none" style={{ padding: 14, fontSize: 12.5 }}>No activity yet.</div>}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ---- tasks by status kanban ---- */}
-          <div className="section-title">
-            <h2>Tasks by status</h2><span className="ln"></span>
-            <a className="seeall" href="/tasks">Open tasks ↗</a>
-          </div>
-          <div className="kanban" id="kanban">
-            {COLS.map((col) => {
-              const items = tasks.filter(col.match).filter((t) => !t.is_root);
-              return (
-                <div className="kcol" key={col.key}>
-                  <div className="kh">
-                    <span
-                      className={`pill ${col.cls}`}
-                      style={{ border: 0, background: "transparent", padding: 0, gap: 7 }}
-                      dangerouslySetInnerHTML={{
-                        __html: glyphHtml(col.cls) + `<span style="font-size:12.5px;font-weight:650;color:var(--text)">${esc(col.label)}</span>`,
-                      }}
+          {/* ---- updates feed (Pulse): the same D8 band as the two above, with
+              its filter pills inside; Today / Yesterday dividers under it ---- */}
+          {!empty && (
+            <section className="ov-sec ov-feed" aria-label="Updates" id="updates">
+              <ListGroup
+                id="updates" level={2} storageKey={OV_GROUP_KEY}
+                title="Updates"
+                glyph={<Icon name="live" cls="v2-ico ov-band-ico" />}
+                actions={
+                  <>
+                    <FilterPills
+                      label="Show updates" size="sm" className="ov-pills" value={feedFilter}
+                      onChange={(k) => setFeedFilter(k as FeedFilter)}
+                      items={[
+                        { key: "all", label: "All" },
+                        { key: "messages", label: "Messages" },
+                        { key: "requests", label: "Requests" },
+                        { key: "outcomes", label: "Finished" },
+                      ]}
                     />
-                    <span className="ct">{items.length}</span>
-                  </div>
-                  <div className="kb">
-                    {items.length ? items.map((t) => {
-                      const who = (t.assignees || [])[0];
-                      const a = agentByAlias(snap, who);
-                      const p = Number(t.priority);
-                      return (
-                        <div
-                          className="kcard" key={t.id}
-                          onClick={() => { navigateScoped("/tasks?task=" + encodeURIComponent(t.id)); }}
-                        >
-                          <div className="kt">{t.title}</div>
-                          <div className="kf">
-                            {who ? <Avatar alias={who} kind={a ? a.kind : "ai"} size="sm" /> : null}
-                            <span className="t2" style={{ fontSize: 11.5 }}>{who || "unassigned"}</span>
-                            <span className={`prio ${p <= 20 ? "p-hi" : p <= 40 ? "p-md" : ""}`}>P{t.priority}</span>
-                          </div>
-                        </div>
-                      );
-                    }) : <div className="none" style={{ padding: 14, fontSize: 12 }}>None</div>}
-                  </div>
+                    <Go className="ov-link" href="/activity">Open activity</Go>
+                  </>
+                }
+              >
+                <div id="actList">
+                  {evs.length ? (
+                    <Timeline label="Project updates" className="ov-tl">
+                      {days.map((g) => [
+                        <TimelineDivider key={"d-" + g.day}>{g.day}</TimelineDivider>,
+                        ...g.events.map((e, i) => <FeedEvent key={g.day + i} e={e} snap={snap} />),
+                      ])}
+                    </Timeline>
+                  ) : (
+                    <p className="ov-empty">{feedFilter === "all" ? "No updates yet." : "Nothing of this kind yet."}</p>
+                  )}
+                  {feedFilter === "outcomes" ? <Go className="ov-link ov-feed-more" href={DONE_TASKS_HREF}>All finished tasks</Go> : null}
                 </div>
-              );
-            })}
-          </div>
-        </>
+              </ListGroup>
+            </section>
+          )}
+        </div>
       )}
 
-      {/* ISS-59: approving may carry an OPTIONAL answer/guidance for the agent */}
+      {/* ISS-59: approving may carry an OPTIONAL answer/guidance for the agent.
+          Same title/copy as the Tasks / Needs-you GateSurface dialog. */}
       {approveFor && (
-        <Modal
-          title="Approve plan"
-          desc="Optionally answer the agent's questions or add guidance — it's sent to the agent with the approval."
-          primary="Approve plan"
-          approve
-          onPrimary={() => {
-            const p = approveFor;
-            setApproveFor(null);
-            void sendPlanDecision(p.taskId, p.authorId, true, answer);
-          }}
+        <Dialog
+          title="Approve this plan?"
+          description={approveFor.who + " will be cleared to execute. Optionally answer/guide below — it's sent with the approval."}
           onClose={() => setApproveFor(null)}
+          size="sm"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setApproveFor(null)}>Cancel</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const p = approveFor;
+                  setApproveFor(null);
+                  void sendPlanDecision(p.taskId, p.authorId, true, answer);
+                }}
+              >
+                Approve plan
+              </Button>
+            </>
+          }
         >
           <textarea
-            id="ans" className="ta" placeholder="Answer / additional info for the agent (optional)"
+            id="ans" className="ta ov-input" placeholder="Answer / additional info for the agent (optional)"
+            aria-label="Answer / additional info for the agent (optional)"
             value={answer} onChange={(e) => setAnswer(e.target.value)}
             style={{ width: "100%", minHeight: 76, resize: "vertical" }}
           />
-        </Modal>
+        </Dialog>
       )}
     </Shell>
+  );
+}
+
+/* ---- one feed line: "actor verb **object** · time" (+ one muted body line).
+ * Rendered as TimelineEvent children so the first line can stay ONE line (the
+ * object ellipsizes) and the body sits under it (max 2 lines per item). */
+function FeedEvent({ e, snap }: { e: ActEvent; snap: Snapshot | null }) {
+  const obj = <Go className="ov-tl-obj" href={e.link} title={e.ctx}><b>{e.ctx}</b></Go>;
+  const when = (
+    <>
+      {" "}<span className="v2-tl-sep" aria-hidden="true">·</span>{" "}
+      <RelTime at={e.at} className="v2-tl-time" />
+    </>
+  );
+  if (e.kind === "outcome") {
+    return (
+      <TimelineEvent className="ov-ev" glyph={<StatusGlyph status={e.status} size={14} />}>
+        <span className="ov-ev-main"><span className="ov-ev-verb">{statusLabel(e.status)}</span>{" "}{obj}{when}</span>
+      </TimelineEvent>
+    );
+  }
+  const a = agentByAlias(snap, e.who);
+  const system = !e.who;
+  const verb = e.kind === "request" ? "asked" : e.kind === "answer" ? "answered" : e.human ? "commented on" : "posted on";
+  return (
+    <TimelineEvent
+      className="ov-ev"
+      glyph={system ? <Icon name="spark" cls="v2-ico" /> : <Avatar alias={e.who} kind={a ? a.kind : e.human ? "human" : "ai"} size={16} decorative />}
+    >
+      <span className="ov-ev-main">
+        {a && e.who ? (
+          <Go className="v2-tl-actor ov-ev-actor" href={agentHref(e.who)} title={"Open " + e.who}>{e.who}</Go>
+        ) : (
+          <span className="v2-tl-actor">{system ? "System" : e.who}</span>
+        )}{" "}
+        <span className="ov-ev-verb">{verb}</span>{" "}
+        {obj}{when}
+      </span>
+      {e.text ? <span className="ov-ev-body">{" "}{e.text}</span> : null}
+    </TimelineEvent>
+  );
+}
+
+/** Agent id → task it is working on, by the sidebar's "working" rule (shell/liveAgents). */
+export function liveWorkByTask(agents: Agent[]): Map<string, Agent> {
+  const m = new Map<string, Agent>();
+  agents.forEach((a) => {
+    if (a.kind === "human" || a.status === "terminated") return;
+    const working = a.active_run != null || a.status === "working" || a.status === "in_progress";
+    if (!working) return;
+    const id = a.active_run?.task_id ?? a.current_task?.task_id;
+    if (id && !m.has(String(id))) m.set(String(id), a);
+  });
+  // a live run outranks a status-only claim on the same task
+  agents.forEach((a) => { const id = a.active_run?.task_id; if (id) m.set(String(id), a); });
+  return m;
+}
+
+/**
+ * The Overview's page state when the project data did not load. It says what
+ * the failure MEANS (Shell.snapshotErrorKind: an answer from the backend is not
+ * an outage — brief §3), never the raw endpoint / container id / status (the
+ * Shell's banner keeps those under its collapsed Details). The ONE action —
+ * All projects for no-access / not-found, Retry otherwise — lives on that
+ * banner (Shell.staleBanner), so it is not repeated here (D12 one fact once).
+ */
+export function LoadError({ error, cid }: { error: string; cid: string | null }) {
+  const kind = snapshotErrorKind(error);
+  const { list, error: listErr } = useProjects();
+  const listed = !listErr && cid ? (list || []).find((p) => p.id === cid)?.name ?? null : null;
+  if (kind === "forbidden") {
+    return <EmptyState title="You don't have access to this project" body="Only its members can open it." />;
+  }
+  if (kind === "not_found") {
+    return <EmptyState title="Project not found" body="Open one of your projects instead." />;
+  }
+  return (
+    <EmptyState
+      tone="danger"
+      title={listed ? `${listed} is unreachable` : "Couldn't load this project"}
+      body="Nothing is shown rather than out-of-date numbers."
+    />
   );
 }

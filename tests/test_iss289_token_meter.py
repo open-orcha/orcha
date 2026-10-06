@@ -3,6 +3,7 @@ tokens-vs-quota meter (GET /api/containers/{cid}/token-usage) + the notifier log
 import json
 
 from orcha_cli import notifier
+from conftest import ts_ago, ts_from_now
 
 
 # --------------------------------------------------------------------------- #
@@ -136,7 +137,7 @@ async def test_token_usage_windowing(client, make_agent, container, db):
     aid = (await make_agent("W", "eng"))["agent_id"]
     old = await _finish_with(client, aid, input_tokens=1000, output_tokens=0,
                              cache_read_input_tokens=0, cache_creation_input_tokens=0)
-    db.execute("UPDATE worker_runs SET ended_at = now() - interval '6 hours' WHERE run_id=%s", (old,))
+    db.execute(f"UPDATE worker_runs SET ended_at = {ts_ago(21600)} WHERE run_id=%s", (old,))
     await _finish_with(client, aid, input_tokens=7, output_tokens=0,
                        cache_read_input_tokens=0, cache_creation_input_tokens=0)  # fresh
 
@@ -232,7 +233,7 @@ async def test_usage_less_ended_run_excluded(client, make_agent, container, db):
                                   json={"wake_kind": "ephemeral"})).json()["run_id"]
     await client.post(f"/api/runs/{rid_null}/finish", json={"status": "exited", "exit_code": 0})
     # force it to be the MOST-RECENT ended row so an unfiltered last_wake query would surface it
-    db.execute("UPDATE worker_runs SET ended_at = now() + interval '1 minute' WHERE run_id=%s",
+    db.execute(f"UPDATE worker_runs SET ended_at = {ts_from_now(60)} WHERE run_id=%s",
                (rid_null,))
 
     body = (await client.get(f"/api/containers/{cid}/token-usage")).json()

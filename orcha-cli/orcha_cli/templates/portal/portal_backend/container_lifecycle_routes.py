@@ -1,10 +1,17 @@
 """Create, reset, and list the container(s) owned by an Orcha stack."""
 
-import psycopg
-from fastapi import HTTPException, Request
+from typing import List, Optional
 
+from fastapi import HTTPException, Query, Request
+
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.attention_counts import (
+    READ_ONLY,
+    needs_you_by_container,
+    parse_acting_picks,
+)
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_kind, valid_uuid
 from portal_backend.identity_routes import (
@@ -60,7 +67,9 @@ def create_container(body: ContainerCreate, request: Request):
                 "INSERT INTO containers (name, description) VALUES (%s, %s) RETURNING id",
                 (body.name, body.description),
             )
-        except psycopg.errors.UniqueViolation:
+        except Exception as exc:  # noqa: BLE001 — re-raised unless a unique violation
+            if not sql.is_unique_violation(exc):
+                raise
             # containers_name_uq (mig 037): project names are unique per stack,
             # case-insensitively — same 409 convention as a duplicate agent alias.
             raise HTTPException(
@@ -309,8 +318,137 @@ def reset_container(cid: str, body: ContainerReset, request: Request):
     return {"container_id": cid, "root_task_id": root_id, "deleted": deleted}
 
 
+def _acting_human(humans, login, mapped, pick):
+    """Who "you" are in one project, resolved like the portal's actingIdentityHuman.
+
+    * proxy login: the live human carrying that github_login (a VIEWER acts on
+      nothing → READ_ONLY); in the UNMAPPED bootstrap state /api/me binds the
+      founding (first) human, so that human; a mapped project with no match
+      (a non-member — never listed anyway) → READ_ONLY.
+    * trust off: the caller's per-project pick when it is a live human here,
+      else the first human (the portal's default acting human); no humans → None.
+    """
+    if login:
+        me = next(
+            (h for h in humans if (h["github_login"] or "").lower() == login.lower()),
+            None,
+        )
+        if me is not None:
+            return READ_ONLY if me["member_role"] == "viewer" else me
+        if not mapped:
+            return humans[0] if humans else None
+        return READ_ONLY
+    if pick:
+        chosen = next((h for h in humans if str(h["id"]).lower() == pick), None)
+        if chosen is not None:
+            return chosen
+    return humans[0] if humans else None
+
+
+LIVE_AGENTS_CAP = 3
+
+
+def _live_agents_by_container(cur, cids):
+    """Per-container AI agents that are working NOW (sidebar tree for non-selected rows).
+
+    Mirrors container_snapshot_routes' liveness: an agent is working when it has a
+    'running' worker_run on the lane its lease currently holds (the snapshot's
+    `active_run`), or a live lease in either lane AND an owned active task (the
+    snapshot's derived status='working'). Nothing is inferred from the stored
+    agents.status (it sticks at 'working' after a worker exits)."""
+    if not cids:
+        return {}
+    # GREATEST(last_heartbeat_at, latest run start) ignoring NULLs, NULL only when both are
+    # NULL: COALESCE each to the -infinity sentinel, then NULLIF it back (the sentinel never
+    # equals a stored timestamp).
+    neg_inf = sql.ts_neg_infinity()
+    last_active = (
+        "NULLIF(" + sql.greatest(
+            f"COALESCE(a.last_heartbeat_at, {neg_inf})",
+            "COALESCE((SELECT max(wr.started_at) FROM worker_runs wr"
+            f" WHERE wr.agent_id = a.id), {neg_inf})",
+        ) + f", {neg_inf})"
+    )
+    cur.execute(
+        f"""SELECT x.container_id, x.alias,
+                  t3.title AS run_task_title, run.started_at,
+                  (x.run_pick IS NOT NULL) AS has_run,
+                  x.current_task_title, x.awaiting, x.owns_task, x.last_active
+             FROM (
+               SELECT a.container_id, a.alias,
+                      (SELECT t2.title FROM agent_tasks at2 JOIN tasks t2 ON t2.id = at2.task_id
+                        WHERE at2.agent_id = a.id AND at2.assignment_status = 'working'
+                        ORDER BY at2.assigned_at DESC LIMIT 1) AS current_task_title,
+                      EXISTS (SELECT 1 FROM requests rq
+                               WHERE rq.requester_id = a.id AND rq.status = 'open') AS awaiting,
+                      EXISTS (SELECT 1 FROM agent_tasks at3
+                               WHERE at3.agent_id = a.id
+                                 AND at3.assignment_status IN ('assigned','accepted','working'))
+                        AS owns_task,
+                      {last_active} AS last_active,
+                      COALESCE(ws.wake_lease_until > now(), false) AS wake_live,
+                      COALESCE(ws.conv_lease_until > now(), false) AS conv_live,
+                      -- VD-09: any 'running' worker_run counts, lease or not — the SAME rule as
+                      -- the snapshot's running_run that the roster/board/selected sidebar read
+                      -- (a lapsed lease is a probable orphan, but it still reads Working there).
+                      -- The run on the lane the lease holds is preferred when there is one.
+                      (SELECT wr.run_id FROM worker_runs wr
+                        WHERE wr.agent_id = a.id AND wr.status = 'running'
+                        ORDER BY ((ws.wake_lease_until > now() AND wr.lane = 'work')
+                                  OR (NOT COALESCE(ws.wake_lease_until > now(), false)
+                                      AND ws.conv_lease_until > now()
+                                      AND wr.lane = 'conversation')) IS TRUE DESC,
+                                 wr.started_at DESC
+                        LIMIT 1) AS run_pick
+                 FROM agents a
+                 LEFT JOIN agent_wake_state ws ON ws.agent_id = a.id
+                WHERE {sql.in_list('a.container_id')}
+                  AND a.terminated_at IS NULL
+                  AND COALESCE(a.kind, 'ai') <> 'human'
+             ) x
+             LEFT JOIN worker_runs run ON run.run_id = x.run_pick
+             LEFT JOIN tasks t3 ON t3.id = run.task_id
+            WHERE x.wake_live OR x.conv_live OR x.run_pick IS NOT NULL""",
+        (sql.list_param(cids),),
+    )
+    out: dict = {}
+    for r in cur.fetchall():
+        working = r["has_run"] or r["owns_task"]
+        if not working:
+            continue  # a live lease with nothing to do reads idle, as in the snapshot
+        out.setdefault(str(r["container_id"]), []).append(
+            {
+                "alias": r["alias"],
+                # the snapshot's derived status for the same row
+                # VD-09: a running run reads Working (presence() rank), even with an
+                # open outgoing ask — the other surfaces agree.
+                "status": "working" if r["has_run"]
+                else ("awaiting_request" if r["awaiting"]
+                      else ("working" if r["owns_task"] else "idle")),
+                "task_title": r["run_task_title"] or r["current_task_title"],
+                "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+                "last_active": r["last_active"].isoformat() if r["last_active"] else None,
+            }
+        )
+    for rows in out.values():
+        rows.sort(key=lambda x: (x["last_active"] or "", x["alias"]), reverse=True)
+    return out
+
+
 @app.get("/api/containers")
-def list_containers(request: Request):
+def list_containers(
+    request: Request,
+    acting: Optional[List[str]] = Query(
+        default=None,
+        description=(
+            "Trust-off only: the viewer's acting-human pick per project, as "
+            "`<container_id>:<human_agent_id>` (repeatable or comma-joined). Scopes "
+            "`needs_you` to the decisions that human can make; ignored under proxy "
+            "trust (the signed-in login decides) and for ids that are not a live "
+            "human of that project (falls back to the first human)."
+        ),
+    ),
+):
     """List this stack's projects (containers) — the switcher AND the /projects
     landing page read this.
 
@@ -329,13 +467,32 @@ def list_containers(request: Request):
     the landing-page cards:
       * agents            — live (non-terminated) agent count;
       * tasks             — non-root task count;
-      * needs_you         — tasks at needs_verification + open human-facing
-                            requests (target a human or escalated) — the card badge;
+      * tasks_done        — non-root tasks at 'completed' (the Projects table's
+                            "done / total" progress ring);
+      * ai_agents         — live non-human agent count (the Agents column; the
+                            same number the project's Overview shows);
+      * needs_you         — the portal's "Needs you" count for THIS viewer, the same
+                            rule as frontend state/attention.ts selectAttention
+                            (portal_backend/attention_counts.py): waiting plans gated
+                            on the author's EFFECTIVE autonomy, verifications (level
+                            not full) and human-facing/escalated requests — counting
+                            only decisions the requesting user can act on (not
+                            another reviewer's / another human's; 0 for a viewer);
+      * needs_you_breakdown — {plan, verify, request} behind that number;
       * member_count      — live human members;
       * members           — the human roster ({alias, github_login, member_role}),
                             ONLY where the caller may see it (trust off, unmapped
                             bootstrap, or owner/manage_members in THAT container);
                             null otherwise — roster privacy holds here too;
+      * my_member_role / my_grants — the caller's own role and grants here (trusted
+                            login lane only; null for trust off or no member row);
+      * live_agents       — (parity r2, additive) up to 3 AI agents working RIGHT NOW,
+                            most recent first: {alias, status, task_title, started_at,
+                            last_active}. "Working" is the snapshot's own rule — a live
+                            worker run on the leased lane, or a live lease plus an owned
+                            task — so the sidebar can nest another project's agents
+                            without loading its snapshot. Idle agents are never listed;
+      * live_agents_total — how many qualified before the cap;
       * last_wake_scan_at — the notifier's most recent wake-scan poll (stamped by
         GET .../wake-scan). Recent ⇒ a host-side daemon serves this project's
         wakes; NULL/stale ⇒ portal-only (CRUD works, nothing wakes).
@@ -358,6 +515,9 @@ def list_containers(request: Request):
         cur.execute(
             f"""SELECT id, name, description, status, root_task_id, github_repo,
                       created_at, completed_at, last_wake_scan_at,
+                      autonomy_level, autonomy_enforced,
+                      -- mig 050 (D14): the project's cosmetic icon (NULL = default glyph)
+                      icon,
                       (SELECT count(*) FROM agents a
                         WHERE a.container_id = containers.id
                           AND a.terminated_at IS NULL) AS agents,
@@ -366,13 +526,11 @@ def list_containers(request: Request):
                           AND NOT t.is_root) AS tasks,
                       (SELECT count(*) FROM tasks t
                         WHERE t.container_id = containers.id
-                          AND t.status = 'needs_verification')
-                      + (SELECT count(*) FROM requests r
-                          WHERE r.container_id = containers.id
-                            AND (r.status = 'escalated' OR (r.status = 'open'
-                                 AND (r.target_id IS NULL OR EXISTS (
-                                      SELECT 1 FROM agents h WHERE h.id = r.target_id
-                                        AND h.kind='human'))))) AS needs_you,
+                          AND NOT t.is_root AND t.status = 'completed') AS tasks_done,
+                      (SELECT count(*) FROM agents a
+                        WHERE a.container_id = containers.id
+                          AND a.terminated_at IS NULL
+                          AND COALESCE(a.kind, 'ai') <> 'human') AS ai_agents,
                       (SELECT count(*) FROM agents h
                         WHERE h.container_id = containers.id
                           AND h.kind='human' AND h.terminated_at IS NULL)
@@ -399,6 +557,18 @@ def list_containers(request: Request):
         for h in cur.fetchall():
             humans_by_cid.setdefault(str(h["container_id"]), []).append(h)
 
+        # "Needs you" for THIS viewer (attention_counts.py mirrors the portal rule).
+        picks = {} if login else parse_acting_picks(acting)
+        acting_by_cid = {
+            str(row["id"]): _acting_human(
+                humans_by_cid.get(str(row["id"]), []), login, row["mapped"],
+                picks.get(str(row["id"]).lower()),
+            )
+            for row in rows
+        }
+        needs = needs_you_by_container(cur, rows, acting_by_cid)
+        live_by_cid = _live_agents_by_container(cur, [str(r["id"]) for r in rows])
+
     def may_see_roster(row) -> bool:
         if not login:
             return True  # trust off / no header: pre-collab behavior
@@ -415,6 +585,14 @@ def list_containers(request: Request):
     for row in rows:
         entry = dict(row)
         del entry["mapped"]
+        del entry["autonomy_level"]
+        del entry["autonomy_enforced"]
+        breakdown = needs[str(row["id"])]
+        entry["needs_you"] = sum(breakdown.values())
+        entry["needs_you_breakdown"] = breakdown
+        _live = live_by_cid.get(str(row["id"]), [])
+        entry["live_agents"] = _live[:LIVE_AGENTS_CAP]
+        entry["live_agents_total"] = len(_live)
         entry["members"] = (
             [
                 {
@@ -426,6 +604,25 @@ def list_containers(request: Request):
             ]
             if may_see_roster(row)
             else None
+        )
+        # Parity r1 (additive): the CALLER's own role/grants in this project, so the
+        # portal can disable per-project actions (e.g. "Change icon…" on a project
+        # other than the selected one) with the right reason BEFORE a write 403s.
+        # Only under the trusted login lane and only for a row that carries it;
+        # null otherwise (trust off has no gating; an unbound bootstrap row has no
+        # member row yet). Your own role is never roster-private.
+        mine = (
+            next(
+                (h for h in humans_by_cid.get(str(row["id"]), [])
+                 if (h["github_login"] or "").lower() == login.lower()),
+                None,
+            )
+            if login
+            else None
+        )
+        entry["my_member_role"] = mine["member_role"] if mine else None
+        entry["my_grants"] = (
+            sorted(mine.get("grants") or []) if mine else None
         )
         out.append(entry)
     return {"containers": out}

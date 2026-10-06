@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Optional
 
+from . import notifier_agent_keys as _agent_keys
 from . import notifier_boot_context as _boot_context
 from . import notifier_headless as _headless
 from . import notifier_persona_cache as _persona_cache
@@ -29,6 +30,16 @@ def _load_master_key_from_env_file() -> None:
 
 def _unseal_scan_key(scan: Optional[dict], field: str) -> Optional[str]:
     return _boot_context.unseal_scan_key(scan, field, _compat())
+
+
+def _remember_agent_keys(container_id: Optional[str], scan: Optional[dict]) -> None:
+    """Remember the sealed agent-run API keys a wake scan carried (migration 071)."""
+    _agent_keys.remember(container_id, scan)
+
+
+def _inject_agent_key(env, runtime: Optional[str], cwd, *, quiet: bool = False) -> bool:
+    """Open this run's opted-in API key in memory and put it in the child env (or do nothing)."""
+    return _agent_keys.inject(env, runtime, cwd, _compat(), quiet=quiet)
 
 
 def _triage_wake(

@@ -12,7 +12,27 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +42,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,8 +63,11 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import io.openorcha.mobile.ui.components.NeutralButton
-import io.openorcha.mobile.ui.components.PrimaryButton
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.components.StateLayout
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
@@ -80,7 +102,7 @@ fun ScannerScreen(
         onDispose { }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().background(if (granted) Color.Black else p.bg)) {
         when {
             granted -> {
                 AndroidView(
@@ -126,43 +148,81 @@ fun ScannerScreen(
                         previewView
                     },
                 )
-                // hint + fallback chrome over the viewfinder
-                Column(
-                    Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        "Scan the QR from your Orcha portal",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.55f), MaterialTheme.shapes.small)
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                    TextButton(onClick = onManualEntry) {
-                        Text("Can't scan? Enter the address", color = p.accent, fontWeight = FontWeight.W700)
-                    }
-                }
+                ScannerFrameOverlay(scanned = scanned, onManualEntry = onManualEntry)
             }
             denied -> StateLayout(
                 title = "Camera access needed",
-                sub = "Orcha uses the camera only to read the pairing QR from your portal. Grant access in Settings, or type the address instead.",
+                sub = "Embodent uses the camera only to read the pairing QR from your portal. Grant access in Settings, or type the address instead.",
                 danger = true,
                 glyph = { Icon(OrchaIcons.NoPhotography, null, tint = p.danger, modifier = Modifier.size(34.dp)) },
             ) {
-                PrimaryButton("Open Settings", {
+                LButton("Open Settings", {
                     context.startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
                     )
-                })
-                NeutralButton("Enter the address instead", onManualEntry)
+                }, icon = OrchaIcons.Settings, kind = LButtonKind.Primary)
+                LButton("Enter the address instead", onManualEntry, kind = LButtonKind.Ghost)
             }
             else -> StateLayout(title = "Requesting camera…", sub = null)
         }
         IconButton(
             onClick = onBack,
-            modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
-        ) { Icon(OrchaIcons.Close, "Close", tint = Color.White) }
+            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp),
+        ) { Icon(OrchaIcons.Close, "Close", tint = if (granted) Color.White else p.text2) }
+    }
+}
+
+
+/** Linear QR frame over the live camera: dimmed surround, rounded corner brackets
+ *  (green once scanned), a caption chip and the manual-entry escape hatch. */
+@Composable
+private fun ScannerFrameOverlay(scanned: Boolean, onManualEntry: () -> Unit) {
+    val p = Orcha.palette
+    val pulse = rememberInfiniteTransition(label = "pulse").animateFloat(
+        initialValue = 1f, targetValue = 1.02f,
+        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse), label = "scale",
+    )
+    val bracket = if (scanned) p.ok else Color.White
+    Box(Modifier.fillMaxSize()) {
+        Canvas(Modifier.fillMaxSize().graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
+            val side = minOf(size.width * 0.68f, 280.dp.toPx()) * pulse.value
+            val topLeft = Offset((size.width - side) / 2f, (size.height - side) / 2f - 40.dp.toPx())
+            val r = 22.dp.toPx()
+            drawRect(Color.Black.copy(alpha = 0.45f))
+            drawRoundRect(Color.Transparent, topLeft, Size(side, side), CornerRadius(r), blendMode = BlendMode.Clear)
+            val len = side * 0.16f
+            val cr = 18.dp.toPx()
+            val l = topLeft.x; val t = topLeft.y; val rt = l + side; val b = t + side
+            val path = Path().apply {
+                moveTo(l, t + len); lineTo(l, t + cr); quadraticTo(l, t, l + cr, t); lineTo(l + len, t)
+                moveTo(rt - len, t); lineTo(rt - cr, t); quadraticTo(rt, t, rt, t + cr); lineTo(rt, t + len)
+                moveTo(rt, b - len); lineTo(rt, b - cr); quadraticTo(rt, b, rt - cr, b); lineTo(rt - len, b)
+                moveTo(l + len, b); lineTo(l + cr, b); quadraticTo(l, b, l, b - cr); lineTo(l, b - len)
+            }
+            drawPath(path, bracket, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round))
+        }
+        Column(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp, start = LSpace.l, end = LSpace.l),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(LSpace.m),
+        ) {
+            Column(
+                Modifier
+                    .background(Color(0xCC141516), RoundedCornerShape(12.dp))
+                    .padding(horizontal = LSpace.l, vertical = LSpace.m),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    if (scanned) "Pairing…" else "Scan the pairing QR",
+                    style = ltype(LType.Headline), color = Color.White,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text("Portal → Settings → Devices and pairing", style = ltype(LType.Meta), color = Color.White.copy(alpha = 0.75f))
+            }
+            TextButton(onClick = onManualEntry, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Can't scan? Enter the address", style = ltype(LType.BodyEmph), color = Color.White)
+            }
+        }
     }
 }

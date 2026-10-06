@@ -69,6 +69,12 @@ import io.openorcha.mobile.ui.components.SectionH
 import io.openorcha.mobile.ui.components.TonalButton
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 
 /* =============================================================================
    Flow 07 — Request detail: flow header, chain context, payload, response quote,
@@ -90,7 +96,7 @@ fun TextSheet(
 ) {
     val p = Orcha.palette
     var text by remember { mutableStateOf("") }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.raised) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.surface) {
         // A1: a multi-thousand-char payload must never push the field/buttons out of
         // reach — cap the title (full body stays on the detail screen behind the sheet),
         // make the sheet scrollable, and keep it above the keyboard.
@@ -102,16 +108,21 @@ fun TextSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(kicker, style = MaterialTheme.typography.labelMedium, color = if (destructive) p.danger else p.accent)
-            Text(title, style = MaterialTheme.typography.titleSmall, color = p.text2, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            Text(
+                kicker.lowercase().replaceFirstChar { it.uppercase() },
+                style = ltype(LType.Headline),
+                color = if (destructive) p.danger else p.text,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(title, style = ltype(LType.Body), color = p.text2, maxLines = 4, overflow = TextOverflow.Ellipsis)
             OrchaField(text, { text = it }, label = label, minLines = 3)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (destructive) {
-                    DangerTonalButton(confirm, { onConfirm(text.trim()) }, Modifier.weight(1f), enabled = (!required || text.isNotBlank()) && !busy)
-                } else {
-                    PrimaryButton(confirm, { onConfirm(text.trim()) }, Modifier.weight(1f), enabled = (!required || text.isNotBlank()) && !busy)
-                }
-                NeutralButton("Cancel", onDismiss, enabled = !busy)
+                LButton(
+                    confirm, { onConfirm(text.trim()) }, Modifier.weight(1f),
+                    kind = if (destructive) LButtonKind.Danger else LButtonKind.Primary,
+                    enabled = (!required || text.isNotBlank()) && !busy,
+                )
+                LButton("Cancel", onDismiss, kind = LButtonKind.Ghost, enabled = !busy)
             }
         }
     }

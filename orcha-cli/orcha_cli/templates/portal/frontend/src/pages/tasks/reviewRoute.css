@@ -1,0 +1,9 @@
+/* mig 057 — manager review handoff rows in the verification gate (ReviewRoute.tsx) */
+.td-g-review { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.td-g-route { color: var(--v2-text-2); }
+.td-g-mgr { display: flex; align-items: baseline; gap: 6px; color: var(--v2-text-2); min-width: 0; }
+.td-g-mgr > span:first-of-type { min-width: 0; overflow-wrap: anywhere; }
+.td-g-mgr .v2-ico { flex: none; align-self: center; width: 12px; height: 12px; color: var(--v2-text-3); }
+.td-g-mgr.is-ok .v2-ico { color: var(--v2-ok); }
+.td-g-mgr.is-bad .v2-ico { color: var(--v2-danger); }
+.td-g-mgr.is-pending .v2-ico { color: var(--v2-warn); }

@@ -9,7 +9,7 @@
  *   GET /api/containers/{cid}/github/browse/file?ref=&path=
  *   GET /api/containers/{cid}/github/browse/search?q=&mode=names|contents&ref=
  */
-import { classifyDetailError, classifyError, type GhError } from "../ghlib";
+import { classifyDetailError, classifyError, unavailableError, type GhError } from "../ghlib";
 import type { BrowseFilePayload, BrowseSearchMode, BrowseSearchPayload, BrowseTreePayload } from "./browseTypes";
 
 export type BrowseResult<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -20,6 +20,11 @@ async function getBrowse<T>(url: string, classify: Classifier): Promise<BrowseRe
     const r = await fetch(url);
     const body = await r.json().catch(() => null);
     if (!r.ok) return { ok: false, error: classify(r.status, body) };
+    // V2 (G-08): the browse routes answer 200 + {available:false, reason} for
+    // not-connected / rate-limited / unreachable — never render that as an
+    // empty tree ("No files.") or an empty file.
+    const off = unavailableError(body, r.status, classify === classifyDetailError ? "item" : "repo");
+    if (off) return { ok: false, error: off };
     return { ok: true, data: body as T };
   } catch (e) {
     return { ok: false, error: { kind: "error", status: 0, detail: (e as Error).message } };

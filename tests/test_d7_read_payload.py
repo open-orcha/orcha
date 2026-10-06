@@ -8,6 +8,7 @@ renders without extra calls and the approval card suppresses durably:
 Plus per-agent `model` is stored at registration (default Opus 5.5; NULL for humans).
 """
 import pytest
+from conftest import ts_ago
 
 
 async def _get_container(client, cid):
@@ -125,9 +126,9 @@ async def test_plan_decision_latest_wins(client, container, make_agent, make_tas
     assert _task(p, tid)["plan_decision"] is None            # no decision yet
 
     # an earlier reject, then a later approve → latest (approve) must win
-    db.execute("""INSERT INTO decisions (container_id, subject_type, subject_id, decision, reason,
+    db.execute(f"""INSERT INTO decisions (container_id, subject_type, subject_id, decision, reason,
                       actor_agent_id, created_at)
-                  VALUES (%s,'plan_approval',%s,'reject','needs work',%s, now() - interval '1 minute')""",
+                  VALUES (%s,'plan_approval',%s,'reject','needs work',%s, {ts_ago(60)})""",
                (container["id"], tid, hid))
     db.execute("""INSERT INTO decisions (container_id, subject_type, subject_id, decision, reason,
                       actor_agent_id, created_at)
@@ -158,8 +159,8 @@ async def test_runs_summary(client, container, make_agent, make_task, db):
     a = await make_agent("Runner", "eng")
     t = await make_task("y", "dod")
     aid, tid = a["agent_id"], t["id"]
-    db.execute("""INSERT INTO worker_runs (agent_id, task_id, status, exit_code, started_at)
-                  VALUES (%s,%s,'exited',0, now() - interval '2 minutes')""", (aid, tid))
+    db.execute(f"""INSERT INTO worker_runs (agent_id, task_id, status, exit_code, started_at)
+                  VALUES (%s,%s,'exited',0, {ts_ago(120)})""", (aid, tid))
     db.execute("""INSERT INTO worker_runs (agent_id, task_id, status, started_at)
                   VALUES (%s,%s,'running', now())""", (aid, tid))
     p = await _get_container(client, container["id"])

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
-import { hostToolPath, scrubWorkerEnv, workerStartResult, startHostWorker, type HostWorkerDeps } from './hostWorker'
+import {
+  hostToolPath,
+  resolveOrcha,
+  scrubWorkerEnv,
+  workerStartResult,
+  startHostWorker,
+  type HostWorkerDeps
+} from './hostWorker'
 
 describe('scrubWorkerEnv', () => {
   it('deletes ANTHROPIC_API_KEY, ORCHA_LLM_API_KEY, and every CLAUDE_CODE_* key', () => {
@@ -19,6 +26,10 @@ describe('scrubWorkerEnv', () => {
     // unrelated vars survive untouched.
     expect(scrubbed.PATH).toBe('/usr/bin')
     expect(scrubbed.HOME).toBe('/Users/x')
+  })
+
+  it('drops the personal-session marker so managed workers never inherit it', () => {
+    expect(scrubWorkerEnv({ ORCHA_PERSONAL_SESSION: '1', PATH: '/usr/bin' }).ORCHA_PERSONAL_SESSION).toBeUndefined()
   })
 
   it('does not mutate the input object', () => {
@@ -83,6 +94,8 @@ describe('startHostWorker', () => {
     which: vi.fn(async (cmd: string) => (cmd === 'orcha' || cmd === 'claude' ? `/bin/${cmd}` : null)),
     orchaUp: vi.fn(async () => undefined),
     pathEnv: '/stub/path',
+    // no bundled runtime / ~/.local/bin link: these cases exercise the PATH lookup
+    orchaBin: () => 'orcha',
     ...over
   })
 
@@ -112,5 +125,35 @@ describe('startHostWorker', () => {
     const r = await startHostWorker('/proj', d)
     expect(r.started).toBe(true)
     expect(r.reason).toMatch(/Claude Code/)
+  })
+})
+
+describe('resolveOrcha (GH #258 plan D3 resolution order)', () => {
+  const RES = '/Applications/Embodent.app/Contents/Resources'
+  const SIDECAR = `${RES}/orcha-runtime/bin/orcha`
+  const LINK = '/Users/x/.local/bin/orcha'
+  const has = (...paths: string[]) => (p: string) => paths.includes(p)
+
+  it('1) prefers the runtime bundled in the app, even when ~/.local/bin/orcha exists', () => {
+    expect(resolveOrcha({ resourcesPath: RES, home: '/Users/x', exists: has(SIDECAR, LINK) })).toBe(SIDECAR)
+  })
+
+  it('2) falls back to ~/.local/bin/orcha when the app has no bundled runtime', () => {
+    expect(resolveOrcha({ resourcesPath: RES, home: '/Users/x', exists: has(LINK) })).toBe(LINK)
+    // dev / tests: no resources dir at all
+    expect(resolveOrcha({ resourcesPath: null, home: '/Users/x', exists: has(LINK) })).toBe(LINK)
+  })
+
+  it('3) else plain `orcha`, looked up on the host-tool PATH', () => {
+    expect(resolveOrcha({ resourcesPath: RES, home: '/Users/x', exists: has() })).toBe('orcha')
+  })
+
+  it('startHostWorker counts a bundled runtime as the helper without a PATH lookup', async () => {
+    const which = vi.fn(async (cmd: string) => (cmd === 'claude' ? '/usr/local/bin/claude' : null))
+    const orchaUp = vi.fn(async () => {})
+    const res = await startHostWorker('/p', { which, orchaUp, pathEnv: '/usr/bin', orchaBin: () => SIDECAR })
+    expect(res).toEqual({ started: true })
+    expect(which).not.toHaveBeenCalledWith('orcha', expect.anything())
+    expect(orchaUp).toHaveBeenCalled()
   })
 })

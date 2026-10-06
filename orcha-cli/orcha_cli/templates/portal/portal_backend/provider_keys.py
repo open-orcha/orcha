@@ -2,15 +2,23 @@
 
 from typing import Optional
 
+from portal_backend import sql
+
 try:
     import secret_box
 except ImportError:
     from orcha_cli import secret_box
 
 
+# Agent runs on an API key (migration 071): which stored provider key can stand in for which agent
+# runtime's subscription. Only these two pairs are meaningful — Claude Code reads
+# ANTHROPIC_API_KEY, the Codex CLI reads CODEX_API_KEY / OPENAI_API_KEY.
+AGENT_KEY_RUNTIME = {"anthropic": "claude", "openai": "codex"}
+
+
 def provider_stored_row(cur, container_id: str, provider: str):
     cur.execute(
-        "SELECT key_enc, key_hint, set_at FROM container_provider_keys "
+        "SELECT key_enc, key_hint, set_at, use_for_agents FROM container_provider_keys "
         "WHERE container_id=%s AND provider=%s",
         (container_id, provider),
     )
@@ -35,6 +43,22 @@ def provider_key_enc(cur, container_id: str, provider: str) -> Optional[str]:
         return row["key_enc"] if row else None
     except Exception:
         return None
+
+
+def agent_keys_enc(cur, container_id: str) -> dict:
+    """{runtime: sealed key or None} for the agent runtimes whose provider key is opted in to agent
+    runs (use_for_agents). Ciphertext only — the daemon opens it in memory at spawn time. A runtime
+    with no opted-in key maps to None, which means: leave the worker env alone (subscription)."""
+    out = {runtime: None for runtime in AGENT_KEY_RUNTIME.values()}
+    cur.execute(
+        "SELECT provider, key_enc FROM container_provider_keys "
+        f"WHERE container_id=%s AND use_for_agents AND {sql.in_list('provider')}",
+        (container_id, sql.list_param(AGENT_KEY_RUNTIME)),
+    )
+    for row in cur.fetchall():
+        if row["key_enc"]:
+            out[AGENT_KEY_RUNTIME[row["provider"]]] = row["key_enc"]
+    return out
 
 
 def effective_use_case_provider(

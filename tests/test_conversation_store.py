@@ -286,7 +286,7 @@ def _seed_event(db, cid, aid, name, ts, payload="{}"):
     body = payload if isinstance(payload, str) else _json.dumps(payload)
     db.execute(
         "INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload) "
-        "VALUES (%s,%s,%s,%s,%s,%s::jsonb)", (cid, aid, aid, name, ts, body))
+        "VALUES (%s,%s,%s,%s,%s,%s)", (cid, aid, aid, name, ts, body))
 
 
 @pytest.mark.asyncio

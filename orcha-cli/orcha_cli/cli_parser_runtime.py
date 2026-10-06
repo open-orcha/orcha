@@ -148,6 +148,26 @@ def register_runtime_commands(
     )
     bridge.set_defaults(func=handlers["terminal-bridge"])
 
+    portal = sub.add_parser(
+        "portal",
+        help="GH #258: run this project's portal as a host process (no container), in the "
+        "foreground. Postgres still comes from the project's Docker `db` service; stop the "
+        "compose `portal` service first so the port is free.",
+    )
+    portal.add_argument("--host", default=None, help="bind host (default 127.0.0.1)")
+    portal.add_argument(
+        "--port", type=int, default=None, help="bind port (default: api_port in orcha.json)"
+    )
+    portal.add_argument(
+        "--project-dir", default=None, help="project root (default: the current directory)"
+    )
+    portal.add_argument(
+        "--allow-downgrade",
+        action="store_true",
+        help="start even if the project's schema is newer than this CLI's migrations",
+    )
+    portal.set_defaults(func=handlers["portal"])
+
     sbx = sub.add_parser(
         "sandbox",
         help="opt-in sandbox mode: run agent wakes inside an isolated `orcha/runner` Docker "

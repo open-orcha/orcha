@@ -5,8 +5,9 @@
  *     click/Enter while the POST is in flight is a no-op (exactly one POST);
  *   - the lost-attachment race: the tray is cleared OPTIMISTICALLY at send,
  *     but the staged refs live on pendingLocal — the POST body still carries
- *     them, a failure returns them to the tray (with the composer text), and
- *     Retry re-submits EXACTLY the failed content + refs.
+ *     them, a failure keeps text + refs on the failed bubble ONLY (composer and
+ *     tray stay clear), and Retry re-submits EXACTLY the failed content + refs;
+ *     Edit moves them back into the composer, Discard drops them.
  */
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +31,7 @@ const RAW_SNAPSHOT = {
     { id: "d1", alias: "Dup", kind: "ai", role: "Builder", status: "idle" },
     { id: "d2", alias: "Race", kind: "ai", role: "Builder", status: "idle" },
     { id: "d3", alias: "Key", kind: "ai", role: "Builder", status: "idle" },
+    { id: "d4", alias: "Edit", kind: "ai", role: "Builder", status: "idle" },
   ],
   tasks: [],
   requests: [],
@@ -133,10 +135,13 @@ describe("composer send sequencing (vanilla conversation-composer.js parity)", (
     expect(JSON.parse(String(turnPosts()[0].body)).attachments).toEqual([{ id: "abc_shot.png", name: "shot.png" }]);
     // … the pending bubble flips to failed with an explicit Retry
     await waitFor(() => expect(container.querySelector(".turn.pending.failed")).toBeTruthy());
-    expect(container.querySelector(".conv-sendfail")!.textContent).toContain("Send failed (500)");
-    // nothing lost: the staged refs are back in the tray and the composer got the text back
-    expect(container.querySelector("#convTray")?.textContent).toContain("shot.png");
-    expect(ta(container).value).toBe("look at this");
+    expect(container.querySelector(".conv-sendfail")!.textContent).toContain("Embodent couldn't save this message (error 500)");
+    // nothing lost, and held in exactly ONE place: the failed bubble keeps the text +
+    // refs; the composer and tray stay clear so a follow-up Enter can't double-send
+    expect(container.querySelector(".turn.pending.failed .tx")!.textContent).toBe("look at this");
+    expect(container.querySelector(".turn.pending.failed .msg-atts")?.textContent).toContain("shot.png");
+    expect(container.querySelector("#convTray")?.textContent || "").not.toContain("shot.png");
+    expect(ta(container).value).toBe("");
 
     // Retry re-submits EXACTLY the failed content + refs through the same path
     fireEvent.click(container.querySelector("[data-retrysend]") as HTMLButtonElement);
@@ -163,5 +168,39 @@ describe("composer send sequencing (vanilla conversation-composer.js parity)", (
     expect(container.querySelectorAll(".turn.human").length).toBe(1);
     expect(ta(container).value).toBe("");
     expect(sessionStorage.getItem("orcha:convdraft:d3")).toBeNull(); // ISS-64 draft dropped
+  });
+
+  it("a failed send offers Edit (text + refs move back to the composer) and Discard (drops the bubble)", async () => {
+    stubFetch(["fail", "fail"]);
+    const { container } = mount(agentOf("d4"));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/api/agents/d4/conversation?limit="))).toBe(true));
+    const input = container.querySelector("#convAttachInput") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["png-bytes"], "shot.png", { type: "image/png" })] } });
+    await waitFor(() => expect(container.querySelector("#convTray")?.textContent).toContain("shot.png"));
+    fireEvent.change(ta(container), { target: { value: "first try" } });
+    fireEvent.click(sendBtn(container));
+    await waitFor(() => expect(container.querySelector(".turn.pending.failed")).toBeTruthy());
+
+    // a second send while the failed bubble exists is refused (one unsent message at a time)
+    fireEvent.change(ta(container), { target: { value: "something else" } });
+    fireEvent.click(sendBtn(container));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(turnPosts()).toHaveLength(1);
+
+    // Edit: the failed text goes back into the composer ahead of the newer draft, refs to the tray
+    fireEvent.click(container.querySelector("[data-editsend]") as HTMLButtonElement);
+    await waitFor(() => expect(container.querySelector(".turn.pending")).toBeNull());
+    expect(ta(container).value).toBe("first try\n\nsomething else");
+    expect(container.querySelector("#convTray")?.textContent).toContain("shot.png");
+
+    // fail again, then Discard: the bubble goes, nothing is re-posted
+    fireEvent.change(ta(container), { target: { value: "second try" } });
+    fireEvent.click(sendBtn(container));
+    await waitFor(() => expect(container.querySelector(".turn.pending.failed")).toBeTruthy());
+    const posted = turnPosts().length;
+    fireEvent.click(container.querySelector("[data-discardsend]") as HTMLButtonElement);
+    await waitFor(() => expect(container.querySelector(".turn.pending")).toBeNull());
+    expect(turnPosts()).toHaveLength(posted);
+    expect(ta(container).value).toBe("");
   });
 });

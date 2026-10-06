@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../components/ui";
 import { SnapshotProvider } from "../state/SnapshotProvider";
 import { HomePage } from "../pages/home/HomePage";
+import { ncEarlierRow, ncUnreadCount } from "./Shell";
 
 const RAW_SNAPSHOT = {
   container: { id: "c1", name: "Orcha", status: "active", autonomy_level: "plan" },
@@ -80,7 +81,7 @@ async function openPanel() {
   expect(panel().classList.contains("show")).toBe(false);
   fireEvent.click(bell());
   await waitFor(() => expect(panel().classList.contains("show")).toBe(true));
-  await screen.findByText("Task verified · Ship the widget");
+  await screen.findByText("Ship the widget");
 }
 
 describe("Shell notification center", () => {
@@ -95,14 +96,15 @@ describe("Shell notification center", () => {
 
   it("bell click opens the panel and requests the acting human's earlier feed", async () => {
     await openPanel();
-    expect(feedCalls()).toHaveLength(1);
-    expect(feedCalls()[0].url).toBe("/api/agents/h1/notifications?zone=earlier&limit=20");
+    // page 1 is prefetched for the unread badge and refreshed on open — always page 1
+    expect(feedCalls().length).toBeGreaterThanOrEqual(1);
+    for (const c of feedCalls()) expect(c.url).toBe("/api/agents/h1/notifications?zone=earlier&limit=20");
     // both rows rendered, unread state reflected per row, task deeplink wired
-    expect(screen.getByText("Request answered · What port?")).toBeInTheDocument();
+    expect(screen.getByText("What port?")).toBeInTheDocument();
     const rows = panel().querySelectorAll(".nrow");
-    const unreadTitles = Array.from(rows).filter((r) => r.classList.contains("unread")).map((r) => r.querySelector(".ti")?.textContent);
-    expect(unreadTitles).toEqual(["Task verified · Ship the widget"]);
-    expect(screen.getByText("Task verified · Ship the widget").closest("a")?.getAttribute("href")).toBe("/tasks?task=t1");
+    const unreadTitles = Array.from(rows).filter((r) => r.classList.contains("unread")).map((r) => r.querySelector(".ti-t")?.textContent);
+    expect(unreadTitles).toEqual(["Ship the widget"]);
+    expect(screen.getByText("Ship the widget").closest("a")?.getAttribute("href")).toBe("/tasks?task=t1");
     // a second click closes it again (the handler toggles; it is not merely preventDefault)
     fireEvent.click(bell());
     await waitFor(() => expect(panel().classList.contains("show")).toBe(false));
@@ -110,16 +112,17 @@ describe("Shell notification center", () => {
 
   it("Load earlier pages with the server cursor and appends the older rows", async () => {
     await openPanel();
-    fireEvent.click(screen.getByText("… Load earlier"));
-    await screen.findByText("Decision made · Approve rollout");
-    expect(feedCalls()).toHaveLength(2);
-    expect(feedCalls()[1].url).toBe(
+    fireEvent.click(screen.getByText("Load earlier"));
+    await screen.findByText("Approve rollout");
+    const before = feedCalls().filter((c) => c.url.includes("before_ts"));
+    expect(before).toHaveLength(1);
+    expect(before[0].url).toBe(
       "/api/agents/h1/notifications?zone=earlier&limit=20&before_ts=1700000050&before_id=n2",
     );
     // first page kept, second appended; no more pages → the footer disappears
-    expect(screen.getByText("Task verified · Ship the widget")).toBeInTheDocument();
+    expect(screen.getByText("Ship the widget")).toBeInTheDocument();
     expect(panel().querySelectorAll(".nc-list .nrow")).toHaveLength(3);
-    expect(screen.queryByText("… Load earlier")).toBeNull();
+    expect(screen.queryByText("Load earlier")).toBeNull();
   });
 
   it("Mark all read POSTs the read endpoint and clears every unread marker", async () => {
@@ -131,5 +134,70 @@ describe("Shell notification center", () => {
     expect(panel().querySelectorAll(".nrow.unread")).toHaveLength(0);
     // the panel stays open (stopPropagation keeps the outside-click closer from firing)
     expect(panel().classList.contains("show")).toBe(true);
+  });
+});
+
+describe("Shell notification center — Inbox rows + unread badge", () => {
+  beforeEach(() => { localStorage.clear(); stubFetch(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it("rows are avatar + one-line title + one-line 'what happened' + age, no chevron", async () => {
+    await openPanel();
+    const row = screen.getByText("Ship the widget").closest(".nrow")!;
+    expect(row.querySelector(".nc-av")).toBeTruthy();
+    expect(row.querySelector(".nc-badge")).toBeTruthy();
+    expect(row.querySelector(".me")?.textContent).toBe("Task verified · kedar");
+    expect(row.querySelector(".nc-r .when")).toBeTruthy();
+    expect(row.querySelector(".go")).toBeNull();
+  });
+
+  it("the bell badge is an UNREAD dot that clears after Mark all read", async () => {
+    mount();
+    await waitFor(() => expect(bell().querySelector(".n")).toBeTruthy());
+    expect(bell().getAttribute("aria-label")).toContain("1 unread");
+    fireEvent.click(bell());
+    await waitFor(() => expect(panel().classList.contains("show")).toBe(true));
+    await screen.findByText("Ship the widget");
+    fireEvent.click(screen.getByText("Mark all read"));
+    await waitFor(() => expect(bell().querySelector(".n")).toBeNull());
+    expect(bell().getAttribute("aria-label")).not.toContain("unread");
+  });
+
+  it("ncUnreadCount caps a fully-unread page with more to load", () => {
+    expect(ncUnreadCount([{ read: false }, { read: true }], true)).toEqual({ n: 1, label: "1" });
+    expect(ncUnreadCount([{ read: false }, { read: false }], true)).toEqual({ n: 2, label: "2+" });
+    expect(ncUnreadCount([], false)).toEqual({ n: 0, label: "0" });
+  });
+
+  it("opening the panel moves focus inside, Tab stays inside, Esc returns to the bell (review M1)", async () => {
+    await openPanel();
+    await waitFor(() => expect(panel().contains(document.activeElement)).toBe(true));
+    expect((document.activeElement as HTMLElement).classList.contains("nrow")).toBe(true);
+    const inside = Array.from(panel().querySelectorAll<HTMLElement>("a[href], button:not([disabled])")).filter((e) => e.tabIndex >= 0);
+    inside[inside.length - 1].focus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+    expect(panel().contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    expect(panel().contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(document.activeElement).toBe(bell());
+  });
+
+  it("the unread dot leads the title, not the age column (m4)", async () => {
+    await openPanel();
+    const row = screen.getByText("Ship the widget").closest(".nrow")!;
+    expect(row.querySelector(".ti > .nc-unread")).toBeTruthy();
+    expect(row.querySelector(".nc-r .nc-unread")).toBeNull();
+  });
+
+  it("a bare notification names its kind + actor / project, never a lone 'Notification' (m3)", () => {
+    const bare = ncEarlierRow({ type: "weird", ts: 1, read: true, deeplink: { kind: "other", id: "x" } }, "orcha-web");
+    expect(bare.ti).toBe("Weird"); // parity: the humanized type, as the old UI showed
+    expect(bare.me).toBe("orcha-web");
+    expect(bare.icon).toBe("bell");
+    const withActor = ncEarlierRow({ type: "task_assigned", actor_alias: "lead", ts: 1, read: false, deeplink: { kind: "task", id: "t" } }, "orcha-web");
+    expect(withActor.ti).toBe("Task assigned");
+    expect(withActor.me).toBe("by lead · orcha-web");
+    expect(withActor.actor).toBe("lead");
   });
 });

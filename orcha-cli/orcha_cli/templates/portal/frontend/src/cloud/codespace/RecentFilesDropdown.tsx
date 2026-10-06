@@ -5,6 +5,7 @@
  * without leaving the file view. Closes on outside click and Escape (house
  * SymbolSearch.tsx / composer convention: Escape closes transient panels).
  */
+import { Button, Popover } from "../../components/primitives";
 import { useEffect, useRef, useState } from "react";
 import { relTime } from "../../lib/format";
 import { loadRecentFiles, type RecentFileEntry } from "./recentFiles";
@@ -21,7 +22,7 @@ export interface RecentFilesDropdownProps {
 export function RecentFilesDropdown({ cid, currentPath, onOpenFile, refreshToken }: RecentFilesDropdownProps) {
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<RecentFileEntry[]>([]);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const anchor = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     setFiles(loadRecentFiles(cid));
@@ -35,43 +36,47 @@ export function RecentFilesDropdown({ cid, currentPath, onOpenFile, refreshToken
     setOpen(false);
   }, [currentPath]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   const others = files.filter((f) => f.path !== currentPath);
+  const pick = (p: string) => { onOpenFile(p); setOpen(false); };
 
+  // The menu is the shared Popover (portaled, so the toolbar row never clips
+  // it; outside-click / Escape close it and focus returns to the pill).
   return (
-    <div className="cs-recentfiles-dd" ref={rootRef}>
-      <button type="button" className="cs-recentfiles-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        Recent files
-      </button>
-      {open ? (
-        <div className="cs-recentfiles-panel">
-          {!others.length ? (
-            <div className="none" style={{ padding: 8 }}>No other recent files yet.</div>
-          ) : (
-            others.map((f) => (
-              <div key={f.path} className="cs-recentfiles-row" onClick={() => { onOpenFile(f.path); setOpen(false); }}>
-                <span className="cs-recentfiles-path mono" title={f.path}>{f.path}</span>
-                <span className="cs-recentfiles-time">{relTime(f.viewedAt)}</span>
-              </div>
-            ))
-          )}
-        </div>
-      ) : null}
+    <div className="cs-recentfiles-dd">
+      <Button
+        ref={anchor}
+        size="md"
+        variant="ghost"
+        pill
+        icon="clock"
+        iconRight="chev"
+        className="cs-recentfiles-btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-label="Recent files"
+      >
+        Recent
+      </Button>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} role="dialog" label="Recent files" className="cs-recentfiles-panel" autoFocus={false}>
+        {!others.length ? (
+          <div className="cs-empty-line">No other recent files yet.</div>
+        ) : (
+          others.map((f) => (
+            <div
+              key={f.path}
+              className="cs-recentfiles-row"
+              role="button"
+              tabIndex={0}
+              onClick={() => pick(f.path)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(f.path); } }}
+            >
+              <span className="cs-recentfiles-path mono" title={f.path}>{f.path}</span>
+              <span className="cs-recentfiles-time">{relTime(f.viewedAt)}</span>
+            </div>
+          ))
+        )}
+      </Popover>
     </div>
   );
 }

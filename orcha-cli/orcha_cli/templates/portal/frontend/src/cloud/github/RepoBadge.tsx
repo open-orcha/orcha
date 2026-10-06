@@ -17,8 +17,7 @@
  * entirely on a non-local badge (a GitHub-bound repo has no separate
  * "origin" concept here).
  */
-import { Icon } from "../../components/ui";
-import { CloudIcon } from "../projects/icons";
+import { CloudIcon, GitHubMark } from "../projects/icons";
 import { isLocalRepo, repoDisplayName } from "./connectRepo";
 
 export interface RepoBadgeProps {
@@ -47,7 +46,7 @@ export function RepoBadge({ repo, workspaceName, link, className, originRepo }: 
       </span>
     );
   }
-  const label = <><Icon name="link" cls="" />{repo}</>;
+  const label = <><GitHubMark cls="repo-badge-gh" />{repo}</>;
   return (
     <span className={cls} data-repo-kind="github" title={repo}>
       {link ? (

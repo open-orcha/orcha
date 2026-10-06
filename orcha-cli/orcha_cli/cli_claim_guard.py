@@ -6,6 +6,8 @@ import json
 import pathlib
 import re
 
+from . import personal_session
+
 
 _CLAIM_VERB = re.compile(
     r"\b(created|creating|spawned|spawning|started|starting|accepted|"
@@ -163,6 +165,8 @@ def _fetch_tasks(
 
 def task_claim_guard(args, services) -> None:
     """Audit the final assistant reply and loudly flag fabricated task claims."""
+    if personal_session.active():  # would post to the portal AS the bound agent
+        return
     try:
         transcript = services._read_hook_stdin().get("transcript_path")
         claimed = extract_claimed_task_ids(

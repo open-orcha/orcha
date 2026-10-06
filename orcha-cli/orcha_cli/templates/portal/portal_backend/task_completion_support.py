@@ -69,7 +69,7 @@ def _recalibrate_agent_digest_on_close(
         """INSERT INTO agent_memory_digests
              (container_id, agent_id, snapshot_ts, current_focus,
               decisions, learnings, open_threads, audience)
-           VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
         (
             str(container_id),
@@ -130,25 +130,18 @@ def _recalibrate_task_owners(
         )
 
 
-def _complete_and_unblock(cur, container_id, tid):
-    """#298: the SHARED completion mechanics used by BOTH the human /verify (approve branch) and
-    the full-autonomy /done path. Extracted so the two cannot drift — a single edit here changes
-    both completion routes (a drift tooth in the tests proves it). Mechanics ONLY: it marks the
-    task completed, unblocks every downstream task whose deps are now all satisfied (publishing the
-    container-wide + per-assignee `task_ready` wakes), and completes the container if THIS was the
-    root. It does NOT emit the verified / task_verified audit + wake events — each caller owns its
-    own audit trail (a human verification vs an engine auto-completion are different events).
-    Returns the list of newly-unblocked downstream task ids."""
-    # GH #56 (Point 5): if THIS task was the accepter's spawned task and its originating request is
-    # still 'accepted' (forgot to report back), auto-answer it now so the loop never strands. Covers
-    # both completion routes that funnel through here (full-autonomy /done and the human /verify
-    # approve branch). Usually a no-op (the request was already answered by the report-back).
-    _backstop_stranded_request(cur, container_id, tid)
-    cur.execute(
-        "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,)
-    )
-    cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
-    # unblock downstream tasks whose deps are now all completed
+# A dependency is SATISFIED once it is completed OR cancelled (TG-25): a cancelled upstream
+# will never complete, so leaving its dependents 'pending' forever strands them — and the
+# cancel dialog promises they unblock. Shared by every ready-vs-pending decision.
+DEP_SATISFIED_STATUSES = ("completed", "cancelled")
+DEP_UNSATISFIED_SQL = "dep.status NOT IN ('completed','cancelled')"
+
+
+def unblock_downstream(cur, container_id, tid):
+    """Promote every PENDING task that depends on `tid` to 'ready' when all of its
+    dependencies are now satisfied (completed or cancelled), publishing the container-wide
+    and per-assignee `task_ready` wakes. Called by the completion path and by cancel.
+    Returns the newly-unblocked task ids."""
     cur.execute(
         """SELECT DISTINCT td.task_id
            FROM task_dependencies td
@@ -162,7 +155,7 @@ def _complete_and_unblock(cur, container_id, tid):
             """SELECT 1
                FROM task_dependencies td
                JOIN tasks dep ON dep.id = td.depends_on_id
-               WHERE td.task_id=%s AND dep.status <> 'completed'
+               WHERE td.task_id=%s AND """ + DEP_UNSATISFIED_SQL + """
                LIMIT 1""",
             (dst,),
         )
@@ -199,6 +192,28 @@ def _complete_and_unblock(cur, container_id, tid):
                 "task_ready",
                 {"task_id": dst, "assigned": True},
             )
+    return unblocked
+
+
+def _complete_and_unblock(cur, container_id, tid):
+    """#298: the SHARED completion mechanics used by BOTH the human /verify (approve branch) and
+    the full-autonomy /done path. Extracted so the two cannot drift — a single edit here changes
+    both completion routes (a drift tooth in the tests proves it). Mechanics ONLY: it marks the
+    task completed, unblocks every downstream task whose deps are now all satisfied (publishing the
+    container-wide + per-assignee `task_ready` wakes), and completes the container if THIS was the
+    root. It does NOT emit the verified / task_verified audit + wake events — each caller owns its
+    own audit trail (a human verification vs an engine auto-completion are different events).
+    Returns the list of newly-unblocked downstream task ids."""
+    # GH #56 (Point 5): if THIS task was the accepter's spawned task and its originating request is
+    # still 'accepted' (forgot to report back), auto-answer it now so the loop never strands. Covers
+    # both completion routes that funnel through here (full-autonomy /done and the human /verify
+    # approve branch). Usually a no-op (the request was already answered by the report-back).
+    _backstop_stranded_request(cur, container_id, tid)
+    cur.execute(
+        "UPDATE tasks SET status='completed', completed_at=now() WHERE id=%s", (tid,)
+    )
+    cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
+    unblocked = unblock_downstream(cur, container_id, tid)
 
     # Did this complete the root? If so, complete the container.
     cur.execute("SELECT is_root, container_id, title FROM tasks WHERE id=%s", (tid,))

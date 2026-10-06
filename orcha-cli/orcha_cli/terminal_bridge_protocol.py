@@ -6,6 +6,8 @@ import os
 import struct
 import termios
 
+from . import personal_session
+
 
 def build_spawn_env(
     alias,
@@ -17,7 +19,7 @@ def build_spawn_env(
     run_token=None,
 ):
     """Return the environment consumed by ``orcha use`` inside a live PTY."""
-    env = dict(os.environ if base_env is None else base_env)
+    env = personal_session.strip(dict(os.environ if base_env is None else base_env))
     env["ORCHA_ALIAS"] = alias
     env["ORCHA_LIVE"] = "1"
     _set_optional(env, "ORCHA_RUN_TOKEN", run_token)

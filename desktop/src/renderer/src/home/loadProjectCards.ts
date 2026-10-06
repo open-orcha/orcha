@@ -1,4 +1,5 @@
 import type { ProjectContainer, Stack } from '../../../shared/types'
+import { containerIcon } from '../../../shared/projectIcon'
 
 /** One project card's worth of data: the container itself plus which stack (compose
  *  project) it lives in — Open/Pair need the stack's project name to route portalShow. */
@@ -24,7 +25,14 @@ export async function loadProjectCards(
           containers?: ProjectContainer[]
         }
         const containers = Array.isArray(res.containers) ? res.containers : []
-        return containers.map((container) => ({ stack, container }))
+        return containers.map((raw) => {
+          // D14: `icon` is validated here (never trusted as-is); an absent key stays absent so
+          // the UI can tell an older portal (no shared store) from an unset icon (null).
+          const { icon: _raw, ...rest } = raw
+          const icon = containerIcon(raw)
+          const container: ProjectContainer = icon === undefined ? rest : { ...rest, icon }
+          return { stack, container }
+        })
       } catch {
         return []
       }

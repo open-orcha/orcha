@@ -1,124 +1,84 @@
 /**
- * AppearanceSection — theme writes orcha:theme + queues the debounced
- * /api/prefs PUT (mig 040), the skin picker applies/persists the data-skin
- * attribute live, and bootAppearance restores it at app boot. fetch is
- * stubbed; matches foundation.test.ts style.
+ * AppearanceSection (legacy settings key `appearance`) — renders Settings ›
+ * Interface, whose Appearance group is the System / Light / Dark picker:
+ *  - bootAppearance() runs the once-per-load /api/prefs sync; a server theme
+ *    WINS and is applied (shell/theme.ts listens for the prefs-applied event);
+ *  - the retired skin is never applied: data-skin stays off, the stored value
+ *    is kept (never deleted) and disclosed as "kept on file".
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as prefs from "../projects/prefs";
-import { AppearanceSection, applySkin, bootAppearance } from "./AppearanceSection";
+import { AppearanceSection, bootAppearance } from "./AppearanceSection";
+import { legacyNote } from "../../pages/settings/InterfaceSection";
+import { _resetThemeForTests, initTheme } from "../../shell/theme";
 
-// static/styles/skin-gold.css — resolved relative to the frontend/ package
-// root (process.cwd() under vitest), four levels up to the portal root.
-const GOLD_CSS_PATH = path.resolve(
-  process.cwd(),
-  "../static/styles/skin-gold.css",
-);
+interface Call { url: string; method: string }
 
-interface Call { url: string; method: string; body: unknown }
-
-function stubFetch(): Call[] {
+function stubFetch(serverPrefs: Record<string, string> | null): Call[] {
   const calls: Call[] = [];
   global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({
-      url: String(input),
-      method: init?.method || "GET",
-      body: init?.body ? JSON.parse(String(init.body)) : null,
-    });
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ prefs: {} }), // server prefs ACTIVE (trusted + mapped)
-    } as unknown as Response;
+    calls.push({ url: String(input), method: init?.method || "GET" });
+    return { ok: true, status: 200, json: async () => ({ prefs: serverPrefs }) } as unknown as Response;
   }) as unknown as typeof fetch;
   return calls;
 }
 
-describe("AppearanceSection (theme + skin apply mechanics)", () => {
+describe("AppearanceSection — Interface with the Appearance picker", () => {
   beforeEach(() => {
     localStorage.clear();
     prefs._resetForTests();
+    _resetThemeForTests();
     document.documentElement.removeAttribute("data-skin");
-    document.documentElement.setAttribute("data-theme", "auto");
+    document.documentElement.setAttribute("data-theme", "dark");
   });
-  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); _resetThemeForTests(); });
 
-  it("theme pick writes orcha:theme, sets data-theme, and queues the prefs PUT", async () => {
-    const calls = stubFetch();
-    await prefs.sync(); // once-per-load boot sync — activates the server mirror
+  it("renders the Theme radiogroup (System / Light / Dark) and no skin picker", () => {
+    stubFetch(null);
     render(<AppearanceSection />);
-    fireEvent.click(screen.getByRole("radio", { name: "dark" }));
-    // the open shell's contract: localStorage key + data-theme on <html>, instantly
-    expect(localStorage.getItem("orcha:theme")).toBe("dark");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-    // mig 040: the debounced (800ms) PUT mirrors the FULL local set
-    await waitFor(() => {
-      const put = calls.find((c) => c.url === "/api/prefs" && c.method === "PUT");
-      expect(put).toBeTruthy();
-      expect(put!.body).toEqual({ prefs: { theme: "dark" } });
-    }, { timeout: 2500 });
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
+    const group = screen.getByRole("radiogroup", { name: "Theme" });
+    expect(Array.from(group.querySelectorAll('[role="radio"]')).map((r) => r.textContent)).toEqual(["System", "Light", "Dark"]);
+    expect(screen.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true"); // default
+    expect(document.querySelector("#legacyAppearance")).toBeNull(); // nothing stored → no note
+    expect(document.querySelector("#skinGrid")).toBeNull();
+    expect(document.querySelector(".skin-tile")).toBeNull();
+    expect(document.querySelector('.set-keys[aria-label="Keyboard shortcuts"]')).not.toBeNull();
   });
 
-  it("skin pick applies data-skin live (classic = no attribute), persists, and rides the prefs PUT", async () => {
-    const calls = stubFetch();
-    await prefs.sync();
-    render(<AppearanceSection />);
-    fireEvent.click(document.querySelector('.skin-tile[data-skin="minimal"]')!);
-    expect(document.documentElement.getAttribute("data-skin")).toBe("minimal");
-    expect(localStorage.getItem("orcha:skin")).toBe("minimal");
-    fireEvent.click(document.querySelector('.skin-tile[data-skin="classic"]')!);
-    // "classic" = the shipped look — attribute REMOVED, not set (vanilla applySkin)
+  it("bootAppearance syncs /api/prefs: the server theme wins and applies; the skin never does", async () => {
+    localStorage.setItem("orcha:skin", "gold");
+    localStorage.setItem("orcha:theme", "dark");
+    initTheme();
+    const calls = stubFetch({ theme: "light", skin: "swiss" });
+    bootAppearance();
+    await act(async () => { await prefs.sync(); });
+    expect(calls.some((c) => c.url === "/api/prefs" && c.method === "GET")).toBe(true);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(document.documentElement.hasAttribute("data-skin")).toBe(false);
-    expect(localStorage.getItem("orcha:skin")).toBe("classic");
-    await waitFor(() => {
-      const put = calls.find((c) => c.url === "/api/prefs" && c.method === "PUT");
-      expect(put).toBeTruthy();
-      expect(put!.body).toEqual({ prefs: { skin: "classic" } });
-    }, { timeout: 2500 });
-  });
-
-  it("prefs inactive (self-host / trust off): writes stay localStorage-only, no PUT", () => {
-    const calls = stubFetch(); // NOT synced — queue stays inactive
-    applySkin("swiss");
-    expect(document.documentElement.getAttribute("data-skin")).toBe("swiss");
+    // stored values are kept (server wins on sync), not deleted
     expect(localStorage.getItem("orcha:skin")).toBe("swiss");
-    expect(calls.filter((c) => c.method === "PUT").length).toBe(0);
+    expect(localStorage.getItem("orcha:theme")).toBe("light");
   });
 
-  it("gold tile applies data-skin=\"gold\" live and persists (fourth skin tile)", async () => {
-    const calls = stubFetch();
-    await prefs.sync();
+  it("discloses a stored retired skin as kept on file (the theme is live, so not disclosed)", () => {
+    stubFetch(null);
+    localStorage.setItem("orcha:theme", "light");
+    localStorage.setItem("orcha:skin", "gold");
     render(<AppearanceSection />);
-    expect(document.querySelector('.skin-tile[data-skin="gold"]')).toBeTruthy();
-    fireEvent.click(document.querySelector('.skin-tile[data-skin="gold"]')!);
-    expect(document.documentElement.getAttribute("data-skin")).toBe("gold");
+    expect(screen.getByText(/\(Gold design\) is kept on file but no longer changes the look/)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Light" })).toHaveAttribute("aria-checked", "true");
+    // reading it did not mutate storage
+    expect(localStorage.getItem("orcha:theme")).toBe("light");
     expect(localStorage.getItem("orcha:skin")).toBe("gold");
-    await waitFor(() => {
-      const put = calls.find((c) => c.url === "/api/prefs" && c.method === "PUT");
-      expect(put).toBeTruthy();
-      expect(put!.body).toEqual({ prefs: { skin: "gold" } });
-    }, { timeout: 2500 });
   });
 
-  it("skin-gold.css defines the [data-skin=\"gold\"] token override (CSS-presence check)", () => {
-    const css = readFileSync(GOLD_CSS_PATH, "utf8");
-    expect(css).toContain('[data-skin="gold"]');
-    // the desktop app's own amber accent (desktop/src/renderer/src/styles.css
-    // --color-accent) — the whole point of this skin is matching it exactly.
-    expect(css).toContain("#f0b94b");
-  });
-
-  it("bootAppearance restores the persisted skin at app boot (pre-paint parity)", () => {
-    stubFetch();
-    localStorage.setItem("orcha:skin", "swiss");
-    bootAppearance();
-    expect(document.documentElement.getAttribute("data-skin")).toBe("swiss");
-    document.documentElement.removeAttribute("data-skin");
-    localStorage.setItem("orcha:skin", "classic");
-    bootAppearance();
-    expect(document.documentElement.hasAttribute("data-skin")).toBe(false);
+  it("legacyNote: only a non-classic skin needs disclosure", () => {
+    expect(legacyNote({ theme: "dark", skin: null })).toBeNull();
+    expect(legacyNote({ theme: "dark", skin: "classic" })).toBeNull();
+    expect(legacyNote({ theme: "auto", skin: null })).toBeNull();
+    expect(legacyNote({ theme: "light", skin: null })).toBeNull();
+    expect(legacyNote({ theme: "dark", skin: "swiss" })).toMatch(/Swiss design/);
   });
 });

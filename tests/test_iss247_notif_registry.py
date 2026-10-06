@@ -185,7 +185,7 @@ async def _emit(db, *, event_key, event_name, ts, payload=None, container_id=Non
     import json as _json
     db.execute(
         """INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload)
-           VALUES (%s, %s, %s, %s, %s, %s::jsonb)""",
+           VALUES (%s, %s, %s, %s, %s, %s)""",
         (container_id, target_id, event_key, event_name, ts, _json.dumps(payload or {})),
     )
 

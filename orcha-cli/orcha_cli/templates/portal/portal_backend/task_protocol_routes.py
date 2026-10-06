@@ -62,7 +62,7 @@ def update_task_protocol(tid: str, body: ProtocolUpdate, request: Request):
         }  # partial merge; sent keys win, others preserved
 
         cur.execute(
-            "UPDATE tasks SET protocol=%s::jsonb WHERE id=%s", (json.dumps(merged), tid)
+            "UPDATE tasks SET protocol=%s WHERE id=%s", (json.dumps(merged), tid)
         )
         log_event(
             cur,

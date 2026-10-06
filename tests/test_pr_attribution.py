@@ -33,17 +33,31 @@ def test_migration_042_exists_and_is_next_sequential():
     # 045 added by Code Space (docs/orcha-code-space-design.md); 046 added by the GitHub PAT
     # storage seam (Orcha Cloud local run gap #1, docs/orcha-cloud-local-run.md §1); 048 added by
     # the host-side roster analysis storage seam (docs/orcha-cloud-local-run.md); 049 adds the
-    # project-level worktree-routing preference. Keep this pin moving with the chain tip so
-    # gaps/dupes still fail loudly.
-    assert numbers[-1] == 49, f"049 must be the latest migration, saw {numbers[-1]:03d}"
+    # project-level worktree-routing preference; 050 adds the D14 per-project icon
+    # (containers.icon); 051 adds the partial request-events index behind the snapshot's
+    # per-request escalation fields (V2 parity r1); 052 adds agents.reports_to_agent_id (org
+    # chart); 053 per-agent/project budgets; 054 routines; 055 agent config revisions; 056 raises the
+    # containers.max_auto_agents default to 12 (configurable agent limit); 057 adds the manager
+    # review handoff (containers.review_route / ai_manager_prereview, tasks.review_routing /
+    # manager_review); 058 evidence packs + Verdikt handoff; 059 portable templates (DoD
+    # presets + skills stores); 060 general project mode + industry templates (writes 059's
+    # presets); 061 task deliverables; 062 goal ancestry (tasks.parent_task_id); 063 fine-grained
+    # notification preferences (notification_prefs + notification_pref_defaults); 064 Verdikt
+    # preview environments (container_verdikt_settings.preview_* + verdikt_previews); 065 splits a
+    # request's human text from its agent instructions (requests.agent_payload); 066 records the
+    # task a routine was made from (routines.origin_task_id); 067 agent-worktree clean-up
+    # (containers.worktree_auto_cleanup / worktree_grace_days + agent_worktree_inventory /
+    # agent_worktree_actions); 068 the Verdikt auto-fix loop (container_verdikt_settings.autofix_* +
+    # verdikt_runs.autofix + verdikt_task_autofix / verdikt_autofix_loops / verdikt_autofix_attempts); 069 plan-usage snapshots
+    # (plan_usage_snapshots); 070 the plan-usage display setting (plan_usage_display); 071 opt-in
+    # agent-run API keys (container_provider_keys.use_for_agents).
+    # Keep this pin moving with the chain tip so gaps/dupes still fail loudly.
+    assert numbers[-1] == 71, f"071 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):
-    rows = db.execute(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name='agents' AND column_name IN ('git_email','github_login')"
-    )
-    assert {r["column_name"] for r in rows} == {"git_email", "github_login"}
+    names = {r["column_name"] for r in db.columns("agents")}
+    assert {"git_email", "github_login"} <= names
 
 
 # ---------- register-human captures the handle ----------

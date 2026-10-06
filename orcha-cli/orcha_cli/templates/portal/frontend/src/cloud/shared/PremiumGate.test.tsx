@@ -18,7 +18,7 @@ describe("PremiumGate", () => {
         feature="members"
         title="Members"
         pitch={["Invite teammates", "Roles: owner, member, viewer"]}
-        upgradeUrl="https://orcha.nursoftai.com/#pricing"
+        upgradeUrl="https://orcha.quantallabs.ai"
       />,
     );
     expect(screen.getByText("Members")).toBeInTheDocument();
@@ -32,13 +32,13 @@ describe("PremiumGate", () => {
     expect(document.querySelector('[data-premium-feature="members"]')).not.toBeNull();
   });
 
-  it('"Upgrade to Orcha Cloud Team" opens upgradeUrl in a new tab, noopener', () => {
+  it('"Upgrade to Embodent Cloud Team" opens upgradeUrl in a new tab, noopener', () => {
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
     render(
-      <PremiumGate feature="members" title="Members" pitch={[]} upgradeUrl="https://orcha.nursoftai.com/#pricing" />,
+      <PremiumGate feature="members" title="Members" pitch={[]} upgradeUrl="https://orcha.quantallabs.ai" />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /Upgrade to Orcha Cloud Team/ }));
-    expect(openSpy).toHaveBeenCalledWith("https://orcha.nursoftai.com/#pricing", "_blank", "noopener");
+    fireEvent.click(screen.getByRole("button", { name: /Upgrade to Embodent Cloud Team/ }));
+    expect(openSpy).toHaveBeenCalledWith("https://orcha.quantallabs.ai", "_blank", "noopener");
   });
 
   it("renders with no pitch list when pitch is empty", () => {

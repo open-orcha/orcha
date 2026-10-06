@@ -8,11 +8,16 @@
 
 **Human-authoritative multi-agent orchestration as Claude Code slash commands.**
 Multiple Claude Code sessions collaborate on a high-level objective through a
-shared Postgres database; the human holds standing authority (approve,
+shared SQLite database; the human holds standing authority (approve,
 reprioritise, reassign, arbitrate) over every subtask.
 
+> **Product name: Embodent** (formerly Quorate). The portal, desktop and mobile
+> apps are branded Embodent; the `orcha` CLI command, the `ORCHA_*` env vars,
+> API paths, the `orcha://` URL scheme and the `open-orcha/orcha` repo keep
+> their names.
+
 This repo is **the Orcha tool source** — the installable CLI, the per-project
-backing service (FastAPI + Postgres), and the slash-command skill templates
+backing service (FastAPI + SQLite), and the slash-command skill templates
 that ship with it. End users don't read this repo; they install it once and run
 `orcha init` in their own projects.
 
@@ -48,9 +53,9 @@ that ship with it. End users don't read this repo; they install it once and run
 |---|---|
 | **CLI** (`orcha`) | Python ≥ 3.10 |
 | **Backing service / API** | FastAPI + Uvicorn (Python), Pydantic |
-| **Database** | PostgreSQL 16 |
-| **Runtime** | Docker + Docker Compose — one isolated stack per project |
-| **Web dashboard** | Vanilla HTML / CSS / JS, with xterm.js for the live terminal |
+| **Database** | SQLite (Python's built-in `sqlite3`) — one file per project |
+| **Runtime** | Host processes supervised by `orcha serve`, kept alive by launchd (macOS) / systemd (Linux) — no Docker |
+| **Web dashboard** | React + TypeScript (Vite), with xterm.js for the live terminal |
 | **Desktop app** (optional) | Electron + React 19 + TypeScript (Vite) |
 | **macOS widget** (optional) | Swift (WidgetKit) |
 | **Agent layer** | Claude Code slash-command skills |
@@ -59,73 +64,72 @@ that ship with it. End users don't read this repo; they install it once and run
 
 ## Installation
 
-> **Docker is required.** Orcha runs its Postgres database and web portal as
-> containers, so install and start a container runtime first —
-> [Docker Desktop](https://www.docker.com/products/docker-desktop/),
-> [OrbStack](https://orbstack.dev/), or [Colima](https://github.com/abiosoft/colima)
-> all work.
+Orcha runs as ordinary background processes on your machine — **no Docker, no
+Postgres.** Each project keeps all of its data in one file,
+`<project>/.orcha/orcha.db`.
+
+> Already have a project that runs in Docker? It keeps working; move it with
+> `orcha migrate-runtime` — see
+> [docs/legacy-docker-runtime.md](docs/legacy-docker-runtime.md).
 
 ### Prerequisites
 
 | Tool | Why | Needed by |
 |---|---|---|
-| **Docker** (Desktop / OrbStack / Colima) | runs Postgres + the portal | everyone |
-| **Python ≥ 3.10** | runs the `orcha` CLI | everyone |
-| **Claude Code** | where the slash commands run | everyone |
-| **Node.js + npm** | builds the desktop app | optional desktop app only |
-| **Xcode** | builds the macOS widget | optional widget only |
+| **Claude Code** (or **Codex**), signed in | the agents run in it | everyone |
+| **git** | GitHub-backed projects and the Code view | optional |
 
-### Install the CLI
+That's it — the Mac app carries its own runtime, and `uv` brings its own
+Python (≥ 3.10).
 
-**Homebrew** (recommended) — installs the `orcha` command-line tool.
+### Option 1 — the Mac app (recommended)
 
-One-line install (Homebrew taps the repo for you automatically):
+<!-- TODO(#258): the bundled runtime ships with the desktop sidecar (plan PR 16); until then the app installs the CLI with uv on first run (plan PR 14). -->
+
+Download **Orcha.app** (macOS, Apple Silicon):
+
+- **GitHub Releases** — latest `.dmg`:
+  <https://github.com/open-orcha/orcha/releases/latest>
+- The **Download** button on the Orcha website (same build)
+
+Open it, pick a project folder, and sign in to Claude Code. The app is signed
+and notarized, so macOS asks only once, on first open. It installs the `orcha`
+command for you at `~/.local/bin/orcha`.
+
+### Option 2 — the command line, with uv (macOS or Linux)
+
+<!-- TODO(#258): needs `orcha-cli` published to PyPI (plan PR 13; owner question Q-H — who owns the PyPI name). -->
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # once, if you don't have uv
+uv tool install orcha-cli
+orcha --version
+```
+
+Upgrade later with `orcha update` inside a project (it updates the CLI, then
+restarts Orcha on the new version).
+
+### Option 3 — Homebrew (still supported)
 
 ```bash
 brew install open-orcha/orcha/orcha
 orcha --version
 ```
 
-Or tap first, then install with the short name — handy if you'll be running
-other `orcha` formula commands later:
-
-```bash
-brew tap open-orcha/orcha
-brew install orcha
-orcha --version
-```
-
-This installs **only the CLI**. Orcha's web portal isn't a separate download —
-it starts automatically as a Docker container the first time you run
-`orcha init` in a project (see [First run](#first-run) below).
+Upgrade with `brew upgrade orcha`. Downgrade via the frozen per-release
+formulae (`brew install open-orcha/orcha/orcha@<version>`); details in the
+[tap README](https://github.com/open-orcha/homebrew-orcha).
 
 **From source** (for hacking on Orcha itself):
 
 ```bash
 git clone git@github.com:open-orcha/orcha.git
 cd orcha
-pip install ./orcha-cli
+uv tool install --editable ./orcha-cli   # or: pip install -e ./orcha-cli
 orcha --version
 ```
 
-### Mac desktop app (optional)
-
-Most people don't need this — the CLI plus the web portal cover the whole
-workflow. The desktop app is **not** installed through Homebrew (there's no
-cask); if you want the native Mac app, download it directly:
-
-- **GitHub Releases** — latest `.dmg` / `.zip`:
-  <https://github.com/open-orcha/orcha/releases/latest>
-- The **Download** button on the Orcha website (same build)
-
-The current Mac build is unsigned, so on first launch right-click the app →
-**Open** to get past macOS Gatekeeper. To build it from source instead:
-
-```bash
-cd desktop
-npm install
-npm run dev      # or: npm run build
-```
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contributor loop.
 
 ### Add your Anthropic API key
 
@@ -147,13 +151,19 @@ create a key, **load $20 of credit**, and drop it in your environment:
 
 ### First run
 
+<!-- TODO(#258): `orcha init` defaulting to native + installing the login service lands in plan PR 10. Until then init defaults to Docker; `orcha init --runtime native` opts in (plan PR 6). -->
+
 In any project you want to orchestrate:
 
 ```bash
+cd ~/projects/your-project
 orcha init --objective "Ship the thing" --as <YourName>
 ```
 
-This brings up the project's Docker stack and registers you as the first human.
+This starts Orcha for the project in the background, prints the portal address
+(`http://localhost:<port>/`), installs a small login service so it keeps
+running after you close the terminal and after a reboot, and registers you as
+the first human. If anything looks wrong, `orcha doctor` tells you what.
 See [How it works](#how-it-works-30-second-tour) below for the full tour.
 
 ---
@@ -161,23 +171,23 @@ See [How it works](#how-it-works-30-second-tour) below for the full tour.
 ## How it works (30-second tour)
 
 1. You install a tiny CLI once: `orcha`.
-2. In any project, `orcha init --objective "..." --as <YourName>` drops a
-   docker-compose + slash-command skills into that project's `.orcha/` and
-   `.claude/commands/`, brings up a per-project Postgres + REST API on free
-   ports, **creates the project's container**, and **registers you as the first
+2. In any project, `orcha init --objective "..." --as <YourName>` drops the
+   slash-command skills into that project's `.claude/commands/`, starts the
+   portal (REST API + web UI) on a free port as a background process,
+   **creates the project's container**, and **registers you as the first
    human agent** (`kind='human'`) so escalations/verifications have a real
    target from day one — no manual `/orcha-container` follow-up needed.
 3. Inside Claude Code (in that project), slash commands like
    `/orcha-register-agent Max ...`, `/orcha-status` appear automatically.
    Claude executes them by calling the local REST API. The portal at
    `http://localhost:<api_port>/` auto-loads your container — no ID to paste.
-4. State (containers, agents, tasks, requests, audit events) lives in the
-   project's Postgres; a read-only HTML dashboard is at `http://localhost:<api_port>/`.
+4. State (containers, agents, tasks, requests, audit events) lives in one
+   SQLite file, `<project>/.orcha/orcha.db`.
 
-**Stack:db:container is 1:1:1.** Each `orcha init` produces one Docker
-Compose stack with one Postgres and one container — enforced by a unique
+**Project:db:container is 1:1:1.** Each `orcha init` produces one project
+with one database file and one container — enforced by a unique
 index. `POST /api/containers` returns 409 if one already exists; to start a
-new container, run `orcha down -v && orcha init` (wipes the volume).
+new container, run `orcha down -v && orcha init` (deletes the database file).
 
 **Cross-folder usage.** Stacks are discoverable from anywhere on the
 machine:
@@ -193,7 +203,7 @@ $ # /orcha-register-agent Dev ... from here now lands in todo-app's stack
 ```
 
 `orcha connect <project>` writes `.claude/orcha.json` + skill templates into
-the CWD pointing at the named stack's API. No second Docker stack — this
+the CWD pointing at the named project's API. No second runtime — this
 folder is a client. Multiple Claude Code tabs `cd`'d into the same folder
 share the same container scope via that `.claude/orcha.json`.
 
@@ -241,8 +251,8 @@ guardrails, remote).
 
 Lifecycle (host shell):
 - `orcha init [--objective "..." --as <YourName>]` — bootstrap a project with
-  Docker stack + skills, create the container, register the first human
-- `orcha up` / `orcha down [-v]` / `orcha status` — Docker stack lifecycle
+  the native runtime + skills, create the container, register the first human
+- `orcha up` / `orcha down [-v]` / `orcha status` / `orcha logs` / `orcha doctor` — runtime lifecycle (see [Lifecycle](#lifecycle))
 - `orcha migrate` — apply any pending `migrations/*.sql` to the live DB now,
   without a wipe (the portal also runs them on startup, so `orcha up` migrates
   automatically; use this for an explicit on-demand apply)
@@ -250,8 +260,8 @@ Lifecycle (host shell):
   templates (compose + portal + migrations + skills, rebuild portal) **without**
   a data wipe. Use after a CLI reinstall so an existing project picks up new
   portal code + compose; then `orcha up` migrates the live volume
-- `orcha ls` — list all running orcha Docker stacks (with each stack's single
-  container) across the machine
+- `orcha ls` — list every Orcha project on this machine (native and, if
+  `docker` is installed, legacy Docker ones) with its container
 - `orcha connect <project-name> [--as <YourName>]` — point THIS folder at an
   existing running stack so `/orcha-* ` skills here target that stack's
   container. Optionally register an additional human in one step
@@ -289,32 +299,23 @@ Lifecycle (host shell):
 
 ### ⚠️ Destructive commands — wiping a project's data
 
-**These erase the project's Postgres data (agents, tasks, runs, threads). NEVER run
-them in a project whose state you want to keep** (e.g., a live multi-agent workspace) —
-there is no undo.
+**This erases the project's data (agents, tasks, runs, threads). NEVER run it in
+a project whose state you want to keep** (e.g., a live multi-agent workspace) —
+there is no undo unless you made a backup with `orcha backup`.
 
-- **`orcha down -v`** — stops the stack **and drops the `pgdata` volume** → full DB wipe.
-  (`orcha down` without `-v` keeps the volume; data survives a plain `up` again.)
-- **`orcha init --force`** does **NOT** wipe data. It only overwrites `.orcha/` config +
-  recreates the container; it **reuses the existing `pgdata` volume**, so the old DB
-  (agents, tasks) **survives**. To truly start fresh you must drop the **volume**.
-- **`orcha init --force --reset-data`** **DOES** wipe: it drops this project's Postgres
-  volume before starting so the DB comes up empty (the one in-place way to get a
-  genuinely pristine re-init without the manual `docker volume rm` dance below).
-
-**Reliable full reset of the *current* project** (only when you really mean it):
-```bash
-orcha down -v                                  # stop stack + drop the pgdata volume
-docker volume ls | grep "$(basename "$PWD")"   # CONFIRM the pgdata volume is gone…
-docker volume rm orcha-<project-name>_pgdata   # …if it's still listed, force-remove it
-orcha up                                        # brings up a fresh, empty DB
-```
-The volume is project-scoped: `orcha-<project-name>_pgdata` (project name = the
-`name:` in `.orcha/docker-compose.yml`, derived from the directory).
+- **`orcha down -v`** — stops Orcha **and deletes `.orcha/orcha.db`** (plus its
+  `-wal`/`-shm` side files) after a `y/N` prompt; scripts must pass `--yes`.
+  (`orcha down` without `-v` keeps the file; data survives a plain `orcha up`.)
+- **`orcha init --force`** does **NOT** wipe data. It only rewrites `.orcha/`
+  config and `.claude/` skills; the existing `orcha.db` is reused.
+  <!-- TODO(#258): confirm whether `orcha init --force --reset-data` survives on the native runtime. -->
 
 **Tip:** to test a *first-run / empty* experience, don't wipe an existing project —
-just `orcha init` in a **brand-new empty directory** (new project name → new volume →
-guaranteed clean), and `orcha down -v` that throwaway dir when finished.
+just `orcha init` in a **brand-new empty directory**, and `orcha down -v` that
+throwaway dir when finished.
+
+Projects still on the Docker runtime: see
+[docs/legacy-docker-runtime.md](docs/legacy-docker-runtime.md#️-wiping-a-docker-projects-data).
 
 Slash skills in Claude Code (after `orcha init`):
 
@@ -543,50 +544,13 @@ Don't put it in a tight loop anymore — `/orcha-listen` is strictly cheaper.
 
 ---
 
-## Prerequisites
-
-| Tool | Why | Install |
-|---|---|---|
-| **Docker Desktop** (or OrbStack / Colima) | runs Postgres + portal | macOS: see "Docker Desktop on macOS" below |
-| **Homebrew** | installs the orcha CLI | <https://brew.sh> |
-
-Tested on macOS (Apple Silicon, Darwin 25.x). Linux should work; Windows untested.
-
----
-
-## Install the `orcha` CLI
-
-One-time tap (private repo — your GitHub org SSH access is the auth):
-
-```bash
-brew tap open-orcha/orcha git@github.com:open-orcha/homebrew-orcha.git
-brew install open-orcha/orcha/orcha
-```
-
-Verify:
-
-```bash
-orcha --version
-orcha --help
-```
-
-Upgrade with `brew upgrade orcha` — or just run `orcha update` inside a
-project: it upgrades the CLI via brew, then the project's templates, portal,
-and DB in one shot. Downgrade via the frozen per-release formulae
-(`brew install open-orcha/orcha/orcha@<version>`); details in the
-[tap README](https://github.com/open-orcha/homebrew-orcha).
-
-Hacking on Orcha itself (editable install from a clone)? See
-[CONTRIBUTING.md](./CONTRIBUTING.md).
-
----
 
 ## Use Orcha in a project (the user flow)
 
 ```bash
 cd ~/projects/your-project
-orcha init                            # writes .orcha/, .claude/commands/, brings up docker
-# (picks free ports automatically: api=8000+, db=5432+)
+orcha init                            # writes .orcha/ + .claude/commands/, starts Orcha in the background
+# (picks a free port automatically: api=8000+)
 
 # Set the workspace objective up front (recommended) — it becomes the container's name:
 orcha init --objective "Build the thing"
@@ -628,63 +592,70 @@ cd ~/projects/your-project && claude
 /orcha-pause / /orcha-resume # mid-flight pause
 ```
 
-Inspect at `http://localhost:<api_port>/` — paste the container_id into the
-input. The dashboard polls every 3s.
+Open `http://localhost:<api_port>/` (the port `orcha init` printed) — the
+portal loads your container automatically.
 
 ### Files Orcha drops into your project
 
 ```
 your-project/
-├── .orcha/                              # docker stack (commit this)
-│   ├── docker-compose.yml               # project-prefixed, unique ports
-│   ├── migrations/                      # 001_init.sql … 010_*.sql, applied in order
-│   └── portal/{Dockerfile, requirements.txt, main.py, static/}
+├── .orcha/
+│   ├── orcha.db                         # the whole project's data (SQLite; back up with `orcha backup`)
+│   ├── .env                             # secret key + local settings (DO NOT commit)
+│   ├── logs/                            # portal / notifier / bridge / serve logs (5 × 10 MB each)
+│   └── state.json                       # what `orcha serve` is running right now
 └── .claude/
     ├── commands/                        # all /orcha-* slash command skills (commit these)
     │   ├── orcha-container.md
     │   ├── orcha-register-agent.md
     │   ├── orcha-status.md
-    │   └── …                            # ~27 skills total — see the skill table above
+    │   └── …                            # see the skill table above
     ├── settings.json                    # SessionStart/SessionEnd/PostToolUse hooks (orcha enable-hook)
-    ├── orcha.json                       # project-shared: api_base_url, ports, current_container_id
+    ├── orcha.json                       # project-shared: api_base_url, ports, runtime, current_container_id
     └── orcha-tabs/                      # per-tab agent binding (DO NOT commit — per-developer)
         └── <tty>.json                   # {alias, agent_id, container_id}
 ```
 
-`.claude/orcha-tabs/` is gitignored-by-convention (per-developer terminal
-state). Everything else is safe to commit.
+The portal code itself is not copied into your project — `orcha serve` runs
+it straight from the installed CLI, so updating the CLI updates every project.
 
-Everything in `.orcha/` and `.claude/` is safe to commit; it's how a teammate
-reproduces the same stack with `orcha up`.
+`.claude/commands/`, `.claude/settings.json` and `.claude/orcha.json` are safe
+to commit. Keep `.orcha/` and `.claude/orcha-tabs/` out of git: they hold your
+data, secrets and per-terminal state.
 
+<!-- TODO(#258): confirmed by the orcha serve author (plan PR 6): up, down, down -v, status, logs, ls, serve. Still unconfirmed: doctor (R4), backup/restore (S7), service + --no-service (plan PR 10), migrate-runtime (plan PR 8). -->
 ### Lifecycle
 
 Two distinct concepts share the word "container," so the verbs are split:
 
-**Docker stack lifecycle** (the Postgres + portal runtime):
+**Runtime lifecycle** (the portal, the wake daemon and the terminal bridge —
+plain background processes supervised by `orcha serve`):
 
 ```bash
 # from the project's directory:
-orcha up                  # bring the stack up (after orcha down)
-orcha down                # stop, KEEP volume (data persists)
-orcha down -v             # stop + drop the Postgres volume (re-runs migrations on next up)
-orcha status              # show config + `docker compose ps` for THIS project
+orcha up                  # make sure Orcha is running for this project
+orcha down                # stop it, KEEP the data (.orcha/orcha.db stays)
+orcha status              # runtime, ports, and each process's health
+orcha logs [-f] [-n N] [portal|notifier|bridge|serve]   # last 50 lines of each log in .orcha/logs/; -f follows
+orcha doctor              # one-screen health check — paste it into bug reports
+orcha backup              # snapshot .orcha/orcha.db (safe while running)
+orcha restore <file>      # put a backup back (stop with `orcha down` first)
 
 # from anywhere (no cd required):
-orcha ls                                   # list ALL running orcha Docker stacks across
-                                           # projects, with their API ports + db ports
-orcha down --project <name> [-v]           # stop a specific project's stack from any dir
-orcha up   --project <name>                # bring it back up (see caveat below)
+orcha ls                  # list every Orcha project on this machine, with ports
 ```
 
-`<name>` is whatever `orcha ls` shows in the PROJECT column (e.g. `news1`,
-`movies`, `orcha-demo`). The CLI prepends `orcha-` internally to match the
-actual docker compose project name.
+`orcha init` also installs a small **login service** (a launchd user agent on
+macOS, label `io.openorcha.<project>`; a systemd user unit
+`orcha-<project>` on Linux) so Orcha keeps running after you close the
+terminal and comes back after a reboot. Manage it with
+`orcha service install|uninstall|status`; skip it at init with
+`--no-service`. On Linux, run `loginctl enable-linger $USER` once if you want
+it to keep running while you're logged out.
 
-**Caveat — `up --project` only works on stopped (not down-ed) stacks.** `down`
-removes containers and breaks the link to the compose file's location, so a
-fresh `up` needs the project directory. Use `orcha up` from inside the project
-dir to bootstrap after a full `down`.
+Projects created before the no-Docker release still run in Docker until you
+move them with `orcha migrate-runtime` — see
+[docs/legacy-docker-runtime.md](docs/legacy-docker-runtime.md).
 
 **Orcha container lifecycle** (the project/milestone entity in the DB — operate on the current project's API):
 
@@ -692,25 +663,12 @@ dir to bootstrap after a full `down`.
 orcha pause [container_id]            # flip Orcha container status to 'paused'
 orcha resume [container_id]           # flip back to 'active'
 orcha stop  [container_id]            # mark 'completed' (or --cancel for 'cancelled')
-                                      # NOTE: does NOT stop the Docker stack — use `orcha down`.
+                                      # NOTE: does NOT stop the runtime — use `orcha down`.
 ```
 
 If `container_id` is omitted, the CLI reads `current_container_id` from `.claude/orcha.json` in your CWD — same fallback the slash skills use. So inside your project dir, plain `orcha pause` does what you'd expect.
 
 These mirror the `/orcha-pause`, `/orcha-resume`, `/orcha-stop` slash skills — same API call under the hood. The host CLI is useful when you want to script lifecycle events from a shell loop or cron without launching Claude Code.
-
-### Force-kill a stack by port (when you're not in the project dir)
-
-If you've lost track of which directory owns a stack (e.g. an old project on
-port 8001 that you can't `cd` to anymore), this one-liner finds the compose
-project from the port and tears it down with its volume:
-
-```bash
-docker compose -p $(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' $(docker ps -q --filter publish=8001)) down -v
-```
-
-Swap `8001` for whichever port is in use. Use this when `orcha down` isn't an
-option (no `.orcha/` dir on hand).
 
 ---
 
@@ -724,10 +682,10 @@ orcha/                                   # this repo
 │       ├── __init__.py
 │       ├── __main__.py                  # the `orcha` CLI
 │       └── templates/                   # rendered into a user's project by `orcha init`
-│           ├── docker-compose.yml.j2
-│           ├── migrations/              # 001_init.sql … 010_wake_kind_ephemeral.sql
-│           ├── portal/{Dockerfile, requirements.txt, main.py, static/}
-│           └── skills/                  # all ~27 orcha-*.md slash-command templates
+│           ├── portal/{main.py, portal_backend/, static/}   # run in place by `orcha serve` (no per-project copy)
+│           ├── migrations/              # schema migrations
+│           ├── docker-compose.yml.j2    # legacy Docker runtime only (one release)
+│           └── skills/                  # all orcha-*.md slash-command templates
 └── README.md                            # you are here
 ```
 
@@ -736,85 +694,23 @@ a clone, the uv wheel-cache footgun, and the release runbook all live there.
 
 ---
 
-## Docker Desktop on macOS — the gotcha that cost us an hour
-
-If you've never installed Docker Desktop before, **install Docker.app into the
-system-wide `/Applications/` folder, not `~/Applications` or `~/Downloads`.**
-This one detail prevents a cascade of confusing failures.
-
-### Why this matters (the AppTranslocation story)
-
-macOS Gatekeeper sets the `com.apple.quarantine` extended attribute on any app
-downloaded from the internet. When you run a quarantined app from **anywhere
-other than `/Applications/`** (e.g. `~/Downloads`, `~/Applications`), Gatekeeper
-runs it from a read-only translocated copy at:
-
-```
-/private/var/folders/.../T/AppTranslocation/<random-uuid>/d/Docker.app
-```
-
-**The random UUID changes every launch.** Docker Desktop's first-launch
-installer creates symlinks like `/usr/local/bin/docker` →
-`<AppTranslocation>/Docker.app/Contents/Resources/bin/docker`. Those symlinks
-go stale the moment you quit and relaunch the app.
-
-### Symptoms
-
-- `zsh: command not found: docker` (despite Docker Desktop running)
-- `docker compose build` fails with:
-  `error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH`
-- `ls -la /usr/local/bin/docker` shows a symlink to an
-  `AppTranslocation/<uuid>/...` path that doesn't exist anymore
-
-### Fix (one-time)
-
-1. **Quit Docker Desktop** from the menu-bar whale icon → *Quit Docker Desktop*.
-2. **Move `Docker.app` into `/Applications/`** (drag in Finder).
-3. **Relaunch** from `/Applications/Docker.app`.
-4. **Repoint the CLI symlinks** if they're still broken. All five may need it
-   — the `docker-credential-*` ones are easy to forget but builds fail without
-   them:
-   ```bash
-   sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker                /usr/local/bin/docker
-   sudo ln -sf /Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose /usr/local/bin/docker-compose
-   sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker-credential-desktop     /usr/local/bin/docker-credential-desktop
-   sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker-credential-osxkeychain /usr/local/bin/docker-credential-osxkeychain
-   sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker-credential-ecr-login   /usr/local/bin/docker-credential-ecr-login
-   ```
-5. **Apple Silicon only:** confirm `/usr/local/bin` is on your `$PATH`. The
-   default zsh PATH on M-series Macs leans on `/opt/homebrew/bin` and may omit
-   `/usr/local/bin`. Add to `~/.zshrc` if missing:
-   `export PATH="/usr/local/bin:$PATH"`.
-6. Verify: `docker version` shows BOTH Client and Server.
-
-### Diagnostic one-liner
-
-```bash
-ls -la /usr/local/bin/docker /usr/local/bin/docker-compose /usr/local/bin/docker-credential-* 2>&1
-pgrep -fl "Docker Desktop" | head -1   # confirm it's running from /Applications/
-```
-
-A symlink target starting with `/private/var/folders/.../AppTranslocation/` is
-the smoking gun.
-
----
 
 ## Troubleshooting cheatsheet
 
+<!-- TODO(#258): `orcha doctor` (R4) and `orcha service` (plan PR 10) are not built yet; the other commands below are confirmed. -->
 | Symptom | Cause | Fix |
 |---|---|---|
-| `command not found: docker` | broken AppTranslocation symlinks | move Docker.app to `/Applications/`, repoint symlinks |
-| `error getting credentials: docker-credential-desktop ... not found` | `docker-credential-*` symlinks stale | repoint all three cred-helper symlinks |
-| `orcha init` says "no free port in range" | host ports 8000..8099 / 5432..5531 all in use | `--api-port` / `--db-port` to pick explicitly |
-| `Bind for 0.0.0.0:5432 failed` | a host Postgres is bound there | `orcha init` should auto-skip; if not, `--db-port 5433` |
-| `psycopg.OperationalError: connection refused` from a skill | stack down or wrong port | `orcha status`; `orcha up` |
+| Anything odd, and you want to file a bug | — | run `orcha doctor` and paste its output into the issue |
+| `orcha init` says "no free port in range" | host ports 8000..8099 all in use | `--api-port` to pick explicitly |
+| Agents stop waking after you close the terminal | the login service isn't installed | `orcha service install` (or re-run `orcha up`) |
+| A project still runs in Docker | it was created before the switch | see [docs/legacy-docker-runtime.md](docs/legacy-docker-runtime.md) |
 | Skill prints "Orcha isn't initialized" | no `.claude/orcha.json` in CWD | run `orcha init` in this project root |
 | `/orcha-register-agent` says "Run /orcha-container first" | no `current_container_id` in `.claude/orcha.json` | run `/orcha-container "..."` once |
 | `/orcha-next` / `/orcha-done` says "tab isn't bound to an agent" | no `.claude/orcha-tabs/<tty>.json` in this terminal | re-run `/orcha-register-agent` in this tab |
 | `/orcha-done` returns 409 "task is 'ready', not 'in_progress'" | task hasn't been claimed yet | `/orcha-next` first, or only `done` your own claimed task |
 | `/orcha-verify` returns 409 "task is 'in_progress', not 'needs_verification'" | task hasn't been marked done yet | wait for `/orcha-done` from the assignee |
 | Portal returns 404 on a UUID | DB was reset, container id is stale | `/orcha-container` to make a new one |
-| Edited `001_init.sql` template, schema didn't change in a live project | `initdb.d` only runs on first boot | `orcha down -v && orcha up` |
+| Portal page won't load | the portal process stopped or is restarting | `orcha status`; `orcha logs portal`; `orcha up` |
 | Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then `rm -rf .orcha .claude && orcha init` in the target project. |
 | Agent hallucinated an endpoint that doesn't exist | skill briefing didn't enumerate capabilities clearly | tell the agent which Phase the system is at; the register-agent briefing now lists "NOT IN PHASE 1" — direct the agent back to it |
 
@@ -852,6 +748,4 @@ that version's DOI from the [Zenodo record](https://doi.org/10.5281/zenodo.20740
 If you hit a setup issue not in the cheatsheet, please open an issue with:
 
 - macOS version + chip (Intel / Apple Silicon)
-- `docker version` and `which docker`
-- `ls -la /usr/local/bin/docker*`
-- `orcha status` output from the project where things broke
+- `orcha doctor` output from the project where things broke

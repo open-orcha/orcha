@@ -28,6 +28,7 @@ These teeth pin the layered priority, the headline sticky-'Working' case, the
 is never mutated by this read-time path.
 """
 import pytest
+from conftest import ts_ago
 
 
 async def _snapshot_agent(client, cid, aid):
@@ -106,7 +107,7 @@ async def test_status_idle_when_lease_expired(client, make_agent, make_task, con
                       json={"lease_ttl": 300, "lease_kind": "resident"})
     # Force the lease into the past — held row, but no longer LIVE. GH #91/#90: a resident lives in
     # the CONVERSATION lane, so expire conv_lease_until (the lane its claim actually wrote).
-    db.execute("UPDATE agent_wake_state SET conv_lease_until = now() - interval '60 seconds' "
+    db.execute(f"UPDATE agent_wake_state SET conv_lease_until = {ts_ago(60)} "
                "WHERE agent_id=%s", (aid,))
 
     row = await _snapshot_agent(client, cid, aid)
@@ -143,7 +144,7 @@ async def test_heartbeat_age_secs_surfaced_raw(client, make_agent, container, db
     cid = container["id"]
     a = await make_agent("Beat")
     aid = a["agent_id"]
-    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '900 seconds' WHERE id=%s", (aid,))
+    db.execute(f"UPDATE agents SET last_heartbeat_at = {ts_ago(900)} WHERE id=%s", (aid,))
 
     row = await _snapshot_agent(client, cid, aid)
     assert row["heartbeat_age_secs"] is not None
@@ -183,10 +184,10 @@ async def test_stored_status_untouched_by_snapshot_and_reaper(
     # embodiment, so its heartbeat-death is on conv_last_heartbeat_at (the lane-scoped reaper keys
     # the conversation branch strictly on that column).
     db.execute("UPDATE agents SET status='working' WHERE id=%s", (aid,))
-    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '2000 seconds' WHERE id=%s", (aid,))
+    db.execute(f"UPDATE agents SET last_heartbeat_at = {ts_ago(2000)} WHERE id=%s", (aid,))
     # GH #138: also backdate conv_last_woken_at (the reaper floors idle at claim time now).
-    db.execute("UPDATE agent_wake_state SET conv_last_heartbeat_at = now() - interval '2000 seconds', "
-               "conv_last_woken_at = now() - interval '2000 seconds' WHERE agent_id=%s", (aid,))
+    db.execute(f"UPDATE agent_wake_state SET conv_last_heartbeat_at = {ts_ago(2000)}, "
+               f"conv_last_woken_at = {ts_ago(2000)} WHERE agent_id=%s", (aid,))
 
     # Surfaced status reads idle (no live lease + no task) even before the reap.
     row = await _snapshot_agent(client, cid, aid)

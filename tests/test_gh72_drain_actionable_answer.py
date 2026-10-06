@@ -224,7 +224,7 @@ async def test_active_conversations_drains_before_answer_but_parks_it(
     msg_ts = answer_ts - 5.0
     db.execute(
         """INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload)
-           VALUES (%s,%s,%s,'prompt',%s,%s::jsonb)""",
+           VALUES (%s,%s,%s,'prompt',%s,%s)""",
         (container["id"], asker["agent_id"], asker["agent_id"], msg_ts,
          json.dumps({"message": "heads up: rebase first"})))
 

@@ -22,7 +22,7 @@ FRONTEND = PORTAL / "frontend" / "src"
 
 
 def _tasks() -> str:
-    return (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    return "".join((FRONTEND / "pages" / "tasks" / f).read_text() for f in ("TasksPage.tsx", "TaskDetail.tsx"))
 
 
 def _requests() -> str:
@@ -73,7 +73,7 @@ def test_tasks_static_guards():
     assert "!t.plan_decision" in sp, "plan gate not gated on the durable plan_decision"
     # the reject-reason + shared reply composer are the protected typing surfaces
     assert '"rt-" + t.id' in html, "no reject-reason input"
-    assert 'textareaId="reply"' in html and "<MessageComposer" in html, "no task reply composer"
+    assert 'id="reply"' in html and "<Composer" in html, "no task reply composer"
     assert "value={value}" in composer and "onValueChange(event.target.value)" in composer, \
         "shared reply textarea is not controlled"
     # runs via the shared engine, fetched per task
@@ -127,8 +127,11 @@ def test_review_p1_fixes():
     assert 'setText("");' in tasks, "reply doesn't clear its input after success"
     assert 'setAnsDraft("");' in reqs, "answer doesn't clear the inline box after success"
     # C: pending + failed have buckets, and a catch-all renders any other status
-    assert '{ k: "pending"' in tasks and '{ k: "failed"' in tasks, "pending/failed tasks have no list bucket"
-    assert "!grouped.has(" in tasks, "no catch-all — a task with an unexpected status would vanish"
+    #    (V2: the grouping lives in the pure pages/tasks/taskQuery.ts the page imports)
+    query = (FRONTEND / "pages" / "tasks" / "taskQuery.ts").read_text()
+    assert "groupTasks(" in tasks, "the task list doesn't use the shared grouping"
+    assert '{ k: "pending"' in query and '{ k: "failed"' in query, "pending/failed tasks have no list bucket"
+    assert "!grouped.has(" in query, "no catch-all — a task with an unexpected status would vanish"
 
 
 def test_review_p2_fixes():

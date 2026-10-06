@@ -11,6 +11,10 @@
  */
 
 const DEBOUNCE_MS = 800;
+/** Fired on window after a server bag was applied to localStorage / <html>, so
+ *  live UI holding a copy in React state (the sidebar rail, the theme) re-reads
+ *  it and never disagrees with <html data-sidebar> / <html data-theme>. */
+export const PREFS_APPLIED_EVENT = "orcha:prefs-applied";
 const DEF_CID_KEY = "orcha:defaultCid";
 
 let _active = false;
@@ -37,28 +41,25 @@ export function localPrefs(): Record<string, string> {
   return p;
 }
 
-// SERVER WINS: apply to <html> now (same attribute contracts as the pre-paint
-// script) and mirror into localStorage for the next load.
+// SERVER WINS: mirror into localStorage for the next load and apply the
+// sidebar attribute now. The theme is applied by shell/theme.ts, which
+// listens for PREFS_APPLIED_EVENT (no import cycle). The retired skin is
+// still mirrored (read-tolerant) but never applied.
 function applyServer(prefs: Record<string, string>): void {
   const d = document.documentElement;
-  if (prefs.theme) {
-    lsSet("orcha:theme", prefs.theme);
-    d.setAttribute("data-theme", prefs.theme);
-  }
-  if (prefs.skin) {
-    lsSet("orcha:skin", prefs.skin);
-    if (prefs.skin === "classic") d.removeAttribute("data-skin");
-    else d.setAttribute("data-skin", prefs.skin);
-  }
+  if (prefs.theme) lsSet("orcha:theme", prefs.theme);
+  if (prefs.skin) lsSet("orcha:skin", prefs.skin);
   if (prefs.sidebar) {
     lsSet("orcha:sidebar", prefs.sidebar);
     if (prefs.sidebar === "collapsed") d.setAttribute("data-sidebar", "collapsed");
     else d.removeAttribute("data-sidebar");
   }
   if (prefs.default_cid != null) lsSet(DEF_CID_KEY, prefs.default_cid);
+  try { window.dispatchEvent(new CustomEvent(PREFS_APPLIED_EVENT)); } catch { /* no window */ }
 }
 
 export function sync(): Promise<Record<string, string> | null> {
+  if (typeof fetch !== "function") return Promise.resolve(null);
   if (_syncPromise) return _syncPromise; // once per page load (single-flight)
   _syncPromise = fetch("/api/prefs")
     .then((r) => (r.ok ? r.json() : { prefs: null }))

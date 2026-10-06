@@ -1,0 +1,17 @@
+{
+  "api_port": 8010,
+  "bind": "loopback",
+  "bridge_port": 8770,
+  "children": {
+    "bridge": {"last_exit": null, "pid": 4102, "restarts": 0, "status": "running"},
+    "notifier": {"last_exit": null, "pid": 4103, "restarts": 0, "status": "running"},
+    "portal": {"last_exit": null, "pid": 4101, "restarts": 0, "status": "running"}
+  },
+  "cli_version": "0.5.0",
+  "db_path": "__ROOT__/notes/.orcha/orcha.db",
+  "runtime": "native",
+  "serve_pid": 4100,
+  "started_at": "2026-10-06T14:00:00+00:00",
+  "status": "running",
+  "updated_at": "2026-10-06T15:00:00+00:00"
+}
