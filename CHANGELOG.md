@@ -56,6 +56,15 @@ missing.
   `docs/legacy-docker-runtime.md` are removed one release later.
 
 ### Fixed
+- An agent no longer gets re-woken every minute about a task request that was
+  already settled. When a task request expired, the expiry sweep handed it to a
+  human but left the original agent's "new request" notice pending, and the
+  later close only cleared the human's copy. Nothing could ever clear the
+  agent's copy, so it woke, found nothing to do, and woke again (about 50
+  wakes an hour on one agent). The sweep now clears the original agent's
+  notice, and any request notice whose request is no longer open to that agent
+  is treated as informational, so notices already stuck this way clear on the
+  agent's next run.
 - Workers stopped waking on task-thread and conversation posts once a run's
   recorded worktree AND its retained `orcha/*` branch were gone: the checkout
   carry gate (added 2026-09-20) tried to recover from the deleted branch, failed

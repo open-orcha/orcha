@@ -15,8 +15,9 @@ from portal_backend.guards import valid_uuid as _valid_uuid
 #   FYI                 - informational; no task-context reasoning needed, so ANY awake run acks it so
 #                         they don't pile up (task_unassigned, a broadcast task_ready, status_changed, an
 #                         APPROVED task_verified, a task_close / non-task decision_made, request_closed,
-#                         request_escalated, the task_request_* receipts, agent_suggested/-decided, and a
-#                         stale task_assigned whose task is already terminal/gone).
+#                         request_escalated, the task_request_* receipts, agent_suggested/-decided, a
+#                         stale task_assigned whose task is already terminal/gone, and a stale
+#                         request_created whose request is no longer open to this agent).
 #   TASKLESS_ACTIONABLE - needs reasoning but carries no task identity, so any awake run may drain it
 #                         (the resident yields to a protocol-bound ephemeral — docs/orcha-review-protocol
 #                         §5.2): prompt, an INFO request_created, a request_answered with no originating task.
@@ -28,7 +29,8 @@ from portal_backend.guards import valid_uuid as _valid_uuid
 #                         the sole wake for "proceed/revise").
 #   NEW_WORK            - claiming/accepting it STARTS the work, so a drain NEVER acks it; it is consumed at
 #                         the /next CLAIM (or accept/reject seam): a task_assigned/task_ready on a `ready`
-#                         task; a request_created of type 'task'; a task_created_unassigned on a live task
+#                         task; a request_created of type 'task' still open to this agent; a
+#                         task_created_unassigned on a live task
 #                         (consumed only when the orchestrator actually ROUTES it via assignment — see
 #                         task_start_core's automatic-triage doorbell).
 #   DIRECTIVE           - a STATUS-SENSITIVE start/rework directive on an in_progress task: surfaced as the
@@ -94,12 +96,21 @@ def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) 
         return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
     if event_name == "request_created":
         rtype = payload.get("type")
-        if rtype is None:
-            rid = payload.get("request_id")
-            if rid and _valid_uuid(str(rid)):
-                cur.execute("SELECT type FROM requests WHERE id=%s", (str(rid),))
-                rr = cur.fetchone()
-                rtype = rr["type"] if rr else None
+        rid = payload.get("request_id")
+        if rid and _valid_uuid(str(rid)):
+            cur.execute(
+                "SELECT type, status, target_id FROM requests WHERE id=%s", (str(rid),)
+            )
+            rr = cur.fetchone()
+            if rr:
+                rtype = rtype or rr["type"]
+                # A request that is no longer open to this agent (closed, rejected, answered, or
+                # re-targeted by an escalation) has no accept/reject seam left for it, so as NEW_WORK
+                # it would re-wake the agent forever. Same downgrade as a stale task_assigned.
+                if rr["status"] != "open" or (
+                    target_id is not None and str(rr["target_id"]) != str(target_id)
+                ):
+                    return {"bucket": _DRAIN_FYI, "task_id": None}
         if rtype == "task":
             return {
                 "bucket": _DRAIN_NEW_WORK,
