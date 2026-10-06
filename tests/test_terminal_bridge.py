@@ -143,10 +143,11 @@ def test_safe_teardown_preserves_dirty_worktree(monkeypatch):
 
 
 def test_safe_teardown_removes_clean_worktree(monkeypatch):
-    monkeypatch.setattr(notifier, "_run_git", lambda args, **k: (0, ""))   # clean status
+    """The bridge delegates to the notifier's proof-based retirement (exercised against real Git
+    in test_disable_worktrees) and reports its disposition unchanged."""
     removed = []
-    monkeypatch.setattr(notifier, "_teardown_worktree",
-                        lambda *a, **k: removed.append(a))
+    monkeypatch.setattr(notifier, "_safe_teardown_worktree",
+                        lambda *a: removed.append(a) or "removed")
     disp = tb.safe_teardown_worktree("/base", "/base/.orcha-worktrees/x", "orcha/wk-x")
     assert disp == "removed"
     assert removed == [("/base", "/base/.orcha-worktrees/x", "orcha/wk-x")]
@@ -235,7 +236,8 @@ def _wire_handle(monkeypatch):
         if url.endswith("/agents/HUMAN/persona"):
             return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss", "role": "operator"}
         if url.endswith("/agents/AID/persona"):
-            return {"agent_id": "AID", "kind": "ai", "alias": "Vault", "role": "eng"}
+            return {"agent_id": "AID", "kind": "ai", "alias": "Vault", "role": "eng",
+                    "container_id": "CID"}
         return None
     monkeypatch.setattr(notifier, "_get_json", _get)
     # acquire_live_lease (the real one) runs and calls this; the happy path returns claimed → connect.
@@ -295,7 +297,7 @@ async def test_handle_connection_passes_target_model_runtime_to_spawn(monkeypatc
             return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss"}
         if url.endswith("/agents/AID/persona"):
             return {"agent_id": "AID", "kind": "ai", "alias": "Vault",
-                    "model": "gpt-5.5", "model_runtime": "codex"}
+                    "model": "gpt-5.5", "model_runtime": "codex", "container_id": "CID"}
         return None
     monkeypatch.setattr(notifier, "_get_json", _get)
     captured = {}
@@ -327,6 +329,7 @@ async def test_handle_connection_disabled_worktrees_uses_main_checkout(monkeypat
                 "kind": "ai",
                 "alias": "Vault",
                 "worktrees_disabled": True,
+                "container_id": "CID",
             }
         return None
 
@@ -367,7 +370,8 @@ async def test_handle_connection_human_target_normalizes_runtime_to_claude(monke
             return {"agent_id": "HUMAN", "kind": "human", "alias": "Boss"}
         # the TARGET is a human → no model, no model_runtime (mirrors /persona main.py:2565-2566)
         if url.endswith("/agents/AID/persona"):
-            return {"agent_id": "AID", "kind": "human", "alias": "Pat", "role": "operator"}
+            return {"agent_id": "AID", "kind": "human", "alias": "Pat", "role": "operator",
+                    "container_id": "CID"}
         return None
     monkeypatch.setattr(notifier, "_get_json", _get)
     captured = {}
