@@ -1989,6 +1989,13 @@ app.whenReady().then(() => {
       return keys.save(input)
     })
   )
+  // The only path that unseals a remembered key (may show the Keychain prompt): a user click.
+  ipcMain.handle(PROVIDER_KEYS_CHANNELS.applyRemembered, (event) =>
+    asResult(async () => {
+      if (!themeSender(event)) throw { code: 'INVALID_PROVIDER_KEYS' } satisfies BridgeError
+      return keys.applyRemembered()
+    })
+  )
   void keys.refresh()
 
   planDisplayTimer = setInterval(() => {

@@ -226,6 +226,91 @@ describe('Settings › API keys (main)', () => {
     expect(s.projects[0].providers.anthropic).toEqual({ state: 'off', masked: 'sk-ant-…wxyz' })
   })
 
+  /** A remembered key saved by an EARLIER session (a fresh module over the same file). */
+  async function rememberedFromEarlierSession(unseal: ProviderKeysDeps['unseal']) {
+    const portals = fakePortals({ 8001: [{ cid: 'c1', name: 'first' }] })
+    const stacks = [stack(8001, 'first')]
+    const first = setup(stacks, portals)
+    await first.keys.save({ anthropic: { apiKey: ANT, useForAgents: true }, openai: { apiKey: OAI, useForAgents: false } })
+    const file = first.saved()
+    const unsealSpy = vi.fn(unseal)
+    const canSeal = vi.fn(() => true)
+    const seal = vi.fn(() => null)
+    const later = setup(stacks, portals, { load: () => file, unseal: unsealSpy, canSeal, seal })
+    portals.spec[8002] = [{ cid: 'c2', name: 'later' }]
+    stacks.push(stack(8002, 'later'))
+    portals.calls.length = 0
+    return { portals, stacks, ...later, unsealSpy, seal }
+  }
+  const realUnseal: ProviderKeysDeps['unseal'] = (s) => Buffer.from(s, 'base64').toString().replace(/^sealed:/, '')
+
+  it('the timed refresh never unseals: a remembered key + a new project is reported as pending', async () => {
+    const { keys, portals, unsealSpy, seal, logs } = await rememberedFromEarlierSession(realUnseal)
+    const s = await keys.refresh()
+    await keys.refresh()
+    expect(unsealSpy).not.toHaveBeenCalled()
+    expect(seal).not.toHaveBeenCalled()
+    expect(portals.calls.filter((c) => c.method === 'PUT')).toEqual([])
+    expect(s.pending).toEqual({ anthropic: 1, openai: 1 })
+    expect(s.keychainDenied).toBe(false)
+    expect(s.projects.find((p) => p.cid === 'c2')!.providers.anthropic.state).toBe('no-key')
+    const everything = JSON.stringify(s) + logs.join('\n')
+    for (const secret of [ANT, OAI, 'SECRET']) expect(everything).not.toContain(secret)
+  })
+
+  it('a key saved this session reaches a new project on the timed refresh — with no unseal', async () => {
+    const portals = fakePortals({ 8001: [{ cid: 'c1', name: 'first' }] })
+    const stacks = [stack(8001, 'first')]
+    const unseal = vi.fn(realUnseal)
+    const { keys } = setup(stacks, portals, { unseal })
+    await keys.save({ anthropic: { apiKey: ANT, useForAgents: true } })
+    portals.spec[8002] = [{ cid: 'c2', name: 'later' }]
+    stacks.push(stack(8002, 'later'))
+    portals.calls.length = 0
+    const s = await keys.refresh()
+    expect(unseal).not.toHaveBeenCalled()
+    const put = portals.calls.find((c) => c.method === 'PUT' && c.url.endsWith('/c2/settings/provider-keys/anthropic'))
+    expect(put?.body).toEqual({ actor_agent_id: 'h-c2', api_key: ANT })
+    expect(s.projects.find((p) => p.cid === 'c2')!.providers.anthropic.state).toBe('on')
+    expect(s.pending).toEqual({ anthropic: 0, openai: 0 })
+    expect(JSON.stringify(s)).not.toContain(ANT)
+  })
+
+  it('applyRemembered unseals (the user’s click), applies, and later refreshes reuse the session copy', async () => {
+    const { keys, portals, stacks, unsealSpy } = await rememberedFromEarlierSession(realUnseal)
+    expect((await keys.refresh()).pending.anthropic).toBe(1)
+    const s = await keys.applyRemembered()
+    expect(unsealSpy).toHaveBeenCalledTimes(2) // anthropic + openai, once each
+    const puts = portals.calls.filter((c) => c.method === 'PUT').map((c) => c.url.split('/api/containers/')[1])
+    expect(puts).toEqual(
+      expect.arrayContaining(['c2/settings/provider-keys/anthropic', 'c2/settings/provider-keys/anthropic/agent-use', 'c2/settings/provider-keys/openai'])
+    )
+    expect(s.pending).toEqual({ anthropic: 0, openai: 0 })
+    expect(s.projects.find((p) => p.cid === 'c2')!.providers).toMatchObject({ anthropic: { state: 'on' }, openai: { state: 'off' } })
+    expect(JSON.stringify(s)).not.toContain('SECRET')
+
+    // another project connects: the timed refresh fills it from memory, no second unseal
+    portals.spec[8003] = [{ cid: 'c3', name: 'third' }]
+    stacks.push(stack(8003, 'third'))
+    const r = await keys.refresh()
+    expect(unsealSpy).toHaveBeenCalledTimes(2)
+    expect(r.projects.find((p) => p.cid === 'c3')!.providers.anthropic.state).toBe('on')
+  })
+
+  it('an unseal that fails sets keychainDenied and is not retried by the timer', async () => {
+    const { keys, portals, unsealSpy, logs } = await rememberedFromEarlierSession(() => null)
+    const s = await keys.applyRemembered()
+    expect(unsealSpy).toHaveBeenCalledTimes(1) // stops at the first refusal: one prompt per click
+    expect(s.keychainDenied).toBe(true)
+    expect(s.pending).toEqual({ anthropic: 1, openai: 1 })
+    expect(portals.calls.filter((c) => c.method === 'PUT')).toEqual([])
+    const r1 = await keys.refresh()
+    await keys.refresh()
+    expect(unsealSpy).toHaveBeenCalledTimes(1)
+    expect(r1.keychainDenied).toBe(true)
+    expect(logs.join('\n')).not.toContain('SECRET')
+  })
+
   it('refresh reads on/off/no-key; billing is kept while nothing answers', async () => {
     const portals = fakePortals({ 8001: [{ cid: 'c1', name: 'a', rows: { anthropic: { stored: true, use: true, hint: null } } }] })
     const stacks = [stack(8001, 'a')]

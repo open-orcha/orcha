@@ -15,6 +15,13 @@
  *  gets it too: a refresh stores it on any project that has no key and was never given one by
  *  this Mac (a key you remove in a project's own Settings is not pushed back).
  *
+ *  KEYCHAIN: on macOS seal/unseal read the "Embodent Safe Storage" Keychain item, which can
+ *  prompt. So they run ONLY on user actions: `save` seals the typed key, `applyRemembered`
+ *  unseals. The timed refresh never touches the Keychain: it gives new projects only a key held
+ *  in this session's memory (typed or unlocked earlier this session) and otherwise reports how
+ *  many projects are waiting (`pending`), for the pane's Apply button. An unseal that fails
+ *  (denied / unavailable) sets `keychainDenied` for the session and is never retried on a timer.
+ *
  *  SECRETS: the key leaves this module only in a PUT body to a localhost portal. It is never
  *  logged, never in a returned state or error (failure reasons are fixed phrases chosen by HTTP
  *  status — a portal's 422 echoes its input, so its detail is never read for key writes). */
@@ -114,7 +121,11 @@ export interface ProviderKeys {
   get(): ProviderKeysState
   refresh(): Promise<ProviderKeysState>
   save(input: ProviderKeysInput): Promise<ProviderKeysState>
+  /** User-initiated: unseal the remembered keys (may prompt), then give them to new projects. */
+  applyRemembered(): Promise<ProviderKeysState>
 }
+
+const noPending = (): Record<KeyProvider, number> => ({ anthropic: 0, openai: 0 })
 
 export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
   const log = deps.log ?? ((m: string) => console.warn(m))
@@ -122,6 +133,14 @@ export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
   let projects: ProjectKeyStatus[] = []
   let checkedAt: number | null = null
   let canRemember = deps.canSeal()
+  /** Plaintext keys for THIS session only (typed in a save, or unsealed by applyRemembered).
+   *  Never persisted, logged or returned; lets the timed refresh fill new projects with no
+   *  Keychain access. */
+  const session: Partial<Record<KeyProvider, string>> = {}
+  /** Projects per provider that lack a remembered key the session doesn't hold yet. */
+  let pending = noPending()
+  /** An unseal failed this session (Keychain denied / unavailable); never retried on a timer. */
+  let keychainDenied = false
   let chain: Promise<unknown> = Promise.resolve()
   /** Serialise refresh/save: a save never interleaves with a refresh's writes. */
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -233,7 +252,9 @@ export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
     providers: remembered(),
     projects: projects.map((p) => ({ ...p, providers: { ...p.providers } })),
     canRemember,
-    checkedAt
+    checkedAt,
+    pending: { ...pending },
+    keychainDenied
   })
 
   const publish = (list: ProjectKeyStatus[]): void => {
@@ -243,21 +264,43 @@ export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
     if (list.some((p) => KEY_PROVIDERS.some((k) => p.providers[k].state !== 'failed'))) deps.onBilling(apiBillingOf(list))
   }
 
-  /** Give a remembered key to every project that has none and never got one from this Mac. */
-  const fillNewProjects = async (list: Project[], read: Record<KeyProvider, ProjectProviderKey>[]): Promise<void> => {
+  /** Give a remembered key to every project that has none and never got one from this Mac.
+   *  Only a key held in this session is used; `unlock` (a user action, never the timer) first
+   *  unseals the remembered keys that are needed and not held yet. */
+  const fillNewProjects = async (list: Project[], read: Record<KeyProvider, ProjectProviderKey>[], unlock = false): Promise<void> => {
+    const missingOf = list.map((p, i) =>
+      KEY_PROVIDERS.filter((k) => {
+        const r = file.providers[k]
+        return r?.sealed && read[i][k].state === 'no-key' && !(file.applied[k] ?? []).includes(p.cid)
+      })
+    )
+    if (unlock) {
+      for (const k of KEY_PROVIDERS) {
+        const sealed = file.providers[k]?.sealed
+        if (!sealed || session[k] || !missingOf.some((m) => m.includes(k))) continue
+        const key = deps.unseal(sealed)
+        if (!key) {
+          keychainDenied = true
+          log(`[provider-keys] couldn’t read the remembered ${k} key from the Keychain`)
+          break // one prompt per click: don't ask again for the next provider
+        }
+        session[k] = key
+        keychainDenied = false
+      }
+    }
+    pending = noPending()
+    for (const m of missingOf) for (const k of m) if (!session[k]) pending[k] += 1
+
     let changed = false
     await Promise.all(
       list.map(async (p, i) => {
-        const missing = KEY_PROVIDERS.filter((k) => {
-          const r = file.providers[k]
-          return r?.sealed && read[i][k].state === 'no-key' && !(file.applied[k] ?? []).includes(p.cid)
-        })
+        const missing = missingOf[i].filter((k) => session[k])
         if (missing.length === 0) return
         const actor = await actorOf(p)
         if (!('id' in actor)) return
         for (const k of missing) {
           const r = file.providers[k]!
-          const key = r.sealed ? deps.unseal(r.sealed) : null
+          const key = session[k]
           if (!key) continue
           const s = await putKey(p, k, actor.id, key)
           if (s !== 200) {
@@ -274,11 +317,11 @@ export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
     if (changed) persist()
   }
 
-  const refreshNow = async (): Promise<ProviderKeysState> => {
+  const refreshNow = async (unlock = false): Promise<ProviderKeysState> => {
     canRemember = deps.canSeal()
     const list = await listProjects()
     const read = await Promise.all(list.map(readProject))
-    await fillNewProjects(list, read)
+    await fillNewProjects(list, read, unlock)
     publish(list.map((p, i) => ({ cid: p.cid, name: p.name, stack: p.stack, providers: read[i] })))
     return state()
   }
@@ -295,6 +338,12 @@ export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
         const sealed = deps.seal(key)
         file.providers[k] = { useForAgents: v.useForAgents, sealed, last4: sealed ? key.slice(-4) : null }
         file.applied[k] = [] // a new key goes to every project again
+        // Held for this session only when remembered (a key not remembered isn't given to
+        // projects started later — the pane says so).
+        if (sealed) session[k] = key
+        else delete session[k]
+        pending[k] = 0
+        keychainDenied = false
       } else {
         file.providers[k] = { useForAgents: v.useForAgents, sealed: prev?.sealed ?? null, last4: prev?.last4 ?? null }
       }
@@ -343,7 +392,8 @@ export function createProviderKeys(deps: ProviderKeysDeps): ProviderKeys {
 
   return {
     get: state,
-    refresh: () => serial(refreshNow),
-    save: (input) => serial(() => saveNow(input))
+    refresh: () => serial(() => refreshNow()),
+    save: (input) => serial(() => saveNow(input)),
+    applyRemembered: () => serial(() => refreshNow(true))
   }
 }

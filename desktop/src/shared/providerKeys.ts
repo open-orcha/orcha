@@ -69,6 +69,13 @@ export interface ProviderKeysState {
   canRemember: boolean
   /** When the projects were last read (epoch ms), null = not yet. */
   checkedAt: number | null
+  /** Running projects per provider that don't have the remembered key yet because it is still
+   *  locked in the Keychain this session (the timed refresh never unlocks it). `applyRemembered`
+   *  unlocks and applies it. */
+  pending: Record<KeyProvider, number>
+  /** This session couldn't read a remembered key from the Keychain (denied / unavailable). Not
+   *  retried automatically; re-entering the key clears it. */
+  keychainDenied: boolean
 }
 
 /** One provider's part of a save. `apiKey` absent = keep the stored key, only (re)apply the switch. */
@@ -86,12 +93,16 @@ export interface ProviderKeysApi {
   refresh(): Promise<ProviderKeysState>
   /** Store the entered key(s) and the switch on every running project, then re-read. */
   save(input: ProviderKeysInput): Promise<ProviderKeysState>
+  /** User action: unlock the remembered key(s) from the Keychain (macOS may ask), then give
+   *  them to the projects that don't have them yet. */
+  applyRemembered(): Promise<ProviderKeysState>
 }
 
 export const PROVIDER_KEYS_CHANNELS = {
   get: 'orcha:providerKeys:get',
   refresh: 'orcha:providerKeys:refresh',
-  save: 'orcha:providerKeys:save'
+  save: 'orcha:providerKeys:save',
+  applyRemembered: 'orcha:providerKeys:applyRemembered'
 } as const
 
 export function isKeyProvider(v: unknown): v is KeyProvider {

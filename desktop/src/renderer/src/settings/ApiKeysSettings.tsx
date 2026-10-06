@@ -4,7 +4,11 @@
  *  project's state per provider: on, off, no key, or failed (with why).
  *
  *  A typed key lives only in this form's input until Save; it is cleared as soon as main has
- *  it, and nothing main sends back ever carries it — only `sk-ant-…abcd` or "stored". */
+ *  it, and nothing main sends back ever carries it — only `sk-ant-…abcd` or "stored".
+ *
+ *  Keychain: macOS asks before Embodent may store (Save) or read back (Apply) a remembered key,
+ *  so the pane says so BEFORE the click. Main never reads the Keychain on its own: projects
+ *  connected later that lack a remembered key are shown as pending, with an Apply button. */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   KEY_PROVIDERS,
@@ -19,6 +23,27 @@ import {
 
 export const API_KEYS_CAPTION =
   'No Claude or ChatGPT subscription? Agents can bill an API key instead. Keys are stored encrypted on each project and used only for its agent runs.'
+
+export const KEYCHAIN_NOTE_BEFORE = 'macOS will ask to let Embodent store this key in your Keychain. Choose '
+export const KEYCHAIN_NOTE_AFTER = ' so you’re not asked again.'
+export const NOT_REMEMBERED_TEXT = 'Saved to your projects. Not remembered on this Mac, so projects you connect later won’t get it automatically.'
+export const KEYCHAIN_DENIED_TEXT = 'Embodent couldn’t read your saved key from the Keychain.'
+
+/** The short "macOS will ask…" explanation shown before a click that can prompt. */
+function KeychainNote({ testId, verb = 'store' }: { testId: string; verb?: 'store' | 'read' }) {
+  const before = verb === 'store' ? KEYCHAIN_NOTE_BEFORE : 'macOS may ask to let Embodent read this key from your Keychain. Choose '
+  return (
+    <p data-testid={testId} className="text-[12px] text-text-3">
+      {before}
+      <strong className="font-medium text-text-2">Always Allow</strong>
+      {KEYCHAIN_NOTE_AFTER}
+    </p>
+  )
+}
+
+function pendingText(n: number, k: KeyProvider): string {
+  return `${n} new project${n === 1 ? '' : 's'} ${n === 1 ? 'doesn’t' : 'don’t'} have your ${KEY_PROVIDER_LABEL[k]} key yet`
+}
 
 const RUNS: Record<KeyProvider, string> = { anthropic: 'Claude', openai: 'Codex' }
 const PLACEHOLDER: Record<KeyProvider, string> = { anthropic: 'sk-ant-…', openai: 'sk-…' }
@@ -87,7 +112,10 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
     touchedRef.current = v
     setTouchedState(v)
   }
-  const [busy, setBusy] = useState<'reading' | 'saving' | null>('reading')
+  const [busy, setBusy] = useState<'reading' | 'saving' | 'applying' | null>('reading')
+  /** Providers whose newly typed key was saved but couldn't be remembered (Keychain denied). */
+  const [notRemembered, setNotRemembered] = useState<KeyProvider[]>([])
+  const inputs = useRef<Partial<Record<KeyProvider, HTMLInputElement | null>>>({})
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -120,11 +148,30 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
     }
   }, [api, adopt])
 
-  const dirty = touched || KEY_PROVIDERS.some((k) => draft[k].key.trim() !== '')
+  const typedKey = KEY_PROVIDERS.some((k) => draft[k].key.trim() !== '')
+  const dirty = touched || typedKey
+  const working = busy === 'saving' || busy === 'applying'
+
+  const applyRemembered = (): void => {
+    if (!api || working) return
+    setBusy('applying')
+    setError(null)
+    setNotice(null)
+    api.applyRemembered().then(
+      (s) => {
+        setState(s)
+        setBusy(null)
+      },
+      () => {
+        setError('Couldn’t apply your saved key.')
+        setBusy(null)
+      }
+    )
+  }
 
   const save = (e: FormEvent): void => {
     e.preventDefault()
-    if (!api || !dirty || busy === 'saving') return
+    if (!api || !dirty || working) return
     const input: ProviderKeysInput = {}
     for (const k of KEY_PROVIDERS) {
       const key = draft[k].key.trim()
@@ -139,6 +186,8 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
     setBusy('saving')
     setError(null)
     setNotice(null)
+    setNotRemembered([])
+    const typed = KEY_PROVIDERS.filter((k) => input[k]?.apiKey !== undefined)
     // The typed key leaves the renderer here and is not kept: clear the inputs at once.
     setDraft((d) => ({ anthropic: { ...d.anthropic, key: '' }, openai: { ...d.openai, key: '' } }))
     api.save(input).then(
@@ -146,6 +195,8 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
         adopt(s, true)
         setTouched(false)
         setNotice(summary(s))
+        // Saved to the projects, but the Keychain wouldn't seal it (denied / unavailable).
+        setNotRemembered(typed.filter((k) => !s.providers[k].remembered))
         setBusy(null)
       },
       () => {
@@ -190,7 +241,7 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
                     on={draft[k].use}
                     label={`Use the ${KEY_PROVIDER_LABEL[k]} key for agent runs`}
                     testId={`api-key-use-${k}`}
-                    disabled={!api || busy === 'saving'}
+                    disabled={!api || working}
                     onChange={(v) => {
                       setDraft((d) => ({ ...d, [k]: { ...d[k], use: v } }))
                       setTouched(true)
@@ -200,6 +251,9 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
                 </div>
               </div>
               <input
+                ref={(el) => {
+                  inputs.current[k] = el
+                }}
                 id={`api-key-input-${k}`}
                 data-testid={`api-key-input-${k}`}
                 type="password"
@@ -208,7 +262,7 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
                 maxLength={MAX_API_KEY_LEN}
                 value={draft[k].key}
                 placeholder={stored ? 'Paste a new key to replace it' : PLACEHOLDER[k]}
-                disabled={!api || busy === 'saving'}
+                disabled={!api || working}
                 onChange={(e) => {
                   const v = e.target.value
                   setDraft((d) => ({ ...d, [k]: { ...d[k], key: v } }))
@@ -216,26 +270,67 @@ export default function ApiKeysSettings({ api = window.orchaDesktop?.providerKey
                 }}
                 className="h-8 w-full max-w-[420px] rounded-md border border-border bg-bg px-2.5 font-mono text-[12.5px] text-text outline-none placeholder:font-sans placeholder:text-text-3 focus:border-accent disabled:opacity-60"
               />
+              {state && state.pending[k] > 0 ? (
+                state.keychainDenied ? (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid={`api-key-denied-${k}`}>
+                    <p role="alert" className="text-[12px] text-danger">
+                      {KEYCHAIN_DENIED_TEXT} {pendingText(state.pending[k], k)}.
+                    </p>
+                    <button
+                      type="button"
+                      data-testid={`api-key-reenter-${k}`}
+                      onClick={() => inputs.current[k]?.focus()}
+                      className="h-7 shrink-0 rounded-md border border-border px-2.5 text-[12.5px] text-text hover:bg-hover"
+                    >
+                      Re-enter key
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1" data-testid={`api-key-pending-${k}`}>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <p className="text-[12px] text-text-2">{pendingText(state.pending[k], k)}</p>
+                      <button
+                        type="button"
+                        data-testid={`api-key-apply-${k}`}
+                        disabled={!api || working}
+                        onClick={applyRemembered}
+                        className="h-7 shrink-0 rounded-md border border-border px-2.5 text-[12.5px] text-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busy === 'applying' ? 'Applying…' : 'Apply'}
+                      </button>
+                    </div>
+                    <KeychainNote testId={`api-key-apply-note-${k}`} verb="read" />
+                  </div>
+                )
+              ) : null}
             </div>
           )
         })}
-        <div className="flex items-center gap-3 px-4 py-3">
-          <button
-            type="submit"
-            data-testid="api-keys-save"
-            disabled={!api || !dirty || busy === 'saving'}
-            className="h-8 shrink-0 rounded-md border border-border px-3 text-[13px] text-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busy === 'saving' ? 'Saving…' : 'Save'}
-          </button>
-          {notice ? (
-            <p role="status" data-testid="api-keys-notice" className="text-[12px] text-text-2">
-              {notice}
-            </p>
-          ) : null}
-          {error ? (
-            <p role="alert" className="text-[12px] text-danger">
-              {error}
+        <div className="flex flex-col gap-2 px-4 py-3">
+          {typedKey ? <KeychainNote testId="api-keys-keychain-note" /> : null}
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              data-testid="api-keys-save"
+              disabled={!api || !dirty || working}
+              className="h-8 shrink-0 rounded-md border border-border px-3 text-[13px] text-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy === 'saving' ? 'Saving…' : 'Save'}
+            </button>
+            {notice ? (
+              <p role="status" data-testid="api-keys-notice" className="text-[12px] text-text-2">
+                {notice}
+              </p>
+            ) : null}
+            {error ? (
+              <p role="alert" className="text-[12px] text-danger">
+                {error}
+              </p>
+            ) : null}
+          </div>
+          {notRemembered.length > 0 ? (
+            <p role="status" data-testid="api-keys-not-remembered" className="text-[12px] text-text-2">
+              {NOT_REMEMBERED_TEXT}
             </p>
           ) : null}
         </div>

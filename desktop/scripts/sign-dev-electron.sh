@@ -57,6 +57,10 @@ echo "patched CFBundleName/CFBundleDisplayName -> Embodent"
 # app's icon by bundle id, and every npm Electron.app on this Mac shares
 # com.github.Electron — so notifications kept showing whatever icon was cached for that
 # id (another project's, or an old Embodent mark) no matter what icns we ship.
+# Keychain side effect: the new id + signature is a different app identity to macOS, so the
+# existing "Embodent Safe Storage" item (Settings › API keys) no longer trusts it. The first
+# save/apply of an API key after an identity change asks for your LOGIN PASSWORD (not just
+# Allow) — once per identity change. Enter it and choose "Always Allow" and it won't ask again.
 DEV_ID="io.openorcha.desktop.dev"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $DEV_ID" "$PLIST"
 for HP in "$APP"/Contents/Frameworks/*.app/Contents/Info.plist; do

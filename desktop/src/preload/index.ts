@@ -59,7 +59,8 @@ const PROFILE = {
 const PROVIDER_KEYS = {
   get: 'orcha:providerKeys:get',
   refresh: 'orcha:providerKeys:refresh',
-  save: 'orcha:providerKeys:save'
+  save: 'orcha:providerKeys:save',
+  applyRemembered: 'orcha:providerKeys:applyRemembered'
 } as const satisfies typeof PROVIDER_KEYS_CHANNELS
 /** Microphone channels, inlined for the same reason (identical to shared/mic.ts). */
 const MIC = {
@@ -261,7 +262,8 @@ const api: OrchaDesktopApi = {
   providerKeys: {
     get: () => invoke<ProviderKeysState>(PROVIDER_KEYS.get),
     refresh: () => invoke<ProviderKeysState>(PROVIDER_KEYS.refresh),
-    save: (input) => invoke<ProviderKeysState>(PROVIDER_KEYS.save, input)
+    save: (input) => invoke<ProviderKeysState>(PROVIDER_KEYS.save, input),
+    applyRemembered: () => invoke<ProviderKeysState>(PROVIDER_KEYS.applyRemembered)
   },
   // Dictation: macOS microphone access (main asks TCC; portal views ask via window.orchaHost).
   mic: {

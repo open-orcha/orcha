@@ -33,15 +33,22 @@ function state(over: Partial<ProviderKeysState> = {}): ProviderKeysState {
     ],
     canRemember: true,
     checkedAt: 1,
+    pending: { anthropic: 0, openai: 0 },
+    keychainDenied: false,
     ...over
   }
 }
 
-function api(initial: ProviderKeysState, saved?: ProviderKeysState): ProviderKeysApi & { save: ReturnType<typeof vi.fn> } {
+function api(
+  initial: ProviderKeysState,
+  saved?: ProviderKeysState,
+  applied?: ProviderKeysState
+): ProviderKeysApi & { save: ReturnType<typeof vi.fn>; applyRemembered: ReturnType<typeof vi.fn> } {
   return {
     get: vi.fn().mockResolvedValue(initial),
     refresh: vi.fn().mockResolvedValue(initial),
-    save: vi.fn().mockResolvedValue(saved ?? initial)
+    save: vi.fn().mockResolvedValue(saved ?? initial),
+    applyRemembered: vi.fn().mockResolvedValue(applied ?? initial)
   }
 }
 
@@ -101,6 +108,72 @@ describe('Settings › API keys', () => {
     await userEvent.click(screen.getByTestId('api-key-use-openai'))
     await userEvent.click(screen.getByTestId('api-keys-save'))
     expect(a.save).toHaveBeenCalledWith({ openai: { useForAgents: true } })
+  })
+
+  it('explains the macOS Keychain prompt by Save as soon as a key field has text', async () => {
+    render(<ApiKeysSettings api={api(state())} />)
+    await screen.findByTestId('api-keys-project-c1')
+    expect(screen.queryByTestId('api-keys-keychain-note')).toBeNull()
+    await userEvent.type(screen.getByTestId('api-key-input-openai'), 'sk-x')
+    expect(screen.getByTestId('api-keys-keychain-note')).toHaveTextContent(
+      'macOS will ask to let Embodent store this key in your Keychain. Choose Always Allow so you’re not asked again.'
+    )
+    await userEvent.clear(screen.getByTestId('api-key-input-openai'))
+    expect(screen.queryByTestId('api-keys-keychain-note')).toBeNull()
+  })
+
+  it('pending: says how many new projects lack the remembered key, and Apply unlocks it (with the Keychain note)', async () => {
+    const remembered = {
+      anthropic: { remembered: true, masked: 'sk-ant-…wxyz', useForAgents: true },
+      openai: { remembered: false, masked: null, useForAgents: false }
+    }
+    const before = state({ providers: remembered, pending: { anthropic: 2, openai: 0 } })
+    const after = state({ providers: remembered })
+    const a = api(before, undefined, after)
+    render(<ApiKeysSettings api={a} />)
+    const row = await screen.findByTestId('api-key-pending-anthropic')
+    expect(row).toHaveTextContent('2 new projects don’t have your Anthropic key yet')
+    expect(screen.getByTestId('api-key-apply-note-anthropic')).toHaveTextContent('Always Allow')
+    expect(screen.queryByTestId('api-key-pending-openai')).toBeNull()
+    await userEvent.click(screen.getByTestId('api-key-apply-anthropic'))
+    expect(a.applyRemembered).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByTestId('api-key-pending-anthropic')).toBeNull())
+  })
+
+  it('one pending project reads in the singular', async () => {
+    render(<ApiKeysSettings api={api(state({ pending: { anthropic: 0, openai: 1 } }))} />)
+    expect(await screen.findByTestId('api-key-pending-openai')).toHaveTextContent('1 new project doesn’t have your OpenAI key yet')
+  })
+
+  it('Keychain denied: says the saved key couldn’t be read and offers to re-enter it (no Apply)', async () => {
+    render(<ApiKeysSettings api={api(state({ pending: { anthropic: 1, openai: 0 }, keychainDenied: true }))} />)
+    const row = await screen.findByTestId('api-key-denied-anthropic')
+    expect(row).toHaveTextContent('Embodent couldn’t read your saved key from the Keychain')
+    expect(screen.queryByTestId('api-key-apply-anthropic')).toBeNull()
+    await userEvent.click(screen.getByTestId('api-key-reenter-anthropic'))
+    expect(screen.getByTestId('api-key-input-anthropic')).toHaveFocus()
+  })
+
+  it('a saved key the Keychain wouldn’t remember: says it went to the projects but isn’t remembered', async () => {
+    const after = state({
+      projects: [
+        {
+          cid: 'c1',
+          name: 'todo-app',
+          stack: 'todo-app',
+          providers: { anthropic: { state: 'off', masked: 'sk-ant-…wxyz' }, openai: { state: 'off', masked: null } }
+        }
+      ]
+    })
+    const a = api(state(), after)
+    render(<ApiKeysSettings api={a} />)
+    await screen.findByTestId('api-keys-project-c1')
+    await userEvent.type(screen.getByTestId('api-key-input-anthropic'), KEY)
+    await userEvent.click(screen.getByTestId('api-keys-save'))
+    expect(await screen.findByTestId('api-keys-not-remembered')).toHaveTextContent(
+      'Saved to your projects. Not remembered on this Mac, so projects you connect later won’t get it automatically.'
+    )
+    expect(document.body.innerHTML).not.toContain('TYPEDSECRET')
   })
 
   it('no running project: says keys are added when one starts', async () => {
