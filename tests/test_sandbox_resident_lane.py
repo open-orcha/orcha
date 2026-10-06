@@ -263,6 +263,9 @@ def test_resident_boot_threads_container_into_handle_and_turn_run_row(monkeypatc
     monkeypatch.setattr(sandbox, "preflight", lambda cfg, ws: None)
     monkeypatch.setattr(sandbox, "cap_defers_spawn", lambda cfg: None)  # #75: not under test here
     monkeypatch.setattr(notifier, "_is_git_repo", lambda p: False)  # spawn in base_cwd
+    # ...and Git agrees it is not a repository (exit 128), so the checkout guard needs no Git
+    # process — Popen is faked below and must see only the sandbox launch.
+    monkeypatch.setattr(notifier, "_run_git", lambda args, **k: (128, ""))
     monkeypatch.setattr(notifier.subprocess, "Popen", CapturePopen)
     live = {}
 
@@ -306,6 +309,9 @@ def test_resident_preflight_failure_releases_lane_and_surfaces_reason(monkeypatc
     monkeypatch.setattr(sandbox, "preflight",
                         lambda cfg, ws: "runner image orcha/runner:0.5 not present")
     monkeypatch.setattr(notifier, "_is_git_repo", lambda p: False)  # spawn in base_cwd
+    # ...and Git agrees it is not a repository (exit 128), so the checkout guard needs no Git
+    # process — Popen is faked below and must see only the sandbox launch.
+    monkeypatch.setattr(notifier, "_run_git", lambda args, **k: (128, ""))
     def _boom(*a, **k):
         raise AssertionError("must not spawn any process")
     monkeypatch.setattr(notifier.subprocess, "Popen", _boom)

@@ -106,9 +106,11 @@ def _wire(monkeypatch, *, active, turns=None):
 
 
 def test_conversation_turn_send_first_no_orphan_run(monkeypatch, tmp_path):
-    """TEETH (Part 1, conversation-turn): a broken pipe must NOT open a worker_run. The old
-    POST-then-send order created a 'running' row then hit `continue` without setting
-    current_run_id — stranding it forever. Send-first: no successful send → no row."""
+    """TEETH (Part 1, conversation-turn): a broken pipe must NOT strand a 'running' worker_run.
+    The old POST-then-send order created a row then hit `continue` without setting
+    current_run_id — stranding it forever. #275 registers the run BEFORE the resident may consume
+    the turn (so every writer is attributable), and a failed send stops the resident and FINISHES
+    that run — so no row is left running."""
     conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
             "session_id": None, "pending_human": True, "last_turn_seq": 1}
     posts = _wire(monkeypatch, active=[conv],
@@ -119,11 +121,13 @@ def test_conversation_turn_send_first_no_orphan_run(monkeypatch, tmp_path):
 
     notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
 
-    # The mutation-check: revert the reorder and a /runs POST appears here → orphan 'running' row.
-    assert not any(u.endswith("/runs") for u, _ in posts), \
-        "a failed send must NOT POST a worker_run (else it strands a 'running' orphan)"
+    # The mutation-check: drop the finish on a failed send and the opened run is left 'running'.
+    opened = [u for u, _ in posts if u.endswith("/runs")]
+    finished = [u for u, _ in posts if u.endswith("/runs/RUN-1/finish")]
+    assert len(opened) == len(finished), \
+        "a failed send must finish any worker_run it opened (else it strands a 'running' orphan)"
     r = live.get("C1")
-    assert r is not None and r.get("current_run_id") is None and not r.get("awaiting_result")
+    assert r is None or not r.get("awaiting_result")
 
 
 def test_conversation_turn_send_ok_still_opens_run(monkeypatch, tmp_path):
