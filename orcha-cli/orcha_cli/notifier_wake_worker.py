@@ -183,6 +183,8 @@ def _worker_state(
         # Checkpoint respawns re-read the persisted project setting, but this value is the
         # fail-safe when the API is temporarily unavailable during that hand-off.
         "worktrees_disabled": bool(candidate.get("worktrees_disabled")),
+        # The checkpoint respawn's live-checkout guard consults this container's runs.
+        "container_id": candidate.get("container_id"),
     }
     return {
         "proc": process,

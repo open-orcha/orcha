@@ -1132,8 +1132,10 @@ def test_watchdog_kill_removes_clean_worktree(monkeypatch, tmp_path):
     monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)))
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: None)
-    monkeypatch.setattr(notifier, "_worktree_is_dirty", lambda wt: False)     # nothing to preserve
-    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
+    # Retirement proves cleanliness itself (branch, full patch incl. ignored files, runtime
+    # overlay) against real Git — covered in test_disable_worktrees; here it reports "removed".
+    monkeypatch.setattr(notifier, "_safe_teardown_worktree",
+                        lambda *a: torn.append(a) or "removed")
     monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: None)
     log = tmp_path / "w.log"
     # an in-flight tool_use → _worker_is_live True, but OVER CAP so the exemption is bypassed.
@@ -1615,7 +1617,8 @@ def _respawn_entry(proc, log, *, respawns=0, cap=1200.0):
                         "respawn_ctx": {"prompt": "drain + continue", "flags": None,
                                         "alias": "Forge", "model": "claude-fable-5",
                                         "model_runtime": "claude",
-                                        "task_id": "T1", "event": "task_message"}}}
+                                        "task_id": "T1", "event": "task_message",
+                                        "container_id": "cid"}}}
 
 
 def test_tick_stores_model_in_respawn_ctx(monkeypatch):
@@ -1648,6 +1651,8 @@ def test_progressing_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_pa
     """ISS-76: a worker STILL GROWING when it crosses the 1200s soft cap is NOT killed — it is
     checkpoint-respawned: graceful SIGTERM (so SessionEnd/C1 digest runs), run finished as
     `exited` (not killed), worktree KEPT, a fresh worker spawned on it, respawns incremented."""
+    # Only the checkout-routing reads answer; every other fetch stays unreachable as before.
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))
     posts, sigs, spawned, torn = [], [], [], []
     def _post(url, body, **k):
         posts.append((url, body))
@@ -1852,6 +1857,8 @@ def test_inflight_codex_worker_past_cap_is_still_respawned(monkeypatch, tmp_path
     `item.started` with no terminal `turn.completed`) is genuinely progressing, so `_terminal_status`
     returns None and it MUST still be checkpoint-respawned — the round-2 fix must not over-fire and
     strand live Codex workers on the terminal branch."""
+    # Only the checkout-routing reads answer; every other fetch stays unreachable as before.
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))
     posts, sigs, spawned = [], [], []
     def _post(url, body, **k):
         posts.append((url, body))
@@ -1883,13 +1890,17 @@ def test_inflight_codex_worker_past_cap_is_still_respawned(monkeypatch, tmp_path
 def test_checkpoint_respawn_budget_exhausted_is_reaped_as_runaway(monkeypatch, tmp_path):
     """ISS-76 runaway backstop: a task still progressing after HARD_CAP_RESPAWN_MAX rollovers is
     no longer respawned — it's gracefully reaped as a timeout kill and its lease released."""
+    # Only the checkout-routing reads answer; every other fetch stays unreachable as before.
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))
     posts, sigs, spawned, torn = [], [], [], []
     monkeypatch.setattr(notifier, "_post_json", lambda u, b, **k: posts.append((u, b)))
     monkeypatch.setattr(notifier.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: sigs.append((pgid, sig)))
     monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "DIFF")
     monkeypatch.setattr(notifier, "_worktree_is_dirty", lambda wt: False)
-    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
+    # Clean-up goes through proof-based retirement (never a blind removal of unsaved files).
+    monkeypatch.setattr(notifier, "_safe_teardown_worktree",
+                        lambda *a: torn.append(a) or "removed")
     monkeypatch.setattr(notifier, "spawn_headless",
                         lambda *a, **k: spawned.append(a) or (True, "r", FakeProc()))
 
@@ -1910,6 +1921,8 @@ def test_checkpoint_respawn_budget_exhausted_is_reaped_as_runaway(monkeypatch, t
 def test_checkpoint_respawn_spawn_failure_releases_lease(monkeypatch, tmp_path):
     """ISS-76: if the fresh worker fails to spawn, the agent is not stranded holding a worktree +
     lease forever — the worktree is torn down and the lease released so a later event can wake it."""
+    # Only the checkout-routing reads answer; every other fetch stays unreachable as before.
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))
     posts, torn = [], []
     def _post(url, body, **k):
         posts.append((url, body))
@@ -1919,7 +1932,9 @@ def test_checkpoint_respawn_spawn_failure_releases_lease(monkeypatch, tmp_path):
     monkeypatch.setattr(notifier.os, "killpg", lambda pgid, sig: None)
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "P")
     monkeypatch.setattr(notifier, "_capture_diff", lambda wt, **k: "D")
-    monkeypatch.setattr(notifier, "_teardown_worktree", lambda *a, **k: torn.append(a))
+    # Clean-up goes through proof-based retirement (never a blind removal of unsaved files).
+    monkeypatch.setattr(notifier, "_safe_teardown_worktree",
+                        lambda *a: torn.append(a) or "removed")
     monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k: (False, "r", None))
 
     log = tmp_path / "w.log"
@@ -1972,7 +1987,8 @@ def _stalled_respawn_entry(proc, log, *, respawns=0, cap=1200.0, model_runtime="
                         "respawn_ctx": {"prompt": "drain + continue", "flags": None,
                                         "alias": "Forge", "model": model,
                                         "model_runtime": model_runtime,
-                                        "task_id": "T1", "event": "task_message"}}}
+                                        "task_id": "T1", "event": "task_message",
+                                        "container_id": "cid"}}}
 
 
 def test_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeypatch, tmp_path):
@@ -1980,6 +1996,8 @@ def test_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeypatch, 
     an unanswered tool_use (a long external job, e.g. `xcodebuild test`) — must NOT be hard-killed.
     It is checkpoint-respawned like a still-progressing worker: graceful SIGTERM (so the C1 digest
     runs), run finished as `exited`, worktree KEPT, a fresh worker spawned, respawns incremented."""
+    # Only the checkout-routing reads answer; every other fetch stays unreachable as before.
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))
     posts, sigs, spawned, torn = [], [], [], []
     def _post(url, body, **k):
         posts.append((url, body))
@@ -2049,6 +2067,8 @@ def test_codex_stalled_but_alive_worker_past_cap_is_checkpoint_respawned(monkeyp
     an alive-but-silent Codex worker past the cap (the #49 failure mode, left unfixed for Codex).
     With a runtime-aware probe an unterminated `item.started` (a long external command in flight)
     reads as LIVE and the worker is checkpoint-respawned exactly like its Claude sibling."""
+    # Only the checkout-routing reads answer; every other fetch stays unreachable as before.
+    monkeypatch.setattr(notifier, "_get_json", _with_routing_reads(lambda url, **k: None))
     posts, sigs, torn = [], [], []
     def _post(url, body, **k):
         posts.append((url, body))

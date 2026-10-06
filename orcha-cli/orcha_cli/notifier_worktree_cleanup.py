@@ -422,6 +422,21 @@ def _git_common_path(cwd, services: Any):
     return common_path.resolve()
 
 
+def _outside_git(cwd, services: Any) -> bool:
+    """Return True only when ``cwd`` provably has no Git metadata to protect.
+
+    That is a path that does not exist, or one Git itself reports as "not a
+    repository" (exit 128).  Any other failure (git missing, timeout) is not
+    proof, so callers keep failing closed.
+    """
+    checkout = pathlib.Path(cwd)
+    if not checkout.exists():
+        return True
+    return checkout.is_dir() and services._run_git(
+        ["rev-parse", "--git-dir"], cwd=cwd
+    )[0] == 128
+
+
 def _checkout_metadata_key(cwd) -> str:
     return hashlib.sha256(
         str(pathlib.Path(cwd).resolve()).encode("utf-8")
@@ -1269,15 +1284,9 @@ def checkout_activity_status(
     """
     path = _checkout_activity_path(cwd, services)
     if path is None:
-        # Reservations live in Git's private metadata, so a path that does not
-        # exist, or that Git itself reports as "not a repository" (exit 128),
-        # can hold none.  Any other failure (git missing, timeout) stays
-        # unreadable and fails closed.
-        checkout = pathlib.Path(cwd)
-        if not checkout.exists() or (
-            checkout.is_dir()
-            and services._run_git(["rev-parse", "--git-dir"], cwd=cwd)[0] == 128
-        ):
+        # Reservations live in Git's private metadata; a checkout outside Git
+        # can hold none.  Any other unreadable state fails closed.
+        if _outside_git(cwd, services):
             return {"status": "none", "records": []}
         return {"status": "unreadable", "records": []}
     if not path.exists():
@@ -2795,6 +2804,29 @@ def handoff_changes_result(
 ) -> HandoffResult:
     """Serialize, revalidate, live-check, and apply one checkout handoff."""
     owner_key = owner_key or "legacy-unscoped"
+    try:
+        same_path = bool(source_cwd and destination_cwd) and (
+            pathlib.Path(source_cwd).resolve()
+            == pathlib.Path(destination_cwd).resolve()
+        )
+    except OSError:
+        same_path = False
+    if same_path and _outside_git(destination_cwd, services):
+        # A respawn in the same non-Git checkout moves nothing and has no Git
+        # metadata to lock or record; the live guard still applies.
+        if checkout_guard is not None:
+            guarded = checkout_guard(source_cwd, destination_cwd)
+            if guarded is not None and not guarded.ok:
+                return guarded
+        return _result(
+            True,
+            "same_checkout",
+            "routing",
+            source=source_cwd,
+            destination=destination_cwd,
+            owner_key=owner_key,
+            guidance="The worker continues in the same checkout; nothing was moved.",
+        )
     with _handoff_mutation_lock(destination_cwd, services) as acquired:
         if not acquired:
             return _result(
