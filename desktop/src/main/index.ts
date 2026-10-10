@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, screen, session, shell, systemPreferences, WebContentsView } from 'electron'
+import { isExternalWebLink } from '../shared/externalLink'
 import { installMediaPermissions, micAccessStatus, requestMicAccess } from './micPermission'
 import { MIC_CHANNELS, MIC_SETTINGS_URL } from '../shared/mic'
 import { classifyVerdiktLink, launchMacApp, openVerdiktLink } from './verdiktLinks'
@@ -1712,8 +1713,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle('orcha:openExternal', (_event, url: unknown) =>
     asResult(async () => {
-      // Allowlist https only — the renderer can't be tricked into opening file:// or app schemes.
-      if (typeof url === 'string' && /^https:\/\//.test(url)) await shell.openExternal(url)
+      // Web links only (http/https — local portals are http://localhost) — the renderer can't be
+      // tricked into opening file:// or app schemes.
+      if (isExternalWebLink(url)) await shell.openExternal(url)
     })
   )
 

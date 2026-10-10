@@ -34,7 +34,7 @@ from typing import Optional
 from fastapi import HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from portal_backend import sql
+from portal_backend import public_errors, sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -365,7 +365,7 @@ def preview_schedule(cid: str, body: SchedulePreview, request: Request):
     try:
         cron, tz = sched.validate(body.cron, body.timezone)
     except sched.ScheduleError as err:
-        return {"valid": False, "error": str(err), "schedule_text": None, "next_runs": []}
+        return {"valid": False, "error": err.user_message, "schedule_text": None, "next_runs": []}
     runs, cur_t = [], _now()
     for _ in range(body.count):
         cur_t = sched.next_after(cron, tz, cur_t)
@@ -791,7 +791,9 @@ def _execute_run(r, run_id, *, actor_id, trigger, slots, now, actor_alias=None) 
         detail = f"Task creation was refused: {err.detail}"
     except Exception as err:  # noqa: BLE001 - record the failure; never crash the tick
         outcome, status_code = "failed", 500
-        detail = f"Task creation failed: {type(err).__name__}: {err}"
+        # the exception text stays in the server log; the run row (and the API) say what happened
+        public_errors.log_exception(f"routine {rid} run {run_id}: task creation", err)
+        detail = "Task creation failed because of an unexpected server error — see the portal log."
     with db_cursor() as (conn, cur):
         cur.execute(
             "UPDATE routine_runs SET outcome=%s, task_id=%s, detail=%s, finished_at=%s WHERE id=%s",

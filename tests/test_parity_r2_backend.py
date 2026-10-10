@@ -377,6 +377,10 @@ def _free_port():
     return port
 
 
+@pytest.mark.skipif(
+    __import__("conftest").BACKEND != "postgres",
+    reason="the child portal can't share the SQLite leg's test DB; runs on the Postgres leg",
+)
 def test_sigterm_with_open_sse_exits_promptly():
     """Real uvicorn process + an open container /events stream: SIGTERM must finish the
     graceful stop in well under 3 s (it previously hung until SIGKILL)."""
@@ -385,10 +389,13 @@ def test_sigterm_with_open_sse_exits_promptly():
 
     port = _free_port()
     env = dict(os.environ)  # carries the leg's DB (ORCHA_DB_PATH on SQLite, DATABASE_URL on Postgres)
+    # The child needs orcha-cli on its path too (the portal imports orcha_cli.llm_util), the
+    # same as conftest gives this process — without it main.py fails to import and the
+    # test only ever saw "uvicorn did not start".
     code = (
-        "import sys; sys.path.insert(0, %r); import uvicorn, main; "
+        "import sys; sys.path[:0] = [%r, %r]; import uvicorn, main; "
         "uvicorn.run(main.app, host='127.0.0.1', port=%d, log_level='warning')"
-        % (str(conftest.PORTAL_DIR), port)
+        % (str(conftest.PORTAL_DIR), str(conftest.REPO / "orcha-cli"), port)
     )
     proc = subprocess.Popen([sys.executable, "-c", code], env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -402,7 +409,9 @@ def test_sigterm_with_open_sse_exits_promptly():
             except httpx.HTTPError:
                 time.sleep(0.2)
         else:
-            pytest.fail("uvicorn did not start")
+            proc.kill()
+            err = proc.communicate(timeout=10)[1].decode(errors="replace")[-3000:]
+            pytest.fail(f"uvicorn did not start (exit {proc.returncode}):\n{err}")
         cid = httpx.post(base + "/api/containers", json={"name": "sse-stop"},
                          timeout=5).json()["container_id"]
 

@@ -617,3 +617,36 @@ async def test_propose_with_head_base_ref_uses_default_branch_sha(client, contai
     by = dict(calls)
     assert by["/repos/acme/site/git/commits"]["parents"] == [BASE_COMMIT_SHA]
     assert by["/repos/acme/site/pulls"]["base"] == "main"
+
+
+async def test_propose_github_error_detail_does_not_leak_the_upstream_body(
+    client, container, token_env, monkeypatch,
+):
+    """CodeQL information exposure: only GitHub's status code reaches the client."""
+    cid = container["id"]
+    await _bind_repo(client, cid)
+    _resolve_ref_via_default_branch(monkeypatch)
+
+    def fake_post(path, token, payload):
+        if path == "/repos/acme/site/git/blobs":
+            return {"sha": "blobsha"}
+        raise RuntimeError('github_status:422:{"message":"SECRET-UPSTREAM-BODY"}')
+
+    monkeypatch.setattr(edit, "_gh_post", fake_post)
+    r = await client.post(
+        f"/api/containers/{cid}/code/github/propose",
+        json={"base_ref": None, "message": "add a file", "files": [{"path": "a.py", "content": "x = 1\n"}]},
+    )
+    body = r.json()
+    assert r.status_code == 200 and body["reason"] == "github_error"
+    assert body["detail"] == "GitHub returned 422"
+
+    def boom(path, token, payload):
+        raise RuntimeError("github_unreachable:<urlopen error SECRET-SOCKET-REASON>")
+
+    monkeypatch.setattr(edit, "_gh_post", boom)
+    r = await client.post(
+        f"/api/containers/{cid}/code/github/propose",
+        json={"base_ref": None, "message": "add a file", "files": [{"path": "a.py", "content": "x = 1\n"}]},
+    )
+    assert r.json()["detail"] == "could not reach GitHub"

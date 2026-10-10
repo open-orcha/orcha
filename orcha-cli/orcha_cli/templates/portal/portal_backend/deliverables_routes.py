@@ -20,6 +20,8 @@ Closed tasks (completed / cancelled) are frozen: the verified evidence never cha
 
 from __future__ import annotations
 
+import os
+import pathlib
 import shutil
 from typing import Optional
 
@@ -37,6 +39,7 @@ from portal_backend.deliverables_storage import (
     NOTE_MAX_CHARS,
     TEXT_KINDS,
     TEXT_PREVIEW_MAX_BYTES,
+    STORED_NAME,
     DeliverablePathError,
     allowed_extensions,
     content_type_of,
@@ -383,10 +386,16 @@ def _commit_version(tid, task, logical, kind, source, run, author, note, staging
                 )
             stored = stored_name_for(version, logical)
             ddir = deliverable_dir(tid, did)
-            if ddir is None:  # unreachable: uuids only
+            if ddir is None or not STORED_NAME.match(stored):  # unreachable: uuids + v<N>.<ext>
                 raise HTTPException(400, "invalid deliverable location")
             ddir.mkdir(parents=True, exist_ok=True)
-            final = ddir / stored
+            # resolve the target and keep it inside the deliverable's own directory, so no
+            # logical path / extension can make the copy (or the cleanup below) land elsewhere
+            real_dir = os.path.realpath(ddir)
+            target = os.path.realpath(os.path.join(real_dir, stored))
+            if not target.startswith(real_dir + os.sep):
+                raise HTTPException(400, "invalid deliverable location")
+            final = pathlib.Path(target)
             shutil.copyfile(staging, final)
             cur.execute(
                 """INSERT INTO task_deliverable_versions

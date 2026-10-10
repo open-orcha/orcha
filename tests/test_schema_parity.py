@@ -21,7 +21,11 @@ import sqlite3
 import psycopg
 import pytest
 
-from conftest import ADMIN_URL, TEST_DB
+from conftest import ADMIN_URL, BACKEND, TEST_DB
+
+# Needs a live Postgres to build the reference schema: it runs on the Postgres leg only
+# (the SQLite CI job has no Postgres service, so every test errored on connect).
+pytestmark = pytest.mark.skipif(BACKEND != "postgres", reason="compares against a live Postgres (Postgres leg)")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PG_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations"

@@ -384,10 +384,12 @@ def _request_prereview(cur, cid, task, finisher_id, finisher_alias, ai_mgr, revi
     return rid
 
 
-_APPROVE_RE = re.compile(r"^\s*\**\s*(approve[ds]?|approval|lgtm|recommend approval)\b[\s:.\-—]*",
+# `\s*(?:\*+\s*)?` is `\s*\**\s*` without its two overlapping `\s*` (which backtrack
+# quadratically over a long run of blanks that is not followed by a keyword) — same matches.
+_APPROVE_RE = re.compile(r"^\s*(?:\*+\s*)?(approve[ds]?|approval|lgtm|recommend approval)\b[\s:.\-—]*",
                          re.I)
 _SEND_BACK_RE = re.compile(
-    r"^\s*\**\s*(send[\s_-]*back|sent[\s_-]*back|reject(ed)?|changes[\s_-]*requested|rework)\b"
+    r"^\s*(?:\*+\s*)?(send[\s_-]*back|sent[\s_-]*back|reject(ed)?|changes[\s_-]*requested|rework)\b"
     r"[\s:.\-—]*",
     re.I,
 )

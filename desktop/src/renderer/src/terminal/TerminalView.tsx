@@ -121,8 +121,16 @@ export default function TerminalView({
   useEffect(() => {
     const el = hostRef.current
     if (!el) return
+    // Links open in the user's browser through the validated http(s)-only bridge — both plain
+    // URLs in the output (WebLinksAddon) and OSC 8 hyperlinks (Claude Code prints those). Without
+    // a linkHandler xterm falls back to window.confirm + window.open, which Electron denies: the
+    // "Do you want to navigate to…?" dialog whose OK did nothing.
+    const openLink = (uri: string): void => {
+      void window.orchaDesktop?.openExternal?.(uri)?.catch?.(() => {})
+    }
     const term = new Terminal({
       ...terminalOptionsFor(currentResolvedTheme()),
+      linkHandler: { activate: (_e, uri) => openLink(uri), allowNonHttpProtocols: false },
       fontFamily: TERMINAL_FONT,
       fontSize: 12.5,
       lineHeight: 1.25,
@@ -137,12 +145,7 @@ export default function TerminalView({
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
-    // Links open in the user's browser through the validated https-only bridge.
-    term.loadAddon(
-      new WebLinksAddon((_e, uri) => {
-        void window.orchaDesktop?.openExternal?.(uri)?.catch?.(() => {})
-      })
-    )
+    term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)))
     // Host shortcuts (⌘K, ⌘1-9) and menu-bar accelerators (⌘T, ⌘W…) must not be eaten by
     // the terminal — every other key goes to the shell.
     term.attachCustomKeyEventHandler((e) => !terminalShouldSkip(e))

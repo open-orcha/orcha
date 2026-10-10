@@ -312,6 +312,13 @@ def kill_group(proc, *, grace: float = KILL_GRACE_S) -> None:
         else:
             proc.terminate()
         proc.wait(timeout=grace)
+        if pgid:
+            # The shell exiting doesn't mean its children did (a server that ignores TERM, a
+            # backgrounded job): KILL whatever is left in the group so nothing outlives the stop.
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
     except subprocess.TimeoutExpired:
         try:
             os.killpg(pgid, signal.SIGKILL) if pgid else proc.kill()

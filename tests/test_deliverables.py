@@ -606,3 +606,16 @@ def test_reaper_calls_hook_for_task_bound_workers(monkeypatch):
                   "respawn_ctx": {"task_id": "t"}, "base_cwd": "/nope"}
         comp.handle_exited("http://x", "a", worker, {}, {}, {}, 0, True, S())
         assert calls == expect
+
+
+async def test_commit_refuses_a_stored_name_that_escapes_the_deliverable_dir(client, arena, store, monkeypatch):
+    """Defence in depth for the version copy (CodeQL path-injection): even if the stored
+    name derived from the logical path were ever unsafe, the copy is refused (400) and
+    nothing is written outside the deliverable's own directory."""
+    tid, human = arena["tid"], arena["human"]
+    for bad in ("../../../evil.md", "/tmp/evil.md", "v1.md/../../evil.md"):
+        monkeypatch.setattr(deliverables_routes, "stored_name_for", lambda version, path, bad=bad: bad)
+        r = await _up(client, tid, "report.md", b"# hi\n", author=human["agent_id"])
+        assert r.status_code == 400, (bad, r.text)
+        assert r.json()["detail"] == "invalid deliverable location"
+    assert not list(store.rglob("evil.md"))

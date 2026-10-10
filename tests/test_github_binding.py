@@ -129,3 +129,25 @@ async def test_repos_github_error_reports_detail(client, monkeypatch, tmp_path):
     body = r.json()
     assert body["available"] is False and body["repos"] == []
     assert "401" in body["detail"]
+
+
+async def test_repos_error_detail_never_echoes_the_exception_text(client, monkeypatch, tmp_path):
+    """CodeQL information exposure: the status code reaches the client, the rest of the
+    exception (an upstream body, a socket reason) only the server log."""
+    token_file = tmp_path / "github-token"
+    token_file.write_text("ghs_testtoken")
+    monkeypatch.setenv("ORCHA_GITHUB_TOKEN_FILE", str(token_file))
+
+    def fake_fetch(token):
+        raise RuntimeError("GitHub returned 401 for installation/repositories: SECRET-UPSTREAM-BODY")
+
+    monkeypatch.setattr(github_routes, "_fetch_installation_repos", fake_fetch)
+    body = (await client.get("/api/github/repos")).json()
+    assert body["detail"] == "GitHub returned 401"
+
+    def unreachable(token):
+        raise RuntimeError("could not reach GitHub: [Errno 61] /internal/socket/path SECRET")
+
+    monkeypatch.setattr(github_routes, "_fetch_installation_repos", unreachable)
+    body = (await client.get("/api/github/repos")).json()
+    assert body["detail"] == "could not reach GitHub"

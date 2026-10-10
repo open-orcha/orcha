@@ -102,14 +102,34 @@ def _get(url, timeout=2.0):
         return r.read().decode()
 
 
-def _dead(pid) -> bool:
-    try:
-        os.killpg(pid, 0)
-        return False
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
+def _live_members(pgid) -> list:
+    """Processes still in the group that aren't zombies. A killed child whose parent (the
+    shell) is gone is reparented, and on CI runners it can sit as a zombie until reaped —
+    killpg(pgid, 0) still succeeds on it, but nothing is running."""
+    out = subprocess.run(["ps", "-eo", "pgid=,stat=,pid="], capture_output=True, text=True).stdout
+    live = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == str(pgid) and not parts[1].startswith("Z"):
+            live.append(parts[2])
+    return live
+
+
+def _dead(pid, wait=5.0) -> bool:
+    """The whole group is gone (or only zombies are left), allowing a moment for it to finish."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        if not _live_members(pid):
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.1)
 
 
 # ------------------------------------------------------------------ pure pieces
@@ -253,8 +273,7 @@ def test_ttl_kills_the_whole_process_group(repo):
     assert "stopped" in portal.routes(), portal.calls
     assert portal.last("stopped")["reason"] == "it reached its time limit (1 min)", portal.calls
     assert _dead(pgid)
-    out = subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True, text=True).stdout.strip()
-    assert out == ""
+    assert _live_members(pgid) == []
 
 
 def test_a_preview_that_dies_is_reported_as_stopped(repo):

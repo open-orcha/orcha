@@ -48,7 +48,14 @@ def _clean_rel_path(path: str) -> str:
     return clean.strip("/")
 
 
-def _read_file_capped(full: str) -> bytes:
+def _read_file_capped(root: str, rel: str, escape_detail: str) -> bytes:
+    """The bytes of `rel` inside the checkout at `root`. The path is resolved (symlinks
+    followed) and must stay inside the resolved root — 400 `escape_detail` otherwise —
+    before anything touches the filesystem at it."""
+    real_root = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(real_root, rel))
+    if not full.startswith(real_root + os.sep):
+        raise HTTPException(400, escape_detail)
     try:
         if not os.path.isfile(full):
             raise HTTPException(404, "file not found")
@@ -136,10 +143,9 @@ def worktree_file_raw(
             raise HTTPException(404, f"{clean!r} does not exist at HEAD")
     else:
         repo_dir = local_git._env_dir()
-        full = local_git._contained_path(repo_dir, clean) if repo_dir else None
-        if full is None:
+        if not repo_dir:
             raise HTTPException(400, "path escapes the repository")
-        data = _read_file_capped(full)
+        data = _read_file_capped(repo_dir, clean, "path escapes the repository")
     return file_preview.raw_response(request, data, clean, download=download, cache="no-store")
 
 
@@ -219,8 +225,5 @@ def run_change_raw(
         if data is None:
             raise HTTPException(404, f"{src_path!r} does not exist at the run's base")
     else:
-        full = local_git._contained_path(co.work_tree, clean)
-        if full is None:
-            raise HTTPException(400, "path escapes the run's checkout")
-        data = _read_file_capped(full)
+        data = _read_file_capped(co.work_tree, clean, "path escapes the run's checkout")
     return file_preview.raw_response(request, data, src_path, download=download, cache="no-store")

@@ -10,11 +10,14 @@ missing project), retry, cancel, one-open-run rule, auto-trigger policy (ui_chan
 manual, once per round) — and that nothing here ever changes the task's status."""
 import json
 import time
+import urllib.request
 from datetime import timedelta
 
 import pytest
 
 from fake_verdikt import FakeVerdikt
+from portal_backend import verdikt_integration as vi
+from portal_backend.verdikt_client import VerdiktError
 from conftest import ts_ago, ts_from_now
 
 
@@ -582,3 +585,51 @@ def test_with_verdikt_round_filter_is_pure():
     new = dict(old, created_at="2026-09-30T10:05:00+00:00")
     out = ep_mod.with_verdikt(pack, {"id": "r2", "status": "cancelled", "created_at": "2026-09-30T10:06:00+00:00"}, new)
     assert out["dod"]["items"][0]["status"] == "proven" and out["summary"]["verdikt"]["status"] == "cancelled"
+
+
+# ------------------------------------------------------------------ SSRF + error text (CodeQL)
+
+async def test_settings_and_connection_check_refuse_metadata_and_link_local_hosts(
+        client, container, make_agent, monkeypatch):
+    cid = container["id"]
+    hid = (await make_agent("root", "operator", kind="human"))["agent_id"]
+    contacted = []
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open",
+                        lambda self, req, *a, **k: contacted.append(req.full_url))
+    for bad in ("http://169.254.169.254/latest/meta-data", "http://[fe80::1]:80", "http://metadata.google.internal",
+                "http://0.0.0.0:31100", "http://user:pw@127.0.0.1:31100", "http://127.0.0.1:31100/?x=1",
+                "gopher://127.0.0.1:70", "file:///etc/passwd"):
+        r = await client.put(f"/api/containers/{cid}/verdikt",
+                             json={"actor_agent_id": hid, "base_url": bad})
+        assert r.status_code == 400, (bad, r.text)
+        d = (await client.post(f"/api/containers/{cid}/verdikt/test",
+                               json={"actor_agent_id": hid, "base_url": bad, "verdikt_project": "x"})).json()
+        assert d["reachable"] is False and d["ok"] is False and d["error"], bad
+    assert contacted == []  # the portal never made a request to any of them
+
+
+async def test_connection_check_error_does_not_echo_the_exception(client, container, make_agent, monkeypatch):
+    cid = container["id"]
+    hid = (await make_agent("root", "operator", kind="human"))["agent_id"]
+
+    class Boom:
+        def __init__(self, base):
+            pass
+
+        def health(self):
+            raise VerdiktError("Verdikt GET /api/health → HTTP 500: SECRET stack frame /srv/app.py", status=500)
+
+    monkeypatch.setattr(vi, "client_factory", Boom)
+    d = (await client.post(f"/api/containers/{cid}/verdikt/test",
+                           json={"actor_agent_id": hid, "base_url": "http://127.0.0.1:31100"})).json()
+    assert d["error"] == "Verdikt answered HTTP 500" and d["reachable"] is True
+
+    class Down(Boom):
+        def health(self):
+            raise VerdiktError("Verdikt is not reachable at http://127.0.0.1:31100 ([Errno 61] SECRET)",
+                               unreachable=True)
+
+    monkeypatch.setattr(vi, "client_factory", Down)
+    d = (await client.post(f"/api/containers/{cid}/verdikt/test",
+                           json={"actor_agent_id": hid, "base_url": "http://127.0.0.1:31100"})).json()
+    assert d["error"] == "Verdikt is not reachable at http://127.0.0.1:31100" and d["reachable"] is False

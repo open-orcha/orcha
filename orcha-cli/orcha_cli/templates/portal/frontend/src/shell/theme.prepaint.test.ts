@@ -10,8 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hostThemeMode, readThemePref, resolveTheme, WINDOW_TONE, type ResolvedTheme } from "./theme";
 
 const indexHtml = readFileSync(resolve(__dirname, "../../index.html"), "utf8");
-const inline = indexHtml.match(/<script>([\s\S]*?)<\/script>/)![1];
-const style = indexHtml.match(/<style>([\s\S]*?)<\/style>/)![1];
+// parse index.html with the DOM rather than a regex: the inline (src-less) boot script and
+// the pre-paint <style>, however their tags are cased or spaced
+const indexDoc = new DOMParser().parseFromString(indexHtml, "text/html");
+const inline = indexDoc.querySelector("script:not([src])")!.textContent!;
+const style = indexDoc.querySelector("style")!.textContent!;
 
 const html = () => document.documentElement;
 const origMatchMedia = window.matchMedia;

@@ -39,7 +39,10 @@ MAX_LOG_TAIL = 16_000
 LOG_TAIL_LINES = 80
 PLACEHOLDERS = ("{port}", "{worktree}", "{branch}")
 _READY_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+# CSI sequences, and OSC sequences up to their BEL. An OSC body never spans another ESC
+# (a new escape starts there), which also keeps the scan linear: a log full of unterminated
+# `ESC ]` can't make each one rescan the rest of the text.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*\x07")
 
 
 # ------------------------------------------------------------------ settings validation

@@ -130,7 +130,7 @@ export function formatInZone(iso: string, tz: string): string {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "—";
   try {
-    return d.toLocaleString("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }).replace(/,(?= \d{2}:)/, ",");
+    return d.toLocaleString("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
   } catch {
     return d.toLocaleString();
   }

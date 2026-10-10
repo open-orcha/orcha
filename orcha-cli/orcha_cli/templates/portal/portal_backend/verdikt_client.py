@@ -27,7 +27,9 @@ that into an honest `unavailable` / `failed` state (never a silent pass).
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
 import re
 import socket
 import urllib.error
@@ -43,30 +45,151 @@ class VerdiktError(Exception):
     """A Verdikt call failed. `unreachable` distinguishes "no Verdikt answered" (connection
     refused / DNS / timeout) from "Verdikt answered with an error"."""
 
-    def __init__(self, message: str, *, unreachable: bool = False, status: int | None = None):
+    def __init__(self, message: str, *, unreachable: bool = False, status: int | None = None,
+                 user_message: str | None = None):
         super().__init__(message)
         self.unreachable = unreachable
         self.status = status
+        # set when the message itself is written for the person configuring Verdikt (a URL
+        # it refuses) — the routes may return it; every other message stays in the log
+        self.user_message = user_message
+
+
+# ---------------------------------------------------------------- base URL checks
+#
+# The base URL is user-supplied (the Verdikt settings form, the connection check) and the
+# portal makes server-side requests to it, so it is checked before any request is made
+# (server-side request forgery):
+#   * http(s) only; no credentials, query or fragment; a plain path prefix; a valid port;
+#   * never a link-local address (169.254.0.0/16 — the cloud metadata service — fe80::/10),
+#     multicast, unspecified (0.0.0.0) or reserved address, nor a cloud metadata host name —
+#     checked on the literal host here AND on every address the name resolves to right
+#     before each request (`_check_resolved`);
+#   * when ORCHA_VERDIKT_ALLOWED_HOSTS is set (comma-separated names / IPs), only those
+#     hosts and loopback are allowed at all;
+#   * redirects are never followed, so an allowed host can't bounce a request elsewhere.
+# The URL is rebuilt from its checked parts.
+
+ALLOWED_HOSTS_ENV = "ORCHA_VERDIKT_ALLOWED_HOSTS"
+_SCHEMES = {"http": "http", "https": "https"}
+_METADATA_NAMES = {"metadata", "metadata.google.internal", "metadata.goog", "instance-data",
+                   "instance-data.ec2.internal", "metadata.azure.internal"}
+_HOST_LABEL = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9])?$")
+_BASE_PATH = re.compile(r"^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$")
+
+
+def _allow_list() -> list[str]:
+    raw = os.environ.get(ALLOWED_HOSTS_ENV) or ""
+    return [h.strip().lower().strip("[]") for h in raw.split(",") if h.strip()]
+
+
+def _ip_refused(ip) -> bool:
+    """A destination the portal never contacts (loopback is always fine)."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped  # ::ffff:169.254.169.254 is the IPv4 address it wraps
+    if ip.is_loopback:
+        return False
+    return ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved
+
+
+def _allowed_host(hostname: str) -> str | None:
+    """The canonical (lower-case; an IP re-serialized by `ipaddress`) form of `hostname`
+    when the portal may contact it, else None."""
+    name = (hostname or "").strip().lower().rstrip(".")
+    if not name:
+        return None
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        ip = None
+    allow = _allow_list()
+    if ip is not None:
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if _ip_refused(ip):
+            return None
+        if allow and not ip.is_loopback and str(ip) not in allow:
+            return None
+        return str(ip)
+    if name in _METADATA_NAMES or not all(_HOST_LABEL.match(x) for x in name.split(".")):
+        return None
+    if allow and name != "localhost" and name not in allow:
+        return None
+    return name
+
+
+def _check_resolved(base: str) -> None:
+    """Refuse a host NAME that resolves to a refused address (a DNS name pointing at the
+    metadata service). An unresolvable name is left to the request itself (unreachable)."""
+    host = urllib.parse.urlsplit(base).hostname or ""
+    try:
+        ipaddress.ip_address(host)
+        return  # a literal was already checked by normalize_base
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        except ValueError:
+            continue
+        if _ip_refused(ip):
+            raise VerdiktError(f"Verdikt host {host!r} resolves to {ip}, which Orcha never contacts",
+                               user_message=f"Verdikt host {host!r} resolves to an address Orcha never contacts")
 
 
 def normalize_base(url: str) -> str:
+    """The Verdikt base URL, checked and rebuilt from its parts: http(s), an allowed host
+    (see above), an optional port and a plain path prefix — no credentials, query or
+    fragment. Raises VerdiktError with a user-facing message otherwise."""
     u = (url or "").strip().rstrip("/")
     if not u:
-        raise VerdiktError("no Verdikt URL configured")
-    p = urllib.parse.urlparse(u)
-    if p.scheme not in ("http", "https") or not p.netloc:
-        raise VerdiktError(f"Verdikt URL must be http(s)://host[:port], got {url!r}")
-    return u
+        raise VerdiktError("no Verdikt URL configured", user_message="no Verdikt URL configured")
+    shape_msg = f"Verdikt URL must be http(s)://host[:port], got {url!r}"
+    shape = VerdiktError(shape_msg, user_message=shape_msg)
+    p = urllib.parse.urlsplit(u)
+    scheme = _SCHEMES.get(p.scheme.lower())
+    if not scheme or not p.netloc or p.username is not None or p.password is not None or p.query or p.fragment:
+        raise shape
+    try:
+        port = p.port
+    except ValueError:
+        raise shape from None
+    if not _BASE_PATH.match(p.path) or any(seg in (".", "..") for seg in p.path.split("/")):
+        raise shape
+    host = _allowed_host(p.hostname or "")
+    if host is None:
+        msg = (f"Verdikt host {p.hostname!r} is not allowed (link-local / metadata addresses are never "
+               f"contacted; when {ALLOWED_HOSTS_ENV} is set, only the hosts it lists are)")
+        raise VerdiktError(msg, user_message=msg)
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc += f":{int(port)}"
+    return f"{scheme}://{netloc}{p.path}"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: a 3xx surfaces as an HTTPError (→ VerdiktError)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 class VerdiktClient:
     def __init__(self, base_url: str, *, timeout: float = DEFAULT_TIMEOUT_S, opener=None):
         self.base = normalize_base(base_url)
         self.timeout = timeout
-        self._open = opener or urllib.request.urlopen
+        self._open = opener or _NO_REDIRECT_OPENER.open
 
     # ---------------------------------------------------------------- transport
     def _call(self, method: str, path: str, body: Any = None) -> Any:
+        _check_resolved(self.base)
         url = self.base + path
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(url, data=data, method=method,
@@ -209,6 +332,7 @@ class VerdiktClient:
         headers = {"Accept": "*/*"}
         if range_header:
             headers["Range"] = range_header
+        _check_resolved(self.base)
         req = urllib.request.Request(self.artifact_url(path), method="GET", headers=headers)
         try:
             return self._open(req, timeout=timeout or self.timeout)

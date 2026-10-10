@@ -39,7 +39,7 @@ import json
 import re
 from typing import Callable
 
-from portal_backend import sql
+from portal_backend import public_errors, sql
 from portal_backend import verdikt_integration as vi
 
 ACTOR = "system:verdikt"
@@ -742,7 +742,8 @@ def sweep(cid: str | None = None) -> dict:
             out["in_flight"] = int(row["open"])
             out["loops_running"] = int(row["loops"])
     except Exception as e:  # noqa: BLE001
-        out["error"] = f"{type(e).__name__}: {e}"
+        public_errors.log_exception("verdikt sweep", e)
+        out["error"] = "the Verdikt sweep failed — see the portal log"
     return out
 
 

@@ -480,3 +480,36 @@ def test_notifier_hook_is_throttled_and_never_raises(monkeypatch):
     clock[0] += notifier_routines.TICK_EVERY_SECS + 1
     notifier_routines.maybe_fire_routines("http://api", "cid-1", Svc, quiet=True, dry_run=True)
     assert len(calls) == 2  # dry-run never fires routines, even when the throttle is open
+
+
+async def test_an_unexpected_task_creation_error_is_logged_not_returned(client, arena, db, monkeypatch, caplog):
+    """CodeQL information exposure: a crash inside task creation fails the run with a fixed
+    message (API, run row, the scheduler's tick result); the exception text goes to the log."""
+    from portal_backend import task_creation_routes
+
+    def boom(*_a, **_k):
+        raise RuntimeError("SECRET-INTERNAL connection string postgres://u:pw@db")
+
+    monkeypatch.setattr(task_creation_routes, "create_task", boom)
+    r = await make_routine(client, arena)
+    with caplog.at_level("WARNING", logger="orcha.portal.errors"):
+        x = await client.post(f"/api/routines/{r['id']}/run", json={"actor_agent_id": arena["owner"]})
+    assert x.status_code == 500
+    assert "SECRET" not in x.text and "RuntimeError" not in x.text
+    assert x.json()["detail"].startswith("Task creation failed because of an unexpected server error")
+    assert "SECRET-INTERNAL" in caplog.text  # the operator still sees the cause
+    assert all("SECRET" not in (row["detail"] or "") for row in runs(db, r["id"]))
+
+    slot = dt("2026-09-29T06:00:00+00:00")
+    set_due(db, r["id"], slot)
+    out = routine_routes.run_due_routines(arena["cid"], now=slot)
+    assert out["fired"] and all("SECRET" not in (f.get("detail") or "") for f in out["fired"])
+
+
+async def test_preview_returns_the_schedule_validation_message(client, arena):
+    bad = (await client.post(f"/api/containers/{arena['cid']}/routines/preview",
+                             json={"cron": "61 * * * *", "timezone": "UTC"})).json()
+    assert bad["valid"] is False and bad["error"] == "minute value 61 is out of range 0-59"
+    bad = (await client.post(f"/api/containers/{arena['cid']}/routines/preview",
+                             json={"cron": "0 9 * * *", "timezone": "Mars/Olympus"})).json()
+    assert bad["error"] == "unknown timezone 'Mars/Olympus'"

@@ -283,3 +283,44 @@ async def test_routes_are_in_openapi(client):
     for p in ("/api/containers/{cid}/github/browse/raw", "/api/containers/{cid}/code/worktree/raw",
               "/api/agents/{aid}/runs/{rid}/changes/raw"):
         assert "get" in paths[p], p
+
+
+# ------------------------------------------------------------------ path containment (CodeQL)
+
+async def test_worktree_raw_refuses_traversal_absolute_and_symlink_escapes(client, container, repo, tmp_path):
+    cid = container["id"]
+    await _bind_local(client, cid)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("outside the checkout")
+    url = f"/api/containers/{cid}/code/worktree/raw"
+    for bad in ("../secret.txt", "img/../../secret.txt", str(secret), "/etc/hosts", "-rf"):
+        r = await client.get(url, params={"path": bad})
+        assert r.status_code == 400, (bad, r.status_code)
+        assert b"outside the checkout" not in r.content
+    # a symlinked FILE pointing out of the checkout is refused too (not just a directory)
+    (repo / "link.txt").symlink_to(secret)
+    r = await client.get(url, params={"path": "link.txt"})
+    assert r.status_code == 400 and b"outside the checkout" not in r.content
+    # a symlink that stays inside the checkout still reads
+    (repo / "inner.png").symlink_to(repo / "img" / "a.png")
+    assert (await client.get(url, params={"path": "inner.png"})).content == PNG_A
+
+
+def test_read_file_capped_checks_containment_before_touching_the_path(tmp_path):
+    from fastapi import HTTPException
+
+    from portal_backend import file_raw_routes as fr
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "ok.txt").write_bytes(b"ok")
+    (tmp_path / "out.txt").write_bytes(b"out")
+    (root / "esc").symlink_to(tmp_path / "out.txt")
+    assert fr._read_file_capped(str(root), "ok.txt", "escape") == b"ok"
+    for rel in ("../out.txt", "esc", "/" + str(tmp_path / "out.txt").lstrip("/")):
+        with pytest.raises(HTTPException) as e:
+            fr._read_file_capped(str(root), rel, "escape")
+        assert e.value.status_code == 400 and e.value.detail == "escape"
+    with pytest.raises(HTTPException) as e:
+        fr._read_file_capped(str(root), "missing.txt", "escape")
+    assert e.value.status_code == 404

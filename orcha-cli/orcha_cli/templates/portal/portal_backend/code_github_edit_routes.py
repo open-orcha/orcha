@@ -102,6 +102,7 @@ import urllib.request
 from fastapi import HTTPException, Request
 
 from portal_backend import github_repo_browse_routes as browse
+from portal_backend import public_errors
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.github_hub_routes import _no_token, _resolve_repo_token
@@ -219,19 +220,10 @@ def _github_error_payload(exc: RuntimeError) -> dict:
     finer-grained rate_limited/not_found split github_hub_routes' `_error_payload`
     makes: a propose is a multi-step write sequence, and by the time any one step
     fails there's no single "the repo" or "the item" a 403-vs-404 distinction would
-    usefully describe to the caller — one honest "GitHub returned X" detail is enough
-    for the human to see in the UI and retry. `detail` is capped to keep a verbose
-    GitHub error body from ballooning the response."""
-    msg = str(exc)
-    if msg.startswith("github_status:"):
-        rest = msg[len("github_status:"):]
-        code, _, body = rest.partition(":")
-        detail = f"GitHub returned {code}"
-        if body.strip():
-            detail += f": {body.strip()[:300]}"
-        return {"available": True, "ok": False, "reason": "github_error", "detail": detail}
+    usefully describe to the caller. `detail` is "GitHub returned <code>" (or "could not
+    reach GitHub") — GitHub's own error body is logged server-side, never returned."""
     return {"available": True, "ok": False, "reason": "github_error",
-            "detail": "could not reach GitHub"}
+            "detail": public_errors.github_failure("code space propose", exc)}
 
 
 def _safe_propose_path(path: str) -> bool:

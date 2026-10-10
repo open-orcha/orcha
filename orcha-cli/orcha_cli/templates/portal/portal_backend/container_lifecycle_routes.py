@@ -392,12 +392,17 @@ def _live_agents_by_container(cur, cids):
                       -- the snapshot's running_run that the roster/board/selected sidebar read
                       -- (a lapsed lease is a probable orphan, but it still reads Working there).
                       -- The run on the lane the lease holds is preferred when there is one.
+                      -- The lease is re-read inside (ws2), not via the outer `ws`: SQLite
+                      -- before 3.46 cannot resolve an outer alias in a subquery's ORDER BY
+                      -- ("no such column: ws.wake_lease_until") — CI's and uv's Python ship 3.45.
                       (SELECT wr.run_id FROM worker_runs wr
                         WHERE wr.agent_id = a.id AND wr.status = 'running'
-                        ORDER BY ((ws.wake_lease_until > now() AND wr.lane = 'work')
-                                  OR (NOT COALESCE(ws.wake_lease_until > now(), false)
-                                      AND ws.conv_lease_until > now()
-                                      AND wr.lane = 'conversation')) IS TRUE DESC,
+                        ORDER BY (SELECT ((ws2.wake_lease_until > now() AND wr.lane = 'work')
+                                          OR (NOT COALESCE(ws2.wake_lease_until > now(), false)
+                                              AND ws2.conv_lease_until > now()
+                                              AND wr.lane = 'conversation')) IS TRUE
+                                    FROM agent_wake_state ws2
+                                   WHERE ws2.agent_id = wr.agent_id) IS TRUE DESC,
                                  wr.started_at DESC
                         LIMIT 1) AS run_pick
                  FROM agents a

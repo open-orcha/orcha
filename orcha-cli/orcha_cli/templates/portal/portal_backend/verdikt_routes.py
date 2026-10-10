@@ -33,7 +33,7 @@ from fastapi import HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from portal_backend import evidence_pack, verdikt_autofix as vaf, verdikt_integration as vi, verdikt_preview as vp
+from portal_backend import evidence_pack, public_errors, verdikt_autofix as vaf, verdikt_integration as vi, verdikt_preview as vp
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -223,9 +223,23 @@ def check_verdikt_connection(cid: str, body: VerdiktTestBody, request: Request):
         if slug and not out["project_found"]:
             out["error"] = f"Verdikt has no project '{slug}'"
     except VerdiktError as e:
-        out["error"] = str(e)
-        out["reachable"] = not e.unreachable
+        out["error"] = _connection_error_text(e, base)
+        # a refused URL (user_message set) was never contacted — not "reachable" either
+        out["reachable"] = not e.unreachable and e.user_message is None
     return out
+
+
+def _connection_error_text(e: VerdiktError, base: str) -> str:
+    """What the connection check tells the user about a failed Verdikt call. The full
+    error (upstream body, socket reason) goes to the server log only."""
+    public_errors.log_exception(f"verdikt connection check ({base})", e)
+    if e.user_message is not None:
+        return e.user_message
+    if e.unreachable:
+        return f"Verdikt is not reachable at {base}"
+    if e.status is not None:
+        return f"Verdikt answered HTTP {int(e.status)}"
+    return "Verdikt gave an unexpected answer — see the portal log"
 
 
 def _load_task(cur, tid: str) -> dict:

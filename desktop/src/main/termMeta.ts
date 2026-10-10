@@ -38,7 +38,8 @@ const LINE_LEAD_RE = /^[\s\u2500-\u257F\u23E9-\u23FA\u25A0-\u25FF\u2700-\u27BF�
 /** Shell default titles are not session titles: "me@host:~/dir", "~/dir", "/Users/x/dir". */
 const SHELL_TITLE_RE = /^([\w.-]+@[\w.-]+(:.*)?|~(\/.*)?|\/\S*)$/u
 /** Spinner / status glyphs a program puts before its title ("✳ Claude Code", "⠋ building"). */
-const TITLE_LEAD_RE = /^[\s⠀-⣿✀-➿✰-✿✳✶✻✽✢·*•●○◐◓◑◒|/\\-]+/u
+// (✀-➿ is the whole Dingbats block, U+2700–U+27BF: it already covers ✳ ✶ ✻ ✽ ✢ and ✰-✿)
+const TITLE_LEAD_RE = /^[\s⠀-⣿✀-➿·*•●○◐◓◑◒|/\\-]+/u
 
 export function cleanText(s: string): string {
   // Drop any C0/C1 controls that slipped through, collapse whitespace.

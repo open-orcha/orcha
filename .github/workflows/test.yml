@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+# Least privilege for the GITHUB_TOKEN: every job only checks out and runs tests.
+permissions:
+  contents: read
+
 # Cancel an in-progress run for the same ref when a newer commit is pushed.
 concurrency:
   group: tests-${{ github.ref }}

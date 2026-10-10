@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from portal_backend import local_git
+from portal_backend import local_git, public_errors
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -236,7 +236,7 @@ def list_github_repos(request: Request, cid: Optional[str] = None):
             try:
                 raw = _fetch_installation_repos(token_map[owner])
             except RuntimeError as exc:
-                failures.append(f"{owner}: {exc}")
+                failures.append(f"{owner}: {public_errors.github_failure('list installation repos', exc)}")
                 continue
             for repo in raw:
                 merged.setdefault(repo.get("full_name"), _repo_entry(repo))
@@ -258,7 +258,7 @@ def list_github_repos(request: Request, cid: Optional[str] = None):
             return {
                 "available": bool(local_entry),
                 "repos": [local_entry] if local_entry else [],
-                "detail": str(exc), "source": "app",
+                "detail": public_errors.github_failure("list installation repos", exc), "source": "app",
             }
         return {
             "available": True,
@@ -278,7 +278,7 @@ def list_github_repos(request: Request, cid: Optional[str] = None):
         return {
             "available": bool(local_entry),
             "repos": [local_entry] if local_entry else [],
-            "detail": str(exc), "source": "pat",
+            "detail": public_errors.github_failure("list PAT repos", exc), "source": "pat",
         }
     return {
         "available": True,
