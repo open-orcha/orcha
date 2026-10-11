@@ -127,6 +127,42 @@ def tcp_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
         return False
 
 
+def agents_idle(root: pathlib.Path) -> bool:
+    """No worker run in flight for the project's container, per its own portal.
+    Unknown (portal down, bad answer) counts as busy: never cut an agent off on a guess."""
+    cfg = read_config(root)
+    cid, port = cfg.get("current_container_id"), cfg.get("api_port")
+    if not cid or not port:
+        return True
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/containers/{cid}/running-runs", timeout=2
+        ) as resp:
+            return not json.load(resp).get("runs")
+    except (OSError, ValueError):
+        return False
+
+
+# --- the installed CLI --------------------------------------------------------------
+
+# Files every reinstall/update of orcha-cli rewrites: the package, the portal app and the
+# SPA shell whose hashed bundle names change with every frontend build.
+INSTALL_SENTINELS = ("__init__.py", "templates/portal/main.py", "templates/portal/static/dist/index.html")
+
+
+def install_fingerprint(pkg_dir: Optional[pathlib.Path] = None) -> tuple:
+    """(mtime_ns, size) per sentinel, None for a missing one (an install in progress)."""
+    base = pathlib.Path(pkg_dir) if pkg_dir else pathlib.Path(__file__).parent
+    out = []
+    for rel in INSTALL_SENTINELS:
+        try:
+            st = (base / rel).stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
 def heartbeat_fresh(root: pathlib.Path, now: Optional[float] = None) -> bool:
     """The notifier re-stamps ``.claude/.orcha-notifier.hb`` every loop pass."""
     try:

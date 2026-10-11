@@ -5,6 +5,7 @@ import { ToastProvider } from "./components/ui";
 import { SnapshotProvider, useSnapshot } from "./state/SnapshotProvider";
 import { PortalDictationProvider } from "./dictation/PortalDictation";
 import { initTheme } from "./shell/theme";
+import { installStaleBundleReload } from "./shell/staleBundle";
 import { AppRoutes } from "./shell/routes";
 
 // Routing: react-router BrowserRouter over clean URLs (/tasks?task=…). Every
@@ -23,6 +24,9 @@ if (!document.querySelector('link[href="/assets/styles.css"]')) {
 // Appearance (System / Light / Dark): apply the resolved theme before the first
 // React render and keep it live (index.html already did it pre-paint).
 initTheme();
+// After an orcha-cli update the portal restarts on new bundles; an open page reloads
+// itself instead of failing on a chunk that no longer exists (#297).
+installStaleBundleReload();
 
 /** Dictation for every text field (src/dictation): needs the project id for the cloud engine. */
 function DictationRoot({ children }: { children: React.ReactNode }) {

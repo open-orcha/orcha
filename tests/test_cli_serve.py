@@ -254,3 +254,112 @@ def test_real_supervisor_fans_sigterm_out_to_every_child(tmp_path):
     finally:
         if serve.poll() is None:
             serve.kill()
+
+
+# --- #297: follow a reinstalled/updated orcha-cli without `orcha upgrade` -------------
+
+SLEEPER = "import time; time.sleep(60)"
+
+
+def _following(tmp_path, *, idle):
+    clock = Clock()
+    fp = {"v": (("a", 1),)}
+    specs = [ChildSpec(n, lambda: _py(SLEEPER), lambda: True) for n in ("portal", "notifier", "bridge")]
+    sup = cli_serve.Supervisor(_native(tmp_path), specs, clock=clock,
+                               fingerprint=lambda: fp["v"], idle=lambda: idle["v"])
+    for _ in range(3):
+        sup.tick()
+    assert all(c.proc is not None for c in sup.children.values())
+    return sup, clock, fp
+
+
+def _advance(sup, clock, secs):
+    clock.now += secs
+    sup.tick()
+
+
+def _pids(sup):
+    return {n: c.proc.pid if c.proc else None for n, c in sup.children.items()}
+
+
+def _settle_update(sup, clock, fp):
+    fp["v"] = (("b", 2),)
+    _advance(sup, clock, cli_serve.INSTALL_CHECK_SECS)  # first sight of the new install
+    _advance(sup, clock, cli_serve.INSTALL_SETTLE_SECS)  # unchanged since: settled
+
+
+def _wait_exit(child):
+    if child.proc is not None:
+        child.proc.wait(timeout=10)
+
+
+def test_update_restarts_portal_and_idle_notifier_but_never_the_bridge(tmp_path):
+    idle = {"v": True}
+    sup, clock, fp = _following(tmp_path, idle=idle)
+    before = _pids(sup)
+    try:
+        _settle_update(sup, clock, fp)  # SIGTERMs the portal and, being idle, the notifier
+        _wait_exit(sup.children["portal"])
+        _wait_exit(sup.children["notifier"])
+        for _ in range(3):
+            _advance(sup, clock, cli_serve.TICK_SECS)
+        after = _pids(sup)
+        assert after["portal"] not in (None, before["portal"])
+        assert after["notifier"] not in (None, before["notifier"])
+        assert after["bridge"] == before["bridge"]  # open terminals survive the update
+        portal = sup.children["portal"]
+        assert portal.failures == 0 and not portal.crashlooping  # planned, not a crash
+        assert sup.stale == {}
+    finally:
+        sup.stop()
+
+
+def test_notifier_waits_for_agent_runs_to_finish(tmp_path):
+    idle = {"v": False}
+    sup, clock, fp = _following(tmp_path, idle=idle)
+    notifier_pid = sup.children["notifier"].proc.pid
+    try:
+        _settle_update(sup, clock, fp)
+        for _ in range(4):
+            _advance(sup, clock, cli_serve.INSTALL_CHECK_SECS)
+        assert sup.children["notifier"].proc.pid == notifier_pid  # an agent is mid-run
+        assert "notifier" in sup.stale
+        idle["v"] = True
+        _advance(sup, clock, cli_serve.INSTALL_CHECK_SECS)
+        _wait_exit(sup.children["notifier"])
+        for _ in range(3):
+            _advance(sup, clock, cli_serve.TICK_SECS)
+        assert sup.children["notifier"].proc.pid != notifier_pid
+    finally:
+        sup.stop()
+
+
+def test_a_half_written_install_is_left_alone(tmp_path):
+    sup, clock, fp = _following(tmp_path, idle={"v": True})
+    before = _pids(sup)
+    try:
+        fp["v"] = (None,)  # files missing while uv rewrites the package
+        for _ in range(4):
+            _advance(sup, clock, cli_serve.INSTALL_CHECK_SECS)
+        assert _pids(sup) == before and sup.stale == {}
+    finally:
+        sup.stop()
+
+
+def test_install_fingerprint_tracks_the_sentinels(tmp_path):
+    for rel in support.INSTALL_SENTINELS:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("v1")
+    first = support.install_fingerprint(tmp_path)
+    assert None not in first
+    index = tmp_path / support.INSTALL_SENTINELS[-1]
+    index.write_text("v2 with a new bundle name")
+    assert support.install_fingerprint(tmp_path) != first
+    index.unlink()
+    assert support.install_fingerprint(tmp_path)[-1] is None
+
+
+def test_agents_idle_is_busy_when_the_portal_cannot_answer(tmp_path):
+    root = _native(tmp_path, current_container_id="c1", api_port=1)  # nothing listens on :1
+    assert support.agents_idle(root) is False
+    assert support.agents_idle(_native(tmp_path / "fresh")) is True  # no container yet

@@ -5,21 +5,29 @@ import pathlib
 from fastapi.responses import HTMLResponse
 
 STATIC_DIR = pathlib.Path(__file__).parent.parent / "static"
-_HTML_CACHE: dict[str, str] = {}
+# name -> (mtime_ns, html). Keyed on the file's mtime, never cached for the process's life:
+# a native portal serves its hashed bundles live from the installed package, so after a
+# CLI update a stale index.html would point at deleted bundles and render blank (#297).
+_HTML_CACHE: dict[str, tuple[int, str]] = {}
 
 
 def serve_page(name: str) -> HTMLResponse:
-    if name not in _HTML_CACHE:
-        path = STATIC_DIR / name
-        if not path.is_file():
-            cause = (
-                "the portal/static/ directory is missing entirely"
-                if not STATIC_DIR.is_dir()
-                else f"portal/static/{name} is missing"
-            )
-            return HTMLResponse(missing_static_page(name, cause), status_code=503)
-        _HTML_CACHE[name] = path.read_text(encoding="utf-8")
-    return HTMLResponse(_HTML_CACHE[name])
+    path = STATIC_DIR / name
+    try:
+        mtime = path.stat().st_mtime_ns if path.is_file() else None
+    except OSError:
+        mtime = None
+    if mtime is None:
+        cause = (
+            "the portal/static/ directory is missing entirely"
+            if not STATIC_DIR.is_dir()
+            else f"portal/static/{name} is missing"
+        )
+        return HTMLResponse(missing_static_page(name, cause), status_code=503)
+    cached = _HTML_CACHE.get(name)
+    if cached is None or cached[0] != mtime:
+        cached = _HTML_CACHE[name] = (mtime, path.read_text(encoding="utf-8"))
+    return HTMLResponse(cached[1])
 
 
 def missing_static_page(name: str, cause: str) -> str:

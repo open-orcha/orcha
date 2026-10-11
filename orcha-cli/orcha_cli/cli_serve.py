@@ -7,6 +7,13 @@ inside ten minutes mark the child ``crashlooping`` in ``.orcha/state.json``; it 
 still retried every 60 s, never abandoned silently. SIGTERM/SIGINT fan out as SIGTERM
 to every child, SIGKILL after 8 s, and the state file is left with
 ``"status": "stopped"``. Uptime across reboots belongs to launchd/systemd (plan R3).
+
+A native project runs straight from the installed orcha-cli, so a reinstall or update
+changes the code and the SPA bundles under the running children (#297). Every few
+seconds the supervisor fingerprints the install; once a change has settled it restarts
+the portal at once and the notifier as soon as no agent run is in flight, so the user
+never has to run `orcha upgrade`. The terminal bridge is left alone: restarting it would
+drop the user's open terminals, and it picks the new code up on its next restart.
 """
 from __future__ import annotations
 
@@ -26,7 +33,10 @@ from typing import Optional
 
 from . import cli_portal, cli_stacks_registry
 from .cli_runtime_mode import NATIVE, db_path, read_config, require_project
-from .cli_serve_support import ChildSpec, child_specs, pump, read_state, rotating_logger, write_state
+from .cli_serve_support import (
+    ChildSpec, agents_idle, child_specs, install_fingerprint, pump, read_state, rotating_logger,
+    write_state,
+)
 
 BACKOFF_CAP_SECS = 30.0
 STABLE_SECS = 60.0
@@ -38,6 +48,10 @@ STATE_REFRESH_SECS = 30.0
 PORTAL_WAIT_SECS = 30.0
 STOP_GRACE_SECS = 8.0
 TICK_SECS = 0.5
+INSTALL_CHECK_SECS = 5.0
+INSTALL_SETTLE_SECS = 5.0  # an install rewrites files for a while; act once they stop changing
+# Children that follow the installed code without the user noticing (not the bridge).
+RECYCLE_ON_INSTALL = ("portal", "notifier")
 
 
 @dataclasses.dataclass
@@ -52,6 +66,7 @@ class Child:
     next_start: float = 0.0
     last_exit: Optional[int] = None
     recent: collections.deque = dataclasses.field(default_factory=collections.deque)
+    recycle_deadline: Optional[float] = None  # set while a planned restart is in flight
 
 
 def _iso_now() -> str:
@@ -67,7 +82,8 @@ def _cli_version() -> str:
 
 class Supervisor:
     def __init__(self, root, specs, *, env=None, popen=subprocess.Popen,
-                 clock=time.monotonic, portal_wait=PORTAL_WAIT_SECS):
+                 clock=time.monotonic, portal_wait=PORTAL_WAIT_SECS,
+                 fingerprint=install_fingerprint, idle=None):
         self.root = pathlib.Path(root)
         self.children = {s.name: Child(s) for s in specs}
         self.env = env
@@ -80,6 +96,14 @@ class Supervisor:
         self.gate_open = "portal" not in self.children
         self.gate_since: Optional[float] = None
         self._last_state = float("-inf")
+        self.fingerprint = fingerprint
+        self.idle = idle or (lambda: agents_idle(self.root))
+        self.install = fingerprint()
+        self._install_checked = clock()
+        self._install_seen: Optional[tuple] = None
+        self._install_since = 0.0
+        self.stale: dict = {}  # name -> pid of a child still running the previous install's code
+        self._idle_checked = float("-inf")
 
     # --- lifecycle ------------------------------------------------------------------
 
@@ -99,6 +123,12 @@ class Supervisor:
         self.log.info(f"[serve] started {child.spec.name} pid {proc.pid}")
 
     def _on_exit(self, child: Child, rc: int, now: float) -> None:
+        if child.recycle_deadline is not None:  # our planned restart, not a crash
+            child.proc, child.last_exit, child.recycle_deadline = None, rc, None
+            child.restarts += 1
+            child.status, child.next_start = "restarting", now
+            self.log.info(f"[serve] {child.spec.name} stopped for the update; starting it on the new code")
+            return
         child.proc, child.last_exit = None, rc
         if now - child.started_at >= STABLE_SECS:
             child.failures = 0
@@ -147,9 +177,51 @@ class Supervisor:
                 before = child.status
                 self._spawn(child, now)
                 changed = changed or child.status != before or child.proc is not None
+        changed = self._follow_install(now) or changed
         if changed or now - self._last_state >= STATE_REFRESH_SECS:
             self.write_state("running")
             self._last_state = now
+
+    # --- following the installed CLI (#297) -----------------------------------------
+
+    def _follow_install(self, now: float) -> bool:
+        if now - self._install_checked >= INSTALL_CHECK_SECS:
+            self._install_checked = now
+            fp = self.fingerprint()
+            if fp == self.install or None in fp:
+                self._install_seen = None  # unchanged, or mid-install with files missing
+            elif fp != self._install_seen:
+                self._install_seen, self._install_since = fp, now
+            elif now - self._install_since >= INSTALL_SETTLE_SECS:
+                self.install, self._install_seen = fp, None
+                self.stale = {n: self.children[n].proc.pid for n in RECYCLE_ON_INSTALL
+                              if n in self.children and self.children[n].proc is not None}
+                self.log.info("[serve] orcha-cli changed on disk; restarting "
+                              + " and ".join(self.stale) + " on the new code")
+        changed = False
+        for name, pid in list(self.stale.items()):
+            child = self.children[name]
+            if child.proc is None or child.proc.pid != pid or child.proc.poll() is not None:
+                del self.stale[name]  # gone or already replaced: its next start runs the new code
+                continue
+            if child.recycle_deadline is not None:
+                if now >= child.recycle_deadline:
+                    child.proc.kill()
+                continue
+            if name == "notifier":
+                # never cut off an agent mid-run; ask the portal at most every few seconds
+                if now - self._idle_checked < INSTALL_CHECK_SECS:
+                    continue
+                self._idle_checked = now
+                if not self.idle():
+                    continue
+            try:
+                child.proc.send_signal(signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            child.recycle_deadline = now + STOP_GRACE_SECS
+            changed = True
+        return changed
 
     def stop(self) -> None:
         """SIGTERM every child, SIGKILL whatever is left after the grace period."""
