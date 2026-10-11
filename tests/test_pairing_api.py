@@ -307,3 +307,130 @@ async def test_qr_decodes_back_to_the_exact_payload(
     assert "qr" in str(result.format).replace(" ", "").lower()
     assert result.ec_level == "H", "error correction must stay H for the glyph knockout"
     assert result.text == data["qrText"], "decoded payload round-trips exactly"
+
+
+# --- native loopback bind (plan R-D3): the QR must not point a phone at a closed port ---
+
+
+def _native_project(tmp_path, monkeypatch, *, supervised=True):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "orcha.json").write_text(json.dumps({"runtime": "native", "api_port": 8000}))
+    monkeypatch.setenv("ORCHA_BIND", "loopback")
+    monkeypatch.setenv("ORCHA_PAIRING_HOST", "192.168.1.24")
+    monkeypatch.setenv("ORCHA_LOCAL_REPO_DIR", str(tmp_path))
+    if supervised:
+        monkeypatch.setenv("ORCHA_SUPERVISED", "1")
+    else:
+        monkeypatch.delenv("ORCHA_SUPERVISED", raising=False)
+    return tmp_path
+
+
+@pytest.fixture
+def no_restart(monkeypatch):
+    """Record the self-restart instead of SIGTERMing the test process."""
+    from portal_backend import container_pairing_routes as pairing
+
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, fn, args=()):
+            timers.append((delay, fn, args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(pairing.threading, "Timer", FakeTimer)
+    return timers
+
+
+async def test_loopback_native_portal_warns_instead_of_a_dead_qr(client, container, make_agent, monkeypatch, tmp_path):
+    _native_project(tmp_path, monkeypatch)
+    await make_agent("Kedar", "operator", kind="human")
+
+    r = await client.get(f"/api/containers/{container['id']}/pairing", headers={"host": "localhost:8000"})
+
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["reason"] == "loopback_only"
+    assert detail["reachable"] is False
+    assert detail["canAllowLan"] is True
+    assert "orcha pair --lan" in detail["remedy"]
+
+
+async def test_loopback_unsupervised_portal_cannot_offer_the_toggle(client, container, make_agent, monkeypatch, tmp_path):
+    _native_project(tmp_path, monkeypatch, supervised=False)
+    await make_agent("Kedar", "operator", kind="human")
+
+    r = await client.get(f"/api/containers/{container['id']}/pairing", headers={"host": "localhost:8000"})
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["canAllowLan"] is False
+
+
+async def test_lan_bound_native_portal_pairs_normally(client, container, make_agent, monkeypatch, tmp_path):
+    _native_project(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCHA_BIND", "lan")
+    await make_agent("Kedar", "operator", kind="human")
+
+    r = await client.get(f"/api/containers/{container['id']}/pairing", headers={"host": "localhost:8000"})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["baseUrl"] == "http://192.168.1.24:8000"
+
+
+async def test_allow_lan_writes_bind_and_restarts_the_portal(client, container, monkeypatch, tmp_path, no_restart):
+    root = _native_project(tmp_path, monkeypatch)
+
+    r = await client.post(f"/api/containers/{container['id']}/pairing/lan", json={})
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"bind": "lan", "restarting": True}
+    cfg = json.loads((root / ".claude" / "orcha.json").read_text())
+    assert cfg == {"runtime": "native", "api_port": 8000, "bind": "lan"}
+    assert len(no_restart) == 1
+
+
+async def test_allow_lan_refuses_a_cross_site_page(client, container, monkeypatch, tmp_path, no_restart):
+    root = _native_project(tmp_path, monkeypatch)
+
+    r = await client.post(
+        f"/api/containers/{container['id']}/pairing/lan", json={}, headers={"origin": "https://evil.example"}
+    )
+
+    assert r.status_code == 403, r.text
+    assert "bind" not in json.loads((root / ".claude" / "orcha.json").read_text())
+    assert no_restart == []
+
+
+async def test_allow_lan_accepts_this_computers_own_page(client, container, monkeypatch, tmp_path, no_restart):
+    _native_project(tmp_path, monkeypatch)
+
+    r = await client.post(
+        f"/api/containers/{container['id']}/pairing/lan", json={}, headers={"origin": "http://localhost:8000"}
+    )
+
+    assert r.status_code == 200, r.text
+
+
+async def test_allow_lan_is_a_no_op_off_the_native_loopback_portal(client, container, monkeypatch, no_restart):
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
+
+    r = await client.post(f"/api/containers/{container['id']}/pairing/lan", json={})
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"bind": "unmanaged", "restarting": False}
+    assert no_restart == []
+
+
+async def test_allow_lan_needs_the_supervisor(client, container, monkeypatch, tmp_path, no_restart):
+    _native_project(tmp_path, monkeypatch, supervised=False)
+
+    r = await client.post(f"/api/containers/{container['id']}/pairing/lan", json={})
+
+    assert r.status_code == 409, r.text
+    assert no_restart == []
+
+
+async def test_allow_lan_is_in_openapi(client):
+    r = await client.get("/openapi.json")
+    assert "post" in r.json()["paths"]["/api/containers/{cid}/pairing/lan"]

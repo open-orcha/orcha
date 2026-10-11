@@ -17,6 +17,7 @@ from .cli_backup import cmd_backup, cmd_restore
 from .cli_doctor import cmd_doctor
 from .cli_logs import cmd_logs
 from .cli_migrate_runtime import cmd_migrate_runtime
+from .cli_pair import cmd_pair
 from .cli_portal import cmd_portal
 from .cli_serve import cmd_serve
 from .cli_service import cmd_service
@@ -95,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         "terminal-bridge": cmd_terminal_bridge,
         "portal": cmd_portal,
         "serve": cmd_serve,
+        "pair": cmd_pair,
         "logs": cmd_logs,
         "backup": cmd_backup,
         "restore": cmd_restore,

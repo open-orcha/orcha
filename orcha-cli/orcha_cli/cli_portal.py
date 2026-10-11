@@ -85,6 +85,9 @@ def build_portal_env(project_root: pathlib.Path, cfg: dict, base_env=None) -> di
         # ...with the SQLite migrations (baseline + later files). The Postgres dir set below
         # would make a fresh native portal halt on 001_init.sql's CREATE EXTENSION.
         env.setdefault("MIGRATIONS_DIR", str(templates_dir() / "migrations" / "sqlite"))
+        # Read fresh on every (re)start, never inherited: the pairing screen flips
+        # orcha.json to "lan" and restarts the portal, which must then report it.
+        env["ORCHA_BIND"] = "lan" if cfg.get("bind") == "lan" else "loopback"
     env.setdefault("MIGRATIONS_DIR", str(templates_dir() / "migrations"))
     env.setdefault("ORCHA_TERMINAL_WS_URL", f"ws://127.0.0.1:{cfg['bridge_port']}")
     # These replace the compose bind mounts, so a stray value in .env must not win.
@@ -142,6 +145,8 @@ def cmd_portal(args: argparse.Namespace) -> None:
     sys.path.insert(0, str(portal_dir()))
     host = args.host or bind_host(cfg)
     port = args.port or int(cfg["api_port"])
+    if "ORCHA_BIND" in os.environ:  # native: report the address actually bound
+        os.environ["ORCHA_BIND"] = "loopback" if host == LOOPBACK_BIND else "lan"
     print(f"[orcha] portal for {project_root.name} on http://{host}:{port} (Ctrl-C to stop)")
     # Mirrors the image's CMD, except trusted forwarding is limited to loopback:
     # the container port was compose-bound, a host process is not.

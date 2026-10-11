@@ -29,7 +29,7 @@ interface PairingPayload {
   shortCode?: string;
   expiresAt?: string;
 }
-interface PairingWarningInfo { title?: string; message?: string; remedy?: string; reason?: string; reachable?: boolean }
+interface PairingWarningInfo { title?: string; message?: string; remedy?: string; reason?: string; reachable?: boolean; canAllowLan?: boolean }
 interface ChooseHuman { id: string; alias: string }
 
 /**
@@ -49,6 +49,8 @@ export interface PairingErrorView {
   /** a retry can help (network / 5xx / reachability) */
   retry: boolean;
   retryLabel?: string;
+  /** a native portal bound to this computer only, which can open itself to the LAN */
+  allowLan?: boolean;
   /** raw status + server detail, for the collapsed Details disclosure */
   details: string | null;
 }
@@ -69,6 +71,7 @@ export function pairingErrorView(status: number | null, detail: unknown, network
       wifiHint: WIFI_REASONS.has(d.reason || ""),
       retry: true,
       retryLabel: "Check again",
+      allowLan: d.reason === "loopback_only" && d.canAllowLan === true,
       details: null, // the structured warning IS the explanation
     };
   }
@@ -107,6 +110,33 @@ function countdownText(ms: number): string {
 /** the expiry line turns amber only in its last 30 seconds */
 const URGENT_MS = 30 * 1000;
 
+/** How long to wait for the portal to come back after it restarts on the LAN address. */
+const LAN_RESTART_WAIT_MS = 30 * 1000;
+const LAN_POLL_MS = 1000;
+
+/**
+ * Turn on phone access (POST …/pairing/lan), then wait out the portal's restart:
+ * the pairing GET fails while it is down and stops answering loopback_only once
+ * it is back on 0.0.0.0. Resolves false when it never came back in time.
+ */
+async function allowLanAndWait(cid: string): Promise<boolean> {
+  const base = "/api/containers/" + encodeURIComponent(cid) + "/pairing";
+  // JSON body: a cross-site page can't send this without a CORS preflight.
+  const r = await fetch(base + "/lan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (!r.ok) return false;
+  const deadline = Date.now() + LAN_RESTART_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, LAN_POLL_MS));
+    try {
+      const g = await fetch(base);
+      if (g.ok) return true;
+      const body = (await g.json().catch(() => null)) as { detail?: PairingWarningInfo } | null;
+      if (body?.detail?.reason && body.detail.reason !== "loopback_only") return true;
+    } catch { /* the portal is restarting */ }
+  }
+  return false;
+}
+
 // esc()-free remedy renderer: React escapes text; only `code` spans are markup.
 function CopyWithCode({ s }: { s: string }) {
   const parts = s.split(/`([^`]+)`/g);
@@ -133,6 +163,7 @@ export function PairingPanel({ cid, identity }: {
   const [view, setView] = useState<View>({ kind: "loading" });
   const [countLeft, setCountLeft] = useState<string>("expires soon");
   const [urgent, setUrgent] = useState(false);
+  const [allowing, setAllowing] = useState<"idle" | "busy" | "failed">("idle");
   const seq = useRef(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -176,6 +207,13 @@ export function PairingPanel({ cid, identity }: {
   }, [cid]);
 
   useEffect(() => { void load(null); return clearTimer; }, [load]);
+
+  const allowLan = async () => {
+    setAllowing("busy");
+    const ok = await allowLanAndWait(cid).catch(() => false);
+    setAllowing(ok ? "idle" : "failed");
+    if (ok) void load(null);
+  };
 
   // countdown: tick each second; on expiry regenerate against the same human.
   useEffect(() => {
@@ -221,9 +259,19 @@ export function PairingPanel({ cid, identity }: {
                 <code>{info.details}</code>
               </details>
             ) : null}
-            {info.retry ? (
+            {allowing === "failed" ? (
+              <p className="pair-foot">Phone access didn't turn on. Run <code>orcha pair --lan</code> in this project, then check again.</p>
+            ) : null}
+            {info.retry || info.allowLan ? (
               <div className="pair-acts">
-                <Button variant="secondary" size="sm" icon="refresh" onClick={() => void load(null)} data-act="pair-retry">{info.retryLabel ?? "Try again"}</Button>
+                {info.allowLan ? (
+                  <Button variant="primary" size="sm" icon="phone" busy={allowing === "busy"} onClick={() => void allowLan()} data-act="pair-allow-lan">
+                    {allowing === "busy" ? "Restarting the portal…" : "Allow phones on this network"}
+                  </Button>
+                ) : null}
+                {info.retry ? (
+                  <Button variant="secondary" size="sm" icon="refresh" disabled={allowing === "busy"} onClick={() => void load(null)} data-act="pair-retry">{info.retryLabel ?? "Try again"}</Button>
+                ) : null}
               </div>
             ) : null}
           </div>

@@ -237,6 +237,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         sys.exit(f"error: `orcha serve` is already running for this project (pid {other}).")
     cli_portal._prepare_host_state(root)
     env = cli_portal.build_portal_env(root, read_config(root))
+    env["ORCHA_SUPERVISED"] = "1"  # the portal may exit to be restarted (LAN rebind)
     sup = Supervisor(root, child_specs(root, no_bridge=args.no_bridge), env=env)
     cfg = read_config(root)
     cli_stacks_registry.register(cfg.get("project_name") or root.name, path=root,

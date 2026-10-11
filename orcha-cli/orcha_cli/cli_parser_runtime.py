@@ -168,6 +168,20 @@ def register_runtime_commands(
     )
     portal.set_defaults(func=handlers["portal"])
 
+    pair = sub.add_parser(
+        "pair",
+        help="phone pairing on a native project: --lan lets phones on this network reach the "
+        "portal (binds 0.0.0.0), --local returns it to this computer only (127.0.0.1); "
+        "no flag prints the current setting. Restarts only the portal.",
+    )
+    pair_mode = pair.add_mutually_exclusive_group()
+    pair_mode.add_argument("--lan", action="store_true", help="allow phones on this network")
+    pair_mode.add_argument("--local", action="store_true", help="this computer only (default)")
+    pair.add_argument(
+        "--project-dir", default=None, help="project root (default: the current directory)"
+    )
+    pair.set_defaults(func=handlers["pair"])
+
     sbx = sub.add_parser(
         "sandbox",
         help="opt-in sandbox mode: run agent wakes inside an isolated `orcha/runner` Docker "

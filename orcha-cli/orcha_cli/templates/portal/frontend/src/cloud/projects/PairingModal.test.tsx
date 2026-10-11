@@ -34,6 +34,29 @@ describe("PairingPanel", () => {
     expect(exp.className).not.toMatch(/s-warn|is-urgent/); // neutral with minutes left
   });
 
+  it("loopback_only: 'Allow phones on this network' turns LAN on, waits for the restart, then shows the QR", async () => {
+    const loopback = { status: 409, body: { detail: { reachable: false, reason: "loopback_only", canAllowLan: true, title: "Phones can't reach this Embodent yet", message: "This computer only" } } };
+    const calls = stub([
+      loopback,
+      { status: 200, body: { bind: "lan", restarting: true } },
+      { status: 200, body: { baseUrl: "http://10.0.0.2:8000", shortCode: "LAN-OK", expiresAt: new Date(Date.now() + 5 * 60e3).toISOString() } },
+    ]);
+    render(<PairingPanel cid="c1" identity={null} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Allow phones on this network/ }));
+    expect(await screen.findByText("LAN-OK", undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(calls).toContain("/api/containers/c1/pairing/lan");
+    const post = (global.fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls.find(([u]) => u.endsWith("/pairing/lan"));
+    expect(post?.[1]?.method).toBe("POST");
+  });
+
+  it("loopback_only without canAllowLan (not under orcha serve) offers no Allow button, only the CLI remedy", async () => {
+    stub([{ status: 409, body: { detail: { reachable: false, reason: "loopback_only", canAllowLan: false, remedy: "Run `orcha pair --lan` in this project, then try again." } } }]);
+    render(<PairingPanel cid="c1" identity={null} />);
+    expect(await screen.findByRole("button", { name: /Check again/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Allow phones/ })).toBeNull();
+    expect(screen.getByText("orcha pair --lan")).toBeInTheDocument();
+  });
+
   it("choose_human renders a labelled select (no warning chrome) and pairs as the chosen human", async () => {
     const calls = stub([
       { status: 400, body: { detail: { reason: "choose_human", humans: [{ id: "h1", alias: "kedar" }, { id: "h2", alias: "sam" }] } } },

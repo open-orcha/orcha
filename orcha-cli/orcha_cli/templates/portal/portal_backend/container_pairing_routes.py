@@ -2,7 +2,11 @@
 
 import json
 import os
+import pathlib
 import secrets
+import signal
+import threading
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -43,6 +47,40 @@ def pairing_warning(reason: str) -> dict:
             "Connect this Mac to the same Wi-Fi as the phone, run `orcha up` from this workspace, "
             "and allow the Embodent portal port through macOS Firewall or Local Network prompts."
         ),
+    }
+
+
+def loopback_only() -> bool:
+    """A native portal bound to 127.0.0.1 (``bind`` not "lan" in orcha.json).
+
+    Docker published the portal on every interface, so the QR's LAN address always
+    answered; a native portal binds loopback by default (plan R-D3) and a phone on
+    Wi-Fi gets nothing back. ``ORCHA_BIND`` is set by `orcha portal` from orcha.json
+    on every (re)start; unset means a Docker/hosted portal, which is never loopback-only
+    from here."""
+    return (os.environ.get("ORCHA_BIND") or "").strip() == "loopback"
+
+
+def can_allow_lan() -> bool:
+    """The portal can rebind itself: it runs under `orcha serve`, which restarts it."""
+    return bool(os.environ.get("ORCHA_SUPERVISED")) and bool(os.environ.get("ORCHA_LOCAL_REPO_DIR"))
+
+
+def loopback_warning() -> dict:
+    allow = can_allow_lan()
+    return {
+        "reachable": False,
+        "reason": "loopback_only",
+        "title": "Phones can't reach this Embodent yet",
+        "message": (
+            "This project only accepts connections from this computer, so a phone on "
+            "Wi-Fi can't connect to it."
+        ),
+        "remedy": (
+            "Allow phones on this network below, or run `orcha pair --lan` in this project."
+            if allow else "Run `orcha pair --lan` in this project, then try again."
+        ),
+        "canAllowLan": allow,
     }
 
 
@@ -212,6 +250,8 @@ def get_container_pairing(
     if human_agent_id is not None and not valid_uuid(human_agent_id):
         raise HTTPException(400, "human_agent_id is not a valid UUID")
 
+    if loopback_only():
+        raise HTTPException(409, loopback_warning())
     base_url, warning = pairing_base_url(request)
     if warning:
         raise HTTPException(409, warning)
@@ -316,3 +356,60 @@ def get_container_pairing(
         "qrText": qr_text,
         "qrSvg": svg,
     }
+
+
+# How long the portal waits after answering before it exits for the rebind restart.
+LAN_RESTART_DELAY_SECONDS = 0.5
+
+
+def _is_loopback_origin(origin: Optional[str]) -> bool:
+    """No Origin (curl, the CLI) or this computer's own page. Anything else is a
+    cross-site request, which must never be able to open the portal to the network."""
+    if origin is None:
+        return True
+    host = urlsplit(origin).hostname or ""
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
+def _write_bind_lan(project_root: pathlib.Path) -> None:
+    path = project_root / ".claude" / "orcha.json"
+    cfg = json.loads(path.read_text())
+    cfg["bind"] = "lan"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
+@app.post("/api/containers/{cid}/pairing/lan")
+def allow_container_pairing_lan(cid: str, request: Request):
+    """Let phones on this network reach a native portal (``bind: "lan"``, plan R-D3).
+
+    Writes ``bind: "lan"`` to the project's orcha.json and exits so `orcha serve`
+    restarts the portal on 0.0.0.0 (the supervisor rebuilds the portal's argv from
+    orcha.json on every start). Only this computer may ask: the request must come
+    from loopback, from no page or this computer's own page."""
+    if not valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if not loopback_only():
+        return {"bind": "lan" if os.environ.get("ORCHA_BIND") == "lan" else "unmanaged", "restarting": False}
+    if not can_allow_lan():
+        raise HTTPException(
+            409,
+            "This portal is not running under `orcha serve`; run `orcha pair --lan` in the project.",
+        )
+    client = request.client.host if request.client else ""
+    if not (client == "::1" or client.startswith("127.")) or not _is_loopback_origin(
+        request.headers.get("origin")
+    ):
+        raise HTTPException(403, "phone access can only be turned on from this computer")
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT id FROM containers WHERE id=%s", (cid,))
+        if not cur.fetchone():
+            raise HTTPException(404, f"container {cid} not found")
+        trusted_actor(cur, request, cid, None, write=True)
+    try:
+        _write_bind_lan(pathlib.Path(os.environ["ORCHA_LOCAL_REPO_DIR"]))
+    except (OSError, ValueError) as e:
+        raise HTTPException(500, "could not update this project's orcha.json") from e
+    threading.Timer(LAN_RESTART_DELAY_SECONDS, os.kill, (os.getpid(), signal.SIGTERM)).start()
+    return {"bind": "lan", "restarting": True}

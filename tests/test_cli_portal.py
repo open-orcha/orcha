@@ -98,6 +98,15 @@ def test_bind_is_loopback_unless_lan(tmp_path):
     assert cli_portal.bind_host({**CFG, "bind": "lan"}) == "0.0.0.0"
 
 
+def test_native_portal_env_reports_its_bind_fresh_from_orcha_json(tmp_path):
+    native = {**CFG, "runtime": "native"}
+    root = _project(tmp_path, cfg=native)
+    stale = {"ORCHA_BIND": "loopback"}  # inherited from `orcha serve`'s start-up env
+    assert cli_portal.build_portal_env(root, native, base_env=stale)["ORCHA_BIND"] == "loopback"
+    assert cli_portal.build_portal_env(root, {**native, "bind": "lan"}, base_env=stale)["ORCHA_BIND"] == "lan"
+    assert "ORCHA_BIND" not in cli_portal.build_portal_env(root, CFG, base_env={})  # Docker-era config
+
+
 def test_portal_dir_is_the_packaged_portal():
     portal = cli_portal.portal_dir()
     assert (portal / "main.py").is_file()
