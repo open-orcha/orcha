@@ -513,3 +513,26 @@ async def test_preview_returns_the_schedule_validation_message(client, arena):
     bad = (await client.post(f"/api/containers/{arena['cid']}/routines/preview",
                              json={"cron": "0 9 * * *", "timezone": "Mars/Olympus"})).json()
     assert bad["error"] == "unknown timezone 'Mars/Olympus'"
+
+
+@pytest.mark.parametrize("cron, tz, cause", [
+    ("61 * * * *", "UTC", "minute value 61 is out of range 0-59"),
+    ("0 9 * * *", "Mars/Olympus", "unknown timezone 'Mars/Olympus'"),
+])
+async def test_an_unparseable_saved_schedule_is_logged_not_returned(client, arena, db, caplog, cron, tz, cause):
+    """CodeQL information exposure: when a saved cron/timezone can't be parsed, the tick's
+    response says so in fixed words; the parse error stays in the run row and the log."""
+    r = await make_routine(client, arena)
+    db.execute("UPDATE routines SET cron=%s, timezone=%s WHERE id=%s", (cron, tz, r["id"]))
+    set_due(db, r["id"], dt("2026-09-29T06:00:00+00:00"))
+    with caplog.at_level("WARNING", logger="orcha.portal.errors"):
+        x = await client.post(f"/api/containers/{arena['cid']}/routines/tick")
+    assert x.status_code == 200
+    [f] = x.json()["fired"]
+    assert f == {"routine_id": r["id"], "outcome": "failed",
+                 "detail": "Schedule can no longer be evaluated — see this routine's run history."}
+    assert cause not in x.text
+    assert cause in caplog.text  # the operator still sees the cause
+    [run] = runs(db, r["id"])
+    assert run["outcome"] == "failed" and run["detail"] == f"Schedule can no longer be evaluated: {cause}"
+    assert db.execute("SELECT next_run_at FROM routines WHERE id=%s", (r["id"],))[0]["next_run_at"] is None

@@ -39,10 +39,7 @@ MAX_LOG_TAIL = 16_000
 LOG_TAIL_LINES = 80
 PLACEHOLDERS = ("{port}", "{worktree}", "{branch}")
 _READY_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
-# CSI sequences, and OSC sequences up to their BEL. An OSC body never spans another ESC
-# (a new escape starts there), which also keeps the scan linear: a log full of unterminated
-# `ESC ]` can't make each one rescan the rest of the text.
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*\x07")
+_CSI_PARAMS = frozenset("0123456789;?")
 
 
 # ------------------------------------------------------------------ settings validation
@@ -150,11 +147,42 @@ def update(cur, pid, **fields) -> dict:
     return dict(cur.fetchone())
 
 
+def _escape_end(t: str, i: int) -> int | None:
+    """Where the CSI sequence, or OSC sequence up to its BEL, starting at the ESC `t[i]` ends
+    (exclusive), or None when none starts there. An OSC body never spans another ESC (a new
+    escape starts there), so no stretch of the log is scanned more than twice."""
+    n, k = len(t), i + 2
+    kind = t[i + 1:k]
+    if kind == "[":  # parameters, intermediates, one final byte
+        while k < n and t[k] in _CSI_PARAMS:
+            k += 1
+        while k < n and " " <= t[k] <= "/":
+            k += 1
+        return k + 1 if k < n and "@" <= t[k] <= "~" else None
+    if kind == "]":
+        nxt = t.find("\x1b", k)
+        bel = t.find("\x07", k, n if nxt < 0 else nxt)
+        return bel + 1 if bel >= 0 else None
+    return None
+
+
+def strip_ansi(text: str) -> str:
+    """`text` without CSI and BEL-terminated OSC sequences — a hand scan, not a regex, so it
+    is linear by construction on whatever a preview's log holds."""
+    out, i = [], 0
+    while (esc := text.find("\x1b", i)) >= 0:
+        end = _escape_end(text, esc)
+        out.append(text[i:esc] if end else text[i:esc + 1])
+        i = end or esc + 1
+    out.append(text[i:])
+    return "".join(out)
+
+
 def clean_tail(text: str | None) -> str | None:
     """The last LOG_TAIL_LINES lines of a log, without terminal escapes, capped in size."""
     if not text:
         return None
-    t = _ANSI.sub("", str(text)).replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
+    t = strip_ansi(str(text)).replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
     lines = [ln[:500] for ln in t.split("\n")]
     while lines and not lines[-1].strip():
         lines.pop()

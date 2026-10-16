@@ -624,7 +624,10 @@ def _claim_next_due(cid: str, now: datetime) -> Optional[dict]:
                 (rid, cid, r["next_run_at"], f"Schedule can no longer be evaluated: {err}", now),
             )
             conn.commit()
-            return {"routine_id": rid, "outcome": "failed", "detail": str(err)}
+            # the parse error stays in the run row and the server log; the tick result says what happened
+            public_errors.log_exception(f"routine {rid}: saved schedule", err)
+            return {"routine_id": rid, "outcome": "failed",
+                    "detail": "Schedule can no longer be evaluated — see this routine's run history."}
 
         slots = sched.occurrences(cron, tz, r["next_run_at"], now) or [r["next_run_at"]]
         missed = len(slots)

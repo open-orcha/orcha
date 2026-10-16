@@ -12,6 +12,8 @@ The route-level counterparts live beside each route's own tests (test_file_raw_r
 test_deliverables, test_evidence_verdikt, test_routines, test_github_binding,
 test_code_github_edit)."""
 import http.server
+import random
+import re
 import socket
 import threading
 import time
@@ -21,7 +23,7 @@ import pytest
 from portal_backend import public_errors, verdikt_autofix
 from portal_backend.review_routing import parse_manager_response
 from portal_backend.verdikt_client import ALLOWED_HOSTS_ENV, VerdiktClient, VerdiktError, normalize_base
-from portal_backend.verdikt_preview import clean_tail
+from portal_backend.verdikt_preview import clean_tail, strip_ansi
 
 
 # ------------------------------------------------------------------ SSRF
@@ -165,6 +167,49 @@ def test_ansi_stripper_is_linear_on_unterminated_osc_runs():
 def test_ansi_stripper_still_strips_csi_and_osc():
     raw = "\x1b[1;32mok\x1b[0m\n\x1b]0;window title\x07built in 3s\n"
     assert clean_tail(raw) == "ok\nbuilt in 3s"
+
+
+# the regex the scanner replaced — the reference its output must match exactly
+_OLD_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*\x07")
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("\x1b[1;32mgreen\x1b[0m", "green"),                                 # SGR colour
+    ("\x1b[38;5;208morange\x1b[39m", "orange"),                          # 256-colour
+    ("\x1b[2K\x1b[1Gline", "line"),                                       # erase line, cursor column
+    ("\x1b[?25lspin\x1b[?25h", "spin"),                                   # private-mode cursor hide/show
+    ("a\x1b[ qb", "ab"),                                                  # intermediate byte
+    ("\x1b]0;window title\x07ready", "ready"),                            # OSC title, BEL-terminated
+    ("\x1b]8;;http://localhost:5173/\x07link\x1b]8;;\x07", "link"),        # OSC 8 hyperlink
+    ("\x1b]8;;http://x/\x1b\\link", "\x1b]8;;http://x/\x1b\\link"),          # ST-terminated OSC: kept, as before
+    ("\x1b[12", "\x1b[12"), ("\x1b]0;no end", "\x1b]0;no end"),             # truncated sequences kept
+    ("\x1b(Bplain\x1b", "\x1b(Bplain\x1b"),                                # other escapes kept
+])
+def test_ansi_scanner_strips_real_sequences_like_the_old_regex(raw, expected):
+    assert strip_ansi(raw) == expected == _OLD_ANSI.sub("", raw)
+
+
+def test_ansi_scanner_matches_the_old_regex_on_random_logs():
+    rng = random.Random(278)
+    alphabet = ["\x1b", "\x1b", "[", "]", "\x07", "0", "9", ";", "?", " ", "/", "!", "@", "m", "~", "\x7f",
+                "a", "\n", "\\", "é"]
+    for _ in range(20_000):
+        raw = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        assert strip_ansi(raw) == _OLD_ANSI.sub("", raw), repr(raw)
+
+
+@pytest.mark.parametrize("evil", [
+    "\x1b]" * 200_000,                       # unterminated OSC openers
+    ("\x1b]" + "x" * 50) * 20_000,          # unterminated OSC bodies
+    "\x1b]" + "x" * 1_000_000,              # one OSC that never ends
+    ("\x1b[" + "1;" * 50) * 20_000,         # CSI parameters with no final byte
+    "\x1b[" * 200_000,
+    "\x1b]0;t\x07" + "\x07" * 1_000_000,    # a BEL flood after a real OSC
+], ids=["osc-openers", "osc-bodies", "endless-osc", "csi-params", "csi-openers", "bel-flood"])
+def test_ansi_scanner_is_linear_on_adversarial_logs(evil):
+    took, out = _elapsed(strip_ansi, evil)
+    assert took < 1.0, took
+    assert out == _OLD_ANSI.sub("", evil)
 
 
 # ------------------------------------------------------------------ information exposure
