@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extensions } from "../extensions";
 import type { Snapshot } from "../types";
 import {
-  accountMenu, actingGrant, actingOwner, fetchIdentity, fetchMe, memActor,
-  resetIdentity, SIGN_OUT_HREF, viewerOnly, viewerRole, type Me,
+  accountMenu, actingGrant, actingOwner, fetchIdentity, fetchMe, IdentityTimeoutError, isIdentityTimeout,
+  lastTrusted, memActor, ME_TIMEOUT_MS, resetIdentity, SIGN_OUT_HREF, viewerOnly, viewerRole, type Me,
 } from "./identity";
 
 const IDENT = {
@@ -36,14 +36,14 @@ describe("fetchMe — wire shape + single flight", () => {
   it("GETs /api/me?cid=<cid> and passes {identity, trusted} through", async () => {
     const fn = stubFetch(() => json({ identity: IDENT, trusted: true }));
     const me = await fetchMe("c1");
-    expect(fn).toHaveBeenCalledWith("/api/me?cid=c1");
+    expect(fn).toHaveBeenCalledWith("/api/me?cid=c1", expect.objectContaining({ signal: expect.anything() }));
     expect(me).toEqual({ identity: IDENT, trusted: true });
   });
 
   it("URL-encodes the cid", async () => {
     const fn = stubFetch(() => json({ identity: null, trusted: false }));
     await fetchMe("c 1/x");
-    expect(fn).toHaveBeenCalledWith("/api/me?cid=c%201%2Fx");
+    expect(fn).toHaveBeenCalledWith("/api/me?cid=c%201%2Fx", expect.anything());
   });
 
   it("no cid -> no network call, the self-host envelope (vanilla data.js)", async () => {
@@ -81,6 +81,54 @@ describe("fetchMe — fail-open to the legacy (self-host) state", () => {
   it("malformed JSON -> {identity:null, trusted:false}", async () => {
     stubFetch(() => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad"); } }) as unknown as Response);
     expect(await fetchMe("c1")).toEqual({ identity: null, trusted: false });
+  });
+});
+
+describe("fetchMe — a hung /api/me times out WITHOUT failing open", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("aborts after ME_TIMEOUT_MS and rejects with IdentityTimeoutError (no trust, no identity cached)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let signal: AbortSignal | undefined;
+    global.fetch = vi.fn((_u: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((_res, rej) =>
+        signal?.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+    }) as unknown as typeof fetch;
+    const p = fetchMe("c1");
+    const settled = p.then(() => "resolved", (e) => e);
+    await vi.advanceTimersByTimeAsync(ME_TIMEOUT_MS - 1);
+    expect(signal!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    const err = await settled;
+    expect(signal!.aborted).toBe(true);
+    expect(isIdentityTimeout(err)).toBe(true);
+    expect(err).toBeInstanceOf(IdentityTimeoutError);
+    expect(lastTrusted("c1")).toBe(false);
+  });
+
+  it("the next ask after a timeout re-fetches (the timed-out attempt is not single-flighted forever)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let n = 0;
+    global.fetch = vi.fn((_u: RequestInfo | URL, init?: RequestInit) => {
+      n++;
+      if (n === 1) {
+        return new Promise<Response>((_res, rej) =>
+          init?.signal?.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+      }
+      return Promise.resolve(json({ identity: IDENT, trusted: true }));
+    }) as unknown as typeof fetch;
+    const first = fetchMe("c1").catch((e) => e);
+    await vi.advanceTimersByTimeAsync(ME_TIMEOUT_MS + 1);
+    expect(isIdentityTimeout(await first)).toBe(true);
+    expect(await fetchMe("c1")).toEqual({ identity: IDENT, trusted: true });
+    expect(n).toBe(2);
+    expect(lastTrusted("c1")).toBe(true);
+  });
+
+  it("a definite network error still fails open (unchanged)", async () => {
+    stubFetch(() => Promise.reject(new TypeError("fetch failed")));
+    await expect(fetchIdentity("c1")).resolves.toBeNull();
   });
 });
 

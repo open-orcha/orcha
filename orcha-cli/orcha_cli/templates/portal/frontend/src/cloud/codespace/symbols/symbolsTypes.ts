@@ -19,7 +19,8 @@
  */
 
 // class covers class/struct/object/enum; interface covers interface/protocol.
-export type SymbolKind = "function" | "class" | "interface" | "type" | "const" | "var";
+// heading: markdown outline entries (C08) — carry a 1-6 `level`.
+export type SymbolKind = "function" | "class" | "interface" | "type" | "const" | "var" | "heading";
 
 export interface WorkspaceSymbol {
   name: string;
@@ -32,6 +33,7 @@ export interface OutlineSymbol {
   name: string;
   kind: SymbolKind;
   line: number;
+  level?: number; // markdown headings only
 }
 
 export interface SymbolSearchPayload {
@@ -64,7 +66,7 @@ export interface SymbolUnavailable {
 /* ---- kind display + grouping ----------------------------------------------
  * Order mirrors the design doc's kind list and code_space_routes.py's module
  * doc: function | class | interface | type | const | var. */
-export const SYMBOL_KIND_ORDER: SymbolKind[] = ["function", "class", "interface", "type", "const", "var"];
+export const SYMBOL_KIND_ORDER: SymbolKind[] = ["heading", "function", "class", "interface", "type", "const", "var"];
 
 export function symbolKindLabel(kind: SymbolKind): string {
   switch (kind) {
@@ -73,6 +75,7 @@ export function symbolKindLabel(kind: SymbolKind): string {
     case "interface": return "Interface";
     case "type": return "Type";
     case "const": return "Const";
+    case "heading": return "Heading";
     default: return "Var";
   }
 }

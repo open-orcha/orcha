@@ -11,8 +11,10 @@ is the auth-fronted multi-user deployment, this is the single-operator one.
 # 1. Install the CLI (from a checkout of this repo)
 uv tool install --from <path-to-orcha-cloud-checkout>/orcha-cli orcha-cli
 
-# 2. Bootstrap a project — this renders the stack, starts Postgres + the
-#    portal in Docker, and creates your first container + human agent.
+# 2. Bootstrap a project — this starts the portal, wake daemon and
+#    terminal bridge as background processes (no Docker), keeps them
+#    running with a login service, and creates your first container +
+#    human agent. Data lives in .orcha/orcha.db.
 mkdir myproj && cd myproj
 orcha init
 orcha up          # idempotent; safe to re-run any time you come back
@@ -23,12 +25,13 @@ open http://localhost:8000
 ```
 
 Or run `sh deploy/local/up.sh` from your project directory instead of steps
-1–2 by hand — it checks for Docker + `orcha` on PATH, runs `orcha init` only
-if `.orcha/` isn't there yet, then `orcha up`, and prints the portal URL.
+1–2 by hand — it runs `orcha init` only if `.orcha/` isn't there yet, then
+`orcha up`, and prints the portal URL.
 
-Don't have `uv`? `curl -LsSf https://astral.sh/uv/install.sh | sh`. Docker
-Desktop, OrbStack, or Colima all work as the container runtime — one of them
-needs to be installed and running before `orcha up`.
+Don't have `uv`? `curl -LsSf https://astral.sh/uv/install.sh | sh`. No Docker
+or Postgres is needed. Projects created before the switch still run in Docker
+until you move them — see
+[`docs/legacy-docker-runtime.md`](../../docs/legacy-docker-runtime.md).
 
 ### Unlock GitHub features: paste a PAT
 

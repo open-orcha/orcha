@@ -6,9 +6,12 @@
  *   GET /api/me?cid=<cid> -> { identity: {agent_id, alias, github_login,
  *       member_role, avatar_url, grants} | null, trusted: bool }
  * No cid -> no call (vanilla data.js resolves {identity:null, trusted:false}
- * without touching the network). Any failure — 401/404, network error, bad
- * JSON — fails OPEN to {identity:null, trusted:false}: the self-host state,
- * where every consumer falls back to the pre-collab local-human behavior.
+ * without touching the network). Any definite failure — 401/404, network
+ * error, bad JSON — fails OPEN to {identity:null, trusted:false}: the
+ * self-host state, where every consumer falls back to the pre-collab
+ * local-human behavior. A request that HANGS is different: after
+ * ME_TIMEOUT_MS it is aborted and rejects with IdentityTimeoutError (no
+ * verdict → read-only + retry in the SnapshotProvider, never fail-open).
  *
  * Trust semantics (vanilla comment, preserved verbatim in spirit):
  *   identity null + trusted FALSE = untrusted header / trust env off — legacy
@@ -25,6 +28,7 @@
 import type { AccountMenuItem, Identity } from "../extensions";
 import { actingHuman } from "../state/SnapshotProvider";
 import type { Snapshot } from "../types";
+import { registerTestReset } from "../lib/testResets";
 
 /* ---- wire shapes -------------------------------------------------------- */
 // The wire identity is the seam's Identity plus the viewer's own grants set
@@ -38,24 +42,60 @@ export interface Me {
 }
 
 /* ---- GET /api/me, single-flighted per cid ------------------------------- */
+/** A /api/me that has not answered after this long is aborted. A timeout is
+ *  NOT a verdict — unlike 401/404/network errors it does not fail open to the
+ *  self-host (act-as-local-human) state, because on a trusted-proxy stack that
+ *  could grant authority the viewer does not have. It rejects with
+ *  IdentityTimeoutError instead; the SnapshotProvider then shows the project
+ *  read-only ("couldn't confirm your identity") and retries with backoff. */
+export const ME_TIMEOUT_MS = 8_000;
+
+export class IdentityTimeoutError extends Error {
+  constructor(cid: string) {
+    super("Timed out confirming your identity for " + cid);
+    this.name = "IdentityTimeoutError";
+  }
+}
+export function isIdentityTimeout(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as { name?: unknown }).name === "IdentityTimeoutError";
+}
+
 let _cache: { cid: string; promise: Promise<Me> } | null = null;
 let _last: Me | null = null; // last resolved envelope (accountMenu reads trusted)
+let _lastCid: string | null = null; // the cid _last answered for (QA: a late /api/me for an old cid must not set trust for the new one)
 
 export function fetchMe(cid: string | null): Promise<Me> {
   if (!cid) return Promise.resolve({ identity: null, trusted: false });
   if (!_cache || _cache.cid !== cid) {
-    const promise = fetch("/api/me?cid=" + encodeURIComponent(cid))
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timedOut = false;
+    const timer = ctl ? setTimeout(() => { timedOut = true; ctl.abort(); }, ME_TIMEOUT_MS) : null;
+    const entry: { cid: string; promise: Promise<Me> } = { cid, promise: Promise.resolve({ identity: null, trusted: false }) };
+    entry.promise = fetch("/api/me?cid=" + encodeURIComponent(cid), ctl ? { signal: ctl.signal } : undefined)
       .then(async (r) => {
         if (!r.ok) return { identity: null, trusted: false }; // 401/404 fail open
         const d = (await r.json()) as { identity?: CloudIdentity | null; trusted?: boolean } | null;
         return { identity: (d && d.identity) || null, trusted: !!(d && d.trusted) };
       })
-      .catch((): Me => ({ identity: null, trusted: false }))
+      .catch((e): Me => {
+        if (timedOut) {
+          // no verdict: forget this attempt so the next ask re-fetches
+          if (_cache === entry) _cache = null;
+          throw new IdentityTimeoutError(cid);
+        }
+        void e;
+        return { identity: null, trusted: false };
+      })
       .then((me) => {
-        _last = me;
+        // only the CURRENT cid's answer may become the last envelope
+        if (_cache && _cache.cid === cid) {
+          _last = me;
+          _lastCid = cid;
+        }
         return me;
-      });
-    _cache = { cid, promise };
+      })
+      .finally(() => { if (timer) clearTimeout(timer); });
+    _cache = entry;
   }
   return _cache.promise;
 }
@@ -66,12 +106,23 @@ export function fetchIdentity(cid: string | null): Promise<Identity | null> {
   return fetchMe(cid).then((me) => me.identity);
 }
 
+// Was the last resolved /api/me envelope a TRUSTED sign-in? (read by the
+// SnapshotProvider right after fetchIdentity resolves — see extensions.ts).
+// With `cid`, only an envelope that answered for THAT cid counts (a late
+// response for a previous project never grants/denies trust for this one).
+export function lastTrusted(cid?: string | null): boolean {
+  if (cid !== undefined && cid !== _lastCid) return false;
+  return !!_last?.trusted;
+}
+
 // Test/page-teardown hook: drop the single-flight cache so a fresh mount
 // re-asks (mirrors the vanilla "once per page load" scope).
 export function resetIdentity(): void {
   _cache = null;
   _last = null;
+  _lastCid = null;
 }
+registerTestReset(resetIdentity);
 
 /* ---- acting-identity accessors (app-data.js parity) ---------------------- *
  * All take the resolved Me + the snapshot explicitly (React style — no D.*

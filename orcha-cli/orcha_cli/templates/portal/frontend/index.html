@@ -3,32 +3,109 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Orcha</title>
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0E0F10" />
+    <meta name="application-name" content="Embodent" />
+    <meta name="apple-mobile-web-app-title" content="Embodent" />
+    <meta name="description" content="Embodent — run and verify a team of AI agents." />
+    <!-- D6: Inter Variable (wght+opsz), self-hosted; @font-face lives in
+         static/styles/v2-tokens.css. The latin file's preload is injected by
+         vite.config.ts (sharedCssPlugin, post-transform) so it keeps the exact
+         URL the @font-face uses in dev AND build — a <link> written here is
+         rebased under /assets/dist/ by Vite dev, which downloaded the font twice. -->
+    <title>Embodent</title>
+    <!-- favicon + apple-touch-icon + manifest links (static/favicon.*, apple-touch-icon.png, manifest.json)
+         are injected by vite.config.ts (sharedCssPlugin, FAVICON_LINKS) for the
+         same reason as the font preload: Vite dev rebases hrefs written here. -->
+    <style>
+      /* Orcha V2 pre-paint: the window canvas exists before ANY stylesheet
+         loads (no flash of the wrong theme on full navigations, in the desktop
+         view, or while the bundle downloads). The boot script below resolves
+         <html data-theme> (light | dark) first. Values = --v2-window / --v2-text
+         per theme. The font stack matches --v2-font-sans, and size / features /
+         optical sizing match the v2-tokens.css body rule, so nothing re-flows
+         or re-shapes when the stylesheet lands. overflow-x: clip = no sideways
+         page pan (r1). */
+      html { overflow-x: clip; color-scheme: dark; }
+      html, body { background: #0E0F10; color: #EEEFF1; margin: 0;
+        font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-feature-settings: "cv01", "ss03"; font-optical-sizing: auto;
+        -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      html[data-theme="light"] { color-scheme: light; }
+      html[data-theme="light"], html[data-theme="light"] body { background: #F4F4F5; color: #1C1D1F; }
+      body { font-size: 13px; line-height: 1.5; } /* body only: html stays 16px so rem units are unchanged */
+    </style>
     <script>
-      // pre-paint theme: honor the persisted choice before first paint so
-      // full-page navigations never flash the dark default (GH #239 family).
-      try {
-        var t = localStorage.getItem("orcha:theme");
-        if (t) document.documentElement.setAttribute("data-theme", t);
-      } catch (e) {}
-      // pre-paint skin: same idiom, same key as the vanilla portal
-      // (orcha:skin) — "classic" carries no attribute, so only a non-classic
-      // pick (e.g. "swiss") is applied before first paint.
-      try {
-        var s = localStorage.getItem("orcha:skin");
-        if (s && s !== "classic") document.documentElement.setAttribute("data-skin", s);
-      } catch (e) {}
-      // pre-paint sidebar: same idiom, same key as the vanilla portal
-      // (orcha:sidebar) — collapsed state applied before first paint so the
-      // rail never flashes at the wrong width on a full-page navigation.
-      try {
-        if (localStorage.getItem("orcha:sidebar") === "collapsed") {
-          document.documentElement.setAttribute("data-sidebar", "collapsed");
+      // Orcha V2 pre-paint boot. Appearance = System / Light / Dark
+      // (src/shell/theme.ts is the runtime twin — keep the two in sync;
+      // theme.prepaint.test.ts runs THIS script). localStorage orcha:theme is
+      // "auto" | "light" | "dark", default "dark". A desktop host with the
+      // "theme" capability owns the theme (its nativeTheme drives
+      // prefers-color-scheme here, so follow System); an older embedding host
+      // (sidebar only) is dark-only, so stay dark. <html data-theme> only ever
+      // holds the RESOLVED value.
+      (function () {
+        var d = document.documentElement;
+        var pref = "dark";
+        try {
+          var v = localStorage.getItem("orcha:theme");
+          if (v === "light" || v === "dark" || v === "auto") pref = v;
+          else if (v === "system") pref = "auto";
+        } catch (e) {}
+        try {
+          var hh = window.orchaHost;
+          if (hh && hh.version === 1 && hh.capabilities && hh.capabilities.indexOf) {
+            if (hh.capabilities.indexOf("theme") >= 0) pref = "auto";
+            else if (hh.capabilities.indexOf("sidebar") >= 0) pref = "dark";
+          }
+        } catch (e) {}
+        var t = pref;
+        if (pref === "auto") {
+          t = "dark";
+          try { if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) t = "light"; } catch (e) {}
         }
-      } catch (e) {}
+        d.setAttribute("data-theme", t);
+        d.style.colorScheme = t;
+        d.style.backgroundColor = t === "light" ? "#F4F4F5" : "#0E0F10";
+        try {
+          var tc = document.querySelector('meta[name="theme-color"]');
+          if (tc) tc.setAttribute("content", t === "light" ? "#F4F4F5" : "#0E0F10");
+          var cs = document.querySelector('meta[name="color-scheme"]');
+          if (cs) cs.setAttribute("content", t);
+        } catch (e) {}
+        d.removeAttribute("data-skin");
+      })();
+      (function () {
+        var d = document.documentElement;
+        // sidebar rail (legacy key/attr kept) + V2 resizable width
+        try {
+          if (localStorage.getItem("orcha:sidebar") === "collapsed") d.setAttribute("data-sidebar", "collapsed");
+          var w = parseInt(localStorage.getItem("orcha:v2:sidebarWidth") || "", 10);
+          // the user width goes in --v2-sidebar-user-w; v2-shell.css derives
+          // --v2-sidebar-w from it, so the collapsed rail (56px) always wins
+          // (QA blocker: an inline --v2-sidebar-w kept the rail at 248px).
+          if (w >= 200 && w <= 360) d.style.setProperty("--v2-sidebar-user-w", w + "px");
+        } catch (e) {}
+        // desktop embedded mode (docs/orcha-v2-architecture.md §7.2): a v1 host
+        // with the "sidebar" capability owns navigation. The ?embed=desktop
+        // hint on the first load URL lets us hide the portal sidebar before
+        // first paint; the capability object is authoritative and the hint is
+        // stripped so it is never copied into links.
+        try {
+          var h = window.orchaHost;
+          var capable = !!(h && h.version === 1 && h.capabilities && h.capabilities.indexOf("sidebar") >= 0);
+          var u = new URL(window.location.href);
+          var hinted = u.searchParams.get("embed") === "desktop";
+          if (capable || hinted) d.setAttribute("data-embed", "desktop");
+          if (hinted) {
+            u.searchParams.delete("embed");
+            history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+          }
+        } catch (e) {}
+      })();
     </script>
-    <!-- the shared styles.css token layer is injected at runtime by main.tsx:
-         a <link> here would get base-prefixed by Vite to /assets/dist/... -->
+    <!-- the shared styles.css token layer is injected at build time (vite
+         sharedCssPlugin) as a blocking <link>, and at runtime by main.tsx in dev -->
   </head>
   <body>
     <div id="root"></div>

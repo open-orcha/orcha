@@ -16,6 +16,7 @@
     "@codemirror/search": "^6.7.2",
     "@codemirror/state": "^6.7.2",
     "@codemirror/view": "^6.43.10",
+    "@lezer/highlight": "^1.2.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.3"

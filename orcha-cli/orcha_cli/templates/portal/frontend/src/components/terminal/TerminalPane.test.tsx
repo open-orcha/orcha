@@ -200,3 +200,33 @@ describe("TerminalPane pairing (§3b + ISS-84 gate, vanilla conversation.js pari
     expect(screen.getByText("Terminal paired")).toBeInTheDocument();
   });
 });
+
+/* parity r1 (agents-activity extra): the no-actor toast named the V1 header
+ * ("top-right"); it now gives the real reason — for a viewer, the read-only role. */
+describe("TerminalPane pair with nobody acting", () => {
+  beforeEach(() => {
+    OrchaTerm._resetForTests();
+    window.Terminal = FakeTerminal as unknown as Window["Terminal"];
+    localStorage.clear();
+  });
+  afterEach(async () => {
+    const { extensions } = await import("../../extensions");
+    delete extensions.identity;
+    delete extensions.identityTrusted;
+    OrchaTerm._resetForTests();
+    cleanup();
+    delete window.Terminal;
+    vi.restoreAllMocks();
+  });
+
+  it("a viewer is told their role, not to look top-right", async () => {
+    const { extensions } = await import("../../extensions");
+    extensions.identity = async () => ({ agent_id: "h1", member_role: "viewer" });
+    extensions.identityTrusted = () => true;
+    stubFetch();
+    mount();
+    await clickPair();
+    expect(await screen.findByText(/Your role is viewer \(read-only\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/top-right/)).toBeNull();
+  });
+});

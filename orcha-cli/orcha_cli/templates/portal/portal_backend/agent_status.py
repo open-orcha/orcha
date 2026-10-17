@@ -19,7 +19,7 @@ def log_event(
     cur.execute(
         """INSERT INTO events
              (container_id, actor_type, actor_id, entity_type, entity_id, event_type, detail)
-           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
         (
             container_id,
             actor_type,

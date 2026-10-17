@@ -1,0 +1,79 @@
+/* Settings → General › Template (portable project templates). Linear-calm: 13px rows,
+   muted meta, one chip per row, hairlines — no coloured stripes or banners (D3/D12). */
+
+.pt-ctl { display: inline-flex; align-items: center; gap: var(--v2-space-3, 12px); flex-wrap: wrap; justify-content: flex-end; }
+.pt-check { display: inline-flex; align-items: center; gap: 6px; color: var(--v2-text); font-size: var(--v2-fs-body, 13px); cursor: pointer; white-space: nowrap; }
+.pt-check input { margin: 0; accent-color: var(--v2-accent, currentColor); }
+.pt-check:has(input:disabled) { color: var(--v2-text-3); cursor: default; }
+.pt-status { padding-top: 0; }
+
+/* dialogs */
+/* long plans: the body scrolls, the header + Import/Cancel footer stay in view */
+.v2-dialog.pt-dialog { display: flex; flex-direction: column; overflow: hidden; }
+.pt-dialog .v2-dialog-h { flex: none; }
+.pt-dialog .v2-dialog-b { padding-top: 4px; padding-bottom: var(--v2-space-3, 12px); overflow: auto; flex: 1 1 auto; min-height: 0; }
+.pt-dialog .v2-dialog-f { flex: none; border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.pt-body { display: flex; flex-direction: column; gap: var(--v2-space-3, 12px); min-width: 0; }
+.pt-pick { display: flex; align-items: center; gap: var(--v2-space-2, 8px); min-width: 0; }
+.pt-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pt-filename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pt-target { display: flex; align-items: center; gap: var(--v2-space-2, 8px); flex-wrap: wrap; }
+.pt-help { display: inline-flex; color: var(--v2-text-3); cursor: help; }
+.pt-label { font-size: var(--v2-fs-label, 12px); font-weight: var(--v2-fw-medium, 500); color: var(--v2-text-2); }
+.pt-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pt-inline { display: inline-flex; align-items: center; gap: 8px; color: var(--v2-text-2); font-size: var(--v2-fs-body, 13px); }
+.pt-input { box-sizing: border-box; height: 30px; min-width: 0; padding: 0 10px; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control, 6px);
+  background: var(--v2-surface); color: var(--v2-text); font: inherit; font-size: var(--v2-fs-body, 13px); }
+.pt-input:focus-visible, .pt-input:focus { outline: none; border-color: var(--v2-border-strong); box-shadow: var(--v2-focus-ring); }
+.pt-textarea { height: auto; min-height: 72px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
+.pt-select { height: 28px; padding: 0 8px; }
+.pt-rename { width: 150px; height: 26px; }
+.pt-hint, .pt-empty { margin: 0; color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); line-height: 1.45; }
+.pt-empty { padding: 12px 0; }
+.pt-error { margin: 0; color: var(--v2-danger); font-size: var(--v2-fs-meta, 12px); }
+.pt-meta { color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); font-variant-numeric: tabular-nums; }
+.pt-code { font-family: var(--v2-font-mono); font-size: 11.5px; color: var(--v2-text-2); }
+
+.pt-plan { display: flex; flex-direction: column; gap: var(--v2-space-3, 12px); transition: opacity .12s; }
+.pt-plan.is-loading { opacity: .6; }
+.pt-source { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--v2-text); font-size: var(--v2-fs-body, 13px); }
+.pt-source b { font-weight: var(--v2-fw-semibold, 600); }
+.pt-sections { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.pt-sections legend { float: left; margin-right: 4px; padding: 0; }
+.pt-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.pt-opts:empty { display: none; }
+
+.pt-group { display: flex; flex-direction: column; min-width: 0; }
+.pt-group-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 2px; font-size: var(--v2-fs-body, 13px); font-weight: var(--v2-fw-semibold, 600); color: var(--v2-text); }
+.pt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.pt-row { display: flex; flex-direction: column; gap: 2px; padding: 7px 2px; border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); min-width: 0; }
+.pt-row-main { display: flex; align-items: center; gap: 10px; min-height: 22px; min-width: 0; }
+.pt-row-main > .pt-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-row-main > .v2-chip { flex: none; margin-left: auto; }
+.pt-row-main > .pt-meta + .v2-chip { margin-left: 0; }
+.pt-name { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--v2-fw-medium, 500); color: var(--v2-text); font-size: var(--v2-fs-body, 13px); }
+.pt-name.is-mono { font-family: var(--v2-font-mono); font-size: 12px; }
+.pt-row[data-action="skip"] .pt-name { color: var(--v2-text-2); }
+.pt-notes { color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); line-height: 1.4; padding-left: 0; }
+.pt-prompt { margin-top: 2px; }
+.pt-prompt summary { width: max-content; color: var(--v2-text-3); font-size: var(--v2-fs-meta, 12px); cursor: pointer; }
+.pt-prompt summary:hover { color: var(--v2-text-2); }
+.pt-prompt pre { margin: 6px 0 2px; max-height: 180px; overflow: auto; padding: 8px 10px; white-space: pre-wrap; word-break: break-word;
+  font-family: inherit; font-size: 12.5px; line-height: 1.5; color: var(--v2-text-2);
+  background: var(--v2-surface); border: 1px solid var(--v2-border-subtle, var(--v2-border)); border-radius: var(--v2-radius-control, 6px); }
+.pt-collide { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.pt-when { flex: none !important; }
+.pt-rowacts { display: inline-flex; gap: 2px; flex: none; opacity: .75; }
+.pt-row:hover .pt-rowacts, .pt-row:focus-within .pt-rowacts { opacity: 1; }
+.pt-done { display: flex; flex-direction: column; gap: var(--v2-space-3, 12px); }
+
+/* library */
+.pt-libbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pt-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-control, 6px); background: var(--v2-raised, var(--v2-surface)); }
+.pt-formbar { display: flex; justify-content: flex-end; gap: 8px; }
+
+@media (max-width: 560px) {
+  .pt-row-main { flex-wrap: wrap; }
+  .pt-name { max-width: 100%; }
+  .pt-collide { flex-wrap: wrap; }
+}

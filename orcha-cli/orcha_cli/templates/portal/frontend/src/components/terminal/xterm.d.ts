@@ -14,6 +14,12 @@ interface XTermTheme {
   background?: string;
   foreground?: string;
   cursor?: string;
+  cursorAccent?: string;
+  selectionBackground?: string;
+  black?: string; red?: string; green?: string; yellow?: string;
+  blue?: string; magenta?: string; cyan?: string; white?: string;
+  brightBlack?: string; brightRed?: string; brightGreen?: string; brightYellow?: string;
+  brightBlue?: string; brightMagenta?: string; brightCyan?: string; brightWhite?: string;
 }
 
 interface XTermOptions {
@@ -34,6 +40,8 @@ interface XTermTerminal {
   loadAddon(addon: unknown): void;
   onData(handler: (data: string) => void): unknown;
   onResize(handler: (size: XTermSize) => void): unknown;
+  /** live options (xterm ≥ 5): assigning `options.theme` re-themes in place */
+  options?: XTermOptions;
 }
 
 interface XTermFitAddon {

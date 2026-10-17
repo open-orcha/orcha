@@ -32,6 +32,8 @@ APNs signing key), and marks rows delivered/failed. Rows older than 48 hours
 are pruned on every enqueue and every claim, so a dormant box ages out.
 """
 
+from portal_backend import notification_prefs as _np
+from portal_backend import sql
 from portal_backend.database import db_cursor
 
 # Notification titles mirror the iOS local-notification sweep verbatim, so a
@@ -49,8 +51,8 @@ PRUNE_HOURS = 48
 def _prune(cur) -> None:
     """Age out stale rows unconditionally — delivered, failed, or never claimed."""
     cur.execute(
-        "DELETE FROM push_outbox WHERE created_at < now() - %s * interval '1 hour'",
-        (PRUNE_HOURS,),
+        "DELETE FROM push_outbox WHERE created_at < %s",
+        (sql.ago(PRUNE_HOURS * 3600),),
     )
 
 
@@ -67,6 +69,32 @@ def _seeded(cur, container_id) -> bool:
                             AND lower(a.github_login)=pd.github_login)
            LIMIT 1""",
         (container_id,),
+    )
+    return cur.fetchone() is not None
+
+
+def push_logins_allowed(cur, container_id, kind, ref_id) -> set:
+    """mig 063: lowercased logins of the container's members whose notification
+    settings let this item through the PUSH channel right now (should_notify —
+    category scope, "only mine", pause, project mute, quiet hours). Used at enqueue
+    (no allowed recipient → no row) and again at claim (devices filtered per member)."""
+    allowed = _np.allowed_members(cur, container_id, kind, ref_id, "push")
+    return {
+        (m.get("github_login") or "").strip().lower()
+        for m in allowed
+        if (m.get("github_login") or "").strip()
+    }
+
+
+def _audience_wants(cur, container_id, kind, ref_id) -> bool:
+    """Does at least one member with a LIVE device want this push?"""
+    logins = push_logins_allowed(cur, container_id, kind, ref_id)
+    if not logins:
+        return False
+    cur.execute(
+        "SELECT 1 FROM push_devices WHERE revoked_at IS NULL"
+        f" AND {sql.in_list('github_login')} LIMIT 1",
+        (sql.list_param(logins),),
     )
     return cur.fetchone() is not None
 
@@ -97,8 +125,9 @@ def _enqueue(cur, container_id, kind, ref_id, body) -> None:
     )
 
 
-def push_task_verify(container_id, task_id) -> None:
-    """A task parked at needs_verification — a human must verify it."""
+def push_task_verify(container_id, task_id, body=None) -> None:
+    """A task parked at needs_verification — a human must verify it. `body` replaces the
+    default (the task title), e.g. "… — Verdikt passed on attempt 2 — ready for your review"."""
     try:
         with db_cursor() as (conn, cur):
             if not _seeded(cur, container_id):
@@ -111,8 +140,10 @@ def push_task_verify(container_id, task_id) -> None:
             row = cur.fetchone()
             if not row:
                 return
+            if not _audience_wants(cur, container_id, "task_verify", task_id):
+                return  # mig 063: every device owner muted this — no row
             _prune(cur)
-            _enqueue(cur, container_id, "task_verify", task_id, row["title"])
+            _enqueue(cur, container_id, "task_verify", task_id, body or row["title"])
             conn.commit()
     except Exception:
         pass  # best-effort by contract — push must never surface in the main flow
@@ -139,12 +170,14 @@ def push_plan_approval(container_id, task_id, message_id) -> None:
                                     ORDER BY m.created_at ASC, m.id ASC LIMIT 1)
                      AND NOT EXISTS (SELECT 1 FROM decisions d
                                       WHERE d.subject_type='plan_approval'
-                                        AND d.subject_id=t.id::text)""",
+                                        AND d.subject_id=CAST(t.id AS TEXT))""",
                 {"tid": task_id, "cid": container_id, "mid": message_id},
             )
             row = cur.fetchone()
             if not row:
                 return
+            if not _audience_wants(cur, container_id, "plan_approval", task_id):
+                return  # mig 063: every device owner muted this — no row
             _prune(cur)
             _enqueue(cur, container_id, "plan_approval", task_id, row["title"])
             conn.commit()
@@ -169,6 +202,8 @@ def push_request(container_id, request_id) -> None:
             row = cur.fetchone()
             if not row:
                 return
+            if not _audience_wants(cur, container_id, "request", request_id):
+                return  # mig 063: every device owner muted this — no row
             _prune(cur)
             _enqueue(cur, container_id, "request", request_id, row["payload"])
             conn.commit()

@@ -40,6 +40,8 @@ export interface UseBrowseTreeResult {
   // what the error row's own "tap to retry" affordance calls while the dir
   // stays expanded and visibly shows the loading state.
   retryDir: (dirPath: string) => void;
+  /** V2: re-run the current file fetch (the file error state's Retry). */
+  retryFile: () => void;
   filePayload: BrowseFilePayload | null;
   fileError: GhError | null;
   fileLoading: boolean;
@@ -134,6 +136,10 @@ export function useBrowseTree(cid: string, gitRef: string, path: string): UseBro
     [dirCache, expanded],
   );
 
+  // V2 (G-08): the file error state's Retry re-runs this same fetch.
+  const [fileReload, setFileReload] = useState(0);
+  const retryFile = useCallback(() => setFileReload((n) => n + 1), []);
+
   useEffect(() => {
     if (!path || !cid) { setFilePayload(null); setFileError(null); return; }
     const myToken = ++fileToken.current;
@@ -145,7 +151,7 @@ export function useBrowseTree(cid: string, gitRef: string, path: string): UseBro
       setFileError(null);
       setFilePayload(res.data);
     });
-  }, [cid, gitRef, path]);
+  }, [cid, gitRef, path, fileReload]);
 
-  return { dirCache, expanded, rows, toggleDir, retryDir, filePayload, fileError, fileLoading };
+  return { dirCache, expanded, rows, toggleDir, retryDir, retryFile, filePayload, fileError, fileLoading };
 }

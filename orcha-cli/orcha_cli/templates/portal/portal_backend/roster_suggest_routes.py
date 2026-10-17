@@ -30,7 +30,7 @@ import os
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field
 
-from portal_backend import local_git
+from portal_backend import local_git, sql
 from portal_backend.agent_registration_routes import register_agent
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -44,7 +44,11 @@ from portal_backend.schemas import AgentCreate
 
 ROSTER_LOG = logging.getLogger("orcha.roster_suggest")
 
-MAX_ACCEPT_SUGGESTIONS = 5  # mirrors roster_signals: 1 main + MAX_SPECIALISTS(4)
+# Clients (desktop onboarding, portal) offer the UNION of the workspace roster
+# (1 main + MAX_SPECIALISTS) and the Claude analysis (roster_analysis_routes
+# MAX_SUGGESTIONS = 8), de-duplicated by alias — accept must take everything
+# they can offer, or a user who keeps every suggestion checked gets a bare 422.
+MAX_ACCEPT_SUGGESTIONS = 1 + 4 + 8
 
 
 def _workspace_available() -> bool:
@@ -107,6 +111,24 @@ def suggest_roster(cid: str, request: Request, refresh: int = 0):
         }
 
     project_kind, suggestions = build_roster(signals, evidence)
+    # D-21: never re-suggest an alias that is already on this project's live roster
+    # (a Reconnect/upgrade of an initialized folder lands here with the fleet already
+    # registered). Case-insensitive, matching register_agent's alias uniqueness.
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "SELECT lower(alias) AS a FROM agents WHERE container_id=%s AND terminated_at IS NULL",
+            (cid,),
+        )
+        taken = {r["a"] for r in cur.fetchall()}
+    suggestions = [s for s in suggestions if str(s.get("alias", "")).lower() not in taken]
+    if not suggestions:
+        return {
+            "available": False,
+            "source": "workspace",
+            "project_kind": project_kind,
+            "signals": sorted(signals),
+            "suggestions": [],
+        }
     return {
         "available": True,
         "source": "workspace",
@@ -167,6 +189,38 @@ def accept_roster_suggestions(cid: str, body: RosterAcceptBody, request: Request
         # per-item anyway.
         body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
         _enforce_grant(cur, request, cid, "manage_agents")
+        # D-19b: validate the WHOLE batch before creating anything. register_agent commits
+        # per item, so a taken alias halfway through used to leave the batch partially
+        # created — and every retry then tripped over the agent the first try made. One
+        # 409 listing every conflict (taken here, or repeated in the batch) keeps the
+        # accept all-or-nothing for alias clashes.
+        aliases = [s.alias for s in body.suggestions]
+        cur.execute(
+            f"SELECT alias FROM agents WHERE container_id=%s AND {sql.in_list('alias')}",
+            (cid, sql.list_param(aliases)),
+        )
+        taken = sorted({r["alias"] for r in cur.fetchall()})
+        seen, repeated = set(), []
+        for a in aliases:
+            if a in seen and a not in repeated:
+                repeated.append(a)
+            seen.add(a)
+        if taken or repeated:
+            parts = []
+            if taken:
+                parts.append(
+                    "already registered in this project: "
+                    + ", ".join(f"'{a}'" for a in taken)
+                )
+            if repeated:
+                parts.append(
+                    "listed more than once: " + ", ".join(f"'{a}'" for a in repeated)
+                )
+            raise HTTPException(
+                409,
+                "alias " + "; ".join(parts) + " — nothing was created; "
+                "uncheck or rename those and try again",
+            )
 
     created = []
     for suggestion in body.suggestions:

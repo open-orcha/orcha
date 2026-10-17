@@ -11,6 +11,7 @@ The token is bound to its worker_run row at run-create, and the SERVER revokes i
 run-terminal transition (finish / orphan / reap) so revocation survives daemon turnover.
 """
 import pytest
+from conftest import ts_ago
 
 pytestmark = pytest.mark.asyncio
 
@@ -136,7 +137,7 @@ async def test_orphan_reaper_keeps_unbound_resident_token(client, make_agent, db
     headless_tok = await _mint(client, aid, "work", kind="headless")
     resident_tok = await _mint(client, aid, "conversation", kind="resident")
     db.execute(
-        "UPDATE embodiment_tokens SET created_at=now() - interval '5 minutes' "
+        f"UPDATE embodiment_tokens SET created_at={ts_ago(300)} "
         "WHERE run_token IN (%s, %s)",
         (headless_tok, resident_tok),
     )

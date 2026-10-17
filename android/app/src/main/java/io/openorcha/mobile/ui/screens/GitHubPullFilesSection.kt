@@ -34,8 +34,16 @@ import io.openorcha.mobile.data.GitHubChangedFile
 import io.openorcha.mobile.data.GitHubFiles
 import io.openorcha.mobile.domain.DiffParser
 import io.openorcha.mobile.ui.components.DiffFileBody
-import io.openorcha.mobile.ui.components.OrchaCard
-import io.openorcha.mobile.ui.components.SectionH
+import io.openorcha.mobile.ui.components.DiffCount
+import io.openorcha.mobile.ui.components.LCard
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LSection
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -43,14 +51,16 @@ import io.openorcha.mobile.ui.theme.Orcha
 internal fun FilesSection(files: GitHubFiles, htmlUrl: String? = null) {
     val p = Orcha.palette
     var expandedFile by remember { mutableStateOf<String?>(null) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionH("Files · ${files.count}")
-        OrchaCard {
+    val totalAdd = files.items.sumOf { it.additions }
+    val totalDel = files.items.sumOf { it.deletions }
+    LSection("Files changed", count = files.count, trailing = { if (files.items.isNotEmpty()) DiffCount(totalAdd, totalDel) }) {
+        LCard(padding = 0.dp) {
             if (files.items.isEmpty()) {
-                Text("No file changes reported.", color = p.muted)
+                Text("No file changes reported.", style = ltype(LType.Meta), color = p.muted, modifier = Modifier.padding(LSpace.m))
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    files.items.forEach { file ->
+                Column {
+                    files.items.forEachIndexed { i, file ->
+                        if (i > 0) LDivider()
                         FileRow(file, htmlUrl, expanded = expandedFile == file.filename) {
                             expandedFile = if (expandedFile == file.filename) null else file.filename
                         }
@@ -58,7 +68,8 @@ internal fun FilesSection(files: GitHubFiles, htmlUrl: String? = null) {
                     if (files.truncated) {
                         Text(
                             "Showing the first ${files.items.size} of ${files.count} changed files.",
-                            style = MaterialTheme.typography.labelMedium, color = p.faint,
+                            style = ltype(LType.Micro), color = p.faint,
+                            modifier = Modifier.padding(LSpace.m),
                         )
                     }
                 }
@@ -73,7 +84,12 @@ private fun FileRow(file: GitHubChangedFile, htmlUrl: String?, expanded: Boolean
     val context = LocalContext.current
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(onClick = onToggle)
+                .padding(horizontal = LSpace.m)
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -83,27 +99,26 @@ private fun FileRow(file: GitHubChangedFile, htmlUrl: String?, expanded: Boolean
                 contentDescription = null, tint = p.faint, modifier = Modifier.size(14.dp),
             )
             Text(
-                file.filename, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                file.filename, style = ltype(LType.Mono),
                 color = p.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
             )
-            if (file.additions > 0) Text("+${file.additions}", style = fileCountStyle, color = p.diffAdd)
-            if (file.deletions > 0) Text("-${file.deletions}", style = fileCountStyle, color = p.diffDel)
+            DiffCount(file.additions, file.deletions)
         }
         if (expanded) {
             val patch = file.patch
-            Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.fillMaxWidth().padding(start = LSpace.m, end = LSpace.m, bottom = LSpace.m), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (patch.isNullOrBlank()) {
                     // iOS omittedNote parity: oversized vs not-served, with the PR link
                     // as fallback (GitHub has no stable per-file anchor).
                     Text(
                         if (file.patchOmitted) "This diff is too large to show here."
                         else "This diff isn't available from this server yet.",
-                        style = MaterialTheme.typography.labelMedium, color = p.muted,
+                        style = ltype(LType.Meta), color = p.muted,
                     )
                     if (htmlUrl != null) {
                         Text(
                             "View on GitHub",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.W600),
+                            style = ltype(LType.Meta).copy(fontWeight = FontWeight.SemiBold),
                             color = p.accent,
                             modifier = Modifier.clickable {
                                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(htmlUrl)))
@@ -116,7 +131,7 @@ private fun FileRow(file: GitHubChangedFile, htmlUrl: String?, expanded: Boolean
                     // DiffViewer duplicated the summary + per-file header inside.
                     val parsed = remember(patch) { DiffParser.parse(patch) }
                     if (parsed.isEmpty()) {
-                        Text("No net change (empty diff).", style = MaterialTheme.typography.labelMedium, color = p.faint)
+                        Text("No net change (empty diff).", style = ltype(LType.Meta), color = p.faint)
                     } else {
                         parsed.forEach { parsedFile -> DiffFileBody(parsedFile) }
                     }
@@ -126,4 +141,3 @@ private fun FileRow(file: GitHubChangedFile, htmlUrl: String?, expanded: Boolean
     }
 }
 
-private val fileCountStyle = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.W600, fontSize = 11.sp)

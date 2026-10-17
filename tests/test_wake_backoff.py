@@ -14,6 +14,7 @@ import importlib
 
 from portal_backend import task_start_core as core
 from portal_backend.database import db_cursor
+from portal_backend import sql
 
 # asyncio_mode=auto (pytest.ini) handles async def tests without an explicit marker —
 # this file also has plain sync tests (pure-function checks), so no module pytestmark.
@@ -22,6 +23,12 @@ from portal_backend.database import db_cursor
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
+
+def _secs(span):
+    """'6 hours' -> seconds (the old Postgres interval literal, as a bound timestamp offset)."""
+    n, unit = span.split()
+    return float(n) * {"second": 1, "minute": 60, "hour": 3600, "day": 86400}[unit.rstrip("s")]
+
 
 async def _make_unassigned_trigger(client, container, make_agent, *, title="Route me"):
     """Reproduce the incident shape: an orchestrator + an unassigned task, which emits a
@@ -60,8 +67,8 @@ async def _completed_run(client, aid, *, wake_event, ended_ago=None, db=None):
     assert f.status_code == 200, f.text
     if ended_ago and db is not None:
         db.execute(
-            f"UPDATE worker_runs SET ended_at = now() - interval '{ended_ago}' WHERE run_id=%s",
-            (rid,),
+            "UPDATE worker_runs SET ended_at = %s WHERE run_id=%s",
+            (sql.ago(_secs(ended_ago)), rid),
         )
     return rid
 

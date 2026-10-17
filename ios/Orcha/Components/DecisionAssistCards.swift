@@ -25,21 +25,21 @@ private struct PlanBriefCore: View {
 
     var body: some View {
         if DecisionAssist.isAvailable, !failed, DecisionAssist.isSubstantial(text) {
-            OrchaCard(borderColor: p.accentLine) {
+            LCard {
                 AssistHeader(loading: brief == nil)
                 if let brief {
                     Text(brief.tldr)
-                        .font(.system(size: 14, weight: .semibold))
+                        .ltype(.bodyEmph)
                         .foregroundStyle(p.text)
                     ForEach(Array(brief.steps.enumerated()), id: \.offset) { i, step in
                         HStack(alignment: .top, spacing: 8) {
                             Text("\(i + 1)")
-                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                                .foregroundStyle(p.accent)
+                                .ltype(.micro).monospacedDigit()
+                                .foregroundStyle(p.text2)
                                 .frame(width: 18, height: 18)
-                                .background(p.accentSoft, in: RoundedRectangle(cornerRadius: 6))
+                                .background(p.surface2, in: RoundedRectangle(cornerRadius: 5))
                             (stepOwnerPrefix(step) + Text(step.what))
-                                .font(.system(size: 13))
+                                .ltype(.meta)
                                 .foregroundStyle(p.text2)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -51,7 +51,7 @@ private struct PlanBriefCore: View {
                                 .foregroundStyle(p.info)
                                 .frame(width: 18, height: 18)
                             Text(gate)
-                                .font(.system(size: 13, weight: .medium))
+                                .ltype(.meta).fontWeight(.medium)
                                 .foregroundStyle(p.info)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -63,7 +63,7 @@ private struct PlanBriefCore: View {
                                 .foregroundStyle(p.warn)
                                 .frame(width: 18, height: 18)
                             Text(risk)
-                                .font(.system(size: 13, weight: .medium))
+                                .ltype(.meta).fontWeight(.medium)
                                 .foregroundStyle(p.warn)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -99,6 +99,7 @@ struct WorkspaceBriefCard: View {
 @available(iOS 26, *)
 private struct WorkspaceBriefCore: View {
     @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let digest: String
     @State private var expanded = false
     @State private var brief: DecisionAssist.StatusBrief?
@@ -106,36 +107,38 @@ private struct WorkspaceBriefCore: View {
 
     var body: some View {
         if DecisionAssist.isAvailable, !failed, !digest.isEmpty {
-            OrchaCard(borderColor: expanded ? p.accentLine : nil) {
+            LCard {
                 Button {
-                    withAnimation(.spring(duration: 0.25)) { expanded.toggle() }
+                    withAnimation(reduceMotion ? nil : .lSpring) { expanded.toggle() }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(p.accent)
-                        Text("WORKSPACE BRIEF · ON-DEVICE")
-                            .font(.system(size: 10, weight: .bold))
-                            .tracking(0.8)
-                            .foregroundStyle(p.accent)
+                        Text("Workspace brief · on-device")
+                            .ltype(.micro)
+                            .fontWeight(.medium)
+                            .foregroundStyle(p.text2)
                         Spacer()
                         Image(systemName: expanded ? "chevron.up" : "chevron.down")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(p.faint)
                     }
+                    .frame(minHeight: 32)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                 if expanded {
                     if let brief {
                         Text(brief.headline)
-                            .font(.system(size: 14, weight: .semibold))
+                            .ltype(.bodyEmph)
                             .foregroundStyle(p.text)
                         ForEach(Array(brief.agents.enumerated()), id: \.offset) { _, line in
                             HStack(alignment: .top, spacing: 8) {
                                 AgentAvatar(alias: line.name, size: 22)
                                 (Text("\(line.name) ").fontWeight(.semibold) + Text(line.line))
-                                    .font(.system(size: 13))
+                                    .ltype(.meta)
                                     .foregroundStyle(p.text2)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -147,7 +150,7 @@ private struct WorkspaceBriefCore: View {
                                     .foregroundStyle(p.warn)
                                     .frame(width: 18, height: 18)
                                 Text(brief.needsYou)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .ltype(.meta).fontWeight(.medium)
                                     .foregroundStyle(p.warn)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -157,7 +160,7 @@ private struct WorkspaceBriefCore: View {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("Reading the workspace…")
-                                .font(.system(size: 13))
+                                .ltype(.meta)
                                 .foregroundStyle(p.muted)
                         }
                         .task(id: digest) {
@@ -198,16 +201,16 @@ private struct CatchUpCore: View {
 
     var body: some View {
         if DecisionAssist.isAvailable, !failed {
-            OrchaCard(borderColor: p.accentLine) {
+            LCard {
                 HStack(spacing: 6) {
-                    AssistHeader(loading: brief == nil, title: "WHILE YOU WERE AWAY · \(gap.uppercased())")
+                    AssistHeader(loading: brief == nil, title: "While you were away · \(gap)")
                     Button {
                         onDismiss()
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(p.faint)
-                            .frame(width: 22, height: 22)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -215,16 +218,16 @@ private struct CatchUpCore: View {
                 }
                 if let brief {
                     Text(brief.headline)
-                        .font(.system(size: 14, weight: .semibold))
+                        .ltype(.bodyEmph)
                         .foregroundStyle(p.text)
                     ForEach(brief.changes, id: \.self) { change in
                         HStack(alignment: .top, spacing: 8) {
                             Circle()
-                                .fill(p.accent)
-                                .frame(width: 5, height: 5)
+                                .fill(p.faint)
+                                .frame(width: 4, height: 4)
                                 .padding(.top, 6)
                             Text(change)
-                                .font(.system(size: 13))
+                                .ltype(.meta)
                                 .foregroundStyle(p.text2)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -236,7 +239,7 @@ private struct CatchUpCore: View {
                                 .foregroundStyle(p.warn)
                                 .frame(width: 18, height: 18)
                             Text(brief.needsYou)
-                                .font(.system(size: 13, weight: .medium))
+                                .ltype(.meta).fontWeight(.medium)
                                 .foregroundStyle(p.warn)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -271,23 +274,23 @@ private struct RunDigestCore: View {
 
     var body: some View {
         if DecisionAssist.isAvailable, !failed, !feed.isEmpty {
-            OrchaCard(borderColor: p.accentLine) {
+            LCard {
                 AssistHeader(loading: digest == nil)
                 if let digest {
                     ForEach(digest.didPoints, id: \.self) { point in
                         HStack(alignment: .top, spacing: 8) {
                             Circle()
-                                .fill(p.accent)
-                                .frame(width: 5, height: 5)
+                                .fill(p.faint)
+                                .frame(width: 4, height: 4)
                                 .padding(.top, 6)
                             Text(point)
-                                .font(.system(size: 13))
+                                .ltype(.meta)
                                 .foregroundStyle(p.text2)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     Text(digest.outcome)
-                        .font(.system(size: 13, weight: .semibold))
+                        .ltype(.meta).fontWeight(.semibold)
                         .foregroundStyle(p.text)
                     AssistFootnote(text: "Made on this iPhone from the run log — the log below is the record.")
                 }
@@ -303,8 +306,9 @@ private struct RunDigestCore: View {
 
 private struct AssistHeader: View {
     @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let loading: Bool
-    var title = "DECISION ASSIST · ON-DEVICE"
+    var title = "Decision assist · on-device"
     @State private var pulse = false
 
     var body: some View {
@@ -313,12 +317,12 @@ private struct AssistHeader: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(p.accent)
                 .opacity(loading && pulse ? 0.35 : 1)
-                .animation(loading ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : nil, value: pulse)
-                .onAppear { pulse = true }
-            Text(loading ? "READING…" : title)
-                .font(.system(size: 10, weight: .bold))
-                .tracking(0.8)
-                .foregroundStyle(p.accent)
+                .animation(loading && !reduceMotion ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : nil, value: pulse)
+                .onAppear { pulse = !reduceMotion }
+            Text(loading ? "Reading…" : title)
+                .ltype(.micro)
+                .fontWeight(.medium)
+                .foregroundStyle(p.text2)
             Spacer()
         }
         .accessibilityElement(children: .combine)
@@ -331,7 +335,7 @@ private struct AssistFootnote: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11))
+            .ltype(.micro)
             .foregroundStyle(p.faint)
     }
 }

@@ -65,7 +65,7 @@ def test_turn_post_carries_attachments_and_allows_attachment_only():
     assert "done.map((s) => ({ id: s.ref.id, name: s.ref.name }))" in js, \
         "doesn't send minimal {id,name} refs (server re-validates size/type from disk)"
     # attachment-only turns (no text) are allowed; a truly-empty send is still blocked
-    assert "if (!v && !done.length) return;" in js, "doesn't allow attachment-only turns / doesn't block truly-empty"
+    assert "if (!v && !done.length) return" in js, "doesn't allow attachment-only turns / doesn't block truly-empty"
     assert 'toast("Wait for uploads to finish"' in js, "doesn't block send while an upload is still in flight"
     # the original turn contract is preserved
     assert 'role: "human", author_agent_id: h.id, content: v' in js, "broke the human-turn POST contract"

@@ -1,0 +1,191 @@
+/* Needs you (V2) — Linear Inbox layout (D10, image 12). Tokens only; the
+   shared workCss still styles GateSurface / RequestDetail inside the detail. */
+
+/* ---- frame: list | detail, each scrolling on its own inside the panel ---- */
+.nd { height: var(--v2-content-h, calc(100dvh - 60px)); min-height: 0; }
+.nd > .v2-split { height: 100%; }
+.nd .v2-split-list { background: transparent; }
+.nd .v2-split-inspector { background: transparent; }
+.nd .v2-split-handle { background: var(--v2-border-subtle, var(--v2-border)); }
+
+/* ---- list column ---------------------------------------------------------- */
+.nd-listcol { min-height: 100%; display: flex; flex-direction: column; }
+.nd-listhead {
+  position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: var(--v2-space-2);
+  height: var(--v2-pillbar-h, 44px); padding: 0 var(--v2-space-3); background: var(--v2-panel, var(--v2-canvas));
+  border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border));
+}
+.nd-listhead .v2-pills { min-width: 0; }
+.nd-info {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; flex: none;
+  color: var(--v2-text-3); cursor: help;
+}
+.nd-info svg { width: 15px; height: 15px; }
+.nd-info:hover { color: var(--v2-text); background: var(--v2-hover); }
+.nd-info:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+.nd-note {
+  display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: wrap;
+  margin: var(--v2-space-2) var(--v2-space-3) 0; padding: 6px 10px; border-radius: var(--v2-radius-control);
+  background: var(--v2-hover); color: var(--v2-text-2); font-size: var(--v2-fs-meta); line-height: 1.45;
+}
+.nd-note b { color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.nd-emptyline { padding: var(--v2-space-3) var(--v2-space-4); color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+
+.nd-list { padding: 4px 0 var(--v2-space-4); }
+.nd-group .v2-group { margin-top: 4px; }
+
+/* inbox row: avatar · two lines · glyph + age */
+.nd .v2-row.nd-row {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; column-gap: 12px;
+  min-height: 56px; margin: 1px 6px; padding: 8px 10px; border-radius: var(--v2-radius-control);
+  border: 0; box-shadow: none; background: transparent;
+}
+.nd .v2-row.nd-row::before { display: none; }
+.nd .v2-row.nd-row:hover { background: var(--v2-hover); }
+/* VD-05: the row reset above zeroes box-shadow — give keyboard focus its ring back */
+.nd .v2-row.nd-row:focus-visible { box-shadow: var(--v2-focus-ring-inset); outline: none; }
+.nd .v2-row.nd-row.is-selected { background: var(--v2-selected); }
+.nd .v2-row.nd-row.is-dim .nd-title { color: var(--v2-text-2); }
+.nd-av { display: inline-flex; align-self: start; padding-top: 2px; --v2-av-ring: var(--v2-panel, var(--v2-canvas)); }
+.nd-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.nd-title {
+  font-size: 13px; font-weight: var(--v2-fw-medium); color: var(--v2-text); line-height: 18px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nd-sub {
+  font-size: var(--v2-fs-meta); color: var(--v2-text-2); line-height: 17px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nd-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; align-self: start; padding-top: 2px; }
+.nd-age { font-size: var(--v2-fs-meta); color: var(--v2-text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nd-dim { color: var(--v2-text-3); }
+
+/* ---- detail column -------------------------------------------------------- */
+.nd-detail { min-height: 100%; display: flex; flex-direction: column; }
+.nd .v2-pagehead {
+  position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px;
+  height: var(--v2-pillbar-h, 44px); padding: 0 var(--v2-space-3) 0 var(--v2-space-5, 24px);
+  background: var(--v2-panel, var(--v2-canvas)); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border));
+}
+.nd .v2-pagehead-id { font-size: var(--v2-fs-meta); }
+.nd .v2-pagehead-title { color: var(--v2-text-2); }
+.nd .v2-pagehead-actions { gap: 6px; }
+.nd .v2-pager { margin-left: 6px; }
+.nd-open { display: inline-grid; place-items: center; }
+
+.nd-dbody { width: 100%; max-width: 820px; margin: 0 auto; padding: 36px 40px 48px; display: flex; flex-direction: column; gap: 18px; }
+/* the title spans the column like the description (Linear img 12): no
+   balanced early wrap — `pretty` only avoids a lone last word */
+.nd-dtitle { margin: 0; max-width: none; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; color: var(--v2-text); overflow-wrap: anywhere; text-wrap: pretty; }
+.nd-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; margin-top: -8px; font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
+.nd-who { display: inline-flex; align-items: center; gap: 6px; color: var(--v2-text-2); text-decoration: none; --v2-av-ring: var(--v2-panel, var(--v2-canvas)); }
+.nd-who:hover { color: var(--v2-text); }
+.nd-review { white-space: nowrap; }
+.nd-caveat { margin: 0; font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
+.nd-desc-b { font-size: 14px; line-height: 1.6; color: var(--v2-text-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.nd-desc-b.is-clamped { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.nd-more { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--v2-text-3); font: inherit; font-size: var(--v2-fs-meta); cursor: pointer; }
+.nd-more:hover { color: var(--v2-text); }
+
+/* decision card: the gate / request card sits flush in the column (no extra box) */
+.nd-decision .wk-gate { margin: 0; background: var(--v2-surface); border-color: var(--v2-border); border-radius: 10px; }
+/* gate labels sit on the value's FIRST line, however tall the value (a plan list) */
+.nd-decision .td-g-row { align-items: start; }
+.nd-decision .td-g-k { line-height: 20px; }
+.nd-decision .td-g-v { line-height: 20px; }
+.nd-decision .td-g-v > :first-child,
+.nd-decision .td-g-v > :first-child > :first-child { margin-top: 0; }
+.nd-decision .wk-decided { margin: 0; }
+
+.nd-h2 { margin: 6px 0 10px; font-size: 15px; font-weight: 600; color: var(--v2-text); }
+.nd-activity .v2-tl-actor { color: var(--v2-text-2); font-weight: var(--v2-fw-medium); }
+.nd-quote { color: var(--v2-text-2); }
+.nd-thread-link { display: inline-block; margin-top: 8px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); }
+.nd-thread-link:hover { color: var(--v2-text); }
+.nd-composer { margin-top: 4px; }
+
+/* header ID: shown once, copy on click */
+.nd-id {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: 4px; background: none; cursor: pointer;
+  font: inherit; font-size: var(--v2-fs-meta); color: var(--v2-text-3); font-variant-numeric: tabular-nums;
+}
+.nd-id:hover { color: var(--v2-text); background: var(--v2-hover); }
+.nd-id .nd-id-copy { width: 12px; height: 12px; opacity: 0; transition: opacity 120ms; }
+.nd-id:hover .nd-id-copy, .nd-id:focus-visible .nd-id-copy { opacity: 1; }
+@media (hover: none) { .nd-id .nd-id-copy { opacity: .7; } }
+.nd-id:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.nd .nd-back { margin-left: -4px; }
+
+/* the request text is already shown as title + description above */
+
+/* ---- history ---------------------------------------------------------------- */
+.nd-history { padding-bottom: var(--v2-space-4); }
+.nd-hlist { list-style: none; margin: 0; padding: 4px 0; }
+.nd-hrow {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; column-gap: 10px;
+  min-height: 36px; margin: 0 6px; padding: 0 10px; border-radius: var(--v2-radius-control); font-size: 13px;
+}
+.nd-hrow:hover { background: var(--v2-hover); }
+.nd-htitle { color: var(--v2-text); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nd-htitle:hover { text-decoration: underline; text-underline-offset: 2px; }
+.nd-hout { font-size: var(--v2-fs-meta); color: var(--v2-text-2); white-space: nowrap; }
+.nd-src { font-weight: 400; font-size: var(--v2-fs-meta); margin-left: 4px; cursor: help; }
+
+/* ---- all projects (Initiatives-style table) ------------------------------- */
+.nd-all { padding-bottom: var(--v2-space-4); }
+.nd-all .nd-note { justify-content: space-between; }
+.nd-projects { table-layout: fixed; width: 100%; border-collapse: collapse; margin-top: var(--v2-space-2); font-size: 13px; }
+.nd-projects th { white-space: nowrap; height: 32px; padding: 0 12px; text-align: left; font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.nd-projects td { height: 40px; padding: 0 12px; border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); color: var(--v2-text); }
+.nd-projects tr:hover td { background: var(--v2-hover); }
+.nd-projects .num { text-align: right; font-variant-numeric: tabular-nums; width: 160px; }
+.nd-projects th:nth-child(2), .nd-projects td:nth-child(2) { width: 140px; }
+.nd-projects th:last-child, .nd-projects td:last-child { width: 132px; text-align: right; }
+.nd-pname { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nd-pname > * { vertical-align: middle; }
+.nd-pname-t { margin-left: 8px; overflow: hidden; text-overflow: ellipsis; }
+/* wave-4: the whole row opens the queue (hover band + trailing arrow; no repeated "Open queue" text) */
+.nd-prow { cursor: pointer; }
+.nd-plink { color: inherit; text-decoration: none; }
+.nd-plink:hover { text-decoration: none; }
+.nd-plink:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); border-radius: 4px; }
+.nd-cur { display: inline-flex; align-items: center; height: 18px; margin-left: 8px; padding: 0 6px; font-size: 11px; color: var(--v2-text-3);
+  border: 1px solid var(--v2-border-strong, var(--v2-border)); border-radius: var(--v2-radius-full, 999px); }
+.nd-parrow { width: 14px; height: 14px; color: var(--v2-text-3); opacity: .55; }
+.nd-prow:hover .nd-parrow, .nd-prow:focus-within .nd-parrow { opacity: 1; color: var(--v2-text-2); }
+/* History / All projects: the pill row stays full-width and left-aligned in
+   every view (no jump when switching); only the content below is capped. */
+/* (History / All projects fill the panel width like Linear lists; the pill
+   row never moves between views.) */
+.nd-th { display: inline-flex; align-items: center; gap: 4px; }
+.nd-th-end { justify-content: flex-end; width: 100%; }
+.nd-info.nd-info-sm { width: 20px; height: 20px; }
+.nd-info.nd-info-sm svg { width: 13px; height: 13px; }
+.nd-pstatus { vertical-align: middle; }
+
+@media (max-width: 900px) {
+  .nd { height: auto; }
+  .nd .v2-split-list, .nd .v2-split-inspector { overflow: visible; }
+  .nd-listhead, .nd .v2-pagehead { top: var(--v2-sticky-top, 0px); }
+  .nd-dbody { padding: 20px 16px 32px; }
+  .nd-dtitle { font-size: 20px; }
+  .nd .v2-pagehead { padding-left: 12px; }
+}
+@media (max-width: 640px) {
+  .nd-projects th:nth-child(2), .nd-projects td:nth-child(2) { display: none; }
+  .nd-projects .num { width: 132px; }
+  .nd-projects th:last-child, .nd-projects td:last-child { width: 52px; }
+  .nd-hrow { grid-template-columns: 14px minmax(0, 1fr) auto; }
+  .nd-hrow .nd-hout { display: none; }
+  .nd .v2-pagehead-id { display: none; }
+  .nd .v2-pagehead { gap: 6px; }
+}
+@media (pointer: coarse) {
+  .nd .v2-row.nd-row { min-height: 60px; }
+  .nd-info { width: 44px; height: 44px; }
+}
+
+/* pager wrapper (carries the "N items in this view" tooltip) */
+.nd-pager { display: inline-flex; align-items: center; }

@@ -1,28 +1,26 @@
 /**
- * Cloud settings-tab ARRANGEMENT — renders the open SettingsPage with the
- * REAL cloud extension registry (src/extensions.ts untouched) and pins the
- * vanilla settings.html grouping it mirrors:
+ * Cloud settings ARRANGEMENT (V2) — renders SettingsPage with the REAL cloud
+ * extension registry (src/extensions.ts untouched) and pins how the
+ * registered sections land in the V2 groups (arch §2.3, parity PI-07):
  *
- *   Workspace (Anthropic key + xAI key + models) → Collaboration (Members,
- *   Phone pairing) → Appearance
+ *   General | Execution | Models & providers (Agent runtimes, then the
+ *   Providers rows — Anthropic + xAI — then models) | Integrations (GitHub access) | Members & access |
+ *   Devices & pairing (inline QR) | Interface (registered `appearance`)
  *
- * becomes, on the React tab strip:
- *
- *   General (models) | Provider keys (Anthropic first, then xAI) | Members |
- *   Phone pairing (inline QR) | Appearance
- *
- * with settingsGeneral.key:false so the Anthropic key card has exactly ONE
- * home — the Provider keys tab — never duplicated on General.
+ * settingsGeneral.key:false keeps ONE home for the Anthropic key card: the
+ * registered Provider keys section, never the open copy.
  */
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
-import { extensions } from "../../extensions";
+import { extensions, type Identity } from "../../extensions";
 import { SettingsPage } from "../../pages/settings/SettingsPage";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
 import { resetIdentity } from "../identity";
 
+// /api/me envelope (trust off by default: the self-hosted portal)
+let meBody: unknown = { identity: null, trusted: false };
 function installFetch() {
   const json = (data: unknown, status = 200) =>
     ({ ok: status < 400, status, json: async () => data }) as unknown as Response;
@@ -30,7 +28,7 @@ function installFetch() {
     const url = String(input);
     const method = (init && init.method) || "GET";
     if (url === "/api/containers") return json([{ id: "c1", status: "active" }]);
-    if (url.startsWith("/api/me")) return json({ identity: null, trusted: false });
+    if (url.startsWith("/api/me")) return json(meBody);
     if (url === "/api/containers/c1/settings/llm-key" && method === "GET")
       return json({ configured: true, masked: "sk-...anth", source: "db" });
     if (url === "/api/containers/c1/settings/provider-keys")
@@ -41,6 +39,9 @@ function installFetch() {
     if (url === "/api/containers/c1/settings/github-pat")
       return json({ configured: false, source: null, masked: null, set_at: null });
     if (url === "/api/github/repos") return json({ available: false, repos: [] });
+    if (url === "/api/models")
+      return json({ default: "claude-opus-5", models: [{ id: "claude-opus-5", name: "Opus 5", runtime: "claude", reasoning_efforts: [] }] });
+    if (url === "/api/reasoning-efforts") return json({ efforts: [] });
     if (url.endsWith("/settings/models")) return json({ use_cases: [] });
     if (url.endsWith("/settings/providers")) return json({ providers: [] });
     if (url === "/api/containers/c1/members")
@@ -98,40 +99,82 @@ describe("cloud settings tabs (vanilla settings.html arrangement, real registry)
     expect(extensions.settingsGeneral).toEqual({ key: false });
   });
 
-  it("General keeps the models card but NOT a duplicate Anthropic key card", async () => {
+  it("maps the registered sections into the V2 groups", async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText("Universal model selection")).toBeInTheDocument());
+    await screen.findByText("Details");
     const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
-    expect(tabs).toEqual(["General", "Provider keys", "GitHub access", "Members", "Phone pairing", "Appearance"]);
-    // the key card lives ONLY under Provider keys now
-    expect(screen.queryByText("Anthropic API key")).not.toBeInTheDocument();
-    expect(document.querySelector("#keyCard")).toBeNull();
+    expect(tabs).toEqual([
+      "General", "Execution", "Models & providers", "Integrations", "Members & access", "Devices & pairing", "Notifications", "Voice", "Interface",
+    ]);
   });
 
-  it("Provider keys tab renders the Anthropic card first, then the other providers", async () => {
+  it("Models & providers renders the shared image-33 rows: runtimes, Anthropic first, then xAI, then models — no duplicate open key card", async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText("Universal model selection")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("tab", { name: "Provider keys" }));
-    await waitFor(() => expect(screen.getByText("Anthropic API key configured")).toBeInTheDocument());
+    await screen.findByText("Details");
+    fireEvent.click(screen.getByRole("tab", { name: "Models & providers" }));
+    const row = (id: string) => document.querySelector<HTMLElement>(`.mp-row[data-provider="${id}"]`);
+    await waitFor(() => expect(row("xai")).not.toBeNull());
+    await waitFor(() => expect(row("claude")).not.toBeNull()); // Agent runtimes group
+    await waitFor(() => expect(row("anthropic")!.querySelector(".mp-row-detail")).toHaveTextContent("sk-...anth"));
+    const ids = Array.from(document.querySelectorAll("#providerKeys .mp-row")).map((r) => r.getAttribute("data-provider"));
+    expect(ids).toEqual(["anthropic", "xai"]);
+    expect(row("xai")!.querySelector('svg[data-brand="xai"]')).not.toBeNull();
+    expect(row("xai")!.querySelector(".mp-row-detail")).toHaveTextContent("No API key");
+    // the old per-provider "… API key" cards are gone: the same groups as the open layout
     const titles = Array.from(document.querySelectorAll(".set-card .card-h h2")).map((h) => h.textContent);
-    expect(titles).toEqual(["Anthropic API key", "xAI / Grok API key"]);
-    expect(await screen.findByText("No xAI (Grok) API key configured.")).toBeInTheDocument();
+    expect(titles).toEqual(["Agent runtimes", "Providers", "Universal model selection"]);
+    expect(document.querySelectorAll("#keyCard").length).toBe(1); // ONE Anthropic key row (the section's), no open copy
+    expect(document.querySelectorAll("#providerKeys").length).toBe(1);
+    expect(document.querySelectorAll('.mp-row[data-provider="anthropic"]').length).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Show xAI (Grok) settings" }));
+    expect(await screen.findByText("(No xAI (Grok) API key)")).toBeVisible();
   });
 
-  it("Members tab renders the members card (roster + invite) inside Settings", async () => {
+  it("a member without manage_keys sees the rows read-only with the reason once (MP-PERM-VIEWER)", async () => {
+    const origId = extensions.identity;
+    const origTrusted = extensions.identityTrusted;
+    extensions.identity = async () => ({ agent_id: "h1", alias: "kedar", member_role: "member", grants: [] }) as Identity;
+    extensions.identityTrusted = () => true;
+    try {
+      renderPage();
+      await screen.findByText("Details");
+      fireEvent.click(screen.getByRole("tab", { name: "Models & providers" }));
+      await waitFor(() => expect(document.querySelector("#keysLocked")).toHaveTextContent(/manage_keys/));
+      await waitFor(() => expect(document.querySelector('.mp-row[data-provider="xai"]')).not.toBeNull());
+      fireEvent.click(screen.getByRole("button", { name: "Show Anthropic settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show xAI (Grok) settings" }));
+      expect(document.querySelectorAll(".mp-row-panel input")).toHaveLength(0);
+      expect(screen.queryByRole("button", { name: /Remove .* API key|Replace key|Save key/ })).toBeNull();
+      expect(document.querySelectorAll("#keysLocked")).toHaveLength(1);
+    } finally {
+      extensions.identity = origId;
+      extensions.identityTrusted = origTrusted;
+    }
+  });
+
+  it("old #tab=github-access still opens GitHub access (now under Integrations)", async () => {
+    window.history.replaceState(null, "", window.location.pathname + "#tab=github-access");
     renderPage();
-    await waitFor(() => expect(screen.getByText("Universal model selection")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Integrations" })).toHaveAttribute("aria-selected", "true"));
+    // no repo bound in this snapshot: the row says so truthfully, and links to connect one
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect on GitHub" })).toHaveAttribute("href", "/github");
+  });
+
+  it("Members & access renders the members card (roster + invite) inside Settings", async () => {
+    renderPage();
+    await screen.findByText("Details");
+    fireEvent.click(screen.getByRole("tab", { name: "Members & access" }));
     expect(await screen.findByText("kedar-gh")).toBeInTheDocument();
     const titles = Array.from(document.querySelectorAll(".set-card .card-h h2")).map((h) => h.textContent);
-    expect(titles).toEqual(["Members"]);
+    expect(titles).toEqual([]); // the section header is the one title (no repeated "Members" h2)
     expect(screen.getByPlaceholderText("GitHub username to invite…")).toBeInTheDocument();
   });
 
-  it("Phone pairing tab shows the QR inline immediately (no button press)", async () => {
+  it("Devices & pairing shows the QR inline immediately (no button press)", async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText("Universal model selection")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("tab", { name: "Phone pairing" }));
+    await screen.findByText("Details");
+    fireEvent.click(screen.getByRole("tab", { name: "Devices & pairing" }));
     expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
     expect(document.querySelector("#pairingCard .pair-qr")).not.toBeNull();
     // the card body carries the panel, not a launcher button (the topbar's own
@@ -139,5 +182,29 @@ describe("cloud settings tabs (vanilla settings.html arrangement, real registry)
     expect(document.querySelector("#pairingCard button#settingsPairPhone")).toBeNull();
     expect(document.querySelectorAll("#pairingCard button").length).toBe(0);
     expect(document.querySelector(".overlay")).toBeNull();
+    // DEV-SELFHOST: trust off (self-hosted) — device sign-in needs GitHub
+    // sign-in, so one muted line replaces the desktop row + devices card
+    expect(await screen.findByText(/Device sign-in needs GitHub sign-in/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Sign in the desktop app…" })).toBeNull();
+    expect(document.querySelector("#deviceTokens")).toBeNull();
+  });
+
+  it("DEV-SELFHOST: behind GitHub sign-in (trusted) the desktop row and Signed-in devices show", async () => {
+    meBody = { identity: { agent_id: "h1", alias: "kedar", github_login: "kedar-gh", member_role: "owner", grants: [] }, trusted: true };
+    try {
+      window.history.replaceState(null, "", window.location.pathname + "#tab=pairing");
+      renderPage();
+      expect(await screen.findByRole("link", { name: "Sign in the desktop app…" })).toHaveAttribute("href", "/auth/device?client=desktop");
+      expect(document.querySelector("#deviceTokens")).not.toBeNull();
+    } finally {
+      meBody = { identity: null, trusted: false };
+    }
+  });
+
+  it("GAP-06: #tab=pairing and the #tab=devices alias both land on Devices & pairing", async () => {
+    window.history.replaceState(null, "", window.location.pathname + "#tab=devices");
+    renderPage();
+    expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Devices & pairing" })).toHaveAttribute("aria-selected", "true");
   });
 });

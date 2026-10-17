@@ -183,8 +183,10 @@ describe("CodeSpacePage — markdown Raw|Rendered toggle (item 1)", () => {
     expect(document.querySelector(".cs-md-rendered strong")).not.toBeNull();
     // Rendered mode has no gutter lines to click/anchor a thread against.
     expect(document.querySelector(".cs-gutter")).toBeNull();
-    const renderedBtn = screen.getByText("Rendered");
-    expect(renderedBtn.className).toContain("on");
+    // r3: the toggle is icon-only (label kept for AT) — query it by role
+    const renderedBtn = screen.getByRole("radio", { name: "Rendered" });
+    expect(renderedBtn.getAttribute("aria-checked")).toBe("true");
+    expect(renderedBtn.getAttribute("title")).toBe("Rendered markdown");
   });
 
   it("toggling to Raw shows plain code lines with working gutter selection", async () => {
@@ -334,7 +336,7 @@ describe("CodeSpacePage — thread conversations on rendered markdown (item 2)",
     fireEvent.click(threadChip.closest(".cs-thread-chip") as Element);
 
     expect(document.querySelector(".cs-md-rendered")).toBeNull(); // switched to Raw
-    expect(screen.getByText("Raw").className).toContain("on");
+    expect(screen.getByRole("radio", { name: "Raw" }).getAttribute("aria-checked")).toBe("true");
     expect(await screen.findByText(/switched to raw/i)).toBeInTheDocument();
     expect(document.querySelector('[data-cs-line="5"] .cs-gutter')).not.toBeNull();
   });
@@ -397,13 +399,15 @@ describe("CodeSpacePage — Learn tab crash regression + error boundaries", () =
 
     fireEvent.click(screen.getByRole("tab", { name: "Learn" }));
     const chip = await screen.findByText("a.ts", { selector: ".cs-learn-group-path" });
-    const chipEl = chip.parentElement!.querySelector(".cs-thread-chip") as HTMLElement;
+    // the path is the group band's title; its rows live in the ListGroup body
+    const chipEl = chip.closest(".v2-listgroup")!.querySelector(".cs-thread-chip") as HTMLElement;
     fireEvent.click(chipEl);
 
     // ThreadView's own guard (the direct fix) now catches the malformed
     // response BEFORE it ever throws — the rail shows an inline "couldn't
     // load" message rather than tripping the boundary at all.
-    expect(await screen.findByText(/couldn.t load this thread/i)).toBeInTheDocument();
+    // (Learn opens it as a lesson: LessonView carries the same guard.)
+    expect(await screen.findByText(/couldn.t load this (thread|lesson)/i)).toBeInTheDocument();
     // and the REST of the page is fully alive: tree pane, content pane, and
     // the app shell around them never unmounted — this is the exact
     // repro path from the bug report (Learn tab -> open a teach/why thread
@@ -478,8 +482,9 @@ describe("CodeSpacePage — no-file landing state", () => {
   it("shows a landing view (not the old empty-pane message) when no file is open", async () => {
     stubFetchNoFile();
     mount("/code");
-    expect(await screen.findByText("Quick actions")).toBeInTheDocument();
-    expect(screen.getByText("Recent threads")).toBeInTheDocument();
+    expect(await screen.findByText("Recent threads")).toBeInTheDocument();
+    // r1 (D12): no "Quick actions" row repeating the toolbar search + tree
+    expect(screen.queryByText("Quick actions")).not.toBeInTheDocument();
     expect(screen.getByText("Recent files")).toBeInTheDocument();
     expect(screen.queryByText(/select a file to view its contents/i)).not.toBeInTheDocument();
   });
@@ -514,26 +519,17 @@ describe("CodeSpacePage — no-file landing state", () => {
     // file open, see the history describe block below) re-mounts the card
     // with the freshly-recorded entry.
     router.navigate(-1);
-    await screen.findByText("Quick actions");
+    await screen.findByText("Recent threads");
     expect(await screen.findByText("a.ts", { selector: ".cs-landing-file-path" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("a.ts", { selector: ".cs-landing-file-path" }));
     await screen.findByText("a.ts", { selector: ".rb-file-path" });
   });
 
-  it("quick action 'Search symbols' focuses/opens the header symbol search", async () => {
-    stubFetchNoFile();
-    mount("/code");
-    await screen.findByText("Quick actions");
-    fireEvent.click(screen.getByText(/search symbols/i, { selector: ".cs-landing-action" }));
-    const input = await screen.findByPlaceholderText(/search symbols/i) as HTMLInputElement;
-    expect(document.activeElement).toBe(input);
-  });
-
   it("Cmd/Ctrl+P works from the landing state (no file open) too", async () => {
     stubFetchNoFile();
     mount("/code");
-    await screen.findByText("Quick actions");
+    await screen.findByText("Recent threads");
     fireEvent.keyDown(document, { key: "p", ctrlKey: true });
     const input = await screen.findByPlaceholderText(/search symbols/i) as HTMLInputElement;
     expect(document.activeElement).toBe(input);
@@ -620,7 +616,7 @@ describe("CodeSpacePage — breadcrumb path navigation", () => {
     mount("/code?path=src/lib/util.ts");
     await screen.findByText("src/lib/util.ts", { selector: ".rb-file-path" });
     const crumbs = document.querySelector(".cs-breadcrumbs")!;
-    expect(crumbs.textContent).toContain("root");
+    expect(crumbs.querySelector('[aria-label="Repository root"]')).not.toBeNull();
     expect(crumbs.textContent).toContain("src");
     expect(crumbs.textContent).toContain("lib");
     expect(crumbs.textContent).toContain("util.ts");
@@ -657,7 +653,7 @@ describe("CodeSpacePage — header Recent files dropdown", () => {
     fireEvent.click(screen.getByText("readme.md"));
     await screen.findByText("readme.md", { selector: ".rb-file-path" });
 
-    fireEvent.click(screen.getByText("Recent files", { selector: ".cs-recentfiles-btn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recent files" }));
     const panel = document.querySelector(".cs-recentfiles-panel")!;
     expect(panel.textContent).toContain("a.ts");
     expect(panel.textContent).not.toContain("readme.md");
@@ -672,7 +668,7 @@ describe("CodeSpacePage — header Recent files dropdown", () => {
     await screen.findByText("a.ts", { selector: ".rb-file-path" });
     fireEvent.click(screen.getByText("readme.md"));
     await screen.findByText("readme.md", { selector: ".rb-file-path" });
-    fireEvent.click(screen.getByText("Recent files", { selector: ".cs-recentfiles-btn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recent files" }));
     expect(document.querySelector(".cs-recentfiles-panel")).not.toBeNull();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(document.querySelector(".cs-recentfiles-panel")).toBeNull();
@@ -685,7 +681,7 @@ describe("CodeSpacePage — header Recent files dropdown", () => {
     stubFetch();
     mount("/code?path=a.ts");
     await screen.findByText("a.ts", { selector: ".rb-file-path" });
-    fireEvent.click(screen.getByText("Recent files", { selector: ".cs-recentfiles-btn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recent files" }));
     expect(document.querySelector(".cs-recentfiles-panel")).not.toBeNull();
 
     fireEvent.click(screen.getByText("readme.md", { selector: ".dfv-nm" }));
@@ -791,10 +787,10 @@ describe("CodeSpacePage — resizable panes", () => {
     firePointer(document, "pointerup", 340);
 
     expect(treePane.style.width).not.toBe(before);
-    expect(treePane.style.width).toBe("340px");
+    expect(treePane.style.width).toBe("300px"); // DEFAULT 240 + 60
     const raw = localStorage.getItem("orcha:cs:panes");
     expect(raw).not.toBeNull();
-    expect(JSON.parse(raw as string).tree).toBe(340);
+    expect(JSON.parse(raw as string).tree).toBe(300);
   });
 
   it("restores a persisted width on mount", async () => {
@@ -817,7 +813,7 @@ describe("CodeSpacePage — resizable panes", () => {
     fireEvent.doubleClick(divider);
     const treePane = document.querySelector(".cs-tree-pane") as HTMLElement;
     const railPane = document.querySelector(".cs-rail") as HTMLElement;
-    expect(treePane.style.width).toBe("280px"); // DEFAULT_WIDTHS.tree
+    expect(treePane.style.width).toBe("240px"); // DEFAULT_WIDTHS.tree
     expect(railPane.style.width).toBe("260px"); // untouched
   });
 
@@ -826,7 +822,7 @@ describe("CodeSpacePage — resizable panes", () => {
     mount();
     await screen.findByText("a.ts", { selector: ".rb-file-path" });
     const railPane = document.querySelector(".cs-rail") as HTMLElement;
-    const beforeWidth = parseInt(railPane.style.width || "340", 10);
+    const beforeWidth = parseInt(railPane.style.width || "300", 10);
     const divider = document.querySelector(".cs-divider-rail") as HTMLElement;
 
     firePointer(divider, "pointerdown", 900);

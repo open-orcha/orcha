@@ -8,6 +8,7 @@ struct RequestDetailScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     let requestId: String
 
     private enum Sheet: Identifiable {
@@ -19,6 +20,12 @@ struct RequestDetailScreen: View {
     @State private var showCloseConfirm = false
     /// GH #140 — a tapped task-id link in the payload/response/rejection text pushes here.
     @State private var linkedTaskId: String?
+    /// Portal-link chips that open in the app (task / request / agent / GitHub).
+    @State private var portalRoute: WorkspaceRoute?
+    /// Fields the snapshot row leaves out: `detail` (auto-resolve, display title, code
+    /// thread) and close attribution. `agent_payload` is decoded there but never shown.
+    @State private var extras: InboxRequestExtrasDto?
+    private var undo: ResolveUndoQueue { .shared }
 
     private var request: RequestDto? {
         model.snapshot?.requests.first { $0.id == requestId }
@@ -26,26 +33,28 @@ struct RequestDetailScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: LSpace.l) {
                 if let req = request {
                     detailSections(req)
                 } else {
-                    OrchaCard {
-                        Text("Request not found — refresh the workspace.")
-                            .foregroundStyle(p.muted)
-                    }
+                    LEmptyState(icon: "questionmark.bubble", title: "Request not found", message: "Refresh the workspace.")
                 }
                 if let error = model.error {
                     Banner(kind: .danger, text: error)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, LSpace.l)
+            .padding(.vertical, LSpace.m)
         }
+        .background(p.bg)
         .refreshable { await model.refresh() }
         .navigationTitle("Request")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarMenu }
         .navigationDestination(item: $linkedTaskId) { TaskDetailScreen(taskId: $0) }
+        .navigationDestination(item: $portalRoute) { route in portalDestination(route) }
+        .overlay(alignment: .bottom) { resolveUndoToast }
+        .task(id: "\(requestId)|\(request?.status ?? "")") { await loadExtras() }
         .sheet(item: $sheet) { which in sheetView(which) }
         .confirmationDialog("Close this request?", isPresented: $showCloseConfirm, titleVisibility: .visible) {
             Button("Close request", role: .destructive, action: closeNow)
@@ -61,84 +70,144 @@ struct RequestDetailScreen: View {
     private func detailSections(_ req: RequestDto) -> some View {
         let isRequester = req.requesterId == model.humanId
         let isTarget = req.targetId == model.humanId || req.targetId == nil
+        let tasks = model.snapshot?.tasks ?? []
+        let agents = model.snapshot?.agents ?? []
 
-        RequestFlowHeader(request: req, isRequester: isRequester, isTarget: isTarget, agents: model.snapshot?.agents ?? [])
+        RequestFlowHeader(request: req, isRequester: isRequester, isTarget: isTarget, agents: agents)
+
+        // The question itself — the clean title + any further lines as body.
+        let human = InboxRequestText.humanize(payload: req.payload, detail: extras?.detail)
+        RequestQuestion(
+            payload: human.question, displayTitle: human.title, tasks: tasks,
+            portalBase: portalBase, onTapPortal: openPortal, onTapTask: { linkedTaskId = $0 }
+        )
+
+        RequestLinkChips(
+            portalLinks: portalLinks(req, human: human),
+            externalTexts: [human.question, req.response, req.rejectionReason].compactMap { $0 },
+            portalBase: portalBase,
+            tasks: tasks,
+            onTap: openPortal
+        )
+
+        if req.status == "closed", let auto = InboxRequestText.autoResolvedCopy(extras?.detail?.autoResolved) {
+            Label(auto, systemImage: "checkmark.circle")
+                .ltype(.meta)
+                .foregroundStyle(p.ok)
+        }
 
         if req.parentRequestId != nil {
-            OrchaCard {
-                Text("↳ part of a request chain (depth \(req.chainDepth))")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(p.muted)
-            }
+            Label("Part of a request chain · depth \(req.chainDepth)", systemImage: "arrow.turn.down.right")
+                .ltype(.meta)
+                .foregroundStyle(p.muted)
         }
 
         if let tid = req.taskLink?.taskId {
             NavigationLink(value: WorkspaceRoute.task(tid)) {
-                OrchaCard {
-                    Text("SPAWNED TASK →")
-                        .font(p.uiFont(11, .bold)).tracking(0.8)
-                        .foregroundStyle(p.violet)
-                    Text(req.taskLink?.title ?? tid)
-                        .font(p.uiFont(15, .semibold))
-                        .foregroundStyle(p.text)
-                        .multilineTextAlignment(.leading)
+                LCard {
+                    HStack(spacing: LSpace.s) {
+                        LStatusGlyph(status: "in_progress")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Spawned task").ltype(.micro).foregroundStyle(p.muted)
+                            Text(req.taskLink?.title ?? tid)
+                                .ltype(.bodyEmph)
+                                .foregroundStyle(p.text)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(p.faint)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .buttonStyle(.plain)
         }
 
-        SectionH(title: "Payload")
-        OrchaCard {
-            LinkedMessageText(text: req.payload, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                .font(p.uiFont(15))
-                .foregroundStyle(p.text)
-        }
-
         if let response = req.response {
-            SectionH(title: "Response")
-            OrchaCard(borderColor: p.okLine) {
-                LinkedMessageText(text: response, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                    .font(p.uiFont(15)).foregroundStyle(p.text2)
+            AnswerCard(
+                responder: isTarget && req.targetId != nil ? "You" : (MobileUx.aliasFor(req.targetId, in: agents) ?? "Agent"),
+                responderIsHuman: isTarget,
+                answeredAgo: MobileUx.agoLabel(req.respondedAt),
+                text: response,
+                tasks: tasks,
+                resolving: undo.isResolving(req.id),
+                portalBase: portalBase,
+                onTapPortal: openPortal,
+                onTapTask: { linkedTaskId = $0 }
+            ) {
+                answerActions(req, isRequester: isRequester)
             }
         }
 
         if let rejection = req.rejectionReason {
-            SectionH(title: "Rejection")
-            OrchaCard(borderColor: p.dangerLine) {
-                LinkedMessageText(text: rejection, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
-                    .font(p.uiFont(15)).foregroundStyle(p.text2)
+            LCard {
+                Label("Rejected", systemImage: "xmark.circle")
+                    .ltype(.micro)
+                    .foregroundStyle(p.danger)
+                LinkedMessageText(text: rejection, tasks: tasks, onTapTask: { linkedTaskId = $0 }, portalBase: portalBase, onTapPortal: openPortal)
+                    .ltype(.body)
+                    .foregroundStyle(p.text2)
             }
         }
 
-        SectionH(title: "Timeline")
-        timeline(req)
+        if !undo.isResolving(req.id) {
+            actionBar(req, isRequester: isRequester, isTarget: isTarget)
+        }
 
-        actionBar(req, isRequester: isRequester, isTarget: isTarget)
+        LSection("Activity") {
+            timeline(req)
+        }
     }
 
     // MARK: timeline (created → accepted → answered → closed/converted)
 
     private func timeline(_ req: RequestDto) -> some View {
         let s = req.status
-        return OrchaCard {
-            TimelineDotRow(label: "created", at: req.createdAt, reached: true)
+        return VStack(alignment: .leading, spacing: 0) {
+            TimelineDotRow(label: "Created", at: req.createdAt, reached: true)
             if ["accepted", "answered", "closed", "converted_to_task"].contains(s) {
-                TimelineDotRow(label: "accepted", at: nil, reached: s != "open")
+                TimelineDotRow(label: "Accepted", at: nil, reached: s != "open")
             }
             if req.respondedAt != nil || ["answered", "closed", "converted_to_task"].contains(s) {
-                TimelineDotRow(label: "answered", at: req.respondedAt, reached: true)
+                TimelineDotRow(label: "Answered", at: req.respondedAt, reached: true)
             }
             if req.closedAt != nil || ["closed", "rejected", "converted_to_task"].contains(s) {
-                TimelineDotRow(label: MobileUx.statusCopy(s), at: req.closedAt, reached: true)
+                TimelineDotRow(label: closedTimelineLabel(req), at: req.closedAt ?? req.respondedAt, reached: true)
+            }
+        }
+    }
+
+    // MARK: answer card actions (requester, answered — Resolve primary, Turn into a task)
+
+    @ViewBuilder
+    private func answerActions(_ req: RequestDto, isRequester: Bool) -> some View {
+        if req.status == "answered" && isRequester && undo.isResolving(req.id) {
+            HStack(spacing: LSpace.s) {
+                LButton("Undo", icon: "arrow.uturn.backward", size: .small) { undoResolve(req.id) }
+                Text("Leaves every queue now; the close is sent in a few seconds unless you undo.")
+                    .ltype(.micro)
+                    .foregroundStyle(p.muted)
+            }
+        } else if req.status == "answered" && isRequester {
+            let busy = model.actionInFlight
+            HStack(spacing: LSpace.s) {
+                LButton("Resolve", icon: "checkmark", kind: .primary, size: .small) { resolve(req.id) }
+                    .disabled(busy)
+                LButton("Turn into a task", icon: "arrow.triangle.branch", size: .small) { sheet = .convert }
+                    .disabled(busy)
+                Spacer(minLength: 0)
             }
         }
     }
 
     // MARK: action bar (state × role matrix, flow 07 — binding)
 
-    /// Flow 07a — two tiers. TIER 1 "Your move" is role-specific (Respond / Accept·Reject /
-    /// Convert). TIER 2 "Operator actions" (Nudge · Close) is universal, computed purely from
-    /// status + owner/target identity so it lights up on ANY request the human can see —
+    /// Flow 07a — two tiers. TIER 1 "Your move" is role-specific (Respond / Accept·Reject;
+    /// the requester's Resolve / Turn-into-a-task live on the answer card). TIER 2
+    /// "Operator actions" (Nudge · Close) is universal, computed purely from status +
+    /// owner/target identity so it lights up on ANY request the human can see —
     /// including agent↔agent traffic they are no party to.
     @ViewBuilder
     private func actionBar(_ req: RequestDto, isRequester: Bool, isTarget: Bool) -> some View {
@@ -147,25 +216,30 @@ struct RequestDetailScreen: View {
         // Operator-tier visibility (§4). `targetIsYou` is a LITERAL human match (not a null
         // target) — hiding a nudge that would only wake yourself.
         let targetIsYou = req.targetId == model.humanId
-        let showClose = ["open", "answered", "accepted"].contains(req.status)
+        // The requester's answered-close is the answer card's "Resolve".
+        let resolvedOnCard = req.status == "answered" && isRequester && req.response != nil
+        let showClose = ["open", "answered", "accepted"].contains(req.status) && !resolvedOnCard
         let showNudge = ["open", "answered"].contains(req.status)
             && !(req.status == "open" && targetIsYou)
             && !(req.status == "answered" && isRequester)
         let closeNeedsReason = req.requesterId != model.humanId
 
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: LSpace.s) {
             // TIER 1 — Your move (role-specific)
-            if req.status == "open" && isTarget && req.type == "info" {
-                KitButton(title: "Respond", role: .primary, enabled: !busy) { sheet = .respond }
-            }
+            // Respond shares its row with the operator tier (Linear: one action bar,
+            // one primary). It needs isTarget, so the operator note never splits them.
+            let respondInline = req.status == "open" && isTarget && req.type == "info"
             if req.status == "open" && isTarget && req.type == "task" {
-                HStack(spacing: 8) {
-                    KitButton(title: "Accept task", role: .primary, enabled: !busy, action: acceptTask)
-                    KitButton(title: "Reject…", role: .dangerTonal, enabled: !busy) { sheet = .reject }
+                HStack(spacing: LSpace.s) {
+                    LButton("Accept task", icon: "checkmark", kind: .primary, action: acceptTask)
+                        .disabled(busy)
+                    LButton("Reject…", kind: .danger) { sheet = .reject }
+                        .disabled(busy)
                 }
             }
-            if req.status == "answered" && isRequester {
-                KitButton(title: "Convert to task", role: .tonal, enabled: !busy) { sheet = .convert }
+            if req.status == "answered" && isRequester && req.response == nil {
+                LButton("Turn into a task", icon: "arrow.triangle.branch") { sheet = .convert }
+                    .disabled(busy)
             }
 
             // Operator note — only when acting on someone else's request (neither role).
@@ -174,23 +248,26 @@ struct RequestDetailScreen: View {
             }
 
             // TIER 2 — Operator actions (universal)
-            if showNudge || showClose {
-                HStack(spacing: 8) {
+            if respondInline || showNudge || showClose {
+                HStack(spacing: LSpace.s) {
+                    if respondInline {
+                        LButton("Respond", icon: "arrowshape.turn.up.left", kind: .primary) { sheet = .respond }
+                            .disabled(busy)
+                    }
                     if showNudge {
-                        KitButton(title: "Nudge", role: .tonal, enabled: !busy) { sheet = .nudge }
+                        LButton("Nudge", icon: "bell", kind: .secondary, size: respondInline ? .regular : .small) { sheet = .nudge }
+                            .disabled(busy)
                     }
                     if showClose {
-                        KitButton(
-                            title: "Close",
-                            role: closeNeedsReason ? .dangerTonal : .neutral,
-                            enabled: !busy
-                        ) {
+                        LButton("Close", icon: "xmark", kind: .ghost, size: respondInline ? .regular : .small) {
                             if closeNeedsReason { sheet = .closeWithReason } else { showCloseConfirm = true }
                         }
+                        .disabled(busy)
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: toolbar menu (escalate — Nudge/Close are now the operator tier, §4)
@@ -202,9 +279,10 @@ struct RequestDetailScreen: View {
             if isRequester && ["open", "answered"].contains(req.status) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Escalate", action: escalate)
+                        Button("Escalate to a human", action: escalate)
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Label("Request actions", systemImage: "ellipsis.circle")
+                            .labelStyle(.iconOnly)
                     }
                 }
             }
@@ -265,6 +343,120 @@ struct RequestDetailScreen: View {
         Task { _ = await model.escalateRequest(requestId, reason: nil) }
     }
 
+    /// One tap, no dialog: the close is deferred for the undo window (web resolveUndo.ts).
+    private func resolve(_ id: String) {
+        let model = model
+        undo.schedule(id) {
+            _ = await model.closeRequest(id, reason: nil)
+        }
+    }
+
+    private func undoResolve(_ id: String) {
+        if undo.undo(id) { model.toast = "Kept open" }
+    }
+
+    // MARK: resolve undo toast
+
+    @ViewBuilder
+    private var resolveUndoToast: some View {
+        if undo.isResolving(requestId) {
+            HStack(spacing: LSpace.m) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(p.ok)
+                    .accessibilityHidden(true)
+                Text("Resolved")
+                    .ltype(.bodyEmph)
+                    .foregroundStyle(p.text)
+                Spacer(minLength: 0)
+                Button("Undo") { undoResolve(requestId) }
+                    .font(p.uiFont(14, .semibold))
+                    .foregroundStyle(p.accent)
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .padding(.horizontal, LSpace.l)
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(p.border2, lineWidth: 1))
+            .padding(.horizontal, LSpace.l)
+            .padding(.bottom, LSpace.m)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .contain)
+            .onAppear {
+                UIAccessibility.post(notification: .announcement, argument: "Resolved. Undo available for 5 seconds.")
+            }
+        }
+    }
+
+    // MARK: request extras + portal links
+
+    private var portalBase: String? { model.selectedContainer?.baseUrl }
+
+    private func loadExtras() async {
+        guard let sel = model.selectedContainer, let req = request else { return }
+        do {
+            let list = try await model.api.inboxRequestExtras(sel.baseUrl, sel.id, status: req.status)
+            extras = list.requests.first { $0.id == requestId }
+        } catch {
+            // Extras only enrich the screen (titles, auto-resolve copy) — the snapshot row still renders.
+        }
+    }
+
+    private func closedTimelineLabel(_ req: RequestDto) -> String {
+        if req.status == "closed" {
+            if let auto = InboxRequestText.autoResolvedCopy(extras?.detail?.autoResolved) { return auto }
+            if extras != nil {
+                return InboxRequestText.closedCopy(closedBy: extras?.closedByAlias, reason: extras?.closeDecision?.reason)
+            }
+        }
+        return MobileUx.statusCopy(req.status).capitalized
+    }
+
+    private func portalLinks(_ req: RequestDto, human: InboxRequestText.Human) -> [PortalLink] {
+        var links = PortalLinks.links(
+            in: [human.question, req.response, req.rejectionReason].compactMap { $0 },
+            baseURL: portalBase
+        )
+        if let thread = human.threadLink, let link = PortalLinks.parse(thread),
+           !links.contains(where: { $0.path == link.path }) {
+            links.insert(link, at: 0)
+        }
+        return links
+    }
+
+    private func openPortal(_ link: PortalLink) {
+        switch link.target {
+        case let .task(id):
+            let tasks = model.snapshot?.tasks ?? []
+            linkedTaskId = MobileUx.resolveTaskRef(id, in: tasks)?.id ?? id
+        case let .request(id):
+            let match = model.snapshot?.requests.first { $0.id == id || $0.id.hasPrefix(id) }
+            portalRoute = .request(match?.id ?? id)
+        case let .agent(alias):
+            if let agent = model.snapshot?.agents.first(where: { $0.alias == alias }) {
+                portalRoute = .agent(agent.id)
+            } else if let url = link.absoluteURL(base: portalBase) {
+                openURL(url)
+            }
+        case let .githubPull(n): portalRoute = .githubPull(n)
+        case let .githubIssue(n): portalRoute = .githubIssue(n)
+        case .web:
+            if let url = link.absoluteURL(base: portalBase) { openURL(url) }
+        }
+    }
+
+    @ViewBuilder
+    private func portalDestination(_ route: WorkspaceRoute) -> some View {
+        OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
+            switch route {
+            case let .task(id): TaskDetailScreen(taskId: id)
+            case let .request(id): RequestDetailScreen(requestId: id)
+            case let .agent(id): AgentDetailScreen(agentId: id)
+            case let .githubPull(n): GitHubPullDetailScreen(number: n)
+            case let .githubIssue(n): GitHubIssueDetailScreen(number: n)
+            default: EmptyView()
+            }
+        }
+    }
+
     // MARK: state-routed sheet copy (§5)
 
     /// Nudge sub-copy names who wakes: open → the target (owes the answer); answered → the
@@ -294,21 +486,20 @@ private struct OperatorNote: View {
     let you: String
 
     var body: some View {
-        OrchaCard(borderColor: p.warn) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "flag.fill")
-                    .font(p.uiFont(12))
-                    .foregroundStyle(p.warn)
-                Text("Acting as operator (\(you)). Closing another agent's request needs a reason — it's sent to the owner so they know why.")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(p.muted)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: LSpace.s) {
+            Image(systemName: "flag")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(p.warn)
+                .accessibilityHidden(true)
+            Text("Acting as operator (\(you)). Closing another agent's request needs a reason — it's sent to the owner so they know why.")
+                .ltype(.meta)
+                .foregroundStyle(p.muted)
         }
     }
 }
 
-/// Flow 07 header card: requester → target avatars with "you" substitution, status
-/// pill, "type · opened ago" meta line, and the expiry tag when under 2h / expired.
+/// Flow 07 header: requester → target avatars with "you" substitution, kind tag,
+/// "opened ago", status glyph, and the expiry tag when under 2h / expired.
 private struct RequestFlowHeader: View {
     @Environment(\.palette) private var p
     let request: RequestDto
@@ -322,46 +513,124 @@ private struct RequestFlowHeader: View {
 
     var body: some View {
         let expiry = MobileUx.expiryChip(request.expiresAt)
-        OrchaCard {
-            HStack(spacing: 10) {
-                AgentAvatar(
-                    alias: requesterAlias ?? (isRequester ? "you" : "A"),
-                    human: isRequester,
-                    githubLogin: MobileUx.humanLogin(alias: requesterAlias, in: agents)
-                )
-                Text("→").font(p.uiFont(17)).foregroundStyle(p.faint)
-                AgentAvatar(
-                    alias: request.targetId == nil ? "H" : (targetAlias ?? "A"),
-                    human: isTarget,
-                    githubLogin: MobileUx.humanLogin(alias: targetAlias, in: agents)
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(isRequester ? "you" : (requesterAlias ?? "agent")) → \(isTarget ? "you" : (targetAlias ?? "agent"))")
-                        .font(p.uiFont(15, .semibold))
-                        .foregroundStyle(p.text)
-                    Text(metaLine)
-                        .font(p.uiFont(13))
-                        .foregroundStyle(p.muted)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                RequestStatusPill(status: request.status, escalated: escalated)
-            }
+        HStack(spacing: LSpace.s) {
+            RequestAvatarPair(
+                from: requesterAlias ?? (isRequester ? "You" : "A"), fromHuman: isRequester,
+                to: request.targetId == nil ? "Human" : (targetAlias ?? "A"), toHuman: isTarget,
+                size: 24
+            )
+            Text("\(isRequester ? "You" : (requesterAlias ?? "agent")) → \(isTarget ? "you" : (targetAlias ?? "agent"))")
+                .ltype(.meta)
+                .foregroundStyle(p.text2)
+                .lineLimit(1)
+            LTag(request.type == "task" ? "Task" : "Question")
             switch expiry {
-            case let .warn(label): MetaTag(text: label, tint: p.warn)
-            case .expired: MetaTag(text: "expired", tint: p.danger)
+            case let .warn(label): LTag(label, tint: p.warn)
+            case .expired: LTag("Expired", tint: p.danger)
             case nil: EmptyView()
             }
+            Spacer(minLength: 0)
+            HStack(spacing: 5) {
+                LStatusGlyph(status: RequestRowCard.glyphStatus(request.status, escalated: escalated), size: 12)
+                Text(escalated ? "To a human" : MobileUx.statusCopy(request.status).capitalized)
+                    .ltype(.micro)
+                    .foregroundStyle(p.text2)
+            }
         }
-    }
-
-    private var metaLine: String {
-        [request.type, MobileUx.agoLabel(request.createdAt).map { "opened \($0)" }]
-            .compactMap { $0 }
-            .joined(separator: " · ")
+        .accessibilityElement(children: .combine)
+        if let opened = MobileUx.agoLabel(request.createdAt) {
+            Text("Opened \(opened)")
+                .ltype(.micro)
+                .foregroundStyle(p.faint)
+                .padding(.top, -LSpace.s)
+        }
     }
 }
 
-/// Flow 07 timeline row — reached dots render accent, unreached border2.
+/// The request's question: first line as the clean title, the rest as body text.
+private struct RequestQuestion: View {
+    @Environment(\.palette) private var p
+    let payload: String
+    /// A stored display title (code-thread questions) — then the whole payload is the body.
+    var displayTitle: String?
+    let tasks: [TaskDto]
+    var portalBase: String?
+    var onTapPortal: ((PortalLink) -> Void)?
+    let onTapTask: (String) -> Void
+
+    private var parts: (title: String, rest: String?) {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let displayTitle { return (displayTitle, trimmed.isEmpty ? nil : trimmed) }
+        guard let nl = trimmed.firstIndex(where: \.isNewline) else { return (trimmed, nil) }
+        let rest = trimmed[nl...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return (String(trimmed[..<nl]), rest.isEmpty ? nil : rest)
+    }
+
+    var body: some View {
+        let (title, rest) = parts
+        VStack(alignment: .leading, spacing: LSpace.s) {
+            LinkedMessageText(text: title, tasks: tasks, onTapTask: onTapTask, portalBase: portalBase, onTapPortal: onTapPortal)
+                .ltype(.title)
+                .foregroundStyle(p.text)
+                .accessibilityAddTraits(.isHeader)
+            if let rest {
+                LinkedMessageText(text: rest, tasks: tasks, onTapTask: onTapTask, portalBase: portalBase, onTapPortal: onTapPortal)
+                    .ltype(.body)
+                    .foregroundStyle(p.text2)
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// "Atlas answered · 1m ago" — the answer card, with the requester's actions inside.
+private struct AnswerCard<Actions: View>: View {
+    @Environment(\.palette) private var p
+    let responder: String
+    let responderIsHuman: Bool
+    let answeredAgo: String?
+    let text: String
+    let tasks: [TaskDto]
+    /// Inside the Resolve undo window: the card reads "Resolved" and offers only Undo.
+    var resolving = false
+    var portalBase: String?
+    var onTapPortal: ((PortalLink) -> Void)?
+    let onTapTask: (String) -> Void
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        LCard(padding: LSpace.l) {
+            VStack(alignment: .leading, spacing: LSpace.m) {
+                HStack(spacing: 6) {
+                    if resolving {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(p.ok)
+                            .accessibilityHidden(true)
+                        Text("Resolved").ltype(.bodyEmph).foregroundStyle(p.text)
+                    } else {
+                        LAvatar(name: responder, isAI: !responderIsHuman, size: 20)
+                            .accessibilityHidden(true)
+                        Text(responder).ltype(.bodyEmph).foregroundStyle(p.text)
+                        Text(["answered", answeredAgo].compactMap { $0 }.joined(separator: " · "))
+                            .ltype(.meta)
+                            .foregroundStyle(p.muted)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                if !resolving {
+                    LinkedMessageText(text: text, tasks: tasks, onTapTask: onTapTask, portalBase: portalBase, onTapPortal: onTapPortal)
+                        .ltype(.body)
+                        .foregroundStyle(p.text)
+                        .textSelection(.enabled)
+                }
+                actions
+            }
+        }
+    }
+}
+
+/// Flow 07 activity row — reached dots fill accent, unreached stay hollow.
 private struct TimelineDotRow: View {
     @Environment(\.palette) private var p
     let label: String
@@ -369,19 +638,21 @@ private struct TimelineDotRow: View {
     let reached: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: LSpace.m) {
             Circle()
-                .fill(reached ? p.accent : p.border2)
-                .frame(width: 9, height: 9)
+                .fill(reached ? p.text2 : Color.clear)
+                .overlay(Circle().strokeBorder(reached ? p.text2 : p.border2, lineWidth: 1))
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
             Text(label)
-                .font(p.uiFont(13))
-                .foregroundStyle(reached ? p.text : p.faint)
+                .ltype(.meta)
+                .foregroundStyle(reached ? p.text2 : p.faint)
             Spacer()
             Text(MobileUx.agoLabel(at) ?? "")
-                .font(.system(size: 10.5, design: .monospaced))
+                .ltype(.micro)
                 .foregroundStyle(p.faint)
         }
-        .padding(.vertical, 3)
+        .frame(minHeight: 28)
         .accessibilityElement(children: .combine)
     }
 }
@@ -427,13 +698,10 @@ struct RequestTextSheet: View {
                             .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
                             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
                         HStack(spacing: 8) {
-                            KitButton(
-                                title: confirm,
-                                role: destructive ? .dangerTonal : .primary,
-                                enabled: canConfirm,
-                                action: submit
-                            )
-                            KitButton(title: "Cancel", role: .neutral, enabled: !model.actionInFlight) { dismiss() }
+                            LButton(confirm, kind: destructive ? .danger : .primary, action: submit)
+                                .disabled(!canConfirm)
+                            LButton("Cancel", kind: .ghost) { dismiss() }
+                                .disabled(model.actionInFlight)
                         }
                         if let error = model.error {
                             Banner(kind: .danger, text: error)
@@ -495,7 +763,8 @@ struct ConvertSheet: View {
                                 }
                             }
                         }
-                        KitButton(title: "Convert", role: .primary, enabled: canConfirm, action: submit)
+                        LButton("Convert", kind: .primary, action: submit)
+                            .disabled(!canConfirm)
                         if let error = model.error {
                             Banner(kind: .danger, text: error)
                         }
@@ -539,13 +808,17 @@ struct PillChip: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(p.uiFont(13, .semibold))
-                .foregroundStyle(selected ? p.accent : p.muted)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(selected ? p.accentSoft : p.surface2, in: Capsule())
-                .overlay(Capsule().strokeBorder(selected ? p.accentLine : p.border, lineWidth: 1))
+                .ltype(.meta)
+                .fontWeight(.medium)
+                .foregroundStyle(selected ? p.text : p.text2)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 28)
+                .background(selected ? p.lSelected : p.surface2, in: Capsule())
+                .overlay(Capsule().strokeBorder(selected ? p.border2 : p.border, lineWidth: 1))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

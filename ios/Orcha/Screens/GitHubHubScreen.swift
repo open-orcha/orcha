@@ -57,16 +57,11 @@ struct GitHubHubScreen: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            Picker("Kind", selection: $kind) {
-                ForEach(GitHubHubKind.allCases, id: \.self) { k in
-                    Text(k.title).tag(k)
-                }
-            }
-            .pickerStyle(.segmented)
+            LSegmented(GitHubHubKind.allCases.map { ($0, $0.title) }, selection: $kind)
 
             HStack(spacing: 8) {
                 ForEach(GitHubHubFilter.allCases, id: \.self) { f in
-                    FilterChip(label: f.label, on: filter == f) { setFilter(f) }
+                    LChip(f.label, selected: filter == f) { setFilter(f) }
                 }
                 if kind == .pulls {
                     Button {
@@ -75,13 +70,15 @@ struct GitHubHubScreen: View {
                         Image(systemName: filterRowExpanded ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(model.githubPullsFilter.isFiltering ? p.accent : p.muted)
+                            .frame(minWidth: 44, minHeight: 44)
                     }
                     .accessibilityLabel(filterRowExpanded ? "Hide filters" : "Show filters")
                 }
                 Spacer()
                 if let repo = boundRepo {
                     Text(repo)
-                        .font(.system(size: 11, design: .monospaced))
+                        .ltype(.micro)
+                        .monospaced()
                         .foregroundStyle(p.faint)
                         .lineLimit(1)
                         .truncationMode(.head)
@@ -95,9 +92,12 @@ struct GitHubHubScreen: View {
                 )
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, LSpace.l)
+        .padding(.top, LSpace.s)
+        .padding(.bottom, LSpace.xs)
+        .background(p.bg)
+        .overlay(alignment: .bottom) { LDivider() }
+        .lAnimation(value: kind)
     }
 
     /// The Open|Mine control switch — "Mine" rides through as the `author=<login>`
@@ -170,16 +170,15 @@ struct GitHubHubScreen: View {
         } else if let caption = GitHubHubUx.loadMoreCaption(loadedCount: count, totalCount: page.totalCount, hasMore: page.hasMore) {
             VStack(spacing: 6) {
                 Text(caption)
-                    .font(p.uiFont(11))
+                    .ltype(.micro)
                     .foregroundStyle(p.faint)
                 if page.hasMore {
-                    KitButton(title: "Load more", role: .neutral, small: true) {
+                    LButton("Load more", icon: "arrow.down", kind: .secondary, size: .small) {
                         Task { await model.loadMoreGithubPulls(filter: filter) }
                     }
-                    .frame(maxWidth: 160)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, LSpace.m)
         }
     }
 
@@ -217,29 +216,32 @@ struct GitHubHubScreen: View {
         isEmpty: Bool, emptyNoun: String, @ViewBuilder rows: () -> Rows
     ) -> some View {
         ScrollView {
-            VStack(spacing: 10) {
-                if isEmpty {
-                    OrchaCard {
-                        Text(filter == .mine
-                             ? "Nothing here is assigned to you right now."
-                             : "No open \(emptyNoun) in this repository.")
-                            .foregroundStyle(p.muted)
-                    }
-                } else {
+            if isEmpty {
+                LEmptyState(
+                    icon: filter == .mine ? "person.crop.circle.badge.checkmark" : "tray",
+                    title: filter == .mine ? "Nothing assigned to you" : "No open \(emptyNoun)",
+                    message: filter == .mine
+                        ? "Nothing here is assigned to you right now."
+                        : "No open \(emptyNoun) in this repository."
+                )
+                .padding(.top, 48)
+            } else {
+                LazyVStack(spacing: 0) {
                     rows()
                 }
+                .padding(.bottom, LSpace.l)
             }
-            .padding(16)
         }
+        .background(p.bg)
         .refreshable { await load() }
     }
 
     private var loadingList: some View {
         ScrollView {
-            VStack(spacing: 10) {
-                ForEach(0..<4, id: \.self) { _ in SkeletonBlock(height: 92) }
+            VStack(spacing: LSpace.s) {
+                ForEach(0..<6, id: \.self) { _ in SkeletonBlock(height: 56) }
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
     }
 
@@ -266,10 +268,9 @@ struct GitHubHubScreen: View {
         ScrollView {
             VStack(spacing: 12) {
                 Banner(kind: .danger, text: message)
-                KitButton(title: "Try again", role: .neutral) {
+                LButton("Try again", icon: "arrow.clockwise", kind: .secondary) {
                     Task { await load() }
                 }
-                .frame(maxWidth: 220)
             }
             .padding(16)
         }
@@ -376,14 +377,14 @@ private struct PullsFilterRow: View {
                     .foregroundStyle(p.faint)
                     .accessibilityHidden(true)
                 TextField("", text: $model.githubPullsFilter.author, prompt: Text("Filter by author"))
-                    .font(p.uiFont(13))
+                    .ltype(.meta)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .accessibilityLabel("Filter by author")
             }
             .padding(9)
-            .background(p.surface2, in: RoundedRectangle(cornerRadius: p.radiusCard))
-            .overlay(RoundedRectangle(cornerRadius: p.radiusCard).strokeBorder(p.border2, lineWidth: 1))
+            .background(p.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(p.border, lineWidth: 1))
 
             HStack(spacing: 8) {
                 involvementChip(.assigned)
@@ -391,7 +392,7 @@ private struct PullsFilterRow: View {
             }
             if involvementDisabled {
                 Text(detail ?? "Sign in with GitHub to use \u{201C}Assigned to me\u{201D} and \u{201C}My reviews.\u{201D}")
-                    .font(p.uiFont(11))
+                    .ltype(.micro)
                     .foregroundStyle(p.faint)
             }
 
@@ -401,19 +402,19 @@ private struct PullsFilterRow: View {
                     .foregroundStyle(p.faint)
                     .accessibilityHidden(true)
                 TextField("", text: $model.githubPullsFilter.q, prompt: Text("Search title and body"))
-                    .font(p.uiFont(13))
+                    .ltype(.meta)
                     .textInputAutocapitalization(.never)
                     .accessibilityLabel("Search pull requests")
             }
             .padding(9)
-            .background(p.surface2, in: RoundedRectangle(cornerRadius: p.radiusCard))
-            .overlay(RoundedRectangle(cornerRadius: p.radiusCard).strokeBorder(p.border2, lineWidth: 1))
+            .background(p.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(p.border, lineWidth: 1))
         }
         .padding(.top, 4)
     }
 
     private func involvementChip(_ value: GitHubHubInvolvement) -> some View {
-        FilterChip(label: value.chipLabel, on: model.githubPullsFilter.involvement == value) {
+        LChip(value.chipLabel, selected: model.githubPullsFilter.involvement == value) {
             // Mutually exclusive with itself: tapping the active chip clears it
             // back to `.none` instead of leaving it stuck on.
             model.githubPullsFilter.involvement = model.githubPullsFilter.involvement == value ? .none : value
@@ -425,9 +426,9 @@ private struct PullsFilterRow: View {
 
 // MARK: - rows
 
-/// Compact PR row: type icon + #number + title, head branch, reviewers, checks +
-/// merge chips, relative time, and a Start affordance (tap = unassigned; the menu
-/// picks an agent). The card itself navigates to the PR detail.
+/// Linear PR row: state glyph (open green / draft grey), mono #number, title, a
+/// muted meta line (branch, checks, merge state, reviewers) and trailing time +
+/// Start. The row itself navigates to the PR detail.
 struct GitHubPullRowCard: View {
     @Environment(\.palette) private var p
     let pull: GitHubPullRow
@@ -436,56 +437,42 @@ struct GitHubPullRowCard: View {
     let onStartWithAgent: () -> Void
 
     var body: some View {
-        OrchaCard {
-            HStack(spacing: 8) {
-                Image(systemName: pull.draft ? "arrow.triangle.pull" : "arrow.triangle.branch")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(pull.draft ? p.muted : p.accent)
-                Text("#\(pull.number)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(p.faint)
-                if pull.draft { MetaTag(text: "draft") }
-                Spacer()
-                StartRowButton(onStartUnassigned: onStartUnassigned, onStartWithAgent: onStartWithAgent)
+        GitHubHubRow(
+            glyph: "arrow.triangle.pull",
+            glyphTint: pull.draft ? p.muted : p.ok,
+            stateLabel: pull.draft ? "Draft pull request" : "Open pull request",
+            number: pull.number,
+            title: pull.title,
+            updatedAt: pull.updatedAt,
+            onStartUnassigned: onStartUnassigned,
+            onStartWithAgent: onStartWithAgent
+        ) {
+            if pull.draft { LTag("Draft") }
+            if !pull.head.isEmpty {
+                Text(pull.head)
+                    .ltype(.micro)
+                    .monospaced()
+                    .foregroundStyle(p.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Text(pull.title)
-                .font(p.uiFont(15, .semibold))
-                .foregroundStyle(p.text)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            HStack(spacing: 6) {
-                if !pull.head.isEmpty {
-                    Label(pull.head, systemImage: "point.3.connected.trianglepath.dotted")
-                        .labelStyle(.titleAndIcon)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(p.text2)
-                        .lineLimit(1)
+            ChecksChip(checks: pull.checks)
+            MergeStateChip(mergeableState: pull.mergeableState)
+            if !pull.requestedReviewers.isEmpty {
+                HStack(spacing: -6) {
+                    ForEach(pull.requestedReviewers.prefix(3), id: \.self) { login in
+                        LAvatar(name: login, size: 18)
+                    }
                 }
-                Spacer()
-                ChecksChip(checks: pull.checks)
-                MergeStateChip(mergeableState: pull.mergeableState)
-            }
-            HStack(spacing: 6) {
-                if !pull.requestedReviewers.isEmpty {
-                    Image(systemName: "eye")
-                        .font(.system(size: 10))
-                        .foregroundStyle(p.muted)
-                    Text(pull.requestedReviewers.joined(separator: ", "))
-                        .font(p.uiFont(11))
-                        .foregroundStyle(p.muted)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Text(MobileUx.agoLabel(pull.updatedAt).map { "updated \($0)" } ?? "")
-                    .font(p.uiFont(11))
-                    .foregroundStyle(p.faint)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Reviewers: \(pull.requestedReviewers.joined(separator: ", "))")
             }
         }
     }
 }
 
-/// Compact issue row: type icon + #number + title, labels, assignee, relative time,
-/// and the same Start affordance. Navigates to the issue detail.
+/// Linear issue row: open glyph, mono #number, title, labels as tags, assignee
+/// avatar, trailing time + Start. Navigates to the issue detail.
 struct GitHubIssueRowCard: View {
     @Environment(\.palette) private var p
     let issue: GitHubIssueRow
@@ -493,45 +480,83 @@ struct GitHubIssueRowCard: View {
     let onStartWithAgent: () -> Void
 
     var body: some View {
-        OrchaCard {
-            HStack(spacing: 8) {
-                Image(systemName: "smallcircle.filled.circle")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(p.ok)
-                Text("#\(issue.number)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(p.faint)
-                Spacer()
-                StartRowButton(onStartUnassigned: onStartUnassigned, onStartWithAgent: onStartWithAgent)
+        GitHubHubRow(
+            glyph: "smallcircle.filled.circle",
+            glyphTint: p.ok,
+            stateLabel: "Open issue",
+            number: issue.number,
+            title: issue.title,
+            updatedAt: issue.updatedAt,
+            onStartUnassigned: onStartUnassigned,
+            onStartWithAgent: onStartWithAgent
+        ) {
+            if let assignee = issue.assignee {
+                LAvatar(name: assignee, size: 18)
+                    .accessibilityLabel("Assigned to \(assignee)")
             }
-            Text(issue.title)
-                .font(p.uiFont(15, .semibold))
-                .foregroundStyle(p.text)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            if !issue.labels.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(issue.labels, id: \.self) { GitHubLabelChip(label: $0) }
+            ForEach(issue.labels.prefix(3), id: \.self) { GitHubLabelChip(label: $0) }
+            if issue.labels.count > 3 {
+                Text("+\(issue.labels.count - 3)")
+                    .ltype(.micro)
+                    .foregroundStyle(p.faint)
+            }
+        }
+    }
+}
+
+/// The shared Linear row anatomy for the hub lists.
+private struct GitHubHubRow<Meta: View>: View {
+    @Environment(\.palette) private var p
+    let glyph: String
+    let glyphTint: Color
+    let stateLabel: String
+    let number: Int
+    let title: String
+    let updatedAt: String?
+    let onStartUnassigned: () -> Void
+    let onStartWithAgent: () -> Void
+    @ViewBuilder let meta: Meta
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: LSpace.m) {
+                Image(systemName: glyph)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(glyphTint)
+                    .frame(width: 18, height: 20)
+                    .accessibilityLabel(stateLabel)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("#\(number)")
+                            .ltype(.mono)
+                            .foregroundStyle(p.faint)
+                        Text(title)
+                            .ltype(.bodyEmph)
+                            .foregroundStyle(p.text)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
                     }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) { meta }
+                    }
+                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let ago = MobileUx.agoLabel(updatedAt) {
+                        Text(ago)
+                            .ltype(.micro)
+                            .foregroundStyle(p.faint)
+                            .accessibilityLabel("Updated \(ago)")
+                    }
+                    StartRowButton(onStartUnassigned: onStartUnassigned, onStartWithAgent: onStartWithAgent)
                 }
             }
-            HStack(spacing: 6) {
-                if let assignee = issue.assignee {
-                    AgentAvatar(alias: assignee, human: true, githubLogin: assignee, size: 22)
-                    Text(assignee)
-                        .font(p.uiFont(11))
-                        .foregroundStyle(p.text2)
-                } else {
-                    Text("unassigned")
-                        .font(p.uiFont(11))
-                        .foregroundStyle(p.faint)
-                }
-                Spacer()
-                Text(MobileUx.agoLabel(issue.updatedAt).map { "updated \($0)" } ?? "")
-                    .font(p.uiFont(11))
-                    .foregroundStyle(p.faint)
-            }
+            .padding(.horizontal, LSpace.l)
+            .padding(.vertical, LSpace.m)
+            .contentShape(Rectangle())
+            LDivider()
+                .padding(.leading, LSpace.l + 18 + LSpace.m)
         }
     }
 }
@@ -554,15 +579,17 @@ private struct StartRowButton: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "play.fill")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                 Text("Start")
-                    .font(p.uiFont(12, .bold))
+                    .ltype(.micro)
+                    .fontWeight(.semibold)
             }
-            .foregroundStyle(p.accent)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(p.accentSoft, in: Capsule())
-            .overlay(Capsule().strokeBorder(p.accentLine, lineWidth: 1))
+            .foregroundStyle(p.text2)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(p.border2, lineWidth: 1))
+            .contentShape(Rectangle().inset(by: -10))
         } primaryAction: {
             onStartUnassigned()
         }

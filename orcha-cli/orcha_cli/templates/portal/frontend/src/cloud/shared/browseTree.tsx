@@ -16,45 +16,81 @@ import { useMemo } from "react";
 import type { GhError } from "../github/ghlib";
 import type { BrowseEntry, BrowseFilePayload } from "../github/browse/browseTypes";
 import { highlightLine, type Token } from "../github/browse/highlight";
+import { Button, ButtonLink } from "../../components/primitives/Button";
+import { FilePreview } from "../../components/filePreview/FilePreview";
+import { isRichKind, kindFromExt, looksBinaryText } from "../../lib/filePreview";
 
-/* ---- error degrade (same class names GitHubPage/RepoBrowser already use) - */
+/* ---- error degrade (same class names GitHubPage/RepoBrowser already use) -
+   V2 (G-08): every state names what happened AND offers the recovery that
+   actually exists — Retry re-runs the same fetch (callers pass onRetry), the
+   not-connected state links to the GitHub hub (which owns Connect repo), and a
+   rate limit never pretends to auto-retry when the surface has no refresh
+   timer. Titles are unchanged so existing tests/copy keep matching. */
+function RetryButton({ onRetry }: { onRetry?: () => void }) {
+  if (!onRetry) return null;
+  return (
+    <Button variant="secondary" size="sm" className="gh-retry" onClick={onRetry}>
+      Retry
+    </Button>
+  );
+}
 export function BrowseEmptyRepo() {
   return (
-    <div className="gh-empty card-empty">
+    <div className="gh-empty card-empty" role="status">
       <div className="t1">No GitHub repo connected</div>
       <p>Connect this project to a repository to browse its files here.</p>
+      <ButtonLink variant="secondary" size="sm" href="/github">Connect a repo</ButtonLink>
     </div>
   );
 }
-export function BrowseRateLimit({ detail }: { detail?: string | null }) {
+export function BrowseRateLimit({ detail, onRetry }: { detail?: string | null; onRetry?: () => void }) {
   return (
-    <div className="gh-empty card-empty">
+    <div className="gh-empty card-empty" role="alert">
       <div className="t1">GitHub rate limit hit</div>
-      <p>Backing off — this quietly retries on the next refresh.{detail ? " (" + detail + ")" : ""}</p>
+      <p>
+        GitHub is refusing requests for now (too many requests).
+        {detail ? " (" + detail + ")" : ""} Try again in a minute.
+      </p>
+      <RetryButton onRetry={onRetry} />
+    </div>
+  );
+}
+/** HTTP 403 that is NOT a rate limit: the token can't read this repo. */
+export function BrowseNoAccess({ detail }: { detail?: string | null }) {
+  return (
+    <div className="gh-empty card-empty" role="alert">
+      <div className="t1">GitHub token can&#39;t access this repository</div>
+      <p>
+        The token Embodent uses is missing, expired, or lacks access to this repo.
+        {detail ? " (" + detail + ")" : ""}
+      </p>
+      <ButtonLink variant="primary" size="sm" href="/settings#tab=github-access">Check GitHub access</ButtonLink>
     </div>
   );
 }
 export function BrowseNotFound({ what }: { what: string }) {
   return (
-    <div className="gh-empty card-empty">
+    <div className="gh-empty card-empty" role="status">
       <div className="t1">{what} not found</div>
       <p>It may not exist at this ref, or may have been moved or deleted.</p>
     </div>
   );
 }
-export function BrowseGenericError({ status, detail }: { status?: number; detail?: string | null }) {
+export function BrowseGenericError({ status, detail, onRetry }: { status?: number; detail?: string | null; onRetry?: () => void }) {
   return (
-    <div className="gh-empty card-empty">
-      <div className="t1">Couldn&#39;t load {status ? "(" + String(status) + ")" : ""}</div>
+    <div className="gh-empty card-empty" role="alert">
+      <div className="t1">Couldn&#39;t load{status && status >= 400 ? " (" + String(status) + ")" : ""}</div>
       <p>{detail ? detail : "Something went wrong talking to GitHub."}</p>
+      <RetryButton onRetry={onRetry} />
     </div>
   );
 }
-export function BrowseErrorBody({ err, what }: { err: GhError; what: string }) {
+export function BrowseErrorBody({ err, what, onRetry }: { err: GhError; what: string; onRetry?: () => void }) {
   if (err.kind === "not_found") return <BrowseNotFound what={what} />;
   if (err.kind === "not_connected") return <BrowseEmptyRepo />;
-  if (err.kind === "rate_limited") return <BrowseRateLimit detail={err.detail} />;
-  return <BrowseGenericError status={err.status} detail={err.detail} />;
+  if (err.kind === "rate_limited") return <BrowseRateLimit detail={err.detail} onRetry={onRetry} />;
+  if (err.kind === "no_access") return <BrowseNoAccess detail={err.detail} />;
+  return <BrowseGenericError status={err.status} detail={err.detail} onRetry={onRetry} />;
 }
 
 /* ---- skeletons (ork-sk-* shared shimmer classes) --------------------------- */
@@ -121,12 +157,12 @@ export function buildVisibleRows(
 }
 
 export const DirIcon = () => (
-  <svg className="dfv-i" viewBox="0 0 16 16" width={14} height={14} fill="currentColor">
+  <svg className="dfv-i" aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="currentColor">
     <path d="M1.75 2.5h4.19l1.55 1.5h6.76c.69 0 1.25.56 1.25 1.25v7c0 .69-.56 1.25-1.25 1.25H1.75c-.69 0-1.25-.56-1.25-1.25v-8.5c0-.69.56-1.25 1.25-1.25Z" />
   </svg>
 );
 export const FileIcon = () => (
-  <svg className="dfv-i" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.3}>
+  <svg className="dfv-i" aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.3}>
     <path d="M3.5 1.75h6l3 3v9.5a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1V2.75a1 1 0 0 1 1-1Z" />
     <path d="M9.5 1.75v3h3" />
   </svg>
@@ -150,32 +186,82 @@ export interface BrowseTreeProps {
   // Space's thread-count badge) — RepoBrowser passes nothing (unchanged UI).
   fileBadge?: (path: string) => React.ReactNode;
 }
+// V2 keyboard contract for the tree (brief §7: every hover/click action also
+// reachable by keyboard): rows are focusable treeitems (roving tabindex — only
+// the selected row, or the first, is in the Tab order); ↑/↓ move, → expands a
+// folder, ← collapses it, Enter/Space activates (open file / toggle folder),
+// Home/End jump. Only handled while focus is ON a row, so it never hijacks
+// inputs, CodeMirror or terminals.
+function onTreeKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+  const target = e.target as HTMLElement;
+  if (!target.classList || !target.classList.contains("dfv-r")) return;
+  const rows = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(".dfv-r[role=treeitem]"));
+  const i = rows.indexOf(target);
+  if (i < 0) return;
+  const focusAt = (n: number) => {
+    const el = rows[Math.max(0, Math.min(rows.length - 1, n))];
+    if (el) el.focus();
+  };
+  const isDir = target.classList.contains("dfv-dir");
+  const open = target.getAttribute("aria-expanded") === "true";
+  switch (e.key) {
+    case "ArrowDown": e.preventDefault(); focusAt(i + 1); break;
+    case "ArrowUp": e.preventDefault(); focusAt(i - 1); break;
+    case "Home": e.preventDefault(); focusAt(0); break;
+    case "End": e.preventDefault(); focusAt(rows.length - 1); break;
+    case "ArrowRight":
+      if (isDir && !open) { e.preventDefault(); target.click(); }
+      break;
+    case "ArrowLeft":
+      if (isDir && open) { e.preventDefault(); target.click(); }
+      break;
+    case "Enter":
+    case " ":
+      e.preventDefault(); target.click(); break;
+    default:
+  }
+}
+
 export function BrowseTree({ rows, dirCache, expanded, selectedPath, onToggleDir, onSelectFile, onRetryDir, fileBadge }: BrowseTreeProps) {
   const root = dirCache[""];
   if (root && root.loading && !root.entries) return <BrowseSkeletonRows />;
-  if (root && root.error) return <BrowseErrorBody err={root.error} what="Repository" />;
+  if (root && root.error) {
+    return <BrowseErrorBody err={root.error} what="Repository" onRetry={onRetryDir ? () => onRetryDir("") : undefined} />;
+  }
   if (!rows.length) return <div className="none" style={{ padding: 14 }}>No files.</div>;
+  // roving tabindex: the selected file row, else the first row, is tabbable
+  const selectedVisible = rows.some((r) => r.entry.type === "file" && r.entry.path === selectedPath);
   return (
-    <div className="dfv-tree rb-dfv-tree">
-      {rows.map((r) => {
+    <div className="dfv-tree rb-dfv-tree" role="tree" aria-label="Repository files" onKeyDown={onTreeKeyDown}>
+      {rows.map((r, idx) => {
         const isDir = r.entry.type === "dir";
         const open = expanded.has(r.entry.path);
+        const tabbable = selectedVisible ? (!isDir && r.entry.path === selectedPath) : idx === 0;
         if (isDir) {
           const state = dirCache[r.entry.path];
+          // a folder can be the selection too (the folder-listing view)
+          const dirSelected = r.entry.path === selectedPath;
           return (
-            <div key={"d:" + r.entry.path}>
+            <div key={"d:" + r.entry.path} role="none">
               <div
-                className="dfv-r dfv-dir"
+                className={"dfv-r dfv-dir" + (dirSelected ? " on" : "")}
+                role="treeitem"
+                aria-level={r.depth + 1}
+                aria-expanded={open}
+                aria-selected={dirSelected}
+                tabIndex={tabbable ? 0 : -1}
                 style={{ paddingLeft: 10 + r.depth * 14 }}
                 title={r.entry.path}
                 onClick={() => onToggleDir(r.entry.path)}
               >
-                <span className="dfv-c">{open ? "▾" : "▸"}</span>
+                <svg className={"dfv-c" + (open ? " is-open" : "")} viewBox="0 0 10 10" width={10} height={10} aria-hidden="true">
+                  <path d="M3.5 2 7 5l-3.5 3" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
                 <DirIcon />
                 <span className="dfv-nm">{r.entry.name}</span>
               </div>
               {open && state && state.loading && !state.entries ? (
-                <div style={{ paddingLeft: 24 + r.depth * 14 }} className="rb-dir-loading muted">Loading…</div>
+                <div style={{ paddingLeft: 24 + r.depth * 14 }} className="rb-dir-loading muted" role="status">Loading…</div>
               ) : null}
               {open && state && state.error ? (
                 onRetryDir ? (
@@ -185,7 +271,7 @@ export function BrowseTree({ rows, dirCache, expanded, selectedPath, onToggleDir
                     role="button"
                     tabIndex={0}
                     onClick={() => onRetryDir(r.entry.path)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onRetryDir(r.entry.path); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onRetryDir(r.entry.path); } }}
                   >
                     Couldn&#39;t load this folder — tap to retry
                   </div>
@@ -196,10 +282,15 @@ export function BrowseTree({ rows, dirCache, expanded, selectedPath, onToggleDir
             </div>
           );
         }
+        const selected = r.entry.path === selectedPath;
         return (
           <div
             key={"f:" + r.entry.path}
-            className={"dfv-r dfv-f" + (r.entry.path === selectedPath ? " on" : "")}
+            className={"dfv-r dfv-f" + (selected ? " on" : "")}
+            role="treeitem"
+            aria-level={r.depth + 1}
+            aria-selected={selected}
+            tabIndex={tabbable ? 0 : -1}
             style={{ paddingLeft: 24 + r.depth * 14 }}
             title={r.entry.path}
             onClick={() => onSelectFile(r.entry.path)}
@@ -285,18 +376,38 @@ export interface ContentPaneChromeProps {
   // Space's Raw/Rendered markdown toggle; RepoBrowser passes nothing —
   // byte-identical header when omitted).
   headerExtra?: React.ReactNode;
+  // drop the path from the header when the host already shows it (RepoBrowser's
+  // breadcrumb) — a fact is never shown twice (D12)
+  hidePath?: boolean;
   children?: React.ReactNode; // the actual code body (CodeLines or a custom gutter render)
+  /** The file's raw-bytes URL (browse/raw at this ref). With it, images, SVG,
+   *  PDF, media and fonts render natively and other binaries get a sized
+   *  Download card; without it a binary keeps the one-line notice. */
+  rawUrl?: string | null;
 }
-export function ContentPaneChrome({ gitRef, payload, htmlUrl, extIcon, headerExtra, children }: ContentPaneChromeProps) {
+export function ContentPaneChrome({ gitRef, payload, htmlUrl, extIcon, headerExtra, hidePath, children, rawUrl }: ContentPaneChromeProps) {
+  const kind = kindFromExt(payload.path);
+  // a payload the server didn't flag but whose text is really binary is never dumped
+  const binary = !!payload.binary || looksBinaryText(payload.content);
+  const preview = !!rawUrl && (binary || kind === "binary" || (!!kind && isRichKind(kind)));
   return (
     <>
       <div className="rb-file-head">
         <span className="tag rb-ref-chip mono">{gitRef}</span>
-        <span className="rb-file-path mono" title={payload.path}>{payload.path}</span>
+        {hidePath ? <span className="v2-grow" /> : <span className="rb-file-path mono" title={payload.path}>{payload.path}</span>}
         <span className="rb-file-size muted">{formatSize(payload.size)}</span>
         {headerExtra}
       </div>
-      {payload.binary ? (
+      {preview ? (
+        <FilePreview
+          url={rawUrl!}
+          path={payload.path}
+          // an unknown extension (null): the response's MIME + a byte sniff decide
+          kind={kind}
+          sizeHint={payload.size}
+          sourceView={kind === "svg" && !binary ? <div className="fp-svg-code">{children}</div> : undefined}
+        />
+      ) : binary ? (
         <div className="rb-binary muted">
           Binary file not shown.
           {htmlUrl ? <> <a href={htmlUrl} target="_blank" rel="noopener noreferrer">View on GitHub {extIcon}</a></> : null}

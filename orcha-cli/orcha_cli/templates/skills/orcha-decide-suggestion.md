@@ -45,7 +45,7 @@ User arguments: `$ARGUMENTS`
 
 ## Errors
 
-- **409** "container is at the <N>-agent cap" → `create` would exceed `containers.max_auto_agents`. Reassign instead, or bump the cap via direct SQL if you really need more.
+- **409** "this project already has <N> suggested agents (the limit is <M>)" → `create` would exceed the project's agent limit (`containers.max_auto_agents`, default 12; counts live AI agents created from suggestions). Reassign instead, or ask the owner (or a `manage_agents` holder) to raise it in Settings → Execution (`PUT /api/containers/{cid}/limits`, 1-50, human-only).
 - **409** "request has no agent-suggestion to decide on" → not a suggestion-escalated request; use `/orcha-escalate` resolution paths instead.
 - **404** alias not found (for `--reassign`).
 

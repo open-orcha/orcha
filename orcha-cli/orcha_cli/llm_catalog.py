@@ -79,6 +79,9 @@ USE_CASE_DEFAULTS: dict[str, ModelSpec] = {
     "digest_summary": ModelSpec(model=MODEL_HAIKU, max_tokens=512, timeout_s=20.0),
     "curation": ModelSpec(model=MODEL_SONNET, max_tokens=512, timeout_s=20.0),
     "vision": ModelSpec(model=MODEL_SONNET, max_tokens=1024, timeout_s=45.0),
+    # Voice dictation clean-up (portal voice_routes): punctuation/fillers/lists on a
+    # finished dictation. Latency-bound and cheap, so Haiku.
+    "dictation_cleanup": ModelSpec(model=MODEL_HAIKU, max_tokens=1024, timeout_s=15.0),
 }
 _DEFAULT_SPEC = ModelSpec()
 

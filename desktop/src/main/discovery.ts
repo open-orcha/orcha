@@ -1,7 +1,10 @@
-import type { Stack } from '../shared/types'
-import { dockerExec, type Exec, type ExecResult } from './dockerExec'
+import type { Stack, StackDiscovery } from '../shared/types'
+import { dockerExecWithTimeout, type Exec, type ExecResult } from './dockerExec'
+import { listNativeStacks, readKnownFolders, rememberNativeFolder } from './nativeStacks'
 
-const defaultExec: Exec = dockerExec
+/** `docker ps` is a quick probe: a hung CLI must settle as DOCKER_UNAVAILABLE, not block the
+ *  manager's first paint forever (desktop audit BLOCKER). */
+const defaultExec: Exec = dockerExecWithTimeout()
 
 const PS_FORMAT =
   '{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}'
@@ -70,19 +73,113 @@ export function parseDockerPs(stdout: string): Stack[] {
       dbPort,
       portalStatus,
       running: portalStatus.startsWith('Up'),
-      folder
+      folder,
+      runtime: 'docker' as const,
+      health: portalStatus.startsWith('Up') ? ('ok' as const) : ('stopped' as const)
     }
   })
 }
 
-/** All orcha-* stacks on this machine, running or stopped.
- *  Rejects with {code:'DOCKER_UNAVAILABLE'} when docker is missing or the daemon is down. */
-export async function listStacks(exec: Exec = defaultExec): Promise<Stack[]> {
+/** One `docker ps -a` pass. Rejects with {code:'DOCKER_UNAVAILABLE'} when docker is missing
+ *  or the daemon is down, adding `unresponsive: true` when the CLI hung past the probe timeout. */
+export async function listDockerStacks(exec: Exec = defaultExec): Promise<Stack[]> {
   let result: ExecResult
   try {
     result = await exec('docker', ['ps', '-a', '--format', PS_FORMAT])
-  } catch {
+  } catch (err) {
+    // A timed-out probe means the CLI is wedged, not that the daemon is stopped: say so, so
+    // the manager/sidebar don't claim "isn't running" while preflight says "not responding".
+    if ((err as { timedOut?: boolean } | null)?.timedOut === true) {
+      throw { code: 'DOCKER_UNAVAILABLE', unresponsive: true } as const
+    }
+    // No `docker` binary at all: a Mac that never had Docker (GH #258 D4) — say nothing about it.
+    if ((err as { code?: unknown } | null)?.code === 'ENOENT') {
+      throw { code: 'DOCKER_UNAVAILABLE', missing: true } as const
+    }
     throw { code: 'DOCKER_UNAVAILABLE' } as const
   }
   return parseDockerPs(result.stdout)
+}
+
+/** Docker is polled at most this often (plan D-D2: the old 15 s cadence); native rows are
+ *  file reads and are fresh on every call. */
+export const DOCKER_CACHE_MS = 15_000
+
+/** `dockerAvailable: false` = `docker` is missing or its daemon is down — Docker projects (if
+ *  any) are hidden, which the home screen shows as a small note instead of a blocking banner. */
+export type Discovery = StackDiscovery
+
+export interface DiscoveryDeps {
+  exec?: Exec
+  listNative?: () => Promise<Stack[]>
+  now?: () => number
+}
+
+let nativeFoldersDir: string | null = null
+/** main/index.ts points discovery at <userData> so stopped native projects stay listed. */
+export function configureNativeDiscovery(userDataDir: string): void {
+  nativeFoldersDir = userDataDir
+}
+
+/** Every native project seen in the CLI registry is remembered, because `orcha down` drops it
+ *  from the registry — without this a project stopped from the app would vanish from Home. */
+async function defaultListNative(): Promise<Stack[]> {
+  const dir = nativeFoldersDir
+  const known = dir ? readKnownFolders(dir) : []
+  const stacks = await listNativeStacks({ knownFolders: known })
+  if (dir) for (const s of stacks) if (s.folder && !known.includes(s.folder)) rememberNativeFolder(dir, s.folder)
+  return stacks
+}
+
+let dockerCache: { at: number; value: Stack[] | { error: { code: 'DOCKER_UNAVAILABLE'; unresponsive?: boolean; missing?: boolean } } } | null =
+  null
+
+/** Test hook: forget the cached docker pass. */
+export function resetDockerCache(): void {
+  dockerCache = null
+}
+
+/** Native projects ∪ Docker stacks (a name in both keeps the native row, like `orcha ls`). */
+export async function discoverStacks(deps: DiscoveryDeps = {}): Promise<Discovery> {
+  const now = (deps.now ?? Date.now)()
+  const nativeP = (deps.listNative ?? defaultListNative)().catch(() => [] as Stack[])
+  // The cache is for the real docker CLI only; an injected exec (tests) always runs.
+  let entry = deps.exec ? null : dockerCache
+  if (!entry || now - entry.at >= DOCKER_CACHE_MS) {
+    try {
+      entry = { at: now, value: await listDockerStacks(deps.exec ?? defaultExec) }
+    } catch (err) {
+      entry = { at: now, value: { error: err as { code: 'DOCKER_UNAVAILABLE'; unresponsive?: boolean; missing?: boolean } } }
+    }
+    if (!deps.exec) dockerCache = entry
+  }
+  const native = await nativeP
+  const docker = entry.value
+  if (!Array.isArray(docker)) {
+    return {
+      stacks: native,
+      dockerAvailable: false,
+      dockerUnresponsive: docker.error.unresponsive === true,
+      dockerMissing: docker.error.missing === true
+    }
+  }
+  const seen = new Set(native.map((s) => s.projectShort))
+  const stacks = [...native, ...docker.filter((s) => !seen.has(s.projectShort))].sort((a, b) =>
+    a.project.localeCompare(b.project)
+  )
+  return { stacks, dockerAvailable: true }
+}
+
+/** All Orcha projects on this machine, running or stopped. Rejects with
+ *  {code:'DOCKER_UNAVAILABLE'} only when Docker is unavailable AND there is no native project
+ *  — a Docker-only machine keeps today's "Docker isn't running" banner; a machine with native
+ *  projects just lists them (GH #258). */
+export async function listStacks(deps: DiscoveryDeps | Exec = {}): Promise<Stack[]> {
+  const d = await discoverStacks(typeof deps === 'function' ? { exec: deps, listNative: async () => [] } : deps)
+  if (!d.dockerAvailable && d.stacks.length === 0) {
+    throw d.dockerUnresponsive
+      ? ({ code: 'DOCKER_UNAVAILABLE', unresponsive: true } as const)
+      : ({ code: 'DOCKER_UNAVAILABLE' } as const)
+  }
+  return d.stacks
 }

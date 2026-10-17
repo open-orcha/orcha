@@ -32,16 +32,14 @@ import threading
 import time
 
 import httpx
-import psycopg
 import pytest
-from psycopg.rows import dict_row
 
-import main  # noqa: E402 — conftest set DATABASE_URL + sys.path before this import
+import main  # noqa: E402 — conftest bound the test database + sys.path before this import
+from conftest import Db
 from orcha_cli import terminal_bridge as tb
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 WORKTREE_CLI = REPO / "orcha-cli"
-TEST_URL = os.environ["DATABASE_URL"]
 
 pytestmark = pytest.mark.smoke
 
@@ -84,10 +82,9 @@ def live_server():
 # DB helpers (read lease state the API doesn't expose for assertions)
 # ---------------------------------------------------------------------------
 def _wake_state(aid):
-    with psycopg.connect(TEST_URL, row_factory=dict_row, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT lease_kind, wake_lease_until FROM agent_wake_state WHERE agent_id=%s", (aid,)
-        ).fetchall()
+    rows = Db().execute(  # GH #258: through the app's own database layer, either backend
+        "SELECT lease_kind, wake_lease_until FROM agent_wake_state WHERE agent_id=%s", (aid,)
+    )
     return rows[0] if rows else None
 
 

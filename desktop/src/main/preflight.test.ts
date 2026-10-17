@@ -49,4 +49,29 @@ describe('preflight', () => {
     const report = await preflight({ exec, open: vi.fn(), pollMs: 1, timeoutMs: 10 })
     expect(report.docker).toBe('daemon-down')
   })
+
+  it('gives up quickly with a restart hint when the Docker CLI hangs', async () => {
+    const hang = Object.assign(new Error('killed'), { killed: true, timedOut: true })
+    const exec = vi.fn().mockImplementation((_cmd, args: string[]) =>
+      args.includes('info') ? Promise.reject(hang) : Promise.resolve({ stdout: '' })
+    )
+    const open = vi.fn().mockResolvedValue(undefined)
+    const t0 = Date.now()
+    const report = await preflight({ exec, open, pollMs: 1, timeoutMs: 60_000, hungBudgetMs: 20 })
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(report.docker).toBe('daemon-down')
+    expect(report.unresponsive).toBe(true)
+    expect(report.hint).toMatch(/isn’t responding/)
+    expect(open).toHaveBeenCalledWith('Docker')
+  })
+
+  it('still recovers if a hung Docker comes back inside the budget', async () => {
+    let calls = 0
+    const exec = vi.fn().mockImplementation(() => {
+      calls += 1
+      return calls === 1 ? Promise.reject(Object.assign(new Error('killed'), { timedOut: true })) : Promise.resolve(okInfo)
+    })
+    const report = await preflight({ exec, open: vi.fn().mockResolvedValue(undefined), pollMs: 1, hungBudgetMs: 1000 })
+    expect(report).toEqual({ docker: 'ok', autoStarted: true, hint: null })
+  })
 })

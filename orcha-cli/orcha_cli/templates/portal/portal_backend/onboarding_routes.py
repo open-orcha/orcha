@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from portal_backend.application import app
@@ -16,6 +16,7 @@ from portal_backend.guards import (
 from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import enforce_grant, require_member_read
 from portal_backend.model_setting_routes import _resolve_use_case_model
 from portal_backend.onboarding_normalization import _normalize_roster_payload
 from portal_backend.onboarding_prompt import (
@@ -42,7 +43,7 @@ ONBOARDING_LOG = logging.getLogger("orcha.onboarding")
 
 
 @app.post("/api/onboarding/propose", status_code=200)
-def propose_onboarding_roster(body: ProposeBody):
+def propose_onboarding_roster(body: ProposeBody, request: Request):
     """SPEC-292: stream an editable roster proposal for the first-run onboarding lane.
 
     This is deliberately the ONLY new onboarding backend surface. It produces a proposal only;
@@ -63,6 +64,11 @@ def propose_onboarding_roster(body: ProposeBody):
 
     with db_cursor() as (_, cur):
         _require_container(cur, body.cid)
+        # P-33: proposing spends the project's stored provider key, so a signed-in caller
+        # must be a member who may manage agents (viewers and non-members get 403) —
+        # checked BEFORE any key is resolved or model called. No header ⇒ unchanged.
+        require_member_read(cur, request, body.cid)
+        enforce_grant(cur, request, body.cid, "manage_agents")
         model_override = _resolve_use_case_model(cur, body.cid, "onboarding")
         config = {"onboarding": model_override} if model_override else None
         spec = llm_util.resolve_spec("onboarding", config=config)

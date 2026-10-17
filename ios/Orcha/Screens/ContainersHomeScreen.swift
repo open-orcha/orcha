@@ -22,17 +22,18 @@ struct ContainersHomeScreen: View {
                     containerList
                 }
             }
-            .navigationTitle("Orcha")
+            .navigationTitle("Projects")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(p.surface, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Settings", systemImage: "gearshape") { showSettings = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Add", systemImage: "plus") { showScanner = true }
+                    Button("Add project", systemImage: "plus") { showScanner = true }
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Color.clear)
+            .background(p.bg)
         }
         .task { model.probeContainers() }
         .refreshable { model.probeContainers() }
@@ -83,117 +84,109 @@ struct ContainersHomeScreen: View {
             }
             Button("Cancel", role: .cancel) { disconnecting = nil }
         } message: {
-            Text("This removes the pairing — and every project sharing its address — from this phone only. The Orcha keeps running, and you can pair again anytime from the portal.")
+            Text("This removes the pairing — and every project sharing its address — from this phone only. The Embodent keeps running, and you can pair again anytime from the portal.")
         }
     }
 
     private var emptyState: some View {
         StateLayout(
-            title: "Add your Orcha",
-            sub: "Open your Orcha portal and choose Pair phone, then scan the QR here — or type the portal address, like orcha.yourteam.com. One pairing brings in every project on that Orcha."
+            title: "Add your Embodent",
+            sub: "Open your Embodent portal and choose Pair phone, then scan the QR here — or type the portal address, like embodent.yourteam.com. One pairing brings in every project on that Embodent."
         ) {
             BrandMark(size: 44)
         } actions: {
-            VStack(spacing: 10) {
-                KitButton(title: "Add your Orcha", systemImage: "qrcode.viewfinder") { showScanner = true }
-                    .frame(maxWidth: 260)
-                Button("Enter address manually") { showManualEntry = true }
-                    .font(p.uiFont(14, .bold))
-                    .foregroundStyle(p.accent)
+            VStack(spacing: LSpace.s) {
+                LButton("Add your Embodent", icon: "qrcode.viewfinder", kind: .primary) { showScanner = true }
+                LButton("Enter address manually", kind: .ghost) { showManualEntry = true }
             }
         }
     }
 
     private var containerList: some View {
         ScrollView {
-            VStack(spacing: 10) {
-                SectionH(title: "My Orchas", count: "\(model.containers.count)")
-                ForEach(model.containers) { container in
-                    Button {
-                        model.openContainer(container.id)
-                    } label: {
-                        ContainerCard(container: container, health: model.containerHealth[container.id])
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button("Rename") {
-                            newName = container.displayName
-                            renaming = container
+            LazyVStack(alignment: .leading, spacing: LSpace.m) {
+                LSection("All projects", count: model.containers.count) {
+                    LCard(padding: 0) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(model.containers.enumerated()), id: \.element.id) { index, container in
+                                if index > 0 { LDivider() }
+                                Button {
+                                    model.openContainer(container.id)
+                                } label: {
+                                    ProjectRow(container: container, health: model.containerHealth[container.id])
+                                }
+                                .buttonStyle(.lRow)
+                                .contextMenu {
+                                    Button("Rename", systemImage: "pencil") {
+                                        newName = container.displayName
+                                        renaming = container
+                                    }
+                                    Button("Disconnect", systemImage: "xmark.circle", role: .destructive) {
+                                        disconnecting = container
+                                    }
+                                }
+                                .shellRowEntrance(index)
+                            }
                         }
-                        Button("Disconnect", role: .destructive) { disconnecting = container }
                     }
                 }
-                Text("Every project on a paired Orcha appears here automatically — tap one to switch into it. Long-press a card to rename or disconnect.")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(p.faint)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 4)
+                Text("Every project on a paired Embodent appears here automatically. Long-press a project to rename or disconnect it.")
+                    .ltype(.meta)
+                    .foregroundStyle(p.muted)
+                    .padding(.horizontal, LSpace.xs)
             }
-            .padding(16)
+            .padding(.horizontal, LSpace.l)
+            .padding(.vertical, LSpace.m)
         }
+        .background(p.bg)
     }
 }
 
-private struct ContainerCard: View {
+/// One project in the list: round glyph tile, name, one muted meta line, and a
+/// trailing needs-you badge + reachability dot (web "All projects" parity).
+private struct ProjectRow: View {
     @Environment(\.palette) private var p
     let container: StoredContainer
     let health: ContainerHealth?
 
-    var body: some View {
-        OrchaCard {
-            HStack(spacing: 12) {
-                BrandMark()
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(container.displayName)
-                        .font(p.uiFont(15, .semibold))
-                        .foregroundStyle(p.text)
-                        .lineLimit(1)
-                    Text(container.baseUrl)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(p.muted)
-                        .lineLimit(1)
-                }
-                Spacer()
-                ConnChip(state: health?.state ?? "probing")
-                Image(systemName: "chevron.right")
-                    .font(p.uiFont(12, .semibold))
-                    .foregroundStyle(p.faint)
-            }
-            switch health?.state {
-            case nil, "probing":
-                Text("Checking…")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(p.faint)
-            case "unreachable":
-                Text("Last seen a while ago — is this Orcha up?")
-                    .font(p.uiFont(13))
-                    .foregroundStyle(p.muted)
-            default:
-                HStack(spacing: 8) {
-                    Text("\(health?.agents ?? 0) agents · \(health?.tasks ?? 0) open")
-                        .font(p.uiFont(13))
-                        .foregroundStyle(p.muted)
-                    Spacer()
-                    if let needs = health?.needsYou, needs > 0 {
-                        StatusPill(status: "\(needs) need you", domain: .agent)
-                    }
-                }
-                // Bound GitHub repo (glance-only — connect/change lives in the
-                // workspace, on the Home tab's repo chip).
-                if let repo = health?.githubRepo {
-                    HStack(spacing: 5) {
-                        GitHubMark()
-                            .frame(width: 11, height: 11)
-                            .foregroundStyle(p.faint)
-                        Text(repo)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(p.muted)
-                            .lineLimit(1)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("GitHub repository: \(repo)")
-                }
-            }
+    private var meta: String {
+        switch health?.state {
+        case nil, "probing": "Checking…"
+        case "unreachable": "Unreachable — is this project up?"
+        default:
+            "\(health?.agents ?? 0) \((health?.agents ?? 0) == 1 ? "agent" : "agents") · \(health?.tasks ?? 0) open \((health?.tasks ?? 0) == 1 ? "task" : "tasks")"
+                + (health?.githubRepo.map { " · \($0)" } ?? "")
         }
     }
+
+    private var dot: (Color, String) {
+        switch health?.state {
+        case "live", "polling", "active": (p.ok, "Running")
+        case "paused": (p.warn, "Paused")
+        case "unreachable": (p.danger, "Unreachable")
+        default: (p.idle, "Checking")
+        }
+    }
+
+    var body: some View {
+        LRow(title: container.displayName, subtitle: meta) {
+            ProjectIconView(icon: health?.icon, size: 32)
+                .accessibilityHidden(true)
+        } trailing: {
+            HStack(spacing: LSpace.s) {
+                if let needs = health?.needsYou, needs > 0 {
+                    LBadgeCount(needs)
+                }
+                Circle()
+                    .fill(dot.0)
+                    .frame(width: 7, height: 7)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(container.displayName)
+        .accessibilityValue([dot.1, meta, (health?.needsYou ?? 0) > 0 ? "\(health?.needsYou ?? 0) need you" : nil]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAddTraits(.isButton)
+    }
 }
+

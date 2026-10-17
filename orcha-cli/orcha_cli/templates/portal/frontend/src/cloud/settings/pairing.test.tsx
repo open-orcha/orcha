@@ -65,8 +65,9 @@ describe("pairing entry points (shared PairingPanel/PairingModal reuse)", () => 
     mount(<PairingButton />);
     const btn = await screen.findByRole("button", { name: /Pair phone/ });
     expect(btn.id).toBe("pairPhoneBtn");
-    expect(btn.className).toBe("btn sm subtle pair-top");
-    expect(btn.getAttribute("title")).toBe("Pair a phone with this Orcha");
+    expect(btn.className).toContain("v2-btn"); // shared V2 Button primitive
+    expect(btn.className).toContain("pair-top");
+    expect(btn.getAttribute("title")).toBe("Pair a phone with this Embodent");
     // no modal until the button is pressed
     expect(screen.queryByText("Pair your phone")).not.toBeInTheDocument();
     // cid resolves async (SnapshotProvider) — wait for the loaded container

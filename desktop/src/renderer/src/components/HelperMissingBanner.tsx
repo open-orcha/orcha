@@ -56,33 +56,24 @@ export default function HelperMissingBanner() {
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-      <div className="flex items-start gap-2">
-        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-        <div className="flex flex-col gap-1">
-          <span className="font-medium text-text">The Orcha helper isn’t installed</span>
-          <span className="text-text/70">
-            Your projects are safe, but agents can’t be launched until the command-line helper is
-            installed on this Mac.
-          </span>
+    <div role="status" className="flex flex-col gap-1.5 rounded-md border border-border bg-bg/40 px-3 py-2 text-[13px]">
+      <div className="flex min-h-7 items-center gap-2.5">
+        <AlertCircle className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <span className="font-medium text-text">The Orcha helper isn’t installed.</span>{' '}
+          <span className="text-text-2">Your projects are safe, but agents can’t launch until it is.</span>
         </div>
-      </div>
-      {installing && lastLine && (
-        <p className="truncate font-mono text-xs text-text/50" title={lastLine}>
-          {lastLine}
-        </p>
-      )}
-      {error && (
-        <p className="flex items-start gap-2 text-red-500">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
-        </p>
-      )}
-      <div>
-        <Button disabled={installing} onClick={() => void install()}>
-          {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        <Button variant="secondary" disabled={installing} onClick={() => void install()}>
+          {installing && <Loader2 className="animate-spin" />}
           {installing ? 'Installing…' : 'Install helper'}
         </Button>
       </div>
+      {installing && lastLine && (
+        <p className="truncate pl-[26px] font-mono text-[11px] text-text-3" title={lastLine}>
+          {lastLine}
+        </p>
+      )}
+      {error && <p className="pl-[26px] text-danger">{error}</p>}
     </div>
   )
 }

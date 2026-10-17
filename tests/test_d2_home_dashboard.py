@@ -41,7 +41,7 @@ def test_home_action_queue_wiring():
     assert "actingHuman(" in html, "actions don't resolve the acting human"
     # review P1: the plan card shows the FULL plan body, rendered via the shared
     # esc-first linkifier (ISS-44), never truncated before approval.
-    assert "<Linkified text={planText(t)} />" in html, \
+    assert "<Linkified text={planText(t)}" in html, \
         "plan card must show the full plan, not a truncated summary"
     assert "trunc(planText" not in html, "plan body must not be truncated before approval"
     # review P2: one-shot — acted cards are suppressed immediately + not re-submittable

@@ -37,7 +37,7 @@ targets:
       path: Orcha/Info.plist
       properties:
         UILaunchScreen: {}
-        CFBundleDisplayName: Orcha
+        CFBundleDisplayName: Embodent
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UIAppFonts:
@@ -46,8 +46,12 @@ targets:
           - HankenGrotesk-Medium.ttf
           - HankenGrotesk-SemiBold.ttf
           - HankenGrotesk-Bold.ttf
-        NSCameraUsageDescription: "Orcha uses the camera only to scan the pairing QR from your portal."
-        NSMicrophoneUsageDescription: "Orcha uses the microphone only while you dictate a message to your agents. Speech is transcribed on this device — audio never leaves your phone."
+          - Inter-Regular.ttf
+          - Inter-Medium.ttf
+          - Inter-SemiBold.ttf
+          - Inter-Bold.ttf
+        NSCameraUsageDescription: "Embodent uses the camera only to scan the pairing QR from your portal."
+        NSMicrophoneUsageDescription: "Embodent uses the microphone only while you dictate a message to your agents. Speech is transcribed on this device — audio never leaves your phone."
         NSSpeechRecognitionUsageDescription: "Dictated audio is transcribed to editable text on this device."
         # Arbitrary loads ONLY — do not re-add NSAllowsLocalNetworking beside it:
         # when both keys are present iOS treats ArbitraryLoads as a legacy fallback
@@ -58,7 +62,7 @@ targets:
         # addresses the user typed or scanned.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSLocalNetworkUsageDescription: "Orcha connects to the Orcha server running on your computer over your local network."
+        NSLocalNetworkUsageDescription: "Embodent connects to the Embodent server running on your computer over your local network."
         UIBackgroundModes:
           - fetch
         BGTaskSchedulerPermittedIdentifiers:
@@ -90,7 +94,7 @@ targets:
     info:
       path: Widgets/Info.plist
       properties:
-        CFBundleDisplayName: Orcha
+        CFBundleDisplayName: Embodent
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         NSExtension:

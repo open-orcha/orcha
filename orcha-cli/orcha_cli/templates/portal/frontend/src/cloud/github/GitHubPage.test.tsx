@@ -143,37 +143,36 @@ describe("GitHubPage list (wire-contract render)", () => {
     expect(screen.queryByText("No GitHub repo connected")).not.toBeInTheDocument();
   });
 
-  it("renders the vanilla column-header row above the list", async () => {
+  it("groups rows under Linear band headers — no uppercase column header row", async () => {
     stubFetch(AGENTS_WITH_HUMAN);
     mount();
     await screen.findByText("Fix login bug");
-    const head = document.querySelector(".ghhead-row");
-    expect(head).not.toBeNull();
-    // ID | TITLE | REVIEWERS | CHECKS | MERGE | UPDATED, same cell classes as .ghrow
-    expect(head!.querySelector(".ghh-num")!.textContent).toBe("ID");
-    expect(head!.querySelector(".ghh-main")!.textContent).toBe("TITLE");
-    expect(head!.querySelector(".ghh-reviewers")!.textContent).toBe("REVIEWERS");
-    expect(head!.querySelector(".ghh-checks")!.textContent).toBe("CHECKS");
-    expect(head!.querySelector(".ghh-merge")!.textContent).toBe("MERGE");
-    expect(head!.querySelector(".ghh-updated")!.textContent).toBe("UPDATED");
-    // pulls tab keeps the header and adds the / CONTEXT suffix to TITLE
+    expect(document.querySelector(".ghhead-row")).toBeNull();
+    // issues group by whether Orcha tracks them: an untracked issue sits in "Not tracked"
+    const band = screen.getByRole("button", { name: /Not tracked/ });
+    expect(band.getAttribute("aria-expanded")).toBe("true");
+    expect(band.textContent).toContain("1");
+    // collapsing the band hides its rows (the region is hidden, not removed)
+    fireEvent.click(band);
+    expect(band.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[data-gh-row="issue:7"]')!.closest("[hidden]")).not.toBeNull();
+    // pulls group by GitHub's merge state — the band carries the merge fact
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
-    expect(document.querySelector(".ghhead-row .ghh-main")!.textContent).toBe("TITLE / CONTEXT");
+    expect(screen.getByRole("button", { name: /Mergeable/ })).toBeInTheDocument();
   });
 
-  it("an issue row carries the empty reviewers/checks/merge columns and the updated cell (vanilla degrade)", async () => {
+  it("an issue row has an assignee column, no PR-only columns, and the updated cell", async () => {
     stubFetch(AGENTS_WITH_HUMAN);
     mount();
     await screen.findByText("Fix login bug");
     const row = document.querySelector('[data-gh-row="issue:7"]');
     expect(row).not.toBeNull();
-    // vanilla issueRowHtml leaves the three PR-only columns present but empty
-    // so the shared header lines up over both tabs
-    expect(row!.querySelector(".gh-reviewers-col")).not.toBeNull();
-    expect(row!.querySelector(".gh-reviewers-col")!.innerHTML).toBe("");
-    expect(row!.querySelector(".gh-checks-col")!.innerHTML).toBe("");
-    expect(row!.querySelector(".gh-merge-col")!.innerHTML).toBe("");
+    // V2: issues never render the PR-only columns; the assignee has its own cell
+    expect(row!.querySelector(".gh-reviewers-col")).toBeNull();
+    expect(row!.querySelector(".gh-checks-col")).toBeNull();
+    expect(row!.querySelector(".gh-merge-col")).toBeNull();
+    expect(row!.querySelector(".gh-assignee-col")!.textContent).toBe("Unassigned");
     // updated relative time renders (never the raw ISO string)
     const updated = row!.querySelector(".gh-updated");
     expect(updated!.textContent).toBeTruthy();
@@ -186,16 +185,19 @@ describe("GitHubPage list (wire-contract render)", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     expect(await screen.findByText("Add OAuth flow")).toBeInTheDocument();
-    expect(screen.getByText("feat/oauth")).toBeInTheDocument();
+    // one-line rows: the head branch rides the title tooltip, not a second line
+    expect(document.querySelector('[data-gh-row="pull:12"] .gh-title-text')!.getAttribute("title")).toContain("feat/oauth");
     // checks:null -> batch GET .../github/checks?numbers=12 -> chip patched
     expect(await screen.findByText("3 passed")).toBeInTheDocument();
     expect(calls.some((c) => c.url === "/api/containers/c1/github/checks?numbers=12")).toBe(true);
-    // PR dispatch button reads "Fix", clean mergeable_state shows "Checks passed"
+    // PR dispatch button reads "Fix"; clean mergeable_state reads "Mergeable" —
+    // never "Checks passed" (that contradicted pending checks beside it)
     expect(screen.getByRole("button", { name: "Dispatch an agent to fix checks/review feedback on this PR" })).toBeInTheDocument();
-    expect(screen.getByText("Checks passed")).toBeInTheDocument();
+    expect(screen.getByText("Mergeable")).toBeInTheDocument();
+    expect(screen.queryByText("Checks passed")).not.toBeInTheDocument();
   });
 
-  it("a PR row fills the reviewers/checks/merge/updated columns (vanilla pullRowHtml)", async () => {
+  it("a PR row is one line: #id · glyph · title · checks chip · reviewer avatars · time", async () => {
     stubFetch(AGENTS_WITH_HUMAN);
     mount();
     await screen.findByText("Fix login bug");
@@ -203,19 +205,21 @@ describe("GitHubPage list (wire-contract render)", () => {
     await screen.findByText("3 passed"); // progressive fill settled
     const row = document.querySelector('[data-gh-row="pull:12"]');
     expect(row).not.toBeNull();
-    // REVIEWERS: requested_reviewers as overlapping avatars in the reviewers column
-    const reviewers = row!.querySelector(".gh-reviewers-col .gh-reviewers");
+    expect(row!.querySelector(".gh-num")!.textContent).toBe("#12");
+    expect(row!.querySelector(".gh-kind-ico.pull.is-open")).not.toBeNull();
+    // REVIEWERS: requested_reviewers as a D7 overlapping round-avatar stack
+    const reviewers = row!.querySelector(".gh-reviewers-col .v2-avstack");
     expect(reviewers).not.toBeNull();
     expect(reviewers!.querySelectorAll(".av").length).toBe(1); // ["kedar"]
-    // CHECKS: the rollup chip (patched in by the batch endpoint) in its column
-    const checks = row!.querySelector(".gh-checks-col .tag.gh-checks");
+    expect(reviewers!.getAttribute("aria-label")).toBe("Review requested: kedar");
+    // CHECKS: the rollup as a D8 chip (patched in by the batch endpoint)
+    const checks = row!.querySelector(".v2-chip.gh-checks");
     expect(checks).not.toBeNull();
     expect(checks!.classList.contains("pass")).toBe(true);
     expect(checks!.textContent).toContain("3 passed");
-    // MERGE: mergeable_state clean -> the green "Checks passed" merge chip
-    const merge = row!.querySelector(".gh-merge-col .tag.gh-merge");
-    expect(merge).not.toBeNull();
-    expect(merge!.classList.contains("ok")).toBe(true);
+    // MERGE is the group band (never repeated per row)
+    expect(row!.querySelector(".gh-merge")).toBeNull();
+    expect(row!.closest('[data-group="pull-mergeable"]')).not.toBeNull();
     // UPDATED: relative time, never the raw ISO string
     const updated = row!.querySelector(".gh-updated");
     expect(updated!.textContent).toBeTruthy();
@@ -259,7 +263,16 @@ describe("GitHubPage Start flow (human-gated mutation)", () => {
       // created_by_agent_id carries the acting human (trust-off attribution)
       expect(post!.body).toEqual({ kind: "issue", number: 7, created_by_agent_id: "h1" });
     });
-    expect(await screen.findByText("t-99")).toBeInTheDocument();
+    // the row swaps to the tracked-task link: task TITLE (unknown here ->
+    // "Tracked task"), never the raw id, linking to the task
+    const chip = await waitFor(() => {
+      const el = document.querySelector('[data-gh-row="issue:7"] .gh-task-chip');
+      expect(el).not.toBeNull();
+      return el as HTMLAnchorElement;
+    });
+    expect(chip.getAttribute("href")).toContain("task=t-99");
+    expect(chip.textContent).toBe("Tracked task");
+    expect(chip.textContent).not.toContain("t-99");
     expect(await screen.findByText("Task created")).toBeInTheDocument();
   });
 
@@ -299,7 +312,7 @@ describe("GitHubPage Files sub-view integration (?browse=1&ref=&path=)", () => {
     stubFetch(AGENTS_WITH_HUMAN);
     mount("/github?pr=12");
     expect(await screen.findByRole("heading", { name: /Add OAuth flow/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /browse head/i }));
+    fireEvent.click(screen.getByRole("button", { name: /browse files at head/i }));
     await waitFor(() => expect(document.querySelector(".rb-wrap")).not.toBeNull());
   });
 
@@ -351,7 +364,7 @@ describe("GitHubPage local-source degradation (Orcha Cloud local run, Addendum 2
     expect(await screen.findByText(
       "Browsing the local repository. Connect a GitHub repo for issues, PRs, and checks.",
     )).toBeInTheDocument();
-    expect(screen.queryByText("No repo connected")).not.toBeInTheDocument();
+    expect(screen.queryByText("No repository connected")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Connect GitHub repo/ })).toBeInTheDocument();
   });
 
@@ -439,7 +452,8 @@ describe("GitHubPage local-binding + GitHub-origin fall-through", () => {
       "This clone comes from acme/site on GitHub — add GitHub access in Settings to see its issues & PRs.",
     )).toBeInTheDocument();
     const link = screen.getByRole("link", { name: /Add GitHub access/ });
-    expect(link.getAttribute("href")).toBe("/settings");
+    // V2: deep-links straight to the GitHub access section (settings hash key)
+    expect(link.getAttribute("href")).toBe("/settings#tab=github-access");
     // the generic "Connect GitHub repo" wording/button is NOT shown for this variant
     expect(screen.queryByRole("button", { name: /Connect GitHub repo/ })).not.toBeInTheDocument();
   });
@@ -525,6 +539,8 @@ function stubFetchFiltered(opts: { identityLogin?: string | null } = {}): Call[]
   return calls;
 }
 
+const openPullFilters = () => fireEvent.click(screen.getByRole("button", { name: "Pull request filters" }));
+
 describe("GitHubPage PR-list filter bar + pagination", () => {
   beforeEach(() => { localStorage.clear(); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -535,6 +551,7 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow"); // plain list first
+    openPullFilters();
     const authorInput = screen.getByPlaceholderText("Author…");
     fireEvent.change(authorInput, { target: { value: "octocat" } });
     await waitFor(() => {
@@ -548,6 +565,7 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
+    openPullFilters();
     const options = document.querySelectorAll("#ghPullsAuthors option");
     const values = Array.from(options).map((o) => (o as HTMLOptionElement).value);
     expect(values).toContain("kedar"); // PULLS fixture row's author_login
@@ -559,13 +577,15 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
-    fireEvent.click(screen.getByText("Assigned to me"));
+    openPullFilters();
+    const btn = (name: string) => screen.getByRole("button", { name });
+    fireEvent.click(btn("Assigned to me"));
     await waitFor(() => expect(calls.some((c) => c.url.includes("involvement=assigned"))).toBe(true));
-    expect(screen.getByText("Assigned to me").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(screen.getByText("My reviews"));
+    expect(btn("Assigned to me").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(btn("My reviews"));
     await waitFor(() => expect(calls.some((c) => c.url.includes("involvement=review_requested"))).toBe(true));
-    expect(screen.getByText("Assigned to me").getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByText("My reviews").getAttribute("aria-pressed")).toBe("true");
+    expect(btn("Assigned to me").getAttribute("aria-pressed")).toBe("false");
+    expect(btn("My reviews").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("involvement chips are disabled with a tooltip when the identity has no github_login", async () => {
@@ -574,9 +594,14 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
-    const assigned = screen.getByText("Assigned to me");
+    openPullFilters();
+    const assigned = screen.getByRole("button", { name: "Assigned to me" });
     expect(assigned).toBeDisabled();
-    expect(assigned.getAttribute("title")).toBe("Link a GitHub login to use this filter");
+    // the reason rides a focusable wrapper (a disabled button can't host a tooltip)
+    const wrap = assigned.closest(".gh-tip-wrap");
+    expect(wrap).not.toBeNull();
+    expect(wrap!.getAttribute("tabindex")).toBe("0");
+    expect(wrap!.getAttribute("aria-label")).toMatch(/link your GitHub login/i);
   });
 
   it("the search box becomes the server-backed q on the pulls tab", async () => {
@@ -585,7 +610,7 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
-    const search = screen.getByPlaceholderText("Search title or body…");
+    const search = screen.getByRole("searchbox", { name: "Search pull requests" });
     fireEvent.change(search, { target: { value: "oauth bug" } });
     await waitFor(() => expect(calls.some((c) => c.url.includes("q=oauth"))).toBe(true), { timeout: 2000 });
   });
@@ -596,6 +621,7 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
+    openPullFilters();
     fireEvent.change(screen.getByPlaceholderText("Author…"), { target: { value: "kedar" } });
     await screen.findByText("Add OAuth flow"); // filtered page 1 result (same title, different source)
     expect(screen.getByText(/Load more · 1 of ~2/)).toBeInTheDocument();
@@ -607,6 +633,7 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
+    openPullFilters();
     fireEvent.change(screen.getByPlaceholderText("Author…"), { target: { value: "kedar" } });
     await screen.findByText(/Load more/);
     fireEvent.click(screen.getByText(/Load more/));
@@ -623,6 +650,7 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     await screen.findByText("Fix login bug");
     fireEvent.click(screen.getByText("Pull requests"));
     await screen.findByText("Add OAuth flow");
+    openPullFilters();
     const authorInput = screen.getByPlaceholderText("Author…");
     fireEvent.change(authorInput, { target: { value: "kedar" } });
     await waitFor(() => expect(screen.getByText(/Load more/)).toBeInTheDocument());
@@ -631,12 +659,12 @@ describe("GitHubPage PR-list filter bar + pagination", () => {
     expect(screen.getByText("Add OAuth flow")).toBeInTheDocument();
   });
 
-  it("the Issues tab is untouched: no filter bar, plain title search still client-side", async () => {
+  it("the Issues tab has no PR server filters; search stays client-side with the same placeholder", async () => {
     stubFetchFiltered();
     mount();
     await screen.findByText("Fix login bug");
     expect(screen.queryByPlaceholderText("Author…")).not.toBeInTheDocument();
     expect(screen.queryByText("Assigned to me")).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Filter by title or #number…")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Filter issues" })).toHaveAttribute("placeholder", "Search…");
   });
 });

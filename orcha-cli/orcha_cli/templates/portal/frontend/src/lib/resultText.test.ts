@@ -34,20 +34,25 @@ describe("resultText (open-orcha#209 JSONB normalization)", () => {
     expect(resultText({ result: 42, text: "kept" })).toBe("kept");
   });
 
-  it("other objects become pretty-printed JSON — never [object Object]", () => {
-    const out = resultText({ pr: 203, ok: true });
-    expect(out).toBe(JSON.stringify({ pr: 203, ok: true }, null, 2));
-    expect(out).not.toContain("[object Object]");
+  it("other objects become readable Key: value lines — never JSON or [object Object] (D4)", () => {
+    const out = resultText({ pr_number: 203, ok: true, notes: null });
+    expect(out).toBe("Pr number: 203\nOk: yes\nNotes: —");
+    expect(out).not.toMatch(/[{}]|\[object Object\]/);
   });
 
-  it("arrays pretty-print too (typeof [] === 'object')", () => {
-    expect(resultText(["a", "b"])).toBe(JSON.stringify(["a", "b"], null, 2));
+  it("arrays and nested objects flatten readably", () => {
+    expect(resultText(["a", "b"])).toBe("a, b");
+    expect(resultText({ checks: { lint: "pass", tests: 12 }, files: ["a.ts", "b.ts"] })).toBe(
+      "Checks › Lint: pass\nChecks › Tests: 12\nFiles: a.ts, b.ts",
+    );
   });
 
-  it("unstringifiable objects (circular) fall back to String(r)", () => {
+  it("circular objects are bounded (no hang, no [object Object])", () => {
     const circ: Record<string, unknown> = {};
     circ.self = circ;
-    expect(resultText(circ)).toBe(String(circ));
+    const out = resultText(circ);
+    expect(out).toContain("Self");
+    expect(out).not.toContain("[object Object]");
   });
 
   it("non-object scalars stringify", () => {

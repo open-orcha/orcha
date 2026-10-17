@@ -225,6 +225,15 @@ def _detail_error_payload(exc: RuntimeError) -> dict:
     return _error_payload(exc)
 
 
+def _browse_error_payload(exc: RuntimeError) -> dict:
+    """C18: Code Space / browse mapping. A 404 there means the REPOSITORY, ref or path is
+    missing — never "issue or pull request". Other codes reuse the shared mapping."""
+    if str(exc) == "github_status:404":
+        return {"available": False, "reason": "not_found",
+                "detail": "repository, ref or path not found (404)"}
+    return _error_payload(exc)
+
+
 def _load_binding(cur, cid: str, request: Request):
     """Container exists + reader is authorized + the repo binding. Raises on a bad
     cid/unknown container/non-member; returns the bound `owner/name` or None."""
@@ -257,6 +266,14 @@ def _not_connected():
     """The container has no bound repo — a clean, renderable off state (not an error)."""
     return {"available": False, "reason": "repo_not_connected",
             "detail": "no GitHub repo is connected to this project"}
+
+
+def _no_token(repo: str):
+    """G13/C18: a repo IS bound but no GitHub token (App file, per-owner map, env PAT or
+    the project's Settings-saved PAT) can read it — an access problem with a Settings
+    fix, never "no repo connected"."""
+    return {"available": False, "reason": "no_token", "repo": repo,
+            "detail": f"no GitHub token can read {repo} — add one in Settings → GitHub access"}
 
 
 def _local_source_unavailable(origin_detected: "str | None" = None):
@@ -900,7 +917,7 @@ def list_github_issues(cid: str, request: Request):
         return {**cached, "issues": _with_tracked_list(cid, cached["issues"])}
     token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     # GitHub's issues list includes PRs; filter them out (PRs carry pull_request).
     path = f"/repos/{repo}/issues?state=open&per_page=100"
     try:
@@ -1015,7 +1032,7 @@ def list_github_pulls(
     if filtering:
         token = _resolve_repo_token(repo, cid)
         if not token:
-            return _not_connected()
+            return _no_token(repo)
         try:
             raw = _search_pulls(repo, token, author=author, involvement_login=involvement_login,
                                 involvement=involvement, q=q, page=page, per_page=per_page)
@@ -1044,7 +1061,7 @@ def list_github_pulls(
                     "total_count": None, "has_more": len(cached["pulls"]) >= per_page}
     token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         if cache_eligible:
             payload, _raw = _fetch_and_cache_pulls_list(cid, repo, token)
@@ -1099,7 +1116,7 @@ def list_github_checks(cid: str, request: Request, numbers: str = Query(...)):
         return {"available": True, "checks": {}}
     token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         raw_pulls = _cached_or_fetch_raw_pulls(cid, repo, token)
     except RuntimeError as exc:
@@ -1168,7 +1185,7 @@ def get_github_pull(cid: str, number: int, request: Request):
         return {**cached, "pull": _with_tracked_one(cid, number, cached["pull"])}
     token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         raw = _gh_get(f"/repos/{repo}/pulls/{number}", token)
     except RuntimeError as exc:
@@ -1207,7 +1224,7 @@ def get_github_issue(cid: str, number: int, request: Request):
         return {**cached, "issue": _with_tracked_one(cid, number, cached["issue"])}
     token = _resolve_repo_token(repo, cid)
     if not token:
-        return _not_connected()
+        return _no_token(repo)
     try:
         raw = _gh_get(f"/repos/{repo}/issues/{number}", token)
     except RuntimeError as exc:
@@ -1215,6 +1232,26 @@ def get_github_issue(cid: str, number: int, request: Request):
     payload = {"available": True, "repo": repo, "issue": _issue_detail(repo, raw, token)}
     _cache_put(cid, "issue", payload, number)
     return {**payload, "issue": _with_tracked_one(cid, number, payload["issue"])}
+
+
+def _start_assignee(cur, cid: str, raw):
+    """The validated assignee id for a hub start (None when unassigned): a live AI agent in
+    this container. Raises the same 400/404/409s the route always returned."""
+    if not raw:
+        return None
+    if not valid_uuid(raw):
+        raise HTTPException(400, "assignee_agent_id is not a valid UUID")
+    cur.execute("SELECT kind, container_id, terminated_at FROM agents WHERE id=%s", (raw,))
+    a = cur.fetchone()
+    if not a:
+        raise HTTPException(404, f"agent {raw} not found")
+    if str(a["container_id"]) != cid:
+        raise HTTPException(409, "assignee is not in this container")
+    if a["terminated_at"] is not None:
+        raise HTTPException(409, "assignee is retired and cannot be assigned work")
+    if a["kind"] != "ai":
+        raise HTTPException(409, "can only assign GitHub work to AI agents")
+    return raw
 
 
 @app.post("/api/containers/{cid}/github/start", status_code=201)
@@ -1257,35 +1294,22 @@ def start_from_github(cid: str, body: GithubStartBody, request: Request):
     """
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
+    # GH #258 S3 note 4: three scopes so no write lock is held across the GitHub calls —
+    # (1) gate + validate, (2) the fetches in a readonly scope, (3) a short write scope that
+    # re-validates the assignee; start_task_from_github re-checks "already tracked" itself.
     with db_cursor() as (conn, cur):
         require_container(cur, cid)
         # Same identity/grant gate task creation requires today: the trusted login IS the
         # creator (non-member 403, viewer write-banned); trust-off passes the body actor
         # through unchanged (the self-host convention).
         created_by = trusted_actor(cur, request, cid, body.created_by_agent_id)
+        _start_assignee(cur, cid, body.assignee_agent_id)
+        already_tracked = find_open_gh_task(cur, cid, body.number)
 
-        assignee_id = None
-        if body.assignee_agent_id:
-            if not valid_uuid(body.assignee_agent_id):
-                raise HTTPException(400, "assignee_agent_id is not a valid UUID")
-            cur.execute(
-                "SELECT kind, container_id, terminated_at FROM agents WHERE id=%s",
-                (body.assignee_agent_id,),
-            )
-            a = cur.fetchone()
-            if not a:
-                raise HTTPException(404, f"agent {body.assignee_agent_id} not found")
-            if str(a["container_id"]) != cid:
-                raise HTTPException(409, "assignee is not in this container")
-            if a["terminated_at"] is not None:
-                raise HTTPException(409, "assignee is retired and cannot be assigned work")
-            if a["kind"] != "ai":
-                raise HTTPException(409, "can only assign GitHub work to AI agents")
-            assignee_id = body.assignee_agent_id
-
-        gh_title, body_excerpt, html_url = body.title or "", body.body_excerpt or "", body.html_url or ""
-        dod_override = None
-        if not find_open_gh_task(cur, cid, body.number):
+    gh_title, body_excerpt, html_url = body.title or "", body.body_excerpt or "", body.html_url or ""
+    dod_override = None
+    if not already_tracked:
+        with db_cursor(readonly=True) as (_conn, cur):
             # Authoritative title/body/url — see this function's docstring. Fetched for
             # BOTH kinds; the client-supplied body.* fields above are the fallback,
             # used only if this fetch itself fails.
@@ -1306,6 +1330,8 @@ def start_from_github(cid: str, body: GithubStartBody, request: Request):
                     except RuntimeError:
                         pass   # live re-fetch failed — degrade to the generic static DoD
 
+    with db_cursor() as (conn, cur):
+        assignee_id = _start_assignee(cur, cid, body.assignee_agent_id)
         result = start_task_from_github(
             cur,
             cid,

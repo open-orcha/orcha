@@ -28,9 +28,10 @@ the trigger made progress).
 import os
 from typing import Optional
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.events import publish_event
-from portal_backend.guards import pick_human
+from portal_backend.guards import find_actionable_human
 
 # ---- backoff ladder (env-tunable, sane defaults) --------------------------------------
 # Strike thresholds and their suppression durations. Kept as an ordered ladder (highest
@@ -109,12 +110,12 @@ def recent_same_trigger_run(cur, agent_id: str, wake_key: str):
     'Completed' = status != 'running' (exited | killed | rate_limited | failed) with
     ended_at set — a still-running run can't yet be judged to have changed nothing."""
     cur.execute(
-        f"""SELECT run_id, ended_at FROM worker_runs
+        """SELECT run_id, ended_at FROM worker_runs
              WHERE agent_id=%s AND wake_event=%s AND status <> 'running'
                AND ended_at IS NOT NULL
-               AND ended_at >= now() - interval '{RECENT_RUN_WINDOW_SECS} seconds'
+               AND ended_at >= %s
              ORDER BY ended_at DESC LIMIT 1""",
-        (agent_id, wake_key),
+        (agent_id, wake_key, sql.ago(RECENT_RUN_WINDOW_SECS)),
     )
     return cur.fetchone()
 
@@ -141,10 +142,10 @@ def record_strike(cur, container_id: str, agent_id: str, wake_key: str) -> dict:
     backoff = backoff_secs_for_strikes(strikes)
     if backoff > 0:
         cur.execute(
-            """UPDATE wake_backoff SET suppressed_until = now() + (%s || ' seconds')::interval
+            """UPDATE wake_backoff SET suppressed_until = %s
                  WHERE agent_id=%s AND wake_key=%s
                  RETURNING strikes, suppressed_until, notified_at, first_strike_at, last_strike_at""",
-            (backoff, agent_id, wake_key),
+            (sql.from_now(backoff), agent_id, wake_key),
         )
     else:
         cur.execute(
@@ -188,9 +189,17 @@ def notify_human_of_breaker(cur, container_id: str, agent_id: str, alias: str, w
 
     Fires ONCE per strike-streak (guarded by the caller checking notified_at is NULL) — never
     once per tick. Honest, specific wording per the spec; never implies work was cancelled."""
-    human_id = pick_human(cur, container_id)
+    # Non-raising lookup: pick_human 409s when nobody can act, which would abort the wake
+    # scan. No actionable human (none registered, or viewers only — never route to a
+    # read-only viewer) → log-safe no-op, mirrors find_orchestrator_agent.
+    # Org chart (mig 052): the stuck agent's nearest actionable manager first.
+    from portal_backend.org_chart import route_via_manager, stamp_routing
+
+    human_id, org_routing = route_via_manager(cur, container_id, agent_id)
     if human_id is None:
-        return None  # no human registered yet — log-safe no-op, mirrors find_orchestrator_agent
+        human_id = find_actionable_human(cur, container_id)
+    if human_id is None:
+        return None
     duration = backoff_secs_for_strikes(strikes)
     duration_label = _format_duration(duration)
     trigger_label = _humanize_wake_key(wake_key)
@@ -203,11 +212,12 @@ def notify_human_of_breaker(cur, container_id: str, agent_id: str, alias: str, w
         """INSERT INTO requests
                 (container_id, type, requester_id, target_id, priority, status,
                  payload, expires_at, chain_depth)
-           VALUES (%s, 'info', %s, %s, 100, 'open', %s, now() + interval '7 days', 0)
+           VALUES (%s, 'info', %s, %s, 100, 'open', %s, %s, 0)
            RETURNING id""",
-        (container_id, agent_id, human_id, payload),
+        (container_id, agent_id, human_id, payload, sql.from_now(7 * 86400)),
     )
     rid = str(cur.fetchone()["id"])
+    stamp_routing(cur, rid, org_routing)
     log_event(
         cur, container_id, "system", None, "request", rid, "created",
         {"type": "info", "target_alias": None, "priority": 100, "preview": payload[:120],

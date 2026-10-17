@@ -17,18 +17,19 @@ export interface PremiumGateProps {
   title: string;
   pitch: string[];
   upgradeUrl: string;
+  /** embedded under a page that already shows the feature's heading — skip the card title */
+  hideTitle?: boolean;
 }
 
-export function PremiumGate({ feature, title, pitch, upgradeUrl }: PremiumGateProps) {
+export function PremiumGate({ feature, title, pitch, upgradeUrl, hideTitle }: PremiumGateProps) {
   return (
     <div className="card set-card" data-premium-feature={feature}>
-      <div className="card-h"><h2>{title}</h2></div>
+      {hideTitle ? null : <div className="card-h"><h2>{title}</h2></div>}
       <div className="card-b">
-        <div className="sc-banner warn">
-          <div className="bt">
-            <Icon name="shield" cls="" />
-            <span><b>{title} is an Orcha Cloud Team feature.</b> Local run is the free solo tier.</span>
-          </div>
+        {/* flat status line (V2): only the icon carries colour — no tinted warn slab */}
+        <div className="pg-status">
+          <Icon name="shield" cls="" />
+          <span><b>{title} is a Embodent Cloud Team feature.</b> Local run is the free solo tier.</span>
         </div>
         {pitch.length > 0 && (
           <ul className="pg-pitch">
@@ -46,7 +47,7 @@ export function PremiumGate({ feature, title, pitch, upgradeUrl }: PremiumGatePr
             type="button"
             onClick={() => window.open(upgradeUrl, "_blank", "noopener")}
           >
-            <Icon name="spark" cls="" />Upgrade to Orcha Cloud Team
+            <Icon name="spark" cls="" />Upgrade to Embodent Cloud Team
           </button>
         </div>
       </div>
@@ -56,6 +57,9 @@ export function PremiumGate({ feature, title, pitch, upgradeUrl }: PremiumGatePr
 }
 
 const PREMIUM_GATE_CSS = `
+  .pg-status { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+  .pg-status svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--amber); }
+  .pg-status b { color: var(--text); font-weight: 600; }
   .pg-pitch { list-style: none; display: flex; flex-direction: column; gap: 8px;
     margin: 14px 0 18px; padding: 0; }
   .pg-pitch li { display: flex; align-items: flex-start; gap: 9px; font-size: 13px;

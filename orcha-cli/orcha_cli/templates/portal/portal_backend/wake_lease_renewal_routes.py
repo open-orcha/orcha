@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
@@ -25,27 +26,28 @@ def wake_renew(aid: str, body: WakeClaim):
     with db_cursor() as (conn, cur):
         require_agent(cur, aid)
         lane = resolve_claim_lane(body)
+        lease_until = sql.from_now(body.lease_ttl)
         if lane == "conversation":
             cur.execute(
                 """UPDATE agent_wake_state
-                   SET conv_lease_until=now() + make_interval(secs => %s)
+                   SET conv_lease_until=%s
                    WHERE agent_id=%s
                      AND conv_lease_until IS NOT NULL
                      AND conv_lease_until > now()
                    RETURNING conv_lease_until AS wake_lease_until,
                              conv_lease_kind AS lease_kind,
                              conv_preempt_requested_at AS preempt_requested_at""",
-                (body.lease_ttl, aid),
+                (lease_until, aid),
             )
         else:
             cur.execute(
                 """UPDATE agent_wake_state
-                   SET wake_lease_until=now() + make_interval(secs => %s)
+                   SET wake_lease_until=%s
                    WHERE agent_id=%s
                      AND wake_lease_until IS NOT NULL
                      AND wake_lease_until > now()
                    RETURNING wake_lease_until, lease_kind, preempt_requested_at""",
-                (body.lease_ttl, aid),
+                (lease_until, aid),
             )
         row = cur.fetchone()
         if row is not None:
@@ -63,7 +65,7 @@ def wake_renew(aid: str, body: WakeClaim):
             cur.execute(
                 """SELECT w.run_id, ag.alias AS by_alias
                    FROM worker_runs w
-                   LEFT JOIN agents ag ON ag.id::text = w.stop_requested_by
+                   LEFT JOIN agents ag ON CAST(ag.id AS TEXT) = w.stop_requested_by
                    WHERE w.agent_id=%s AND w.status='running' AND w.lane=%s
                      AND w.stop_requested_at IS NOT NULL
                    ORDER BY w.started_at DESC LIMIT 1""",

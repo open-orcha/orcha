@@ -15,7 +15,7 @@ class ConnectionErrorCopyTest {
     @Test
     fun `null error falls back to the address-neutral unreachable copy`() {
         assertEquals(
-            "Could not reach Orcha at this address. Check the address and that your Orcha is up.",
+            "Could not reach Embodent at this address. Check the address and that your Embodent is up.",
             ConnectionErrorCopy.friendly(null),
         )
     }
@@ -38,7 +38,7 @@ class ConnectionErrorCopyTest {
     @Test
     fun `blank-message IllegalArgumentException falls through to the generic classifier`() {
         assertEquals(
-            "Could not reach Orcha at this address. Check the address and that your Orcha is up.",
+            "Could not reach Embodent at this address. Check the address and that your Embodent is up.",
             ConnectionErrorCopy.friendly(IllegalArgumentException("")),
         )
     }
@@ -54,7 +54,7 @@ class ConnectionErrorCopyTest {
         val decodeFailure = FakeSerializationException("Unexpected token")
         val copy = ConnectionErrorCopy.friendly(decodeFailure)
         assertEquals(
-            "This app version couldn't read part of Orcha's reply. Your Orcha and network are fine — update the app to the latest version.",
+            "This app version couldn't read part of Embodent's reply. Your Embodent and network are fine — update the app to the latest version.",
             copy,
         )
         assertEquals(false, copy.contains("reach", ignoreCase = true))
@@ -66,7 +66,7 @@ class ConnectionErrorCopyTest {
         val wrapped = RuntimeException("wrapped", RuntimeException("also wrapped", root))
         val copy = ConnectionErrorCopy.friendly(wrapped)
         assertEquals(
-            "This app version couldn't read part of Orcha's reply. Your Orcha and network are fine — update the app to the latest version.",
+            "This app version couldn't read part of Embodent's reply. Your Embodent and network are fine — update the app to the latest version.",
             copy,
         )
     }
@@ -82,7 +82,7 @@ class ConnectionErrorCopyTest {
     @Test
     fun `409 gets the item-changed copy`() {
         assertEquals(
-            "Orcha rejected this action because the item changed. Refresh and try again.",
+            "Embodent rejected this action because the item changed. Refresh and try again.",
             ConnectionErrorCopy.friendly(RuntimeException("409 Conflict")),
         )
     }
@@ -90,7 +90,7 @@ class ConnectionErrorCopyTest {
     @Test
     fun `422 gets the needs-more-information copy`() {
         assertEquals(
-            "Orcha needs more information for this action.",
+            "Embodent needs more information for this action.",
             ConnectionErrorCopy.friendly(RuntimeException("422 Unprocessable")),
         )
     }
@@ -98,8 +98,8 @@ class ConnectionErrorCopyTest {
     @Test
     fun `a short plain message passes through unchanged`() {
         assertEquals(
-            "No Orcha container was found at this address.",
-            ConnectionErrorCopy.friendly(RuntimeException("No Orcha container was found at this address.")),
+            "No Embodent container was found at this address.",
+            ConnectionErrorCopy.friendly(RuntimeException("No Embodent container was found at this address.")),
         )
     }
 
@@ -107,7 +107,7 @@ class ConnectionErrorCopyTest {
     fun `a very long message is dropped in favor of the address-neutral fallback`() {
         val longMessage = "x".repeat(200)
         assertEquals(
-            "Could not reach Orcha at this address. Check the address and that your Orcha is up.",
+            "Could not reach Embodent at this address. Check the address and that your Embodent is up.",
             ConnectionErrorCopy.friendly(RuntimeException(longMessage)),
         )
     }

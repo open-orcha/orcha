@@ -1,0 +1,4 @@
+/* mig 057 — Settings → Execution › Review: keep the three choices on one line */
+.set-review-route { flex: none; white-space: nowrap; }
+.set-review-route .v2-seg-item { white-space: nowrap; }
+.set-rowi.set-review-row > dd { flex: none; }

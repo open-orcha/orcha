@@ -17,6 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import io.openorcha.mobile.ui.components.LocalPortalLinkHandler
+import io.openorcha.mobile.ui.components.PortalLinkHandler
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,11 +91,21 @@ class MainActivity : ComponentActivity() {
                         AppRoute.GitHubIssueDetail, AppRoute.GitHubPullDetail -> viewModel.showGithubHub()
                         AppRoute.TaskDetail, AppRoute.RequestDetail, AppRoute.AgentDetail, AppRoute.CreateTask, AppRoute.GitHubHub ->
                             viewModel.showWorkspace()
-                        AppRoute.Workspace, AppRoute.AddContainer, AppRoute.Settings, AppRoute.Scanner ->
+                        AppRoute.Settings -> viewModel.closeSettings()
+                        AppRoute.Workspace, AppRoute.AddContainer, AppRoute.Scanner ->
                             viewModel.showContainers()
                         AppRoute.Containers -> Unit
                     }
                 }
+                val workspaceState = rememberSaveableStateHolder()
+                // Portal-link chips anywhere (threads, chat, requests) open in-app screens.
+                val portalLinks = PortalLinkHandler(
+                    baseUrl = state.selectedContainer?.baseUrl,
+                    onTask = viewModel::openTask,
+                    onRequest = viewModel::openRequest,
+                    onAgent = { ref -> state.snapshot?.agents?.firstOrNull { it.id == ref || it.alias == ref }?.let { viewModel.openAgent(it.id) } },
+                )
+                CompositionLocalProvider(LocalPortalLinkHandler provides portalLinks) {
                 Box(Modifier.fillMaxSize().paletteChromeBackground()) {
                 when (state.route) {
                     AppRoute.Containers -> ContainersHomeScreen(
@@ -125,7 +139,7 @@ class MainActivity : ComponentActivity() {
 
                     AppRoute.Settings -> SettingsScreen(
                         state = state,
-                        onBack = viewModel::showContainers,
+                        onBack = viewModel::closeSettings,
                         onTheme = viewModel::setThemeMode,
                         onSkin = viewModel::setSkinMode,
                         onOpen = viewModel::openContainer,
@@ -137,26 +151,43 @@ class MainActivity : ComponentActivity() {
                             viewModel.beginSignInAgain(id)
                             viewModel.signInWithGitHub(this@MainActivity)
                         },
-                    )
-
-                    AppRoute.Workspace -> WorkspaceScreen(
-                        state = state,
-                        onBack = viewModel::showContainers,
-                        onRefresh = viewModel::refreshSelected,
-                        onForget = viewModel::forgetSelectedContainer,
-                        onSettings = viewModel::showSettings,
-                        onTab = viewModel::selectTab,
-                        onOpenTask = viewModel::openTask,
-                        onOpenRequest = viewModel::openRequest,
-                        onOpenAgent = viewModel::openAgent,
-                        onCreateTask = viewModel::showCreateTask,
-                        onDecidePlanFor = viewModel::decidePlanById,
-                        onVerifyFor = viewModel::verifyTaskById,
                         onSetWakes = viewModel::setWakes,
                         onSetAutonomy = viewModel::setAutonomy,
-                        onOpenGithubHub = viewModel::showGithubHub,
-                        onSearchQueryChange = viewModel::setSearchQuery,
+                        onOpenTask = viewModel::openTask,
+                        onRepoChanged = { viewModel.refreshSelected() },
+                        onIconChanged = { viewModel.refreshSelected(); viewModel.probeContainers() },
                     )
+
+                    // Keep the workspace's saved UI state (tab filters, request lens, scroll) while a
+                    // detail screen is open, so back returns to the same view — per project.
+                    AppRoute.Workspace -> workspaceState.SaveableStateProvider("workspace-${state.selectedContainer?.id}") {
+                        // Synced prefs (iOS parity): pull the server's theme/skin when a workspace opens.
+                        LaunchedEffect(state.selectedContainer?.baseUrl) {
+                            val base = state.selectedContainer?.baseUrl ?: return@LaunchedEffect
+                            io.openorcha.mobile.ui.screens.InboxPrefsSync.pull(
+                                base, state.themeMode, state.skinMode, viewModel::setThemeMode, viewModel::setSkinMode,
+                            )
+                        }
+                        WorkspaceScreen(
+                            state = state,
+                            onBack = viewModel::showContainers,
+                            onRefresh = viewModel::refreshSelected,
+                            onForget = viewModel::forgetSelectedContainer,
+                            onSettings = viewModel::showSettings,
+                            onTab = viewModel::selectTab,
+                            onOpenTask = viewModel::openTask,
+                            onOpenRequest = viewModel::openRequest,
+                            onOpenAgent = viewModel::openAgent,
+                            onCreateTask = viewModel::showCreateTask,
+                            onDecidePlanFor = viewModel::decidePlanById,
+                            onVerifyFor = viewModel::verifyTaskById,
+                            onSetWakes = viewModel::setWakes,
+                            onSetAutonomy = viewModel::setAutonomy,
+                            onOpenGithubHub = viewModel::showGithubHub,
+                            onSearchQueryChange = viewModel::setSearchQuery,
+                            onSwitchProject = viewModel::openContainer,
+                        )
+                    }
 
                     AppRoute.TaskDetail -> TaskDetailScreen(
                         state = state,
@@ -169,6 +200,8 @@ class MainActivity : ComponentActivity() {
                         onVerify = viewModel::verifySelectedTask,
                         onDecidePlan = viewModel::decideSelectedPlan,
                         onOpenRun = viewModel::openRun,
+                        onSendMessage = viewModel::sendTaskMessage,
+                        onTaskChanged = viewModel::refreshSelected,
                     )
 
                     AppRoute.TaskThread -> TaskThreadScreen(
@@ -191,6 +224,9 @@ class MainActivity : ComponentActivity() {
                         onRejectTask = viewModel::rejectSelectedTaskRequest,
                         onConvert = viewModel::convertSelectedRequest,
                         onOpenTask = viewModel::openTask,
+                        onOpenRequest = viewModel::openRequest,
+                        onOpenAgent = { ref -> state.snapshot?.agents?.firstOrNull { it.id == ref || it.alias == ref }?.let { viewModel.openAgent(it.id) } },
+                        onResolved = viewModel::refreshSelected,
                     )
 
                     AppRoute.AgentDetail -> AgentDetailScreen(
@@ -208,6 +244,7 @@ class MainActivity : ComponentActivity() {
                             viewModel.selectTab(io.openorcha.mobile.ui.WorkspaceTab.Requests)
                             viewModel.showWorkspace()
                         },
+                        onOpenAgent = viewModel::openAgent,
                     )
 
                     AppRoute.RunDetail -> RunDetailScreen(
@@ -305,6 +342,7 @@ class MainActivity : ComponentActivity() {
                     hostState = snackbarHost,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 90.dp),
                 )
+                }
                 }
             }
         }

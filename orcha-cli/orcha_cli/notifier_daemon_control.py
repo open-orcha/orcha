@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pathlib
 
+from . import personal_session
+
 
 def terminate_and_wait(
     pid: int, cid: str | None, grace: float = 8.0, *, services
@@ -175,6 +177,9 @@ def ensure_daemon(
                 stderr=log,
                 stdin=services.subprocess.DEVNULL,
                 start_new_session=True,
+                # A daemon --ensure'd from a personal desktop tab must not hand the
+                # personal marker to every worker it later spawns.
+                env=personal_session.strip(dict(services.os.environ)),
             )
     except (OSError, services.subprocess.SubprocessError) as error:
         if claim_won:

@@ -53,7 +53,7 @@ describe("fetchPlan", () => {
     const p = await fetchPlan();
     expect(p.plan).toBe("team");
     expect(p.features).toEqual({ members: true });
-    expect(p.upgrade_url).toBe("https://orcha.nursoftai.com/#pricing");
+    expect(p.upgrade_url).toBe("https://orcha.quantallabs.ai");
   });
 
   it("fail-open: a non-OK response (5xx) resolves to team", async () => {

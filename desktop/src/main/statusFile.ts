@@ -2,7 +2,7 @@ import { promises as nodeFs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { AgentSummary, StackAttention } from './attention'
-import type { AttentionItem, Stack } from '../shared/types'
+import { isDecisionItem, type AttentionItem, type Stack } from '../shared/types'
 
 /** App Group shared with the native WidgetKit extension. The prefix must be
  *  the signing cert's REAL TeamIdentifier (the OU, N2597TV587 — the CN
@@ -44,12 +44,17 @@ export function buildStatus(
   details: Map<string, StackAttention>,
   now: Date
 ): WidgetStatus {
+  // Counts are DECISIONS only (plans, verifications, requests to a human/escalated) — the
+  // same rule as the tray title and host sidebar. Follow-ups (answered requests a human
+  // raised) are still listed below, after the decisions, but never counted (V2 arch §3.3).
+  const decisions = items.filter(isDecisionItem)
+  const followUps = items.filter((i) => !isDecisionItem(i))
   const counts = new Map<string, number>()
-  for (const i of items) counts.set(i.project, (counts.get(i.project) ?? 0) + 1)
+  for (const i of decisions) counts.set(i.project, (counts.get(i.project) ?? 0) + 1)
   return {
     v: 3,
     updatedAt: now.toISOString(),
-    totalAttention: items.length,
+    totalAttention: decisions.length,
     stacks: stacks.map((s) => {
       const d = details.get(s.project) // stopped stacks aren't fetched -> zeros
       const agents = d?.agents ?? []
@@ -62,7 +67,7 @@ export function buildStatus(
         tasks: d?.tasks ?? { ready: 0, inProgress: 0, needsVerification: 0 }
       }
     }),
-    attention: items
+    attention: [...decisions, ...followUps]
       .slice(0, ATTENTION_MAX)
       .map((i) => ({ projectShort: i.projectShort, kind: i.kind, title: i.title }))
   }

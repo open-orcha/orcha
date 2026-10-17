@@ -59,19 +59,22 @@ struct GitHubPullDetailScreen: View {
 
     private var loadingState: some View {
         ScrollView {
-            VStack(spacing: 12) {
-                SkeletonBlock(height: 60)
+            VStack(spacing: LSpace.m) {
+                SkeletonBlock(height: 72)
                 SkeletonBlock(height: 160)
                 SkeletonBlock(height: 120)
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
     }
 
     private func loaded(_ pull: GitHubPullDetail) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: LSpace.xl) {
                 header(pull)
+                GitHubTrackedCard(startedTaskId: startedTask, disabled: model.actionInFlight) {
+                    showStartPicker = true
+                }
                 if !pull.bodyMarkdown.isEmpty {
                     section("Description") {
                         ChatMarkdownView(text: pull.bodyMarkdown)
@@ -83,46 +86,40 @@ struct GitHubPullDetailScreen: View {
                     OpenOnGitHubLink(url: url)
                 }
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
+        .background(p.bg)
         .refreshable { await load() }
     }
 
     private func header(_ pull: GitHubPullDetail) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(pull.title)
-                .font(p.uiFont(19, .bold))
-                .foregroundStyle(p.text)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                StatusPill(status: pull.draft ? "draft" : pull.state, domain: .task)
-                ChecksChip(checks: pull.checks)
-                MergeStateChip(mergeableState: pull.mergeableState)
+        let state = GitHubDetailState.pull(state: pull.state, draft: pull.draft)
+        return GitHubDetailHeader(state: state, number: pull.number, title: pull.title) {
+            if let author = pull.authorLogin {
+                GitHubPersonMeta(login: author)
             }
             // base ← head, mirroring GitHub's own "into base from head" framing.
-            HStack(spacing: 6) {
-                Text(pull.base)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(p.text2)
+            HStack(spacing: 4) {
+                Text(pull.base).foregroundStyle(p.text2)
                 Image(systemName: "arrow.left")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(p.muted)
-                Text(pull.head)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(p.accent)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(p.faint)
+                    .accessibilityLabel("from")
+                Text(pull.head).foregroundStyle(p.text)
             }
+            .ltype(.micro)
+            .monospaced()
             .lineLimit(1)
-            HStack(spacing: 6) {
-                if let author = pull.authorLogin {
-                    AgentAvatar(alias: author, human: true, githubLogin: author, size: 22)
-                    Text(author).font(p.uiFont(12)).foregroundStyle(p.text2)
-                }
-                if !pull.requestedReviewers.isEmpty {
-                    MetaTag(text: "reviewers: \(pull.requestedReviewers.joined(separator: ", "))")
-                }
-                Spacer()
-                Text(MobileUx.agoLabel(pull.updatedAt).map { "updated \($0)" } ?? "")
-                    .font(p.uiFont(11)).foregroundStyle(p.faint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 5))
+            ChecksChip(checks: pull.checks)
+            MergeStateChip(mergeableState: pull.mergeableState)
+            if !pull.requestedReviewers.isEmpty {
+                LTag("Reviewers: \(pull.requestedReviewers.joined(separator: ", "))")
+            }
+            if let ago = MobileUx.agoLabel(pull.updatedAt) {
+                Text("Updated \(ago)").ltype(.micro).foregroundStyle(p.faint)
             }
         }
     }
@@ -130,26 +127,30 @@ struct GitHubPullDetailScreen: View {
     @ViewBuilder
     private func checksSection(_ checks: GitHubChecks) -> some View {
         let summary = GitHubHubUx.checksSummary(checks)
-        section("Checks · \(summary.label)") {
+        section("Checks", count: summary.hasChecks ? checks.total : nil) {
             if checks.runs.isEmpty {
                 Text(summary.hasChecks ? "No per-run detail reported." : "No checks are configured on this repository.")
-                    .font(p.uiFont(13)).foregroundStyle(p.muted)
+                    .ltype(.meta).foregroundStyle(p.muted)
             } else {
-                VStack(spacing: 8) {
-                    ForEach(checks.runs) { run in
-                        HStack(spacing: 8) {
+                VStack(spacing: 0) {
+                    ForEach(Array(checks.runs.enumerated()), id: \.element.id) { index, run in
+                        if index > 0 { LDivider() }
+                        HStack(spacing: LSpace.s) {
                             CheckRunGlyph(run: run)
                             Text(run.name.isEmpty ? "(unnamed check)" : run.name)
-                                .font(p.uiFont(13))
+                                .ltype(.meta)
                                 .foregroundStyle(p.text)
                                 .lineLimit(1)
                             Spacer()
                             if let conclusion = run.conclusion {
                                 Text(conclusion)
-                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .ltype(.micro)
+                                    .monospaced()
                                     .foregroundStyle(p.muted)
                             }
                         }
+                        .frame(minHeight: 36)
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -158,36 +159,38 @@ struct GitHubPullDetailScreen: View {
 
     @ViewBuilder
     private func filesSection(_ files: GitHubFiles, htmlUrl: String?) -> some View {
-        section("Files · \(files.count)") {
+        section("Files changed", count: files.count) {
             if files.items.isEmpty {
                 Text("No file changes reported.")
-                    .font(p.uiFont(13)).foregroundStyle(p.muted)
+                    .ltype(.meta).foregroundStyle(p.muted)
             } else {
-                VStack(spacing: 6) {
-                    ForEach(files.items) { file in
+                VStack(spacing: 0) {
+                    ForEach(Array(files.items.enumerated()), id: \.element.id) { index, file in
+                        if index > 0 { LDivider() }
                         ChangedFileRow(file: file, htmlUrl: htmlUrl)
                     }
                     if files.truncated {
                         Text("Showing the first \(files.items.count) of \(files.count) changed files.")
-                            .font(p.uiFont(11))
+                            .ltype(.micro)
                             .foregroundStyle(p.faint)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, LSpace.s)
                     }
                     if files.patchesTruncated {
                         Text("Some diffs were too large to include here — view the full changes on GitHub.")
-                            .font(p.uiFont(11))
+                            .ltype(.micro)
                             .foregroundStyle(p.faint)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, LSpace.s)
                     }
                 }
             }
         }
     }
 
-    private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionH(title: title)
-            OrchaCard { content() }
+    private func section(_ title: String, count: Int? = nil, @ViewBuilder content: () -> some View) -> some View {
+        LSection(title, count: count) {
+            LCard { content() }
         }
     }
 }
@@ -206,6 +209,7 @@ struct ChangedFileRow: View {
     let htmlUrl: String?
 
     @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var parsedFile: DiffFile? {
         guard let patch = file.patch else { return nil }
@@ -215,29 +219,22 @@ struct ChangedFileRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.spring(duration: 0.25)) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : .lSpring) { expanded.toggle() }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10.5, weight: .semibold))
+                HStack(spacing: LSpace.s) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(p.faint)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
                     Text(file.filename)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(p.text2)
+                        .ltype(.mono)
+                        .foregroundStyle(p.text)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    if file.additions > 0 {
-                        Text("+\(file.additions)")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(p.ok)
-                    }
-                    if file.deletions > 0 {
-                        Text("-\(file.deletions)")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(p.danger)
-                    }
+                    Spacer(minLength: LSpace.s)
+                    DiffCounts(adds: file.additions, dels: file.deletions, compact: true)
                 }
+                .frame(minHeight: 40)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -247,7 +244,9 @@ struct ChangedFileRow: View {
             if expanded {
                 if let parsedFile {
                     DiffFileBody(file: parsedFile)
-                        .padding(.top, 6)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(p.border, lineWidth: 1))
+                        .padding(.bottom, LSpace.s)
                 } else {
                     omittedNote
                 }
@@ -261,11 +260,12 @@ struct ChangedFileRow: View {
             Text(file.patchOmitted
                  ? "This diff is too large to show here."
                  : "This diff isn't available from this server yet.")
-                .font(p.uiFont(12))
+                .ltype(.meta)
                 .foregroundStyle(p.muted)
             if let htmlUrl, let url = URL(string: htmlUrl) {
                 Link("View on GitHub", destination: url)
-                    .font(p.uiFont(12, .semibold))
+                    .ltype(.meta)
+                    .fontWeight(.medium)
                     .foregroundStyle(p.accent)
             }
         }
@@ -281,19 +281,20 @@ struct OpenOnGitHubLink: View {
 
     var body: some View {
         Link(destination: url) {
-            HStack(spacing: 8) {
+            HStack(spacing: LSpace.s) {
                 GitHubMark().frame(width: 15, height: 15)
                 Text("Open on GitHub")
-                    .font(p.uiFont(14, .semibold))
+                    .ltype(.bodyEmph)
                 Spacer()
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(p.faint)
             }
             .foregroundStyle(p.text)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(p.surface2, in: RoundedRectangle(cornerRadius: p.radiusButton))
-            .overlay(RoundedRectangle(cornerRadius: p.radiusButton).strokeBorder(p.border2, lineWidth: 1))
+            .padding(.horizontal, LSpace.m)
+            .frame(minHeight: 44)
+            .background(p.surface, in: RoundedRectangle(cornerRadius: p.radiusCard, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: p.radiusCard, style: .continuous).strokeBorder(p.border, lineWidth: 1))
         }
         .accessibilityHint("Opens this item in Safari")
     }
@@ -329,15 +330,158 @@ struct GitHubDetailFailed: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: LSpace.m) {
                 Banner(kind: .danger, text: message)
-                KitButton(title: "Try again", role: .neutral) {
+                LButton("Try again", icon: "arrow.clockwise", kind: .secondary) {
                     Task { await retry() }
                 }
-                .frame(maxWidth: 220)
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
         .refreshable { await retry() }
+    }
+}
+
+// MARK: - Shared Linear detail pieces (issue + PR)
+
+/// GitHub state → glyph + tint, web parity: open green, merged violet, closed grey.
+enum GitHubDetailState {
+    case openIssue, closedIssue, openPull, draftPull, mergedPull, closedPull
+
+    static func issue(state: String) -> Self { state == "closed" ? .closedIssue : .openIssue }
+
+    static func pull(state: String, draft: Bool) -> Self {
+        switch state {
+        case "merged": .mergedPull
+        case "closed": .closedPull
+        default: draft ? .draftPull : .openPull
+        }
+    }
+
+    var glyph: String {
+        switch self {
+        case .openIssue: "smallcircle.filled.circle"
+        case .closedIssue: "checkmark.circle"
+        case .openPull, .draftPull: "arrow.triangle.pull"
+        case .mergedPull: "arrow.triangle.merge"
+        case .closedPull: "xmark.circle"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .openIssue, .openPull: "Open"
+        case .closedIssue, .closedPull: "Closed"
+        case .draftPull: "Draft"
+        case .mergedPull: "Merged"
+        }
+    }
+
+    func tint(_ p: Palette) -> Color {
+        switch self {
+        case .openIssue, .openPull: p.ok
+        case .mergedPull: p.violet
+        case .closedIssue, .closedPull, .draftPull: p.muted
+        }
+    }
+}
+
+/// Calm detail header: state pill + mono number, the title, then a wrapping meta row.
+struct GitHubDetailHeader<Meta: View>: View {
+    @Environment(\.palette) private var p
+    let state: GitHubDetailState
+    let number: Int
+    let title: String
+    @ViewBuilder let meta: Meta
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: LSpace.m) {
+            HStack(spacing: LSpace.s) {
+                HStack(spacing: 5) {
+                    Image(systemName: state.glyph)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(state.label)
+                        .ltype(.micro)
+                        .fontWeight(.semibold)
+                }
+                .foregroundStyle(state.tint(p))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(state.tint(p).opacity(0.12), in: Capsule())
+                Text("#\(number)")
+                    .ltype(.mono)
+                    .foregroundStyle(p.faint)
+            }
+            .accessibilityElement(children: .combine)
+            Text(title)
+                .ltype(.title)
+                .foregroundStyle(p.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: LSpace.s) { meta }
+            }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        }
+    }
+}
+
+/// Avatar + login, for a meta row.
+struct GitHubPersonMeta: View {
+    @Environment(\.palette) private var p
+    let login: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            LAvatar(name: login, size: 18)
+            Text(login)
+                .ltype(.micro)
+                .fontWeight(.medium)
+                .foregroundStyle(p.text2)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "Tracked in Embodent" — links the started task when there is one; otherwise
+/// offers Start (the same agent picker as the toolbar).
+struct GitHubTrackedCard: View {
+    @Environment(\.palette) private var p
+    let startedTaskId: String?
+    let disabled: Bool
+    let onStart: () -> Void
+
+    var body: some View {
+        HStack(spacing: LSpace.m) {
+            BrandMark(size: 28)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(startedTaskId == nil ? "Not tracked in Embodent" : "Tracked in Embodent")
+                    .ltype(.bodyEmph)
+                    .foregroundStyle(p.text)
+                Text(startedTaskId == nil ? "Start a task to hand this to an agent." : "A task is following this item.")
+                    .ltype(.meta)
+                    .foregroundStyle(p.muted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let taskId = startedTaskId {
+                NavigationLink {
+                    TaskDetailScreen(taskId: taskId)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Open task").ltype(.meta).fontWeight(.medium)
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(p.accent)
+                    .frame(minHeight: 44)
+                }
+            } else {
+                LButton("Start", icon: "play.fill", kind: .primary, size: .small, action: onStart)
+                    .disabled(disabled)
+            }
+        }
+        .padding(LSpace.m)
+        .background(p.surface, in: RoundedRectangle(cornerRadius: p.radiusCard, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: p.radiusCard, style: .continuous).strokeBorder(p.border, lineWidth: 1))
     }
 }

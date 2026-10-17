@@ -42,19 +42,19 @@ export function OutlineRail({ cid, gitRef, path, onJumpToLine }: OutlineRailProp
   }, [cid, gitRef, path]);
 
   if (state.phase === "empty") {
-    return <div className="none" style={{ padding: 10 }}>Select a file to view its outline.</div>;
+    return <div className="cs-empty-line">Select a file to view its outline.</div>;
   }
   if (state.phase === "loading") {
-    return <div className="muted" style={{ padding: 10 }}>Loading outline…</div>;
+    return <div className="cs-empty-line" role="status">Loading outline…</div>;
   }
   if (state.phase === "error") {
     return <BrowseErrorBody err={state.error} what="Outline" />;
   }
   if (!state.language) {
-    return <div className="none" style={{ padding: 10 }}>No outline available for this file type.</div>;
+    return <div className="cs-empty-line">No outline available for this file type.</div>;
   }
   if (!state.symbols.length) {
-    return <div className="none" style={{ padding: 10 }}>No symbols found in this file.</div>;
+    return <div className="cs-empty-line">No symbols found in this file.</div>;
   }
 
   const grouped = groupByKind(state.symbols);
@@ -67,7 +67,10 @@ export function OutlineRail({ cid, gitRef, path, onJumpToLine }: OutlineRailProp
             <div
               key={g.kind + ":" + s.name + ":" + s.line + ":" + i}
               className="cs-outline-row"
+              role="button"
+              tabIndex={0}
               onClick={() => onJumpToLine(s.line)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onJumpToLine(s.line); } }}
               title={`Jump to line ${s.line}`}
             >
               <span className={"kind-tag cs-symkind-" + s.kind}>{symbolKindLabel(s.kind)}</span>

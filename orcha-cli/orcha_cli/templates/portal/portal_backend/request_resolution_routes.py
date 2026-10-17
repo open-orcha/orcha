@@ -14,6 +14,7 @@ from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
 from portal_backend.identity_routes import trusted_actor as _trusted_actor
+from portal_backend.org_chart import route_via_manager, stamp_routing
 from portal_backend.request_lookup import require_request
 from portal_backend.schemas.requests import RequestActorBody, TriageCloseBody
 
@@ -96,11 +97,28 @@ def escalate_request(rid: str, body: RequestActorBody, request: Request):
             raise HTTPException(409, f"request is '{r['status']}' — cannot escalate")
         if str(r["requester_id"]) != body.requester_agent_id:
             raise HTTPException(403, "only the requester may escalate")
-        human_id = _pick_human(cur, str(r["container_id"]))
+        # Parity r2: never escalate back to the requester. A HUMAN escalating their own
+        # ask used to land on themselves (freshest heartbeat = the one who just clicked),
+        # reading "you -> you" with an Answer button on their own question.
+        # Org chart (mig 052): climb the requester's manager chain first — escalation goes UP,
+        # so when the ask already sits with a manager in the chain only managers above that
+        # one are considered; viewers / AI managers are skipped. Else the project-wide pick.
+        human_id, org_routing = route_via_manager(
+            cur,
+            str(r["container_id"]),
+            body.requester_agent_id,
+            exclude_ids=(body.requester_agent_id,),
+            start_above=str(r["target_id"]) if r["target_id"] else None,
+        )
+        if human_id is None:
+            human_id = _pick_human(
+                cur, str(r["container_id"]), exclude_id=body.requester_agent_id
+            )
         cur.execute(
             "UPDATE requests SET target_id=%s, status='open' WHERE id=%s",
             (human_id, rid),
         )
+        stamp_routing(cur, rid, org_routing)
         bump_agent(cur, body.requester_agent_id)
         recompute_agent_status(cur, body.requester_agent_id)
         log_event(
@@ -115,6 +133,10 @@ def escalate_request(rid: str, body: RequestActorBody, request: Request):
                 "reason": body.reason,
                 "from_status": r["status"],
                 "to_human_id": human_id,
+                # Parity r1: who the request was escalated AWAY from, so read-models can
+                # say "escalated to you (from <original target>)" after target_id moved.
+                "from_target_id": str(r["target_id"]) if r["target_id"] else None,
+                "routed_via": org_routing.get("routed_via") if org_routing else None,
             },
         )
         # Notify the human directly + the container channel for any dashboards.
@@ -150,6 +172,7 @@ def escalate_request(rid: str, body: RequestActorBody, request: Request):
         "status": "open",
         "target_id": human_id,
         "escalated": True,
+        "routed_via": org_routing.get("routed_via") if org_routing else None,
     }
 
 

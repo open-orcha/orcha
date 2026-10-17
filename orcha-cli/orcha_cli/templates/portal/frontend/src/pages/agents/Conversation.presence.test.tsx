@@ -139,7 +139,10 @@ describe("S5 presence — queued vs thinking vs fallback (vanilla conversation.j
     expect(pill(container).className).toContain("p-idle");
     expect(pill(container).textContent).toContain("idle");
     // no reason supplied -> the generic honest fallback line
-    expect(container.querySelector(".conv-queued")!.textContent).toContain("is busy with another task");
+    // V2 honesty: an IDLE agent is not "busy with another task" — the copy says the
+    // message is saved and not yet picked up (queued, never fake dots)
+    expect(container.querySelector(".conv-queued")!.textContent).toContain("hasn't picked it up yet");
+    expect(container.querySelector(".conv-queued")!.textContent).not.toContain("busy with another task");
     expect(container.querySelector(".conv-thinking")).toBeNull();
   });
 });

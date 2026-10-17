@@ -17,6 +17,11 @@ decided, built, or where it landed. Do NOT send a content-free receipt ("done", 
 "on it") — that wakes the requester with nothing to act on. If the work isn't materially finished
 yet, don't respond; keep working and answer once you have a real result.
 
+If the request row (from `/orcha-inbox`) carries a non-null `agent_payload` with its OWN reply
+instructions (e.g. a code-thread question: `reply via POST /api/code/threads/<id>/messages …`),
+follow those instead — the answer belongs in that thread, and posting there records it on the
+request for you.
+
 ## Steps
 
 1. **Parse `$ARGUMENTS`**:

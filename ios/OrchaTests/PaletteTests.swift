@@ -156,3 +156,63 @@ import UIKit
         #expect(font == Font.custom("Hanken Grotesk Bold", size: 15))
     }
 }
+
+/// `LStatusGlyph` mirrors the web `StatusIcon` (`SHAPE` table + `STAT` labels).
+@Suite struct StatusGlyphParityTests {
+    private typealias G = LStatusGlyph
+
+    @Test func taskStatusesMatchTheWeb() {
+        #expect(G.style(for: "ready") == (.todo, .todo))
+        #expect(G.style(for: "pending") == (.dashed, .todo))
+        #expect(G.style(for: "in_progress") == (.progress, .progress))
+        #expect(G.style(for: "IN_PROGRESS") == (.progress, .progress))
+        #expect(G.style(for: "needs_verification") == (.review, .review))
+        #expect(G.style(for: "completed") == (.done, .done))
+        #expect(G.style(for: "blocked") == (.blocked, .danger))
+        #expect(G.style(for: "failed") == (.failed, .danger))
+        #expect(G.style(for: "cancelled") == (.cancelled, .muted))
+        #expect(G.style(for: "not_ready") == (.dashed, .todo))
+    }
+
+    @Test func requestStatusesMatchTheWeb() {
+        #expect(G.style(for: "open") == (.open, .todo))
+        #expect(G.style(for: "accepted") == (.accepted, .accent))
+        #expect(G.style(for: "answered") == (.done, .done))
+        #expect(G.style(for: "closed") == (.closed, .muted))
+        #expect(G.style(for: "rejected") == (.rejected, .danger))
+        #expect(G.style(for: "escalated") == (.escalated, .danger))
+        #expect(G.style(for: "converted_to_task") == (.converted, .accent))
+    }
+
+    @Test func agentStatusesMatchTheWeb() {
+        #expect(G.style(for: "working") == (.progress, .progress))
+        #expect(G.style(for: "idle") == (.dotted, .faint))
+        #expect(G.style(for: "offline") == (.dotted, .faint))
+        #expect(G.style(for: "awaiting_request") == (.paused, .warn))
+        #expect(G.style(for: "awaiting_human") == (.attention, .warn))
+        #expect(G.style(for: "terminated") == (.stopped, .danger))
+        #expect(G.style(for: "orphaned") == (.stopped, .muted))
+        #expect(G.style(for: "paused") == (.paused, .warn))
+        #expect(G.style(for: "rate_limited") == (.paused, .warn))
+    }
+
+    @Test func unknownStatusesFallBackToTheFaintRingAndRawLabel() {
+        #expect(G.style(for: "something_new") == (.unknown, .faint))
+        #expect(G.label(for: "something_new") == "something_new")
+        #expect(G.label(for: "") == "unknown")
+    }
+
+    @Test func labelsAreTheWebStatLabels() {
+        let expected: [String: String] = [
+            "in_progress": "In progress", "working": "Working", "ready": "Ready", "pending": "Pending",
+            "awaiting_request": "Waiting", "awaiting_human": "Needs human",
+            "needs_verification": "Needs verification", "completed": "Completed",
+            "answered": "Answered", "closed": "Closed", "rejected": "Rejected",
+            "escalated": "Escalated", "accepted": "Accepted", "converted_to_task": "Converted",
+            "terminated": "Terminated", "not_ready": "On hold", "rate_limited": "Rate limited",
+        ]
+        for (status, label) in expected {
+            #expect(G.label(for: status) == label, "\(status)")
+        }
+    }
+}

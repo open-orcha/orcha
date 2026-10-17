@@ -90,7 +90,9 @@ export async function putRepoBinding(cid: string, repo: string | null): Promise<
     let detail: string | null = null;
     try {
       const body = await r.json();
-      detail = (body && body.detail) || null;
+      // FastAPI 422s carry an ARRAY detail — only a string is human copy
+      // (the caller maps everything else to friendly text; never "[object Object]").
+      detail = body && typeof body.detail === "string" ? body.detail : null;
     } catch { /* empty body */ }
     return { ok: r.ok, status: r.status, detail };
   } catch (e) {

@@ -32,7 +32,7 @@ def test_live_run_feed_uses_the_shared_sse_engine():
     cl = (FRONTEND / "lib" / "classify.ts").read_text()
     assert "export function classifyLine" in cl, "shared classifier missing"
     # both detail pages render runs through the shared pieces
-    tasks = (FRONTEND / "pages" / "tasks" / "TasksPage.tsx").read_text()
+    tasks = "".join((FRONTEND / "pages" / "tasks" / f).read_text() for f in ("TasksPage.tsx", "TaskDetail.tsx"))
     assert "useRunStream" in tasks, "tasks page doesn't mount the shared run engine"
     runlog = (FRONTEND / "pages" / "agents" / "runlog.tsx").read_text()
     assert "classifyLine" in runlog, "agents run feed doesn't use the shared classifier"
@@ -47,7 +47,9 @@ def test_snapshot_provider_subscribes_to_the_container_event_stream():
         "stream not seeded with a since_ts cursor (would replay the full history — review P1)"
     assert "cursor == null" in js and "Date.now() / 1000" in js, "doesn't seed the cursor at 'now' on first connect"
     assert "if (ts != null) cursor = ts" in js, "doesn't advance the cursor per event (reconnect would replay)"
-    assert "es?.close()" in js and "setTimeout(connect, 3000)" in js, "doesn't manage reconnect from the cursor"
+    # parity r2: an answered 403/404 backs the reconnect off to ANSWERED_BACKOFF_MS; otherwise 3s
+    assert "es?.close()" in js and "setTimeout(connect, answeredRef.current ? ANSWERED_BACKOFF_MS : 3000)" in js, \
+        "doesn't manage reconnect from the cursor"
     # an event triggers a refresh; bursts coalesce; the 3s poll remains the fallback
     assert "void refresh()" in js, "an event doesn't refresh the snapshot"
     assert "pending" in js, "no coalescing of an event burst"

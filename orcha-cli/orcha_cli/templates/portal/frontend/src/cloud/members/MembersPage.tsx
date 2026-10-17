@@ -35,16 +35,19 @@
  * arriving from any mutation swaps straight to the gate as a belt-and-braces
  * fallback. GET (roster) stays open on both plans.
  */
-import { useCallback, useEffect, useState } from "react";
-import { Avatar, Icon, Modal, useToast } from "../../components/ui";
-import { hue } from "../../lib/format";
-import { Shell } from "../../shell/Shell";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Navigate, useLocation } from "react-router-dom";
+import { Icon, Modal, useToast } from "../../components/ui";
+import { Avatar, Button, Chip, IconButton, Menu, Popover, Tooltip } from "../../components/primitives";
+import { HelpTip, StatusLine } from "../../pages/settings/settingsUi";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import {
   actingGrant, actingOwner, fetchMe, memActor, viewerRole, type ActingHumanRec, type Me,
 } from "../identity";
 import { PremiumGate } from "../shared/PremiumGate";
 import { usePlan } from "../shared/plan";
+import "../settings/settings-cards.css";
+import "./members.css";
 
 /* ---- wire shapes -------------------------------------------------------- */
 export interface Member {
@@ -65,6 +68,13 @@ const MEM_GRANTS: [string, string][] = [
   ["manage_agents", "Agents — create, edit, retire"],
   ["assign_reviewers", "Assign task reviewers"],
 ];
+
+const ROLE_LABEL: Record<string, string> = { owner: "Owner", member: "Member", viewer: "Viewer" };
+export function roleLabel(r: string): string { return ROLE_LABEL[r] || r; }
+export function grantLabel(g: string): string {
+  const hit = MEM_GRANTS.find(([k]) => k === g);
+  return hit ? hit[1] : g;
+}
 
 /* ---- raw fetch with status passthrough (vanilla memApi parity: the 409
  * invite path and detail surfacing depend on reading status + body). Also
@@ -92,6 +102,35 @@ function isPremium402(res: MemRes): boolean {
   return res.status === 402 && !!d && typeof d === "object" && "premium" in d;
 }
 
+/** GitHub's username rule — the same pattern the backend's MemberCreate validates. */
+export const GH_LOGIN_RE = /^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}$/;
+
+/**
+ * A member mutation's failure as plain words (pure, tested) — never a bare
+ * status code and never "[object Object]": a string detail as is; FastAPI's
+ * 422 array (a github_login pattern miss reads as an invalid username, any
+ * other entry by its .msg); an object detail by its .message; no answer at
+ * all is "Couldn't reach the server."
+ */
+export function memErrText(res: { status: number; body: { detail?: unknown } | null }): string {
+  const d = res.body ? res.body.detail : undefined;
+  if (typeof d === "string" && d.trim()) return d.trim();
+  if (Array.isArray(d)) {
+    const items = d.filter((x) => x && typeof x === "object") as { type?: unknown; loc?: unknown; msg?: unknown }[];
+    if (items.some((x) => x.type === "string_pattern_mismatch" && Array.isArray(x.loc) && x.loc.indexOf("github_login") >= 0)) {
+      return "That isn't a valid GitHub username.";
+    }
+    const msgs = items.map((x) => (typeof x.msg === "string" ? x.msg : "")).filter(Boolean);
+    if (msgs.length) return msgs.join("; ");
+  }
+  if (d && typeof d === "object" && typeof (d as { message?: unknown }).message === "string") {
+    return (d as { message: string }).message;
+  }
+  if (!res.status) return "Couldn't reach the server.";
+  if (res.status >= 500) return "Embodent hit an error — try again.";
+  return "The server refused the change.";
+}
+
 function memUrl(cid: string, suffix = ""): string {
   return "/api/containers/" + encodeURIComponent(cid) + "/members" + suffix;
 }
@@ -105,30 +144,149 @@ const MEMBERS_PITCH = [
   "GitHub-verified identity for every collaborator",
 ];
 
-/* ---- faces (app-ui.js ghAvatar/face parity) ------------------------------ */
-// GitHub member avatar: the github.com/<login>.png image over the deterministic
-// letter tile (which stays visible when the img errors out). Circular via .av.human.
-function GhAvatar({ login, size }: { login: string; size?: string }) {
-  const h = hue(login);
-  const grad = `linear-gradient(140deg, hsl(${h} 70% 62%), hsl(${(h + 38) % 360} 72% 54%))`;
-  const cls = "av gh" + (size ? " " + size : "") + " human";
-  const init = (login || "?").trim().charAt(0).toUpperCase();
+/* ---- faces: the shared D7 Avatar (round; the github.com/<login>.png image
+ * over the deterministic initial, which stays when the image fails). The
+ * name is printed right beside it, so the avatar is decorative. ----------- */
+function MemberFace({ m }: { m: Member }) {
+  return <Avatar alias={m.github_login || m.alias} ghLogin={m.github_login} kind="human" size={24} decorative className="mem-av" />;
+}
+
+/** Tooltip on a member's name: GitHub login and Orcha alias, each once. */
+export function identityTip(m: Pick<Member, "github_login" | "alias">): string {
+  if (m.github_login && m.github_login !== m.alias) return "@" + m.github_login + " · alias " + m.alias;
+  return m.github_login ? "@" + m.github_login : m.alias;
+}
+
+/** Role / state chips (D8: rounded-full, 1px border, small dot). */
+function RoleChip({ role }: { role: string }) {
+  return <Chip size="sm" dot={role === "owner" ? "accent" : "neutral"} className={"tag role-" + role}>{roleLabel(role)}</Chip>;
+}
+function PendingChip() {
+  return <Chip size="sm" dot="info" className="tag mem-pending" title="Invited — pending until they first sign in">pending</Chip>;
+}
+
+/**
+ * RoleMenu — the Linear ghost dropdown for a role (text + chevron, no box
+ * until hover), replacing the native <select> and its OS caret. The Menu
+ * primitive gives roving focus, Esc-to-close + focus return, and marks the
+ * current role with a trailing check (menuitemradio + aria-checked).
+ */
+export function RoleMenu({ value, roles, onPick, label, id, className, disabled }: {
+  value: string; roles: string[]; onPick: (role: string) => void; label: string; id?: string; className?: string; disabled?: boolean;
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
   return (
-    <span className={cls} style={{ background: grad }}>
-      {init}
-      <img
-        className="gh-face"
-        src={`https://github.com/${encodeURIComponent(login)}.png?size=96`}
-        alt=""
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={(e) => e.currentTarget.remove()}
+    <>
+      <button
+        ref={ref}
+        id={id}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label + ": " + roleLabel(value)}
+        data-role={value}
+        disabled={disabled}
+        className={"v2-btn v2-btn-ghost v2-btn-sm v2-menubtn mem-role-sel mem-role-btn" + (className ? " " + className : "")}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="v2-btn-label">{roleLabel(value)}</span>
+        <Icon name="chev" cls="v2-ico v2-btn-ico v2-btn-ico-r" />
+      </button>
+      <Menu
+        anchor={ref}
+        open={open}
+        onClose={() => setOpen(false)}
+        label={label}
+        placement="bottom-start"
+        items={roles.map((r) => ({
+          label: roleLabel(r),
+          checked: r === value,
+          onSelect: () => { if (r !== value) onPick(r); },
+        }))}
       />
-    </span>
+    </>
   );
 }
-function MemberFace({ m }: { m: Member }) {
-  return m.github_login ? <GhAvatar login={m.github_login} /> : <Avatar alias={m.alias} kind="human" />;
+
+/** Grants that change anything for a role: a viewer stays read-only whatever
+ *  it holds (every write refuses the role), so only the roster-visibility
+ *  grant (manage_members, honoured on reads — identity_routes.has_grant) has
+ *  an effect for them. Members get the whole list. */
+export function grantsForRole(role: string): [string, string][] {
+  return role === "viewer" ? MEM_GRANTS.filter(([g]) => g === "manage_members") : MEM_GRANTS;
+}
+
+/**
+ * PermsButton — ONE control for a member's extra grants (D12: the count lives
+ * in the button, never a separate "+N permissions" chip beside it). It opens a
+ * compact Popover checklist with Save / Cancel instead of an inline block.
+ */
+export function PermsButton({ name, role, grants, busy, onSave }: {
+  name: string; role: string; grants: string[]; busy: boolean; onSave: (next: string[]) => void;
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string[]>(grants);
+  const toggle = () => { if (!open) setDraft(grants); setOpen((o) => !o); };
+  const options = grantsForRole(role);
+  const close = () => setOpen(false);
+  const dirty = draft.length !== grants.length || draft.some((g) => grants.indexOf(g) < 0);
+  const n = grants.length;
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        className="v2-btn v2-btn-ghost v2-btn-sm mem-perm-btn"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={"Permissions for " + name + (n ? ": " + n + " extra" : ": none extra")}
+        title={n ? grants.map(grantLabel).join(", ") : "Granular permissions"}
+        disabled={busy}
+        aria-busy={busy || undefined}
+        onClick={toggle}
+      >
+        <span className="v2-btn-label">Permissions{n ? <span className="mem-perm-n"> · {n}</span> : null}</span>
+        <Icon name="chev" cls="v2-ico v2-btn-ico v2-btn-ico-r" />
+      </button>
+      <Popover anchor={ref} open={open} onClose={close} role="dialog" label={"Permissions for " + name} placement="bottom-end" className="mem-perms-pop" trap>
+        <div className="mem-perms">
+          {role === "viewer" ? (
+            <div className="mem-perms-h">
+              Viewers are read-only
+              <HelpTip label="permissions">A viewer can never change anything, so only seeing the full roster applies. Make them a member to grant the rest.</HelpTip>
+            </div>
+          ) : (
+            <div className="mem-perms-h">
+              Extra permissions on top of {role}
+              <HelpTip label="permissions">Viewers stay read-only regardless — only the roster grant affects them.</HelpTip>
+            </div>
+          )}
+          {options.map(([g, label]) => (
+            <label className="mem-grant" key={g}>
+              <input
+                type="checkbox"
+                className="v2-checkbox"
+                checked={draft.indexOf(g) >= 0}
+                onChange={() => setDraft((cur) => (cur.indexOf(g) >= 0 ? cur.filter((x) => x !== g) : [...cur, g]))}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+          <div className="mem-perms-acts">
+            <Button size="sm" variant="ghost" onClick={() => { close(); ref.current?.focus(); }}>Cancel</Button>
+            <Button
+              size="sm" variant={dirty ? "primary" : "secondary"} disabled={!dirty || busy}
+              onClick={() => { onSave(draft); close(); ref.current?.focus(); }}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      </Popover>
+    </>
+  );
 }
 
 /* ---- acting identity: the shared cloud /api/me layer (src/cloud/identity.ts
@@ -136,56 +294,19 @@ function MemberFace({ m }: { m: Member }) {
  * affordance below, exactly as the local copies here did before the module
  * was extracted for the extensions.ts identity/accountMenu seams. ---------- */
 
-/* ---- page-scoped CSS: the settings-card + members rules the vanilla page
- * pulled from pages/settings.css, carried over verbatim so the standalone
- * /members page styles identically without that stylesheet. ---------------- */
-const MEMBERS_CSS = `
-  .set-wrap { max-width: 760px; }
-  .set-intro { margin: 2px 2px 20px; }
-  .set-intro h1 { font-size: 20px; font-weight: 740; letter-spacing: -.02em; }
-  .set-intro p { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.55; max-width: 64ch; }
-  .set-card .card-b { padding: 18px 20px; }
-  .set-card .lead { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: -2px 0 16px; }
-
-  .sc-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px;
-    border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 16px; }
-  .sc-banner .bt { display: flex; align-items: center; gap: 9px; font-size: 13px; line-height: 1.45; }
-  .sc-banner .bt svg { width: 17px; height: 17px; flex: none; }
-  .sc-banner.warn { background: var(--warn-soft); border-color: var(--warn-line); }
-  .sc-banner.warn .bt svg { color: var(--warn); }
-  .sc-inp { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 10px;
-    color: var(--text); font: 13px "JetBrains Mono", ui-monospace, monospace; padding: 10px 12px; outline: none; }
-  .sc-inp::placeholder { color: var(--faint); font-family: Inter, system-ui, sans-serif; }
-  .sc-inp:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
-  .sc-hint { font-size: 11.5px; color: var(--faint); min-height: 16px; margin: 7px 2px 0; line-height: 1.4; }
-
-  /* collab v1: Members card — avatar + login rows, role/pending chips, invite bar */
-  .mem-list { display: flex; flex-direction: column; }
-  .mem-row { display: flex; align-items: center; gap: 11px; padding: 10px 2px; }
-  .mem-row + .mem-row { border-top: 1px solid var(--border); }
-  .mem-name { font-size: 13.5px; font-weight: 640; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; display: flex; align-items: center; gap: 7px; }
-  .mem-you { color: var(--faint); font-size: 10.5px; letter-spacing: .06em;
-    text-transform: uppercase; font-weight: 650; }
-  .mem-sub { color: var(--muted); font-size: 11.5px; margin-top: 1px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; }
-  .mem-acts { display: flex; align-items: center; gap: 6px; flex: none; }
-  .mem-invite { display: flex; align-items: center; gap: 8px; margin-top: 14px;
-    padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }
-  .mem-role-sel { flex: 0 0 110px; }
-  /* access model: per-member grant chips + the owner-only Permissions expander */
-  .mem-grants { color: var(--accent); border-color: var(--accent-line); }
-  .mem-perms { display: flex; flex-direction: column; gap: 7px; margin: 2px 0 10px;
-    padding: 12px 14px; border: 1px dashed var(--border); border-radius: 11px; }
-  .mem-perms .btn { align-self: flex-start; margin-top: 4px; }
-  .mem-grant { display: flex; align-items: center; gap: 9px; font-size: 12.5px;
-    color: var(--text-2); cursor: pointer; }
-  .mem-grant input { accent-color: var(--accent); }
-  .mem-restricted { margin-top: 12px; }
-`;
-
 /* ---- the members card ---------------------------------------------------- */
 interface RowCtx { canManage: boolean; isOwner: boolean; meId: string | null; ownerCount: number }
+
+/**
+ * Why a row's Remove is unavailable, or null when it may be offered (pure,
+ * tested). Authority (brief §3): you can never remove your own access from
+ * here, and the LAST owner can never be removed (the backend 400s it).
+ */
+export function removeBlockedReason(m: Pick<Member, "agent_id" | "member_role">, ctx: Pick<RowCtx, "meId" | "ownerCount">): string | null {
+  if (ctx.meId != null && String(ctx.meId) === String(m.agent_id)) return "You can't remove yourself";
+  if (m.member_role === "owner" && ctx.ownerCount <= 1) return "A project needs at least one owner";
+  return null;
+}
 
 function MembersCard() {
   const { snap, cid } = useSnapshot();
@@ -193,10 +314,9 @@ function MembersCard() {
   const plan = usePlan();
   const [members, setMembers] = useState<Member[] | null>(null);
   const [restricted, setRestricted] = useState(false);
-  const [err, setErr] = useState(false);
+  // "forbidden": the server said you're not a member (403) — Retry can't help (S1)
+  const [err, setErr] = useState<false | "error" | "forbidden">(false);
   const [busy, setBusy] = useState(false);
-  const [openPerms, setOpenPerms] = useState<Set<string>>(new Set());
-  const [permsDraft, setPermsDraft] = useState<Record<string, string[]>>({});
   const [inviteLogin, setInviteLogin] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [removing, setRemoving] = useState<Member | null>(null);
@@ -229,7 +349,7 @@ function MembersCard() {
     } else {
       setMembers(null);
       setRestricted(false);
-      setErr(true);
+      setErr(res.status === 403 ? "forbidden" : "error");
     }
   }, [cid]);
 
@@ -249,14 +369,14 @@ function MembersCard() {
   const catchPremium402 = (res: MemRes): boolean => {
     if (!isPremium402(res)) return false;
     const d = res.body?.detail as Premium402;
-    setForcedGate({ upgradeUrl: d.upgrade_url || "https://orcha.nursoftai.com/#pricing" });
+    setForcedGate({ upgradeUrl: d.upgrade_url || "https://orcha.quantallabs.ai" });
     return true;
   };
 
   /* ---- mutations (server re-validates every gate) ----------------------- */
   const doInvite = async () => {
     const login = inviteLogin.trim();
-    if (!login || busy || !cid) return;
+    if (!login || busy || !cid || !GH_LOGIN_RE.test(login)) return;
     const h = requireActor();
     if (!h) return;
     setBusy(true);
@@ -274,7 +394,7 @@ function MembersCard() {
     } else if (res.status === 409) {
       toast(login + " is already a member.", "warn");
     } else {
-      toast("Invite failed (" + res.status + ")" + (res.body && res.body.detail ? ": " + res.body.detail : ""), "danger");
+      toast("Couldn't invite " + login + ": " + memErrText(res), "danger");
     }
   };
 
@@ -288,18 +408,17 @@ function MembersCard() {
     });
     setBusy(false);
     if (catchPremium402(res)) return;
-    if (res.ok) { toast("Role updated — " + to + ".", "ok"); void load(); }
+    if (res.ok) { toast("Role updated — " + roleLabel(to) + ".", "ok"); void load(); }
     else {
-      toast("Role change failed (" + res.status + ")" + (res.body && res.body.detail ? ": " + res.body.detail : ""), "danger");
-      void load(); // reset the select to the server truth
+      toast("Couldn't change the role: " + memErrText(res), "danger");
+      void load(); // reset the role menu to the server truth
     }
   };
 
-  const doGrants = async (aid: string) => {
+  const doGrants = async (aid: string, grants: string[]) => {
     if (busy || !cid) return;
     const h = requireActor();
     if (!h) return;
-    const grants = permsDraft[aid] || [];
     setBusy(true);
     const res = await memApi("PATCH", memUrl(cid, "/" + encodeURIComponent(aid)), {
       grants: grants, actor_agent_id: h.id,
@@ -307,7 +426,7 @@ function MembersCard() {
     setBusy(false);
     if (catchPremium402(res)) return;
     if (res.ok) { toast("Permissions saved.", "ok"); void load(); }
-    else toast("Permissions change failed (" + res.status + ")" + (res.body && res.body.detail ? ": " + res.body.detail : ""), "danger");
+    else toast("Couldn't save permissions: " + memErrText(res), "danger");
   };
 
   const doRemove = async (m: Member) => {
@@ -322,31 +441,14 @@ function MembersCard() {
     setBusy(false);
     if (catchPremium402(res)) return;
     if (res.ok) { toast("Removed " + name + ".", "ok"); void load(); }
-    else toast("Remove failed (" + res.status + ")" + (res.body && res.body.detail ? ": " + res.body.detail : ""), "danger");
-  };
-
-  const togglePerms = (m: Member) => {
-    const aid = String(m.agent_id);
-    setOpenPerms((prev) => {
-      const next = new Set(prev);
-      if (next.has(aid)) next.delete(aid);
-      else next.add(aid);
-      return next;
-    });
-    setPermsDraft((prev) => (aid in prev ? prev : { ...prev, [aid]: m.grants || [] }));
-  };
-  const toggleGrant = (aid: string, g: string) => {
-    setPermsDraft((prev) => {
-      const cur = prev[aid] || [];
-      return { ...prev, [aid]: cur.indexOf(g) >= 0 ? cur.filter((x) => x !== g) : [...cur, g] };
-    });
+    else toast("Couldn't remove " + name + ": " + memErrText(res), "danger");
   };
 
   /* ---- render ----------------------------------------------------------- */
   // Belt-and-braces: a 402 from a mutation trumps everything else — the
   // server just told us, authoritatively, that this plan can't do this.
   if (forcedGate) {
-    return <PremiumGate feature="members" title="Members" pitch={MEMBERS_PITCH} upgradeUrl={forcedGate.upgradeUrl} />;
+    return <PremiumGate feature="members" title="Members" hideTitle pitch={MEMBERS_PITCH} upgradeUrl={forcedGate.upgradeUrl} />;
   }
   // Plan gating (contract item 7): solo renders the paywall INSTEAD of the
   // roster+invite UI — invite/role/grant affordances never render. `plan ===
@@ -354,32 +456,44 @@ function MembersCard() {
   // rendering (a beat of blank card body) rather than flash the real roster
   // and then yank it away, or flash the gate for a paying team customer.
   if (plan && plan.plan === "solo") {
-    return <PremiumGate feature="members" title="Members" pitch={MEMBERS_PITCH} upgradeUrl={plan.upgrade_url} />;
+    return <PremiumGate feature="members" title="Members" hideTitle pitch={MEMBERS_PITCH} upgradeUrl={plan.upgrade_url} />;
+  }
+  if (err === "forbidden") {
+    return <StatusLine tone="warn" id="memForbidden">You&#39;re not a member of this project.</StatusLine>;
   }
   if (err) {
     return (
-      <div className="sc-banner warn">
-        <div className="bt"><Icon name="alert" cls="" /><span>Couldn&#39;t load members.</span></div>
-        <button className="btn sm" id="memRetry" type="button" onClick={() => void load()}>Retry</button>
-      </div>
+      <StatusLine
+        tone="err"
+        action={<Button size="sm" variant="ghost" icon="refresh" id="memRetry" onClick={() => void load()}>Retry</Button>}
+      >
+        Couldn&#39;t load members.
+      </StatusLine>
     );
   }
-  if (!members || !plan) return <div className="none">Loading members…</div>;
+  if (!members || !plan) return <StatusLine tone="muted">Loading members…</StatusLine>;
 
   // Roster privacy: the server sent only your own membership — render it as a
   // card plus the explanation (no invite bar, no roster, no controls).
   if (restricted) {
     const m = members[0];
-    if (!m) return <div className="none">No membership found.</div>;
+    if (!m) return <p className="set-note">No membership found.</p>;
     return (
       <>
-        <div className="mem-row">
-          <MemberFace m={m} />
-          <div className="grow" style={{ minWidth: 0 }}>
-            <div className="mem-name">{m.github_login || m.alias}<span className="mem-you">you</span></div>
+        <div className="mem-list">
+          <div className="mem-row">
+            <MemberFace m={m} />
+            <div className="mem-who">
+              <div className="mem-name">
+                <span className="mem-name-t" title={identityTip(m)}>{m.github_login || m.alias}</span>
+                <span className="mem-you">you</span>
+              </div>
+            </div>
+            <span className="mem-meta">
+              {m.pending && <PendingChip />}
+              <RoleChip role={m.member_role} />
+            </span>
           </div>
-          {m.pending && <span className="tag mem-pending">pending</span>}
-          <span className={"tag role-" + m.member_role}>{m.member_role}</span>
         </div>
         <div className="sc-hint mem-restricted">
           Your membership on this project. The full member list is visible to owners and to
@@ -390,19 +504,41 @@ function MembersCard() {
   }
 
   const isOwner = actingOwner(me, snap);
-  const canManage = !busy && !viewerRole(me) && (isOwner || actingGrant(me, snap, "manage_members"));
+  // `busy` is NOT part of the authority: an in-flight mutation disables the
+  // controls in place (aria-busy) instead of collapsing the card (MEM-BUSY).
+  const canManage = !viewerRole(me) && (isOwner || actingGrant(me, snap, "manage_members"));
   const ctx: RowCtx = {
     canManage,
     isOwner,
     meId: me?.identity?.agent_id ?? null,
     ownerCount: members.filter((m) => m.member_role === "owner").length,
   };
+  const inviteTrim = inviteLogin.trim();
+  const inviteBad = !!inviteTrim && !GH_LOGIN_RE.test(inviteTrim);
+  const inviteOk = !!inviteTrim && !inviteBad;
+  const inviteHint = !inviteTrim ? "Type a GitHub username first" : inviteBad ? "That isn't a valid GitHub username" : "";
+  // A read-only viewer (or a member without the Members permission) sees why
+  // nothing is editable instead of controls silently missing.
+  const readOnlyNote = !canManage
+    ? viewerRole(me)
+      ? "You\u2019re a viewer — only owners and members with the Members permission can manage access."
+      : "Only owners and members with the Members permission can invite people or change roles."
+    : null;
 
   return (
     <>
-      <div className="mem-list">
+      {readOnlyNote && <p className="set-note mem-readonly" id="memReadOnly">{readOnlyNote}</p>}
+      <div className="mem-cols" aria-hidden="true">
+        <span className="mem-col-name">Member</span>
+        <span className="mem-col-count">{members.length} {members.length === 1 ? "person" : "people"}</span>
+        {canManage ? <span className="mem-col-role">Role</span> : null}
+        {canManage && isOwner ? <span className="mem-col-perms">Permissions</span> : null}
+        {canManage ? <span className="mem-col-x" /> : null}
+      </div>
+      <div className="mem-list" role="list" aria-label="Project members">
         {members.length ? members.map((m) => {
           const login = m.github_login;
+          const name = login || m.alias;
           const grants = m.grants || [];
           const you = ctx.meId && String(ctx.meId) === String(m.agent_id);
           // NEVER offer demote/remove on the LAST owner's row (the backend 400s
@@ -410,70 +546,93 @@ function MembersCard() {
           // carve-out mirrored).
           const lastOwner = m.member_role === "owner" && ctx.ownerCount <= 1;
           const rowManageable = ctx.canManage && !lastOwner && (m.member_role !== "owner" || ctx.isOwner);
-          const permsOpen = rowManageable && ctx.isOwner && m.member_role !== "owner"
-            && openPerms.has(String(m.agent_id));
+          const canPerms = rowManageable && ctx.isOwner && m.member_role !== "owner";
+          const removeBlocked = removeBlockedReason(m, ctx);
+          // the grant count shows once: inside the Permissions button when you
+          // can edit it, else as this read-only chip
+          const grantChip = !canPerms && grants.length > 0 && m.member_role !== "owner" ? (
+            <Chip size="sm" className="tag mem-grants" title={grants.map(grantLabel).join(", ")}>
+              +{grants.length} {grants.length === 1 ? "permission" : "permissions"}
+            </Chip>
+          ) : null;
           return (
-            <div key={m.agent_id}>
+            <div key={m.agent_id} role="listitem" className="mem-item">
               <div className="mem-row">
                 <MemberFace m={m} />
-                <div className="grow" style={{ minWidth: 0 }}>
-                  <div className="mem-name">{login || m.alias}{you && <span className="mem-you">you</span>}</div>
-                  {login && login !== m.alias && <div className="mem-sub">{m.alias}</div>}
+                <div className="mem-who">
+                  <div className="mem-name">
+                    <span className="mem-name-t" title={identityTip(m)}>{name}</span>
+                    {you && <span className="mem-you">you</span>}
+                  </div>
+                  {/* ONE name per row (D12): the GitHub login; the Orcha
+                      alias lives in the name's tooltip, never a second
+                      truncated label beside it */}
                 </div>
-                {m.pending && <span className="tag mem-pending">pending</span>}
-                {grants.length > 0 && m.member_role !== "owner" && (
-                  <span className="tag mem-grants" title={grants.join(", ")}>+{grants.length}</span>
-                )}
-                <span className={"tag role-" + m.member_role}>{m.member_role}</span>
-                {rowManageable && (
-                  <span className="mem-acts">
-                    {/* Promoting TO owner (and touching an owner row at all) is
-                        owner-only server-side, so the option only renders where
-                        the actor could succeed. */}
-                    <select
-                      className="sc-inp mem-role-sel"
-                      title="Project role"
-                      value={m.member_role}
-                      onChange={(e) => void doRole(m.agent_id, e.target.value)}
-                    >
-                      {ctx.isOwner && <option value="owner">owner</option>}
-                      <option value="member">member</option>
-                      <option value="viewer">viewer</option>
-                    </select>
-                    {ctx.isOwner && m.member_role !== "owner" && (
-                      <button className="btn sm ghost" type="button" title="Granular permissions"
-                        onClick={() => togglePerms(m)}>Permissions</button>
+                <span className="mem-meta">
+                  {m.pending && <PendingChip />}
+                  {/* read-only card: the facts sit together at the row's end */}
+                  {!ctx.canManage && grantChip}
+                  {!ctx.canManage && <RoleChip role={m.member_role} />}
+                </span>
+                {ctx.canManage && <span className="mem-break" aria-hidden="true" />}
+                {ctx.canManage && (
+                  /* MEM-V1: when the card is editable EVERY row uses the same
+                     grid (role · permissions · remove), so a row you can't edit
+                     shows its role chip IN the Role column, never beside the name */
+                  <span className="mem-acts" aria-busy={busy || undefined}>
+                    {rowManageable ? (
+                      /* Promoting TO owner (and touching an owner row at all) is
+                         owner-only server-side, so the option only renders where
+                         the actor could succeed. */
+                      <RoleMenu
+                        className="is-compact is-ghost"
+                        label={"Project role for " + name}
+                        value={m.member_role}
+                        roles={ctx.isOwner ? ["owner", "member", "viewer"] : ["member", "viewer"]}
+                        onPick={(r) => void doRole(m.agent_id, r)}
+                        disabled={busy}
+                      />
+                    ) : (
+                      <span className="mem-role-slot"><RoleChip role={m.member_role} /></span>
                     )}
-                    <button className="iconbtn" title="Remove access" onClick={() => setRemoving(m)}>
-                      <Icon name="x" cls="" />
-                    </button>
+                    {/* fixed slot so every row's controls line up (owners only —
+                        the Permissions column exists only for them) */}
+                    {ctx.isOwner && (
+                      <span className="mem-perm-slot">
+                        {canPerms ? (
+                          <PermsButton
+                            name={name} role={m.member_role} grants={grants} busy={busy}
+                            onSave={(next) => void doGrants(m.agent_id, next)}
+                          />
+                        ) : grantChip}
+                      </span>
+                    )}
+                    {!ctx.isOwner && grantChip}
+                    <span className="mem-x-slot">
+                      {!rowManageable ? null : removeBlocked ? (
+                        /* never an enabled Remove on your own row (or the last
+                           owner's); the reason is the tooltip */
+                        <Tooltip label={removeBlocked} placement="left">
+                          <IconButton
+                            icon="x" size="sm" className="mem-remove is-blocked" label={"Remove access for " + name}
+                            title="" aria-disabled="true" data-remove-blocked=""
+                            onClick={(e) => e.preventDefault()}
+                          />
+                        </Tooltip>
+                      ) : (
+                        <IconButton
+                          icon="x" size="sm" className="mem-remove" label={"Remove access for " + name} title="Remove access"
+                          disabled={busy}
+                          onClick={() => setRemoving(m)}
+                        />
+                      )}
+                    </span>
                   </span>
                 )}
               </div>
-              {permsOpen && (
-                <div className="mem-perms">
-                  <div className="sc-hint">
-                    Extra permissions on top of the {m.member_role} role (viewers stay read-only
-                    regardless — only the roster grant affects them).
-                  </div>
-                  {MEM_GRANTS.map(([g, label]) => (
-                    <label className="mem-grant" key={g}>
-                      <input
-                        type="checkbox"
-                        checked={(permsDraft[String(m.agent_id)] || []).indexOf(g) >= 0}
-                        onChange={() => toggleGrant(String(m.agent_id), g)}
-                      />
-                      <span>{label}</span>
-                    </label>
-                  ))}
-                  <button className="btn sm" type="button" onClick={() => void doGrants(m.agent_id)}>
-                    Save permissions
-                  </button>
-                </div>
-              )}
             </div>
           );
-        }) : <div className="none">No human members yet.</div>}
+        }) : <p className="set-note">No human members yet.</p>}
       </div>
       {canManage && (
         <>
@@ -481,6 +640,9 @@ function MembersCard() {
             <input
               id="memLogin"
               className="sc-inp"
+              aria-label="GitHub username to invite"
+              aria-invalid={inviteBad || undefined}
+              aria-describedby={inviteBad ? "memLoginHint" : undefined}
               spellCheck={false}
               autoComplete="off"
               placeholder="GitHub username to invite…"
@@ -489,24 +651,35 @@ function MembersCard() {
               onChange={(e) => setInviteLogin(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void doInvite(); }}
             />
-            <select
+            <RoleMenu
               id="memRole"
-              className="sc-inp mem-role-sel"
+              className="is-ghost"
+              label="Role for the invite"
               value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value)}
+              roles={isOwner ? ["member", "viewer", "owner"] : ["member", "viewer"]}
+              onPick={setInviteRole}
+              disabled={busy}
+            />
+            <Button
+              size="sm" variant={inviteOk ? "primary" : "secondary"} icon="plus" id="memInvite"
+              disabled={!inviteOk || busy}
+              busy={busy}
+              title={inviteHint || undefined}
+              onClick={() => void doInvite()}
             >
-              <option value="member">member</option>
-              <option value="viewer">viewer</option>
-              {isOwner && <option value="owner">owner</option>}
-            </select>
-            <button className="btn sm" id="memInvite" type="button" onClick={() => void doInvite()}>
-              <Icon name="plus" cls="" />Invite
-            </button>
+              Invite
+            </Button>
           </div>
-          <div className="sc-hint">
-            Invited members appear as <b>pending</b> until they first sign in. The cloud front
-            door (perimeter allowlist) follows this roster — a background sync applies invites
-            and removals within a couple of minutes.
+          {inviteBad && (
+            <div className="sc-hint mem-hint mem-login-bad" id="memLoginHint" role="status">
+              GitHub usernames use letters, numbers and single hyphens (up to 39 characters).
+            </div>
+          )}
+          <div className="sc-hint mem-hint">
+            Invites stay <b>pending</b> until they first sign in.
+            <HelpTip label="invites">
+              The cloud front door (perimeter allowlist) follows this roster — a background sync applies invites and removals within a couple of minutes.
+            </HelpTip>
           </div>
         </>
       )}
@@ -530,38 +703,29 @@ function MembersCard() {
  * Carries its own <style> so the card renders identically here and on the
  * standalone /members page (identical rules are idempotent when doubled). -- */
 export function MembersSection() {
+  // The surrounding page / settings section supplies the one title + one
+  // description; this group is just the roster (no repeated "Members" h2).
   return (
-    <>
-      <style>{MEMBERS_CSS}</style>
-      <div className="card set-card">
-        <div className="card-h"><h2>Members</h2></div>
-        <div className="card-b">
-          <div className="lead">
-            Who&#39;s on this project. Members map verified GitHub identities to this workspace;
-            owners can invite collaborators, change roles, and assign task reviewers. Cloud
-            access itself (the perimeter allowlist) is synced separately.
-          </div>
-          <div id="membersCard">
-            <MembersCard />
-          </div>
+    <div className="card set-card mem-card">
+      <div className="card-b is-flush">
+        <div id="membersCard">
+          <MembersCard />
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
-/* ---- the page (kept routed at /members; renders the same section) -------- */
+/* ---- /members: ONE home for the roster ------------------------------------
+ * The standalone page duplicated Settings › Members & access one to one
+ * (review r1). The route stays (old links, bookmarks, the palette) and
+ * redirects — keeping ?cid and any other query — to the Settings section,
+ * which renders this same MembersSection (roster, invites, roles, grants,
+ * removal, plan gate). Nothing is dropped; only the duplicate page is. */
+export function membersRedirectTarget(search: string): string {
+  return "/settings" + (search || "") + "#tab=members";
+}
 export function MembersPage() {
-  const { snap } = useSnapshot();
-  return (
-    <Shell page="members" title="Members" ctx={snap?.container?.name}>
-      <div className="set-wrap">
-        <div className="set-intro">
-          <h1>Members</h1>
-          <p>Who&#39;s on this project — the collab roster mapping verified GitHub identities to this workspace.</p>
-        </div>
-        <MembersSection />
-      </div>
-    </Shell>
-  );
+  const { search } = useLocation();
+  return <Navigate to={membersRedirectTarget(search)} replace />;
 }

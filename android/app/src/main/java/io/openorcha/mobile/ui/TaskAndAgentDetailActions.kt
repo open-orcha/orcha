@@ -3,6 +3,7 @@ package io.openorcha.mobile.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.openorcha.mobile.data.getAgentRecentRuns
 import io.openorcha.mobile.data.AgentDto
 import io.openorcha.mobile.data.ContainerSnapshot
 import io.openorcha.mobile.data.ContainerStore
@@ -120,18 +121,20 @@ override fun refreshAgentDetail() {
     val agent = _uiState.value.selectedAgent ?: return
     scope.launch {
         _uiState.update { it.copy(loading = true, error = null, agentExtras = AgentExtras()) }
+        // flow 09 §9: headless + resident runs merged, newest first. Runs land on their own
+        // (iOS parity): a slow/failed models read, or a stale reply for another agent, must
+        // never blank "Recent runs". Headless rows carry their full output, so the read
+        // gets a longer timeout than the 8s default (it timed out on a slow device → 0 runs).
         runCatching {
-            // flow 09 §9: headless + resident runs merged, newest first
-            val headless = api.getAgentRuns(selected.baseUrl, agent.id).runs
+            val headless = api.getAgentRecentRuns(selected.baseUrl, agent.id).runs
             val resident = runCatching { api.getResidentRuns(selected.baseUrl, agent.id).runs }.getOrDefault(emptyList())
-            val runs = (headless + resident).distinctBy { it.runId }.sortedByDescending { it.startedAt ?: "" }
-            val models = api.listModels(selected.baseUrl).models
-            runs to models
-        }.onSuccess { (runs, models) ->
-            _uiState.update { it.copy(agentRuns = runs, models = models, loading = false) }
+            io.openorcha.mobile.domain.AgentControlsUx.mergeRuns(headless, resident)
+        }.onSuccess { runs ->
+            _uiState.update { if (it.selectedAgent?.id == agent.id) it.copy(agentRuns = runs, loading = false) else it }
         }.onFailure { err ->
-            _uiState.update { it.copy(loading = false, error = friendlyConnectionError(err)) }
+            _uiState.update { if (it.selectedAgent?.id == agent.id) it.copy(loading = false, error = friendlyConnectionError(err)) else it }
         }
+        runCatching { api.listModels(selected.baseUrl).models }.onSuccess { models -> _uiState.update { it.copy(models = models) } }
         // lazy sections — each best-effort, independent of the core fetch (flow 09 §states)
         val persona = runCatching { api.getPersona(selected.baseUrl, agent.id) }.getOrNull()
         val digest = runCatching { api.getDigest(selected.baseUrl, agent.id).digest }.getOrNull()

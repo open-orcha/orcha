@@ -1,0 +1,10 @@
+{
+  "api_port": 8011,
+  "children": {
+    "notifier": {"last_exit": 1, "pid": null, "restarts": 6, "status": "crashlooping"},
+    "portal": {"last_exit": null, "pid": 4201, "restarts": 0, "status": "running"}
+  },
+  "runtime": "native",
+  "serve_pid": 4200,
+  "status": "running"
+}

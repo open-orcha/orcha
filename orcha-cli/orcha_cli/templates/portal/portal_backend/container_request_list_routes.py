@@ -4,12 +4,19 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Query, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.identity_routes import require_member_read
 from portal_backend.list_sorting import sort_clause, validate_sort
-from portal_backend.request_ownership import _annotate_request_ownership
+from portal_backend.schemas.requests import RequestListResponse
+from portal_backend.request_ownership import (
+    REQUEST_CLOSE_COLUMNS,
+    REQUEST_ESCALATION_COLUMNS,
+    REQUEST_ESCALATION_JOIN,
+    _annotate_request_ownership,
+)
 
 REQUEST_STATUSES = {
     "open",
@@ -21,7 +28,7 @@ REQUEST_STATUSES = {
 }
 
 
-@app.get("/api/containers/{cid}/requests")
+@app.get("/api/containers/{cid}/requests", responses={200: {"model": RequestListResponse}})
 def list_container_requests(
     cid: str,
     request: Request,
@@ -53,7 +60,7 @@ def list_container_requests(
     validate_sort(sort, sort_dir)
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
-    with db_cursor() as (_, cur):
+    with db_cursor(readonly=True) as (_, cur):
         require_container(cur, cid)
         # Access model: reads are project-isolated (trusted non-member 403).
         require_member_read(cur, request, cid)
@@ -86,18 +93,23 @@ def list_container_requests(
             id_col="id",
             default=default_order,
         )
+        task_link_obj = sql.json_object(
+            "'task_id'", "st.id", "'title'", "st.title", "'status'", "st.status")
         cur.execute(
             f"""SELECT id, type, status, priority, requester_id, target_id,
-                       payload, response, rejection_reason, spawned_task_id,
+                       payload, agent_payload, response, rejection_reason, spawned_task_id,
                        expires_at, created_at, responded_at, closed_at,
                        parent_request_id, chain_depth, detail,
-                       (SELECT json_build_object('task_id', st.id, 'title', st.title, 'status', st.status)
+                       (SELECT {task_link_obj}
                           FROM tasks st WHERE st.id = requests.spawned_task_id) AS task_link,
                        (SELECT a.alias FROM agents a
                           WHERE a.id = CASE requests.status WHEN 'open' THEN requests.target_id
                                                             WHEN 'answered' THEN requests.requester_id END)
-                         AS owner_alias
-                FROM requests WHERE {where} {order} LIMIT %s OFFSET %s""",
+                         AS owner_alias,
+                       {REQUEST_ESCALATION_COLUMNS},
+                       {REQUEST_CLOSE_COLUMNS}
+                FROM requests {REQUEST_ESCALATION_JOIN}
+                WHERE {where} {order} LIMIT %s OFFSET %s""",
             (*params, limit, offset),
         )
         rows = _annotate_request_ownership(cur.fetchall())

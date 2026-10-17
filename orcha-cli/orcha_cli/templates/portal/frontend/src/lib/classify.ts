@@ -18,10 +18,27 @@ const trunc = (s: string, n: number): string => {
   return v.length > n ? v.slice(0, n - 1) + "…" : v;
 };
 
+// The Orcha skill / slash-command verbs (templates/skills/orcha-*.md). Only
+// these words count — a bare /orcha-[a-z]/ used to tag every Read/Bash that
+// merely touched a path like /workspace/orcha-web or orcha-open/ as an
+// Orcha action (screen review: Activity).
+const ORCHA_SKILLS = [
+  "accept-task", "ask", "checkpoint", "close", "container", "convert", "decide-suggestion",
+  "done", "escalate", "inbox", "listen", "next", "nudge", "outbox", "pause", "post",
+  "register-agent", "register-human", "reject-task", "respond", "resume", "self-wake",
+  "snapshot", "status", "stop", "suggest-agent", "sweep", "task-new", "thread", "verify",
+];
+// The verb must stand alone: at the start / after whitespace, a quote, `=`,
+// `(` or `:` — optionally as a `/slash-command` — and must not continue as a
+// path or filename (`orcha-next.md`, `orcha-status/`, `orcha-web`).
+const SKILL_RE = new RegExp(
+  `(?:^|[\\s"'\\x60=(:])\\/?orcha-(?:${ORCHA_SKILLS.join("|")})(?![a-z0-9_./-])`,
+);
+
 // true when a tool call is the agent acting on Orcha itself (skills / API verbs).
 export function selfAction(_name: unknown, input: unknown): boolean {
   const s = (typeof input === "string" ? input : JSON.stringify(input || "")).toLowerCase();
-  if (/orcha-[a-z]/.test(s)) return true;
+  if (SKILL_RE.test(s)) return true;
   return /\/api\/(decisions|agent-suggestions\/[^ "/]+\/decide|containers\/[^ "/]+\/(requests|tasks)|tasks\/[^ "/]+\/(done|messages|next|verify|cancel|close|respond)|requests\/[^ "/]+\/[a-z-]+|agents\/[^ "/]+\/(next|digest|reachability|wake-ack|wake-claim))/.test(
     s,
   );
@@ -69,7 +86,191 @@ function summaryText(v: any): string {
   return "";
 }
 
-// Codex-runtime event shapes (msg/event envelope, item/delta payloads).
+/* ---- Codex `exec --json` — the concrete shapes, rendered like Claude's ------------------
+ * Two generations exist (same set the backend reads in evidence_parse.extract_commands and
+ * notifier_codex_events):
+ *   newer  {type:"item.started"|"item.updated"|"item.completed"|"item.failed", item:{id, type:
+ *           "command_execution"|"agent_message"|"reasoning"|"file_change"|"mcp_tool_call"|
+ *           "web_search"|"todo_list"|"error", …}} + thread.started / turn.* / error
+ *   older  {id, msg:{type:"exec_command_begin"|"exec_command_output_delta"|"exec_command_end"|
+ *           "agent_message"|"agent_reasoning"|"patch_apply_begin"|"patch_apply_end"|
+ *           "task_started"|"task_complete"|"token_count"|…}}
+ * A command becomes the SAME rows a Claude Bash call does — a "Bash" tool row whose detail is
+ * {command} and a "tool result" row carrying the output ("Exit code N\n…" on a failure, the
+ * way Claude's Bash result reads) — so the work log, activity line and live chat need no
+ * Codex special-casing. File changes become "apply_patch" tool rows ({path, change}).
+ * Returns null when the event is not one of these shapes (the generic reader takes over);
+ * [] for a known event with nothing worth a row (deltas, token counts, item.updated). */
+
+/** ["bash","-lc","pytest -q"] / "bash -lc 'pytest -q'" -> "pytest -q" (mirrors _codex_command). */
+export function codexCommand(v: unknown): string {
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => String(x));
+    if (parts.length >= 3 && /(^|\/)(ba|z)?sh$/.test(parts[0]) && /^-[a-z]*c[a-z]*$/.test(parts[1])) return parts[2];
+    return parts.map((p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : "'" + p.replace(/'/g, "'\\''") + "'")).join(" ");
+  }
+  const s = String(v ?? "").trim();
+  const m = /^(?:\S*\/)?(?:ba|z)?sh\s+-[a-z]*c[a-z]*\s+(['"])([\s\S]*)\1$/.exec(s);
+  return m ? m[2] : s;
+}
+
+function commandOutput(output: unknown, exitCode: unknown): string {
+  const out = visibleText(output);
+  const code = typeof exitCode === "number" ? exitCode : null;
+  if (code != null && code !== 0) return "Exit code " + code + (out ? "\n" + out : "");
+  if (!out.trim()) return code === 0 ? "(no output · exit 0)" : "(no output)";
+  return out;
+}
+
+const commandRow = (command: unknown): LogEvent => {
+  const input = { command: codexCommand(command) };
+  const self = selfAction("Bash", input);
+  return { type: self ? "decision" : "tool", label: self ? "orcha-action" : "tool", text: "Bash", detail: JSON.stringify(input) };
+};
+
+const resultRow = (detail: string): LogEvent => {
+  const dec = /decision_made|"decision_id"/.test(detail);
+  return {
+    type: dec ? "decision" : "result",
+    label: dec ? "decision" : "tool result",
+    text: dec ? "decision received {decision,reason}" : "tool result",
+    detail,
+  };
+};
+
+const patchRow = (path: string, change: string, extra: Record<string, string> = {}): LogEvent => ({
+  type: "tool",
+  label: "tool",
+  text: "apply_patch",
+  detail: JSON.stringify({ path, change, ...extra }),
+});
+
+const CHANGE_WORD: Record<string, string> = { add: "added", create: "added", update: "updated", modify: "updated", delete: "deleted", remove: "deleted" };
+
+function classifyCodexItem(o: any): LogEvent[] | null {
+  if (!o || typeof o !== "object") return null;
+  const top = String(o.type || "").toLowerCase();
+  // ---- newer item.* lifecycle
+  if (/^item\.(started|updated|completed|failed|done)$/.test(top) && o.item && typeof o.item === "object") {
+    const it = o.item;
+    const itype = String(it.type || "").toLowerCase();
+    const phase = top.slice(5); // started | updated | completed | failed | done
+    const end = phase !== "started" && phase !== "updated";
+    if (itype === "command_execution" || itype === "local_shell_call" || itype === "exec_command") {
+      if (phase === "updated") return [];
+      if (!end) return [commandRow(it.command)];
+      return [resultRow(commandOutput(it.aggregated_output ?? it.output, it.exit_code))];
+    }
+    if (itype === "agent_message" || itype === "assistant_message") {
+      if (!end) return [];
+      const txt = visibleText(it.text ?? it.message ?? it.content);
+      return txt.trim() ? [{ type: "narrate", label: "narration", text: txt }] : [];
+    }
+    if (itype === "reasoning") {
+      if (!end) return [];
+      // Codex only ever exposes its reasoning SUMMARY (item.text / item.summary); raw or
+      // encrypted content stays hidden (ISS-85 honesty boundary — see the generic reader).
+      const txt = (typeof it.text === "string" ? it.text : "") || summaryText(it.summary || it.reasoning_summary || it.summary_text);
+      return [
+        txt.trim()
+          ? { type: "think", label: "reasoning", text: txt }
+          : { type: "think", label: "reasoning", text: "reasoning summary unavailable", detail: "provider did not expose raw reasoning" },
+      ];
+    }
+    if (itype === "file_change") {
+      if (!end) return [];
+      const changes = Array.isArray(it.changes) ? it.changes : [];
+      const failed = String(it.status || "").toLowerCase() === "failed" || phase === "failed";
+      const rows: LogEvent[] = changes
+        .filter((c: any) => c && typeof c.path === "string")
+        .map((c: any) => patchRow(c.path, CHANGE_WORD[String(c.kind || "").toLowerCase()] || String(c.kind || "changed")));
+      if (failed) rows.push(resultRow("Exit code 1\npatch failed to apply"));
+      return rows;
+    }
+    if (itype === "mcp_tool_call") {
+      const name = [it.server, it.tool].filter(Boolean).join(".") || "mcp tool";
+      if (!end) {
+        const args = it.arguments ?? {};
+        const self = selfAction(name, args);
+        return [{ type: self ? "decision" : "tool", label: self ? "orcha-action" : "tool", text: name, detail: typeof args === "string" ? args : jsonDetail(args) }];
+      }
+      if (phase === "updated") return [];
+      const err = it.error && (typeof it.error === "string" ? it.error : visibleText(it.error));
+      const res = it.result && typeof it.result === "object" ? visibleText(it.result.content ?? it.result) : visibleText(it.result);
+      return [resultRow(err ? "Error: " + err : res || "(no output)")];
+    }
+    if (itype === "web_search") {
+      if (!end || !it.query) return [];
+      return [{ type: "tool", label: "tool", text: "WebSearch", detail: JSON.stringify({ query: String(it.query) }) }];
+    }
+    if (itype === "todo_list") {
+      const items = Array.isArray(it.items) ? it.items : [];
+      if (!items.length || phase === "updated") return [];
+      const lines = items.map((t: any) => (t && t.completed ? "[x] " : "[ ] ") + String((t && t.text) || ""));
+      return [{ type: "narrate", label: "progress", text: "Plan: " + items.filter((t: any) => t && t.completed).length + "/" + items.length + " done", detail: lines.join("\n") }];
+    }
+    if (itype === "error") {
+      const msg = visibleText(it.message ?? it.error) || "error";
+      return [{ type: "error", label: "error", text: trunc(msg, 200), detail: msg }];
+    }
+    return null;
+  }
+  if (top === "turn.failed" || (top === "error" && !o.msg)) {
+    const msg = visibleText((o.error && (o.error.message ?? o.error)) ?? o.message) || top;
+    return [{ type: "error", label: "error", text: trunc(msg, 200), detail: msg }];
+  }
+  if (top === "turn.completed") return [{ type: "done", label: "run-complete", text: "turn completed" }];
+  if (top === "turn.started") return [];
+  // ---- older nested msg envelope
+  const m = o.msg && typeof o.msg === "object" ? o.msg : null;
+  if (!m) return null;
+  const mt = String(m.type || "").toLowerCase();
+  switch (mt) {
+    case "exec_command_begin":
+      return [commandRow(m.command)];
+    case "exec_command_output_delta":
+    case "agent_message_delta":
+    case "agent_reasoning_delta":
+    case "agent_reasoning_raw_content":
+    case "agent_reasoning_raw_content_delta":
+    case "agent_reasoning_section_break":
+    case "token_count":
+    case "turn_diff":
+      return [];
+    case "exec_command_end": {
+      const out = m.aggregated_output || m.formatted_output || [m.stdout, m.stderr].filter((x) => typeof x === "string" && x).join("");
+      return [resultRow(commandOutput(out, m.exit_code))];
+    }
+    case "agent_message": {
+      const txt = visibleText(m.message ?? m.text);
+      return txt.trim() ? [{ type: "narrate", label: "narration", text: txt }] : [];
+    }
+    case "agent_reasoning": {
+      const txt = typeof m.text === "string" ? m.text : "";
+      return txt.trim() ? [{ type: "think", label: "reasoning", text: txt }] : [];
+    }
+    case "patch_apply_begin": {
+      const ch = m.changes && typeof m.changes === "object" ? m.changes : {};
+      return Object.keys(ch).map((path) => {
+        const c = ch[path] || {};
+        const key = ["add", "update", "delete"].find((k) => c[k] != null) || String(c.type || "");
+        const diff = c.update && typeof c.update.unified_diff === "string" ? c.update.unified_diff : "";
+        return patchRow(path, CHANGE_WORD[key] || "changed", diff ? { diff } : {});
+      });
+    }
+    case "patch_apply_end":
+      return [resultRow(m.success === false ? "Exit code 1\n" + (visibleText(m.stderr) || "patch failed to apply") : visibleText(m.stdout) || "patch applied")];
+    case "task_complete":
+      return [{ type: "done", label: "run-complete", text: m.last_agent_message ? trunc(String(m.last_agent_message), 200) : "task complete" }];
+    case "task_started":
+      return [];
+    default:
+      return null;
+  }
+}
+
+// Codex-runtime event shapes (msg/event envelope, item/delta payloads) — the tolerant
+// generic reader for anything classifyCodexItem does not pin down.
 function classifyCodex(o: any): LogEvent[] {
   const rows: LogEvent[] = [];
   const p = o && typeof o.msg === "object" ? o.msg : o && typeof o.event === "object" ? o.event : o;
@@ -178,6 +379,10 @@ export function classifyLine(line: string): LogEvent[] {
   const t = o.type;
   const st = o.subtype;
   const cont = o.message && o.message.content;
+  // Claude partial-message deltas (--include-partial-messages): the live chat reads them
+  // (runlog useLiveTurn); a work log already shows the complete `assistant` event each
+  // block ends with, so a delta is never its own row (it used to paint a blank one).
+  if (t === "stream_event") return out;
   if (t === "assistant" && Array.isArray(cont)) {
     cont.forEach((c: any) => {
       if (c.type === "text" && c.text && c.text.trim()) out.push({ type: "narrate", label: "narration", text: c.text });
@@ -214,6 +419,9 @@ export function classifyLine(line: string): LogEvent[] {
   } else if (t === "result") {
     out.push({ type: "done", label: "run-complete", text: trunc(JSON.stringify(o.result || o.subtype || "done"), 200) });
   } else {
+    // a pinned Codex shape answers outright — [] means "known, nothing worth a row"
+    const known = classifyCodexItem(o);
+    if (known) return known;
     const codex = classifyCodex(o);
     if (codex.length) codex.forEach((e) => out.push(e));
     else out.push({ type: "narrate", label: t || "event", text: "" });

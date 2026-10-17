@@ -1,9 +1,12 @@
 """Expose attachment limits through an explicit compatibility configuration seam."""
 
 import pathlib
+import tempfile
 from collections.abc import Callable
 
-DEFAULT_ATTACHMENTS_DIR = pathlib.Path("/app/orcha-attachments")
+# Only used when ORCHA_ATTACHMENTS_DIR is unset; compose and `orcha portal` always set it
+# (to the project's .claude/.orcha-attachments). A temp dir keeps a bare host run writable.
+DEFAULT_ATTACHMENTS_DIR = pathlib.Path(tempfile.gettempdir()) / "orcha-attachments"
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 MAX_EXTRACTED_TEXT_CHARS = 8_000

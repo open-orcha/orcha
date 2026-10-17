@@ -2,80 +2,54 @@ package io.openorcha.mobile.ui.screens
 
 /** Owns live and completed worker-run detail presentation. */
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import io.openorcha.mobile.ui.icons.OrchaIcons
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.openorcha.mobile.data.RunDto
-import io.openorcha.mobile.data.TaskDto
-import io.openorcha.mobile.data.TaskMessageDto
+import io.openorcha.mobile.domain.ActivityCopy
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
-import io.openorcha.mobile.ui.components.Avatar
-import io.openorcha.mobile.ui.components.AvatarSize
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.BannerKind
-import io.openorcha.mobile.ui.components.Bubble
-import io.openorcha.mobile.ui.components.BubbleKind
-import io.openorcha.mobile.ui.components.DangerTonalButton
 import io.openorcha.mobile.ui.components.FeedRow
-import io.openorcha.mobile.ui.components.MetaTag
-import io.openorcha.mobile.ui.components.OrchaCard
-import io.openorcha.mobile.ui.components.OrchaField
-import io.openorcha.mobile.ui.components.PrimaryButton
-import io.openorcha.mobile.ui.components.SectionH
-import io.openorcha.mobile.ui.components.StatusDomain
-import io.openorcha.mobile.ui.components.StatusPill
-import io.openorcha.mobile.ui.components.TonalButton
-import io.openorcha.mobile.ui.theme.MonoSmStyle
-import io.openorcha.mobile.ui.theme.MonoStyle
+import io.openorcha.mobile.ui.components.LAvatar
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LCard
+import io.openorcha.mobile.ui.components.LSize
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LStatusGlyph
+import io.openorcha.mobile.ui.components.LTag
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
+import kotlinx.coroutines.launch
 
 /* =============================================================================
-   Flow 05 — Task detail + thread. Flow 06 — worker runs + streaming log.
+   Flow 06 — worker run detail: classified feed (no raw JSON), pin-to-bottom, stop-run.
    ============================================================================= */
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RunDetailScreen(
     state: OrchaUiState,
@@ -100,43 +74,49 @@ fun RunDetailScreen(
         if (state.runFeed.isNotEmpty() && atBottom) listState.animateScrollToItem(state.runFeed.size - 1)
     }
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = p.bg,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = {
-                    Column {
-                        Text(run?.runId?.take(6) ?: "run", style = MonoStyle.copy(fontWeight = FontWeight.W700))
-                        Text(run?.taskTitle ?: run?.wakeEvent ?: "", style = MaterialTheme.typography.bodyMedium, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
-                actions = { IconButton(onClick = onRefresh) { Icon(OrchaIcons.Refresh, "Refresh") } },
-            )
+            LTopBar(
+                title = run?.runId?.take(6) ?: "Run",
+                subtitle = run?.taskTitle ?: run?.wakeEvent?.let(ActivityCopy::humanize),
+                monoTitle = run != null,
+                onBack = onBack,
+            ) {
+                IconButton(onClick = onRefresh) { Icon(OrchaIcons.Refresh, "Refresh", tint = p.text2) }
+            }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = LSpace.l, vertical = LSpace.m),
+            verticalArrangement = Arrangement.spacedBy(LSpace.m),
+        ) {
             run?.let {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatusPill(it.status, StatusDomain.Run)
-                    it.wakeKind?.let { wk -> MetaTag(wk) }
-                    it.agentAlias?.let { a -> MetaTag(a) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(LSpace.s)) {
+                    LStatusGlyph(runGlyphStatus(it.status), size = 15.dp)
+                    Text(
+                        MobileUx.statusCopy(it.status).capitalizedFirst() +
+                            (if (it.status != "running") MobileUx.agoLabel(it.endedAt)?.let { t -> " · $t" } ?: "" else ""),
+                        style = ltype(LType.Meta),
+                        color = if (it.status == "running") p.warn else p.text2,
+                        maxLines = 1,
+                    )
+                    it.wakeKind?.let { wk -> LTag(wk) }
+                    io.openorcha.mobile.ui.components.ModelProviderMark(it.runtime)
                     Spacer(Modifier.weight(1f))
+                    it.agentAlias?.let { a -> LAvatar(a, isAI = true, size = 20.dp) }
                     if (it.status == "running") {
-                        DangerTonalButton("Stop run", { confirmStop = true }, small = true, enabled = !state.actionInFlight)
+                        LButton("Stop run", { confirmStop = true }, kind = LButtonKind.Danger, size = LSize.Small, enabled = !state.actionInFlight)
                     }
-                }
-                if (it.status != "running") {
-                    val kind = when (it.status) {
-                        "exited", "finished" -> BannerKind.Info
-                        "killed", "failed", "error" -> BannerKind.Danger
-                        else -> BannerKind.Info
-                    }
-                    Banner(kind, "Run ${MobileUx.statusCopy(it.status)}${MobileUx.agoLabel(it.endedAt)?.let { t -> " · $t" } ?: ""}")
                 }
             }
-            state.runStreamNote?.let { Banner(BannerKind.Info, it) }
-            OrchaCard(Modifier.weight(1f)) {
+            // Live changes while the agent works (polled; a finished run's changes read once)
+            val changesBase = state.selectedContainer?.baseUrl
+            val changesAgent = run?.agentId ?: state.selectedAgent?.id
+            if (run != null && changesBase != null && changesAgent != null) {
+                RunChangesBar(changesBase, changesAgent, run.runId, running = run.status == "running")
+            }
+            state.runStreamNote?.let { Text(it, style = ltype(LType.Meta), color = p.faint) }
+            LCard(Modifier.weight(1f)) {
                 if (state.runFeed.isEmpty()) {
                     Text(
                         when {
@@ -144,20 +124,23 @@ fun RunDetailScreen(
                             run?.status == "running" -> "Streaming — waiting for the first log line…"
                             else -> "No log lines yet."
                         },
-                        color = p.muted,
+                        style = ltype(LType.Meta),
+                        color = p.faint,
                     )
                 } else {
-                    androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth()) {
-                        LazyColumn(state = listState) {
+                    Box(Modifier.fillMaxWidth()) {
+                        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             items(state.runFeed.size) { i ->
                                 val row = state.runFeed[i]
                                 FeedRow(row.type, row.label, row.text, row.detail)
                             }
                         }
                         if (!atBottom) {
-                            androidx.compose.material3.SuggestionChip(
-                                onClick = { scope.launch { listState.animateScrollToItem(state.runFeed.size - 1) } },
-                                label = { Text("Auto-scroll paused · Jump to latest", style = MaterialTheme.typography.labelMedium) },
+                            LButton(
+                                "Jump to latest",
+                                { scope.launch { listState.animateScrollToItem(state.runFeed.size - 1) } },
+                                kind = LButtonKind.Secondary,
+                                size = LSize.Small,
                                 modifier = Modifier.align(Alignment.BottomCenter),
                             )
                         }
@@ -170,13 +153,16 @@ fun RunDetailScreen(
     if (confirmStop) {
         AlertDialog(
             onDismissRequest = { confirmStop = false },
-            title = { Text("Stop this run?") },
-            text = { Text("${run?.agentAlias ?: "The"} worker is interrupted mid-turn. The log so far is kept and the run is marked stopped.") },
-            confirmButton = {
-                TextButton(onClick = { confirmStop = false; onStop() }) { Text("Stop run", color = p.danger, fontWeight = FontWeight.W700) }
+            title = { Text("Stop this run?", style = ltype(LType.Headline), color = p.text) },
+            text = {
+                Text(
+                    "${run?.agentAlias ?: "The"} worker is interrupted mid-turn. The log so far is kept and the run is marked stopped.",
+                    style = ltype(LType.Body), color = p.text2,
+                )
             },
-            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Cancel", color = p.accent) } },
-            containerColor = p.raised,
+            confirmButton = { LButton("Stop run", { confirmStop = false; onStop() }, kind = LButtonKind.Danger) },
+            dismissButton = { LButton("Cancel", { confirmStop = false }, kind = LButtonKind.Ghost) },
+            containerColor = p.surface,
         )
     }
 }

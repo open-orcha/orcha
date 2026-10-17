@@ -14,9 +14,17 @@
  * instead of RepoBrowser's plain line-number gutter.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "../../components/ui";
-import { useSnapshot } from "../../state/SnapshotProvider";
+import { isEditingTarget } from "../../components/primitives";
+import { Button, ButtonLink, IconButton, Segmented } from "../../components/primitives";
+import { CircleIconButton, PageToolbar } from "../../shell/Shell";
+import { withCid } from "../../lib/scope";
+import { useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
+import { useProjects } from "../../state/projects";
+import { repoConnectBlockedReason } from "../github/repoPermissions";
+import { EmptyState } from "../../components/primitives";
+import { useCodeWriteBlock } from "./writeAccess";
 import { Shell } from "../../shell/Shell";
 import { extOf } from "../github/browse/browseTypes";
 import { highlightLine, type Token } from "../github/browse/highlight";
@@ -25,13 +33,19 @@ import {
   BrowseSkeletonPane,
   BrowseTree,
   ContentPaneChrome,
+  formatSize,
 } from "../shared/browseTree";
 import { useBrowseTree } from "../shared/useBrowseTree";
 import { getCachedBlob, isCacheableSha, putCachedBlob } from "./blobCache";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { CodeSpaceLanding } from "./CodeSpaceLanding";
-import type { CodeThreadSummary } from "./codespaceTypes";
+import type { CodeThreadDetailPayload, CodeThreadSummary, CreateThreadResponse } from "./codespaceTypes";
+import type { FocusRange } from "./editorLessonFocus";
+import type { LineRef } from "./lesson";
+import { SelectionLens, type LensRange } from "./SelectionLens";
+import { useStartLesson } from "./useStartLesson";
 import { DraftsBar } from "./DraftsBar";
+import { EditContext, refLabelFor, type EditSource } from "./EditContext";
 import { getDraft, listDrafts, putDraft, type DraftListEntry } from "./draftStore";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { fetchGithubEditable } from "./githubEditApi";
@@ -42,13 +56,21 @@ import { LazyEditorPane } from "./LazyEditorPane";
 import { MdRenderedPane } from "./MdRenderedPane";
 import { recordFileView } from "./recentFiles";
 import { RecentFilesDropdown } from "./RecentFilesDropdown";
+import { RefPicker } from "./RefPicker";
 import { IdentifierTokens } from "./symbols/IdentifierTokens";
 import { SymbolSearch } from "./symbols/SymbolSearch";
 import { ThreadRail, type RailTab } from "./ThreadRail";
 import { usePaneWidths } from "./usePaneWidths";
-import { fetchWorktreeFile, type WorktreeFilePayload, fetchWorktreeAvailable } from "./worktreeApi";
+import { useCodeLayout } from "./useCodeLayout";
+import { fetchWorktreeBranch, fetchWorktreeFile, type WorktreeFilePayload, fetchWorktreeAvailable } from "./worktreeApi";
 import { WorktreeDiffPane } from "./WorktreeDiffPane";
+import { browseRawUrl } from "../../components/filePreview/sources";
 import "./codespace.css";
+import { RepoNotConnected } from "../github/RepoNotConnected";
+// Registers the Cmd/Ctrl+K "Files" provider (C-03). extensions.ts imports this
+// page eagerly, so the provider is live app-wide from boot; B may move the
+// side-effect import into extensions.ts (requests/B.md "From F").
+import "./filesSearch";
 
 // Item 1 — Markdown files render through the house Md component (esc-first,
 // safe inline markdown) by default; a small Raw|Rendered toggle in the
@@ -66,13 +88,25 @@ function isMarkdownPath(path: string): boolean {
   return extOf(path) === "md";
 }
 
-// jsdom has no scrollIntoView (RequestsPage.tsx / AgentsPage.tsx's same
-// feature-detect precedent) — production browsers always have it.
-function scrollLineIntoView(line: number): void {
-  const el = document.querySelector(`[data-cs-line="${line}"]`);
-  if (el && typeof (el as HTMLElement).scrollIntoView === "function") {
-    (el as HTMLElement).scrollIntoView({ block: "center" });
+// Scroll a code line to ~1/3 of the viewer's height (Linear/GitHub deep-link
+// convention: the anchor sits high enough that the code it introduces is
+// visible below it). Falls back to scrollIntoView when the line isn't inside
+// the code scroller; jsdom has neither layout nor scrollIntoView, so both
+// paths are feature-detected.
+export function scrollLineIntoView(line: number, opts: { smooth?: boolean } = {}): void {
+  const el = document.querySelector(`[data-cs-line="${line}"]`) as HTMLElement | null;
+  if (!el) return;
+  const scroller = el.closest(".cs-code-scroll") as HTMLElement | null;
+  if (scroller && scroller.clientHeight > 0) {
+    const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    const top = Math.max(0, scroller.scrollTop + delta - Math.round(scroller.clientHeight / 3));
+    // Learn stepping glides (unless the reader asked for reduced motion)
+    const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (typeof scroller.scrollTo === "function") scroller.scrollTo(opts.smooth && !reduce ? { top, behavior: "smooth" } : { top });
+    else scroller.scrollTop = top;
+    return;
   }
+  if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
 }
 
 // Item 3 — breadcrumb segment click: scroll that directory's tree row into
@@ -95,17 +129,85 @@ function pulseTreeRow(dirPath: string): void {
 
 const LARGE_FILE_LINES = 1500;
 
+/** Wide-layout pane visibility (toolbar view toggles), persisted per browser. */
+export interface PaneCollapse { tree: boolean; rail: boolean }
+const COLLAPSE_KEY = "orcha:cs:collapsed";
+export function readPaneCollapse(): PaneCollapse {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "null");
+    return { tree: !!(v && v.tree), rail: !!(v && v.rail) };
+  } catch {
+    return { tree: false, rail: false };
+  }
+}
+function writePaneCollapse(c: PaneCollapse): void {
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(c)); } catch { /* private mode */ }
+}
+
 export function CodeSpacePage() {
-  const { snap, cid } = useSnapshot();
+  const { snap, cid, identity, error: snapError, refresh } = useSnapshot();
+  // the project list names a project whose snapshot failed (unreachable state)
+  const { list: projectList } = useProjects();
+  // e2e-permissions-16: Connect repo is owner-or-manage_repo server-side
+  const connectBlock = repoConnectBlockedReason(useActingAuthority(), identity);
   const toast = useToast();
+  // viewer / non-member: every Code Space write is refused server-side
+  const writeBlock = useCodeWriteBlock();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const gitRef = searchParams.get("ref") || "HEAD";
   const path = searchParams.get("path") || "";
   const lineParam = searchParams.get("line");
   const threadParam = searchParams.get("thread");
+  // Learn deep link: ?lesson=<threadId> (the lesson open in the rail),
+  // &view=full (full-page lesson mode) and &step=N (1-based; omitted = step 1).
+  const openLessonId = searchParams.get("lesson");
+  const lessonFull = !!openLessonId && searchParams.get("view") === "full";
+  const stepParam = Number(searchParams.get("step"));
+  const lessonInitialStep = Number.isFinite(stepParam) && stepParam >= 1 ? Math.floor(stepParam) - 1 : 0;
+  const routerNavigate = useNavigate();
 
-  const { dirCache, expanded, rows, toggleDir, retryDir, filePayload, fileError, fileLoading } = useBrowseTree(cid || "", gitRef, path);
+  const { widths, dragTree, dragRail, resetTree, resetRail } = usePaneWidths();
+  const dragStateRef = useRef<{ pane: "tree" | "rail"; startX: number } | null>(null);
+
+  // V2 responsive layout (screen review S6): wide = three inline panes;
+  // medium = the rail becomes an overlay drawer; narrow = single-pane file
+  // view with Files / Threads drawers toggled from the header.
+  const [shellEl, setShellEl] = useState<HTMLDivElement | null>(null);
+  const layout = useCodeLayout(shellEl, widths.tree, widths.rail);
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(false);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  // Wide layouts can hide the tree / rail from the toolbar's circular view
+  // toggles (Linear's panel toggles); the choice persists per browser.
+  const [collapsed, setCollapsed] = useState<PaneCollapse>(readPaneCollapse);
+  useEffect(() => { writePaneCollapse(collapsed); }, [collapsed]);
+  // Landing (no file open): the rail has nothing file-scoped to show, so on
+  // wide layouts it starts hidden and the landing gets the room (D12 — no
+  // column holding only a help sentence). The Threads-panel toggle still
+  // opens it (Live / Changes stay one click away); this is session-only and
+  // never overwrites the persisted per-browser choice.
+  const [landingRail, setLandingRail] = useState(false);
+  const railHidden = collapsed.rail || (!path && !landingRail);
+  // any action that needs the rail (composer, thread, raise-hand) reveals it:
+  // opens the drawer on medium/narrow, un-hides it on wide.
+  const revealRail = useCallback(() => {
+    if (layoutRef.current !== "wide") { setRailOpen(true); setTreeOpen(false); }
+    else { setCollapsed((c) => (c.rail ? { ...c, rail: false } : c)); setLandingRail(true); }
+  }, []);
+  const toggleWideRail = useCallback(() => {
+    if (railHidden) { setCollapsed((c) => (c.rail ? { ...c, rail: false } : c)); setLandingRail(true); }
+    else if (!path) setLandingRail(false);
+    else setCollapsed((c) => ({ ...c, rail: true }));
+  }, [railHidden, path]);
+  const closeDrawers = useCallback(() => { setTreeOpen(false); setRailOpen(false); }, []);
+  useEffect(() => {
+    if (layout === "wide") { setTreeOpen(false); setRailOpen(false); }
+    else if (layout === "medium") setTreeOpen(false);
+  }, [layout]);
+
+  const { dirCache, expanded, rows, toggleDir, retryDir, retryFile, filePayload, fileError, fileLoading } = useBrowseTree(cid || "", gitRef, path);
 
   // sha-keyed blob cache (blobCache.ts) — FAST loading for ref-PINNED reads
   // only (gitRef is a real immutable commit sha, e.g. after opening History
@@ -165,6 +267,14 @@ export function CodeSpacePage() {
   const [openThreadId, setOpenThreadId] = useState<string | null>(threadParam);
   const [fileThreads, setFileThreads] = useState<CodeThreadSummary[]>([]);
   const [raiseHand, setRaiseHand] = useState<{ agentId: string; line: number } | null>(null);
+  // Learn: the lesson open in the rail's Learn tab (page-owned so the gutter's
+  // lesson markers and the floating Teach · Why lens can open one), a seed for a
+  // lesson just created here, the current step's cited lines (glow + dim), and
+  // the latest text selection (sticky per file) for the quick starts.
+  const [lessonSeed, setLessonSeed] = useState<CodeThreadDetailPayload | null>(null);
+  const [lessonFocus, setLessonFocus] = useState<{ path: string; ranges: FocusRange[] } | null>(null);
+  const [textSel, setTextSel] = useState<LensRange | null>(null);
+  const [codeBodyEl, setCodeBodyEl] = useState<HTMLDivElement | null>(null);
   // Identifier click (Phase 3, best-effort v1): prefills the header's
   // SymbolSearch with the clicked word — "Find symbol", never "go to
   // definition". prefillToken forces a re-trigger even on a repeat click of
@@ -190,6 +300,19 @@ export function CodeSpacePage() {
     });
     return () => { cancelled = true; };
   }, [cid]);
+
+  // V2 edit-context strip: the REAL local branch name (never invented — only
+  // shown when GET …/worktree/branch answers available with a branch).
+  const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null);
+  useEffect(() => {
+    setWorktreeBranch(null);
+    if (!cid || !worktreeAvailable) return;
+    let cancelled = false;
+    fetchWorktreeBranch(cid)
+      .then((b) => { if (!cancelled && b && b.available && b.branch) setWorktreeBranch(b.branch); })
+      .catch(() => { /* branch label is optional — the strip falls back to "HEAD" */ });
+    return () => { cancelled = true; };
+  }, [cid, worktreeAvailable]);
 
   // Phase 4 — GitHub-bound editing: a container with no writable worktree
   // (worktreeAvailable=false) can still offer local-draft editing when the
@@ -226,7 +349,10 @@ export function CodeSpacePage() {
   const [draftMode, setDraftMode] = useState(false); // true while THIS edit session is draft-backed (github mode)
   const [draftContent, setDraftContent] = useState<string | null>(null);
   const [draftBaseHash, setDraftBaseHash] = useState<string | null>(null);
-  const canEdit = (worktreeAvailable || githubEditable) && gitRef === "HEAD" && !!path;
+  // A binary payload has nothing to edit — no Edit toggle that would only
+  // flip the bar to "Editing" over "Binary file not shown." (parity extra).
+  const openIsBinary = !!filePayload && filePayload.path === path && !!filePayload.binary;
+  const canEdit = (worktreeAvailable || githubEditable) && gitRef === "HEAD" && !!path && !openIsBinary;
   useEffect(() => {
     setEditMode(false);
     setEditorDirty(false);
@@ -254,7 +380,7 @@ export function CodeSpacePage() {
   }, [cid, draftsToken]);
 
   const enterEditMode = useCallback(() => {
-    if (!cid || !path) return;
+    if (!cid || !path || writeBlock) return;
     if (!worktreeAvailable && githubEditable) {
       // GitHub mode: seed from an existing draft if one exists, else the
       // already-loaded read-only filePayload — never a network read (there's
@@ -274,7 +400,7 @@ export function CodeSpacePage() {
     setEditorFile(null);
     setEditMode(true);
     fetchWorktreeFile(cid, path).then((data) => setEditorFile(data));
-  }, [cid, path, worktreeAvailable, githubEditable, filePayload]);
+  }, [cid, path, worktreeAvailable, githubEditable, filePayload, writeBlock]);
 
   const exitEditMode = useCallback(() => {
     setEditMode(false);
@@ -336,15 +462,30 @@ export function CodeSpacePage() {
   const [viewMode, setViewMode] = useState<ViewMode>(isMd ? "rendered" : "raw");
   useEffect(() => {
     setViewMode(isMarkdownPath(path) ? "rendered" : "raw");
+    setTextSel(null);
   }, [path]);
 
-  // deep-linked ?line= scrolls to that line once the file paints.
+  // deep-linked ?line= / ?thread= scrolls once the file paints: the open
+  // thread's first line when its range is known (fileThreads arrives after
+  // the file), else ?line=. Keyed so the 3 s snapshot bump never re-scrolls
+  // a human who has since scrolled away.
+  const openThreadRange = useMemo(() => {
+    if (!openThreadId) return null;
+    const t = fileThreads.find((ft) => ft.id === openThreadId && ft.path === path);
+    return t ? { start: t.start_line, end: Math.max(t.start_line, t.end_line) } : null;
+  }, [openThreadId, fileThreads, path]);
+  const deepScrollKey = useRef("");
   useEffect(() => {
-    if (!filePayload || !lineParam) return;
-    const ln = Number(lineParam);
-    if (!Number.isFinite(ln)) return;
-    scrollLineIntoView(ln);
-  }, [filePayload, lineParam]);
+    if (!filePayload || filePayload.path !== path) return;
+    if (!lineParam && !openThreadRange) return;
+    const ln = openThreadRange ? openThreadRange.start : Number(lineParam);
+    if (!Number.isFinite(ln) || ln < 1) return;
+    const key = path + "|" + ln + "|" + (threadParam || "");
+    if (deepScrollKey.current === key) return;
+    deepScrollKey.current = key;
+    // after paint: the rows for a just-fetched file mount in this commit
+    requestAnimationFrame(() => scrollLineIntoView(ln));
+  }, [filePayload, path, lineParam, threadParam, openThreadRange]);
 
   // Item 2/3 — "recently viewed files": record on every file open, regardless
   // of entry point (tree click, breadcrumb, symbol nav, thread nav, recent-
@@ -362,15 +503,28 @@ export function CodeSpacePage() {
     setRecentFilesToken((n) => n + 1);
   }, [cid, path]);
 
-  const navigate = useCallback((next: { ref?: string; path?: string; line?: number | null; thread?: string | null }, replace = false) => {
-    setSearchParams((prev) => {
-      const p = new URLSearchParams(prev);
+  // Several URL writes can land in ONE commit (a lesson step mirrors ?step=
+  // while full page follows it to another ?path=); setSearchParams' updater
+  // sees the render's params, so each write builds on the latest one instead.
+  const latestParamsRef = useRef(searchParams);
+  const seenParamsRef = useRef(searchParams);
+  if (seenParamsRef.current !== searchParams) { seenParamsRef.current = searchParams; latestParamsRef.current = searchParams; }
+  const navigate = useCallback((next: {
+    ref?: string; path?: string; line?: number | null; thread?: string | null;
+    lesson?: string | null; view?: "full" | null; step?: string | null;
+  }, replace = false) => {
+    {
+      const p = new URLSearchParams(latestParamsRef.current);
       if (next.ref !== undefined) { if (next.ref) p.set("ref", next.ref); else p.delete("ref"); }
       if (next.path !== undefined) { if (next.path) p.set("path", next.path); else p.delete("path"); }
       if (next.line !== undefined) { if (next.line != null) p.set("line", String(next.line)); else p.delete("line"); }
       if (next.thread !== undefined) { if (next.thread) p.set("thread", next.thread); else p.delete("thread"); }
-      return p;
-    }, { replace });
+      if (next.lesson !== undefined) { if (next.lesson) p.set("lesson", next.lesson); else p.delete("lesson"); }
+      if (next.view !== undefined) { if (next.view) p.set("view", next.view); else p.delete("view"); }
+      if (next.step !== undefined) { if (next.step) p.set("step", next.step); else p.delete("step"); }
+      latestParamsRef.current = p;
+      setSearchParams(p, { replace });
+    }
   }, [setSearchParams]);
 
   const openDraftFile = useCallback((p: string) => {
@@ -378,6 +532,7 @@ export function CodeSpacePage() {
     setComposerOpen(false);
     setWorktreePath(null);
     setHistoryOpen(false);
+    setTreeOpen(false);
     navigate({ ref: "HEAD", path: p, line: null, thread: null });
     // enterEditMode fires from the pendingDraftOpenRef effect above once the
     // new file's payload + editable gating are in place — mirrors how
@@ -390,6 +545,7 @@ export function CodeSpacePage() {
     setComposerOpen(false);
     setWorktreePath(null);
     setHistoryOpen(false);
+    setTreeOpen(false);
     navigate({ path: p, line: null, thread: null });
   }, [navigate]);
 
@@ -403,8 +559,9 @@ export function CodeSpacePage() {
     setComposerOpen(false);
     setHistoryOpen(false);
     setWorktreePath(p);
+    closeDrawers();
     navigate({ path: p, line: null, thread: null });
-  }, [navigate]);
+  }, [navigate, closeDrawers]);
 
   // History row click: re-open the CURRENT file at the picked commit's sha —
   // the committed-file viewer already supports an arbitrary ref via ?ref=.
@@ -415,9 +572,97 @@ export function CodeSpacePage() {
   }, [navigate]);
 
   const jumpToLine = useCallback((line: number) => {
+    if (layoutRef.current !== "wide") setRailOpen(false);
     navigate({ line }, true);
     scrollLineIntoView(line);
   }, [navigate]);
+
+  // Learn — open a lesson in the rail (navigating to its file when needed). The
+  // open lesson lives in the URL (?lesson=), so reload / share restores it.
+  // `opts.full` opens it straight into full page (a SECOND history entry, pushed
+  // once ?lesson= has landed, so Back exits full page before leaving the lesson).
+  const pendingFullRef = useRef<string | null>(null);
+  const openLesson = useCallback((t: CodeThreadSummary | null, seed?: CodeThreadDetailPayload | null, opts?: { full?: boolean }) => {
+    setLessonSeed(seed ?? null);
+    if (!t) { setLessonFocus(null); navigate({ lesson: null, view: null, step: null }, true); return; }
+    setRailTab("learn");
+    pendingFullRef.current = opts?.full ? t.id : null;
+    const move = t.path !== path;
+    if (t.id === openLessonId && !move) { if (opts?.full && !lessonFull) { pendingFullRef.current = null; navigate({ view: "full" }, false); } return; }
+    navigate({ lesson: t.id, step: null, ...(move ? { path: t.path, line: null, thread: null } : {}) }, !move);
+  }, [path, navigate, openLessonId, lessonFull]);
+
+  // Learn — full-page lesson mode (?view=full). Entering pushes a history entry
+  // so browser Back exits full page first; the in-page exits (button, F, Esc)
+  // pop that same entry when this session pushed it, else just drop the param
+  // (a reloaded / shared full-page link has nothing of ours to pop).
+  const fullPushedRef = useRef(false);
+  const lessonStepRef = useRef(lessonInitialStep);
+  const enterLessonFull = useCallback(() => {
+    if (!openLessonId || lessonFull) return;
+    fullPushedRef.current = true;
+    setRailTab("learn");
+    setTreeOpen(false);
+    setRailOpen(false);
+    navigate({ view: "full" }, false);
+  }, [openLessonId, lessonFull, navigate]);
+  const exitLessonFull = useCallback(() => {
+    if (!lessonFull) return;
+    if (fullPushedRef.current) { fullPushedRef.current = false; routerNavigate(-1); }
+    else navigate({ view: null }, true);
+  }, [lessonFull, navigate, routerNavigate]);
+  const toggleLessonFull = useCallback(() => {
+    if (lessonFull) exitLessonFull();
+    else enterLessonFull();
+  }, [lessonFull, enterLessonFull, exitLessonFull]);
+  useEffect(() => {
+    if (!openLessonId) return;
+    setRailTab("learn");
+    if (pendingFullRef.current === openLessonId) { pendingFullRef.current = null; enterLessonFull(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openLessonId]);
+  const onLessonStepChange = useCallback((step: number) => {
+    lessonStepRef.current = step;
+    const want = step > 0 ? String(step + 1) : null;
+    if (latestParamsRef.current.get("step") !== want) navigate({ step: want }, true);
+  }, [navigate]);
+  // Presenter mode (full page, wide only): the app sidebar hides too.
+  const [lessonPresent, setLessonPresent] = useState(false);
+  // leaving full page (any route: button, F, Esc, Back) plays the exit motion,
+  // drops presenter mode and re-mirrors the CURRENT step (Back restored the
+  // pre-full entry, whose ?step= may be stale).
+  const [lessonFullExit, setLessonFullExit] = useState(false);
+  const wasFullRef = useRef(lessonFull);
+  useEffect(() => {
+    if (lessonFull) setRailTab("learn");
+    if (wasFullRef.current && !lessonFull) {
+      fullPushedRef.current = false;
+      setLessonPresent(false);
+      if (openLessonId) {
+        const want = lessonStepRef.current > 0 ? String(lessonStepRef.current + 1) : null;
+        if (latestParamsRef.current.get("step") !== want) navigate({ step: want }, true);
+      }
+      setLessonFullExit(true);
+      const t = window.setTimeout(() => setLessonFullExit(false), 520);
+      wasFullRef.current = lessonFull;
+      return () => window.clearTimeout(t);
+    }
+    wasFullRef.current = lessonFull;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lessonFull]);
+  // Esc exits full page (never while typing, inside an editor, a menu or a dialog)
+  useEffect(() => {
+    if (!lessonFull) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as Element | null;
+      if (isEditingTarget(t) || (t && (t as HTMLElement).closest?.('.cm-editor, [role="menu"], [role="dialog"], [role="listbox"]'))) return;
+      e.preventDefault();
+      exitLessonFull();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [lessonFull, exitLessonFull]);
 
   const jumpToPinnedSha = useCallback((sha: string) => {
     navigate({ ref: sha }, true);
@@ -457,7 +702,8 @@ export function CodeSpacePage() {
     setRailTab("threads");
     setOpenThreadId(null);
     setRaiseHand(null);
-  }, []);
+    revealRail();
+  }, [revealRail]);
 
   // Item 2 — Rendered mode's "Discuss this document" header affordance: opens
   // the SAME composer the gutter uses, anchored file-level (start=end=1),
@@ -469,7 +715,8 @@ export function CodeSpacePage() {
     setRailTab("threads");
     setOpenThreadId(null);
     setRaiseHand(null);
-  }, []);
+    revealRail();
+  }, [revealRail]);
 
   // Item 2 — a rendered heading resolved to its source line (mdHeadingAnchor
   // .ts): anchor the composer there, same as a Raw-mode gutter click on that
@@ -482,7 +729,8 @@ export function CodeSpacePage() {
     setRailTab("threads");
     setOpenThreadId(null);
     setRaiseHand(null);
-  }, []);
+    revealRail();
+  }, [revealRail]);
 
   // Item 2 — a heading click that couldn't be confidently resolved to a
   // source line (count/text mismatch — see mdHeadingAnchor.ts) falls back to
@@ -512,7 +760,8 @@ export function CodeSpacePage() {
     setOpenThreadId(null);
     setComposerOpen(false);
     setSelection(null);
-  }, []);
+    revealRail();
+  }, [revealRail]);
 
   // Workspace symbol search result navigation (header search AND identifier
   // click both land here): switch to the clicked file at the symbol's line.
@@ -521,6 +770,7 @@ export function CodeSpacePage() {
     setComposerOpen(false);
     setWorktreePath(null);
     setHistoryOpen(false);
+    setTreeOpen(false);
     navigate({ path: symbolPath, line, thread: null }, false);
     scrollLineIntoView(line);
   }, [navigate]);
@@ -528,16 +778,6 @@ export function CodeSpacePage() {
   const onIdentifierClick = useCallback((word: string) => {
     setSymbolPrefill(word);
     setSymbolPrefillToken((n) => n + 1);
-  }, []);
-
-  // Item 2 — landing state's "Search symbols" quick action: focuses/opens the
-  // header SymbolSearch WITHOUT a prefill (a plain open, unlike identifier
-  // click). Cmd/Ctrl+P already does this itself (SymbolSearch's own document
-  // keydown listener) — this bumps the same open affordance via a prop so it
-  // also works as a mouse-driven action from the landing card.
-  const [symbolFocusToken, setSymbolFocusToken] = useState(0);
-  const focusSymbolSearch = useCallback(() => {
-    setSymbolFocusToken((n) => n + 1);
   }, []);
 
   // Item 3 — breadcrumb segment click: make sure that directory is expanded
@@ -553,21 +793,6 @@ export function CodeSpacePage() {
     requestAnimationFrame(() => pulseTreeRow(dirPath));
   }, [expanded, toggleDir]);
 
-  // Item 4 — landing state's "Browse the file tree" quick action: scrolls the
-  // first row into view with a brief highlight pulse. Deliberately NOT a
-  // .focus() call (usability-sweep correction) — BrowseTree's rows
-  // (cloud/shared/browseTree.tsx, owned by the GitHub browse surface too)
-  // are plain unfocusable <div>s with no tabIndex, so calling .focus() on one
-  // is a silent no-op that would have made this "quick action" a lie for
-  // keyboard users; a visible pulse is honest about what it actually does.
-  const focusTree = useCallback(() => {
-    const el = document.querySelector(".cs-tree-pane .dfv-r") as HTMLElement | null;
-    if (!el) return;
-    el.scrollIntoView?.({ block: "center" });
-    el.classList.add("cs-tree-row-pulse");
-    window.setTimeout(() => el.classList.remove("cs-tree-row-pulse"), 900);
-  }, []);
-
   // Item 3 — Recent tab row click: open that thread's file at its anchor line
   // WITH the thread itself selected (unlike navigateToSymbol, which clears
   // ?thread= — here the whole point is landing straight in the thread view).
@@ -580,7 +805,9 @@ export function CodeSpacePage() {
     setOpenThreadId(t.id);
     navigate({ path: t.path, line: t.start_line, thread: t.id }, false);
     scrollLineIntoView(t.start_line);
-  }, [navigate]);
+    setTreeOpen(false);
+    revealRail();
+  }, [navigate, revealRail]);
 
   const agents = snap?.agents ?? [];
   const htmlUrl = null; // Code Space has no repo html_url context handy here; the file pane omits the GitHub link.
@@ -588,6 +815,9 @@ export function CodeSpacePage() {
   const gutterDotsForLine = useMemo(() => {
     const m = new Map<number, CodeThreadSummary[]>();
     fileThreads.forEach((t) => {
+      // Learn: teach/why threads get their own spark marker (lessonMarks) —
+      // a whole-file "Explain this file" lesson must not dot every line.
+      if (t.kind === "teach" || t.kind === "why") return;
       for (let ln = t.start_line; ln <= t.end_line; ln++) {
         const list = m.get(ln) || [];
         list.push(t);
@@ -596,6 +826,93 @@ export function CodeSpacePage() {
     });
     return m;
   }, [fileThreads]);
+  // the same thread-dot lines, handed to the CM6 editor so Edit mode keeps
+  // the gutter markers the read view shows (no layout shift on toggle).
+  // (plus each lesson's first line, so lessons stay marked in the editor too)
+  const threadLineNumbers = useMemo(() => {
+    const set = new Set(gutterDotsForLine.keys());
+    fileThreads.forEach((t) => { if (t.kind === "teach" || t.kind === "why") set.add(t.start_line); });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [gutterDotsForLine, fileThreads]);
+
+  // Learn — gutter lesson markers: a spark at each teach/why thread's first line
+  // (click opens the lesson), and a faint tint on the lines a SHORT lesson covers
+  // (whole-file lessons would tint every line, so they only get the marker).
+  const lessonMarks = useMemo(() => {
+    const starts = new Map<number, CodeThreadSummary>();
+    const covered = new Set<number>();
+    fileThreads.forEach((t) => {
+      if (t.path !== path || (t.kind !== "teach" && t.kind !== "why")) return;
+      if (!starts.has(t.start_line)) starts.set(t.start_line, t);
+      if (t.end_line - t.start_line <= 40) for (let ln = t.start_line; ln <= t.end_line; ln++) covered.add(ln);
+    });
+    return { starts, covered };
+  }, [fileThreads, path]);
+
+  // Learn — the active lesson step's lines, for THIS file only.
+  const focusHere = lessonFocus && lessonFocus.path === path ? lessonFocus.ranges : null;
+  const focusLines = useMemo(() => {
+    const set = new Set<number>();
+    (focusHere ?? []).forEach((r) => { for (let ln = r.start; ln <= Math.max(r.start, r.end); ln++) set.add(ln); });
+    return set;
+  }, [focusHere]);
+  const focusStarts = useMemo(() => new Set((focusHere ?? []).map((r) => r.start)), [focusHere]);
+  const focusScrollKey = focusHere ? path + "|" + focusHere.map((r) => r.start + "-" + r.end).join(",") : "";
+  useEffect(() => {
+    if (!focusHere || !focusHere.length) return;
+    const first = Math.min(...focusHere.map((r) => r.start));
+    requestAnimationFrame(() => scrollLineIntoView(first, { smooth: true }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusScrollKey, filePayload]);
+
+  const onLessonFocus = useCallback((ranges: FocusRange[] | null, p: string) => {
+    setLessonFocus(ranges && ranges.length ? { path: p, ranges } : null);
+  }, []);
+  // Full page follows the step: a step citing another file opens THAT file
+  // (replace — stepping never piles up history entries).
+  useEffect(() => {
+    if (!lessonFull || !lessonFocus || lessonFocus.path === path) return;
+    setWorktreePath(null);
+    setSelection(null);
+    setComposerOpen(false);
+    navigate({ path: lessonFocus.path, line: null, thread: null }, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lessonFull, lessonFocus?.path]);
+  const onOpenFileRef = useCallback((ref: LineRef) => {
+    if (!ref.path) return;
+    setSelection(null);
+    setComposerOpen(false);
+    setWorktreePath(null);
+    navigate({ path: ref.path, line: ref.start, thread: null }, false);
+    requestAnimationFrame(() => scrollLineIntoView(ref.start, { smooth: true }));
+  }, [navigate]);
+
+  // Learn — the floating lens (text selection) + gutter marker entry points.
+  const { start: startLesson, busy: lensBusy, blocked: lensBlocked } = useStartLesson(cid || "", gitRef, agents);
+  const lessonCreated = useCallback((res: CreateThreadResponse | null) => {
+    if (!res) return;
+    setFileThreads((prev) => [res.thread, ...prev.filter((t) => t.id !== res.thread.id)]);
+    openLesson(res.thread, { thread: res.thread, messages: [res.message] });
+    revealRail();
+  }, [openLesson, revealRail]);
+  const lensAsk = useCallback((kind: "teach" | "why", r: LensRange) => {
+    const where = r.start === r.end ? "line " + r.start : "lines " + r.start + "–" + r.end;
+    const file = path.slice(path.lastIndexOf("/") + 1);
+    const body = kind === "teach"
+      ? `Teach me the concept in ${file} ${where}: what it is, how this code uses it, and what to read next.`
+      : `Why is ${file} ${where} written this way? Walk me through the decision and the alternatives.`;
+    void startLesson({ kind, path, start: r.start, end: r.end, body }, null, "lens").then(lessonCreated);
+  }, [path, startLesson, lessonCreated]);
+  const lensCompose = useCallback((r: LensRange) => {
+    anchorLineRef.current = r.start;
+    setSelection(rangeFrom(r.start, r.end));
+    setComposerWholeDocument(false);
+    setComposerOpen(true);
+    setRailTab("threads");
+    setOpenThreadId(null);
+    setRaiseHand(null);
+    revealRail();
+  }, [revealRail]);
 
   // Panel improvements item 1 — resizable tree/code/rail panes. Native
   // Pointer Events via DOCUMENT-level listeners registered for the
@@ -606,9 +923,6 @@ export function CodeSpacePage() {
   // scrollLineIntoView's identical feature-detect precedent elsewhere in
   // this file for the general house convention). No drag library — this
   // codebase adds zero new dependencies for UI interactions like this.
-  const { widths, dragTree, dragRail, resetTree, resetRail } = usePaneWidths();
-  const dragStateRef = useRef<{ pane: "tree" | "rail"; startX: number } | null>(null);
-
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const st = dragStateRef.current;
@@ -635,32 +949,270 @@ export function CodeSpacePage() {
     dragStateRef.current = { pane, startX: e.clientX };
   }, []);
 
+  // V2 keyboard resize (brief §7 — every pointer-only affordance also works
+  // from the keyboard): ←/→ nudge the focused divider 16 px (Shift = 64 px),
+  // Home/Enter reset it. Same dragTree/dragRail math as the pointer path.
+  const onDividerKey = useCallback((pane: "tree" | "rail") => (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 64 : 16;
+    const drag = pane === "tree" ? dragTree : dragRail;
+    if (e.key === "ArrowLeft") { e.preventDefault(); drag(-step); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); drag(step); }
+    else if (e.key === "Home" || e.key === "Enter") { e.preventDefault(); (pane === "tree" ? resetTree : resetRail)(); }
+  }, [dragTree, dragRail, resetTree, resetRail]);
+
+  const editSource: EditSource = worktreeAvailable ? "worktree" : githubEditable ? "github" : "readonly";
+  const backToHead = useCallback(() => {
+    setWorktreePath(null);
+    setHistoryOpen(false);
+    navigate({ ref: "HEAD", line: null }, false);
+  }, [navigate]);
+  const fileName = path ? path.slice(path.lastIndexOf("/") + 1) : "";
+  const pickRef = useCallback((ref: string) => {
+    setWorktreePath(null);
+    setHistoryOpen(false);
+    navigate({ ref, line: null }, false);
+  }, [navigate]);
+
   if (!cid) return null;
 
-  return (
-    <Shell page="code" title="Code Space" ctx={snap?.container?.name}>
-      <div className="cs-shell">
-        <div className="cs-head">
-          <SymbolSearch
-            cid={cid}
-            gitRef={gitRef}
-            onNavigate={navigateToSymbol}
-            prefill={symbolPrefill}
-            prefillToken={symbolPrefillToken}
-            focusToken={symbolFocusToken}
-            path={path}
+  // "No GitHub repo connected" is a PAGE state, not a tree-pane state: one
+  // centered empty state with the primary Connect action, instead of a tree
+  // column message beside a center pane still offering symbol search.
+  const rootError = dirCache[""]?.error;
+  // C18: "No repository connected" only for a project with NO bound repo. A
+  // bound repo that browse still can't reach (no usable token) names the repo
+  // and points at GitHub access — never "connect a repo" when one is connected.
+  const boundRepo = (snap?.container as { github_repo?: string | null } | undefined)?.github_repo || null;
+  const cantReachRepo = boundRepo && (rootError?.kind === "not_connected" || rootError?.kind === "no_access") ? boundRepo : null;
+  // the server's own reason when it names the access problem (no_token / 403);
+  // a "not connected" detail would contradict the bound repo, so it's dropped
+  const cantReachDetail = rootError?.kind === "no_access" && rootError.detail ? rootError.detail : null;
+  const notConnected = rootError?.kind === "not_connected" && !cantReachRepo;
+  // wave4 review: an unreachable project (5xx) is ONE page state — not a
+  // tree-rail "Couldn't load (503)" + raw DB text beside a landing that
+  // claims "No threads yet" as if the project were empty.
+  const unreachable = !notConnected && ((rootError?.kind === "error" && (rootError.status ?? 0) >= 500) || (!snap && !!snapError && !!rootError));
+  // parity r2: a failed snapshot has no container name, but the (reachable)
+  // project list does — name the project like the header / stale bar do
+  const unreachableName = snap?.container?.name || (projectList || []).find((p) => p.id === cid)?.name || null;
+  const unreachableDetail = [rootError?.status ? "HTTP " + rootError.status : null, rootError?.detail || snapError || null].filter(Boolean).join(" · ");
+  const drawerOpen = !lessonFull && layout !== "wide" && (railOpen || (layout === "narrow" && treeOpen));
+  const threadCount = fileThreads.length;
+
+  // The ONE file bar (EditContext): breadcrumbs left, state · ref · file
+  // controls right. File controls only exist once THIS path's payload landed.
+  const fileReady = !!filePayload && filePayload.path === path && !fileLoading && !fileError;
+  const fileActions = fileReady && filePayload ? (
+    <div className="cs-file-actions">
+      <span className="cs-file-size tnum" title={filePayload.size + " bytes"}>{formatSize(filePayload.size)}</span>
+      {!editMode && isMd && !lessonFull ? (
+        <>
+          {viewMode === "rendered" ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              pill
+              icon="plus"
+              className="cs-discuss-doc-btn"
+              onClick={onDiscussDocument}
+              title="Start a thread anchored to this whole document"
+            >
+              Discuss this document
+            </Button>
+          ) : null}
+          <Segmented
+            size="sm"
+            label="View mode"
+            className="cs-view-toggle"
+            value={viewMode}
+            onChange={(k) => setViewMode(k as ViewMode)}
+            // r3: icon-only (label kept for AT, title as tooltip) so the
+            // toggle stops squeezing the ref picker down to "f…" on .md files.
+            items={[
+              { key: "raw", icon: "code", label: <span className="cs-view-toggle-label">Raw</span>, title: "Raw source" },
+              { key: "rendered", icon: "eye", label: <span className="cs-view-toggle-label">Rendered</span>, title: "Rendered markdown" },
+            ]}
           />
-          {path ? (
-            <RecentFilesDropdown
+        </>
+      ) : null}
+      {worktreeAvailable ? (
+        <span className="cs-history-anchor">
+          <IconButton
+            size="sm"
+            icon="clock"
+            label="Commit history"
+            className="cs-history-btn"
+            onClick={() => setHistoryOpen((v) => !v)}
+            aria-expanded={historyOpen}
+            pressed={historyOpen}
+          />
+          {historyOpen ? (
+            <HistoryPanel
               cid={cid}
-              currentPath={path}
-              onOpenFile={selectFile}
-              refreshToken={recentFilesToken}
+              path={path}
+              gitRef={gitRef}
+              onSelectCommit={openFileAtHistorySha}
+              onClose={() => setHistoryOpen(false)}
             />
           ) : null}
-        </div>
-        <div className="cs-body">
-          <div className="cs-tree-pane" style={{ width: widths.tree }}>
+        </span>
+      ) : null}
+      {canEdit ? (
+        <Button
+          size="sm"
+          variant={editMode ? "secondary" : "ghost"}
+          pill
+          icon="pencil"
+          className={"cs-edit-toggle-btn" + (editMode ? " on" : "")}
+          onClick={editMode ? exitEditMode : enterEditMode}
+          disabled={!editMode && !!writeBlock}
+          title={editMode ? "Stop editing and return to the read-only view" : writeBlock || "Edit this file"}
+          aria-pressed={editMode}
+        >
+          {editMode ? "Editing" : "Edit"}
+          {editorDirty ? <span className="cs-edit-dirty-dot" aria-label="Unsaved changes" /> : null}
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
+
+  // D5 filter row under the panel header: symbol search + Recent on the
+  // left, circular pane toggles on the right (only when a pane is a drawer).
+  const toolbar = notConnected || cantReachRepo || unreachable ? undefined : (
+    <PageToolbar
+      label="Code Space"
+      className={"cs-toolbar is-" + layout}
+      end={
+        layout === "wide" ? (
+          <>
+            <CircleIconButton
+              icon="folder"
+              label="File tree"
+              className="cs-pane-toggle"
+              pressed={!collapsed.tree}
+              aria-controls="cs-tree-pane"
+              onClick={() => setCollapsed((c) => ({ ...c, tree: !c.tree }))}
+            />
+            <CircleIconButton
+              icon="sidebar"
+              label="Threads panel"
+              className="cs-pane-toggle cs-rail-toggle"
+              pressed={!railHidden}
+              aria-controls="cs-rail"
+              onClick={toggleWideRail}
+            />
+          </>
+        ) : (
+          <>
+            {layout === "narrow" ? (
+              <CircleIconButton
+                icon="folder"
+                label={treeOpen ? "Hide files" : "Show files"}
+                className="cs-pane-toggle"
+                pressed={treeOpen}
+                aria-controls="cs-tree-pane"
+                onClick={() => { setRailOpen(false); setTreeOpen((v) => !v); }}
+              />
+            ) : null}
+            <CircleIconButton
+              icon="sidebar"
+              label={railOpen ? "Hide threads" : "Show threads, live edits, outline and changes"}
+              className="cs-pane-toggle cs-rail-toggle"
+              pressed={railOpen}
+              badge={threadCount || undefined}
+              aria-controls="cs-rail"
+              onClick={() => { setTreeOpen(false); setRailOpen((v) => !v); }}
+            />
+          </>
+        )
+      }
+    >
+      <SymbolSearch
+        cid={cid}
+        gitRef={gitRef}
+        onNavigate={navigateToSymbol}
+        prefill={symbolPrefill}
+        prefillToken={symbolPrefillToken}
+        path={path}
+      />
+      {path ? (
+        <RecentFilesDropdown
+          cid={cid}
+          currentPath={path}
+          onOpenFile={selectFile}
+          refreshToken={recentFilesToken}
+        />
+      ) : null}
+    </PageToolbar>
+  );
+
+  // Full-page lesson: presenter mode only exists at wide widths; the narrow
+  // single column shows each step's lines inline (the loaded file = the step's).
+  const presentOn = lessonPresent && lessonFull && layout === "wide";
+  const lessonPeek = lessonFull && layout === "narrow" && fileReady && filePayload && !filePayload.binary
+    ? { path: filePayload.path, content: filePayload.content ?? "" }
+    : null;
+
+  return (
+    <Shell
+      page="code"
+      title="Code Space"
+      crumbs={path ? [{ label: fileName, title: path }] : undefined}
+      toolbar={lessonFull ? undefined : toolbar}
+      flush
+    >
+      {presentOn ? <PresentMode /> : null}
+      <div className="cs-shell" ref={setShellEl} data-layout={layout}>
+        {notConnected ? (
+          // the ONE shared not-connected state (same copy + CTA as the GitHub hub);
+          // cs-not-connected keeps Code Space's tuned vertical placement
+          <RepoNotConnected className="cs-not-connected" to={withCid("/github?connect=1", cid)} disabledReason={connectBlock} />
+        ) : cantReachRepo ? (
+          <div className="cs-unreachable" id="csCantReachRepo">
+            <EmptyState
+              icon="alert"
+              title={"Can't reach " + cantReachRepo}
+              body={cantReachDetail
+                ? <>{cantReachDetail.charAt(0).toUpperCase() + cantReachDetail.slice(1)}.</>
+                : <>Embodent has no GitHub token that can read this repository. Add or check one in Settings › Integrations.</>}
+              action={<ButtonLink variant="secondary" size="sm" href={withCid("/settings", cid) + "#tab=github-access"}>Check GitHub access</ButtonLink>}
+            />
+          </div>
+        ) : unreachable ? (
+          <div className="cs-unreachable">
+            <EmptyState
+              icon="alert"
+              title={"Can't reach " + (unreachableName || "this project")}
+              body={
+                <>
+                  Embodent couldn&#39;t load this project&#39;s code. It may still be starting, or its database may be down.
+                  {/* the Shell's stale bar already carries Details + Retry for a
+                      failed snapshot — never the same fact twice (D12) */}
+                  {unreachableDetail && !snapError ? (
+                    <details className="cs-unreachable-details">
+                      <summary>Details</summary>
+                      <code>{unreachableDetail}</code>
+                    </details>
+                  ) : null}
+                </>
+              }
+              action={snapError ? undefined : <Button variant="secondary" icon="refresh" onClick={() => { retryDir(""); void refresh(); }}>Retry</Button>}
+            />
+          </div>
+        ) : (
+        <>
+        <div
+          className={"cs-body" + (lessonFull ? " is-lesson-full" : (treeOpen ? " tree-open" : "") + (railOpen ? " rail-open" : "")
+            + (layout === "wide" && collapsed.tree ? " tree-collapsed" : "") + (layout === "wide" && railHidden ? " rail-collapsed" : ""))
+            + (lessonFullExit ? " is-lesson-exit" : "") + (presentOn ? " is-presenting" : "")}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape" || !drawerOpen || e.defaultPrevented) return;
+            const t = e.target as HTMLElement;
+            if (t.closest("textarea, input, .cm-editor")) return;
+            closeDrawers();
+          }}
+        >
+          <div className="cs-tree-pane" id="cs-tree-pane" style={{ width: widths.tree }}>
             <div className="rb-tree-scroll">
               <ErrorBoundary label="tree">
                 <BrowseTree
@@ -673,7 +1225,7 @@ export function CodeSpacePage() {
                   onSelectFile={selectFile}
                   fileBadge={(p) => {
                     const n = fileThreads.filter((t) => t.path === p).length;
-                    return n ? <span className="cs-tree-badge">{n}</span> : null;
+                    return n ? <span className="cs-tree-badge" aria-label={n + " thread" + (n === 1 ? "" : "s")}>{n}</span> : null;
                   }}
                 />
               </ErrorBoundary>
@@ -685,21 +1237,47 @@ export function CodeSpacePage() {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize file tree pane"
-            title="Drag to resize, double-click to reset"
+            title="Drag or use ←/→ to resize; double-click or Home to reset"
+            tabIndex={0}
+            aria-valuenow={widths.tree}
             onPointerDown={startDrag("tree")}
             onDoubleClick={resetTree}
+            onKeyDown={onDividerKey("tree")}
           />
 
           <div className="cs-code-pane">
-            {drafts.length > 0 ? (
-              <DraftsBar
-                cid={cid}
-                gitRef="HEAD"
-                drafts={drafts}
-                onOpenDraft={openDraftFile}
-                onDraftsChanged={refreshDrafts}
+            {path && !worktreePath ? (
+              <EditContext
+                source={editSource}
+                gitRef={gitRef}
+                branch={worktreeBranch}
+                editing={editMode}
+                dirty={editorDirty}
+                draftCount={drafts.length}
+                onBackToHead={backToHead}
+                lead={<Breadcrumbs path={path} onOpenDir={openDirInTree} />}
+                actions={fileActions}
+                refSlot={
+                  <RefPicker
+                    cid={cid}
+                    gitRef={gitRef}
+                    label={refLabelFor(editSource, gitRef, worktreeBranch)}
+                    onPick={pickRef}
+                    onOpenHistory={worktreeAvailable ? () => setHistoryOpen(true) : undefined}
+                  />
+                }
               />
             ) : null}
+            {/* always mounted: it renders nothing without drafts, but keeps a
+                successful propose's "Opened PR #N" notice after the drafts it
+                sent are cleared (CODE-062) */}
+            <DraftsBar
+              cid={cid}
+              gitRef="HEAD"
+              drafts={drafts}
+              onOpenDraft={openDraftFile}
+              onDraftsChanged={refreshDrafts}
+            />
             <div className="cs-code-scroll">
               <ErrorBoundary label="content" key={path}>
               {worktreePath ? (
@@ -713,8 +1291,6 @@ export function CodeSpacePage() {
                   cid={cid}
                   onNavigateToThread={navigateToThread}
                   onOpenFile={selectFile}
-                  onSearchSymbols={focusSymbolSearch}
-                  onFocusTree={focusTree}
                 />
               ) : showCachedPreview ? (
                 // blobCache.ts fast-path — a previously-viewed, ref-PINNED
@@ -728,7 +1304,7 @@ export function CodeSpacePage() {
                   gitRef={cachedPreview!.ref}
                   payload={{ ref: cachedPreview!.ref, path: cachedPreview!.path, content: cachedPreview!.content, size: (cachedPreview!.content ?? "").length, truncated: cachedPreview!.truncated, binary: cachedPreview!.binary }}
                   htmlUrl={htmlUrl}
-                  headerExtra={<Breadcrumbs path={path} onOpenDir={openDirInTree} />}
+                  rawUrl={browseRawUrl(cid, cachedPreview!.ref, cachedPreview!.path)}
                 >
                   <div className="rb-code mono">
                     {(cachedPreview!.content ?? "").split("\n").map((line, i) => (
@@ -754,93 +1330,14 @@ export function CodeSpacePage() {
                 // fileLoading and path ever race each other in the future.
                 <BrowseSkeletonPane />
               ) : fileError ? (
-                <BrowseErrorBody err={fileError} what="File" />
+                <BrowseErrorBody err={fileError} what="File" onRetry={retryFile} />
               ) : filePayload ? (
                 <ContentPaneChrome
                   gitRef={gitRef}
                   payload={filePayload}
                   htmlUrl={htmlUrl}
-                  headerExtra={
-                    <>
-                      <Breadcrumbs path={path} onOpenDir={openDirInTree} />
-                      {worktreeAvailable ? (
-                        <span className="cs-history-anchor">
-                          <button
-                            type="button"
-                            className="cs-history-btn"
-                            onClick={() => setHistoryOpen((v) => !v)}
-                            title="Show this file's commit history"
-                            aria-expanded={historyOpen}
-                          >
-                            History
-                          </button>
-                          {historyOpen ? (
-                            <HistoryPanel
-                              cid={cid}
-                              path={path}
-                              gitRef={gitRef}
-                              onSelectCommit={openFileAtHistorySha}
-                              onClose={() => setHistoryOpen(false)}
-                            />
-                          ) : null}
-                        </span>
-                      ) : null}
-                      {!editMode && isMd ? (
-                        <>
-                          {viewMode === "rendered" ? (
-                            <button
-                              type="button"
-                              className="cs-discuss-doc-btn"
-                              onClick={onDiscussDocument}
-                              title="Start a thread anchored to this whole document"
-                            >
-                              Discuss this document
-                            </button>
-                          ) : null}
-                          <div className="cs-view-toggle" role="group" aria-label="View mode">
-                            <button
-                              type="button"
-                              className={"cs-view-toggle-btn" + (viewMode === "raw" ? " on" : "")}
-                              onClick={() => setViewMode("raw")}
-                            >
-                              Raw
-                            </button>
-                            <button
-                              type="button"
-                              className={"cs-view-toggle-btn" + (viewMode === "rendered" ? " on" : "")}
-                              onClick={() => setViewMode("rendered")}
-                            >
-                              Rendered
-                            </button>
-                          </div>
-                        </>
-                      ) : null}
-                      {canEdit ? (
-                        <button
-                          type="button"
-                          className={"cs-edit-toggle-btn" + (editMode ? " on" : "")}
-                          onClick={editMode ? exitEditMode : enterEditMode}
-                          title={editMode ? "Stop editing" : "Edit this file"}
-                          aria-pressed={editMode}
-                        >
-                          {editMode ? (
-                            /* eye (Lucide outline) — "back to view mode" */
-                            <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          ) : (
-                            /* pencil (Lucide outline) — "edit this file" */
-                            <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
-                              <path d="m15 5 4 4" />
-                            </svg>
-                          )}
-                          {editorDirty ? <span className="cs-edit-dirty-dot" aria-label="Unsaved changes" /> : null}
-                        </button>
-                      ) : null}
-                    </>
-                  }
+                  // images / PDF / media / fonts preview natively (never while editing)
+                  rawUrl={editMode ? null : browseRawUrl(cid, filePayload.ref || gitRef, filePayload.path)}
                 >
                   {editMode && draftMode ? (
                     draftContent == null ? (
@@ -854,6 +1351,7 @@ export function CodeSpacePage() {
                         path={path}
                         initialContent={draftContent}
                         onDraftChange={onDraftChange}
+                        threadLines={threadLineNumbers}
                       />
                     )
                   ) : editMode ? (
@@ -870,6 +1368,8 @@ export function CodeSpacePage() {
                         initialContent={editorFile.content ?? ""}
                         contentHash={editorFile.content_hash ?? null}
                         onDirty={setEditorDirty}
+                        threadLines={threadLineNumbers}
+                        focusRanges={focusHere}
                       />
                     )
                   ) : !isMd && fileLineCount > LARGE_FILE_LINES ? (
@@ -880,33 +1380,62 @@ export function CodeSpacePage() {
                       contentHash={null}
                       readOnly
                       onDirty={() => {}}
+                      focusRanges={focusHere}
                     />
-                  ) : isMd && viewMode === "rendered" ? (
+                  ) : isMd && viewMode === "rendered" && !lessonFull ? (
                     <MdRenderedPane
                       content={filePayload.content ?? ""}
+                      path={path}
+                      onOpenPath={selectFile}
                       onDiscussHeading={onDiscussHeading}
                       onAmbiguousHeading={onAmbiguousHeading}
                     />
                   ) : (
-                    <div className="rb-code mono">
+                    <>
+                    <div ref={setCodeBodyEl} className={"rb-code mono" + (focusLines.size ? " has-lesson-focus" : "")}>
                       {(filePayload.content ?? "").split("\n").map((line, i) => {
                         const lineNo = i + 1;
                         const threadsHere = gutterDotsForLine.get(lineNo) || [];
                         const selected = isLineSelected(selection, lineNo);
+                        const inThread = !!openThreadRange && lineNo >= openThreadRange.start && lineNo <= openThreadRange.end;
                         const tokens: Token[] = highlightLine(line, filePayload.path);
+                        const lessonHere = lessonMarks.starts.get(lineNo);
+                        const focused = focusLines.has(lineNo);
                         return (
                           <div
                             key={lineNo}
-                            className={"cs-line" + (selected ? " selected" : "")}
+                            className={"cs-line" + (selected ? " selected" : "")
+                              + (inThread ? " in-thread" + (lineNo === openThreadRange!.start ? " thread-start" : "") + (lineNo === openThreadRange!.end ? " thread-end" : "") : "")
+                              + (focused ? " lesson-focus" + (focusStarts.has(lineNo) ? " lesson-focus-start" : "") + (!focusLines.has(lineNo + 1) ? " lesson-focus-end" : "") : "")
+                              + (lessonMarks.covered.has(lineNo) ? " lesson-covered" : "")}
                             data-cs-line={lineNo}
                           >
                             <span
                               className="cs-gutter"
-                              onClick={(e) => onGutterClick(lineNo, e.shiftKey)}
+                              // C14c: keyboard reachable — Enter/Space starts a thread
+                              // here (Shift extends the range), same as a click.
+                              role="button"
+                              tabIndex={0}
+                              aria-label={"Start a thread on line " + lineNo}
+                              onClick={(e) => {
+                                // Learn: the spark marker opens that lesson instead of a new thread
+                                if (lessonHere && (e.target as Element).closest?.(".cs-gutter-lesson")) { openLesson(lessonHere); revealRail(); return; }
+                                onGutterClick(lineNo, e.shiftKey);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  onGutterClick(lineNo, e.shiftKey);
+                                }
+                              }}
                               title="Click to start a thread, shift-click to extend the range"
                             >
                               <span className="cs-gutter-add" aria-hidden="true">+</span>
-                              {threadsHere.length ? <span className="cs-gutter-dot" /> : null}
+                              {lessonHere ? (
+                                <span className="cs-gutter-lesson" title={"Lesson: " + (lessonHere.first_message || "open lesson") + " — click to open"} aria-hidden="true">
+                                  <svg viewBox="0 0 10 10"><path d="M5 .9 6.05 3.95 9.1 5 6.05 6.05 5 9.1 3.95 6.05.9 5 3.95 3.95z" fill="currentColor" /></svg>
+                                </span>
+                              ) : threadsHere.length ? <span className="cs-gutter-dot" /> : null}
                               {lineNo}
                             </span>
                             <span className="cs-line-text">
@@ -916,6 +1445,16 @@ export function CodeSpacePage() {
                         );
                       })}
                     </div>
+                    <SelectionLens
+                      root={codeBodyEl}
+                      disabled={!!writeBlock}
+                      busy={!!lensBusy || !!lensBlocked}
+                      onTeach={(r) => lensAsk("teach", r)}
+                      onWhy={(r) => lensAsk("why", r)}
+                      onAsk={lensCompose}
+                      onRangeChange={setTextSel}
+                    />
+                    </>
                   )}
                 </ContentPaneChrome>
               ) : (
@@ -930,9 +1469,12 @@ export function CodeSpacePage() {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize thread rail pane"
-            title="Drag to resize, double-click to reset"
+            title="Drag or use ←/→ to resize; double-click or Home to reset"
+            tabIndex={0}
+            aria-valuenow={widths.rail}
             onPointerDown={startDrag("rail")}
             onDoubleClick={resetRail}
+            onKeyDown={onDividerKey("rail")}
           />
 
           <ErrorBoundary label="rail">
@@ -958,10 +1500,41 @@ export function CodeSpacePage() {
               selectedWorktreePath={worktreePath}
               onOpenWorktreeDiff={openWorktreeDiff}
               width={widths.rail}
+              landingOwnsRecent
+              learn={{
+                lineCount: fileLineCount,
+                selection: selection ?? textSel,
+                openLessonId,
+                onOpenLesson: openLesson,
+                lessonSeed,
+                onFocusLines: onLessonFocus,
+                onOpenFileRef,
+                lessonFull,
+                onToggleLessonFull: toggleLessonFull,
+                lessonPresent: presentOn,
+                onToggleLessonPresent: layout === "wide" ? () => setLessonPresent((v) => !v) : undefined,
+                lessonInitialStep,
+                onLessonStepChange,
+                lessonPeek,
+              }}
             />
           </ErrorBoundary>
+          {drawerOpen ? <div className="cs-scrim" aria-hidden="true" onClick={closeDrawers} /> : null}
         </div>
+        </>
+        )}
       </div>
     </Shell>
   );
+}
+
+/** Presenter mode: hides the app sidebar (html[data-lesson-present], codespace.css)
+ *  for as long as it is mounted. */
+function PresentMode() {
+  useEffect(() => {
+    const el = document.documentElement;
+    el.setAttribute("data-lesson-present", "");
+    return () => el.removeAttribute("data-lesson-present");
+  }, []);
+  return null;
 }

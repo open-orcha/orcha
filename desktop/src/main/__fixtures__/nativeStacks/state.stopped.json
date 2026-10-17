@@ -1,0 +1,9 @@
+{
+  "api_port": 8012,
+  "children": {
+    "portal": {"last_exit": null, "pid": null, "restarts": 0, "status": "stopped"}
+  },
+  "runtime": "native",
+  "serve_pid": null,
+  "status": "stopped"
+}

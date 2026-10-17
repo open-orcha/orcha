@@ -139,9 +139,10 @@ def nudge_request(rid: str, body: NudgeBody, request: Request):
         # can decide even though the original request_created event was consumed on first drain.
         short_rid = rid[:8]
         is_task = r["type"] == "task"
-        payload_preview = (str(r["payload"] or "").strip().splitlines() or [""])[0][
-            :120
-        ]
+        # Mig 065: the nudge goes to an AGENT — preview the text addressed to it.
+        payload_preview = (
+            str(r["agent_payload"] or r["payload"] or "").strip().splitlines() or [""]
+        )[0][:120]
         if role == "target":
             if is_task:
                 message = (

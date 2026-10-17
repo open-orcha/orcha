@@ -4,8 +4,11 @@ enum BubbleKind {
     case mine, theirs, system
 }
 
-/// `.bubble` — chat bubbles: radius 16 / tail 6, max 82% width; mine = accent fill,
-/// theirs = surface-2 + border with accent author label, system = centered dashed.
+/// Chat messages (Linear / web live-chat parity):
+/// - `mine`   — right-aligned, subtle surface bubble, max ~82% width.
+/// - `theirs` — full-width, no bubble: a small author line (round avatar · name · time)
+///              over the content (rendered markdown when `markdown` is set).
+/// - `system` — a centered muted caption between hairlines (day dividers, notices).
 struct Bubble<Trailing: View>: View {
     @Environment(\.palette) private var p
     let kind: BubbleKind
@@ -19,6 +22,9 @@ struct Bubble<Trailing: View>: View {
     /// Web parity — agent turn content renders as chat-scale markdown. Only `theirs`
     /// bubbles honor this; mine/system (and pending/failed) stay plain.
     var markdown = false
+    /// Portal-link chips: portal links open in the app via this handler (nil = plain text).
+    var portalBase: String?
+    var onTapPortal: ((PortalLink) -> Void)?
     @ViewBuilder var trailing: Trailing
 
     init(
@@ -29,6 +35,8 @@ struct Bubble<Trailing: View>: View {
         tasks: [TaskDto] = [],
         onTapTask: ((String) -> Void)? = nil,
         markdown: Bool = false,
+        portalBase: String? = nil,
+        onTapPortal: ((PortalLink) -> Void)? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() }
     ) {
         self.kind = kind
@@ -38,78 +46,85 @@ struct Bubble<Trailing: View>: View {
         self.tasks = tasks
         self.onTapTask = onTapTask
         self.markdown = markdown
+        self.portalBase = portalBase
+        self.onTapPortal = onTapPortal
         self.trailing = trailing()
     }
 
     var body: some View {
         switch kind {
         case .system:
-            HStack {
-                Spacer()
-                Group {
-                    if let onTapTask {
-                        LinkedMessageText(text: body_, tasks: tasks, onTapTask: onTapTask)
-                    } else {
-                        Text(body_)
-                    }
-                }
-                .font(p.uiFont(12))
-                .foregroundStyle(p.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(p.border2, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .allowsHitTesting(false)
-                )
-                Spacer()
+            HStack(spacing: LSpace.s) {
+                LDivider().frame(maxWidth: .infinity)
+                messageText
+                    .ltype(.micro)
+                    .foregroundStyle(p.muted)
+                    .multilineTextAlignment(.center)
+                    .layoutPriority(1)
+                LDivider().frame(maxWidth: .infinity)
             }
-        case .mine, .theirs:
-            let mine = kind == .mine
-            let shape = UnevenRoundedRectangle(
-                topLeadingRadius: 16,
-                bottomLeadingRadius: mine ? 16 : 6,
-                bottomTrailingRadius: mine ? 6 : 16,
-                topTrailingRadius: 16
-            )
+            .padding(.vertical, LSpace.xs)
+        case .mine:
             HStack {
-                if mine { Spacer(minLength: 60) }
-                VStack(alignment: .leading, spacing: 3) {
-                    if !mine, let author {
-                        Text(author)
-                            .font(p.uiFont(11, .bold))
-                            .foregroundStyle(p.accent)
+                Spacer(minLength: 56)
+                VStack(alignment: .trailing, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        messageText
+                            .ltype(.body)
+                            .foregroundStyle(p.text)
+                        trailing
                     }
-                    Group {
-                        if !mine, markdown {
-                            ChatMarkdownView(text: body_, tasks: tasks, onTapTask: onTapTask)
-                        } else if let onTapTask {
-                            LinkedMessageText(text: body_, tasks: tasks, onTapTask: onTapTask)
-                        } else {
-                            Text(body_)
-                        }
-                    }
-                    .font(p.uiFont(14.5))
-                    .foregroundStyle(mine ? p.accentInk : p.text)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(p.surface2, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(p.border, lineWidth: 1).allowsHitTesting(false))
                     if let time {
                         Text(time)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(mine ? p.accentInk.opacity(0.55) : p.faint)
-                    }
-                    trailing
-                }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
-                .background(mine ? AnyShapeStyle(p.accent) : AnyShapeStyle(p.surface2), in: shape)
-                .overlay {
-                    if !mine {
-                        shape.strokeBorder(p.border, lineWidth: 1)
-                            .allowsHitTesting(false)
+                            .ltype(.micro)
+                            .foregroundStyle(p.faint)
+                            .padding(.trailing, 4)
                     }
                 }
-                if !mine { Spacer(minLength: 60) }
             }
+        case .theirs:
+            VStack(alignment: .leading, spacing: 6) {
+                if author != nil || time != nil {
+                    HStack(spacing: 6) {
+                        if let author {
+                            LAvatar(name: author, isAI: true, size: 20)
+                                .accessibilityHidden(true)
+                            Text(author)
+                                .ltype(.bodyEmph)
+                                .foregroundStyle(p.text)
+                        }
+                        if let time {
+                            Text(time)
+                                .ltype(.micro)
+                                .foregroundStyle(p.faint)
+                        }
+                    }
+                }
+                Group {
+                    if markdown {
+                        ChatMarkdownView(text: body_, tasks: tasks, onTapTask: onTapTask, portalBase: portalBase, onTapPortal: onTapPortal)
+                    } else {
+                        messageText
+                    }
+                }
+                .ltype(.body)
+                .foregroundStyle(p.text)
+                trailing
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var messageText: some View {
+        if let onTapTask {
+            LinkedMessageText(text: body_, tasks: tasks, onTapTask: onTapTask, portalBase: portalBase, onTapPortal: onTapPortal)
+        } else {
+            Text(body_)
         }
     }
 }

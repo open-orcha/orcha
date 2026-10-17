@@ -1,8 +1,8 @@
 """Agent registration route and optional first-task creation."""
 
-import psycopg
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -24,6 +24,34 @@ def configure_model_ids(model_ids):
     _model_ids = model_ids
 
 
+def _lock_pickable_task(cur, cid: str, tid: str):
+    """P-10: lock and validate an existing task the new agent should start on: same
+    project, not the root, status 'ready' and no active assignee. Anything else is a 409
+    so the client never silently creates a duplicate or steals someone's work."""
+    cur.execute(
+        """SELECT id, title, status, is_root, container_id FROM tasks
+           WHERE id=%s """ + sql.for_update(),
+        (tid,),
+    )
+    row = cur.fetchone()
+    if not row or str(row["container_id"]) != cid:
+        raise HTTPException(404, f"task {tid} not found in this project")
+    if row["is_root"]:
+        raise HTTPException(409, "the root task cannot be picked as a first task")
+    if row["status"] != "ready":
+        raise HTTPException(
+            409, f"task is '{row['status']}' — only a ready task can be picked"
+        )
+    cur.execute(
+        """SELECT 1 FROM agent_tasks WHERE task_id=%s
+             AND assignment_status IN ('assigned','accepted','working') LIMIT 1""",
+        (tid,),
+    )
+    if cur.fetchone():
+        raise HTTPException(409, "task already has an active assignee")
+    return row
+
+
 @app.post(
     "/api/containers/{cid}/agents",
     response_model=AgentCreateResponse,
@@ -36,10 +64,18 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
         raise HTTPException(
             400, "kind='ai' requires a non-empty `prompt` (the system prompt)"
         )
-    if body.kind == "human" and body.initial_task is not None:
+    if body.kind == "human" and (
+        body.initial_task is not None or body.initial_task_id is not None
+    ):
         raise HTTPException(
             400, "humans don't get an initial_task — they pick work deliberately"
         )
+    if body.initial_task is not None and body.initial_task_id is not None:
+        raise HTTPException(
+            400, "pass either initial_task (a new task) or initial_task_id (an existing one), not both"
+        )
+    if body.initial_task_id is not None and not _valid_uuid(body.initial_task_id):
+        raise HTTPException(400, "initial_task_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         _require_container(cur, cid)
         # Per-project identity: once this container has a mapped member, only members
@@ -50,6 +86,9 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
         # Access model: registering agents is owner-or-manage_agents (trusted lane;
         # the CLI's headerless `orcha init` registration is untouched).
         _enforce_grant(cur, request, cid, "manage_agents")
+        picked = None
+        if body.initial_task_id is not None:
+            picked = _lock_pickable_task(cur, cid, body.initial_task_id)
         model = body.model
         if body.kind == "human":
             model = None
@@ -84,10 +123,13 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
                 (cid, body.alias, body.role, body.kind, body.prompt, model,
                  github_login, git_email, body.kind, cid),
             )
-        except psycopg.errors.UniqueViolation as exc:
+        except Exception as exc:  # noqa: BLE001 — re-raised unless a unique violation
+            if not sql.is_unique_violation(exc):
+                raise
             # Two unique surfaces can trip here: (container_id, alias) and the
             # 036 partial index on (container_id, lower(github_login)).
-            constraint = (exc.diag.constraint_name or "") if exc.diag else ""
+            diag = getattr(exc, "diag", None)  # psycopg names the constraint; sqlite3 says it
+            constraint = (diag.constraint_name or "") if diag else str(exc)
             if "github_login" in constraint:
                 raise HTTPException(
                     409,
@@ -154,6 +196,44 @@ def register_agent(cid: str, body: AgentCreate, request: Request):
                 {"via": "initial_task on register"},
             )
             initial = {"task_id": tid, "title": task.title, "status": "in_progress"}
+        elif picked is not None:
+            # P-10: the picked EXISTING task becomes this agent's first task — same end
+            # state as initial_task (in_progress + working), but no duplicate row.
+            tid = str(picked["id"])
+            cur.execute(
+                "UPDATE tasks SET status='in_progress', started_at=now() WHERE id=%s",
+                (tid,),
+            )
+            cur.execute(
+                """INSERT INTO agent_tasks (agent_id, task_id, assignment_status)
+                   VALUES (%s, %s, 'working')
+                   ON CONFLICT (agent_id, task_id) DO UPDATE SET assignment_status='working'""",
+                (aid, tid),
+            )
+            bump_agent(cur, aid)
+            recompute_agent_status(cur, aid)
+            log_event(
+                cur,
+                cid,
+                "human",
+                None,
+                "task",
+                tid,
+                "assigned",
+                {"agent_id": aid, "alias": body.alias, "status": "in_progress",
+                 "via": "initial_task_id on register"},
+            )
+            log_event(
+                cur,
+                cid,
+                "ai",
+                aid,
+                "task",
+                tid,
+                "claimed",
+                {"via": "initial_task_id on register"},
+            )
+            initial = {"task_id": tid, "title": picked["title"], "status": "in_progress"}
         conn.commit()
     return AgentCreateResponse(
         agent_id=aid,

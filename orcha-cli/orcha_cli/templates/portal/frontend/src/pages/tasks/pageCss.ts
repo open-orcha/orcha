@@ -1,56 +1,37 @@
 // Page-scoped styles carried verbatim from static/tasks.html's inline <style>
 // block (they are not part of the shared styles.css).
 export const tasksPageCss = String.raw`
-  /* task list (left, sticky) — gate / thread / reason styles come from the shared system */
-  .tlist-card { padding: 9px; }
-  .tlist-card .rh { padding: 9px 9px 4px; font-size: 10.5px; font-weight: 650; letter-spacing: .07em;
-    text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
-  .tgrp { padding: 11px 9px 3px 9px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-    color: var(--faint); display: flex; align-items: center; gap: 7px; }
-  .tgrp .ln { flex: 1; height: 1px; background: var(--border); }
-  .trow { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: 11px; cursor: pointer;
-    border: 1px solid transparent; transition: background .12s, border-color .12s; width: 100%; text-align: left;
-    background: transparent; font: inherit; color: inherit; }
-  .trow:hover { background: var(--hover); }
-  .trow.sel { background: var(--accent-soft); border-color: var(--accent-line); }
-  .trow .grow { flex: 1; min-width: 0; }
-  .trow .tt { font-weight: 620; font-size: 13px; line-height: 1.3; }
-  .trow .tm { display: flex; align-items: center; gap: 7px; margin-top: 5px; }
-  .trow .tm .t2 { color: var(--faint); font-size: 11px; }
-  .thead h1 { font-size: 21px; font-weight: 740; letter-spacing: -.02em; line-height: 1.25; margin: 0; }
-  .reply-in { flex: 1; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 9px; padding: 9px 12px; font: inherit; font-size: 13px; outline: none; }
-  .reply-in:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
+  /* (the legacy .tlist-card/.tgrp/.trow list styles were retired in V2 — rows
+     are the V2 Row primitive + workCss .wk-row; .trow survives only as a hook) */
   /* SPEC-4 protocol panel (ported from docs/portal-redesign-ref/protocol-panel.html) */
   .proto { border: 1px solid var(--border); border-radius: 15px; background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 18px; }
   .proto > .ph { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); cursor: pointer; flex-wrap: wrap; }
   .proto.collapsed > .ph { border-bottom: 0; }
-  .proto > .ph .ttl { font-size: 14px; font-weight: 680; display: flex; align-items: center; gap: 8px; }
-  .proto > .ph .ttl svg { width: 15px; height: 15px; color: var(--accent); }
+  .proto > .ph .ttl { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .proto > .ph .ttl svg { width: 14px; height: 14px; color: var(--v2-text-3, var(--muted)); }
   .proto > .ph .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .proto > .ph .grow { flex: 1; }
   .proto > .ph .chev { transition: transform .15s; color: var(--muted); display: inline-flex; }
   .proto.collapsed > .ph .chev { transform: rotate(-90deg); }
-  .pchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; white-space: nowrap;
-    padding: 3px 9px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); }
-  .pchip .lbl { color: var(--faint); font-weight: 650; }
-  .pchip.aut { color: var(--warn); border-color: var(--warn-line); background: var(--warn-soft); }
+  .pchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; white-space: nowrap;
+    height: 22px; padding: 0 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); }
+  .pchip .lbl { color: var(--faint); font-weight: 500; }
+  .pchip.aut { color: var(--text-2); }
   .proto .pb { padding: 6px 16px 16px; display: grid; gap: 2px; }
   .proto.collapsed .pb { display: none; }
-  .prow { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); align-items: start; }
-  .prow:last-child { border-bottom: 0; }
-  .prow .k { color: var(--faint); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 650; padding-top: 2px; }
-  .prow .v { font-size: 13.5px; font-weight: 560; line-height: 1.5; }
+  .prow { display: grid; grid-template-columns: 120px 1fr; gap: 12px; padding: 6px 0; align-items: baseline; }
+  .prow .k { color: var(--faint); font-size: 13px; font-weight: 400; }
+  .prow .v { font-size: 13px; font-weight: 500; line-height: 1.5; }
   .prow .v.notes { font-weight: 450; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
   .prow .v .arrowchain { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
   .proto.editing .prow .v { display: none; }
   .prow .edit { display: none; }
   .proto.editing .prow .edit { display: block; }
   .prow input, .prow textarea { width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 9px; padding: 8px 11px; font: inherit; font-size: 13px; outline: none; }
+    border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; outline: none; }
   .prow input:focus, .prow textarea:focus { border-color: var(--accent-line); box-shadow: var(--ring); }
   .prow textarea { min-height: 64px; resize: vertical; }
-  .proto .pf { display: none; justify-content: flex-end; gap: 10px; padding: 0 16px 16px; }
+  .proto .pf { display: none; justify-content: flex-end; gap: 8px; padding: 0 16px 16px; }
   .proto.editing .pf { display: flex; }
   .proto.editing .ph .editbtn { display: none; }
   .empty-proto { color: var(--faint); font-size: 13px; padding: 14px 16px; }
@@ -85,7 +66,7 @@ export const tasksPageCss = String.raw`
   .msg-atts .att-file svg { width: 15px; height: 15px; color: var(--muted); flex: 0 0 auto; }
   .msg-atts .att-file .sz { color: var(--faint); font-size: 10.5px; }
   /* lightbox */
-  .att-lightbox { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.82); display: flex;
+  .att-lightbox { position: fixed; inset: 0; z-index: 2000; background: var(--v2-lightbox-bg); display: flex;
     align-items: center; justify-content: center; padding: 32px; cursor: zoom-out; }
-  .att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .att-lightbox img { max-width: 95vw; max-height: 92vh; border-radius: 10px; box-shadow: var(--v2-shadow-lightbox); }
 `;

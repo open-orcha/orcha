@@ -12,6 +12,7 @@ live listener is here — and resumes waking once the loop goes quiet >= min_idl
 import asyncio
 
 import pytest
+from conftest import ts_ago
 
 pytestmark = pytest.mark.asyncio
 
@@ -25,7 +26,7 @@ async def test_wait_refreshes_heartbeat_but_not_turns(client, container, make_ag
     a = await make_agent("A")
     aid = a["agent_id"]
     # Force a stale heartbeat + a known turn count so we can see exactly what /wait changes.
-    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '1 hour', turns_used = 5 "
+    db.execute(f"UPDATE agents SET last_heartbeat_at = {ts_ago(3600)}, turns_used = 5 "
                "WHERE id=%s", (aid,))
     before_hb, before_turns = await _hb_turns(db, aid)
 
@@ -43,7 +44,7 @@ async def test_polling_agent_reads_fresh_in_roster(client, container, make_agent
     so a long-polling agent stops showing OFFLINE."""
     a = await make_agent("A")
     aid = a["agent_id"]
-    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '1 hour' WHERE id=%s", (aid,))
+    db.execute(f"UPDATE agents SET last_heartbeat_at = {ts_ago(3600)} WHERE id=%s", (aid,))
 
     r0 = await client.get(f"/api/containers/{container['id']}")
     a0 = next(x for x in r0.json()["agents"] if x["id"] == aid)
@@ -73,8 +74,8 @@ async def test_present_listener_suppresses_then_releases_wake(client, container,
 
     # Once the listener goes quiet past min_idle, the daemon resumes waking it. GH #91/#90: the
     # WORK-idle gate keys on work_last_heartbeat_at (which the poll now also bumps), so age BOTH.
-    db.execute("UPDATE agents SET last_heartbeat_at = now() - interval '5 minutes' WHERE id=%s", (bid,))
-    db.execute("UPDATE agent_wake_state SET work_last_heartbeat_at = now() - interval '5 minutes' "
+    db.execute(f"UPDATE agents SET last_heartbeat_at = {ts_ago(300)} WHERE id=%s", (bid,))
+    db.execute(f"UPDATE agent_wake_state SET work_last_heartbeat_at = {ts_ago(300)} "
                "WHERE agent_id=%s", (bid,))
     r = await client.get(f"/api/containers/{container['id']}/wake-scan", params={"min_idle": 60})
     cand = next(c for c in r.json()["candidates"] if c["agent_id"] == bid)

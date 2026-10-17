@@ -10,17 +10,20 @@ worker thread (`asyncio.to_thread`), so it can only see rows the request handler
 has actually committed. Transactional-rollback isolation would hide those rows,
 so we commit-and-truncate uniformly rather than special-casing bus tests.
 
-The app reads `DATABASE_URL` at import time, so we (re)create the test DB and set
-the env var *before* importing `main`.
+The app binds its database at import time, so we (re)create the test DB and set
+the env var *before* importing `main`: `ORCHA_DB_PATH` (a temp SQLite file, the default)
+or `DATABASE_URL` (Postgres, with ORCHA_TEST_BACKEND=postgres).
 """
 import asyncio
+import datetime as _dt
 import json as _json
 import os
 import pathlib
+import sqlite3
 import sys
+import tempfile
+import time
 
-import psycopg
-from psycopg.rows import dict_row
 import pytest
 import pytest_asyncio
 import httpx
@@ -31,7 +34,14 @@ PORTAL_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"
 MIGRATIONS_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations"
 SCHEMA_SQL = MIGRATIONS_DIR / "001_init.sql"
 
-# --- a SEPARATE database so a test run never touches a live stack's data ---
+# GH #258 PR 7b: the suite runs on SQLite by default (a temp file per session, no server).
+# ORCHA_TEST_BACKEND=postgres keeps the Postgres leg alive until the cleanup PR (plan S9).
+BACKEND = os.environ.get("ORCHA_TEST_BACKEND", "sqlite")
+if BACKEND not in ("sqlite", "postgres"):
+    raise RuntimeError(f"ORCHA_TEST_BACKEND must be sqlite or postgres, got {BACKEND!r}")
+
+# --- Postgres leg: a SEPARATE database so a test run never touches a live stack's data ---
+# (also read by tests/test_schema_parity.py, which always compares against Postgres)
 ADMIN_URL = os.environ.get("ORCHA_TEST_ADMIN_URL", "postgresql://orcha:orcha@localhost:5432/postgres")
 TEST_DB = os.environ.get("ORCHA_TEST_DB_NAME", "orcha_test")
 TEST_URL = os.environ.get(
@@ -40,6 +50,7 @@ TEST_URL = os.environ.get(
 
 # Truncate order doesn't matter with CASCADE, but list every app table explicitly
 # so a new table added to the schema fails loudly here until it's wired in.
+# (Postgres leg only: the SQLite leg derives its table list from sqlite_master.)
 APP_TABLES = [
     "conversation_turns", "conversations",
     "agent_wake_state", "agent_reachability", "agent_memory_digests",
@@ -47,9 +58,11 @@ APP_TABLES = [
     "decisions", "agent_events", "events", "task_messages", "agent_tasks",
     "task_dependencies", "requests", "tasks", "container_provider_keys",
     "container_github_pat",
-    "device_tokens", "user_prefs", "push_devices", "push_outbox",
+    "device_tokens", "user_prefs", "plan_usage_snapshots", "plan_usage_display", "push_devices", "push_outbox",
     "wake_backoff",
     "agents", "containers",
+    # mig 063 — FK'd to agents/containers, so listed last (the CASCADE lock order)
+    "notification_prefs", "notification_pref_defaults",
 ]
 
 
@@ -57,6 +70,8 @@ def _bootstrap_database() -> None:
     """Drop+recreate the test DB, load 001_init.sql, then apply incremental
     migrations (002+) — so the test schema matches a live DB after `orcha up`
     runs the R1 migration runner, not just the initdb baseline."""
+    import psycopg
+
     with psycopg.connect(ADMIN_URL, autocommit=True) as conn:
         conn.execute(f'DROP DATABASE IF EXISTS "{TEST_DB}" WITH (FORCE)')
         conn.execute(f'CREATE DATABASE "{TEST_DB}"')
@@ -71,21 +86,82 @@ def _bootstrap_database() -> None:
         conn.commit()
 
 
-# Run once at collection, BEFORE importing main (which binds DATABASE_URL).
-_bootstrap_database()
-os.environ["DATABASE_URL"] = TEST_URL
+# Run once at collection, BEFORE importing main (which binds the database at import).
+if BACKEND == "postgres":
+    _bootstrap_database()
+    os.environ.pop("ORCHA_DB_PATH", None)
+    os.environ["DATABASE_URL"] = TEST_URL
+    TEST_DB_PATH = None
+else:
+    TEST_DB_PATH = str(pathlib.Path(tempfile.mkdtemp(prefix="orcha-test-")) / "orcha.db")
+    os.environ.pop("DATABASE_URL", None)
+    os.environ["ORCHA_DB_PATH"] = TEST_DB_PATH
+    os.environ.setdefault("ORCHA_DB_ASSERT_READONLY", "1")  # plan S3 note 5: on in tests
 sys.path.insert(0, str(PORTAL_DIR))
 # Also expose the CLI package so tests can `from orcha_cli import notifier` even when
 # collected standalone (orcha-cli isn't installed in every env — e.g. a targeted run).
 sys.path.insert(0, str(REPO / "orcha-cli"))
-import main  # noqa: E402  (must follow the env + path setup above)
+from portal_backend import database  # noqa: E402  (must follow the env + path setup above)
+
+if BACKEND == "sqlite":
+    database.run_migrations()  # the real runner, on the shipped SQLite baseline
+import main  # noqa: E402
+
+
+def _sqlite_app_tables() -> list:
+    with sqlite3.connect(TEST_DB_PATH) as conn:
+        return [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "AND name <> 'schema_migrations' ORDER BY name")]
+
+
+SQLITE_TABLES = _sqlite_app_tables() if BACKEND == "sqlite" else []
+
+# Plan PR 7b acceptance / risk R2: every scope held past the 250 ms threshold during the run,
+# listed in the terminal summary (the app's own log line is swallowed by output capture).
+SLOW_TRANSACTIONS: list = []
+_report_slow_transaction = database.report_slow_transaction
+
+
+def _record_slow_transaction(held, readonly, where):
+    test = os.environ.get("PYTEST_CURRENT_TEST", "?").split(" (")[0]
+    SLOW_TRANSACTIONS.append((held, readonly, where, test))
+    _report_slow_transaction(held, readonly, where)
+
+
+database.report_slow_transaction = _record_slow_transaction
 
 
 @pytest.fixture(autouse=True)
 def _clean_db():
-    """Truncate every app table before each test → each test starts empty."""
-    with psycopg.connect(TEST_URL, autocommit=True) as conn:
-        conn.execute("TRUNCATE " + ", ".join(APP_TABLES) + " RESTART IDENTITY CASCADE")
+    """Empty every app table before each test → each test starts empty."""
+    if BACKEND == "postgres":
+        import psycopg
+
+        # A background thread left over from the previous test, still finishing a
+        # read, can hold a share lock on one table while
+        # TRUNCATE holds another; Postgres then picks the TRUNCATE as the deadlock
+        # victim. The other side finishes on its own, so retry rather than error.
+        for attempt in range(5):
+            try:
+                with psycopg.connect(TEST_URL, autocommit=True) as conn:
+                    conn.execute("TRUNCATE " + ", ".join(APP_TABLES) + " RESTART IDENTITY CASCADE")
+                break
+            except psycopg.errors.DeadlockDetected:
+                if attempt == 4:
+                    raise
+                time.sleep(0.2)
+    else:
+        conn = sqlite3.connect(TEST_DB_PATH, isolation_level=None, timeout=10)
+        try:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("BEGIN IMMEDIATE")
+            for table in SQLITE_TABLES:
+                conn.execute(f'DELETE FROM "{table}"')
+            conn.execute("DELETE FROM sqlite_sequence")  # RESTART IDENTITY
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
     yield
 
 
@@ -109,6 +185,21 @@ def _isolate_persona_cache():
         notifier._clear_persona_cache()
 
 
+def ts_ago(seconds):
+    """A quoted timestamp literal `seconds` before sql.utcnow(), for raw test SQL on either
+    backend: replaces `now() - interval '...'` (Postgres casts the text; SQLite stores it)."""
+    from portal_backend import sql
+
+    return "'" + sql.ts(sql.ago(seconds)) + "'"
+
+
+def ts_from_now(seconds):
+    """A quoted timestamp literal `seconds` after sql.utcnow(): replaces `now() + interval`."""
+    from portal_backend import sql
+
+    return "'" + sql.ts(sql.from_now(seconds)) + "'"
+
+
 class Db:
     """Thin DB accessor for tests — no ORM, just raw rows.
 
@@ -116,13 +207,69 @@ class Db:
     row-level assertions the API doesn't expose (e.g. the event-bus fan-out).
     """
 
+    backend = BACKEND
+
     def execute(self, sql, params=()):
-        with psycopg.connect(TEST_URL, row_factory=dict_row, autocommit=True) as conn:
-            cur = conn.execute(sql, params)
-            try:
-                return cur.fetchall()
-            except psycopg.ProgrammingError:
-                return []
+        if BACKEND == "postgres":
+            import psycopg
+            from psycopg.rows import dict_row
+
+            with psycopg.connect(TEST_URL, row_factory=dict_row, autocommit=True) as conn:
+                cur = conn.execute(sql, params)
+                try:
+                    return cur.fetchall()
+                except psycopg.ProgrammingError:
+                    return []
+        with database.db_cursor() as (_conn, cur):  # same adapters + %s translation as the app
+            cur.execute(sql, params)
+            return cur.fetchall() if cur.description else []
+
+    @staticmethod
+    def ago(seconds):
+        """A bound timestamp `seconds` in the past: replaces `now() - interval '...'` in raw SQL."""
+        return _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=seconds)
+
+    @staticmethod
+    def from_now(seconds):
+        """A bound timestamp `seconds` in the future: replaces `now() + make_interval(...)`."""
+        return _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=seconds)
+
+    def columns(self, table):
+        """`table`'s columns as information_schema-shaped dict rows (column_name, data_type,
+        is_nullable, column_default) on either backend: PRAGMA table_info on SQLite, whose
+        declared types (BOOLEAN, UUID, ...) lower-case to the Postgres names; boolean
+        defaults 0/1 read back as 'false'/'true' like Postgres prints them."""
+        if BACKEND == "postgres":
+            return self.execute(
+                "SELECT column_name, data_type, is_nullable, column_default"
+                " FROM information_schema.columns WHERE table_name=%s ORDER BY ordinal_position",
+                (table,),
+            )
+        out = []
+        for r in self.execute(f"PRAGMA table_info({table})"):
+            dtype = (r["type"] or "").lower()
+            default = r["dflt_value"]
+            if dtype == "boolean" and default in ("0", "1"):
+                default = "true" if default == "1" else "false"
+            out.append({"column_name": r["name"], "data_type": dtype,
+                        "is_nullable": "NO" if r["notnull"] or r["pk"] else "YES",
+                        "column_default": default})
+        return out
+
+    def column(self, table, column):
+        """One column's info row from `columns()`, or None when the column is absent."""
+        return next((c for c in self.columns(table) if c["column_name"] == column), None)
+
+    @staticmethod
+    def check_violation():
+        """The exception a CHECK-constraint breach raises on this backend."""
+        if BACKEND == "postgres":
+            import psycopg
+
+            return psycopg.errors.CheckViolation
+        import sqlite3
+
+        return sqlite3.IntegrityError
 
     def event_rows(self, event_key):
         """All agent_events rows for a delivery key, in insertion order."""
@@ -264,6 +411,15 @@ async def read_sse(client, path, *, timeout=2.0, max_events=10, params=None):
     return out
 
 
+def pytest_addoption(parser):
+    # GH #258 PR 1: tests/test_dialect_parity.py rewrites tests/fixtures/parity_postgres.json
+    # instead of asserting against it (regenerate only on a deliberate response-shape change).
+    parser.addoption(
+        "--regen-parity", action="store_true", default=False,
+        help="rewrite tests/fixtures/parity_postgres.json from this run instead of comparing",
+    )
+
+
 def pytest_configure(config):
     # The bus suite tags itself @pytest.mark.committed (Thread's contract). Our
     # isolation truncates-committed uniformly, so the marker is a documented no-op.
@@ -275,3 +431,13 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "smoke: end-to-end real-seam gate (real HTTP server + real PTY exec)"
     )
+
+
+def pytest_terminal_summary(terminalreporter):
+    if BACKEND != "sqlite":
+        return
+    terminalreporter.write_line(
+        f"[db] slow transactions (> {database.SLOW_TX_SECS * 1000:.0f} ms): {len(SLOW_TRANSACTIONS)}")
+    for held, readonly, where, test in sorted(SLOW_TRANSACTIONS, reverse=True):
+        terminalreporter.write_line(
+            f"[db]   {held * 1000:.0f} ms at {where}{' (readonly)' if readonly else ''} in {test}")

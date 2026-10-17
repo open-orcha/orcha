@@ -1,7 +1,6 @@
 /**
  * GitHub hub page — React + TypeScript port of the vanilla cloud page
- * (static/github.html + pages/github-{state,render,boot}.js), emitting the
- * SAME class names so the carried github.css + shared styles apply as-is.
+ * (static/github.html + pages/github-{state,render,boot}.js).
  *
  * One SPA route (/github) hosts the Issues/PRs list AND every item's detail
  * view via ?pr=N / ?issue=N (react-router search params replace the vanilla
@@ -10,27 +9,65 @@
  * refreshes on load, on tab switch, and on a 60s timer — never the 3s tick.
  * Volatile UI (search text, sub-tab, dropdowns, <details> expansion) lives in
  * useState so the poll never clobbers typing.
+ *
+ * Linear layout (directives D5–D12):
+ *  - list = Linear "My issues": a filter-pill toolbar in the Shell's fixed
+ *    toolbar slot, one-line 38px rows (muted #id · state glyph · title · chips
+ *    · avatars · time) grouped under D8 band headers (PRs by GitHub's merge
+ *    state, issues by whether Orcha already tracks them);
+ *  - detail = Linear issue: header row (glyph · #id · title … circle actions
+ *    · "2 / 5 ↑↓"), a large title, one muted meta line, a compact Orcha
+ *    dispatch card, the description, an Activity timeline, and a
+ *    PropertyRail on the right.
  */
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { getJSON } from "../../api/client";
-import { DiffFile, FilesChanged } from "../../components/FilesChanged";
+import { DiffFile, FilesChanged, type BlobSource } from "../../components/FilesChanged";
+import { refBlobSource } from "../../components/filePreview/sources";
 import { Icon, useToast } from "../../components/ui";
-import { hue, mdText, relTime } from "../../lib/format";
-import { actingHuman, useSnapshot } from "../../state/SnapshotProvider";
+import {
+  Avatar,
+  AvatarStack,
+  Button,
+  ButtonLink,
+  Chip,
+  IconButton,
+  Menu,
+  MenuButton,
+  Popover,
+  StatusGlyph,
+  Tabs,
+  Tooltip,
+  rowNavKeyDown,
+  statusLabel,
+  type MenuItemSpec,
+} from "../../components/primitives";
+import { FilterPills } from "../../components/primitives";
+import { useScrollEdges } from "../../components/primitives/FilterPills";
+import { iconButtonClass } from "../../components/primitives";
+import { ListGroup } from "../../components/primitives";
+import { Property, PropertyRail, PropertySection } from "../../components/primitives";
+import { RelTime, Timeline, TimelineComment, TimelineEvent } from "../../components/primitives";
+import { mdText, relTime } from "../../lib/format";
+import { actingHuman, snapshotErrorKind, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
+import { repoConnectBlockedReason } from "./repoPermissions";
+import { PageHeader, PageToolbar, Pager } from "../../shell/PageChrome";
 import { Shell } from "../../shell/Shell";
 import type { Agent, Task } from "../../types";
 import { CloudIcon } from "../projects/icons";
 import { useDebouncedValue } from "./browse/useDebounce";
 import { RepoBrowser } from "./browse/RepoBrowser";
+import { RepoNotConnected } from "./RepoNotConnected";
 import { ConnectRepoModal } from "./ConnectRepoModal";
 import { isLocalRepo } from "./connectRepo";
 import "./connectRepo.css";
@@ -39,19 +76,27 @@ import {
   authorsFromRows,
   buildPullsQuery,
   CHECKS_BATCH_CAP,
-  CLEAN_STATES,
   classifyDetailError,
   classifyError,
   dispatchLabel,
+  unavailableError,
   EMPTY_PULLS_FILTER,
   fixOutstandingItems,
   hasActivePullsFilter,
+  fillMissingChecks,
+  EMPTY_ISSUES_FILTER,
+  issueFacets,
+  matchesIssuesFilter,
+  UNASSIGNED,
+  type IssuesFilter,
   isLocalSourcePayload,
-  labelColors,
+  labelDot,
   matchesFilter,
+  mergeStateLabel,
   matchesSearch,
   suggestAgents,
   topSuggestions,
+  trackedTaskLabel,
   type ChecksRollup,
   type GhComment,
   type GhError,
@@ -71,12 +116,26 @@ import {
 } from "./ghlib";
 import "./github.css";
 
-/* ---- page-local icons (app-ui.js glyphs absent from the shared Icon map) -- */
+/* ---- page-local GitHub glyphs (not task-status glyphs: GitHub's own issue /
+   PR / check shapes, coloured by GitHub state via CSS classes) ------------- */
 const GH_ICONS: Record<string, string> = {
-  issueDot: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="2.6" fill="currentColor" stroke="none"/>',
-  pullArrow: '<circle cx="6" cy="5" r="2" fill="currentColor" stroke="none"/><circle cx="6" cy="15" r="2" fill="currentColor" stroke="none"/><circle cx="14" cy="8" r="2" fill="currentColor" stroke="none"/><path d="M6 7v6M14 10v3a2 2 0 0 1-2 2h-2M14 6V5"/><path d="M11.5 3.5 14 6l2.5-2.5"/>',
+  issueDot: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="2.4" fill="currentColor" stroke="none"/>',
+  issueDone: '<circle cx="10" cy="10" r="7"/><path d="m7 10.2 2.1 2.1L13.2 8"/>',
+  pullArrow: '<circle cx="6" cy="5" r="1.9"/><circle cx="6" cy="15" r="1.9"/><circle cx="14" cy="15" r="1.9"/><path d="M6 6.9v6.2M14 13.1V8.4a2 2 0 0 0-2-2H9.4"/><path d="m11 4.6-1.8 1.8L11 8.2"/>',
+  pullDraft: '<circle cx="6" cy="5" r="1.9"/><circle cx="6" cy="15" r="1.9"/><circle cx="14" cy="15" r="1.9"/><path d="M6 6.9v6.2M14 11.6v-.8M14 8.2v-.8M14 4.8V4"/>',
   ring: '<circle cx="10" cy="10" r="6"/>',
   info: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="6.6" r="0.9" fill="currentColor" stroke="none"/><path d="M10 9.6v4.4"/>',
+  // D8: the failed ✕ and the cancelled slash belong to task states — merge
+  // conflicts get a ring + "!" and "blocked" the task set's ring + bar (no-entry).
+  conflict: '<circle cx="10" cy="10" r="7"/><path d="M10 6.2v4.6"/><circle cx="10" cy="13.6" r=".9" fill="currentColor" stroke="none"/>',
+  blocked: '<circle cx="10" cy="10" r="7"/><path d="M6.6 10h6.8"/>',
+  unstable: '<path d="M10 3.2 17.2 16H2.8z"/><path d="M10 8.2v3.4"/><circle cx="10" cy="13.7" r=".7" fill="currentColor" stroke="none"/>',
+  merge: '<circle cx="10" cy="10" r="7"/><path d="m7 10.2 2.1 2.1L13.2 8"/>',
+  behind: '<circle cx="10" cy="10" r="7"/><path d="M10 6.4v7.2M7 10.6l3 3 3-3"/>',
+  unknown: '<circle cx="10" cy="10" r="7" stroke-dasharray="2.2 2.4"/>',
+  // "Tracked in Orcha" band: a neutral issue ring with an arrow in (handed to
+  // Orcha) — muted like every other band glyph, never accent-coloured
+  tracked: '<circle cx="10" cy="10" r="7"/><path d="M6.8 10h6M10.6 7.6 13 10l-2.4 2.4"/>',
 };
 function GhIcon({ name, cls = "gl" }: { name: string; cls?: string }) {
   const body = GH_ICONS[name];
@@ -91,121 +150,132 @@ function GhIcon({ name, cls = "gl" }: { name: string; cls?: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      focusable="false"
       dangerouslySetInnerHTML={{ __html: body }}
     />
   );
 }
 
-/* ---- GitHub-login avatar (app-ui.js ghAvatar port) ------------------------ */
-function GhAvatar({ login, size = "sm" }: { login: string | null | undefined; size?: string }) {
-  const h = hue(login || "");
-  const grad = `linear-gradient(140deg, hsl(${h} 70% 62%), hsl(${(h + 38) % 360} 72% 54%))`;
-  const cls = "av gh" + (size ? " " + size : "") + " human";
-  const init = (login || "?").trim().charAt(0).toUpperCase();
-  return (
-    <span className={cls} style={{ background: grad }}>
-      {init}
-      <img
-        className="gh-face"
-        src={`https://github.com/${encodeURIComponent(login || "")}.png?size=96`}
-        alt=""
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={(e) => e.currentTarget.remove()}
-      />
-    </span>
-  );
-}
-
-/* ---- resolved theme (github-render.js ghResolvedTheme) -------------------- */
-function ghResolvedTheme(): string {
-  try {
-    const t = localStorage.getItem("orcha:theme") || "auto";
-    if (t === "dark" || t === "light") return t;
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  } catch {
-    return "dark";
+/** GitHub state glyph for an item: PR open / draft / closed, issue open / closed. */
+function KindGlyph({ kind, item }: { kind: GhKind; item: { draft?: boolean; state?: string | null } }) {
+  if (kind === "pull") {
+    if (item.draft) return <GhIcon name="pullDraft" cls="gl gh-kind-ico pull is-draft" />;
+    if (item.state === "closed") return <GhIcon name="pullArrow" cls="gl gh-kind-ico pull is-closed" />;
+    return <GhIcon name="pullArrow" cls="gl gh-kind-ico pull is-open" />;
   }
+  if (item.state === "closed") return <GhIcon name="issueDone" cls="gl gh-kind-ico issue is-closed" />;
+  return <GhIcon name="issueDot" cls="gl gh-kind-ico issue is-open" />;
 }
 
-/* ---- chips (github-state.js builders, same class names) ------------------- */
-function ChecksChip({ rollup }: { rollup: ChecksRollup | null | undefined }) {
+/* ---- people: D7 round avatars (GitHub logins; the image falls back to initials) */
+function GhAvatar({ login, size = 20, decorative }: { login: string | null | undefined; size?: 16 | 20 | 24; decorative?: boolean }) {
+  return <Avatar alias={login || "unknown"} ghLogin={login || null} size={size} decorative={decorative} label={login || "Unknown"} />;
+}
+
+/* ---- chips (D8: rounded-full, 1px border, coloured icon/dot + neutral text) */
+function checksTotal(r: ChecksRollup): number {
+  return r.total != null ? r.total : (r.passed || 0) + (r.failing || 0) + (r.pending || 0);
+}
+function ChecksChip({ rollup, unavailable }: { rollup: ChecksRollup | null | undefined; unavailable?: boolean }) {
   if (rollup === null || rollup === undefined) {
-    return <span className="tag gh-checks loading">checks…</span>;
+    // unknown ≠ zero: a failed checks fetch says so instead of spinning forever
+    if (unavailable) return <span className="gh-checks zero" title="Couldn't load checks from GitHub">Checks unavailable</span>;
+    return <span className="gh-checks loading" title="Loading checks from GitHub">checks…</span>;
   }
   const passed = rollup.passed || 0;
   const failing = rollup.failing || 0;
   const pending = rollup.pending || 0;
-  const total = rollup.total != null ? rollup.total : passed + failing + pending;
-  if (!total) return <span className="tag gh-checks zero">No checks</span>;
-  if (failing > 0) return <span className="tag gh-checks fail"><Icon name="x" cls="gl" />{failing} failing</span>;
-  if (pending > 0) return <span className="tag gh-checks pend"><GhIcon name="ring" cls="gl" />{pending} pending</span>;
-  return <span className="tag gh-checks pass"><Icon name="check" cls="gl" />{passed} passed</span>;
+  const total = checksTotal(rollup);
+  if (!total) return <span className="gh-checks zero">No checks</span>;
+  const title = [passed ? `${passed} passed` : "", failing ? `${failing} failing` : "", pending ? `${pending} pending` : ""].filter(Boolean).join(" · ");
+  if (failing > 0) return <Chip size="sm" className="gh-checks fail" title={title} icon={<Icon name="x" cls="gl" />}>{failing} failing</Chip>;
+  if (pending > 0) return <Chip size="sm" className="gh-checks pend" title={title} icon={<GhIcon name="ring" cls="gl" />}>{pending} pending</Chip>;
+  return <Chip size="sm" className="gh-checks pass" title={title} icon={<Icon name="check" cls="gl" />}>{passed} passed</Chip>;
 }
 
-function MergeChip({ pr }: { pr: GhPullRow }) {
-  if (pr.draft) return <span className="tag gh-merge draft">Draft</span>;
-  const st = pr.mergeable_state || "unknown";
-  if (CLEAN_STATES[st]) return <span className="tag gh-merge ok"><Icon name="check" cls="gl" />Checks passed</span>;
-  return <span className="tag gh-merge">Merge</span>;
-}
-
-// `.gh-reviewers.empty` (never `.none`) — see github.css's collision note.
-function Reviewers({ logins }: { logins: string[] | undefined }) {
-  const l = Array.isArray(logins) ? logins : [];
-  if (!l.length) return <span className="gh-reviewers empty">—</span>;
+// GitHub's mergeability in its own words (Mergeable / Blocked / Conflicts /
+// Unstable / Behind / Draft) — never "Checks passed", which contradicted a
+// pending check shown right beside it.
+const MERGE_GLYPH: Record<string, string> = {
+  Mergeable: "merge", Blocked: "blocked", Conflicts: "conflict", Unstable: "unstable", Behind: "behind", Draft: "pullDraft", Unknown: "unknown",
+};
+function MergeState({ pr }: { pr: { mergeable_state?: string | null; draft?: boolean } }) {
+  const m = mergeStateLabel(pr.mergeable_state, pr.draft);
   return (
-    <span className="gh-reviewers">
-      {l.slice(0, 3).map((r) => <GhAvatar key={r} login={r} />)}
-      {l.length > 3 ? <span className="gh-more">+{l.length - 3}</span> : null}
+    <span className={"gh-merge " + m.tone} title={m.hint}>
+      <GhIcon name={MERGE_GLYPH[m.label] || "unknown"} cls="gl" />{m.label}
     </span>
   );
 }
 
-function LabelChip({ label, theme }: { label: GhLabel | string; theme: string }) {
-  const c = labelColors(label, theme);
+// neutral chip + a dot in the repo's label color (no saturated pills).
+function LabelChip({ label }: { label: GhLabel | string }) {
+  const c = labelDot(label);
   return (
-    <span className="tag gh-label" style={{ background: c.bg, color: c.fg, borderColor: c.border }}>
+    <Chip size="sm" className="gh-label" icon={<span className="gh-label-dot" style={{ background: c.color }} />}>
       {c.name}
+    </Chip>
+  );
+}
+function LabelChips({ labels, max }: { labels: (GhLabel | string)[] | undefined; max: number }) {
+  const l = labels || [];
+  if (!l.length) return null;
+  const rest = l.slice(max);
+  return (
+    <>
+      {l.slice(0, max).map((x, i) => <LabelChip key={i} label={x} />)}
+      {rest.length ? (
+        <span className="gh-more" title={rest.map((x) => labelDot(x).name).join(", ")}>+{rest.length}</span>
+      ) : null}
+    </>
+  );
+}
+
+function stateWord(kind: GhKind, item: { draft?: boolean; state?: string | null }): string {
+  if (kind === "pull" && item.draft) return "Draft";
+  return item.state === "closed" ? "Closed" : "Open";
+}
+function StateValue({ kind, item }: { kind: GhKind; item: { draft?: boolean; state?: string | null } }) {
+  return (
+    <span className="gh-state">
+      <KindGlyph kind={kind} item={item} />
+      {stateWord(kind, item)}
     </span>
   );
 }
 
-function StatePill({ kind, item }: { kind: GhKind; item: { draft?: boolean; state?: string | null } }) {
-  if (kind === "pull") {
-    if (item.draft) return <span className="pill s-idle gh-state-pill">Draft</span>;
-    if (item.state === "closed") return <span className="pill s-bad gh-state-pill">Closed</span>;
-    return <span className="pill s-ok gh-state-pill">Open</span>;
-  }
-  return item.state === "closed"
-    ? <span className="pill s-acc gh-state-pill">Closed</span>
-    : <span className="pill s-ok gh-state-pill">Open</span>;
-}
-
-function BranchChips({ base, head }: { base: string | null | undefined; head: string | null | undefined }) {
+/* ---- tracked Orcha task chip: the task TITLE (never the raw uuid) + its real
+   status glyph; a router link styled as a D8 chip (v2-chip classes). */
+function TrackedChip({ taskId, existing, tasks, size = "sm" }: { taskId: string; existing?: boolean; tasks: Task[]; size?: "sm" | "md" }) {
+  const title = trackedTaskLabel(taskId, tasks);
+  const task = tasks.find((t) => t.id === taskId);
+  const status = task ? task.status : null;
   return (
-    <span className="gh-branch-chips">
-      <span className="tag gh-branch-tag mono">{base || "?"}</span>
-      <span className="gh-branch-arrow"><Icon name="arrow" cls="gl" /></span>
-      <span className="tag gh-branch-tag mono">{head || "?"}</span>
-    </span>
+    <Chip
+      className="gh-task-chip"
+      size={size}
+      to={"/tasks?task=" + encodeURIComponent(taskId)}
+      title={(existing ? "Already tracked: " : "Tracked: ") + title + (status ? " · " + statusLabel(status) : "")}
+      onClick={(e) => e.stopPropagation()}
+      icon={status ? <StatusGlyph status={status} size={13} /> : <Icon name="tasks" cls="gl" />}
+    >
+      {title}
+    </Chip>
   );
 }
 
-/* ---- empty / error states ------------------------------------------------- */
-function EmptyRepo({ onConnect }: { onConnect: () => void }) {
-  return (
-    <div className="gh-empty card-empty">
-      <div className="t1">No repo connected</div>
-      <p>Connect this project to a repository — this machine&#39;s own git repo, or GitHub — to see issues and pull requests here.</p>
-      <button className="btn subtle sm" type="button" onClick={onConnect}>Connect repo</button>
-    </div>
-  );
+/* ---- empty / error states -------------------------------------------------
+   V2: every state names what happened and offers the recovery that really
+   exists, with ONE primary action (the fix) and quiet secondary ones. */
+// The shared not-connected state (RepoNotConnected) — Code Space renders the
+// same component, so one condition has one look everywhere.
+function EmptyRepo({ onConnect, blockedReason }: { onConnect: () => void; blockedReason?: string | null }) {
+  return <RepoNotConnected onConnect={onConnect} disabledReason={blockedReason} />;
 }
 // Orcha Cloud local run, Addendum 2 (hub degradation): the bound repo is the
 // local git working tree, not GitHub — browse/Code Space keep working, only
 // issues/PRs/checks are affected. Honest callout + a way to connect GitHub
-// on top, reusing the settings sc-* banner idiom.
+// on top.
 //
 // Local-binding + GitHub-origin fall-through: this only renders when the
 // fall-through DIDN'T happen (no origin, or an origin with no usable token —
@@ -219,56 +289,123 @@ function LocalSourceCallout({ onConnect, originDetected }: { onConnect: () => vo
     : "Browsing the local repository. Connect a GitHub repo for issues, PRs, and checks.";
   return (
     <div className="gh-empty card-empty gh-local-callout">
-      <div className="sc-banner muted">
-        <div className="bt">
-          <CloudIcon name="folder" cls="" />
-          <span>{message}</span>
-        </div>
-      </div>
-      <div className="sc-acts">
+      <div className="gh-empty-ico" aria-hidden="true"><CloudIcon name="folder" cls="" /></div>
+      <p>{message}</p>
+      <div className="gh-empty-acts">
         {originDetected ? (
-          <Link className="btn sm" to="/settings">
-            <Icon name="link" cls="" />Add GitHub access
-          </Link>
+          <ButtonLink variant="primary" icon="link" to="/settings#tab=github-access">Add GitHub access</ButtonLink>
         ) : (
-          <button className="btn sm" type="button" onClick={onConnect}>
-            <Icon name="link" cls="" />Connect GitHub repo
-          </button>
+          <Button variant="primary" icon="link" onClick={onConnect}>Connect GitHub repo</Button>
         )}
       </div>
     </div>
   );
 }
-function RateLimit({ detail }: { detail?: string | null }) {
+/** A 403 that is about project membership, not the GitHub token (pure). */
+export function isMembershipDenial(detail: string | null | undefined): boolean {
+  return /not a member|member of (this|any) project/i.test(detail || "");
+}
+function RetryBtn({ onRetry, variant = "secondary" }: { onRetry?: () => void; variant?: "secondary" | "ghost" | "primary" }) {
+  if (!onRetry) return null;
+  return <Button variant={variant} icon="refresh" className="gh-retry" onClick={onRetry}>Retry now</Button>;
+}
+// Rate limit: the 60 s refresh tick really does retry on this page, so the
+// copy may promise it. The hub's 200-payload `rate_limited` reason also covers
+// an ambiguous 403 ("rate limit or access forbidden") — that wording gets the
+// honest "one of two causes" copy with the access check offered first.
+function RateLimit({ detail, onRetry }: { detail?: string | null; onRetry?: () => void }) {
+  const ambiguous = /forbidden|access|scope|permission/i.test(detail || "");
   return (
-    <div className="gh-empty card-empty">
-      <div className="t1">GitHub rate limit hit</div>
-      <p>Backing off — this quietly retries on the next refresh.{detail ? " (" + detail + ")" : ""}</p>
+    <div className="gh-empty card-empty" role="alert">
+      <div className="gh-empty-ico is-warn" aria-hidden="true"><Icon name="clock" cls="" /></div>
+      <div className="t1">{ambiguous ? "GitHub refused the request" : "GitHub rate limit reached"}</div>
+      <p>
+        {ambiguous
+          ? "Either this token hit GitHub's rate limit, or it can't access this repository. This page retries every minute."
+          : "GitHub is throttling requests for this token. This page retries automatically every minute."}
+      </p>
+      {detail ? <p className="gh-empty-detail">{detail}</p> : null}
+      <div className="gh-empty-acts">
+        {ambiguous ? <ButtonLink variant="secondary" to="/settings#tab=github-access">Check GitHub access</ButtonLink> : null}
+        <RetryBtn onRetry={onRetry} />
+        {ambiguous ? null : <ButtonLink variant="ghost" to="/settings#tab=github-access">Check GitHub access</ButtonLink>}
+      </div>
     </div>
   );
 }
-function GenericError({ status, detail }: { status?: number; detail?: string | null }) {
+// V2: a real permissions problem (HTTP 403 that isn't a rate limit, or a bound
+// repo GitHub won't return). No auto-retry promise — waiting won't fix it.
+function NoAccess({ repo, detail, title, onConnect, onRetry }: {
+  repo: string; detail?: string | null; title?: string; onConnect: () => void; onRetry?: () => void;
+}) {
   return (
-    <div className="gh-empty card-empty">
-      <div className="t1">Couldn&#39;t load {status ? "(" + String(status) + ")" : ""}</div>
+    <div className="gh-empty card-empty" role="alert">
+      <div className="gh-empty-ico is-danger" aria-hidden="true"><Icon name="shield" cls="" /></div>
+      <div className="t1">{title || <>GitHub token can&#39;t access {repo}</>}</div>
+      <p>
+        This project is connected to <span className="mono">{repo}</span>, but GitHub didn&#39;t return it — the access token may be
+        missing, expired, or not granted to this repository.
+      </p>
+      {detail ? <p className="gh-empty-detail">{detail}</p> : null}
+      <div className="gh-empty-acts">
+        <ButtonLink variant="primary" to="/settings#tab=github-access">Check GitHub access</ButtonLink>
+        <Button variant="secondary" onClick={onConnect}>Change repo</Button>
+        <RetryBtn onRetry={onRetry} variant="ghost" />
+      </div>
+    </div>
+  );
+}
+function GenericError({ status, detail, onRetry }: { status?: number; detail?: string | null; onRetry?: () => void }) {
+  return (
+    <div className="gh-empty card-empty" role="alert">
+      <div className="gh-empty-ico is-danger" aria-hidden="true"><Icon name="alert" cls="" /></div>
+      <div className="t1">Couldn&#39;t load from GitHub{status && status >= 400 ? " (" + String(status) + ")" : ""}</div>
       <p>{detail ? detail : "Something went wrong talking to GitHub."}</p>
+      <div className="gh-empty-acts"><RetryBtn onRetry={onRetry} /></div>
     </div>
   );
 }
-function DetailNotFound({ kind }: { kind: GhKind }) {
+function DetailNotFound({ kind, onBack }: { kind: GhKind; onBack?: () => void }) {
   return (
-    <div className="gh-empty card-empty">
+    <div className="gh-empty card-empty" role="status">
       <div className="t1">{kind === "pull" ? "Pull request" : "Issue"} not found</div>
       <p>It may have been deleted, or the number doesn&#39;t exist in this repo.</p>
+      {onBack ? (
+        <div className="gh-empty-acts">
+          <Button variant="secondary" onClick={onBack}>Back to {kind === "pull" ? "pull requests" : "issues"}</Button>
+        </div>
+      ) : null}
     </div>
   );
 }
-function GhErrorBody({ err, notFoundKind, onConnect }: { err: GhError; notFoundKind?: GhKind; onConnect: () => void }) {
-  if (err.kind === "not_found" && notFoundKind) return <DetailNotFound kind={notFoundKind} />;
+function GhErrorBody({ err, notFoundKind, onConnect, onRetry, onBack, boundRepo, blockedReason }: {
+  err: GhError;
+  /** why Connect repo is unavailable to this viewer (null = allowed) */
+  blockedReason?: string | null;
+  notFoundKind?: GhKind;
+  onConnect: () => void;
+  onRetry?: () => void;
+  onBack?: () => void;
+  /** the container's GitHub binding (owner/name), when known — turns a
+   *  "not connected" answer for a BOUND repo into the missing-access state */
+  boundRepo?: string | null;
+}) {
+  if (err.kind === "not_found" && notFoundKind) return <DetailNotFound kind={notFoundKind} onBack={onBack} />;
   if (err.kind === "local_source") return <LocalSourceCallout onConnect={onConnect} originDetected={err.originDetected} />;
-  if (err.kind === "not_connected") return <EmptyRepo onConnect={onConnect} />;
-  if (err.kind === "rate_limited") return <RateLimit detail={err.detail} />;
-  return <GenericError status={err.status} detail={err.detail} />;
+  if (err.kind === "not_connected") {
+    if (boundRepo && !isLocalRepo(boundRepo)) {
+      // G13: the server's "no GitHub repo is connected" contradicts the bound
+      // repo on screen — for a bound repo that answer means no usable token.
+      const detail = /no GitHub repo is connected/i.test(err.detail || "") ? "No GitHub token can read this repository — add one in Settings › Integrations." : err.detail;
+      return <NoAccess repo={boundRepo} title={"Can't reach " + boundRepo} detail={detail} onConnect={onConnect} onRetry={onRetry} />;
+    }
+    return <EmptyRepo onConnect={onConnect} blockedReason={blockedReason} />;
+  }
+  if (err.kind === "no_access") {
+    return <NoAccess repo={boundRepo && !isLocalRepo(boundRepo) ? boundRepo : "this repository"} detail={err.detail} onConnect={onConnect} onRetry={onRetry} />;
+  }
+  if (err.kind === "rate_limited") return <RateLimit detail={err.detail} onRetry={onRetry} />;
+  return <GenericError status={err.status} detail={err.detail} onRetry={onRetry} />;
 }
 
 /* ---- skeleton loading states (modules/app-skeleton.js markup, verbatim) ----
@@ -318,71 +455,87 @@ function useSkeletonReady(resetKey: string): boolean {
   return ready;
 }
 
-/* ---- column header (wide viewports; CSS-hidden below the wrap breakpoint) - */
-function ColumnHeader({ tab }: { tab: GhKind }) {
-  return (
-    <div className="ghhead-row" aria-hidden="true">
-      <span className="ghh-ico"></span>
-      <span className="ghh-num">ID</span>
-      <span className="grow ghh-main">TITLE{tab === "pull" ? " / CONTEXT" : ""}</span>
-      <span className="ghh-reviewers">REVIEWERS</span>
-      <span className="ghh-checks">CHECKS</span>
-      <span className="ghh-merge">MERGE</span>
-      <span className="ghh-updated">UPDATED</span>
-      <span className="ghh-actions"></span>
-    </div>
-  );
+/* ---- list grouping (D8 band headers) ----------------------------------------
+   PRs group by GitHub's own merge state (the group band IS the merge fact, so
+   rows don't repeat it); issues group by whether Orcha already tracks them.
+   Pure + exported for tests. */
+export interface GhGroup<T> { id: string; title: string; glyph: string; tone: string; items: T[] }
+const PULL_GROUP_ORDER = ["Conflicts", "Blocked", "Unstable", "Behind", "Mergeable", "Unknown", "Draft"];
+export function groupPulls<T extends { mergeable_state?: string | null; draft?: boolean }>(rows: T[]): GhGroup<T>[] {
+  const by = new Map<string, { tone: string; items: T[] }>();
+  rows.forEach((r) => {
+    const m = mergeStateLabel(r.mergeable_state, r.draft);
+    const g = by.get(m.label) || { tone: m.tone, items: [] };
+    g.items.push(r);
+    by.set(m.label, g);
+  });
+  return PULL_GROUP_ORDER.filter((k) => by.has(k)).map((k) => {
+    const g = by.get(k)!;
+    return { id: k.toLowerCase(), title: k, glyph: MERGE_GLYPH[k] || "unknown", tone: g.tone, items: g.items };
+  });
+}
+export function groupIssues<T>(rows: T[], isTracked: (r: T) => boolean): GhGroup<T>[] {
+  const tracked = rows.filter(isTracked);
+  const open = rows.filter((r) => !isTracked(r));
+  const out: GhGroup<T>[] = [];
+  if (tracked.length) out.push({ id: "tracked", title: "Tracked in Embodent", glyph: "tracked", tone: "neutral", items: tracked });
+  if (open.length) out.push({ id: "untracked", title: "Not tracked", glyph: "issueDot", tone: "ok", items: open });
+  return out;
 }
 
-/* ---- Start / Fix split button + already-tracked chip ---------------------- */
+/* ---- Start / Fix split action ------------------------------------------------
+   In list rows the action is a quiet ghost control revealed on row hover /
+   focus (always visible on touch); in the detail's Orcha card it is the
+   view's single primary action. Tracked items show a TrackedChip instead. */
 interface StartCellProps {
   kind: GhKind;
   item: GhItem;
   taskState: TaskState | null;
+  tasks: Task[];
   busy: boolean;
   ddOpen: boolean;
+  primary?: boolean;
   onStart: (kind: GhKind, number: number) => void;
   onToggleDd: (anchor: HTMLElement, kind: GhKind, number: number) => void;
+  /** G09: why this viewer can't dispatch (viewer / non-member) — both halves
+   *  disabled with the reason as their tooltip; null = allowed */
+  blocked?: string | null;
 }
-function StartCell({ kind, item, taskState, busy, ddOpen, onStart, onToggleDd }: StartCellProps) {
+function StartCell({ kind, item, taskState, tasks, busy, ddOpen, primary, onStart, onToggleDd, blocked }: StartCellProps) {
   if (taskState && taskState.task_id) {
-    return (
-      <Link
-        className="dlink gh-task-chip"
-        to={"/tasks?task=" + encodeURIComponent(taskState.task_id)}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Icon name="tasks" cls="gl" />{taskState.task_id}
-        {taskState.existing ? <span className="gh-already">already tracked</span> : null}
-      </Link>
-    );
+    return <TrackedChip taskId={taskState.task_id} existing={taskState.existing} tasks={tasks} size={primary ? "md" : "sm"} />;
   }
   const d = dispatchLabel(kind);
   return (
-    <div className="gh-start-split">
-      <button
-        className="btn approve sm gh-start"
-        type="button"
-        disabled={busy}
+    <div className={"gh-start-split" + (primary ? " is-primary" : "")}>
+      <Button
+        variant={primary ? "primary" : "secondary"}
+        size="sm"
+        className="gh-start"
+        busy={busy}
+        icon="play"
         data-gh-start={kind}
         data-gh-number={item.number}
-        title={d.tooltip}
+        title={blocked || d.tooltip}
         aria-label={d.tooltip}
-        onClick={(e) => { e.stopPropagation(); onStart(kind, item.number); }}
+        disabled={!!blocked}
+        onClick={(e) => { e.stopPropagation(); if (!blocked) onStart(kind, item.number); }}
       >
-        {d.label} <Icon name="arrow" cls="gl" />
-      </button>
+        {d.label}
+      </Button>
       <button
-        className="btn approve sm gh-start-dd"
+        className={"v2-btn v2-btn-" + (primary ? "primary" : "secondary") + " v2-btn-sm v2-btn-icononly gh-start-dd"}
         type="button"
         data-gh-start-dd={kind}
         data-gh-number={item.number}
         aria-haspopup="true"
         aria-expanded={ddOpen}
-        title="Assign to an agent"
-        onClick={(e) => { e.stopPropagation(); onToggleDd(e.currentTarget, kind, item.number); }}
+        title={blocked || "Assign to an agent"}
+        aria-label="Assign to an agent"
+        disabled={!!blocked}
+        onClick={(e) => { e.stopPropagation(); if (!blocked) onToggleDd(e.currentTarget, kind, item.number); }}
       >
-        <Icon name="chev" cls="gl" />
+        <Icon name="chev" cls="v2-ico v2-btn-ico" />
       </button>
     </div>
   );
@@ -408,6 +561,7 @@ function AgentRoster({ kind, number, item, agents, onPick }: {
       data-gh-number={number}
       onClick={() => onPick(a.id)}
     >
+      <Avatar alias={a.alias} kind="ai" status={a.status} size={20} decorative />
       <span className="b">
         <span className="t1">{a.alias}</span>
         {reason ? <span className="t2">{reason}</span> : null}
@@ -438,10 +592,10 @@ const GH_STATUS: Record<string, "M" | "A" | "D" | "R"> = {
   modified: "M", changed: "M", added: "A", copied: "A", removed: "D", renamed: "R",
 };
 
-function FilesSection({ files, htmlUrl }: { files: GhFiles | undefined; htmlUrl: string | null | undefined }) {
+function FilesSection({ files, htmlUrl, blobSource }: { files: GhFiles | undefined; htmlUrl: string | null | undefined; blobSource?: BlobSource | null }) {
   const f = files || {};
   const items = f.items || [];
-  if (!items.length) return <div className="none" style={{ padding: 14 }}>No files changed.</div>;
+  if (!items.length) return <div className="gh-quiet-empty">No files changed.</div>;
   // The shared hierarchy viewer (FilesChanged): tree + filter + badges over the
   // per-file GitHub patches — same widget the run diffs use.
   const preparsed: DiffFile[] = items
@@ -455,10 +609,12 @@ function FilesSection({ files, htmlUrl }: { files: GhFiles | undefined; htmlUrl:
       lines: it.patch_omitted
         ? ["(diff too large to show here — view it on GitHub)"]
         : (it.patch || "(no textual diff)").split("\n"),
+      // GitHub sends no patch for a binary file (and no line counts) — preview it instead
+      binary: !it.patch && !it.patch_omitted && !it.additions && !it.deletions && it.status !== "renamed",
     }));
   return (
     <div className="gh-files">
-      <FilesChanged preparsed={preparsed} />
+      <FilesChanged preparsed={preparsed} blobSource={blobSource} />
       {f.truncated ? <div className="gh-files-more muted">Showing the first {items.length} of {f.count} files.</div> : null}
       {f.patches_truncated ? (
         <div className="gh-files-more muted">
@@ -486,81 +642,197 @@ function RunRow({ run }: { run: GhRun }) {
   return (
     <div className={`gh-run-row ${cls}`}>
       <span className={`gh-run-glyph ${cls}`}><GhIcon name={glyph} cls="gl" /></span>
-      <span className="grow gh-run-name">{name}</span>
+      <span className="grow gh-run-name" title={name}>{name}</span>
       <span className="gh-run-state">{completed ? (conclusion || "done") : (run.status || "queued")}</span>
       {run.html_url ? (
-        <a className="gh-run-link" href={run.html_url} target="_blank" rel="noopener noreferrer"><Icon name="ext" cls="gl" /></a>
+        <a className={iconButtonClass({ size: "sm" }, "gh-run-link")} href={run.html_url} target="_blank" rel="noopener noreferrer" aria-label={"Open " + name + " on GitHub"} title="Open on GitHub">
+          <Icon name="ext" cls="v2-ico" />
+        </a>
       ) : null}
     </div>
   );
 }
-function ChecksSection({ checks }: { checks: ChecksRollup | null | undefined }) {
+/** Checks tab count = the rows the tab actually lists (never the rollup's
+ *  larger total beside 3 rows); the gap is explained under the list. Exported for tests. */
+export function checksTabCount(checks: ChecksRollup | null | undefined): number | null {
+  const r = checks || {};
+  const runs = (r.runs || []).length;
+  return runs || checksTotal(r) || null;
+}
+function ChecksSection({ checks, htmlUrl }: { checks: ChecksRollup | null | undefined; htmlUrl?: string | null }) {
   const runs = (checks && checks.runs) || [];
-  if (!runs.length) return <div className="none" style={{ padding: 14 }}>No checks reported.</div>;
-  return <div className="gh-runs">{runs.map((r, i) => <RunRow key={i} run={r} />)}</div>;
+  const total = checksTotal(checks || {});
+  if (!runs.length) return <div className="gh-quiet-empty">No checks reported for this pull request.</div>;
+  const hasLink = !!htmlUrl && htmlUrl !== "#";
+  return (
+    <>
+      <div className="gh-runs">{runs.map((r, i) => <RunRow key={i} run={r} />)}</div>
+      {total > runs.length ? (
+        <div className="gh-files-more muted gh-runs-more">
+          GitHub reported {total} checks; {runs.length} shown here.
+          {hasLink ? <> <a className="gh-inline-link" href={htmlUrl + "/checks"} target="_blank" rel="noopener noreferrer">All checks on GitHub<Icon name="ext" cls="gl" /></a></> : null}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
-/* ---- right rail ------------------------------------------------------------ */
+/* ---- right rail values --------------------------------------------------- */
 function PersonList({ logins }: { logins: string[] | undefined }) {
   const l = Array.isArray(logins) ? logins : [];
-  if (!l.length) return <div className="none" style={{ padding: "10px 0" }}>None</div>;
+  if (!l.length) return null;
   return (
-    <div className="gh-people">
+    <div className="gh-people-list">
       {l.map((login) => (
-        <span key={login} className="gh-person"><GhAvatar login={login} /><span>{login}</span></span>
+        <span key={login} className="gh-person"><GhAvatar login={login} decorative /><span>{login}</span></span>
       ))}
     </div>
   );
 }
 function ChecksSummary({ checks }: { checks: ChecksRollup | null | undefined }) {
   const r = checks || {};
-  const total = r.total != null ? r.total : (r.passed || 0) + (r.failing || 0) + (r.pending || 0);
-  if (!total) return <div className="none" style={{ padding: "10px 0" }}>No checks</div>;
+  if (!checksTotal(r)) return null;
   return (
-    <div className="gh-checks-summary">
-      {r.passed ? <span className="gh-cs-row pass"><Icon name="check" cls="gl" />{r.passed} passed</span> : null}
-      {r.failing ? <span className="gh-cs-row fail"><Icon name="x" cls="gl" />{r.failing} failing</span> : null}
-      {r.pending ? <span className="gh-cs-row pend"><GhIcon name="ring" cls="gl" />{r.pending} pending</span> : null}
-    </div>
-  );
-}
-function PullRail({ pull }: { pull: GhPullDetail }) {
-  return (
-    <aside className="gh-rail">
-      <div className="card gh-rail-card">
-        <div className="gh-rail-h">Status</div>
-        <StatePill kind="pull" item={pull} />
-      </div>
-      <div className="card gh-rail-card">
-        <div className="gh-rail-h">Assignees</div>
-        <PersonList logins={pull.assignees} />
-      </div>
-      <div className="card gh-rail-card">
-        <div className="gh-rail-h">Reviewers</div>
-        <PersonList logins={pull.requested_reviewers} />
-      </div>
-      <div className="card gh-rail-card">
-        <div className="gh-rail-h">Checks</div>
-        <ChecksSummary checks={pull.checks} />
-      </div>
-    </aside>
+    <span className="gh-checks-summary">
+      {r.passed ? <span className="gh-cs pass"><Icon name="check" cls="gl" />{r.passed} passed</span> : null}
+      {r.failing ? <span className="gh-cs fail"><Icon name="x" cls="gl" />{r.failing} failing</span> : null}
+      {r.pending ? <span className="gh-cs pend"><GhIcon name="ring" cls="gl" />{r.pending} pending</span> : null}
+    </span>
   );
 }
 
-/* ---- issue comments -------------------------------------------------------- */
-function CommentRow({ c, tasks }: { c: GhComment; tasks: Task[] }) {
+/* ---- GitHub Markdown bodies: mdText keeps paragraph breaks as text (the
+   body is white-space: pre-wrap), so a newline between two block spans
+   (heading / list item) would render as an extra blank line. Drop exactly
+   those; real paragraph breaks stay. Exported for tests. */
+export function tightMd(html: string): string {
+  return html
+    .replace(/\n(?=<span class="md-(?:h|li)\b)/g, "")
+    // a paragraph after a list / heading: the block already ends its line, so
+    // "\n\n" would paint TWO blank lines — keep one paragraph break.
+    .replace(/^(<span class="md-(?:h|li)\b[^\n]*<\/span>)\n(?=\n)/gm, "$1");
+}
+
+/* ---- human copy for a failed Start/Fix dispatch ----------------------------
+   V2: never a raw "Start failed (404): <server string>" — say what failed in
+   plain words; a short server reason rides along only when it reads as prose. */
+export function startFailureMessage(kind: GhKind, number: number, status: number, detail?: string | null): string {
+  const what = "Couldn't start a task for " + (kind === "pull" ? "PR" : "issue") + " #" + number;
+  let why: string;
+  if (status === 0) why = "the portal is unreachable — check your connection and try again";
+  else if (status === 401 || status === 403) why = "you don't have permission to create tasks in this project";
+  else if (status === 404) why = "this item or the project's GitHub connection wasn't found";
+  else if (status === 409) why = "it's already being started — refresh in a moment";
+  else if (status === 429) why = "GitHub is rate limiting — try again in a minute";
+  else if (status >= 500) why = "the server hit an error — try again";
+  else why = detail && detail.length < 120 && /\s/.test(detail) ? detail : "the request was rejected";
+  return what + ": " + why + ".";
+}
+
+/* ---- empty list (r3): the shared compact EmptyState, like every other
+   list, with a muted line naming the active filters. */
+function ListEmpty({ kind, filtered, filters }: { kind: GhKind; filtered: boolean; filters: string[] }) {
+  const noun = kind === "pull" ? "pull requests" : "issues";
   return (
-    <div className="gh-comment">
-      <GhAvatar login={c.author_login} />
-      <div className="gh-comment-body">
-        <div className="gh-comment-head">
-          <span className="gh-comment-author">{c.author_login || "unknown"}</span>
-          <span className="gh-comment-when">{relTime(c.created_at)}</span>
-        </div>
-        <div className="md gh-comment-text" dangerouslySetInnerHTML={{ __html: mdText(c.body_markdown || "", tasks) }} />
+    // EmptyState's markup/classes (compact), with the GitHub kind glyph —
+    // EmptyState's `icon` only takes the app icon set, which has no issue glyph.
+    <div className="gh-list-empty">
+      <div className="v2-empty v2-empty-neutral v2-empty-compact">
+        <div className="v2-empty-icon" aria-hidden="true"><GhIcon name={kind === "pull" ? "pullArrow" : "issueDot"} cls="v2-ico" /></div>
+        <div className="v2-empty-title">{filtered ? "No " + noun + " match this filter" : "No open " + noun}</div>
+        {filters.length ? <div className="v2-empty-body gh-list-empty-filters">Filters: {filters.join(" · ")}</div> : null}
       </div>
     </div>
   );
+}
+
+/* ---- PR rail branch value (r3): the head/base branch is often longer than
+   the rail — full name in the tooltip, click (or Enter) copies it. */
+function BranchValue({ name }: { name: string | null | undefined }) {
+  const toast = useToast();
+  if (!name) return null;
+  const copy = () => {
+    const fail = () => toast("Couldn't copy — select and copy it manually: " + name, "danger");
+    try {
+      const p = navigator.clipboard?.writeText(name);
+      if (!p) { fail(); return; }
+      p.then(() => toast("Branch name copied", "ok"), fail);
+    } catch {
+      fail();
+    }
+  };
+  return (
+    <button type="button" className="mono gh-branch-v gh-branch-copy" title={name + " — click to copy"} aria-label={"Copy branch name " + name} onClick={copy}>
+      <span className="gh-branch-name">{name}</span>
+      <Icon name="copy" cls="v2-ico gh-branch-copy-ico" />
+    </button>
+  );
+}
+
+/* ---- detail header ⋯ menu (D5 "ID title ☆ ⋯"): copy the GitHub link /
+   the #N reference, plus the actions the circle buttons also offer. */
+function DetailMoreMenu({ kind, number, htmlUrl, onBrowseHead }: {
+  kind: GhKind; number: number; htmlUrl: string | null | undefined; onBrowseHead?: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const toast = useToast();
+  const noun = kind === "pull" ? "pull request" : "issue";
+  const hasLink = !!htmlUrl && htmlUrl !== "#";
+  const copy = (text: string, what: string) => {
+    try {
+      void navigator.clipboard?.writeText(text).then(
+        () => toast(what + " copied", "ok"),
+        () => toast("Couldn't copy — select and copy it manually: " + text, "danger"),
+      );
+    } catch {
+      toast("Couldn't copy — select and copy it manually: " + text, "danger");
+    }
+  };
+  const items: (MenuItemSpec | "separator")[] = [
+    { label: "Copy GitHub link", icon: "link", disabled: !hasLink, disabledReason: "GitHub didn't return a link for this " + noun, onSelect: () => copy(htmlUrl as string, "Link") },
+    { label: "Copy #" + number, icon: "copy", onSelect: () => copy("#" + number, "Reference") },
+  ];
+  if (onBrowseHead) items.push({ label: "Browse files at head", icon: "code", onSelect: onBrowseHead });
+  if (hasLink) items.push("separator", { label: "Open on GitHub", icon: "ext", onSelect: () => { window.open(htmlUrl as string, "_blank", "noopener,noreferrer"); } });
+  return (
+    <>
+      <IconButton ref={ref} icon="more" size="sm" label={(kind === "pull" ? "Pull request" : "Issue") + " actions"} className="gh-more-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} />
+      <Menu anchor={ref} open={open} onClose={() => setOpen(false)} items={items} label={(kind === "pull" ? "Pull request" : "Issue") + " actions"} placement="bottom-start" />
+    </>
+  );
+}
+
+/* ---- narrow toolbar ⋯ (≤600px): the repo switcher and Browse files fold in
+   here so the kind pills keep the row (review r2: the selected "Pull
+   requests" pill used to scroll off-screen behind the repo button). ------- */
+function ToolbarMoreMenu({ items }: { items: (MenuItemSpec | "separator")[] }) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <IconButton ref={ref} variant="outline" icon="more" label="Repository actions" className="gh-tb-more" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} />
+      <Menu anchor={ref} open={open} onClose={() => setOpen(false)} items={items} label="Repository actions" placement="bottom-end" />
+    </>
+  );
+}
+
+/* ---- floating menu placement (assignee roster / Fix info) -----------------
+   bottom-end under the anchor, clamped 8px inside the viewport on both sides;
+   flips above the anchor when it would run past the bottom edge. Pure +
+   exported for tests. */
+export interface AnchorRect { top: number; bottom: number; left: number; right: number }
+function rectOf(el: HTMLElement): AnchorRect {
+  const r = el.getBoundingClientRect();
+  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+}
+export function placeFloating(a: AnchorRect, w: number, h: number, vw: number, vh: number): { top: number; left: number } {
+  const M = 8;
+  let left = a.right - w;
+  left = Math.max(M, Math.min(left, vw - w - M));
+  let top = a.bottom + 6;
+  if (top + h > vh - M && a.top - h - 6 >= M) top = a.top - h - 6;
+  return { top: Math.round(top), left: Math.round(left) };
 }
 
 /* ---- route shape ----------------------------------------------------------- */
@@ -572,14 +844,36 @@ interface BrowseRoute { on: boolean; ref: string; path: string }
 type DetailPayload = { __number: number; repo?: string | null; pull?: GhPullDetail; issue?: GhIssueDetail };
 type NumberedError = GhError & { __number: number };
 
+/** ↓ / j with focus on nothing interactive (body, or the panel chrome) moves
+ *  focus to the first visible [data-gh-row]. Returns true when it did. */
+export function focusFirstGhRowFromIdle(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (e.key !== "ArrowDown" && e.key !== "j") return false;
+  const ae = document.activeElement as HTMLElement | null;
+  const idle = !ae || ae === document.body || ae === document.documentElement
+    || !ae.closest('input, textarea, select, button, a[href], [contenteditable="true"], [role="menu"], [role="listbox"], [role="dialog"], [data-gh-row], [tabindex]:not([tabindex="-1"])');
+  if (!idle) return false;
+  const row = document.querySelector<HTMLElement>("#ghlist [data-gh-row]");
+  if (!row) return false;
+  e.preventDefault();
+  row.focus();
+  return true;
+}
+
 /* ============================================================================
    The page
    ============================================================================ */
 export function GitHubPage() {
-  const { snap, cid } = useSnapshot();
+  const { snap, cid, identity, error: snapError } = useSnapshot();
   const toast = useToast();
-  const nav = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  // e2e-permissions-16: binding a repo is owner-or-manage_repo server-side;
+  // the Connect affordances say so up front instead of failing on click.
+  const actingAuth = useActingAuthority();
+  const connectBlocked = repoConnectBlockedReason(actingAuth, identity);
+  // G09: Start / Fix / Assign create a task — a viewer or non-member can't
+  // (the server refuses); the controls say why instead of a toast on click.
+  const startBlocked = actingAuth.readOnly ? (actingAuth.reason || "Your role is viewer (read-only)") : null;
 
   // ---- route (?pr=N / ?issue=N), derived from the URL like readRouteFromUrl
   const route: GhRoute = useMemo(() => {
@@ -633,6 +927,9 @@ export function GitHubPage() {
   const [filter, setFilter] = useState("open");
   const [query, setQuery] = useState("");
   const [detailSubTab, setDetailSubTab] = useState("conversation");
+  // PR server-filter popover (author / involvement)
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // ---- PR-list server-backed filter bar (monorepo-scale repos): author input +
   // Assigned-to-me/My-reviews chips + free-text search. Only meaningful on the
@@ -643,6 +940,8 @@ export function GitHubPage() {
   const [pullsFilter, setPullsFilter] = useState<PullsFilter>(EMPTY_PULLS_FILTER);
   const debouncedPullsQ = useDebouncedValue(pullsFilter.q, 300);
   const pullsFilterActive = hasActivePullsFilter({ ...pullsFilter, q: debouncedPullsQ });
+  // Issues: client-side label / assignee facets (the list payload is complete)
+  const [issuesFilter, setIssuesFilter] = useState<IssuesFilter>(EMPTY_ISSUES_FILTER);
   // accumulated filtered pages (append on "Load more") — separate from `payload`,
   // which stays the single cached no-filter list.
   const [filteredPulls, setFilteredPulls] = useState<GhPullRow[]>([]);
@@ -654,6 +953,9 @@ export function GitHubPage() {
   // ---- list payload/error slots (per tab, like github-render.js module state)
   const [payload, setPayload] = useState<Record<ListKey, GhListPayload | null>>({ issues: null, pulls: null });
   const [loadError, setLoadError] = useState<Record<ListKey, GhError | null>>({ issues: null, pulls: null });
+  // V2 freshness: when each tab's list last loaded successfully, so a failed
+  // refresh over an existing list is labeled stale instead of passing as live.
+  const [loadedAt, setLoadedAt] = useState<Record<ListKey, number | null>>({ issues: null, pulls: null });
   const loadingRef = useRef<Record<ListKey, boolean>>({ issues: false, pulls: false });
   const payloadRef = useRef(payload);
   payloadRef.current = payload;
@@ -662,6 +964,7 @@ export function GitHubPage() {
   // list refetch doesn't need to re-carry checks (vanilla checksByNumber).
   const [checksByNumber, setChecksByNumber] = useState<Record<number, ChecksRollup>>({});
   const checksRequested = useRef<Record<number, boolean>>({});
+  const [checksUnavailable, setChecksUnavailable] = useState<Record<number, boolean>>({});
 
   // ---- detail slots (one per kind, __number-scoped like the vanilla)
   const [detailPayload, setDetailPayload] = useState<Record<GhKind, DetailPayload | null>>({ pull: null, issue: null });
@@ -675,8 +978,8 @@ export function GitHubPage() {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
   // ---- floating menus (assignee dropdown / Fix-info popover)
-  const [dd, setDd] = useState<{ key: string; kind: GhKind; number: number; top: number; left: number } | null>(null);
-  const [fixInfo, setFixInfo] = useState<{ number: number; top: number; left: number } | null>(null);
+  const [dd, setDd] = useState<{ key: string; kind: GhKind; number: number; anchor: AnchorRect; top: number; left: number } | null>(null);
+  const [fixInfo, setFixInfo] = useState<{ number: number; anchor: AnchorRect; top: number; left: number } | null>(null);
   const ddRef = useRef<HTMLDivElement | null>(null);
   const fixInfoRef = useRef<HTMLDivElement | null>(null);
 
@@ -698,6 +1001,15 @@ export function GitHubPage() {
   // so the header badge is correct even before the first list response.
   const [binding, setBinding] = useState<string | null | undefined>(undefined);
   const [connectOpen, setConnectOpen] = useState(false);
+  // `/github?connect=1` (Code Space's "Connect repo") opens the picker in one
+  // step; the flag is consumed so a refresh/back doesn't reopen it.
+  useEffect(() => {
+    if (!cid || searchParams.get("connect") !== "1") return;
+    setConnectOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("connect");
+    setSearchParams(next, { replace: true });
+  }, [cid, searchParams, setSearchParams]);
   useEffect(() => {
     if (!cid) return;
     let alive = true;
@@ -720,7 +1032,6 @@ export function GitHubPage() {
   const fallthroughOriginRepo =
     isLocalRepo(binding) && hubPayloadRepo && !isLocalRepo(hubPayloadRepo) ? hubPayloadRepo : null;
 
-  const theme = ghResolvedTheme();
   const agents = snap?.agents ?? [];
   const tasks = snap?.tasks ?? [];
 
@@ -753,8 +1064,19 @@ export function GitHubPage() {
       .then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })).catch(() => ({ ok: r.ok, status: r.status, body: null })))
       .then(({ ok, status, body }) => {
         if (!ok) { setLoadError((e) => ({ ...e, [key]: classifyError(status, body) })); return; }
+        // 200 + {available:false} (rate limit / unreachable / no access) is an
+        // ERROR state, never "No open issues." — local_source stays a payload
+        // (its own callout renders from it, unchanged).
+        const off = isLocalSourcePayload(body) ? null : unavailableError(body, status);
+        if (off) {
+          setLoadError((e) => ({ ...e, [key]: off }));
+          // a repo-level "not connected" means any list we had is no longer valid
+          if (off.kind === "not_connected") setPayload((p) => ({ ...p, [key]: null }));
+          return;
+        }
         setPayload((p) => ({ ...p, [key]: body as GhListPayload }));
         setLoadError((e) => ({ ...e, [key]: null }));
+        setLoadedAt((t) => ({ ...t, [key]: Date.now() }));
       })
       .catch((e: Error) => { setLoadError((er) => ({ ...er, [key]: { kind: "error", status: 0, detail: e.message } })); })
       .then(() => { loadingRef.current[key] = false; });
@@ -822,8 +1144,12 @@ export function GitHubPage() {
       .then(({ ok, status, body }) => {
         if (myToken !== detailToken.current) return; // superseded by a newer route change
         if (!ok || !body || body.available === false) {
-          setDetailError((e) => ({ ...e, [kind]: { __number: number, ...classifyDetailError(status, body) } }));
-          setDetailPayload((p) => ({ ...p, [kind]: null }));
+          const de = classifyDetailError(status, body);
+          setDetailError((e) => ({ ...e, [kind]: { __number: number, ...de } }));
+          // V2: a transient refresh failure (rate limit / unreachable) keeps the
+          // item on screen, labeled stale; only "gone"/"disconnected" clears it.
+          const keep = de.kind === "rate_limited" || de.kind === "error";
+          if (!keep) setDetailPayload((p) => ({ ...p, [kind]: null }));
           return;
         }
         setDetailPayload((p) => ({ ...p, [kind]: { __number: number, ...body } as DetailPayload }));
@@ -840,9 +1166,29 @@ export function GitHubPage() {
   // so the issues/pulls/detail loaders skip entirely while it's mounted.
   useEffect(() => {
     if (!cid || browseRoute.on) return;
-    if (route.kind) loadDetail(route.kind, route.number as number, false);
-    else loadList(tab, false);
+    if (route.kind) {
+      loadDetail(route.kind, route.number as number, false);
+      // a deep-linked detail still gets its list (cached, no force) so the
+      // header's "N / M ↑↓" pager can walk the same grouped order
+      loadList(route.kind === "pull" ? "pulls" : "issues", false);
+    } else loadList(tab, false);
   }, [cid, routeKey, tab, route.kind, route.number, loadDetail, loadList, browseRoute.on]);
+
+  // r3: the sibling list's COUNT on its section pill (Issues / Pull requests)
+  // used to stay blank until that tab was opened, so the two segments looked
+  // different. Once the active list has landed, fetch the sibling once in the
+  // background (cached, never forced; the 60s tick only refreshes the active
+  // tab). A failure just leaves the count blank — the tab itself re-shows the
+  // recoverable error when opened.
+  const activePl = payload[tab];
+  const activeListLoaded = !!(activePl && activePl.repo && !isLocalSourcePayload(activePl));
+  useEffect(() => {
+    if (!cid || browseRoute.on || !activeListLoaded) return;
+    const other: ListKey = tab === "pulls" ? "issues" : "pulls";
+    if (payloadRef.current[other] || loadError[other]) return;
+    loadList(other, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cid, tab, activeListLoaded, browseRoute.on, loadList]);
 
   // 60s refresh cadence — heavier GitHub-backed fetches never ride the 3s tick
   const tickRef = useRef({ route, tab, loadList, loadDetail, browseOn: browseRoute.on });
@@ -871,15 +1217,19 @@ export function GitHubPage() {
     fetch("/api/containers/" + encodeURIComponent(cid) + "/github/checks?numbers=" + wanted.join(","))
       .then((r) => (r.ok ? r.json() : null))
       .then((body: { available?: boolean; checks?: Record<string, ChecksRollup> } | null) => {
-        if (!body || body.available === false || !body.checks) return; // degrade quietly
-        const incoming = body.checks;
-        setChecksByNumber((prev) => {
-          const next = { ...prev };
-          Object.keys(incoming).forEach((numStr) => { next[Number(numStr)] = incoming[numStr]; });
-          return next;
-        });
+        if (!body || body.available === false || !body.checks) {
+          // degrade honestly: the chip says "Checks unavailable", not a forever spinner
+          setChecksUnavailable((prev) => { const next = { ...prev }; wanted.forEach((n) => { next[n] = true; }); return next; });
+          return;
+        }
+        // numbers the batch omitted resolve to "No checks" — never an
+        // endless "checks…" placeholder
+        const filled = fillMissingChecks(wanted, body.checks);
+        setChecksByNumber((prev) => ({ ...prev, ...filled }));
       })
-      .catch(() => { /* quiet degrade — chips stay on the "checks…" placeholder */ });
+      .catch(() => {
+        setChecksUnavailable((prev) => { const next = { ...prev }; wanted.forEach((n) => { next[n] = true; }); return next; });
+      });
   }, [cid, route.kind, tab, payload.pulls, checksByNumber]);
 
   /* ---- started-task lookup (github-render.js startedOf()) ----------------- */
@@ -922,19 +1272,31 @@ export function GitHubPage() {
       .then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, d })).catch(() => ({ ok: r.ok, status: r.status, d: {} as { task_id?: string; existing?: boolean; detail?: string } })))
       .then(({ ok, status, d }) => {
         if (!ok) {
-          toast("Start failed (" + status + ")" + (d && d.detail ? ": " + d.detail : ""), "danger");
+          toast(startFailureMessage(kind, number, status, d && d.detail), "danger", { sticky: true });
           setBusy((b) => ({ ...b, [busyKey]: false }));
           return;
         }
         setStarted((s) => ({ ...s, [kind]: { ...s[kind], [number]: { task_id: d.task_id as string, existing: !!d.existing } } }));
-        toast(d.existing ? "Already tracked — " + d.task_id : "Task created", "ok");
+        toast(d.existing ? "Already tracked as a task" : "Task created", "ok");
         setBusy((b) => ({ ...b, [busyKey]: false }));
       })
-      .catch((e: Error) => {
-        toast("Start failed: " + e.message, "danger");
+      .catch(() => {
+        toast(startFailureMessage(kind, number, 0, null), "danger", { sticky: true });
         setBusy((b) => ({ ...b, [busyKey]: false }));
       });
   }, [cid, snap, toast]);
+
+  /* ---- list keyboard entry (wave4 review): with NOTHING focused, ↓ / j
+     lands on the first visible row, so the advertised "↑ ↓ Move between
+     rows" works without first clicking or tabbing into the list. Row-to-row
+     movement stays with the .gh-groups handler (rowNavKeyDown). */
+  const listKeysOn = !route.kind && !browseRoute.on;
+  useEffect(() => {
+    if (!listKeysOn) return;
+    const onKey = (e: KeyboardEvent) => { focusFirstGhRowFromIdle(e); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [listKeysOn]);
 
   /* ---- floating menus wiring (outside click / Escape close) --------------- */
   useEffect(() => {
@@ -950,21 +1312,60 @@ export function GitHubPage() {
     return () => { document.removeEventListener("click", onDoc); document.removeEventListener("keydown", onKey); };
   }, [dd, fixInfo]);
 
+  // V2 keyboard: the assignee menu takes focus when it opens (first agent)
+  // and gives it back to the chevron that opened it when it closes.
+  const ddAnchorRef = useRef<HTMLElement | null>(null);
+  const ddOpenKey = dd ? dd.key : null;
+  useEffect(() => {
+    if (ddOpenKey) {
+      const first = ddRef.current?.querySelector<HTMLElement>("button");
+      first?.focus();
+      return;
+    }
+    const a = ddAnchorRef.current;
+    ddAnchorRef.current = null;
+    if (a && document.contains(a) && (document.activeElement === document.body || !document.activeElement)) a.focus();
+  }, [ddOpenKey]);
+  const onDdKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>("button"));
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const next = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+    e.preventDefault();
+    items[next]?.focus();
+  }, []);
+
+  // bottom-end placement from a first guess, then re-placed from the menu's
+  // MEASURED size (useLayoutEffect below) so a wide roster never runs off the
+  // window's right edge and a tall one flips above its anchor.
   const toggleDd = useCallback((anchor: HTMLElement, kind: GhKind, number: number) => {
+    ddAnchorRef.current = anchor;
     const key = kind + ":" + number;
     setDd((cur) => {
       if (cur && cur.key === key) return null;
-      const r = anchor.getBoundingClientRect();
-      return { key, kind, number, top: Math.round(r.bottom + 6), left: Math.round(Math.max(8, r.right - 200)) };
+      const a = rectOf(anchor);
+      return { key, kind, number, anchor: a, ...placeFloating(a, 240, 240, window.innerWidth, window.innerHeight) };
     });
   }, []);
   const toggleFixInfo = useCallback((anchor: HTMLElement, number: number) => {
     setFixInfo((cur) => {
       if (cur && cur.number === number) return null;
-      const r = anchor.getBoundingClientRect();
-      return { number, top: Math.round(r.bottom + 6), left: Math.round(Math.max(8, r.right - 260)) };
+      const a = rectOf(anchor);
+      return { number, anchor: a, ...placeFloating(a, 280, 160, window.innerWidth, window.innerHeight) };
     });
   }, []);
+  useLayoutEffect(() => {
+    const el = ddRef.current;
+    if (!dd || !el) return;
+    const p = placeFloating(dd.anchor, el.offsetWidth, el.offsetHeight, window.innerWidth, window.innerHeight);
+    if (p.top !== dd.top || p.left !== dd.left) setDd({ ...dd, ...p });
+  }, [dd]);
+  useLayoutEffect(() => {
+    const el = fixInfoRef.current;
+    if (!fixInfo || !el) return;
+    const p = placeFloating(fixInfo.anchor, el.offsetWidth, el.offsetHeight, window.innerWidth, window.innerHeight);
+    if (p.top !== fixInfo.top || p.left !== fixInfo.left) setFixInfo({ ...fixInfo, ...p });
+  }, [fixInfo]);
 
   // resolve the issue/PR object for the dropdown's suggestion scoring
   // (github-boot.js ghFindItem — list payload first, then detail payload)
@@ -981,149 +1382,141 @@ export function GitHubPage() {
     return null;
   }, [payload, detailPayload]);
 
-  /* ---- tab / filter / breadcrumb handlers --------------------------------- */
+  /* ---- tab / filter handlers ------------------------------------------------ */
   const onTabClick = (next: ListKey) => {
     if (next === tab) return;
     setTab(next);
     setFilter("open");
+    setFilterOpen(false);
     if (route.kind) goto({ kind: null, number: null }, true);
   };
-  const onBack = (e: ReactMouseEvent) => {
-    e.preventDefault();
-    // arrived from the list this session -> history back keeps ?cid= etc.;
-    // deep-linked with no history -> plain list route (the href fallback).
-    if (window.history.length > 1) nav(-1);
-    else goto({ kind: null, number: null });
-  };
 
-  /* ---- shared detail-header actions --------------------------------------- */
-  const detailActions = (kind: GhKind, item: GhItem & { html_url?: string | null }, taskState: TaskState | null) => {
-    const showFixInfo = kind === "pull" && !(taskState && taskState.task_id);
+  /* ---- visible list rows (filter + search + progressive checks), in the SAME
+     grouped order the list renders — the detail pager walks this order. ---- */
+  const isTracked = useCallback((kind: GhKind) => (it: GhItem) => !!(startedOf(kind, it.number)?.task_id), [startedOf]);
+  const visibleRows = (key: ListKey): GhItem[] | null => {
+    const kind: GhKind = key === "pulls" ? "pull" : "issue";
+    const withChecks = (rows: GhPullRow[]) => rows.map((p) => (p.checks == null && checksByNumber[p.number] != null ? { ...p, checks: checksByNumber[p.number] } : p));
+    if (key === "pulls" && pullsFilterActive) return withChecks(filteredPulls);
+    const pl = payload[key];
+    if (!pl || isLocalSourcePayload(pl) || !pl.repo) return null;
+    const raw = (pl.issues || pl.pulls || []) as GhItem[];
+    const all = key === "pulls" ? withChecks(raw as GhPullRow[]) : raw;
+    return (all as GhItem[])
+      .filter((it) => matchesFilter(kind, it, filter, myLogin))
+      .filter((it) => kind !== "issue" || matchesIssuesFilter(it as GhIssueRow, issuesFilter))
+      .filter((it) => matchesSearch(it, query));
+  };
+  const groupsFor = (kind: GhKind, rows: GhItem[]): GhGroup<GhItem>[] => (kind === "pull"
+    ? groupPulls(rows as GhPullRow[]) as unknown as GhGroup<GhItem>[]
+    : groupIssues(rows, isTracked("issue")));
+
+  /* ---- list rows: ONE line (Linear My issues) — muted #id · state glyph ·
+     title (ellipsis, full title + branch in the tooltip) · chips · people ·
+     time. The Start/Fix action is revealed on hover/focus (touch: always). */
+  const rowAction = (kind: GhKind, it: GhItem) => {
+    const ts = startedOf(kind, it.number);
+    if (ts && ts.task_id) return null;
     return (
-      <div className="gh-detail-actions">
+      <span className="gh-actions">
         <StartCell
           kind={kind}
-          item={item}
-          taskState={taskState}
-          busy={!!busy[kind + ":" + item.number]}
-          ddOpen={dd?.key === kind + ":" + item.number}
+          item={it}
+          taskState={null}
+          tasks={tasks}
+          busy={!!busy[kind + ":" + it.number]}
+          ddOpen={dd?.key === kind + ":" + it.number}
           onStart={(k, n) => postStart(k, n, null)}
           onToggleDd={toggleDd}
+          blocked={startBlocked}
         />
-        {showFixInfo ? (
-          <button
-            className="iconbtn sm gh-fix-info"
-            type="button"
-            data-gh-fix-info={item.number}
-            aria-haspopup="true"
-            aria-expanded={fixInfo?.number === item.number}
-            title="What will the dispatched agent do?"
-            aria-label="What will the dispatched agent do?"
-            onClick={(e) => { e.stopPropagation(); toggleFixInfo(e.currentTarget, item.number); }}
-          >
-            <GhIcon name="info" cls="gl" />
-          </button>
-        ) : null}
-        <a className="btn ghost sm gh-open-ext" href={item.html_url || "#"} target="_blank" rel="noopener noreferrer">
-          <Icon name="ext" cls="gl" />Open on GitHub
-        </a>
-        {kind === "pull" ? (
-          <button
-            type="button"
-            className="btn ghost sm gh-browse-head"
-            onClick={(e) => { e.stopPropagation(); gotoBrowse({ ref: `pr/${item.number}`, path: "" }); }}
-          >
-            <Icon name="search" cls="gl" />Browse head
-          </button>
-        ) : null}
-      </div>
+      </span>
     );
   };
+  const trackedFor = (kind: GhKind, n: number) => {
+    const ts = startedOf(kind, n);
+    return ts && ts.task_id ? <TrackedChip taskId={ts.task_id} existing={ts.existing} tasks={tasks} /> : null;
+  };
 
-  const breadcrumb = (kind: GhKind, number: number, repo: string | null | undefined) => (
-    <div className="gh-crumb">
-      <a
-        className="gh-crumb-back"
-        href={"?" + (kind === "pull" ? "tab=pulls" : "tab=issues")}
-        data-gh-back="1"
-        onClick={onBack}
-      >
-        <GhIcon name="arrow" cls="gl gh-crumb-ico" /><span>{kind === "pull" ? "Pull requests" : "Issues"}</span>
-      </a>
-      <span className="gh-crumb-sep">·</span>
-      <span className="gh-crumb-repo mono">{isLocalRepo(repo) ? "Local" : repo || ""}</span>
-      <span className="gh-crumb-sep">·</span>
-      <span className="gh-crumb-num">#{number}</span>
-    </div>
-  );
-
-  /* ---- list rows ----------------------------------------------------------- */
   const issueRow = (it: GhIssueRow) => (
     <div
       key={it.number}
       className="ghrow"
       data-gh-row={`issue:${it.number}`}
       data-gh-open={`issue:${it.number}`}
+      role="link"
+      tabIndex={0}
+      aria-label={"Issue #" + it.number + ": " + it.title}
       onClick={() => goto({ kind: "issue", number: it.number })}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && e.key === "Enter") goto({ kind: "issue", number: it.number }); }}
     >
-      <GhIcon name="issueDot" cls="gl gh-kind-ico issue" />
-      <span className="gh-num mono">#{it.number}</span>
-      <span className="grow gh-main">
-        <span className="gh-title">{it.title}</span>
-        <span className="gh-meta">
-          {(it.labels || []).slice(0, 4).map((l, i) => <LabelChip key={i} label={l} theme={theme} />)}
-          {it.assignee
-            ? <span className="gh-assignee"><GhAvatar login={it.assignee} /><span>{it.assignee}</span></span>
-            : <span className="tag gh-unassigned">Unassigned</span>}
-        </span>
+      <span className="gh-num">#{it.number}</span>
+      <KindGlyph kind="issue" item={it as { state?: string | null }} />
+      <span className="gh-title-text" title={it.title || ""}>{it.title}</span>
+      <span className="gh-chips">
+        {trackedFor("issue", it.number)}
+        {/* D12: at most 2 chips per row — the linked task counts as one */}
+        <LabelChips labels={it.labels} max={trackedFor("issue", it.number) ? 1 : 2} />
       </span>
-      <span className="gh-reviewers-col"></span>
-      <span className="gh-checks-col"></span>
-      <span className="gh-merge-col"></span>
-      <span className="gh-updated">{relTime(it.updated_at)}</span>
-      <span className="gh-actions">
-        <StartCell
-          kind="issue"
-          item={it}
-          taskState={startedOf("issue", it.number)}
-          busy={!!busy["issue:" + it.number]}
-          ddOpen={dd?.key === "issue:" + it.number}
-          onStart={(k, n) => postStart(k, n, null)}
-          onToggleDd={toggleDd}
-        />
+      <span className="gh-people gh-assignee-col">
+        {it.assignee
+          ? <GhAvatar login={it.assignee} />
+          : <span className="gh-unassigned" title="Unassigned"><span className="v2-sr">Unassigned</span></span>}
       </span>
+      <span className="gh-updated" title={it.updated_at ? new Date(it.updated_at).toLocaleString() : undefined}>{relTime(it.updated_at)}</span>
+      {rowAction("issue", it)}
     </div>
   );
 
-  const pullRow = (pr: GhPullRow) => (
-    <div
-      key={pr.number}
-      className="ghrow"
-      data-gh-row={`pull:${pr.number}`}
-      data-gh-open={`pull:${pr.number}`}
-      onClick={() => goto({ kind: "pull", number: pr.number })}
-    >
-      <GhIcon name="pullArrow" cls={"gl gh-kind-ico pull" + (pr.draft ? " draft" : "")} />
-      <span className="gh-num mono">#{pr.number}</span>
-      <span className="grow gh-main">
-        <span className="gh-title">{pr.draft ? <span className="tag gh-draft">Draft</span> : null}{pr.title}</span>
-        <span className="gh-meta"><span className="gh-branch mono">{pr.head || ""}</span></span>
-      </span>
-      <span className="gh-reviewers-col"><Reviewers logins={pr.requested_reviewers} /></span>
-      <span className="gh-checks-col"><ChecksChip rollup={pr.checks} /></span>
-      <span className="gh-merge-col"><MergeChip pr={pr} /></span>
-      <span className="gh-updated">{relTime(pr.updated_at)}</span>
-      <span className="gh-actions">
-        <StartCell
-          kind="pull"
-          item={pr}
-          taskState={startedOf("pull", pr.number)}
-          busy={!!busy["pull:" + pr.number]}
-          ddOpen={dd?.key === "pull:" + pr.number}
-          onStart={(k, n) => postStart(k, n, null)}
-          onToggleDd={toggleDd}
-        />
-      </span>
+  const pullRow = (pr: GhPullRow) => {
+    const reviewers = Array.isArray(pr.requested_reviewers) ? pr.requested_reviewers : [];
+    return (
+      <div
+        key={pr.number}
+        className="ghrow"
+        data-gh-row={`pull:${pr.number}`}
+        data-gh-open={`pull:${pr.number}`}
+        role="link"
+        tabIndex={0}
+        aria-label={"Pull request #" + pr.number + ": " + pr.title}
+        onClick={() => goto({ kind: "pull", number: pr.number })}
+        onKeyDown={(e) => { if (e.target === e.currentTarget && e.key === "Enter") goto({ kind: "pull", number: pr.number }); }}
+      >
+        <span className="gh-num">#{pr.number}</span>
+        <KindGlyph kind="pull" item={pr} />
+        <span className="gh-title-text" title={(pr.title || "") + (pr.head ? "\n" + pr.head : "")}>{pr.title}</span>
+        <span className="gh-chips">
+          {trackedFor("pull", pr.number)}
+          <ChecksChip rollup={pr.checks} unavailable={!!checksUnavailable[pr.number]} />
+        </span>
+        <span className="gh-people gh-reviewers-col">
+          {reviewers.length
+            ? <AvatarStack className="gh-reviewers" label="Review requested" actors={reviewers.map((r) => ({ alias: r, ghLogin: r }))} max={3} />
+            : null}
+        </span>
+        <span className="gh-updated" title={pr.updated_at ? new Date(pr.updated_at).toLocaleString() : undefined}>{relTime(pr.updated_at)}</span>
+        {rowAction("pull", pr)}
+      </div>
+    );
+  };
+
+  const groupedRows = (kind: GhKind, rows: GhItem[]) => (
+    // ↑/↓ and j/k move between rows (Settings › Interface advertises it) —
+    // the shared roving handler, which skips rows in collapsed groups; Enter
+    // stays with the focused row.
+    <div className="gh-groups" onKeyDown={rowNavKeyDown({ selector: "[data-gh-row]", vimKeys: true })}>
+      {groupsFor(kind, rows).map((g) => (
+        <ListGroup
+          key={g.id}
+          id={kind + "-" + g.id}
+          storageKey="orcha:gh:groups"
+          title={g.title}
+          count={g.items.length}
+          glyph={<GhIcon name={g.glyph} cls={"gl gh-group-ico tone-" + g.tone} />}
+        >
+          {g.items.map((it) => (kind === "pull" ? pullRow(it as GhPullRow) : issueRow(it as GhIssueRow)))}
+        </ListGroup>
+      ))}
     </div>
   );
 
@@ -1135,19 +1528,31 @@ export function GitHubPage() {
     const shown = filteredPulls.length;
     const of = filteredMeta.totalCount != null ? `${shown} of ~${filteredMeta.totalCount}` : `${shown} loaded`;
     if (!filteredMeta.hasMore) {
-      return <div className="gh-loadmore-done muted" style={{ padding: "10px 4px", fontSize: 12 }}>{of}</div>;
+      return <div className="gh-loadmore-done">{of}</div>;
     }
     return (
-      <button
-        className="btn subtle sm gh-loadmore"
-        type="button"
-        style={{ width: "100%", margin: "8px 0 2px" }}
-        disabled={filteredLoading}
-        onClick={loadMoreFilteredPulls}
-      >
-        {filteredLoading ? "Loading…" : `Load more · ${of}`}
-      </button>
+      <div className="gh-loadmore-row">
+        <Button variant="ghost" size="sm" className="gh-loadmore" busy={filteredLoading} onClick={loadMoreFilteredPulls}>
+          {filteredLoading ? "Loading…" : `Load more · ${of}`}
+        </Button>
+      </div>
     );
+  };
+
+  // The muted "what's filtering this list" line under an empty state.
+  const activeFilterSummary = (kind: GhKind): string[] => {
+    const parts: string[] = [filter === "mine" ? "Mine" : "Open"];
+    if (kind === "issue") {
+      if (issuesFilter.label) parts.push("label " + issuesFilter.label);
+      if (issuesFilter.assignee) parts.push("assignee " + issuesFilter.assignee);
+      if (query.trim()) parts.push("“" + query.trim() + "”");
+    } else if (pullsFilterActive) {
+      if (pullsFilter.author.trim()) parts.push("author " + pullsFilter.author.trim());
+      if (pullsFilter.involvement === "assigned") parts.push("assigned to me");
+      if (pullsFilter.involvement === "review_requested") parts.push("review requested");
+      if (debouncedPullsQ.trim()) parts.push("“" + debouncedPullsQ.trim() + "”");
+    } else if (query.trim()) parts.push("“" + query.trim() + "”");
+    return parts;
   };
 
   const listBody = () => {
@@ -1158,16 +1563,24 @@ export function GitHubPage() {
     // -> render the accumulated filtered/paginated pages instead of the plain
     // cached list; the Issues tab and the no-filter Pulls view are untouched.
     if (key === "pulls" && pullsFilterActive) {
-      if (filteredError) return <GhErrorBody err={filteredError} onConnect={() => setConnectOpen(true)} />;
+      if (filteredError) {
+        return (
+          <GhErrorBody
+            err={filteredError}
+            boundRepo={boundRepo}
+            blockedReason={connectBlocked}
+            onConnect={() => setConnectOpen(true)}
+            onRetry={() => loadFilteredPulls({ ...pullsFilter, q: debouncedPullsQ }, 1, false)}
+          />
+        );
+      }
       if (!filteredPulls.length && filteredLoading) return skeletonReady ? <GhSkeleton kind="list-rows" /> : null;
       if (!filteredPulls.length) {
-        return <div className="none" style={{ padding: 20 }}>No pull requests match this filter.</div>;
+        return <ListEmpty kind="pull" filtered filters={activeFilterSummary("pull")} />;
       }
-      const rows = filteredPulls.map((p) => (p.checks == null && checksByNumber[p.number] != null ? { ...p, checks: checksByNumber[p.number] } : p));
       return (
         <>
-          <ColumnHeader tab="pull" />
-          {rows.map((it) => pullRow(it))}
+          {groupedRows("pull", visibleRows("pulls") || [])}
           {loadMoreFooter()}
         </>
       );
@@ -1178,133 +1591,331 @@ export function GitHubPage() {
     // unsettled (no payload AND no error yet): the vanilla page's OrchaSkeleton
     // "list-rows" shimmer, behind the same 120ms show delay (nothing before it)
     if (pl == null && err == null) return skeletonReady ? <GhSkeleton kind="list-rows" /> : null;
-    if (err) return <GhErrorBody err={err} onConnect={() => setConnectOpen(true)} />;
+    const retryList = () => loadList(key, true);
+    // A failed REFRESH over a list we already have: keep the rows but label
+    // them stale with the last good time (never shown as live); a failure with
+    // nothing loaded yet renders the full recoverable error state.
+    const havePriorRows = !!(pl && pl.repo && !isLocalSourcePayload(pl));
+    if (err && !(havePriorRows && err.kind !== "not_connected" && err.kind !== "local_source")) {
+      return <GhErrorBody err={err} boundRepo={boundRepo} blockedReason={connectBlocked} onConnect={() => setConnectOpen(true)} onRetry={retryList} />;
+    }
+    const staleBar = err ? (
+      <div className="gh-stale" role="status">
+        <Icon name="alert" cls="gl" />
+        <span>
+          Couldn&#39;t refresh from GitHub
+          {err.kind === "rate_limited" ? " (rate limit)" : err.kind === "no_access" ? " (token lost access)" : err.detail ? " (" + err.detail + ")" : ""}
+          {" "}— showing the list from {loadedAt[key] ? new Date(loadedAt[key] as number).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "earlier"}, not live.
+        </span>
+        <Button variant="secondary" size="sm" className="gh-retry" onClick={retryList}>Retry now</Button>
+      </div>
+    ) : null;
     // list endpoints answer HTTP 200 even when available:false (see ghlib's
     // classifyError docstring) — the local-run degrade never reaches loadError.
     if (isLocalSourcePayload(pl)) return <LocalSourceCallout onConnect={() => setConnectOpen(true)} originDetected={pl?.origin_detected} />;
-    if (!pl || !pl.repo) return <EmptyRepo onConnect={() => setConnectOpen(true)} />;
-    const rawItems: GhItem[] = (pl.issues || pl.pulls || []) as GhItem[];
-    // merge the progressively-filled checks map onto still-null rollups
-    const all = key === "pulls"
-      ? (rawItems as GhPullRow[]).map((p) => (p.checks == null && checksByNumber[p.number] != null ? { ...p, checks: checksByNumber[p.number] } : p))
-      : rawItems;
-    const filtered = (all as GhItem[])
-      .filter((it) => matchesFilter(kind, it, filter, myLogin))
-      .filter((it) => matchesSearch(it, query));
+    if (!pl || !pl.repo) return <EmptyRepo onConnect={() => setConnectOpen(true)} blockedReason={connectBlocked} />;
+    const all = (pl.issues || pl.pulls || []) as GhItem[];
+    const filtered = visibleRows(key) || [];
     if (!filtered.length) {
       return (
-        <div className="none" style={{ padding: 20 }}>
-          {all.length
-            ? "No " + (kind === "pull" ? "pull requests" : "issues") + " match this filter."
-            : "No open " + (kind === "pull" ? "pull requests" : "issues") + "."}
-        </div>
+        <>
+          {staleBar}
+          <ListEmpty kind={kind} filtered={all.length > 0} filters={activeFilterSummary(kind)} />
+        </>
       );
     }
     return (
       <>
-        <ColumnHeader tab={kind} />
-        {filtered.map((it) => (kind === "pull" ? pullRow(it as GhPullRow) : issueRow(it as GhIssueRow)))}
+        {staleBar}
+        {groupedRows(kind, filtered)}
       </>
     );
   };
 
-  /* ---- PR detail (github-state.js prDetailHtml) ---------------------------- */
-  const prDetail = (pull: GhPullDetail, repo: string | null | undefined) => {
-    const checks = pull.checks || {};
-    const total = checks.total != null ? checks.total : (checks.passed || 0) + (checks.failing || 0) + (checks.pending || 0);
+  /* ---- detail (Linear issue layout) ----------------------------------------
+     Header row: state glyph · #id · title … circle actions · "2 / 5 ↑↓".
+     Main: large title, ONE muted meta line, the Orcha dispatch card (the
+     view's single primary action), the description, then Activity (PR:
+     Activity / Checks / Files changed tabs). Right: PropertyRail. */
+  const detailPager = (kind: GhKind, number: number) => {
+    const key: ListKey = kind === "pull" ? "pulls" : "issues";
+    const rows = visibleRows(key);
+    if (!rows || !rows.length) return null;
+    const ordered = groupsFor(kind, rows).flatMap((g) => g.items);
+    const i = ordered.findIndex((it) => it.number === number);
+    if (i < 0) return null;
+    const go = (j: number) => { const t = ordered[j]; if (t) goto({ kind, number: t.number }); };
+    return <Pager index={i} total={ordered.length} noun={kind === "pull" ? "pull request" : "issue"} onPrev={() => go(i - 1)} onNext={() => go(i + 1)} />;
+  };
+  const detailTop = (kind: GhKind, item: GhItem & { html_url?: string | null; title?: string | null; state?: string | null }) => {
+    // the ↗ button is the constant detail action on both kinds: GitHub's own
+    // html_url, else the canonical github.com URL built from the bound repo
+    // slug (never for a local-checkout binding — there is no github.com page)
+    const extUrl = item.html_url && item.html_url !== "#"
+      ? item.html_url
+      : boundRepo && !isLocalRepo(boundRepo)
+        ? `https://github.com/${boundRepo}/${kind === "pull" ? "pull" : "issues"}/${item.number}`
+        : null;
+    return (
+      <PageHeader
+        className="gh-pagehead"
+        glyph={
+          <Link
+            to={"/github?tab=" + (kind === "pull" ? "pulls" : "issues")}
+            className={iconButtonClass({ size: "sm" }, "gh-back")}
+            aria-label={"Back to " + (kind === "pull" ? "pull requests" : "issues")}
+            title={"Back to " + (kind === "pull" ? "pull requests" : "issues")}
+            onClick={(e) => { e.preventDefault(); goto({ kind: null, number: null }); }}
+          >
+            <Icon name="arrow-left" cls="v2-ico" />
+          </Link>
+        }
+        id={<><KindGlyph kind={kind} item={item} /><span>#{item.number}</span></>}
+        title={item.title || ""}
+        trailing={
+          <DetailMoreMenu
+            kind={kind}
+            number={item.number}
+            htmlUrl={extUrl}
+            onBrowseHead={kind === "pull" ? () => gotoBrowse({ ref: `pr/${item.number}`, path: "" }) : undefined}
+          />
+        }
+        actions={
+          <>
+            {/* ↗ always first (same place on issues and PRs); PRs add </> second */}
+            {extUrl ? (
+              <a
+                className={iconButtonClass({ size: "sm", variant: "outline" }, "gh-open-ext")}
+                href={extUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open on GitHub"
+                title="Open on GitHub"
+              >
+                <Icon name="ext" cls="v2-ico" />
+              </a>
+            ) : null}
+            {kind === "pull" ? (
+              <IconButton
+                icon="code"
+                variant="outline"
+                size="sm"
+                label="Browse files at head"
+                className="gh-browse-head"
+                onClick={(e) => { e.stopPropagation(); gotoBrowse({ ref: `pr/${item.number}`, path: "" }); }}
+              />
+            ) : null}
+          </>
+        }
+        pager={detailPager(kind, item.number)}
+      />
+    );
+  };
+  /** the compact Orcha card (D10 "gate actions in a compact card near the top") */
+  const dispatchCard = (kind: GhKind, item: GhItem) => {
+    const ts = startedOf(kind, item.number);
+    const tracked = !!(ts && ts.task_id);
+    const showFixInfo = kind === "pull" && !tracked;
+    return (
+      <section className="gh-orcha-card" aria-label="Embodent">
+        <span className="gh-orcha-ico" aria-hidden="true"><Icon name="spark" cls="gl" /></span>
+        <span className="gh-orcha-h">Embodent</span>
+        <span className="gh-orcha-t">
+          {tracked
+            ? "Tracked as a task"
+            : kind === "pull"
+              ? "Dispatch an agent to fix checks and review feedback"
+              : "Dispatch an agent to work on this issue"}
+        </span>
+        <span className="gh-orcha-acts">
+          {showFixInfo ? (
+            <IconButton
+              icon="info"
+              size="sm"
+              label="What will the dispatched agent do?"
+              className="gh-fix-info"
+              data-gh-fix-info={item.number}
+              aria-haspopup="true"
+              aria-expanded={fixInfo?.number === item.number}
+              onClick={(e) => { e.stopPropagation(); toggleFixInfo(e.currentTarget, item.number); }}
+            />
+          ) : null}
+          <StartCell
+            kind={kind}
+            item={item}
+            taskState={ts}
+            tasks={tasks}
+            primary
+            busy={!!busy[kind + ":" + item.number]}
+            ddOpen={dd?.key === kind + ":" + item.number}
+            onStart={(k, n) => postStart(k, n, null)}
+            onToggleDd={toggleDd}
+            blocked={startBlocked}
+          />
+        </span>
+      </section>
+    );
+  };
+  const bodyMd = (md: string | null | undefined) => (
+    md && md.trim()
+      ? <div className="md gh-conversation-body" dangerouslySetInnerHTML={{ __html: tightMd(mdText(md, tasks)) }} />
+      : <div className="gh-conversation-body gh-no-desc">No description provided.</div>
+  );
+  const activity = (
+    kind: GhKind,
+    item: { author_login?: string | null; created_at?: string | null; html_url?: string | null },
+    comments: GhComment[] | undefined,
+    count: number | null | undefined,
+    reviewCount: number | null | undefined,
+  ) => {
+    const list = comments || [];
+    const total = count != null ? count : list.length;
+    const review = reviewCount || 0;
+    const htmlUrl = item.html_url;
+    const hasLink = !!htmlUrl && htmlUrl !== "#";
+    const summary = [
+      total ? `${total} comment${total !== 1 ? "s" : ""}` : "No comments",
+      review ? `${review} review comment${review !== 1 ? "s" : ""}` : null,
+    ].filter(Boolean).join(" · ");
+    const needsFooter = !list.length || list.length < total || !!review;
+    return (
+      <Timeline label="Activity" className="gh-timeline">
+        {item.created_at ? (
+          <TimelineEvent
+            glyph={item.author_login ? <GhAvatar login={item.author_login} size={16} decorative /> : undefined}
+            actor={item.author_login || "Someone"}
+            at={item.created_at}
+          >
+            opened this {kind === "pull" ? "pull request" : "issue"}
+          </TimelineEvent>
+        ) : null}
+        {list.map((c, i) => (
+          <TimelineComment
+            key={i}
+            author={c.author_login || "unknown"}
+            avatar={<GhAvatar login={c.author_login} size={20} decorative />}
+            at={c.created_at}
+          >
+            <div className="md gh-comment-text" dangerouslySetInnerHTML={{ __html: tightMd(mdText(c.body_markdown || "", tasks)) }} />
+          </TimelineComment>
+        ))}
+        {needsFooter ? (
+          <TimelineEvent
+            icon="inbox"
+            className="gh-comments-more"
+            trailing={hasLink && (total || review) ? (
+              <a className="gh-inline-link" href={htmlUrl as string} target="_blank" rel="noopener noreferrer">
+                {list.length ? "View all on GitHub" : "Read on GitHub"}<Icon name="ext" cls="gl" />
+              </a>
+            ) : undefined}
+          >
+            <span>{list.length && list.length < total ? `Showing ${list.length} of ${summary}` : summary}</span>
+          </TimelineEvent>
+        ) : null}
+      </Timeline>
+    );
+  };
+  const metaLine = (parts: ReactNode[]) => (
+    <p className="gh-detail-meta">
+      {parts.filter(Boolean).map((p, i) => <span key={i} className="gh-meta-part">{i ? <span className="gh-dot" aria-hidden="true">·</span> : null}{p}</span>)}
+    </p>
+  );
+
+  const prDetail = (pull: GhPullDetail) => {
     const filesCount = (pull.files && pull.files.count) || 0;
     const activeSub = detailSubTab || "conversation";
-    const tabsDef = [
-      { k: "conversation", label: "Conversation" },
-      { k: "checks", label: `Checks (${total})` },
-      { k: "files", label: `Files changed (${filesCount})` },
-    ];
+    const commentTotal = (pull.comments_count || 0) + (pull.review_comments_count || 0);
     return (
-      <>
-        {breadcrumb("pull", pull.number, repo)}
+      <div className="gh-item">
+        {detailTop("pull", pull)}
         <div className="gh-detail-layout">
           <div className="gh-detail-main">
-            <div className="gh-detail-head">
-              <h1 className="gh-detail-title">{pull.title} <span className="gh-detail-num mono">#{pull.number}</span></h1>
-              <div className="gh-detail-chips">
-                <StatePill kind="pull" item={pull} />
-                <BranchChips base={pull.base} head={pull.head} />
-                <span className="gh-detail-updated">Updated {relTime(pull.updated_at)}</span>
-              </div>
-              {detailActions("pull", pull, startedOf("pull", pull.number))}
-            </div>
-            <nav className="aut gh-subtabs" role="tablist" aria-label="Pull request sections">
-              {tabsDef.map((t) => (
-                <span
-                  key={t.k}
-                  className={"seg" + (t.k === activeSub ? " on" : "")}
-                  role="tab"
-                  tabIndex={0}
-                  aria-selected={t.k === activeSub}
-                  data-gh-subtab={t.k}
-                  onClick={() => setDetailSubTab(t.k)}
-                >
-                  {t.label}
-                </span>
-              ))}
-            </nav>
-            <div className="card gh-subtab-body">
+            <div className="gh-detail-title v2-t-display" aria-hidden="true">{pull.title}</div>
+            {metaLine([
+              pull.author_login ? <><b>{pull.author_login}</b> wants to merge</> : "Merge",
+              <span className="gh-branch-line"><span className="mono gh-head" title={pull.head || ""}>{pull.head || "?"}</span><Icon name="arrow" cls="gl" /><span className="mono">{pull.base || "?"}</span></span>,
+              <>Updated <RelTime at={pull.updated_at} /></>,
+            ])}
+            {dispatchCard("pull", pull)}
+            {bodyMd(pull.body_markdown)}
+            <Tabs
+              className="gh-subtabs"
+              label="Pull request sections"
+              idPrefix="gh-pr"
+              value={activeSub}
+              onChange={setDetailSubTab}
+              tabs={[
+                { key: "conversation", label: "Activity", count: commentTotal || null },
+                { key: "checks", label: "Checks", count: checksTabCount(pull.checks) },
+                { key: "files", label: "Files changed", count: filesCount },
+              ]}
+            />
+            <div className="gh-subtab-body" role="tabpanel" id={"gh-pr-panel-" + activeSub} aria-labelledby={"gh-pr-tab-" + activeSub}>
               {activeSub === "checks" ? (
-                <ChecksSection checks={pull.checks} />
+                <ChecksSection checks={pull.checks} htmlUrl={pull.html_url} />
               ) : activeSub === "files" ? (
-                <FilesSection files={pull.files} htmlUrl={pull.html_url} />
+                <FilesSection
+                  files={pull.files}
+                  htmlUrl={pull.html_url}
+                  // before = the base branch, after = the PR head (browse/raw ref=pr/<n>)
+                  blobSource={cid && pull.number ? refBlobSource(cid, pull.base, "pr/" + pull.number) : null}
+                />
               ) : (
-                <div className="md gh-conversation-body" dangerouslySetInnerHTML={{ __html: mdText(pull.body_markdown || "", tasks) }} />
+                activity("pull", pull, pull.comments, pull.comments_count, pull.review_comments_count)
               )}
             </div>
           </div>
-          <PullRail pull={pull} />
+          <PropertyRail label="Pull request properties" className="gh-rail">
+            <PropertySection title="Properties">
+              <Property label="Status"><StateValue kind="pull" item={pull} /></Property>
+              <Property label="Merge"><MergeState pr={pull} /></Property>
+              <Property label="Checks" empty="No checks">{checksTotal(pull.checks || {}) ? <ChecksSummary checks={pull.checks} /> : null}</Property>
+              <Property label="Author" empty="Unknown">{pull.author_login ? <PersonList logins={[pull.author_login]} /> : null}</Property>
+              <Property label="Assignees" empty="No assignee">{(pull.assignees || []).length ? <PersonList logins={pull.assignees} /> : null}</Property>
+              <Property label="Reviewers" empty="No reviewer">{(pull.requested_reviewers || []).length ? <PersonList logins={pull.requested_reviewers} /> : null}</Property>
+            </PropertySection>
+            <PropertySection title="Branch">
+              <Property label="Head" layout="row">{pull.head ? <BranchValue name={pull.head} /> : null}</Property>
+              <Property label="Base" layout="row">{pull.base ? <BranchValue name={pull.base} /> : null}</Property>
+            </PropertySection>
+          </PropertyRail>
         </div>
-      </>
+      </div>
     );
   };
 
   /* ---- issue detail (github-state.js issueDetailHtml) ---------------------- */
-  const issueDetail = (issue: GhIssueDetail, repo: string | null | undefined) => {
-    const comments = issue.comments || [];
+  const issueDetail = (issue: GhIssueDetail) => {
+    const assignees = issue.assignees && issue.assignees.length ? issue.assignees : issue.assignee ? [issue.assignee] : [];
     return (
-      <>
-        {breadcrumb("issue", issue.number, repo)}
+      <div className="gh-item">
+        {detailTop("issue", issue)}
         <div className="gh-detail-layout">
           <div className="gh-detail-main">
-            <div className="gh-detail-head">
-              <h1 className="gh-detail-title">{issue.title} <span className="gh-detail-num mono">#{issue.number}</span></h1>
-              <div className="gh-detail-chips">
-                <StatePill kind="issue" item={issue} />
-                {(issue.labels || []).map((l, i) => <LabelChip key={i} label={l} theme={theme} />)}
-                <span className="gh-detail-updated">Updated {relTime(issue.updated_at)}</span>
-              </div>
-              {detailActions("issue", issue, startedOf("issue", issue.number))}
-            </div>
-            <div className="card gh-subtab-body">
-              <div className="md gh-conversation-body" dangerouslySetInnerHTML={{ __html: mdText(issue.body_markdown || "", tasks) }} />
-            </div>
-            <div className="card" style={{ marginTop: 14 }}>
-              <div className="card-h"><h3>Comments</h3><span className="count">{comments.length ? "(" + comments.length + ")" : ""}</span></div>
-              <div className="card-b" style={{ padding: "14px 16px" }}>
-                {comments.length
-                  ? comments.map((c, i) => <CommentRow key={i} c={c} tasks={tasks} />)
-                  : <div className="none">No comments yet.</div>}
-              </div>
-            </div>
+            <div className="gh-detail-title v2-t-display" aria-hidden="true">{issue.title}</div>
+            {metaLine([
+              issue.author_login ? <><b>{issue.author_login}</b> opened this issue</> : "Issue",
+              <>Updated <RelTime at={issue.updated_at} /></>,
+            ])}
+            {dispatchCard("issue", issue)}
+            {bodyMd(issue.body_markdown)}
+            <h2 className="gh-section-h">Activity</h2>
+            {activity("issue", issue, issue.comments, issue.comments_count ?? (issue.comments || []).length, 0)}
           </div>
-          <aside className="gh-rail">
-            <div className="card gh-rail-card">
-              <div className="gh-rail-h">Status</div>
-              <StatePill kind="issue" item={issue} />
-            </div>
-            <div className="card gh-rail-card">
-              <div className="gh-rail-h">Assignees</div>
-              <PersonList logins={issue.assignees && issue.assignees.length ? issue.assignees : issue.assignee ? [issue.assignee] : []} />
-            </div>
-          </aside>
+          <PropertyRail label="Issue properties" className="gh-rail">
+            <PropertySection title="Properties">
+              <Property label="Status"><StateValue kind="issue" item={issue} /></Property>
+              <Property label="Author" empty="Unknown">{issue.author_login ? <PersonList logins={[issue.author_login]} /> : null}</Property>
+              <Property label="Assignees" empty="No assignee">{assignees.length ? <PersonList logins={assignees} /> : null}</Property>
+            </PropertySection>
+            <PropertySection title="Labels">
+              <div className="gh-rail-labels">
+                {(issue.labels || []).length ? <LabelChips labels={issue.labels} max={20} /> : <span className="gh-prop-none">No labels</span>}
+              </div>
+            </PropertySection>
+          </PropertyRail>
         </div>
-      </>
+      </div>
     );
   };
 
@@ -1316,71 +1927,183 @@ export function GitHubPage() {
     const p = dp && dp.__number === number ? dp : null;
     const de = detailError[kind];
     const err = de && de.__number === number ? de : null;
-    if (!p && err) return <GhErrorBody err={err} notFoundKind={kind} onConnect={() => setConnectOpen(true)} />;
+    if (!p && err) {
+      return (
+        <GhErrorBody
+          err={err}
+          notFoundKind={kind}
+          boundRepo={boundRepo}
+          blockedReason={connectBlocked}
+          onConnect={() => setConnectOpen(true)}
+          onRetry={() => loadDetail(kind, number, true)}
+          onBack={() => goto({ kind: null, number: null })}
+        />
+      );
+    }
     const item = p ? (kind === "pull" ? p.pull : p.issue) : null;
     // no item yet (and no error) -> the vanilla "detail-pane" skeleton,
     // regardless of fetch timing (same 120ms show delay as the list)
     if (!item) return skeletonReady ? <GhSkeleton kind="detail-pane" /> : null;
-    return kind === "pull" ? prDetail(item as GhPullDetail, p!.repo) : issueDetail(item as GhIssueDetail, p!.repo);
+    return (
+      <>
+        {err ? (
+          <div className="gh-stale" role="status">
+            <Icon name="alert" cls="gl" />
+            <span>Couldn&#39;t refresh this {kind === "pull" ? "pull request" : "issue"} from GitHub{err.detail ? " (" + err.detail + ")" : ""} — showing the last loaded version, not live.</span>
+            <Button variant="secondary" size="sm" className="gh-retry" onClick={() => loadDetail(kind, number, true)}>Retry now</Button>
+          </div>
+        ) : null}
+        {kind === "pull" ? prDetail(item as GhPullDetail) : issueDetail(item as GhIssueDetail)}
+      </>
+    );
   };
 
-  /* ---- filter chips (github-state.js filterChipsHtml) ---------------------- */
-  const filterChips = () => {
-    const kind: GhKind = tab === "pulls" ? "pull" : "issue";
-    const chips: { k: string; label: string }[] = [{ k: "open", label: "Open" }, { k: "mine", label: "Mine" }];
-    if (kind === "pull") chips.push({ k: "needs-review", label: "Needs review" });
-    return chips.map((c) => (
-      <button key={c.k} className={c.k === filter ? "on" : ""} data-gh-filter={c.k} onClick={() => setFilter(c.k)}>
-        {c.label}
-      </button>
-    ));
-  };
-
-  /* ---- PR-list server-backed filter bar (monorepo-scale repos) -------------
+  /* ---- PR-list server-backed filters (monorepo-scale repos) -----------------
      Author input (+ datalist of authors seen in loaded rows), Assigned-to-me/
-     My-reviews chips (mutually exclusive; disabled+tooltip with no github_login
-     on the acting identity), and the free-text search box lives in the header
-     above (wired to pullsFilter.q on this tab — see the ghSearch input). */
-  const pullsFilterBar = () => {
+     My-reviews pill toggles (mutually exclusive; disabled with a visible
+     tooltip reason when the acting identity has no github_login). */
+  const pullsFilterPanel = () => {
     const loadedRows: GhPullRow[] = [...((payload.pulls && payload.pulls.pulls) || []), ...filteredPulls];
     const authorOptions = authorsFromRows(loadedRows);
     const noIdentity = !myLogin;
     const chip = (key: Involvement, label: string) => {
       const on = pullsFilter.involvement === key;
-      return (
-        <button
+      const btn = (
+        <Button
           key={key || "none"}
-          type="button"
-          className={"tag gh-involve-chip" + (on ? " on" : "")}
+          variant="ghost"
+          size="sm"
+          pill
+          className={"gh-involve-chip" + (on ? " on" : "")}
           disabled={noIdentity}
-          title={noIdentity ? "Link a GitHub login to use this filter" : undefined}
           aria-pressed={on}
           onClick={() => setPullsFilter((f) => ({ ...f, involvement: on ? null : key }))}
         >
           {label}
-        </button>
+        </Button>
+      );
+      if (!noIdentity) return btn;
+      // a disabled <button> swallows pointer events — the tooltip rides a
+      // focusable wrapper so the reason is discoverable by mouse AND keyboard
+      return (
+        <Tooltip key={key || "none"} label="Link your GitHub login (Settings → GitHub access) to use this filter" placement="bottom">
+          <span className="gh-tip-wrap" tabIndex={0} aria-label={label + " (unavailable: link your GitHub login)"}>{btn}</span>
+        </Tooltip>
       );
     };
     return (
-      <div className="gh-pulls-filterbar" id="ghPullsFilterBar">
-        <input
-          className="gh-search-in gh-author-in"
-          type="text"
-          list="ghPullsAuthors"
-          placeholder="Author…"
-          spellCheck={false}
-          autoComplete="off"
-          aria-label="Filter by author"
-          value={pullsFilter.author}
-          onChange={(e) => setPullsFilter((f) => ({ ...f, author: e.target.value }))}
-        />
+      <div className="gh-filterpop">
+        <div className="gh-fp-h">Author</div>
+        <label className="gh-field gh-author-field">
+          <Icon name="person" cls="gl" />
+          <input
+            className="gh-field-in gh-author-in"
+            type="text"
+            list="ghPullsAuthors"
+            placeholder="Author…"
+            spellCheck={false}
+            autoComplete="off"
+            aria-label="Filter by author"
+            value={pullsFilter.author}
+            onChange={(e) => setPullsFilter((f) => ({ ...f, author: e.target.value }))}
+          />
+        </label>
         <datalist id="ghPullsAuthors">
           {authorOptions.map((a) => <option key={a} value={a} />)}
         </datalist>
-        {chip("assigned", "Assigned to me")}
-        {chip("review_requested", "My reviews")}
+        <div className="gh-fp-h">Involvement</div>
+        <div className="gh-fp-row">
+          {chip("assigned", "Assigned to me")}
+          {chip("review_requested", "My reviews")}
+        </div>
       </div>
     );
+  };
+  /* ---- Issues filter popover: label + assignee facets over the loaded rows */
+  const issuesFilterPanel = () => {
+    const rows = ((payload.issues && payload.issues.issues) || []) as GhIssueRow[];
+    const f = issueFacets(rows);
+    const row = (on: boolean, name: string, count: number, key: string, icon: ReactNode, onClick: () => void) => (
+      <button key={key} type="button" className={"gh-facet" + (on ? " on" : "")} aria-pressed={on} onClick={onClick}>
+        <span className="gh-facet-ico" aria-hidden="true">{icon}</span>
+        <span className="gh-facet-name">{name}</span>
+        <span className="gh-facet-n">{count}</span>
+        <span className="gh-facet-chk" aria-hidden="true">{on ? <Icon name="check" cls="gl" /> : null}</span>
+      </button>
+    );
+    return (
+      <div className="gh-filterpop gh-issues-filterpop">
+        <div className="gh-fp-h">Label</div>
+        <div className="gh-facet-list" role="group" aria-label="Label">
+          {f.labels.length ? f.labels.map((l) => row(
+            issuesFilter.label === l.name, l.name, l.count, "l:" + l.name,
+            <span className="gh-label-dot" style={{ background: l.color }} />,
+            () => setIssuesFilter((x) => ({ ...x, label: x.label === l.name ? null : l.name })),
+          )) : <span className="gh-fp-none">No labels on open issues</span>}
+        </div>
+        <div className="gh-fp-h">Assignee</div>
+        <div className="gh-facet-list" role="group" aria-label="Assignee">
+          {f.assignees.map((a) => row(
+            issuesFilter.assignee === a.login, a.login, a.count, "a:" + a.login,
+            <GhAvatar login={a.login} size={16} decorative />,
+            () => setIssuesFilter((x) => ({ ...x, assignee: x.assignee === a.login ? null : a.login })),
+          ))}
+          {f.unassigned ? row(
+            issuesFilter.assignee === UNASSIGNED, "No assignee", f.unassigned, "a:none",
+            <span className="gh-unassigned gh-unassigned-sm" />,
+            () => setIssuesFilter((x) => ({ ...x, assignee: x.assignee === UNASSIGNED ? null : UNASSIGNED })),
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+  const activeIssueChips = () => {
+    const out: ReactNode[] = [];
+    if (issuesFilter.label) {
+      out.push(
+        <Chip key="label" size="sm" selected className="gh-active-filter" trailing={<Icon name="x" cls="gl" />}
+          aria-label={"Remove filter: label " + issuesFilter.label}
+          onClick={() => setIssuesFilter((f) => ({ ...f, label: null }))}>
+          {issuesFilter.label}
+        </Chip>,
+      );
+    }
+    if (issuesFilter.assignee) {
+      const who = issuesFilter.assignee === UNASSIGNED ? "No assignee" : issuesFilter.assignee;
+      out.push(
+        <Chip key="assignee" size="sm" selected className="gh-active-filter" icon={<Icon name="person" cls="gl" />} trailing={<Icon name="x" cls="gl" />}
+          aria-label={"Remove filter: " + who}
+          onClick={() => setIssuesFilter((f) => ({ ...f, assignee: null }))}>
+          {who}
+        </Chip>,
+      );
+    }
+    return out;
+  };
+  // active server-backed PR filters, as removable chips in the toolbar (the
+  // filter state is always visible even with the popover closed)
+  const activePullChips = () => {
+    const out: ReactNode[] = [];
+    if (pullsFilter.author.trim()) {
+      out.push(
+        <Chip key="author" size="sm" selected className="gh-active-filter" icon={<Icon name="person" cls="gl" />} trailing={<Icon name="x" cls="gl" />}
+          aria-label={"Remove filter: author " + pullsFilter.author.trim()}
+          onClick={() => setPullsFilter((f) => ({ ...f, author: "" }))}>
+          {pullsFilter.author.trim()}
+        </Chip>,
+      );
+    }
+    if (pullsFilter.involvement) {
+      const label = pullsFilter.involvement === "assigned" ? "Assigned to me" : "My reviews";
+      out.push(
+        <Chip key="inv" size="sm" selected className="gh-active-filter" trailing={<Icon name="x" cls="gl" />}
+          aria-label={"Remove filter: " + label}
+          onClick={() => setPullsFilter((f) => ({ ...f, involvement: null }))}>
+          {label}
+        </Chip>,
+      );
+    }
+    return out;
   };
 
   /* ---- Fix-info popover content (fixInfoPopoverBodyHtml) ------------------- */
@@ -1399,71 +2122,149 @@ export function GitHubPage() {
     );
   };
 
+  /* ---- toolbar helpers ------------------------------------------------------ */
+  // V2: with no repo bound at all, the list chrome (tabs / filters / Browse)
+  // is hidden — the only meaningful action is the empty state's Connect repo.
+  const curErr = loadError[tab];
+  // G10b: a non-member gets ONE "not a member" state — never the token-403
+  // card with Check GitHub access / Change repo / Connect repo.
+  const notMember = (!snap?.container && snapshotErrorKind(snapError) === "forbidden")
+    || (!!curErr && curErr.kind === "no_access" && isMembershipDenial(curErr.detail));
+  const noRepo = !route.kind && !browseRoute.on && binding === null && !hubPayloadRepo
+    && !!curErr && curErr.kind === "not_connected";
+  const listCount = (key: ListKey): number | null => {
+    const pl = payload[key];
+    if (!pl || isLocalSourcePayload(pl)) return null;
+    const rows = (pl.issues || pl.pulls || []) as GhItem[];
+    return rows.length;
+  };
+  const repoMenuItems: MenuItemSpec[] = [
+    { label: "Browse files", icon: "code", onSelect: () => gotoBrowse() },
+    { label: boundRepo ? "Change repo…" : "Connect repo…", icon: "folder", onSelect: () => setConnectOpen(true), disabled: !!connectBlocked, disabledReason: connectBlocked || undefined },
+    ...(boundRepo && !isLocalRepo(boundRepo)
+      ? [{ label: "Open on GitHub", icon: "ext", onSelect: () => { window.open(`https://github.com/${boundRepo}`, "_blank", "noopener,noreferrer"); } }]
+      : []),
+  ];
+
+  // ≤600px: the repo switcher collapses into the toolbar ⋯ — the repo name
+  // rides along as the "Change repo…" hint so it is still one tap away
+  const repoShort = boundRepo ? (isLocalRepo(boundRepo) ? (snap?.container?.name || "Local repository") : boundRepo) : null;
+  const narrowMenuItems: (MenuItemSpec | "separator")[] = [
+    { label: "Browse files", icon: "code", onSelect: () => gotoBrowse() },
+    { label: boundRepo ? "Change repo…" : "Connect repo…", icon: "folder", hint: repoShort || undefined, onSelect: () => setConnectOpen(true), disabled: !!connectBlocked, disabledReason: connectBlocked || undefined },
+    ...(boundRepo && !isLocalRepo(boundRepo)
+      ? ["separator" as const, { label: "Open on GitHub", icon: "ext", onSelect: () => { window.open(`https://github.com/${boundRepo}`, "_blank", "noopener,noreferrer"); } }]
+      : []),
+  ];
+
+  /* ---- header crumbs: the list's kind lives in the toolbar pills (never
+     twice); a detail adds "Pull requests / #N". ------------------------------ */
+  const shellCrumbs = (() => {
+    if (browseRoute.on) return [{ label: "Files", title: browseRoute.path || "Repository root" }];
+    if (route.kind) {
+      const dp = detailPayload[route.kind];
+      const item = dp && dp.__number === route.number ? (route.kind === "pull" ? dp.pull : dp.issue) : null;
+      return [
+        { label: route.kind === "pull" ? "Pull requests" : "Issues", href: "/github?tab=" + (route.kind === "pull" ? "pulls" : "issues") },
+        { label: "#" + route.number, title: item && item.title ? item.title : undefined },
+      ];
+    }
+    return [];
+  })();
+
+  const listMode = !route.kind && !browseRoute.on;
+  // the pills strip scrolls sideways at narrow widths — edge fades say so
+  const tbScrollRef = useRef<HTMLDivElement | null>(null);
+  useScrollEdges(tbScrollRef, [tab, listMode, issuesFilter, pullsFilter.author, pullsFilter.involvement]);
+  const serverFilterCount = tab === "pulls"
+    ? (pullsFilter.author.trim() ? 1 : 0) + (pullsFilter.involvement ? 1 : 0)
+    : (issuesFilter.label ? 1 : 0) + (issuesFilter.assignee ? 1 : 0);
+  const filterItems = [{ key: "open", label: "Open" }, { key: "mine", label: "Mine" }];
+  if (tab === "pulls") filterItems.push({ key: "needs-review", label: "Needs review" });
+  const toolbar = listMode && !noRepo && !notMember ? (
+    <PageToolbar
+      label="GitHub filters"
+      className="gh-toolbar"
+      end={
+        <>
+          <label className="gh-field gh-search">
+            <Icon name="search" cls="gl" />
+            <input
+              id="ghSearch"
+              className="gh-field-in"
+              type="search"
+              placeholder="Search…"
+              aria-label={tab === "pulls" ? "Search pull requests" : "Filter issues"}
+              spellCheck={false}
+              autoComplete="off"
+              value={tab === "pulls" ? pullsFilter.q : query}
+              onChange={(e) => (tab === "pulls"
+                ? setPullsFilter((f) => ({ ...f, q: e.target.value }))
+                : setQuery(e.target.value))}
+            />
+          </label>
+          {boundRepo ? (
+            <MenuButton
+              className="gh-repo-menu"
+              variant="ghost"
+              size="sm"
+              menuLabel="Repository"
+              title={isLocalRepo(boundRepo) ? "Local repository" : boundRepo}
+              value={<RepoBadge repo={boundRepo} workspaceName={snap?.container?.name} originRepo={fallthroughOriginRepo} />}
+              items={repoMenuItems}
+            />
+          ) : (
+            <Button variant="secondary" size="sm" pill icon="folder" className="gh-connect-cta" onClick={() => setConnectOpen(true)} disabled={!!connectBlocked} title={connectBlocked || undefined}>Connect repo</Button>
+          )}
+          {(
+            <IconButton
+              ref={filterBtnRef}
+              variant="outline"
+              icon="sliders"
+              label={tab === "pulls" ? "Pull request filters" : "Issue filters"}
+              className="gh-filter-btn"
+              aria-haspopup="dialog"
+              aria-expanded={filterOpen}
+              pressed={serverFilterCount > 0 || undefined}
+              badge={serverFilterCount || null}
+              onClick={() => setFilterOpen((o) => !o)}
+            />
+          )}
+          <IconButton variant="outline" icon="code" label="Browse files" className="gh-browse-cta" onClick={() => gotoBrowse()} />
+          <ToolbarMoreMenu items={narrowMenuItems} />
+        </>
+      }
+    >
+      <div className="v2-filterbar-main gh-tb-scroll" ref={tbScrollRef}>
+      <FilterPills
+        label="GitHub hub sections"
+        className="gh-kind-pills"
+        value={tab}
+        onChange={(k) => onTabClick(k as ListKey)}
+        items={[
+          { key: "issues", label: "Issues", count: listCount("issues"), icon: <GhIcon name="issueDot" cls="v2-ico v2-pill-ico" /> },
+          { key: "pulls", label: "Pull requests", count: listCount("pulls"), icon: <GhIcon name="pullArrow" cls="v2-ico v2-pill-ico" /> },
+        ]}
+      />
+      <span className="gh-tb-sep" aria-hidden="true" />
+      <FilterPills label="Filter" size="sm" className="gh-filter-pills" value={filter} onChange={setFilter} items={filterItems} />
+      {tab === "pulls" ? activePullChips() : activeIssueChips()}
+      </div>
+    </PageToolbar>
+  ) : null;
+
   /* ---- page ----------------------------------------------------------------- */
   return (
-    <Shell page="github" title="GitHub" ctx={snap?.container?.name}>
-      <div className="gh-wrap">
-        <div className={"gh-head" + (route.kind || browseRoute.on ? " hidden" : "")} id="ghHead">
-          <nav className="aut" id="ghTabs" role="tablist" aria-label="GitHub hub sections">
-            <span
-              className={"seg" + (tab === "issues" ? " on" : "")}
-              role="tab"
-              tabIndex={0}
-              aria-selected={tab === "issues"}
-              data-tab="issues"
-              onClick={() => onTabClick("issues")}
-            >
-              Issues
-            </span>
-            <span
-              className={"seg" + (tab === "pulls" ? " on" : "")}
-              role="tab"
-              tabIndex={0}
-              aria-selected={tab === "pulls"}
-              data-tab="pulls"
-              onClick={() => onTabClick("pulls")}
-            >
-              Pull requests
-            </span>
-          </nav>
-          <button type="button" className="btn subtle sm gh-browse-cta" onClick={() => gotoBrowse()}>
-            <Icon name="search" cls="gl" />Browse files
-          </button>
-          {boundRepo ? (
-            <RepoBadge repo={boundRepo} workspaceName={snap?.container?.name} originRepo={fallthroughOriginRepo} />
-          ) : null}
-          <button type="button" className="btn subtle sm" onClick={() => setConnectOpen(true)}>
-            <CloudIcon name="folder" cls="gl" />{boundRepo ? "Change repo" : "Connect repo"}
-          </button>
-          <div className="grow"></div>
-          <input
-            id="ghSearch"
-            className="gh-search-in"
-            type="search"
-            placeholder={tab === "pulls" ? "Search title or body…" : "Filter by title or #number…"}
-            spellCheck={false}
-            autoComplete="off"
-            value={tab === "pulls" ? pullsFilter.q : query}
-            onChange={(e) => (tab === "pulls"
-              ? setPullsFilter((f) => ({ ...f, q: e.target.value }))
-              : setQuery(e.target.value))}
-          />
-        </div>
-
-        {browseRoute.on ? (
-          <div className="gh-crumb">
-            <a className="gh-crumb-back" href="?" data-gh-back="1" onClick={(e) => { e.preventDefault(); exitBrowse(); }}>
-              <GhIcon name="arrow" cls="gl gh-crumb-ico" /><span>{tab === "pulls" ? "Pull requests" : "Issues"}</span>
-            </a>
-            <span className="gh-crumb-sep">·</span>
-            <span className="gh-crumb-repo mono">Files</span>
+    <Shell page="github" title="GitHub" crumbs={shellCrumbs} toolbar={toolbar} flush={!noRepo}>
+      <div className={"gh-wrap" + (listMode ? " is-list" : "") + (route.kind ? " is-detail" : "")}>
+        {notMember ? (
+          <div className="ghlist-card gh-norepo" id="ghlist">
+            <div className="gh-empty card-empty" role="status" id="ghNotMember">
+              <div className="t1">You&#39;re not a member of this project.</div>
+              <p>Ask an owner to invite you to see its GitHub issues and pull requests.</p>
+            </div>
           </div>
-        ) : null}
-
-        <div className="filters" id="ghFilters">{route.kind || browseRoute.on ? null : filterChips()}</div>
-        {!route.kind && !browseRoute.on && tab === "pulls" ? pullsFilterBar() : null}
-
-        {browseRoute.on ? (
+        ) : browseRoute.on ? (
           cid ? (
             <RepoBrowser
               cid={cid}
@@ -1473,10 +2274,20 @@ export function GitHubPage() {
               // Orcha Cloud local run, Addendum 2 (RepoBadge deliverable).
               htmlUrlBase={boundRepo && !isLocalRepo(boundRepo) ? `https://github.com/${boundRepo}` : null}
               onNavigate={(next) => gotoBrowse(next, true)}
+              leading={
+                <IconButton
+                  size="sm"
+                  icon="arrow-left"
+                  className="gh-back"
+                  data-gh-back="1"
+                  label={"Back to " + (tab === "pulls" ? "pull requests" : "issues")}
+                  onClick={exitBrowse}
+                />
+              }
             />
           ) : null
         ) : (
-          <div className={"card ghlist-card" + (route.kind ? " gh-detail-mode" : "")} id="ghlist">
+          <div className={"ghlist-card" + (route.kind ? " gh-detail-mode" : "") + (noRepo ? " gh-norepo" : "")} id="ghlist">
             {route.kind ? detailBody() : listBody()}
           </div>
         )}
@@ -1487,6 +2298,7 @@ export function GitHubPage() {
           cid={cid}
           currentRepo={boundRepo}
           fallbackLocalName={snap?.container?.name || null}
+          blockedReason={connectBlocked}
           onClose={() => setConnectOpen(false)}
           onBound={(repo) => {
             setBinding(repo);
@@ -1507,6 +2319,9 @@ export function GitHubPage() {
             <div
               ref={ddRef}
               id="ghAssignMenu"
+              role="group"
+              aria-label="Assign to an agent"
+              onKeyDown={onDdKeyDown}
               className="pmenu float show"
               style={{ top: dd.top, left: dd.left, right: "auto" }}
             >
@@ -1522,6 +2337,12 @@ export function GitHubPage() {
             document.body,
           )
         : null}
+
+      {listMode ? (
+        <Popover anchor={filterBtnRef} open={filterOpen} onClose={() => setFilterOpen(false)} placement="bottom-end" role="dialog" label={tab === "pulls" ? "Pull request filters" : "Issue filters"} className="gh-filter-popover">
+          {tab === "pulls" ? pullsFilterPanel() : issuesFilterPanel()}
+        </Popover>
+      ) : null}
 
       {fixInfo
         ? createPortal(

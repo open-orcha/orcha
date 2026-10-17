@@ -1,19 +1,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import { ToastProvider } from "./components/ui";
-import { SnapshotProvider } from "./state/SnapshotProvider";
-import { initTheme } from "./shell/Shell";
-import { HomePage } from "./pages/home/HomePage";
-import { AgentsPage } from "./pages/agents/AgentsPage";
-import { TasksPage } from "./pages/tasks/TasksPage";
-import { RequestsPage } from "./pages/requests/RequestsPage";
-import { SettingsPage } from "./pages/settings/SettingsPage";
-import { OnboardingPage } from "./pages/onboarding/OnboardingPage";
-import { extensions } from "./extensions";
+import { SnapshotProvider, useSnapshot } from "./state/SnapshotProvider";
+import { PortalDictationProvider } from "./dictation/PortalDictation";
+import { initTheme } from "./shell/theme";
+import { AppRoutes } from "./shell/routes";
 
-// Hash routing keeps the SPA servable from ONE static file (/assets/dist/) with
-// the FastAPI backend untouched — no history-fallback route needed server-side.
+// Routing: react-router BrowserRouter over clean URLs (/tasks?task=…). Every
+// page URL is served by an explicit FastAPI page route that returns the built
+// SPA shell (portal_backend/dashboard_routes.py), so a hard reload of any
+// route works. (GAP-08: an older comment here claimed hash routing.)
 // The shared token layer (static/styles.css, served at /assets/styles.css) is
 // linked at runtime: an href in index.html would get base-prefixed by Vite.
 if (!document.querySelector('link[href="/assets/styles.css"]')) {
@@ -23,34 +20,25 @@ if (!document.querySelector('link[href="/assets/styles.css"]')) {
   l.href = "/assets/styles.css";
   document.head.appendChild(l);
 }
+// Appearance (System / Light / Dark): apply the resolved theme before the first
+// React render and keep it live (index.html already did it pre-paint).
 initTheme();
 
-// Open page routes. A downstream extension route with the SAME path replaces
-// the open one (e.g. Cloud's access-model landing overriding "/"), so the
-// registry can both add and override without forking this file.
-const OPEN_ROUTES: { path: string; element: React.ComponentType }[] = [
-  { path: "/", element: HomePage },
-  { path: "/agents", element: AgentsPage },
-  { path: "/tasks", element: TasksPage },
-  { path: "/requests", element: RequestsPage },
-  { path: "/settings", element: SettingsPage },
-  { path: "/onboarding", element: OnboardingPage },
-];
-const overridden = new Set(extensions.routes.map((r) => r.path));
-const routes = [...extensions.routes, ...OPEN_ROUTES.filter((r) => !overridden.has(r.path))];
+/** Dictation for every text field (src/dictation): needs the project id for the cloud engine. */
+function DictationRoot({ children }: { children: React.ReactNode }) {
+  const { cid } = useSnapshot();
+  return <PortalDictationProvider cid={cid}>{children}</PortalDictationProvider>;
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ToastProvider>
       <SnapshotProvider>
-        <BrowserRouter>
-          <Routes>
-            {routes.map((r) => (
-              <Route key={r.path} path={r.path} element={<r.element />} />
-            ))}
-            <Route path="*" element={<HomePage />} />
-          </Routes>
-        </BrowserRouter>
+        <DictationRoot>
+          <BrowserRouter>
+            <AppRoutes />
+          </BrowserRouter>
+        </DictationRoot>
       </SnapshotProvider>
     </ToastProvider>
   </React.StrictMode>,

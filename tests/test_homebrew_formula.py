@@ -61,3 +61,45 @@ def test_main_rejects_malformed_inputs(tmp_path, monkeypatch, version, revision)
                         ["render_formula.py", version, revision, str(tmp_path)])
     with pytest.raises(SystemExit):
         rf.main()
+
+
+# --- GH #258: the formula carries the `orcha portal` stack as pinned sdist resources ---
+
+def _resources():
+    import json
+    return json.loads(rf.RESOURCES.read_text(encoding="utf-8"))
+
+
+def test_every_pyproject_dependency_is_a_pinned_resource():
+    # Adding a dependency to orcha-cli/pyproject.toml without `render_formula.py lock`
+    # would ship a formula whose venv can't import it.
+    names = {r["name"] for r in _resources()}
+    for req in rf.pyproject_requirements():
+        name = rf.normalize(req.split(">")[0].split("=")[0].split("<")[0].strip())
+        assert name in names, f"{name} missing from resources.json; run render_formula.py lock"
+
+
+def test_formula_requirements_swap_binary_psycopg_and_drop_extras():
+    reqs = rf.pyproject_requirements()
+    assert not any("[" in r for r in reqs)
+    assert any(r.startswith("psycopg>=") for r in reqs)
+    assert not any("binary" in r for r in reqs)
+
+
+def test_resources_are_pinned_sdists():
+    for res in _resources():
+        assert res["url"].startswith("https://files.pythonhosted.org/"), res
+        assert res["url"].endswith(".tar.gz"), res        # Homebrew builds from source
+        assert len(res["sha256"]) == 64 and int(res["sha256"], 16) >= 0, res
+    assert "psycopg-binary" not in {r["name"] for r in _resources()}
+
+
+def test_rendered_formula_has_one_block_per_resource_and_build_deps():
+    out = rf.render("0.2.0", SHA, versioned=False)
+    resources = _resources()
+    assert out.count('  resource "') == len(resources)
+    for res in resources:
+        assert f'resource "{res["name"]}" do' in out
+        assert f'sha256 "{res["sha256"]}"' in out
+    assert 'depends_on "rust" => :build' in out   # pydantic-core
+    assert 'depends_on "libpq"' in out            # pure psycopg

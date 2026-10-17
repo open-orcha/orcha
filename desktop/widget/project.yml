@@ -16,7 +16,7 @@ targets:
     info:
       path: HostApp/Info.plist
       properties:
-        CFBundleDisplayName: Orcha Widgets
+        CFBundleDisplayName: Embodent Widgets
         LSApplicationCategoryType: public.app-category.developer-tools
         CFBundleShortVersionString: "1.2"
         CFBundleVersion: "3"
@@ -39,7 +39,7 @@ targets:
     info:
       path: Widget/Info.plist
       properties:
-        CFBundleDisplayName: Orcha
+        CFBundleDisplayName: Embodent
         CFBundleShortVersionString: "1.2"
         CFBundleVersion: "3"
         NSExtension:

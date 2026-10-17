@@ -184,7 +184,7 @@ describe("ThreadView — item 5: optimistic seed + optimistic reply", () => {
     mount();
     await screen.findByText("how does this work?");
     fireEvent.change(screen.getByLabelText(/reply to thread/i), { target: { value: "a reply" } });
-    fireEvent.click(screen.getByText("Reply"));
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 
     // appears immediately, marked pending, BEFORE the POST promise resolves.
     const bubble = await screen.findByText("a reply", { selector: ".cs-message-body" });
@@ -224,7 +224,7 @@ describe("ThreadView — item 5: optimistic seed + optimistic reply", () => {
     mount();
     await screen.findByText("how does this work?");
     fireEvent.change(screen.getByLabelText(/reply to thread/i), { target: { value: "will fail" } });
-    fireEvent.click(screen.getByText("Reply"));
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 
     // end state: the failed POST rolled the optimistic bubble back out and
     // restored the human's draft text so nothing is silently lost.
@@ -273,7 +273,7 @@ describe("ThreadView — chat-feel animation + auto-scroll (panel improvements i
     mount();
     await screen.findByText("how does this work?");
     fireEvent.change(screen.getByLabelText(/reply to thread/i), { target: { value: "hello" } });
-    fireEvent.click(screen.getByText("Reply"));
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
     const pending = document.querySelector(".cs-message.pending");
     expect(pending).not.toBeNull();
     expect(pending!.className).toContain("cs-message-mount");

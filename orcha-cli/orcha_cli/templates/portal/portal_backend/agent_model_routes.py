@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException, Request
 
+from portal_backend.agent_config_history_routes import config_before, record_config_change
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -47,18 +48,20 @@ def set_agent_model(aid: str, body: AgentModelUpdate, request: Request):
     WITH this model (--model) is Forge's B8.2, separate from this persistence."""
     if not _valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
-    if body.model not in _model_ids():
-        raise HTTPException(
-            400,
-            f"model '{body.model}' is not a known model; "
-            f"choose one of {sorted(_model_ids())}",
-        )
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
         # Per-project identity: a model swap is a member action (403 non-member).
-        _trusted_actor(cur, request, str(agent["container_id"]), None)
-        # Access model: model/effort swaps are owner-or-manage_agents.
+        actor = _trusted_actor(cur, request, str(agent["container_id"]), None)
+        # Access model: model/effort swaps are owner-or-manage_agents. Checked
+        # BEFORE the body is validated, so a viewer / non-member always gets the
+        # honest 403 rather than a 400 about the model name.
         _enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
+        if body.model not in _model_ids():
+            raise HTTPException(
+                400,
+                f"model '{body.model}' is not a known model; "
+                f"choose one of {sorted(_model_ids())}",
+            )
         cur.execute("SELECT kind, model, reasoning_effort FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
         if row["kind"] == "human":
@@ -67,11 +70,13 @@ def set_agent_model(aid: str, body: AgentModelUpdate, request: Request):
         old_effort = row["reasoning_effort"]
         supported_efforts = _reasoning_effort_ids_by_model().get(body.model, set())
         new_effort = old_effort if old_effort in supported_efforts else None
+        before = config_before(cur, aid)  # config history: pre-change state (row-locked)
         cur.execute(
             "UPDATE agents SET model=%s, reasoning_effort=%s WHERE id=%s RETURNING model",
             (body.model, new_effort, aid),
         )
         new_model = cur.fetchone()["model"]
+        record_config_change(cur, aid, before, source="model", actor_agent_id=actor)
         cold_reset = []
         if new_model != old_model:
             cur.execute(
@@ -119,7 +124,7 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate, reque
     with db_cursor() as (conn, cur):
         agent = _require_agent(cur, aid)
         # Per-project identity: an effort change is a member action (403 non-member).
-        _trusted_actor(cur, request, str(agent["container_id"]), None)
+        actor = _trusted_actor(cur, request, str(agent["container_id"]), None)
         # Access model: model/effort swaps are owner-or-manage_agents.
         _enforce_grant(cur, request, str(agent["container_id"]), "manage_agents")
         cur.execute("SELECT kind, model, reasoning_effort FROM agents WHERE id=%s", (aid,))
@@ -143,11 +148,13 @@ def set_agent_reasoning_effort(aid: str, body: AgentReasoningEffortUpdate, reque
                 f"model '{row['model']}'; choose one of {sorted(supported)}",
             )
         old_effort = row["reasoning_effort"]
+        before = config_before(cur, aid)  # config history: pre-change state (row-locked)
         cur.execute(
             "UPDATE agents SET reasoning_effort=%s WHERE id=%s RETURNING reasoning_effort",
             (body.reasoning_effort, aid),
         )
         new_effort = cur.fetchone()["reasoning_effort"]
+        record_config_change(cur, aid, before, source="reasoning_effort", actor_agent_id=actor)
         log_event(
             cur,
             agent["container_id"],

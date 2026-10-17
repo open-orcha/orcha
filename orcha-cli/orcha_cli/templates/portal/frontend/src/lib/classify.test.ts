@@ -4,7 +4,7 @@
  * TS source is exercised directly here).
  */
 import { describe, expect, it } from "vitest";
-import { classifyLine, type LogEvent } from "./classify";
+import { classifyLine, selfAction, type LogEvent } from "./classify";
 
 const first = (line: string): LogEvent => classifyLine(line)[0] || ({ type: "", label: "", text: "" } as LogEvent);
 const toolLine = (cmd: string): string =>
@@ -97,5 +97,32 @@ describe("classifyLine — Codex JSONL taxonomy (ISS-85)", () => {
       item: { type: "function_call", name: "shell", arguments: "curl -X POST http://x:8000/api/agents/a1/wake-ack -d @x" },
     });
     expect(first(line).type).toBe("decision");
+  });
+});
+
+describe("selfAction — only Orcha verbs, never repo paths (screen review: Activity)", () => {
+  it("does not tag ordinary Read/Bash calls on paths that contain 'orcha-'", () => {
+    expect(selfAction("Read", { file_path: "/workspace/orcha-web/src/App.tsx" })).toBe(false);
+    expect(selfAction("Read", { file_path: "/Users/me/orcha-open/README.md" })).toBe(false);
+    expect(selfAction("Bash", { command: "cd /workspace/orcha-open && npm test" })).toBe(false);
+    expect(selfAction("Bash", { command: "ls orcha-cli/orcha_cli/templates" })).toBe(false);
+    expect(selfAction("Read", { file_path: "/repo/skills/orcha-next.md" })).toBe(false);
+    expect(first(toolLine("cat /workspace/orcha-web/package.json")).type).toBe("tool");
+  });
+
+  it("still tags Orcha skills, slash commands and API verbs", () => {
+    expect(selfAction("Skill", { skill: "orcha-next" })).toBe(true);
+    expect(selfAction("SlashCommand", { command: "/orcha-done t1 shipped" })).toBe(true);
+    expect(selfAction("Bash", { command: "orcha-respond r1 'yes'" })).toBe(true);
+    expect(selfAction("Bash", { command: "curl -X POST http://x/api/tasks/t1/done" })).toBe(true);
+  });
+});
+
+describe("partial-message deltas (--include-partial-messages)", () => {
+  it("a stream_event is never its own work-log row (the complete assistant event is)", () => {
+    const d = JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hel" } }, session_id: "s" });
+    const s = JSON.stringify({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t", name: "Bash" } } });
+    expect(classifyLine(d)).toEqual([]);
+    expect(classifyLine(s)).toEqual([]);
   });
 });

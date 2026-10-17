@@ -26,7 +26,7 @@ def missing_static_page(name: str, cause: str) -> str:
     return f"""<!doctype html>
 <html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
-<title>Orcha · portal not provisioned</title>
+<title>Embodent · portal not provisioned</title>
 <style>
   body{{margin:0;min-height:100vh;display:grid;place-items:center;
     background:#0b0e14;color:#e6ebf5;

@@ -115,7 +115,7 @@ fun closeSelectedRequest(reason: String?) = runHumanAction("Request closed") { s
 fun nudgeSelectedRequest(note: String?) {
     val selected = _uiState.value.selectedContainer ?: return
     val actor = selected.humanAgentId ?: run {
-        _uiState.update { it.copy(error = "Pairing is missing the human identity. Reconnect this Orcha first.") }
+        _uiState.update { it.copy(error = "Pairing is missing the human identity. Reconnect this Embodent first.") }
         return
     }
     val request = _uiState.value.selectedRequest ?: return

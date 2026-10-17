@@ -47,3 +47,5 @@
 
 /* ---- GitHub hub degradation callout (local_source) ------------------------ */
 .gh-local-callout .sc-acts { margin-top: 12px; }
+/* e2e-permissions-16: the reason a viewer / ungranted member can't bind */
+.cr-blocked { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: var(--surface-2, rgba(127,127,127,.08)); font-size: 12.5px; color: var(--muted); line-height: 1.45; }

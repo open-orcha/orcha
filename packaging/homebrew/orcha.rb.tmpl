@@ -14,14 +14,15 @@ class {{CLASS_NAME}} < Formula
   version "{{VERSION}}"
   license "MIT"
 
+  # pydantic-core (FastAPI) is Rust and Homebrew builds every resource from source;
+  # libpq backs pure psycopg (the wheel-only psycopg-binary can't be built here).
+  depends_on "rust" => :build
+  depends_on "libpq"
   depends_on "python@3.13"
-{{CONFLICTS}}  # The CLI's single runtime dep, pinned. Bump together with the
-  # `dependencies` line in orcha-cli/pyproject.toml.
-  resource "websockets" do
-    url "https://files.pythonhosted.org/packages/04/24/4b2031d72e840ce4c1ccb255f693b15c334757fc50023e4db9537080b8c4/websockets-16.0.tar.gz"
-    sha256 "5f6261a5e56e8d5c42a4497b364ea24d94d9563e8fbd44e78ac40879c60179b5"
-  end
-
+{{CONFLICTS}}  # The CLI's runtime deps (the `orcha portal` stack, GH #258), pinned.
+  # Generated from packaging/homebrew/resources.json: after changing the
+  # `dependencies` in orcha-cli/pyproject.toml, run `render_formula.py lock`.
+{{RESOURCES}}
   def install
     venv = virtualenv_create(libexec, "python3.13")
     venv.pip_install resources

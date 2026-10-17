@@ -14,8 +14,9 @@
 
    This suite makes that class of damage impossible to reintroduce silently:
    every shared stylesheet must balance braces, carry no stray top-level "}",
-   and have nothing declaration-like before its first rule; responsive.css must
-   carry the swiss-light rule at a REACHABLE top level.
+   and have nothing declaration-like before its first rule. (Orcha V2 retired
+   the skins, responsive.css included; the entrypoint check below now pins that
+   every imported sheet exists and the V2 layers load last.)
 
    Run:  node tests/portal/css_split_guard.test.js
    (No package.json / npm install needed — uses only Node built-ins.)
@@ -38,7 +39,9 @@ function assert(cond, msg) {
 function cssIntegrityTests() {
   console.log("\nshared stylesheets parse standalone (split-fragment guard)\n");
   const SHEETS = ["tokens.css", "shell.css", "components.css", "overlays.css",
-    "conversation.css", "responsive.css"];
+    "conversation.css",
+    // Orcha V2 layers (imported last by styles.css)
+    "v2-tokens.css", "v2-primitives.css", "v2-shell.css"];
   const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, " ");
   for (const name of SHEETS) {
     const css = stripComments(read(name));
@@ -55,14 +58,19 @@ function cssIntegrityTests() {
     assert(head.indexOf(";") < 0 && head.indexOf("}") < 0,
       `styles/${name}: nothing declaration-like before the first rule`);
   }
-  // and the rule the field bug lost must exist as a REACHABLE top-level rule
-  const resp = stripComments(read("responsive.css"));
-  const lightAt = resp.indexOf('html[data-skin="swiss"][data-theme="light"]');
-  assert(lightAt >= 0, "responsive.css carries the Swiss LIGHT theme rule");
-  const before = resp.slice(0, lightAt);
-  let d = 0;
-  for (const ch of before) { if (ch === "{") d += 1; else if (ch === "}") d -= 1; }
-  assert(d === 0, "…at the top level, where the parser can actually reach it");
+  // V2: the decorative skins (responsive.css = Swiss, skin-minimal, skin-gold)
+  // were retired; the entrypoint must not import a sheet that no longer ships,
+  // and every sheet it imports must exist (a missing @import is a silent 404).
+  const entry = stripComments(fs.readFileSync(path.join(STYLES, "..", "styles.css"), "utf8"));
+  const imports = [...entry.matchAll(/@import\s+url\("\/assets\/styles\/([\w.-]+)"\)/g)].map((m) => m[1]);
+  for (const retired of ["responsive.css", "skin-minimal.css", "skin-gold.css"]) {
+    assert(imports.indexOf(retired) < 0, `styles.css no longer imports retired skin ${retired}`);
+  }
+  for (const name of imports) {
+    assert(fs.existsSync(path.join(STYLES, name)), `styles.css import ${name} exists`);
+  }
+  assert(imports[imports.length - 1] === "v2-shell.css" && imports.indexOf("v2-tokens.css") > imports.indexOf("skeleton.css"),
+    "V2 layers are imported last (tokens → primitives → shell)");
 }
 
 function run() {

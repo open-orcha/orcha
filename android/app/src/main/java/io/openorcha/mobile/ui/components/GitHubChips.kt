@@ -40,20 +40,18 @@ fun ChecksChip(checks: GitHubChecks, modifier: Modifier = Modifier, showsWhenEmp
     val summary = GitHubHubUx.checksSummary(checks)
     if (!summary.hasChecks && !showsWhenEmpty) return
     val tint = verdictColor(summary.verdict)
+    val p = Orcha.palette
+    val shape = RoundedCornerShape(p.radiusTag.dp)
     Row(
         modifier
-            .background(tint.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
-            .border(BorderStroke(1.dp, tint.copy(alpha = 0.34f)), RoundedCornerShape(6.dp))
+            .background(p.surface2, shape)
+            .border(BorderStroke(1.dp, p.border), shape)
             .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(verdictIcon(summary.verdict), contentDescription = null, tint = tint, modifier = Modifier.size(9.dp))
-        Text(
-            summary.label,
-            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.W600, fontSize = 10.5.sp),
-            color = tint,
-        )
+        Icon(verdictIcon(summary.verdict), contentDescription = null, tint = tint, modifier = Modifier.size(10.dp))
+        Text(summary.label, style = ltype(LType.Mono).copy(fontSize = 11.sp), color = p.text2)
     }
 }
 
@@ -86,16 +84,32 @@ fun MergeStateChip(mergeableState: String?, modifier: Modifier = Modifier) {
         "dirty", "blocked", "behind" -> p.danger
         else -> p.warn
     }
-    Text(
-        label,
-        modifier = modifier
-            .border(BorderStroke(1.dp, tint.copy(alpha = 0.4f)), RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W500, fontSize = 10.5.sp),
-        color = tint,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+    LTag(label, modifier = modifier, tint = tint, dot = true)
+}
+
+/** Issue / PR state as a compact Linear tag: open (green dot), draft (grey), merged
+ *  (violet), closed (red). Replaces the task-domain StatusPill on GitHub screens. */
+@Composable
+fun GitHubStateTag(state: String?, modifier: Modifier = Modifier) {
+    val p = Orcha.palette
+    val s = state?.lowercase().orEmpty()
+    val tint = when (s) {
+        "open" -> p.ok
+        "merged" -> p.violet
+        "closed" -> p.danger
+        else -> p.muted
+    }
+    LTag(s.replaceFirstChar { it.uppercase() }.ifEmpty { "Unknown" }, modifier = modifier, tint = tint, dot = true)
+}
+
+/** Linear "+N −N" diff count, mono, green/red. */
+@Composable
+fun DiffCount(additions: Int, deletions: Int, modifier: Modifier = Modifier) {
+    val p = Orcha.palette
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("+$additions", style = ltype(LType.Mono), color = p.ok)
+        Text("\u2212$deletions", style = ltype(LType.Mono), color = p.danger)
+    }
 }
 
 /** A single GitHub label chip (issue/PR label names). */
@@ -106,17 +120,8 @@ fun GitHubLabelChip(label: GitHubLabel, modifier: Modifier = Modifier) {
     // the house violet is the fallback for colorless labels / older servers.
     val hex = label.color?.toLongOrNull(16)
     val tint = if (hex != null) Color(0xFF000000 or hex) else p.violet
-    Text(
-        label.name,
-        modifier = modifier
-            .background(tint.copy(alpha = 0.15f), CircleShape)
-            .border(BorderStroke(1.dp, tint.copy(alpha = 0.4f)), CircleShape)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W500, fontSize = 10.sp),
-        color = tint,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+    // Linear label: neutral tag with the label's colour as a dot.
+    LTag(label.name, modifier = modifier, tint = tint, dot = true)
 }
 
 /** The per-run status glyph for the detail checks list. */

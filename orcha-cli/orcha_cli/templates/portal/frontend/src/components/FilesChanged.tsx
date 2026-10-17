@@ -13,6 +13,10 @@
  * by run_id and selection/filter/collapse survive the 3s poll re-renders.
  */
 import { useEffect, useMemo, useState } from "react";
+import { binaryPatchNewSize, isBinaryDiff, isRichKind, kindFromExt, stripBinaryPayload } from "../lib/filePreview";
+import { BinaryDiffView, type BlobSource } from "./filePreview/BinaryDiff";
+
+export type { BlobSource } from "./filePreview/BinaryDiff";
 
 export interface DiffFile {
   path: string;
@@ -21,6 +25,19 @@ export interface DiffFile {
   add: number;
   del: number;
   lines: string[];
+  /** A binary section ("GIT binary patch" / "Binary files … differ") — its
+   *  payload is never rendered as text; the preview layer shows it instead. */
+  binary?: boolean;
+  /** The new side's size when a binary patch states it (`literal N`). */
+  size?: number | null;
+}
+
+// V2 a11y: tree rows are keyboard-reachable (Enter/Space activate) and the
+// one-letter status badge carries its word as a tooltip (the badge text itself
+// stays the bare letter — other surfaces' tests pin it).
+const STATUS_WORD: Record<string, string> = { M: "modified", A: "added", D: "deleted", R: "renamed" };
+function activateOnKey(e: { key: string; preventDefault: () => void }, fn: () => void) {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); }
 }
 
 export function diffLineClass(l: string): string {
@@ -35,7 +52,8 @@ export function diffLineClass(l: string): string {
     l.startsWith("new mode") ||
     l.startsWith("similarity ") ||
     l.startsWith("rename ") ||
-    l.startsWith("Binary files")
+    l.startsWith("Binary files") ||
+    l.startsWith("GIT binary patch")
   )
     return "meta";
   if (l.startsWith("@@")) return "hunk";
@@ -58,13 +76,27 @@ export function parseDiffFiles(diff: string): DiffFile[] {
     cur.lines.push(l);
     if (l.startsWith("new file")) cur.status = "A";
     else if (l.startsWith("deleted file")) cur.status = "D";
-    else if (l.startsWith("rename to ")) {
+    else if (l === "GIT binary patch" || /^Binary files .* differ$/.test(l)) {
+      cur.binary = true;
+      // `--no-index` diffs say "Binary files /dev/null and b/x differ" with no mode line
+      if (/^Binary files \/dev\/null and /.test(l) && cur.status === "M") cur.status = "A";
+      else if (/ and \/dev\/null differ$/.test(l) && cur.status === "M") cur.status = "D";
+    } else if (cur.binary) {
+      /* base85 payload / literal|delta headers — counted as neither add nor del */
+    } else if (l.startsWith("rename to ")) {
       cur.status = "R";
       cur.path = l.slice(10);
     } else if (l.startsWith("+++ b/")) cur.path = l.slice(6);
     else if (diffLineClass(l) === "add") cur.add++;
     else if (diffLineClass(l) === "del") cur.del++;
   });
+  for (const f of files) {
+    if (f.binary) {
+      f.size = binaryPatchNewSize(f.lines);
+      f.add = 0;
+      f.del = 0;
+    }
+  }
   return files;
 }
 
@@ -72,7 +104,7 @@ export function parseDiffFiles(diff: string): DiffFile[] {
 function FlatDiff({ diff }: { diff: string }) {
   let add = 0;
   let del = 0;
-  const rows = diff.split("\n").map((l, i) => {
+  const rows = stripBinaryPayload(diff.split("\n")).map((l, i) => {
     const cls = diffLineClass(l);
     if (cls === "add") add++;
     else if (cls === "del") del++;
@@ -179,8 +211,30 @@ function buildTreeRows(files: DiffFile[], q: string, closed: Set<string>, selPat
 }
 
 /* ---- the selected file's pane (dfvPaneHtml parity) ------------------------ */
-function FilePane({ file }: { file: DiffFile | undefined }) {
+/** A file whose change the preview layer shows (binary, or a rich media kind
+ *  — e.g. an image the host can serve both sides of). */
+function previewable(file: DiffFile, blobSource?: BlobSource | null): boolean {
+  if (file.binary || isBinaryDiff(file.lines)) return true;
+  const k = kindFromExt(file.path);
+  // an SVG text diff stays a text diff; other rich kinds never carry useful text
+  return !!blobSource && !!k && isRichKind(k) && k !== "svg";
+}
+
+function FilePane({ file, blobSource }: { file: DiffFile | undefined; blobSource?: BlobSource | null }) {
   if (!file) return null;
+  if (previewable(file, blobSource)) {
+    return (
+      <>
+        <div className="dfv-ph">
+          <span className="dfv-path mono">{file.path}</span>
+          <span className="muted dfv-bin">binary</span>
+        </div>
+        <div className="dfv-preview">
+          <BinaryDiffView key={file.path} file={file} source={blobSource} />
+        </div>
+      </>
+    );
+  }
   return (
     <>
       <div className="dfv-ph">
@@ -203,7 +257,13 @@ function FilePane({ file }: { file: DiffFile | undefined }) {
 // Accepts EITHER a raw unified git diff (`diff`) or pre-parsed per-file
 // entries (`preparsed`, e.g. GitHub API file patches) — same tree/filter/
 // badges UI over both.
-export function FilesChanged({ diff, preparsed }: { diff?: string | null | undefined; preparsed?: DiffFile[] }) {
+/** `hideSummary`: the host already states "N files changed +a −d" (e.g. the
+ *  agent conversation's "Changed N files" card) — drop the viewer's own count
+ *  line so the fact is shown once (D12); the maximize control stays. */
+/** `blobSource`: where each side's bytes live (a run / working-tree / ref raw
+ *  route) — binary and media files then preview (images compare before/after);
+ *  without it they show a compact "binary file" card, never their payload. */
+export function FilesChanged({ diff, preparsed, hideSummary, blobSource }: { diff?: string | null | undefined; preparsed?: DiffFile[]; hideSummary?: boolean; blobSource?: BlobSource | null }) {
   const files = useMemo(
     () => (preparsed && preparsed.length ? preparsed : diff && diff.trim() ? parseDiffFiles(diff) : []),
     [diff, preparsed],
@@ -217,7 +277,12 @@ export function FilesChanged({ diff, preparsed }: { diff?: string | null | undef
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setFull(false);
+      // An inner popover/menu that already handled this Escape wins. Otherwise
+      // the full view consumes it (preventDefault) so page-level "Escape closes
+      // the task detail" handlers leave the detail open (parity TSK-129).
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      setFull(false);
     };
     document.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden"; // the overlay owns scrolling
@@ -262,7 +327,7 @@ export function FilesChanged({ diff, preparsed }: { diff?: string | null | undef
           aria-label="Filter changed files"
           onChange={(e) => setQ(e.target.value)}
         />
-        <div className="dfv-tree">
+        <div className="dfv-tree" role="tree" aria-label="Changed files">
           {rows.length ? (
             rows.map((r) =>
               r.kind === "dir" ? (
@@ -272,9 +337,13 @@ export function FilesChanged({ diff, preparsed }: { diff?: string | null | undef
                   data-dfv-dir={r.full}
                   style={{ paddingLeft: 10 + r.depth * 14 }}
                   title={r.full}
+                  role="treeitem"
+                  aria-expanded={r.open}
+                  tabIndex={0}
                   onClick={() => toggleDir(r.full)}
+                  onKeyDown={(e) => activateOnKey(e, () => toggleDir(r.full))}
                 >
-                  <span className="dfv-c">{r.open ? "▾" : "▸"}</span>
+                  <span className="dfv-c" aria-hidden="true">{r.open ? "▾" : "▸"}</span>
                   <DirIcon />
                   <span className="dfv-nm">{r.label}</span>
                   <span className="dfv-ct">{r.count}</span>
@@ -286,11 +355,17 @@ export function FilesChanged({ diff, preparsed }: { diff?: string | null | undef
                   data-dfv-file={r.file!.path}
                   style={{ paddingLeft: 24 + r.depth * 14 }}
                   title={`${r.file!.path} · +${r.file!.add} −${r.file!.del}`}
+                  role="treeitem"
+                  aria-selected={r.file!.path === sel.path}
+                  tabIndex={0}
                   onClick={() => setSelPath(r.file!.path)}
+                  onKeyDown={(e) => activateOnKey(e, () => setSelPath(r.file!.path))}
                 >
                   <FileIcon />
                   <span className="dfv-nm">{r.label}</span>
-                  <span className={"dfv-b " + r.file!.status}>{r.file!.status}</span>
+                  <span className={"dfv-b " + r.file!.status} title={STATUS_WORD[r.file!.status] || r.file!.status}>
+                    {r.file!.status}
+                  </span>
                 </div>
               ),
             )
@@ -306,11 +381,15 @@ export function FilesChanged({ diff, preparsed }: { diff?: string | null | undef
   return (
     <div className={"dfv" + (full ? " dfv-full" : "")}>
       <div className="dfv-top">
-        <span className="dfv-n">
-          {files.length} file{files.length === 1 ? "" : "s"} changed
-        </span>
-        <span className="a">+{addT}</span>
-        <span className="d">−{delT}</span>
+        {hideSummary ? null : (
+          <>
+            <span className="dfv-n">
+              {files.length} file{files.length === 1 ? "" : "s"} changed
+            </span>
+            <span className="a">+{addT}</span>
+            <span className="d">−{delT}</span>
+          </>
+        )}
         <button
           type="button"
           className="dfv-max"
@@ -332,7 +411,7 @@ export function FilesChanged({ diff, preparsed }: { diff?: string | null | undef
       <div className="dfv-body">
         {side}
         <div className="dfv-main">
-          <FilePane file={sel} />
+          <FilePane file={sel} blobSource={blobSource} />
         </div>
       </div>
     </div>

@@ -34,6 +34,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -55,6 +66,7 @@ import io.openorcha.mobile.ui.theme.MonoFontFamily
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
 
+/** Linear card: panel surface, 1dp hairline border, skin card radius (10 on Linear). */
 @Composable
 fun OrchaCard(
     modifier: Modifier = Modifier,
@@ -66,43 +78,52 @@ fun OrchaCard(
     val cardShape = RoundedCornerShape(Orcha.palette.radiusCard.dp)
     val base = modifier
         .fillMaxWidth()
+        .clip(cardShape)
         .background(container, cardShape)
         .border(BorderStroke(1.dp, borderColor), cardShape)
         .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-    Column(base.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+    Column(base.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }
 
-/** `.section-h` — 11/700 +.8 uppercase kicker with faint count. */
+/** Linear section header: muted 13/500 caption + count, no band, no uppercase. */
 @Composable
 fun SectionH(title: String, count: String? = null, modifier: Modifier = Modifier, trailing: (@Composable RowScope.() -> Unit)? = null) {
     Row(
-        modifier.fillMaxWidth().padding(top = 10.dp, start = 2.dp, end = 2.dp),
+        modifier.fillMaxWidth().padding(top = 10.dp, start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(title.uppercase(), style = MaterialTheme.typography.labelMedium, color = Orcha.palette.muted)
-        if (count != null) Text(count, style = MaterialTheme.typography.labelMedium, color = Orcha.palette.faint)
-        Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.weight(1f).semantics(mergeDescendants = true) { heading() },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(title, style = ltype(LType.Meta).copy(fontWeight = FontWeight.Medium), color = Orcha.palette.text2)
+            if (count != null) Text(count, style = ltype(LType.Meta), color = Orcha.palette.muted)
+        }
         trailing?.invoke(this)
     }
 }
 
-/** `.tag` — bordered 10.5 meta chip; `.tag.model` mono variant for model ids. */
+/** Linear tag — compact neutral chip on surface2 with a hairline; mono variant for model ids. */
 @Composable
 fun MetaTag(text: String, mono: Boolean = false, tint: Color? = null, modifier: Modifier = Modifier) {
+    val p = Orcha.palette
+    val shape = RoundedCornerShape(p.radiusTag.dp)
     Text(
         text,
         modifier = modifier
-            .border(BorderStroke(1.dp, tint?.copy(alpha = 0.4f) ?: Orcha.palette.border2), RoundedCornerShape(Orcha.palette.radiusTag.dp))
+            .background(p.surface2, shape)
+            .border(BorderStroke(1.dp, p.border), shape)
             .padding(horizontal = 6.dp, vertical = 1.dp),
-        style = if (mono) MonoSmStyle else MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W500, letterSpacing = 0.sp),
-        color = tint ?: Orcha.palette.muted,
+        style = if (mono) MonoSmStyle.copy(fontSize = 11.sp) else ltype(LType.Micro),
+        color = tint ?: p.text2,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
 }
 
-/* ---------- buttons (`.btn`; Android renders full-radius pills) ---------- */
+/* ---------- buttons (Linear: compact, skin button radius; 48dp hit target) ---------- */
 
 @Composable
 private fun KitButton(
@@ -115,49 +136,63 @@ private fun KitButton(
     small: Boolean = false,
     modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
+    pressedContainer: Color = container.copy(alpha = container.alpha * 0.85f),
 ) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.alpha(if (enabled) 1f else 0.45f),
-        shape = RoundedCornerShape(999.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = container, contentColor = contentColor,
-            disabledContainerColor = container, disabledContentColor = contentColor,
-        ),
-        border = border?.let { BorderStroke(1.dp, it) },
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = if (small) 14.dp else 18.dp, vertical = if (small) 8.dp else 12.dp,
-        ),
+    val p = Orcha.palette
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val shape = RoundedCornerShape(p.radiusButton.dp)
+    Box(
+        modifier
+            .defaultMinSize(minHeight = 48.dp)
+            .alpha(if (enabled) 1f else 0.45f)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        if (leading != null) { leading(); Spacer(Modifier.width(8.dp)) }
-        Text(
-            text,
-            style = if (small) MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W700)
-            else MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.W700, letterSpacing = (-0.1).sp),
-        )
+        Row(
+            Modifier
+                .heightIn(min = if (small) 28.dp else 34.dp)
+                .background(if (pressed) pressedContainer else container, shape)
+                .let { if (border != null) it.border(BorderStroke(1.dp, border), shape) else it }
+                .padding(horizontal = if (small) 10.dp else 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            if (leading != null) {
+                CompositionLocalProvider(LocalContentColor provides contentColor) { leading() }
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                text,
+                style = ltype(if (small) LType.Meta else LType.BodyEmph).copy(fontWeight = FontWeight.Medium),
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
 @Composable
 fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, small: Boolean = false, leading: (@Composable () -> Unit)? = null) =
-    KitButton(text, onClick, Orcha.palette.accent, Orcha.palette.accentInk, enabled = enabled, small = small, modifier = modifier, leading = leading)
+    KitButton(text, onClick, Orcha.palette.lPrimaryFill, Orcha.palette.lPrimaryText, enabled = enabled, small = small, modifier = modifier, leading = leading)
 
 @Composable
 fun TonalButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, small: Boolean = false) =
-    KitButton(text, onClick, Orcha.palette.accentSoft, Orcha.palette.accent, Orcha.palette.accentLine, enabled, small, modifier)
+    // Linear: tonal = secondary surface with the accent label (no tinted fill).
+    KitButton(text, onClick, Orcha.palette.surface2, Orcha.palette.accent, Orcha.palette.border2, enabled, small, modifier, pressedContainer = Orcha.palette.surface3)
 
 @Composable
 fun OkTonalButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, small: Boolean = false) =
-    KitButton(text, onClick, Orcha.palette.okSoft, Orcha.palette.ok, Orcha.palette.okLine, enabled, small, modifier)
+    KitButton(text, onClick, Orcha.palette.okSoft, Orcha.palette.ok, Orcha.palette.okLine, enabled, small, modifier, pressedContainer = Orcha.palette.okLine)
 
 @Composable
 fun DangerTonalButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, small: Boolean = false) =
-    KitButton(text, onClick, Orcha.palette.dangerSoft, Orcha.palette.danger, Orcha.palette.dangerLine, enabled, small, modifier)
+    KitButton(text, onClick, Orcha.palette.dangerSoft, Orcha.palette.danger, Orcha.palette.dangerLine, enabled, small, modifier, pressedContainer = Orcha.palette.dangerLine)
 
 @Composable
 fun NeutralButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, small: Boolean = false) =
-    KitButton(text, onClick, Orcha.palette.surface2, Orcha.palette.text, Orcha.palette.border2, enabled, small, modifier)
+    KitButton(text, onClick, Orcha.palette.surface2, Orcha.palette.text, Orcha.palette.border2, enabled, small, modifier, pressedContainer = Orcha.palette.surface3)
 
 /* ---------- inputs (`.input`: surface-2 fill, border-2, radius 12) ---------- */
 
@@ -187,6 +222,7 @@ fun OrchaField(
         modifier = modifier.fillMaxWidth(),
         label = label?.let { { Text(it) } },
         placeholder = placeholder?.let { { Text(it, color = Orcha.palette.faint) } },
+        textStyle = ltype(LType.Body).copy(color = Orcha.palette.text),
         minLines = minLines,
         maxLines = maxLines,
         isError = isError,
@@ -207,8 +243,8 @@ fun OrchaField(
             focusedContainerColor = Orcha.palette.surface2,
             unfocusedContainerColor = Orcha.palette.surface2,
             errorContainerColor = Orcha.palette.surface2,
-            focusedBorderColor = Orcha.palette.accent,
-            unfocusedBorderColor = Orcha.palette.border2,
+            focusedBorderColor = Orcha.palette.accentLine,
+            unfocusedBorderColor = Orcha.palette.border,
             errorBorderColor = Orcha.palette.danger,
             focusedLabelColor = Orcha.palette.accent,
             unfocusedLabelColor = Orcha.palette.muted,
@@ -217,31 +253,41 @@ fun OrchaField(
     )
 }
 
-/** `.seg` — segmented control on surface-2, selected opt on surface-3. */
+/** Linear segmented control: surface2 track, selected option raised on surface3 + hairline. */
 @Composable
 fun SegControl(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val p = Orcha.palette
+    val track = RoundedCornerShape(p.radiusButton.dp + 2.dp)
+    val seg = RoundedCornerShape(p.radiusButton.dp)
     Row(
         modifier
             .fillMaxWidth()
-            .background(Orcha.palette.surface2, RoundedCornerShape(10.dp))
-            .border(BorderStroke(1.dp, Orcha.palette.border), RoundedCornerShape(10.dp))
-            .padding(3.dp),
+            .background(p.surface2, track)
+            .border(BorderStroke(1.dp, p.border), track)
+            .padding(2.dp),
     ) {
         options.forEachIndexed { i, opt ->
             val on = i == selected
-            // Selected segment speaks the accent language — surface3-on-surface2 was
-            // indistinguishable in the dark skins ("colors need update for selected tab").
-            Text(
-                opt,
-                modifier = Modifier
+            Box(
+                Modifier
                     .weight(1f)
-                    .background(if (on) Orcha.palette.accentSoft else Color.Transparent, RoundedCornerShape(8.dp))
-                    .clickable { onSelect(i) }
-                    .padding(vertical = 7.dp),
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W600),
-                color = if (on) Orcha.palette.accent else Orcha.palette.muted,
-            )
+                    .defaultMinSize(minHeight = 44.dp)
+                    .selectable(selected = on, role = Role.Tab) { onSelect(i) }
+                    .padding(2.dp)
+                    .background(if (on) p.surface3 else Color.Transparent, seg)
+                    .border(BorderStroke(1.dp, if (on) p.border2 else Color.Transparent), seg),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    opt,
+                    textAlign = TextAlign.Center,
+                    style = ltype(LType.Meta).copy(fontWeight = FontWeight.Medium),
+                    color = if (on) p.text else p.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+                )
+            }
         }
     }
 }

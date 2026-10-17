@@ -2,6 +2,8 @@
 
 from fastapi import HTTPException
 
+from portal_backend import sql
+
 
 def require_request(cur, rid, for_update=False):
     # for_update locks the request row for the rest of the transaction. State-mutating
@@ -13,9 +15,10 @@ def require_request(cur, rid, for_update=False):
     cur.execute(
         """SELECT id, container_id, type, status, requester_id, target_id,
                   payload, response, expires_at, parent_request_id, chain_depth,
-                  detail, spawned_task_id, rejection_reason, originating_task_id
+                  detail, spawned_task_id, rejection_reason, originating_task_id,
+                  agent_payload
            FROM requests WHERE id=%s"""
-        + (" FOR UPDATE" if for_update else ""),
+        + (" " + sql.for_update() if for_update else ""),
         (rid,),
     )
     r = cur.fetchone()

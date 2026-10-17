@@ -50,6 +50,7 @@ export function extractHeadingLines(raw: string): HeadingLine[] {
 // textContent "Bold Title".
 export function normalizeHeadingText(text: string): string {
   return text
+    .replace(/!?\[([^\]\n]+)\]\([^)\n]*\)/g, "$1") // [text](href) renders as its text (mdDoc.ts)
     .replace(/`([^`\n]+)`/g, "$1")
     .replace(/\*\*(?!\s)([^\n]+?)\*\*/g, "$1")
     .replace(/__(?!\s)([^\n_]+?)__/g, "$1")

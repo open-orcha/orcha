@@ -3,13 +3,15 @@
 import json
 import time
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event
 from portal_backend.guards import require_agent, valid_uuid
+from portal_backend.identity_routes import require_machine_lane_member, require_member_read
 from portal_backend.schemas.agent_state import DigestSnapshot
 
 _digest_curator = None
@@ -22,7 +24,7 @@ def configure_compatibility(digest_curator):
 
 
 @app.post("/api/agents/{aid}/digest", status_code=201)
-def post_digest(aid: str, body: DigestSnapshot):
+def post_digest(aid: str, body: DigestSnapshot, request: Request):
     """D3: store one per-agent memory digest the agent composed.
 
     Append-only — every POST is a new snapshot row; the latest is the live view.
@@ -52,12 +54,13 @@ def post_digest(aid: str, body: DigestSnapshot):
     with db_cursor() as (connection, cur):
         agent = require_agent(cur, aid)
         container_id = str(agent["container_id"])
+        require_machine_lane_member(cur, request, container_id)  # PS-07
         snapshot_ts = time.time()
         cur.execute(
             """INSERT INTO agent_memory_digests
                  (container_id, agent_id, snapshot_ts, current_focus,
                   decisions, learnings, open_threads, audience)
-               VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
                 container_id,
@@ -93,12 +96,13 @@ def post_digest(aid: str, body: DigestSnapshot):
 
 
 @app.get("/api/agents/{aid}/digest")
-def get_digest(aid: str):
+def get_digest(aid: str, request: Request):
     """Return the agent's LATEST memory digest (or {digest: null} if none yet)."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
-        require_agent(cur, aid)
+        agent = require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
         cur.execute(
             """SELECT id, snapshot_ts, current_focus, decisions, learnings,
                       open_threads, audience, created_at
@@ -110,7 +114,7 @@ def get_digest(aid: str):
 
 
 @app.get("/api/agents/{aid}/rehydrate")
-def rehydrate(aid: str):
+def rehydrate(aid: str, request: Request):
     """D4: assemble the 'where we left off' brief for a re-binding tab.
 
     One call returns everything the SessionStart rehydrate prints: identity,
@@ -131,6 +135,7 @@ def rehydrate(aid: str):
         agent = cur.fetchone()
         if not agent:
             raise HTTPException(404, f"agent {aid} not found")
+        require_member_read(cur, request, str(agent["container_id"]))  # PS-08
         cur.execute(
             """SELECT t.id, t.title, t.status, t.priority, t.definition_of_done,
                       (SELECT m.body FROM task_messages m
@@ -143,8 +148,16 @@ def rehydrate(aid: str):
             (aid,),
         )
         tasks = cur.fetchall()
+        # Dialect-portable truncation (LEFT on Postgres, substr on SQLite).
+        payload_240 = sql.left("COALESCE(r.agent_payload, r.payload)", 240)
+        payload_160 = sql.left("COALESCE(r.agent_payload, r.payload)", 160)
+        response_240 = sql.left("r.response", 240)
         cur.execute(
-            """SELECT r.id, r.type, r.priority, LEFT(r.payload, 240) AS payload,
+            # Mig 065: the brief is agent-only — it shows the text addressed to the agent
+            # (agent_payload, e.g. a code thread's reply instructions) when there is one.
+            f"""SELECT r.id, r.type, r.priority,
+                      {payload_240} AS payload,
+                      r.agent_payload,
                       req.alias AS requester_alias
                FROM requests r JOIN agents req ON req.id = r.requester_id
                WHERE r.target_id = %s AND r.status = 'open'
@@ -153,8 +166,8 @@ def rehydrate(aid: str):
         )
         inbox = cur.fetchall()
         cur.execute(
-            """SELECT r.id, r.type, LEFT(r.payload, 160) AS payload,
-                      LEFT(r.response, 240) AS response,
+            f"""SELECT r.id, r.type, {payload_160} AS payload,
+                      {response_240} AS response,
                       COALESCE(tgt.alias, '(human)') AS target_alias
                FROM requests r LEFT JOIN agents tgt ON tgt.id = r.target_id
                WHERE r.requester_id = %s AND r.status = 'answered'

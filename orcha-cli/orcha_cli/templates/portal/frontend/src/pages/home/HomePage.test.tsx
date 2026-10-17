@@ -10,6 +10,14 @@ import { ToastProvider } from "../../components/ui";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
 import { HomePage } from "./HomePage";
 
+// These suites exercise the INLINE gate cards, which render only when the
+// dedicated /needs page is absent (with it, the Overview shows preview rows).
+vi.mock("../../shell/optionalPages", async (orig) => ({
+  ...(await orig<typeof import("../../shell/optionalPages")>()),
+  HAS_NEEDS_PAGE: false,
+  NEEDS_HREF: "/",
+}));
+
 interface Call { url: string; method: string; body: unknown }
 
 const rawSnap = (autonomy: string) => ({
@@ -65,23 +73,24 @@ describe("HomePage action queue (#367 autonomy gating)", () => {
   it("renders a needs_verification task as a verify card at autonomy 'plan'", async () => {
     stubFetch("plan");
     mount();
-    expect(await screen.findByText("Verify task")).toBeInTheDocument();
+    // identity settles after the first snapshot paint — re-query, don't hold a node
+    await waitFor(() => expect(document.querySelector("#needs .v2-group-count")).toHaveTextContent("1"));
+    expect(screen.getByText("Verify task")).toBeInTheDocument();
     expect(screen.getAllByText("Ship the feature").length).toBeGreaterThan(0);
-    expect(document.getElementById("aqBadge")).toHaveTextContent("1");
   });
 
   it("renders a needs_verification task as a verify card at autonomy 'pr'", async () => {
     stubFetch("pr");
     mount();
-    expect(await screen.findByText("Verify task")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Verify task")).toBeInTheDocument());
   });
 
   it("hides the verify card at autonomy 'full'", async () => {
     stubFetch("full");
     mount();
-    expect(await screen.findByText("✓ Nothing needs you right now.")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing needs you right now.")).toBeInTheDocument();
     expect(screen.queryByText("Verify task")).not.toBeInTheDocument();
-    expect(document.getElementById("aqBadge")).toHaveTextContent("0");
+    expect(document.querySelector("#needs .v2-group-count")).toHaveTextContent("0");
   });
 });
 
@@ -121,5 +130,40 @@ describe("HomePage gate actions (human-gated verify contract)", () => {
       expect(v).toBeTruthy();
       expect(v!.body).toEqual({ approve: false, actor_agent_id: "h1", feedback: "needs work" });
     });
+  });
+});
+
+describe("HomePage failed decision (inline cards)", () => {
+  beforeEach(() => { localStorage.clear(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it("a failed verification keeps the typed reason and the item", async () => {
+    const calls = stubFetch("plan");
+    const ok = global.fetch;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/verify")) {
+        calls.push({ url: String(input), method: init?.method || "GET", body: null });
+        return { ok: false, status: 500, json: async () => ({ detail: "nope" }) } as unknown as Response;
+      }
+      return ok(input, init);
+    }) as unknown as typeof fetch;
+    mount();
+    await screen.findByText("Verify task");
+    fireEvent.click(screen.getByRole("button", { name: "Reject…" }));
+    fireEvent.change(screen.getByPlaceholderText("What needs fixing? (required)"), { target: { value: "tests fail" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit rejection" }));
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/tasks/t1/verify")).toBe(true));
+    await screen.findByText(/nothing was changed; your input is kept/);
+    expect(screen.getByText("Verify task")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("What needs fixing? (required)")).toHaveValue("tests fail");
+  });
+
+  it("inline gate buttons are never solid green slabs", async () => {
+    stubFetch("plan");
+    mount();
+    await screen.findByText("Verify task");
+    const accept = screen.getByRole("button", { name: /Accept/ });
+    expect(accept.className).not.toMatch(/v2-btn-approve/);
+    expect(document.querySelector(".aq")!.className).not.toMatch(/stripe/);
   });
 });

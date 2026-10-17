@@ -16,10 +16,18 @@ export interface MergedSuggestion extends RosterSuggestion {
  *  heuristic entry source:'heuristic'. Pure. */
 export function mergeSuggestions(
   heuristic: RosterSuggestion[],
-  analysisAgents: { alias: string; role: string; focus: string; rationale: string }[]
+  analysisAgents: {
+    alias: string
+    role: string
+    focus: string
+    rationale: string
+  }[]
 ): MergedSuggestion[] {
   const seen = new Set(heuristic.map((s) => s.alias.toLowerCase()))
-  const merged: MergedSuggestion[] = heuristic.map((s) => ({ ...s, source: 'heuristic' as const }))
+  const merged: MergedSuggestion[] = heuristic.map((s) => ({
+    ...s,
+    source: 'heuristic' as const
+  }))
   for (const a of analysisAgents) {
     const key = a.alias.toLowerCase()
     if (seen.has(key)) continue
@@ -36,38 +44,40 @@ export function mergeSuggestions(
   return merged
 }
 
-export type AnalysisState =
-  | { kind: 'idle' }
-  | { kind: 'pending' }
-  | { kind: 'done'; result: AnalyzeProjectResult }
+export type AnalysisState = { kind: 'idle' } | { kind: 'pending' } | { kind: 'done'; result: AnalyzeProjectResult }
 
 /** Kick off `analyzeProject(folder)` in the background as soon as it mounts with a folder,
  *  never blocking the step it's used from — FleetStep renders fully usable immediately and
- *  appends the analysis card whenever (if ever) this resolves. Cancels its effect on unmount
- *  so a fast step-skip never sets state on an unmounted component. */
+ *  appends the analysis card whenever (if ever) this resolves.
+ *
+ *  The analysis is expensive (a real Claude run), so it starts at most ONCE per folder per
+ *  mount: the in-flight promise is kept in a ref and every effect run (React StrictMode runs
+ *  effects twice in dev) subscribes to that same promise with its own cancel flag. The old
+ *  "startedFor" guard returned early on the second run, whose cleanup had already cancelled
+ *  the first — so the result was never applied and the shimmer spun forever. */
 export function useProjectAnalysis(folder: string | null): AnalysisState {
   const [state, setState] = useState<AnalysisState>(folder ? { kind: 'pending' } : { kind: 'idle' })
-  const startedFor = useRef<string | null>(null)
+  const inflight = useRef<{
+    folder: string
+    promise: Promise<AnalyzeProjectResult>
+  } | null>(null)
 
   useEffect(() => {
-    if (!folder || startedFor.current === folder) return
-    startedFor.current = folder
+    if (!folder) return
+    if (!inflight.current || inflight.current.folder !== folder) {
+      const promise = window.orchaDesktop.analyzeProject(folder).catch((err: unknown): AnalyzeProjectResult => ({
+        // The IPC handler collapses failures to ok:false, but a stale/killed channel can
+        // still reject — treat that like any other unavailable analysis.
+        ok: false,
+        reason: (err as { code?: string })?.code ?? 'analysis unavailable'
+      }))
+      inflight.current = { folder, promise }
+      setState({ kind: 'pending' })
+    }
     let cancelled = false
-    setState({ kind: 'pending' })
-    void window.orchaDesktop
-      .analyzeProject(folder)
-      .then((result) => {
-        if (!cancelled) setState({ kind: 'done', result })
-      })
-      .catch((err: unknown) => {
-        // analyzeProject's IPC handler never rejects in practice (it collapses failures to
-        // ok:false), but a stale/killed IPC channel could still reject the promise itself —
-        // treat that identically to an ok:false result rather than leaving `pending` forever.
-        if (!cancelled) {
-          const reason = (err as { code?: string })?.code ?? 'analysis unavailable'
-          setState({ kind: 'done', result: { ok: false, reason } })
-        }
-      })
+    void inflight.current.promise.then((result) => {
+      if (!cancelled) setState({ kind: 'done', result })
+    })
     return () => {
       cancelled = true
     }

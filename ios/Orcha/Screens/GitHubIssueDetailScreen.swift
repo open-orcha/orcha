@@ -58,18 +58,21 @@ struct GitHubIssueDetailScreen: View {
 
     private var loadingState: some View {
         ScrollView {
-            VStack(spacing: 12) {
-                SkeletonBlock(height: 60)
+            VStack(spacing: LSpace.m) {
+                SkeletonBlock(height: 72)
                 SkeletonBlock(height: 160)
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
     }
 
     private func loaded(_ issue: GitHubIssueDetail) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: LSpace.xl) {
                 header(issue)
+                GitHubTrackedCard(startedTaskId: startedTask, disabled: model.actionInFlight) {
+                    showStartPicker = true
+                }
                 if !issue.bodyMarkdown.isEmpty {
                     section("Description") {
                         ChatMarkdownView(text: issue.bodyMarkdown)
@@ -80,71 +83,55 @@ struct GitHubIssueDetailScreen: View {
                     OpenOnGitHubLink(url: url)
                 }
             }
-            .padding(16)
+            .padding(LSpace.l)
         }
+        .background(p.bg)
         .refreshable { await load() }
     }
 
     private func header(_ issue: GitHubIssueDetail) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(issue.title)
-                .font(p.uiFont(19, .bold))
-                .foregroundStyle(p.text)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                StatusPill(status: issue.state, domain: .task)
+        GitHubDetailHeader(state: .issue(state: issue.state), number: issue.number, title: issue.title) {
+            if let author = issue.authorLogin {
+                GitHubPersonMeta(login: author)
             }
-            if !issue.labels.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(issue.labels, id: \.self) { GitHubLabelChip(label: $0) }
-                    }
-                }
+            ForEach(issue.labels, id: \.self) { GitHubLabelChip(label: $0) }
+            if !issue.assignees.isEmpty {
+                LTag("Assigned: \(issue.assignees.joined(separator: ", "))")
             }
-            HStack(spacing: 6) {
-                if let author = issue.authorLogin {
-                    AgentAvatar(alias: author, human: true, githubLogin: author, size: 22)
-                    Text(author).font(p.uiFont(12)).foregroundStyle(p.text2)
-                }
-                if !issue.assignees.isEmpty {
-                    MetaTag(text: "assigned: \(issue.assignees.joined(separator: ", "))")
-                }
-                Spacer()
-                Text(MobileUx.agoLabel(issue.updatedAt).map { "updated \($0)" } ?? "")
-                    .font(p.uiFont(11)).foregroundStyle(p.faint)
+            if let ago = MobileUx.agoLabel(issue.updatedAt) {
+                Text("Updated \(ago)").ltype(.micro).foregroundStyle(p.faint)
             }
         }
     }
 
     @ViewBuilder
     private func commentsSection(_ issue: GitHubIssueDetail) -> some View {
-        section("Comments · \(issue.commentsCount)") {
+        section("Comments", count: issue.commentsCount) {
             if issue.comments.isEmpty {
                 Text(issue.commentsCount > 0
                      ? "The comment thread couldn't be loaded."
                      : "No comments yet.")
-                    .font(p.uiFont(13)).foregroundStyle(p.muted)
+                    .ltype(.meta).foregroundStyle(p.muted)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: LSpace.l) {
                     if issue.commentsCount > issue.comments.count {
                         Text("Showing the most recent \(issue.comments.count) of \(issue.commentsCount) comments.")
-                            .font(p.uiFont(11)).foregroundStyle(p.faint)
+                            .ltype(.micro).foregroundStyle(p.faint)
                     }
                     ForEach(issue.comments) { comment in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 6) {
-                                AgentAvatar(
-                                    alias: comment.authorLogin ?? "?",
-                                    human: true, githubLogin: comment.authorLogin, size: 22
-                                )
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: LSpace.s) {
+                                LAvatar(name: comment.authorLogin ?? "?", size: 22)
                                 Text(comment.authorLogin ?? "someone")
-                                    .font(p.uiFont(13, .semibold))
+                                    .ltype(.meta)
+                                    .fontWeight(.semibold)
                                     .foregroundStyle(p.text)
-                                Spacer()
                                 Text(MobileUx.agoLabel(comment.createdAt) ?? "")
-                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .ltype(.micro)
                                     .foregroundStyle(p.faint)
+                                Spacer()
                             }
+                            .accessibilityElement(children: .combine)
                             ChatMarkdownView(text: comment.bodyMarkdown)
                         }
                     }
@@ -153,10 +140,9 @@ struct GitHubIssueDetailScreen: View {
         }
     }
 
-    private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionH(title: title)
-            OrchaCard { content() }
+    private func section(_ title: String, count: Int? = nil, @ViewBuilder content: () -> some View) -> some View {
+        LSection(title, count: count) {
+            LCard { content() }
         }
     }
 }

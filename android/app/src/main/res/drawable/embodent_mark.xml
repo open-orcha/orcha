@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Embodent "Halo E" mark (in-app BrandMark), from embodent-6c-e-halo-mark-light.svg: a solid E
+     inside a 50% halo arc, #ECEDF1. Transparent; drawn on the dark #121314 tile. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="1600"
+    android:viewportHeight="1600">
+    <group android:translateX="857" android:translateY="800">
+        <path android:strokeColor="#FFECEDF1" android:strokeAlpha="0.5" android:strokeWidth="204" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M390 -504 L0 -504 A504 504 0 0 0 0 504 L390 504 M0 0 L330 0" />
+        <path android:strokeColor="#FFECEDF1" android:strokeWidth="204" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M390 -354 L0 -354 A354 354 0 0 0 0 354 L390 354 M0 0 L330 0" />
+    </group>
+</vector>

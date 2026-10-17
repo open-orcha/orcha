@@ -136,7 +136,9 @@ async def test_get_unconfigured(client, container, monkeypatch):
     monkeypatch.delenv("ORCHA_LLM_API_KEY", raising=False)
     r = await client.get(f"/api/containers/{container['id']}/settings/llm-key")
     assert r.status_code == 200, r.text
-    assert r.json() == {"configured": False, "source": None, "masked": None, "set_at": None}
+    assert r.json() == {"configured": False, "source": None, "masked": None, "set_at": None,
+                        # migration 071 (additive): the agent-run opt-in for this key
+                        "stored": False, "use_for_agents": False, "agent_runtime": "claude"}
 
 
 @pytest.mark.asyncio
@@ -305,8 +307,7 @@ async def test_test_route_requires_human(client, container, make_agent):
 # ---- migration 020 shape + install copy ----
 
 def test_migration_020_added_columns(db):
-    cols = {row["column_name"] for row in db.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name='containers'")}
+    cols = {row["column_name"] for row in db.columns("containers")}
     assert {"llm_api_key_enc", "llm_api_key_hint", "llm_api_key_set_at"} <= cols
 
 

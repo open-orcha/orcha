@@ -18,7 +18,10 @@
  * that thread's ThreadView, seeded with the CreateThreadResponse the POST
  * already returned — no loading flash, no waiting for the next 3s poll.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Button, HelpTip } from "../../components/primitives";
+import { Icon } from "../../components/ui";
+import { relTime, trunc } from "../../lib/format";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import type { Agent } from "../../types";
 import { ChangesTab } from "./ChangesTab";
@@ -31,14 +34,22 @@ import {
   type CodeThreadSummary,
   type CreateThreadResponse,
 } from "./codespaceTypes";
-import { LearnTab } from "./LearnTab";
+import { LearnTab, type LearnTabProps } from "./LearnTab";
 import { LivePanel } from "./LivePanel";
 import { RecentThreadsList } from "./RecentThreadsList";
 import { OutlineRail } from "./symbols/OutlineRail";
 import { ThreadComposer } from "./ThreadComposer";
+import { KindChip, ThreadAuthorAvatar, ThreadStatusIcon } from "./threadBits";
 import { ThreadView } from "./ThreadView";
 
 export type RailTab = "threads" | "live" | "learn" | "outline" | "changes";
+const RAIL_TABS: { key: RailTab; label: string }[] = [
+  { key: "threads", label: "Threads" },
+  { key: "live", label: "Live" },
+  { key: "learn", label: "Learn" },
+  { key: "outline", label: "Outline" },
+  { key: "changes", label: "Changes" },
+];
 
 export interface ThreadRailProps {
   cid: string;
@@ -88,6 +99,14 @@ export interface ThreadRailProps {
   // `.cs-rail` itself (not a wrapper) carries the inline width, matching
   // .cs-tree-pane's own convention.
   width?: number;
+  // V2: the page's no-file landing already lists repo-wide recent threads in
+  // the main pane — when set, the rail's Threads tab shows a short hint
+  // instead of rendering the SAME list a second time (screen review S3).
+  landingOwnsRecent?: boolean;
+  // Learn: file/selection context + the page-owned open lesson and editor
+  // focus bridge (CodeSpacePage). Optional — without it Learn still lists and
+  // opens lessons on its own.
+  learn?: Omit<LearnTabProps, "cid" | "agents" | "gitRef" | "path">;
 }
 
 export function ThreadRail({
@@ -113,6 +132,8 @@ export function ThreadRail({
   onOpenWorktreeDiff,
   onDirtyCountChange,
   width,
+  landingOwnsRecent,
+  learn,
 }: ThreadRailProps) {
   const { bump } = useSnapshot();
   const [threads, setThreads] = useState<CodeThreadSummary[]>([]);
@@ -154,7 +175,7 @@ export function ThreadRail({
   // Recent quick-jump: fetched whenever no file is open (it's the default
   // view then) OR the human explicitly toggled the compact "Recent" link
   // while a file IS open.
-  const wantsRecent = !path || showRecent;
+  const wantsRecent = (!path && !landingOwnsRecent) || showRecent;
   useEffect(() => {
     if (!wantsRecent) return;
     const myToken = ++recentToken.current;
@@ -170,27 +191,73 @@ export function ThreadRail({
     onOpenThread(created.thread.id);
   };
 
+  // Narrow rails scroll the tab strip: fade whichever edge hides a label and
+  // keep the selected tab in view (never a hard-cut "Chang" — screen review r1).
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  const [tabsEdge, setTabsEdge] = useState<{ overflowing: boolean; atEnd: boolean }>({ overflowing: false, atEnd: false });
+  useLayoutEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const measure = () => {
+      const overflowing = el.scrollWidth > el.clientWidth + 1;
+      const atEnd = overflowing && el.scrollLeft + el.clientWidth >= el.scrollWidth - 1;
+      setTabsEdge((p) => (p.overflowing === overflowing && p.atEnd === atEnd ? p : { overflowing, atEnd }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => { el.removeEventListener("scroll", measure); ro?.disconnect(); };
+  }, [dirtyCount]);
+  useEffect(() => {
+    const el = document.getElementById("cs-rail-tab-" + tab);
+    if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [tab]);
+
+  // V2: WAI-ARIA tabs keyboard model (roving tabindex; ←/→/Home/End move
+  // AND activate — the rail's panels are cheap to switch).
+  const onRailTabsKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const i = RAIL_TABS.findIndex((t) => t.key === tab);
+    let next = -1;
+    if (e.key === "ArrowRight") next = (i + 1) % RAIL_TABS.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + RAIL_TABS.length) % RAIL_TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = RAIL_TABS.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    const key = RAIL_TABS[next].key;
+    onTabChange(key);
+    const el = document.getElementById("cs-rail-tab-" + key);
+    if (el) el.focus();
+  };
+
   return (
-    <aside className="cs-rail" style={width != null ? { width } : undefined}>
-      <div className="cs-rail-tabs" role="tablist" aria-label="Code Space rail">
-        <button type="button" role="tab" aria-selected={tab === "threads"} className={"cs-rail-tab" + (tab === "threads" ? " on" : "")} onClick={() => onTabChange("threads")}>
-          Threads
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "live"} className={"cs-rail-tab" + (tab === "live" ? " on" : "")} onClick={() => onTabChange("live")}>
-          Live
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "learn"} className={"cs-rail-tab" + (tab === "learn" ? " on" : "")} onClick={() => onTabChange("learn")}>
-          Learn
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "outline"} className={"cs-rail-tab" + (tab === "outline" ? " on" : "")} onClick={() => onTabChange("outline")}>
-          Outline
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "changes"} className={"cs-rail-tab" + (tab === "changes" ? " on" : "")} onClick={() => onTabChange("changes")}>
-          Changes
-          {dirtyCount ? <span className="cs-rail-tab-badge">{dirtyCount}</span> : null}
-        </button>
+    <aside className="cs-rail" id="cs-rail" aria-label="Threads and code activity" style={width != null ? { width } : undefined}>
+      <div
+        ref={tabsRef}
+        className={"cs-rail-tabs" + (tabsEdge.overflowing ? " is-overflowing" : "") + (tabsEdge.atEnd ? " is-scrolled-end" : "")}
+        role="tablist"
+        aria-label="Code Space rail"
+        onKeyDown={onRailTabsKey}
+      >
+        {RAIL_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            id={"cs-rail-tab-" + t.key}
+            aria-controls="cs-rail-panel"
+            aria-selected={tab === t.key}
+            tabIndex={tab === t.key ? 0 : -1}
+            className={"cs-rail-tab" + (tab === t.key ? " on" : "")}
+            onClick={() => onTabChange(t.key)}
+          >
+            {t.label}
+            {t.key === "changes" && dirtyCount ? <span className="cs-rail-tab-badge" title={dirtyCount + " uncommitted file" + (dirtyCount === 1 ? "" : "s")}>{dirtyCount}</span> : null}
+          </button>
+        ))}
       </div>
-      <div className="cs-rail-body">
+      <div className="cs-rail-body" role="tabpanel" id="cs-rail-panel" aria-labelledby={"cs-rail-tab-" + tab}>
         {tab === "threads" ? (
           openThreadId ? (
             <ThreadView
@@ -225,26 +292,36 @@ export function ThreadRail({
             />
           ) : path && !showRecent ? (
             <>
-              <button type="button" className="cs-recent-link" onClick={() => setShowRecent(true)}>
-                Recent threads (all files)
-              </button>
-              <ThreadList threads={threads} onOpen={onOpenThread} onJumpToLine={onJumpToLine} />
+              <div className="cs-rail-subhead">
+                <span className="cs-rail-subhead-title">On this file</span>
+                <Button size="sm" variant="ghost" iconRight="arrow" className="cs-recent-link" onClick={() => setShowRecent(true)}>
+                  Recent threads (all files)
+                </Button>
+              </div>
+              <ThreadList threads={threads} agents={agents} onOpen={onOpenThread} onJumpToLine={onJumpToLine} />
             </>
+          ) : !path && landingOwnsRecent ? (
+            <div className="cs-rail-hint">
+              <p>Open a file to see its threads.</p>
+              <HelpTip placement="bottom" label="About code threads" tip="Threads anchor to lines of code: open a file and click a line number to ask an agent about it. Recent threads across the repository are listed in the main pane." />
+            </div>
           ) : (
             <>
               {path ? (
-                <button type="button" className="cs-recent-link" onClick={() => setShowRecent(false)}>
-                  &larr; Back to {path}
-                </button>
+                <div className="cs-rail-subhead">
+                  <Button size="sm" variant="ghost" icon="arrow-left" className="cs-recent-link" onClick={() => setShowRecent(false)} title={"Back to " + path}>
+                    Back to {path.slice(path.lastIndexOf("/") + 1)}
+                  </Button>
+                </div>
               ) : null}
-              <RecentThreadsList threads={recentThreads} onOpen={onNavigateToThread} />
+              <RecentThreadsList threads={recentThreads} agents={agents} onOpen={onNavigateToThread} />
             </>
           )
         ) : null}
         {tab === "live" ? (
           <LivePanel cid={cid} agents={agents} onJumpToLine={onJumpToLine} onRaiseHand={onRaiseHandRequested} />
         ) : null}
-        {tab === "learn" ? <LearnTab cid={cid} agents={agents} /> : null}
+        {tab === "learn" ? <LearnTab cid={cid} agents={agents} gitRef={gitRef} path={path} onJumpToPinnedSha={onJumpToPinnedSha} {...learn} /> : null}
         {tab === "outline" ? <OutlineRail cid={cid} gitRef={gitRef} path={path} onJumpToLine={onJumpToLine} /> : null}
         {tab === "changes" ? (
           <ChangesTab
@@ -259,36 +336,90 @@ export function ThreadRail({
   );
 }
 
+// The rail is ~320px: the meta line keeps kind · lines · addressee only; the
+// message count lives in the row tooltip + accessible name (screen review r2:
+// "3 messag" / "1 m" were hard-clipped).
+function msgCount(n: number): string {
+  return n + " message" + (n === 1 ? "" : "s");
+}
+
 function ThreadList({
   threads,
+  agents,
   onOpen,
   onJumpToLine,
 }: {
   threads: CodeThreadSummary[];
+  agents: Agent[];
   onOpen: (id: string) => void;
   onJumpToLine: (line: number) => void;
 }) {
-  if (!threads.length) return <div className="none" style={{ padding: 10 }}>No threads on this file yet.</div>;
+  if (!threads.length) {
+    return (
+      <div className="cs-rail-hint">
+        <Icon name="plus" cls="v2-ico" />
+        <p>No threads on this file yet. Click a line number to start one.</p>
+      </div>
+    );
+  }
+  // Linear Inbox rows (D10/D12): round author avatar · first line (the
+  // opening message when the list carries it, else kind + anchor) · ONE
+  // muted meta line · status glyph + age on the right. Two lines max.
   return (
-    <>
-      {threads.map((t) => (
-        <div key={t.id} className="cs-thread-chip" onClick={() => onOpen(t.id)}>
-          <div className="row1">
-            <span className={"kind-tag " + t.kind}>{kindLabel(t.kind)}</span>
-            <span
-              className="anchor mono"
-              onClick={(e) => { e.stopPropagation(); onJumpToLine(t.start_line); }}
-            >
-              :{anchorLabel(t.start_line, t.end_line)}
+    <div className="cs-thread-list">
+      {threads.map((t) => {
+        const anchor = (
+          <button
+            type="button"
+            className="anchor mono"
+            title={"Jump to line " + t.start_line}
+            onClick={(e) => { e.stopPropagation(); onJumpToLine(t.start_line); }}
+          >
+            L{anchorLabel(t.start_line, t.end_line)}
+          </button>
+        );
+        const kindTag = <KindChip kind={t.kind} />;
+        return (
+          <div
+            key={t.id}
+            className={"cs-thread-chip kind-" + t.kind}
+            role="button"
+            tabIndex={0}
+            aria-label={kindLabel(t.kind) + " thread at line " + anchorLabel(t.start_line, t.end_line) + ", " + t.status + (t.message_count ? ", " + msgCount(t.message_count) : "")}
+            title={t.message_count ? msgCount(t.message_count) + (t.created_by_alias ? " · started by @" + t.created_by_alias : "") : undefined}
+            onClick={() => onOpen(t.id)}
+            onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(t.id); } }}
+          >
+            <span className="cs-thread-av">
+              <ThreadAuthorAvatar alias={t.created_by_alias} id={t.created_by_agent_id} kind={t.kind} agents={agents} />
             </span>
-            <span className="grow" />
-            <span className="status-tag">{t.status}</span>
+            <div className="cs-thread-main">
+              <div className="row1">
+                {t.first_message ? (
+                  <span className="body-preview" title={t.first_message}>{trunc(t.first_message, 140)}</span>
+                ) : (
+                  <>{kindTag}{anchor}</>
+                )}
+              </div>
+              <div className="cs-thread-meta">
+                {t.first_message ? <>{kindTag}{anchor}</> : null}
+                {t.blob_match === false ? (
+                  <span className="outdated-chip" title={"The file changed since this thread was pinned to " + shortSha(t.sha)}>
+                    <Icon name="alert" cls="v2-ico" /> Outdated<span className="v2-sr"> — pinned to</span> <span className="mono">{shortSha(t.sha)}</span>
+                  </span>
+                ) : null}
+                {t.tagged_alias ? (
+                  <span className="cs-thread-who" title={(t.created_by_alias ? "@" + t.created_by_alias + " " : "") + "→ @" + t.tagged_alias}>→ @{t.tagged_alias}</span>
+                ) : t.created_by_alias ? <span className="cs-thread-who">@{t.created_by_alias}</span> : null}
+              </div>
+            </div>
+            <div className="cs-thread-side">
+              <ThreadStatusIcon status={t.status} />
+              <span className="cs-thread-time">{relTime(t.updated_at || t.created_at)}</span>
+            </div>
           </div>
-          {t.blob_match === false ? (
-            <div className="outdated-chip">outdated — pinned to {shortSha(t.sha)}</div>
-          ) : null}
-        </div>
-      ))}
-    </>
+        );
+      })}
+    </div>
   );
 }

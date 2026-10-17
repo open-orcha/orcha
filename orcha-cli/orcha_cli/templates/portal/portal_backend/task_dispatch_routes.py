@@ -22,7 +22,7 @@ def _deps_unmet(cur, tid: str) -> bool:
     cur.execute(
         """SELECT 1 FROM task_dependencies td
            JOIN tasks dep ON dep.id = td.depends_on_id
-           WHERE td.task_id=%s AND dep.status <> 'completed' LIMIT 1""",
+           WHERE td.task_id=%s AND dep.status NOT IN ('completed','cancelled') LIMIT 1""",
         (tid,),
     )
     return cur.fetchone() is not None

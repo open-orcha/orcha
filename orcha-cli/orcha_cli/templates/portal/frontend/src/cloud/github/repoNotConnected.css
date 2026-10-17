@@ -1,0 +1,5 @@
+/* shared "no repository connected" placement (GitHub hub + Code Space) */
+.repo-not-connected { flex: 1; min-height: 0; display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh var(--v2-space-4) var(--v2-space-6); }
+.repo-not-connected .v2-empty { max-width: 460px; }
+.repo-not-connected-reason { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }

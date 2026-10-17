@@ -242,12 +242,11 @@ async def test_patch_omitting_override_leaves_it_unchanged(client, container, ma
 async def test_db_check_rejects_bad_override(db, container, client, make_agent):
     """Belt-and-suspenders: the mig-043 column CHECK refuses an out-of-enum value even via raw
     SQL (mirrors the mig-021 CHECK tooth)."""
-    import psycopg
     a = await make_agent("dev", "eng")
     try:
         db.execute("UPDATE agents SET autonomy_override='nope' WHERE id=%s", (a["agent_id"],))
         assert False, "DB CHECK should have rejected 'nope'"
-    except psycopg.errors.CheckViolation:
+    except db.check_violation():
         pass
 
 

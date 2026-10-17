@@ -1,7 +1,7 @@
 #!/bin/sh
 # Thin, idempotent wrapper around the local-run happy path:
 #   orcha init   (only if .orcha/ doesn't exist yet in this directory)
-#   orcha up     (always — safe to re-run; `docker compose up -d` is idempotent)
+#   orcha up     (always — safe to re-run; it only starts what is not running)
 #
 # Usage:  sh deploy/local/up.sh        (run from the project directory you want
 #                                        Orcha initialized in, e.g. a fresh
@@ -9,19 +9,23 @@
 #
 # See deploy/local/README.md for the full guide (GitHub PAT, optional OAuth
 # overlay, troubleshooting). This script only automates steps 1–2 of the
-# TL;DR there; it does not install Docker, orcha-cli, or set up OAuth.
+# TL;DR there; it does not install orcha-cli or set up OAuth.
 set -eu
 
-if ! command -v docker >/dev/null 2>&1; then
-    echo "error: docker not found on PATH." >&2
-    echo "  Install Docker Desktop, OrbStack, or Colima, then re-run this script." >&2
-    exit 1
-fi
-
-if ! docker info >/dev/null 2>&1; then
-    echo "error: docker is installed but not running (or not reachable)." >&2
-    echo "  Start Docker Desktop / OrbStack / Colima, then re-run this script." >&2
-    exit 1
+# Docker is only needed by a project created before the native runtime (GH #258): its
+# folder has .orcha/docker-compose.yml. New projects run natively (`orcha init`'s default).
+if [ -f .orcha/docker-compose.yml ]; then
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "error: this project runs on Docker, but docker is not on PATH." >&2
+        echo "  Install/start Docker Desktop, OrbStack, or Colima, then re-run this script" >&2
+        echo "  (or move the project off Docker: orcha migrate-runtime)." >&2
+        exit 1
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        echo "error: docker is installed but not running (or not reachable)." >&2
+        echo "  Start Docker Desktop / OrbStack / Colima, then re-run this script." >&2
+        exit 1
+    fi
 fi
 
 if ! command -v orcha >/dev/null 2>&1; then

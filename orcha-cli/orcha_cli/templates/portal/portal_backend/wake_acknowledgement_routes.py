@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -13,18 +14,22 @@ from portal_backend.schemas.wakes import EventsAckHandled, WakeAck
 
 
 def _acknowledge_lane(cur, aid, body, lane):
+    # The cursor only moves forward. Every nullable GREATEST operand falls back to a non-NULL
+    # sibling so a NULL is ignored exactly as Postgres GREATEST ignores it (SQLite max()
+    # would return NULL).
     if lane == "conversation":
+        conv_advance = sql.greatest(
+            "COALESCE(agent_wake_state.conv_delivered_ts, 0)",
+            "COALESCE(EXCLUDED.conv_delivered_ts, agent_wake_state.conv_delivered_ts, 0)",
+        )
         cur.execute(
-            """INSERT INTO agent_wake_state
+            f"""INSERT INTO agent_wake_state
                  (agent_id, conv_delivered_ts, conv_last_woken_at,
                   last_wake_kind, last_wake_event, conv_lease_until)
                VALUES (%s, COALESCE(%s, 0), CASE WHEN %s THEN now() ELSE NULL END,
                        %s, %s, NULL)
                ON CONFLICT (agent_id) DO UPDATE SET
-                 conv_delivered_ts=GREATEST(
-                   COALESCE(agent_wake_state.conv_delivered_ts, 0),
-                   COALESCE(EXCLUDED.conv_delivered_ts,
-                            agent_wake_state.conv_delivered_ts)),
+                 conv_delivered_ts={conv_advance},
                  conv_last_woken_at=CASE WHEN %s THEN now()
                    ELSE agent_wake_state.conv_last_woken_at END,
                  last_wake_kind=EXCLUDED.last_wake_kind,
@@ -56,17 +61,18 @@ def _acknowledge_lane(cur, aid, body, lane):
             ),
         )
     else:
+        work_advance = sql.greatest(
+            "COALESCE(agent_wake_state.delivered_ts, EXCLUDED.delivered_ts)",
+            "COALESCE(EXCLUDED.delivered_ts, agent_wake_state.delivered_ts)",
+        )
         cur.execute(
-            """INSERT INTO agent_wake_state
+            f"""INSERT INTO agent_wake_state
                  (agent_id, delivered_ts, last_woken_at, last_wake_kind,
                   last_wake_event, wake_lease_until)
                VALUES (%s, COALESCE(%s, 0), CASE WHEN %s THEN now() ELSE NULL END,
                        %s, %s, NULL)
                ON CONFLICT (agent_id) DO UPDATE SET
-                 delivered_ts=GREATEST(
-                   agent_wake_state.delivered_ts,
-                   COALESCE(EXCLUDED.delivered_ts,
-                            agent_wake_state.delivered_ts)),
+                 delivered_ts={work_advance},
                  last_woken_at=CASE WHEN %s THEN now()
                    ELSE agent_wake_state.last_woken_at END,
                  last_wake_kind=EXCLUDED.last_wake_kind,
@@ -133,9 +139,9 @@ def wake_ack(aid: str, body: WakeAck):
             reconciled = [str(run["run_id"]) for run in cur.fetchall()]
             if reconciled:
                 cur.execute(
-                    """UPDATE embodiment_tokens SET revoked_at=now()
-                       WHERE run_id=ANY(%s) AND revoked_at IS NULL""",
-                    (reconciled,),
+                    f"""UPDATE embodiment_tokens SET revoked_at=now()
+                       WHERE {sql.in_list('run_id')} AND revoked_at IS NULL""",
+                    (sql.list_param(reconciled),),
                 )
                 log_event(
                     cur,
@@ -197,11 +203,11 @@ def events_ack_handled(aid: str, body: EventsAckHandled):
         ]
         if event_ids:
             cur.execute(
-                """INSERT INTO agent_event_acks (agent_id, event_id)
+                f"""INSERT INTO agent_event_acks (agent_id, event_id)
                    SELECT %s, e.id FROM agent_events e
-                   WHERE e.event_key=%s AND e.id=ANY(%s)
+                   WHERE e.event_key=%s AND {sql.in_list('e.id')}
                    ON CONFLICT DO NOTHING""",
-                (aid, aid, event_ids),
+                (aid, aid, sql.list_param(event_ids)),
             )
         new_floor = recompute_delivered_floor(cur, aid)
         log_event(

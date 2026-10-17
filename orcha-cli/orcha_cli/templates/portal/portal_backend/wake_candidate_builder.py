@@ -44,7 +44,6 @@ def build_wake_candidate(
     resolve_model_runtime,
     container_autonomy_level="plan",
     container_autonomy_enforced=False,
-    worktrees_disabled=False,
 ):
     """Return the stable wake-scan contract for one AI agent."""
     aid = str(agent["id"])
@@ -138,6 +137,7 @@ def build_wake_candidate(
         lease_active=lease_active,
         lease_kind=lease_kind,
         embodiment_running=embodiment_running,
+        embodiment_silent_seconds=agent.get("embodiment_silent_seconds"),
     )
     triage_hint = None
     if triage_eligible(
@@ -188,6 +188,7 @@ def build_wake_candidate(
         "lease_active": lease_active,
         "lease_kind": lease_kind,
         "embodiment_running": embodiment_running,
+        "embodiment_silent_seconds": agent.get("embodiment_silent_seconds"),
         "has_pending_task_request": pending_task_request,
         "conv_lease_active": bool(agent["conv_lease_active"]),
         "conv_embodiment_running": bool(agent["conv_embodiment_running"]),
@@ -210,8 +211,4 @@ def build_wake_candidate(
             container_autonomy_enforced,
             agent.get("autonomy_override"),
         ),
-        # Project routing is resolved here once for every wake cause.  The notifier consumes this
-        # at the final cwd decision, so assignments, task messages, requests/escalations, retries,
-        # automatic/self wakes, and resumed task work cannot drift into separate policies.
-        "worktrees_disabled": bool(worktrees_disabled),
     }

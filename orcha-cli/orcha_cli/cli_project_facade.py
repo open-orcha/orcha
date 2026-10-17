@@ -13,6 +13,7 @@ from . import (
     cli_project_commands,
     cli_project_setup,
     cli_stacks,
+    cli_stacks_registry,
     cli_status,
     cli_update,
 )
@@ -195,7 +196,10 @@ def cmd_connect(args) -> None:
 
 
 def _discover_stacks() -> list[dict]:
-    return cli_stacks.discover_stacks(parse_host_port=_parse_host_port)
+    return cli_stacks_registry.discover_all(
+        docker_stacks=lambda: cli_stacks.discover_stacks(parse_host_port=_parse_host_port),
+        get_json=_get_json,
+    )
 
 
 def _full_project(project_name: str) -> str:

@@ -75,6 +75,8 @@ data class ContainerHealth(
     val needsYou: Int = 0,
     /** The bound GitHub repo ("owner/name"), shown on the card's secondary line. */
     val githubRepo: String? = null,
+    /** D14 project icon from the snapshot's container (null = default glyph). */
+    val icon: io.openorcha.mobile.domain.ProjectIconValue? = null,
 )
 
 /** Flow 09: lazily-fetched agent-detail sections (each best-effort, absent on failure). */
@@ -89,6 +91,8 @@ data class AgentExtras(
 
 data class OrchaUiState(
     val route: AppRoute = AppRoute.Containers,
+    /** Where Settings was opened from, so Done/back returns there (workspace or projects). */
+    val settingsFrom: AppRoute = AppRoute.Containers,
     val themeMode: io.openorcha.mobile.ui.theme.ThemeMode = io.openorcha.mobile.ui.theme.ThemeMode.Auto,
     val skinMode: io.openorcha.mobile.ui.theme.SkinMode = io.openorcha.mobile.ui.theme.SkinMode.Classic,
     val containerHealth: Map<String, ContainerHealth> = emptyMap(),

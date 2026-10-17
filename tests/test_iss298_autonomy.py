@@ -141,11 +141,10 @@ async def test_route_rejects_bad_level(client, container, make_agent):
 
 async def test_db_check_rejects_bad_level(db, container):
     """Belt-and-suspenders: the column CHECK refuses an out-of-enum value even via raw SQL."""
-    import psycopg
     try:
         db.execute("UPDATE containers SET autonomy_level='nope' WHERE id=%s", (container["id"],))
         assert False, "DB CHECK should have rejected 'nope'"
-    except psycopg.errors.CheckViolation:
+    except db.check_violation():
         pass
 
 

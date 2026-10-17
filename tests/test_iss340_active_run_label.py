@@ -31,6 +31,7 @@ stale claim, so the frontend can prefer it), the stale-orphan suppression
 nuance, and the truly-idle baseline.
 """
 import pytest
+from conftest import ts_ago
 
 
 async def _snapshot_agent(client, cid, aid):
@@ -149,11 +150,11 @@ async def test_active_run_follows_work_lane_when_both_lanes_live(
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "ephemeral"})
     db.execute(
-        """INSERT INTO worker_runs
+        f"""INSERT INTO worker_runs
              (agent_id, task_id, status, wake_kind, wake_event, lane, started_at)
            VALUES
              (%s, %s, 'running', 'ephemeral', 'task_assigned', 'work',
-              now() - interval '1 minute')""",
+              {ts_ago(60)})""",
         (aid, tid),
     )
     db.execute(
@@ -187,7 +188,7 @@ async def test_active_run_suppressed_for_stale_orphan_run(
     await client.post(f"/api/agents/{aid}/wake-claim",
                       json={"lease_ttl": 300, "lease_kind": "ephemeral"})
     db.execute(
-        "UPDATE agent_wake_state SET wake_lease_until = now() - interval '1 hour' WHERE agent_id=%s",
+        f"UPDATE agent_wake_state SET wake_lease_until = {ts_ago(3600)} WHERE agent_id=%s",
         (aid,),
     )
     db.execute(

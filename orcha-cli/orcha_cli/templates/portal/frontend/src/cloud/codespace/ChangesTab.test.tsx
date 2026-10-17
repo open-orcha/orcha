@@ -62,7 +62,10 @@ describe("ChangesTab", () => {
     expect(await screen.findByText("src/a.ts")).toBeInTheDocument();
     expect(screen.getByText("src/new.ts")).toBeInTheDocument();
     expect(screen.getByText("src/gone.ts")).toBeInTheDocument();
-    expect(screen.getByText("3 files changed")).toBeInTheDocument();
+    // the summary is the shared Linear ChangesCard: "Changed 3 files +8 −9"
+    const card = screen.getByRole("region", { name: "Code changes" });
+    expect(card.textContent).toContain("Changed");
+    expect(screen.getByText("3 files")).toBeInTheDocument();
     expect(screen.getByText("+8")).toBeInTheDocument();
     expect(screen.getByText("−9")).toBeInTheDocument();
   });
@@ -210,7 +213,14 @@ describe("ChangesTab", () => {
       stubFetch(ONE_DIRTY);
       render(<ChangesTab cid="c1" onOpenChange={vi.fn()} />);
       await screen.findByText("src/a.ts");
-      expect(screen.getByRole("button", { name: /commit 1 file/i })).toBeDisabled();
+      const btn = screen.getByRole("button", { name: /commit 1 file/i });
+      expect(btn).toBeDisabled();
+      // r2: a plain primary button (no pill/check) that says why it's disabled
+      expect(btn.className).not.toMatch(/pill/);
+      expect(btn.getAttribute("title")).toBe("Write a commit message first");
+      fireEvent.change(screen.getByPlaceholderText("Commit message"), { target: { value: "msg" } });
+      expect(btn).not.toBeDisabled();
+      expect(btn.getAttribute("title")).toBeNull();
     });
   });
 

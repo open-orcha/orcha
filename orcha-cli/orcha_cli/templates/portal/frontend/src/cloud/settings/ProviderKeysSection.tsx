@@ -19,10 +19,24 @@
  * and the card refuses to fire without one — resolved through the shared
  * cloud identity layer (fetchMe + memActor), so the trusted proxy lane's
  * signed-in member is the ONLY possible actor.
+ *
+ * V2 look (image-33 rows): the section renders the SAME Models & providers
+ * groups as the open layout — Agent runtimes, then the Providers group
+ * (Anthropic KeyCard row, "N connected", Refresh, Default badge, docs link,
+ * Coming soon) — and plugs its own provider rows into the group's slot, so
+ * the wire contract, human gate and error copy above stay cloud-owned while
+ * every row is the shared ProviderRow (logo · name · masked key · chevron →
+ * the unchanged KeyBody).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Icon, Modal, useToast } from "../../components/ui";
-import { KeyCard } from "../../pages/settings/SettingsPage";
+import { Modal, useToast } from "../../components/ui";
+import { Button } from "../../components/primitives";
+import { KeyBody, ProvidersGroup, type ProviderRowsSlot } from "../../pages/settings/SettingsPage";
+import { StatusLine, settingsErrText } from "../../pages/settings/settingsUi";
+import { DefaultBadge, KeyDetail, PROVIDER_DOCS, ProviderRow, RuntimesGroup } from "../../pages/settings/providerRows";
+import { useGrantAuthority } from "../../pages/settings/grantAuthority";
+import { AgentKeyToggle, agentEntryOf, providerUnsetCopy, type AgentKeyEntry } from "../../pages/settings/AgentKeyToggle";
+import { errorDetailText } from "../../api/client";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import { fetchMe, memActor, type Me } from "../identity";
 import "./settings-cards.css";
@@ -34,6 +48,9 @@ interface PkKeyResp {
   configured?: boolean;
   masked?: string | null;
   source?: string | null;
+  stored?: boolean;
+  use_for_agents?: boolean;
+  agent_runtime?: string | null;
 }
 interface PkVM {
   provider: string;
@@ -43,6 +60,7 @@ interface PkVM {
   masked: string | null;
   editable: boolean; // env keys are managed outside the portal
   canClear: boolean; // only a DB-stored key can be removed here
+  agent: AgentKeyEntry | null; // "Use for agent runs" (migration 071); null on an older portal
 }
 export function pkKeyState(data: PkKeyResp): PkVM {
   const src = data.source === "db" || data.source === "env" ? data.source : null;
@@ -56,6 +74,7 @@ export function pkKeyState(data: PkKeyResp): PkVM {
     masked: data.masked || null,
     editable: mode !== "env",
     canClear: mode === "db",
+    agent: agentEntryOf(data.provider, data),
   };
 }
 
@@ -75,8 +94,31 @@ async function pkApi(method: string, path: string, body?: unknown): Promise<PkRe
   } catch { return { ok: false, status: 0, body: null }; }
 }
 
-/* ---- the section (renders its own settings card) -------------------------- */
+/** A failed key call in words: the server's detail, else the status meaning
+ * (never a bare "(403)"). Pure, tested. */
+export function pkErrText(res: PkRes): string {
+  const d = res.body && (res.body as { detail?: unknown }).detail;
+  const t = d != null ? errorDetailText(d) : "";
+  return t || settingsErrText({ status: res.status });
+}
+
+/* ---- the section: the shared Models & providers groups -------------------- */
 export function ProviderKeysSection() {
+  const { cid } = useSnapshot();
+  const renderOthers = useCallback(
+    (slot: ProviderRowsSlot) => <CloudProviderKeyRows {...slot} />,
+    [],
+  );
+  return (
+    <>
+      <RuntimesGroup />
+      <ProvidersGroup cid={cid} renderOthers={renderOthers} />
+    </>
+  );
+}
+
+/* ---- the non-Anthropic provider rows (cloud wiring) ------------------------ */
+function CloudProviderKeyRows({ reload, onKeys, defaults }: ProviderRowsSlot) {
   const { snap, cid } = useSnapshot();
   const toast = useToast();
   const [pkeys, setPkeys] = useState<PkVM[] | null>(null); // null until loaded
@@ -111,13 +153,19 @@ export function ProviderKeysSection() {
     }
   }, [cid]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, reload]);
+  useEffect(() => { onKeys(pkeys); }, [pkeys, onKeys]);
 
   // PR #315 human gate — vanilla requireHuman() wording, actor via the shared
   // cloud acting helpers (trusted lane: the resolved member or nothing).
-  const who = memActor(me, snap);
+  // Parity e2e-permissions-15 / MP-PERM-VIEWER: keys need owner or manage_keys
+  // (the server's enforce_grant); the reason sits once at the section top.
+  const auth = useGrantAuthority("manage_keys");
+  const locked = !auth.can;
+  const who = locked ? null : memActor(me, snap);
   const requireHuman = (verb: string): boolean => {
     if (who) return true;
+    if (locked && auth.reason) { toast(auth.reason, "warn"); return false; }
     toast("Pick an acting human to " + verb + " the key", "warn");
     return false;
   };
@@ -141,7 +189,7 @@ export function ProviderKeysSection() {
       void load();
     } else {
       // keep the typed value — a transient failure never loses it
-      toast("Couldn't save the key (" + res.status + "). Your input is preserved.", "danger");
+      toast("Couldn't save the key — " + pkErrText(res) + ". Your input is preserved.", "danger");
     }
   };
 
@@ -162,7 +210,7 @@ export function ProviderKeysSection() {
       ...t,
       [p]: res.ok && res.body
         ? { ok: !!(res.body as { ok?: boolean }).ok, detail: (res.body as { detail?: string }).detail }
-        : { ok: false, detail: "Test failed (" + res.status + ")." },
+        : { ok: false, detail: "Test failed — " + pkErrText(res) + "." },
     }));
   };
 
@@ -182,161 +230,72 @@ export function ProviderKeysSection() {
       setTests((t) => ({ ...t, [p]: null }));
       void load();
     } else {
-      toast("Couldn't remove the key (" + res.status + ").", "danger");
+      toast("Couldn't remove the key — " + pkErrText(res) + ".", "danger");
     }
   };
 
-  const card = (k: PkVM) => {
+  const row = (k: PkVM) => {
     const p = k.provider;
-    const has = (drafts[p] || "").trim().length > 0;
-    const isBusy = !!busy[p];
     const tr = tests[p];
-    const banner =
-      k.mode === "db" ? (
-        <div className="sc-banner ok">
-          <div className="bt">
-            <Icon name="check" cls="" />
-            <span><b>{k.name} API key configured</b> — stored encrypted on this workspace.</span>
-          </div>
-          <code className="masked">{k.masked || "sk-…"}</code>
-        </div>
-      ) : k.mode === "env" ? (
-        <div className="sc-banner ok">
-          <div className="bt">
-            <Icon name="shield" cls="" />
-            <span><b>Using <code>ORCHA_LLM_API_KEY</code> from the environment</b> — it takes precedence; read-only here.</span>
-          </div>
-          <code className="masked">{k.masked || "sk-…"}</code>
-        </div>
-      ) : (
-        <div className="sc-banner warn">
-          <div className="bt">
-            <Icon name="bell" cls="" />
-            <span><b>No {k.name} API key configured.</b> Use-cases set to {k.name} are off until you add one.</span>
-          </div>
-        </div>
-      );
-    const editor = k.editable ? (
-      <>
-        <div className="sc-row">
-          <input
-            id={"pk-input-" + p}
-            className="sc-inp"
-            type={reveal[p] ? "text" : "password"}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder={k.mode === "db" ? "Paste a new key to replace…" : "Paste " + k.name + " API key…"}
-            value={drafts[p] || ""}
-            onChange={(e) => {
-              const v = e.target.value;
+    return (
+      <ProviderRow
+        key={p}
+        id={p}
+        brand={p}
+        name={k.name}
+        detail={<KeyDetail mode={k.mode} masked={k.masked} />}
+        detailTone={k.mode === "none" ? "warn" : undefined}
+        badge={defaults.has(p) ? <DefaultBadge tip="The shipped default provider for Embodent's helpers" /> : null}
+        docsHref={PROVIDER_DOCS[p] || null}
+      >
+        <div className="pk-card" data-provider={p}>
+          <KeyBody
+            vm={k}
+            name={k.name}
+            provider={p}
+            unsetCopy={providerUnsetCopy(p)}
+            draft={drafts[p] || ""}
+            onDraft={(v) => {
               setDrafts((d) => ({ ...d, [p]: v }));
               setTests((t) => ({ ...t, [p]: null }));
             }}
+            reveal={!!reveal[p]}
+            onReveal={() => setReveal((r) => ({ ...r, [p]: !r[p] }))}
+            busy={!!busy[p]}
+            ids={{ input: "pk-input-" + p, reveal: "pk-reveal-" + p, save: "pk-save-" + p, test: "pk-test-" + p, clear: "pk-clear-" + p }}
+            onSave={() => void doSave(p)}
+            onTest={() => void doTest(p)}
+            onClear={() => doClear(p)}
+            testResult={tr || null}
+            locked={locked}
+            inRow
           />
-          <button
-            className="iconbtn" id={"pk-reveal-" + p} type="button" title="Show / hide"
-            onClick={() => setReveal((r) => ({ ...r, [p]: !r[p] }))}
-          >
-            <Icon name="search" cls="" />
-          </button>
+          <AgentKeyToggle cid={cid} provider={p} entry={k.agent} />
         </div>
-        <div className="sc-acts">
-          <button className="btn sm" id={"pk-save-" + p} disabled={isBusy || !has} onClick={() => void doSave(p)}>
-            <Icon name="check" cls="" />{k.mode === "db" ? "Replace key" : "Save key"}
-          </button>
-          <button
-            className="btn sm ghost" id={"pk-test-" + p}
-            disabled={isBusy || (!has && !k.configured)}
-            onClick={() => void doTest(p)}
-          >
-            <Icon name="spark" cls="" />Test
-          </button>
-          {k.canClear && (
-            <button className="btn sm danger" id={"pk-clear-" + p} onClick={() => doClear(p)}>
-              <Icon name="x" cls="" />Remove
-            </button>
-          )}
-        </div>
-      </>
-    ) : (
-      <>
-        <div className="sc-acts">
-          <button className="btn sm ghost" id={"pk-test-" + p} disabled={isBusy} onClick={() => void doTest(p)}>
-            <Icon name="spark" cls="" />Test stored key
-          </button>
-        </div>
-        <div className="sc-hint">
-          To change an environment key, update <code>ORCHA_LLM_API_KEY</code> and relaunch with <code>orcha up</code>.
-        </div>
-      </>
-    );
-    return (
-      <div className="pk-card" data-provider={p} key={p}>
-        {banner}
-        {editor}
-        {tr && (
-          <div className={"sc-result " + (tr.ok ? "ok" : "err")}>
-            <Icon name={tr.ok ? "check" : "x"} cls="" />
-            <span>{tr.ok ? "Key is valid — " + k.name + " accepted it." : tr.detail || "Key was rejected."}</span>
-          </div>
-        )}
-      </div>
+      </ProviderRow>
     );
   };
 
-  const content = pkErr ? (
-    <div className="sc-banner err">
-      <div className="bt">
-        <Icon name="x" cls="" />
-        <span>Couldn&#39;t load provider keys.</span>
-      </div>
-      <button className="btn sm ghost" id="pkRetry" onClick={() => void load()}>Retry</button>
-    </div>
-  ) : !pkeys ? (
-    <div className="sc-banner muted">
-      <div className="bt">
-        <Icon name="clock" cls="" />
-        <span>Checking provider keys…</span>
-      </div>
-    </div>
-  ) : !pkeys.length ? (
-    <div className="sc-hint">No additional providers are available yet.</div>
-  ) : (
-    pkeys.map(card)
-  );
+  const clearingName = clearing ? (pkeys || []).find((k) => k.provider === clearing)?.name || "provider" : "";
 
   return (
     <>
-      {/* Anthropic first — the open KeyCard re-homed here (settings.html kept
-          the Anthropic card alongside the other key cards; card markup + lead
-          verbatim from the open General-tab copy this replaces). */}
-      <div className="card set-card">
-        <div className="card-h"><h2>Anthropic API key</h2></div>
-        <div className="card-b">
-          <div className="lead">
-            Stored encrypted on this workspace and used for the universal client. The{" "}
-            <code>ORCHA_LLM_API_KEY</code> environment variable takes precedence — a key set here is used
-            only when no env key is present.
-          </div>
-          <div id="keyCard">
-            <KeyCard cid={cid} />
-          </div>
+      {/* rows sit inside the group's #providerKeys list, after the Anthropic
+          KeyCard row; loading renders nothing (the Anthropic row already says
+          "Checking…"), an error keeps its Retry. */}
+      {pkErr ? (
+        <div className="mp-pad">
+          <StatusLine
+            tone="err"
+            action={<Button size="sm" variant="ghost" icon="refresh" id="pkRetry" onClick={() => void load()}>Retry</Button>}
+          >
+            Couldn&#39;t load provider keys.
+          </StatusLine>
         </div>
-      </div>
-
-      <div className="card set-card">
-      <div className="card-h"><h2>xAI / Grok API key</h2></div>
-      <div className="card-b">
-        <div className="lead">
-          Stored encrypted on this workspace and used when a use-case is set to xAI (Grok) —
-          wake triage, onboarding proposal, image-to-text, digest curation. As above,{" "}
-          <code>ORCHA_LLM_API_KEY</code> takes precedence when present.
-        </div>
-        <div id="providerKeys">{content}</div>
-      </div>
+      ) : (pkeys || []).map(row)}
       {clearing && (
         <Modal
-          title="Remove API key"
+          title={"Remove " + clearingName + " API key"}
           danger
           primary="Remove key"
           desc="Deletes the stored key for this provider from this workspace. If ORCHA_LLM_API_KEY is set in the environment, the client falls back to it."
@@ -344,7 +303,6 @@ export function ProviderKeysSection() {
           onClose={() => setClearing(null)}
         />
       )}
-      </div>
     </>
   );
 }
