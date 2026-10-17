@@ -601,6 +601,12 @@ async def test_recovery_runs_the_real_reply_and_finish_path_once(
         active = (await client.get(f"/api/containers/{container['id']}/active-conversations")).json()
         return next(c for c in active["conversations"] if c["conversation_id"] == conv_id)
 
+    def conv_lease():
+        rows = db.execute(
+            "SELECT conv_lease_until FROM agent_wake_state WHERE agent_id=%s", (aid,)
+        )
+        return rows[0]["conv_lease_until"] if rows else None
+
     def agent_turns():
         return db.execute(
             "SELECT role, content FROM conversation_turns WHERE conversation_id=%s ORDER BY seq",
@@ -626,6 +632,7 @@ async def test_recovery_runs_the_real_reply_and_finish_path_once(
         assert len(procs) == 1 and conv_id in live
         resident = live[conv_id]
         assert resident.get("current_run_id")
+        assert conv_lease() is not None  # the real claim holds the conversation lease
 
         # The provider produces its reply; the real tick reads and posts it.
         if runtime == "codex":
@@ -660,6 +667,7 @@ async def test_recovery_runs_the_real_reply_and_finish_path_once(
         assert len(posted) == 1 and posted[0][2] == 201
         claims = [c for c in calls if c[1].endswith("/wake-claim")]
         assert len(claims) == 1 and claims[0][2] == 200
+        assert conv_lease() is None, "the finished worker must release the lease"
         runs = db.execute("SELECT status FROM worker_runs WHERE agent_id=%s", (aid,))
         assert runs and all(r["status"] != "running" for r in runs), runs
         assert _snapshot(documents / ".git") == parent_before
