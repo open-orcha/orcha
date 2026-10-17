@@ -184,6 +184,33 @@ def test_empty_ancestor_repo_blocks_before_lease_and_names_it(
 
 
 @RUNTIMES
+def test_committed_ancestor_repo_also_blocks_and_parent_git_is_untouched(
+    monkeypatch, tmp_path, runtime
+):
+    # A parent WITH history must not get a branch or worktree entry either.
+    documents, project = _empty_parent_with_project(tmp_path)
+    _git(documents, "add", "taxes.txt")
+    _git(documents, "commit", "-q", "-m", "parent history")
+    before = _snapshot(documents)
+    refs_before = _git(documents, "for-each-ref")
+    worktrees_before = _git(documents, "worktree", "list", "--porcelain")
+    posts, spawns = _wire(monkeypatch, runtime)
+    live = {}
+
+    _tick(project, live, quiet=True)
+
+    assert spawns == [] and live == {}
+    assert _claims(posts) == []
+    (ack,) = _acks(posts)
+    assert ack["release_lease"] is False and "delivered_ts" not in ack
+    assert str(documents) in ack["detail"] and "saved history" in ack["detail"]
+    assert _git(documents, "for-each-ref") == refs_before
+    assert _git(documents, "worktree", "list", "--porcelain") == worktrees_before
+    assert _snapshot(documents) == before
+    assert not (documents / ".orcha-worktrees").exists()
+
+
+@RUNTIMES
 def test_empty_project_repo_reports_missing_first_commit(monkeypatch, tmp_path, runtime):
     project = tmp_path / "proj"
     project.mkdir()
