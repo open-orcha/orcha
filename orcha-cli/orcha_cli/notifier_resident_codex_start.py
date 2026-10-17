@@ -6,6 +6,7 @@ import pathlib
 import time
 
 from . import notifier_checkout_consent as _consent
+from . import notifier_startup_preflight as _preflight
 from .notifier_routing_handoff import carry_previous_checkout
 
 
@@ -46,6 +47,16 @@ def start_candidate(
                 f"for {candidate.get('agent_alias')}"
             )
         return
+    if not _preflight.preflight(
+        services,
+        api_base,
+        conv_id,
+        candidate,
+        base_cwd=base_cwd,
+        quiet=quiet,
+        kind="codex_conversation_failed",
+    ):
+        return
     claim = services._post_json(
         f"{api_base}/api/agents/{candidate['agent_id']}/wake-claim",
         {
@@ -72,12 +83,15 @@ def start_candidate(
         else (None, None)
     )
     if in_git and not worktrees_disabled and worktree is None:
-        _fail(
+        _preflight.report_failure(
             services,
             api_base,
             candidate,
-            quiet,
-            "worktree isolation failed (won't run in shared checkout)",
+            conv_id,
+            kind="codex_conversation_failed",
+            reason=_preflight.ISOLATION_FAILED.format(base_cwd=base_cwd),
+            release_lease=True,
+            quiet=quiet,
         )
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
@@ -161,7 +175,16 @@ def start_candidate(
     if not sent or process is None:
         services._safe_teardown_worktree(base_cwd, worktree, branch)
         services._revoke_or_defer(api_base, token)
-        _fail(services, api_base, candidate, quiet)
+        _preflight.report_failure(
+            services,
+            api_base,
+            candidate,
+            conv_id,
+            kind="codex_conversation_failed",
+            reason="The Codex worker process could not be launched.",
+            release_lease=True,
+            quiet=quiet,
+        )
         return
     _run_payload = {
         "wake_kind": "ephemeral",
@@ -202,6 +225,7 @@ def start_candidate(
             "worker_run creation failed",
         )
         return
+    _preflight.record_success(conv_id)
     live_residents[conv_id] = {
         "runtime": services.RUNTIME_CODEX,
         "proc": process,

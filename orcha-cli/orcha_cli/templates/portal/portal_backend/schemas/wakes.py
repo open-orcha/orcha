@@ -31,6 +31,13 @@ class WakeAck(BaseModel):
         max_length=MAX_NAME_LEN,
         description="the event_name / reason that triggered the wake",
     )
+    detail: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        description="GH #301: plain-language reason a worker could not start (e.g. the project "
+        "sits inside an empty parent Git repository). Stored on the `woken` audit row so it "
+        "survives a quiet notifier.",
+    )
     release_lease: bool = Field(
         default=False,
         description="R2.4: a one-shot worker that has finished draining sets this on its final "
