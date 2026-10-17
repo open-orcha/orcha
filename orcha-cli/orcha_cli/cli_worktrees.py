@@ -23,17 +23,31 @@ import sys
 from typing import Optional
 
 from . import notifier_worktree_gc as ngc
+from . import worktree_bringin as bringin
 from . import worktree_gc as gc
 
 
 def register(sub, handler) -> None:
     p = sub.add_parser(
-        "worktrees",
-        help="list / clean up the agent worktrees under .orcha-worktrees (use --dry-run first)",
+        "worktrees", aliases=["worktree"],
+        help="list / clean up the agent worktrees under .orcha-worktrees; bring a task worktree's "
+             "changes into main or update it from main (#288; use --dry-run first)",
     )
     p.add_argument("action", nargs="?", default="list",
-                   choices=("list", "clean", "remove", "save-output"))
-    p.add_argument("path", nargs="?", default=None, help="worktree path (remove / save-output)")
+                   choices=("list", "clean", "remove", "save-output", "bring-in", "update-from-main"))
+    p.add_argument("path", nargs="?", default=None,
+                   help="worktree path — or, for bring-in / update-from-main, a task id prefix or "
+                        "agent alias")
+    p.add_argument("--mode", choices=("apply", "merge"), default="apply",
+                   help="bring-in: land the changes uncommitted in main's working tree (apply, "
+                        "default) or merge the agent branch into main's branch (merge)")
+    p.add_argument("--stash", action="store_true",
+                   help="bring-in / update-from-main: stash the receiving checkout's own "
+                        "uncommitted files first (restored afterwards, kept if that conflicts)")
+    p.add_argument("--stash-message", default=None, metavar="TEXT",
+                   help="name the stash entry (default: orcha-bring-in/<worktree>/<stamp>)")
+    p.add_argument("--allow-other-branch", action="store_true",
+                   help="bring-in: confirm although main is checked out on another branch")
     p.add_argument("--project", default=None, help="project folder (default: current folder)")
     p.add_argument("--dry-run", action="store_true", help="clean: report the plan, change nothing")
     p.add_argument("--json", action="store_true", help="machine-readable output")
@@ -100,6 +114,90 @@ def _print_rows(rows):
             print(f"      · …and {extra} more")
 
 
+def resolve_task_worktree(rows, ref: str):
+    """A task worktree by path, folder name, task id prefix or agent alias (pure, tested)."""
+    real = gc._real(str(pathlib.Path(ref).resolve())) if ("/" in ref or ref.startswith(".")) else None
+    tasks = [r for r in rows if r.get("kind") == "task"]
+    for r in rows:
+        if real and gc._real(r["path"]) == real:
+            return r, None
+    exact = [r for r in tasks if r.get("name") == ref]
+    by_task = [r for r in tasks if (r.get("task_id") or "").startswith(ref) or (r.get("task_ref") or "").startswith(ref)]
+    by_agent = [r for r in tasks if (r.get("agent") or "").lower() == ref.lower()]
+    for group in (exact, by_task, by_agent):
+        if len(group) == 1:
+            return group[0], None
+        if len(group) > 1:
+            return None, (f"{ref} matches {len(group)} task worktrees — give the path: "
+                          + ", ".join(r["path"] for r in group[:5]))
+    return None, f"{ref} is not a task worktree, task id or agent of this project"
+
+
+def _bring_in(args, root, rows, busy) -> dict:
+    row, why = resolve_task_worktree(rows, args.path)
+    if row is None:
+        return {"ok": False, "error": why}
+    if row.get("kind") != "task":
+        return {"ok": False, "error": "only a task worktree can be brought in or updated"}
+    try:
+        if args.action == "bring-in":
+            if args.dry_run:
+                res = bringin.plan_bring_in(str(root), row["path"], mode=args.mode, busy=busy)
+            else:
+                res = bringin.bring_in(str(root), row["path"], mode=args.mode, stash=args.stash,
+                                       stash_message=args.stash_message,
+                                       allow_other_branch=args.allow_other_branch, busy=busy)
+        else:
+            if args.dry_run:
+                res = bringin.plan_update(str(root), row["path"], busy=busy)
+            else:
+                res = bringin.update_from_main(str(root), row["path"], stash=args.stash,
+                                               stash_message=args.stash_message, busy=busy)
+    except bringin.BringInError as exc:
+        return {"ok": False, "error": str(exc), "worktree": row["path"]}
+    ok = not res.get("conflicts") and not res.get("error")
+    return {"ok": ok, "dry_run": bool(args.dry_run), **res}
+
+
+def _print_bring_in(out: dict) -> None:
+    if not out.get("ok") and out.get("error") and "files" not in out:
+        print(f"not done: {out['error']}")
+        return
+    what = "Would change" if out.get("dry_run") else ("Changed" if out.get("outcome") == "done" else "Nothing to do —")
+    where = "main" if out.get("direction") == "bring_in" else out.get("name")
+    if out.get("conflicts"):
+        print(f"not done: conflicts in {len(out['conflicts'])} file(s) — nothing was changed:")
+        for p in out["conflicts"][:20]:
+            print(f"  ! {p}")
+        return
+    if out.get("nothing_to_do") or out.get("outcome") == "nothing-to-do":
+        print("nothing to do — " + ("main already has everything from this worktree" if where == "main"
+                                     else "the worktree is up to date with main"))
+        return
+    print(f"{what} {out.get('file_count', 0)} file(s) in {where}"
+          + (" (dry run — nothing changed)" if out.get("dry_run") else ""))
+    for f in (out.get("files") or [])[:20]:
+        print(f"  {f.get('status', '?')} {f.get('path')}")
+    if len(out.get("files") or []) > 20:
+        print(f"  …and {len(out['files']) - 20} more")
+    if out.get("dry_run"):
+        if out.get("needs_stash"):
+            dirty = out.get("main_dirty") if where == "main" else out.get("agent_dirty")
+            print(f"  {where} has {len(dirty or [])} uncommitted file(s): pass --stash to set them aside first"
+                  + (" (required for --mode merge)" if out.get("mode") == "merge" else ""))
+        if out.get("other_branch"):
+            print(f"  main is on '{out.get('main_branch')}', not '{out.get('base_branch')}': pass "
+                  "--allow-other-branch to confirm")
+        if out.get("main_ahead"):
+            print("  main moved ahead since the branch forked; the changes are replayed onto its current state")
+    else:
+        if out.get("stash"):
+            print(f"  stash '{out['stash']}' " + ("restored" if out.get("stash_restore") == "restored"
+                                                  else "KEPT — it did not re-apply cleanly (git stash list)"))
+        if out.get("merge_commit"):
+            print(f"  merge commit {out['merge_commit'][:10]}")
+
+
 def cmd_worktrees(args) -> None:
     root = _project_root(args.project)
     api, cid = _portal(root, args.offline)
@@ -162,6 +260,15 @@ def cmd_worktrees(args) -> None:
     if not args.path:
         print("error: give the worktree path", file=sys.stderr)
         sys.exit(2)
+    if args.action in ("bring-in", "update-from-main"):
+        out = _bring_in(args, root, rows, busy)
+        if args.json:
+            print(json.dumps(out, default=str))
+        else:
+            _print_bring_in(out)
+        if not out.get("ok"):
+            sys.exit(1)
+        return
     target = str(pathlib.Path(args.path).resolve())
     row = next((r for r in rows if gc._real(r["path"]) == gc._real(target)), None)
     if row is None:

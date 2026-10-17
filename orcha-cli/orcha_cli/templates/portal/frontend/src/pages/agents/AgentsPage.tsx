@@ -38,6 +38,8 @@ import { actingHuman, agentAutonomy, agentByAlias, planAwaitsHuman, planMessageO
 import type { Identity } from "../../extensions";
 import type { Agent, OrchaRequest, Snapshot, Task } from "../../types";
 import { Conversation } from "./Conversation";
+import { BringInDialog, type BringInDirection } from "../settings/BringInDialog";
+import type { WorktreeItem, WorktreesPayload } from "../settings/AgentWorktreesSection";
 import { RunsFeed, runReasonText, useAgentRuns } from "./runlog";
 import { modelLabel } from "../../lib/models";
 import { agentPresence, humanizeModelId, type ConvPresence } from "./presence";
@@ -465,6 +467,8 @@ export function AgentsPage() {
   // picked roster row (one-shot; cleared after the next paint).
   const dlAgent = new URLSearchParams(location.search).get("agent");
   const [sel, setSel] = useState<string | null>(dlAgent);
+  // GH #288: "Bring changes into main…" from the agent menu → the shared dialog on its task worktree
+  const [bringIn, setBringIn] = useState<{ item: WorktreeItem; direction: BringInDirection } | null>(null);
   const [pendingScroll, setPendingScroll] = useState(!!dlAgent);
 
   // ISS-68 PR-3 section caps — reset on agent switch.
@@ -971,6 +975,21 @@ export function AgentsPage() {
       }
     };
     const toTasks = () => navigate("/tasks?assignee=" + encodeURIComponent(a.alias));
+    /** The agent's task worktree (its current task's first): from the host inventory. */
+    const openBringIn = async (agent: Agent, direction: BringInDirection) => {
+      if (!cid) return;
+      try {
+        const d = await getJSON<WorktreesPayload>("/api/containers/" + encodeURIComponent(cid) + "/agent-worktrees");
+        const mine = (d?.inventory?.items || []).filter((i) => i.kind === "task" && i.agent === agent.alias && i.state !== "not-quorate");
+        const taskId = agent.active_run?.task_id || agent.current_task?.task_id || null;
+        const item = mine.find((i) => taskId && i.task_id === taskId) || mine[0];
+        if (!item) { toast(agent.alias + " has no task worktree to " + (direction === "bring_in" ? "bring in" : "update") + ".", "warn"); return; }
+        if (item.state === "in-use") { toast(agent.alias + " is running in that worktree — available when the run finishes.", "warn"); return; }
+        setBringIn({ item, direction });
+      } catch (e) {
+        toast(failMsg("Reading the agent worktrees", e), "danger");
+      }
+    };
     const headerMenu: MenuItemSpec[] = isHuman
       ? [
           { label: "Requests", icon: "requests", onSelect: () => setTab("requests") },
@@ -983,6 +1002,8 @@ export function AgentsPage() {
           { label: "Requests", icon: "requests", onSelect: () => setTab("requests") },
           { label: "Memory", icon: "inbox", onSelect: () => setTab("memory") },
           { label: "Configuration", icon: "sliders", onSelect: () => setTab("config") },
+          { label: "Bring changes into main…", icon: "git", onSelect: () => void openBringIn(a, "bring_in") },
+          { label: "Update worktree from main…", icon: "git", onSelect: () => void openBringIn(a, "update_from_main") },
           { label: "Show in Tasks", icon: "tasks", onSelect: toTasks },
           { label: "Copy ID · " + shortId(a.id), icon: "copy", onSelect: copyId },
         ];
@@ -1070,6 +1091,9 @@ export function AgentsPage() {
             ) : null}
             {rosterOrder.length > 1 ? <Pager index={selIdx} total={rosterOrder.length} onPrev={() => step(-1)} onNext={() => step(1)} noun="agent" /> : null}
             <MoreMenu label={a.alias + " actions"} items={headerMenu} />
+            {bringIn && cid ? (
+              <BringInDialog cid={cid} item={bringIn.item} direction={bringIn.direction} onClose={() => setBringIn(null)} />
+            ) : null}
           </div>
         </header>
         {a.status === "failed" && !isHuman ? (
