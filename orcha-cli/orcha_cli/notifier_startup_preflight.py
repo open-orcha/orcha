@@ -43,7 +43,8 @@ def repository_state(base_cwd, services: Any) -> dict[str, Any]:
     folder that has no usable commit), or ``no_commit`` (the project's own repository has
     no commit yet). Read-only: only ``rev-parse`` is run.
     """
-    if not base_cwd:
+    # Same detection the starters use to decide on isolation, so both agree on "no Git".
+    if not base_cwd or not services._is_git_repo(base_cwd):
         return {"state": "no_git", "toplevel": None, "detail": None}
     code, out = services._run_git(["rev-parse", "--show-toplevel"], cwd=base_cwd)
     if code != 0 or not out.strip():
