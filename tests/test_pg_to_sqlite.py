@@ -26,6 +26,7 @@ import pytest
 import main
 from conftest import BACKEND, PORTAL_DIR, REPO, TEST_URL
 from orcha_cli import db_convert
+from portal_backend import database
 from test_dialect_parity import _endpoints, _run_scenario, diff_recordings, record
 
 UTC = _dt.timezone.utc
@@ -115,6 +116,48 @@ def test_fk_order_puts_parents_first_and_ignores_self_references():
 def test_fk_order_reports_a_cycle():
     with pytest.raises(db_convert.ConvertError, match="cycle"):
         db_convert.fk_order(["a", "b"], [("a", "b"), ("b", "a")])
+
+
+class _FakePg:
+    """Just enough of a psycopg connection for ``_check_schema``'s version comparison."""
+
+    def __init__(self, versions):
+        self.versions = versions
+
+    def execute(self, query, *a):
+        if "to_regclass" in query:
+            return _Rows([("schema_migrations",)])
+        assert "FROM schema_migrations" in query, query
+        return _Rows([(v,) for v in self.versions])
+
+
+class _Rows(list):
+    def fetchone(self):
+        return self[0]
+
+
+def _runner_stamped_lite():
+    """A SQLite DB migrated by the portal runner has every file's own name (the runner
+    stamps it) plus the Postgres names the files fold in or twin."""
+    lite = sqlite3.connect(":memory:", isolation_level=None)
+    lite.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT)")
+    for f in sorted(db_convert.sqlite_migrations_dir().glob("*.sql")):
+        for stmt in database.split_statements(f.read_text()):
+            if "INTO schema_migrations" in stmt:
+                lite.execute(stmt)
+        lite.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)", (f.name,))
+    return lite
+
+
+def test_schema_check_expects_only_the_postgres_names_from_postgres():
+    pg_names = sorted(f.name for f in (REPO / "orcha-cli" / "orcha_cli" / "templates"
+                                        / "migrations").glob("*.sql"))
+    lite = _runner_stamped_lite()
+    db_convert._check_schema(_FakePg(pg_names), lite, [])  # SQLite-only rows are fine
+    with pytest.raises(db_convert.ConvertError, match=r"missing migrations \['073_worktree_bring_in.sql'\]"):
+        db_convert._check_schema(_FakePg([v for v in pg_names if not v.startswith("073_")]), lite, [])
+    with pytest.raises(db_convert.ConvertError, match="does not include.*099_future.sql"):
+        db_convert._check_schema(_FakePg(pg_names + ["099_future.sql"]), lite, [])
 
 
 def test_refuses_to_overwrite_an_existing_file(tmp_path):
