@@ -7,6 +7,8 @@ notifier lane claims requests, reports results / inventory / removal events, and
 context for worktree paths; viewers, plain members and strangers are kept out; everything is
 in /openapi.json.
 """
+import json
+
 import pytest
 
 from test_evidence_verdikt import HUBOT, MALLORY, OCTO, VERA, _members
@@ -209,3 +211,77 @@ async def test_openapi_documents_the_agent_worktree_routes(client):
     schemas = spec["components"]["schemas"]
     assert {"auto_cleanup", "grace_days"} <= set(schemas["WorktreeSettings"]["properties"])
     assert "confirm_branch" in schemas["WorktreeActionCreate"]["properties"]
+
+
+# ---------------------------------------------------------------- GH #288: bring in / update
+
+def _task_items(task_id):
+    return _items() + [
+        {"path": f"{WT}/task-Atlas-{task_id[:8]}-1", "name": f"task-Atlas-{task_id[:8]}-1",
+         "branch": f"orcha/task-Atlas-{task_id[:8]}-1", "state": "has-output", "kind": "task",
+         "agent": "Atlas", "size_bytes": 10, "modified": ["app.py"], "modified_count": 1},
+    ]
+
+
+async def test_bring_in_requests_carry_the_humans_choices_and_refuse_a_running_agent(
+        client, container, make_agent, make_task, db):
+    cid = container["id"]
+    hid = (await make_agent("operator", kind="human"))["agent_id"]
+    ai = await make_agent("Atlas")
+    task = await make_task("ship it", "done")
+    path = f"{WT}/task-Atlas-{task['id'][:8]}-1"
+    await _report(client, cid, items=_task_items(task["id"]))
+    base = f"/api/containers/{cid}/agent-worktrees"
+
+    # a dry run first: the default options say so
+    r = await client.post(f"{base}/actions", json={"action": "bring_in", "path": path, "actor_agent_id": hid})
+    assert r.status_code == 201, r.text
+    dry = r.json()
+    assert dry["action"] == "bring_in" and dry["options"] == {
+        "dry_run": True, "mode": "apply", "stash": False, "stash_message": None, "allow_other_branch": False}
+    claim = (await client.post(f"{base}/claim", json={"claimed_by": "mac:1"})).json()
+    assert [a["id"] for a in claim["actions"]] == [dry["id"]] and claim["actions"][0]["options"]["dry_run"] is True
+    plan = {"direction": "bring_in", "files": [{"status": "M", "path": "app.py"}], "conflicts": [],
+            "needs_stash": True, "main_dirty": ["notes.md"], "nothing_to_do": False}
+    r = await client.post(f"/api/agent-worktrees/actions/{dry['id']}/result", json={"status": "done", "result": plan})
+    assert r.status_code == 200 and r.json()["result"] == plan
+
+    # then the real run with the choices the human made in the dialog
+    r = await client.post(f"{base}/actions", json={
+        "action": "bring_in", "path": path, "actor_agent_id": hid,
+        "options": {"dry_run": False, "mode": "merge", "stash": True, "stash_message": "my wip",
+                    "allow_other_branch": True}})
+    assert r.status_code == 201, r.text
+    assert r.json()["options"] == {"dry_run": False, "mode": "merge", "stash": True,
+                                   "stash_message": "my wip", "allow_other_branch": True}
+    rows = db.execute("SELECT detail FROM events WHERE container_id=%s AND event_type=%s ORDER BY id",
+                      (cid, "agent_worktree_action_requested"))
+    ev = rows[-1]["detail"]
+    ev = json.loads(ev) if isinstance(ev, str) else ev
+    assert ev["action"] == "bring_in" and ev["options"]["mode"] == "merge"
+
+    # the reverse direction, and only on a TASK worktree
+    r = await client.post(f"{base}/actions", json={"action": "update_from_main", "path": path, "actor_agent_id": hid})
+    assert r.status_code == 201 and r.json()["options"]["dry_run"] is True
+    r = await client.post(f"{base}/actions", json={"action": "bring_in", "path": f"{WT}/Atlas-1", "actor_agent_id": hid})
+    assert r.status_code == 409 and "task worktree" in r.text
+
+    # Q8: never while the agent runs there — a LIVE check, not the inventory's state
+    db.execute("INSERT INTO worker_runs (agent_id, task_id, status, worktree, branch, base_cwd) "
+               "VALUES (%s,%s,'running',%s,%s,%s)", (ai["agent_id"], task["id"], path, f"orcha/task-x", BASE))
+    r = await client.post(f"{base}/actions", json={"action": "bring_in", "path": path, "actor_agent_id": hid,
+                                                   "options": {"dry_run": False}})
+    assert r.status_code == 409 and "running" in r.text
+    r = await client.post(f"{base}/actions", json={"action": "update_from_main", "path": path, "actor_agent_id": hid,
+                                                   "options": {"dry_run": False}})
+    assert r.status_code == 409 and "running" in r.text
+
+    # a bad option is a 422, and the kinds are in the public contract
+    r = await client.post(f"{base}/actions", json={"action": "bring_in", "path": path, "actor_agent_id": hid,
+                                                   "options": {"mode": "rebase"}})
+    assert r.status_code == 422
+    spec = (await client.get("/openapi.json")).json()
+    enum = spec["components"]["schemas"]["WorktreeActionCreate"]["properties"]["action"]["enum"]
+    assert "bring_in" in enum and "update_from_main" in enum
+    assert "BringInOptions" in spec["components"]["schemas"]
+
