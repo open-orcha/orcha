@@ -10,7 +10,9 @@ fixtures in disposable folders; only the HTTP helpers and the provider spawns ar
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import pathlib
 import re
 import subprocess
@@ -529,3 +531,140 @@ async def test_blocked_message_stays_pending_and_is_answered_once_after_recovery
     turns = server["conversation"]["turns"]
     assert [t["role"] for t in turns] == ["human", "agent"]
     assert _snapshot(documents / ".git") == parent_before
+
+
+@RUNTIMES
+async def test_recovery_runs_the_real_reply_and_finish_path_once(
+    client, container, make_agent, db, monkeypatch, tmp_path, runtime
+):
+    """Every notifier GET/POST goes to the real server (wake claim, run records, reply turn,
+    lease release); only the provider is a stand-in: a real child process plus the output a
+    provider leaves behind (Claude's stream `result` line, Codex's last-message file). The
+    blocked turn stays pending, one worker answers it once after the fix, its exit is seen
+    by the real tick (no live.clear()), the lease is released, and nothing restarts."""
+    human = await make_agent("Kedar301b", "human", kind="human")
+    ai = await make_agent("Atlas301b")
+    aid = ai["agent_id"]
+    started = await client.post(
+        f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]}
+    )
+    conv_id = started.json()["conversation"]["id"]
+    turn = await client.post(
+        f"/api/conversations/{conv_id}/turns",
+        json={"role": "human", "author_agent_id": human["agent_id"], "content": "hello?"},
+    )
+    assert turn.status_code == 201, turn.text
+
+    loop = asyncio.get_running_loop()
+    calls: list = []
+
+    def _call(method, url, body=None):
+        path = url.split("://", 1)[-1]
+        path = path[path.index("/"):]
+        coro = client.post(path, json=body) if method == "POST" else client.get(path)
+        resp = asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
+        calls.append((method, path.split("?")[0], resp.status_code))
+        if resp.status_code >= 400:
+            return None  # the real helper returns None on HTTP errors
+        data = resp.json()
+        if "active-conversations" in path and isinstance(data, dict):
+            # The fixture agent has no provider configured; pick this run's provider.
+            for c in data.get("conversations", []):
+                c["model_runtime"] = runtime
+        return data
+
+    procs: list = []
+
+    def _spawn(cwd, *args, **kwargs):
+        proc = subprocess.Popen(["sleep", "120"], stdin=subprocess.PIPE)
+        procs.append(proc)
+        return True, "sleep-stand-in", proc
+
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **_: _call("GET", url))
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **_: _call("POST", url, body))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA")
+    monkeypatch.setattr(notifier, "spawn_headless", _spawn)
+    monkeypatch.setattr(notifier, "spawn_resident", _spawn)
+    clock = [1000.0]
+    monkeypatch.setattr(preflight.time, "time", lambda: clock[0])
+    documents, project = _empty_parent_with_project(tmp_path)
+    parent_before = _snapshot(documents / ".git")
+    live: dict = {}
+
+    async def tick():
+        await asyncio.to_thread(
+            notifier.service_residents,
+            "http://test", container["id"], live, quiet=True, base_cwd=str(project),
+        )
+
+    async def pending():
+        active = (await client.get(f"/api/containers/{container['id']}/active-conversations")).json()
+        return next(c for c in active["conversations"] if c["conversation_id"] == conv_id)
+
+    def agent_turns():
+        return db.execute(
+            "SELECT role, content FROM conversation_turns WHERE conversation_id=%s ORDER BY seq",
+            (conv_id,),
+        )
+
+    try:
+        # Blocked: the real tick stores its reason, claims nothing, the turn stays pending.
+        await tick()
+        assert procs == [] and not [c for c in calls if c[1].endswith("/wake-claim")]
+        assert (await pending())["pending_human"] is True
+        woken = db.execute(
+            "SELECT detail FROM events WHERE entity_id=%s AND event_type='woken'", (aid,)
+        )
+        assert "parent folder" in json.dumps(woken[-1]["detail"])
+
+        # Fixed: one worker starts through the real claim and run-record calls.
+        _git(project, "init", "-q")
+        _git(project, "add", "notes.md")
+        _git(project, "commit", "-q", "-m", "first commit")
+        clock[0] += preflight.BACKOFF_FIRST_SECS + 0.1
+        await tick()
+        assert len(procs) == 1 and conv_id in live
+        resident = live[conv_id]
+        assert resident.get("current_run_id")
+
+        # The provider produces its reply; the real tick reads and posts it.
+        if runtime == "codex":
+            reply = pathlib.Path(resident["last_message_path"])
+            reply.parent.mkdir(parents=True, exist_ok=True)  # the real spawn opens this folder
+            reply.write_text("hi from codex")
+            procs[0].terminate()
+            procs[0].wait(timeout=10)
+        else:
+            log = pathlib.Path(resident["log_path"])
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a") as fh:
+                fh.write(json.dumps({"type": "result", "subtype": "success",
+                                     "result": "hi from claude", "session_id": "S301",
+                                     "num_turns": 1}) + "\n")
+        await tick()
+        if runtime == "claude":
+            # The resident stays up after replying; then its process exits.
+            procs[0].terminate()
+            procs[0].wait(timeout=10)
+        for _ in range(3):
+            clock[0] += preflight.BACKOFF_MAX_SECS + 1
+            await tick()
+
+        rows = agent_turns()
+        assert [r["role"] for r in rows] == ["human", "agent"], rows
+        assert rows[1]["content"].startswith("hi from ")
+        assert (await pending())["pending_human"] is False
+        assert len(procs) == 1, "a finished conversation must not restart a worker"
+        assert conv_id not in live
+        posted = [c for c in calls if c[0] == "POST" and c[1].endswith("/turns")]
+        assert len(posted) == 1 and posted[0][2] == 201
+        claims = [c for c in calls if c[1].endswith("/wake-claim")]
+        assert len(claims) == 1 and claims[0][2] == 200
+        runs = db.execute("SELECT status FROM worker_runs WHERE agent_id=%s", (aid,))
+        assert runs and all(r["status"] != "running" for r in runs), runs
+        assert _snapshot(documents / ".git") == parent_before
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)
