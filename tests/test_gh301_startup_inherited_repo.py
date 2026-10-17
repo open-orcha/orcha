@@ -347,6 +347,19 @@ def test_failures_back_off_and_reason_prints_once(monkeypatch, tmp_path, capsys)
     assert spawns == [] and _claims(posts) == []
 
 
+def test_backoff_stays_capped_after_thousands_of_failures():
+    # Days of a blocked repository must keep retrying every 2 minutes, not overflow
+    # the doubling (2**1024 is past float range) and raise on every later tick.
+    now = 1000.0
+    for _ in range(5000):
+        delay, _changed = preflight.record_failure("C301-long", "blocked", now=now)
+        now += delay
+    assert delay == preflight.BACKOFF_MAX_SECS
+    assert preflight._BACKOFF["C301-long"]["failures"] == 5000
+    assert preflight.in_backoff("C301-long", now=now - 1)
+    assert not preflight.in_backoff("C301-long", now=now + 0.1)
+
+
 @RUNTIMES
 def test_recovers_after_first_commit_without_duplicate_start(
     monkeypatch, tmp_path, runtime
