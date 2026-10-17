@@ -433,3 +433,93 @@ async def test_wake_ack_detail_is_stored_on_the_woken_audit_row(client, make_age
         json={"kind": "x", "lane": "conversation", "detail": "y" * 1001},
     )
     assert too_long.status_code in (413, 422)  # oversized fields are refused, never truncated
+
+
+@RUNTIMES
+async def test_blocked_message_stays_pending_and_is_answered_once_after_recovery(
+    client, container, make_agent, db, monkeypatch, tmp_path, runtime
+):
+    """End to end against the real server and database: the notifier only sees what the
+    server reports. A blocked start leaves the human turn pending (the reason is saved on
+    the woken row); after the fix exactly one worker starts; once its reply is persisted
+    and the worker has exited, the refreshed server state starts nothing again."""
+    human = await make_agent("Kedar301", "human", kind="human")
+    ai = await make_agent("Atlas301")
+    aid = ai["agent_id"]
+    started = await client.post(
+        f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]}
+    )
+    conv_id = started.json()["conversation"]["id"]
+    turn = await client.post(
+        f"/api/conversations/{conv_id}/turns",
+        json={"role": "human", "author_agent_id": human["agent_id"], "content": "hello?"},
+    )
+    assert turn.status_code == 201, turn.text
+
+    server = {}
+
+    async def refresh():
+        active = (await client.get(f"/api/containers/{container['id']}/active-conversations")).json()
+        cand = next(c for c in active["conversations"] if c["conversation_id"] == conv_id)
+        server["active"] = {"conversations": [{**cand, "model_runtime": runtime}]}
+        server["conversation"] = (await client.get(f"/api/agents/{aid}/conversation?limit=200")).json()
+        return cand
+
+    posts, spawns = _wire(monkeypatch, runtime)
+
+    def _get(url, **_):
+        if "active-conversations" in url:
+            return server["active"]
+        if "/conversation" in url:
+            return server["conversation"]
+        return None
+
+    monkeypatch.setattr(notifier, "_get_json", _get)
+    clock = [1000.0]
+    monkeypatch.setattr(preflight.time, "time", lambda: clock[0])
+    documents, project = _empty_parent_with_project(tmp_path)
+    parent_before = _snapshot(documents / ".git")
+    live = {}
+
+    # Blocked: no lease claim, a reason ack the server stores, and the turn stays pending.
+    assert (await refresh())["pending_human"] is True
+    _tick(project, live)
+    assert _claims(posts) == [] and spawns == []
+    (ack,) = _acks(posts)
+    stored = await client.post(f"/api/agents/{aid}/wake-ack", json=ack)
+    assert stored.status_code == 200, stored.text
+    cand = await refresh()
+    assert cand["pending_human"] is True and cand["last_turn_seq"] == 1
+    woken = db.execute(
+        "SELECT detail FROM events WHERE entity_id=%s AND event_type='woken'", (aid,)
+    )
+    assert "parent folder" in woken[-1]["detail"]["detail"]
+
+    # Fixed: the project gets its own first commit; one worker starts for the pending turn.
+    _git(project, "init", "-q")
+    _git(project, "add", "notes.md")
+    _git(project, "commit", "-q", "-m", "first commit")
+    clock[0] += preflight.BACKOFF_FIRST_SECS + 0.1
+    _tick(project, live)
+    assert len(spawns) == 1 and conv_id in live
+
+    # The worker replies once (persisted), then its process exits.
+    run = db.execute(
+        "INSERT INTO worker_runs (agent_id, status) VALUES (%s,'running') RETURNING run_id",
+        (aid,),
+    )[0]["run_id"]
+    reply = await client.post(
+        f"/api/conversations/{conv_id}/turns",
+        json={"role": "agent", "author_agent_id": aid, "content": "hi", "run_id": str(run)},
+    )
+    assert reply.status_code == 201, reply.text
+    cand = await refresh()
+    assert cand["pending_human"] is False and cand["last_turn_seq"] == 2
+    live.clear()  # worker process finished
+    for _ in range(3):
+        clock[0] += preflight.BACKOFF_MAX_SECS + 1
+        _tick(project, live)
+    assert len(spawns) == 1
+    turns = server["conversation"]["turns"]
+    assert [t["role"] for t in turns] == ["human", "agent"]
+    assert _snapshot(documents / ".git") == parent_before
