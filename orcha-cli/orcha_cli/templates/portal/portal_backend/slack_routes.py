@@ -414,7 +414,7 @@ def create_github_issue(cur, container_id, title: str, body: str, member,
         repo = row["github_repo"] if row else None
         if not repo:
             raise ValueError("no_repo")
-        token = _hub._resolve_repo_token(repo)
+        token = _hub._resolve_repo_token(repo, str(container_id))  # C01: Settings PAT too
         if not token:
             raise ValueError("no_token")
     who = member.get("github_login") or member.get("alias") or "an Orcha member"
@@ -479,24 +479,23 @@ def _needs_attention_summary(cur, container_id) -> dict:
             "open_requests": open_requests}
 
 
-def _handle_command(cur, member, text: str) -> dict:
-    """Route a verified, linked member's command text to its handler. Returns the Slack
-    ephemeral response dict. The caller commits (task creation writes)."""
+def _slack_start(member, m) -> dict:
+    """`/orcha start issue|pr <n>`: fetch the real title, then start (or find) the task."""
     cid = str(member["container_id"])
-    text = (text or "").strip()
-
-    m = _START_RE.match(text)
-    if m:
-        kind_word, number = m.group(1).lower(), int(m.group(2))
-        kind = "pull" if kind_word == "pr" else "issue"
-        # The title-bug fix: fetch the REAL issue/PR title before composing the task,
-        # exactly like the hub does (there, the frontend already has it in hand from
-        # the list it just rendered and passes it straight through). Slack only gives
-        # us a bare number, so this is the one extra live fetch the hub gets for free.
+    kind_word, number = m.group(1).lower(), int(m.group(2))
+    kind = "pull" if kind_word == "pr" else "issue"
+    # The title-bug fix: fetch the REAL issue/PR title before composing the task,
+    # exactly like the hub does (there, the frontend already has it in hand from
+    # the list it just rendered and passes it straight through). Slack only gives
+    # us a bare number, so this is the one extra live fetch the hub gets for free.
+    # GH #258 S3 note 4: the fetch reads in a readonly scope; only the start takes the
+    # write lock (start_task_from_github re-checks "already tracked" inside it).
+    with db_cursor(readonly=True) as (_conn, cur):
         gh_item = _fetch_gh_item(cur, cid, kind, number)
-        gh_title = (gh_item or {}).get("title") or f"#{number}"
-        html_url = (gh_item or {}).get("html_url") or ""
-        body_excerpt = (gh_item or {}).get("body_excerpt") or ""
+    gh_title = (gh_item or {}).get("title") or f"#{number}"
+    html_url = (gh_item or {}).get("html_url") or ""
+    body_excerpt = (gh_item or {}).get("body_excerpt") or ""
+    with db_cursor() as (conn, cur):
         result = start_task_from_github(
             cur,
             cid,
@@ -509,17 +508,26 @@ def _handle_command(cur, member, text: str) -> dict:
             assignee_agent_id=None,  # Slack start is unassigned — Atlas routes it
             source="slack",
         )
-        label = "PR" if kind == "pull" else "issue"
-        task_link = portal_task_link(cid, result["task_id"])
-        if result["existing"]:
-            return _ephemeral(
-                blocks_already_tracked(label, number, task_link),
-                f"Already tracked: {label} #{number} has an open Orcha task.",
-            )
+        conn.commit()
+    label = "PR" if kind == "pull" else "issue"
+    task_link = portal_task_link(cid, result["task_id"])
+    if result["existing"]:
         return _ephemeral(
-            blocks_start_success(label, number, html_url, gh_title, task_link),
-            f"Started an Orcha task for {label} #{number}: {gh_title}",
+            blocks_already_tracked(label, number, task_link),
+            f"Already tracked: {label} #{number} has an open Orcha task.",
         )
+    return _ephemeral(
+        blocks_start_success(label, number, html_url, gh_title, task_link),
+        f"Started an Orcha task for {label} #{number}: {gh_title}",
+    )
+
+
+def _handle_command(cur, member, text: str) -> dict:
+    """Route a verified, linked member's command text to its handler. Returns the Slack
+    ephemeral response dict. `/orcha start` goes to _slack_start instead (it writes); every
+    command here only reads."""
+    cid = str(member["container_id"])
+    text = (text or "").strip()
 
     m = _ISSUE_RE.match(text)
     if m:
@@ -575,7 +583,7 @@ def _dispatch_command(slack_user_id: str, text: str) -> dict:
     trip (matches this codebase's established pattern for blocking work inside an
     `async def` route — e.g. attachment_routes.py's `asyncio.to_thread(_attachment_ref, ...)`).
     """
-    with db_cursor() as (conn, cur):
+    with db_cursor(readonly=True) as (_conn, cur):
         member = _member_for_slack_user(cur, slack_user_id)
         if member is None:
             # 200 with an ephemeral body — Slack shows the text; never a 4xx (that would
@@ -584,9 +592,12 @@ def _dispatch_command(slack_user_id: str, text: str) -> dict:
                 blocks_unlinked_user(),
                 "Your Slack account isn't linked to an Orcha member yet.",
             )
-        response = _handle_command(cur, member, text)
-        conn.commit()
-    return response
+        start = _START_RE.match((text or "").strip())
+        if not start:
+            # GH #258 S3 note 4: these commands only read (an issue is filed on GitHub), so
+            # this scope is readonly and holds no write lock across their GitHub calls.
+            return _handle_command(cur, member, text)
+    return _slack_start(member, start)
 
 
 @app.post("/api/slack/commands")
@@ -1079,63 +1090,64 @@ def _run_issue_only_pipeline(prepared: dict, bot_token: str) -> None:
     files = prepared["files"]
     files_seen = prepared["files_seen"]
     title, body = prepared["title"], prepared["body"]
+    member = prepared["member"]
 
-    with db_cursor() as (conn, cur):
-        member = prepared["member"]
-
-        # Resolve the repo/token ONCE up front — reused both for issue creation and
-        # for committing any images (avoids re-resolving the same token twice).
+    # GH #258 S3 note 4: this path only reads Orcha's DB (the issue and the image
+    # commits live on GitHub), so a short read-only scope resolves the repo/token ONCE
+    # up front — reused for both the image commits and the issue — and closes before
+    # any Slack/GitHub call below.
+    with db_cursor(readonly=True) as (_conn, cur):
         cur.execute("SELECT github_repo FROM containers WHERE id=%s", (cid,))
         crow = cur.fetchone()
         repo = crow["github_repo"] if crow else None
-        token = _hub._resolve_repo_token(repo) if repo else None
+        token = _hub._resolve_repo_token(repo, cid) if repo else None  # C01
 
-        images = _fetch_and_land_images(
-            cur, cid, repo, token, files, _issue_slug(title, None), bot_token,
-        )
-        body_with_images = _embed_images_markdown(body, images["landed"])
+    images = _fetch_and_land_images(
+        None, cid, repo, token, files, _issue_slug(title, None), bot_token,
+    )
+    body_with_images = _embed_images_markdown(body, images["landed"])
 
-        try:
-            issue = create_github_issue(cur, cid, title, body_with_images, member,
-                                        repo=repo, token=token)
-        except ValueError:
-            conn.rollback()
-            if slack_user_id:
-                _dm_or_ephemeral(
-                    bot_token, slack_user_id, blocks_github_permission_error(),
-                    "No GitHub repo (or installation token) is connected to this project.",
-                )
-            return
-        except GithubPermissionError:
-            conn.rollback()
-            if slack_user_id:
-                _dm_or_ephemeral(
-                    bot_token, slack_user_id, blocks_github_permission_error(),
-                    "The GitHub App needs the Issues write permission.",
-                )
-            return
-        except RuntimeError:
-            conn.rollback()
-            if slack_user_id:
-                _dm_or_ephemeral(
-                    bot_token, slack_user_id, blocks_github_unreachable_error(),
-                    "Couldn't reach GitHub — try again in a moment.",
-                )
-            return
-
-        shot_note = _screenshot_status_note(images["selected"], len(images["landed"]), files_seen)
-        if images["scope_missing"]:
-            shot_note = (shot_note + " · " if shot_note else "") + \
-                "some screenshots skipped — add the files:read scope and reinstall the App"
-
-        conn.commit()
+    try:
+        if not repo:
+            raise ValueError("no_repo")
+        if not token:
+            raise ValueError("no_token")
+        issue = create_github_issue(None, cid, title, body_with_images, member,
+                                    repo=repo, token=token)
+    except ValueError:
         if slack_user_id:
             _dm_or_ephemeral(
-                bot_token, slack_user_id,
-                blocks_issue_filed(issue["number"], issue["html_url"], issue["title"], None,
-                                   screenshot_note=shot_note or None),
-                f"Filed GitHub issue #{issue['number']}: {issue['title']}",
+                bot_token, slack_user_id, blocks_github_permission_error(),
+                "No GitHub repo (or installation token) is connected to this project.",
             )
+        return
+    except GithubPermissionError:
+        if slack_user_id:
+            _dm_or_ephemeral(
+                bot_token, slack_user_id, blocks_github_permission_error(),
+                "The GitHub App needs the Issues write permission.",
+            )
+        return
+    except RuntimeError:
+        if slack_user_id:
+            _dm_or_ephemeral(
+                bot_token, slack_user_id, blocks_github_unreachable_error(),
+                "Couldn't reach GitHub — try again in a moment.",
+            )
+        return
+
+    shot_note = _screenshot_status_note(images["selected"], len(images["landed"]), files_seen)
+    if images["scope_missing"]:
+        shot_note = (shot_note + " · " if shot_note else "") + \
+            "some screenshots skipped — add the files:read scope and reinstall the App"
+
+    if slack_user_id:
+        _dm_or_ephemeral(
+            bot_token, slack_user_id,
+            blocks_issue_filed(issue["number"], issue["html_url"], issue["title"], None,
+                               screenshot_note=shot_note or None),
+            f"Filed GitHub issue #{issue['number']}: {issue['title']}",
+        )
 
 
 def _run_task_first_pipeline(prepared: dict, bot_token: str) -> None:
@@ -1159,12 +1171,14 @@ def _run_task_first_pipeline(prepared: dict, bot_token: str) -> None:
     files_seen = prepared["files_seen"]
     title, body = prepared["title"], prepared["body"]
 
+    # GH #258 S3 note 4: the Slack downloads run before the write scope opens.
+    fetch_result = {"images": [], "skipped": 0, "scope_missing": False}
+    if files:
+        fetch_result = fetch_selected_images(files, bot_token)
+
     with db_cursor() as (conn, cur):
         member = prepared["member"]
 
-        fetch_result = {"images": [], "skipped": 0, "scope_missing": False}
-        if files:
-            fetch_result = fetch_selected_images(files, bot_token)
         images = fetch_result["images"]
         selected = len(images) + fetch_result["skipped"]
 
@@ -1240,11 +1254,14 @@ def _run_block_action_pipeline(cid: str, slack_user_id: str, number: int, bot_to
     (`blocks_start_success` / `blocks_already_tracked`) this used to return inline
     before the ack-timing fix; only the timing moved.
     """
-    with db_cursor() as (conn, cur):
+    # GH #258 S3 note 4: the GitHub fetch only reads, so it holds no write lock; the start
+    # (which re-checks "already tracked" itself) runs in a short write scope after it.
+    with db_cursor(readonly=True) as (_conn, cur):
         gh_item = _fetch_gh_item(cur, cid, "issue", number)
-        gh_title = (gh_item or {}).get("title") or f"#{number}"
-        html_url = (gh_item or {}).get("html_url") or ""
-        body_excerpt = (gh_item or {}).get("body_excerpt") or ""
+    gh_title = (gh_item or {}).get("title") or f"#{number}"
+    html_url = (gh_item or {}).get("html_url") or ""
+    body_excerpt = (gh_item or {}).get("body_excerpt") or ""
+    with db_cursor() as (conn, cur):
         # Re-resolve the acting member from THIS background call's own fresh cursor
         # (never trusting a dict handed across from the request's already-closed
         # cursor) — mirrors _member_for_slack_user's own lookup exactly, so a member
@@ -1263,21 +1280,21 @@ def _run_block_action_pipeline(cid: str, slack_user_id: str, number: int, bot_to
             source="slack",
         )
         conn.commit()
-        task_link = portal_task_link(cid, result["task_id"])
-        if not slack_user_id:
-            return
-        if result["existing"]:
-            _dm_or_ephemeral(
-                bot_token, slack_user_id,
-                blocks_already_tracked("issue", number, task_link),
-                f"Already tracked: issue #{number} has an open Orcha task.",
-            )
-        else:
-            _dm_or_ephemeral(
-                bot_token, slack_user_id,
-                blocks_start_success("issue", number, html_url, gh_title, task_link),
-                f"Started an Orcha task for issue #{number}: {gh_title}",
-            )
+    task_link = portal_task_link(cid, result["task_id"])
+    if not slack_user_id:
+        return
+    if result["existing"]:
+        _dm_or_ephemeral(
+            bot_token, slack_user_id,
+            blocks_already_tracked("issue", number, task_link),
+            f"Already tracked: issue #{number} has an open Orcha task.",
+        )
+    else:
+        _dm_or_ephemeral(
+            bot_token, slack_user_id,
+            blocks_start_success("issue", number, html_url, gh_title, task_link),
+            f"Started an Orcha task for issue #{number}: {gh_title}",
+        )
 
 
 def _prepare_interaction(payload: dict, bot_token: str) -> tuple:

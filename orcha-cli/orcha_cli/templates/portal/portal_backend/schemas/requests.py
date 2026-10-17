@@ -36,7 +36,22 @@ class RequestCreate(BaseModel):
     target_agent_id: Optional[str] = (
         None  # ditto; both null → API picks the human via _pick_human() (Orcha#30)
     )
-    payload: str = Field(..., max_length=MAX_PAYLOAD_LEN)
+    payload: str = Field(
+        ...,
+        max_length=MAX_PAYLOAD_LEN,
+        description="What a PERSON reads: the question/ask in plain words. Rendered on every "
+        "human surface (portal, push, Slack).",
+    )
+    # Mig 065: the full text the TARGET AGENT receives when it differs from `payload` — e.g. a
+    # code-thread question's anchor header, lesson guide and reply instructions. Agent read paths
+    # (wake preview, /inbox, /outbox, /rehydrate, nudge) deliver this (falling back to `payload`
+    # when null); human surfaces never render it.
+    agent_payload: Optional[str] = Field(
+        default=None,
+        max_length=MAX_PAYLOAD_LEN,
+        description="Agent-only instructions for the target (null = the agent reads `payload`). "
+        "Never shown to people.",
+    )
     priority: int = 100
     expires_minutes: int = Field(default=60, ge=0, le=10080)  # cap at 7 days
     parent_request_id: Optional[str] = None  # Orcha#1: chain off another request
@@ -126,3 +141,45 @@ class TriageCloseBody(BaseModel):
         description="why the wake was suppressed (the triage verdict reason) — stamped into the "
         "request_closed event JSONB so #289 can measure suppressions with no schema change",
     )
+
+
+class RequestRow(BaseModel):
+    """Documentation model for a request read-row (list / inbox / outbox). Declared via
+    ``responses=`` only — it documents the shape in /openapi.json without filtering the
+    (wider, additive) dict the routes return."""
+
+    model_config = {"extra": "allow"}
+
+    id: str
+    type: str
+    status: str
+    priority: Optional[int] = None
+    payload: Optional[str] = Field(
+        default=None, description="Human-facing text of the ask (clean; never agent instructions)."
+    )
+    agent_payload: Optional[str] = Field(
+        default=None,
+        description="Mig 065: agent-only text the target agent receives (anchor, reply "
+        "instructions, lesson guide). Null when the agent reads `payload` itself.",
+    )
+    response: Optional[str] = None
+    detail: Optional[dict] = Field(
+        default=None,
+        description="JSON detail. Code-thread questions carry `display_title` and "
+        "`code_thread` {thread_id, kind, path, start_line, end_line, link}; an auto-resolved "
+        "one carries `auto_resolved`.",
+    )
+
+
+class RequestListResponse(BaseModel):
+    requests: list[RequestRow]
+    total: int
+    has_more: bool
+
+
+class AgentInboxResponse(BaseModel):
+    open_requests: list[RequestRow]
+
+
+class AgentOutboxResponse(BaseModel):
+    outgoing_requests: list[RequestRow]

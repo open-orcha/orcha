@@ -74,11 +74,17 @@ def migration_tip(source) -> int:
     overwrite a newer stack (the silent-downgrade incident: an outdated
     `orcha upgrade` re-copied pre-React templates over an upgraded portal).
     Returns 0 for a missing/empty dir (unknown = oldest, never blocks)."""
-    tip = 0
     try:
         names = [item.name for item in source.iterdir()]
     except (FileNotFoundError, OSError):
         return 0
+    return migration_tip_of(names)
+
+
+def migration_tip_of(names) -> int:
+    """Highest NNN among ``NNN_*.sql`` names (0 when none) — the same stamp whether the
+    names come from a migrations dir or from a database's ``schema_migrations`` rows."""
+    tip = 0
     for name in names:
         m = re.match(r"^(\d+)_.*\.sql$", name)
         if m:

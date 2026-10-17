@@ -24,6 +24,8 @@
    the vanilla engine's guard; the caller surfaces the toast.
    ========================================================================== */
 
+import { currentTheme, THEME_CHANGED_EVENT, type ResolvedTheme } from "../../shell/theme";
+
 export interface TermFrameInfo {
   code?: number;
   holder?: string;
@@ -57,6 +59,47 @@ export interface PreflightResult {
   install_hint?: string;
   override_env?: string;
   [k: string]: unknown;
+}
+
+/* ---- terminal theme ------------------------------------------------------
+ * The embedded terminal follows the app theme: a light page gets a light
+ * terminal (a black slab inside a white panel reads as a dark island). xterm
+ * needs literal colours, so these mirror the V2 tokens: background = the pane
+ * (.term-body sits on --v2-canvas = the panel), foreground = --v2-text,
+ * cursor = --v2-accent. The light ANSI set is darkened so every colour a CLI
+ * prints (git diff green/red, warnings, dim "bright black") stays >= 4.5:1 on
+ * white — the stock xterm palette has yellow/cyan/white that vanish there.
+ * Open sessions re-theme live on THEME_CHANGED_EVENT. */
+const TERM_THEMES: Record<ResolvedTheme, XTermTheme> = {
+  dark: {
+    background: "#101113", foreground: "#EEEFF2", cursor: "#8D93F7", cursorAccent: "#101113",
+    selectionBackground: "rgba(141,147,247,0.30)",
+  },
+  light: {
+    background: "#FFFFFF", foreground: "#1C1D1F", cursor: "#505AC9", cursorAccent: "#FFFFFF",
+    selectionBackground: "rgba(80,90,201,0.22)",
+    black: "#1C1D1F", red: "#C23434", green: "#187A4C", yellow: "#8A5A00",
+    blue: "#1A68BA", magenta: "#9A3A8C", cyan: "#0E6F7E", white: "#62666E",
+    brightBlack: "#5E626A", brightRed: "#A82B2B", brightGreen: "#136640", brightYellow: "#744B00",
+    brightBlue: "#15579C", brightMagenta: "#7F2F74", brightCyan: "#0B5B67", brightWhite: "#1C1D1F",
+  },
+};
+export function termTheme(resolved: ResolvedTheme): XTermTheme {
+  return { ...TERM_THEMES[resolved] };
+}
+let _themeWired = false;
+function wireThemeFollow(): void {
+  if (_themeWired || typeof window === "undefined") return;
+  _themeWired = true;
+  window.addEventListener(THEME_CHANGED_EVENT, () => {
+    const t = termTheme(currentTheme());
+    for (const aid of order) {
+      const term = sessions[aid]?.term;
+      if (term && term.options) {
+        try { term.options.theme = t; } catch { /* disposed */ }
+      }
+    }
+  });
 }
 
 interface Session {
@@ -167,10 +210,12 @@ export function open(el: HTMLElement, aid: string, opts?: OpenOpts): void {
   evictBeyondCap(aid);
 
   const TerminalCtor = window.Terminal!;
+  wireThemeFollow();
   s.term = new TerminalCtor({
     fontSize: 13, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     cursorBlink: true, convertEol: true, scrollback: 5000,
-    theme: { background: "#0b0e14", foreground: "#d5d9e0", cursor: "#3fb6a8" },
+    // follows the app theme (light terminal on light) — see termTheme()
+    theme: termTheme(currentTheme()),
   });
   const FitCtor = window.FitAddon && window.FitAddon.FitAddon;
   if (FitCtor) {

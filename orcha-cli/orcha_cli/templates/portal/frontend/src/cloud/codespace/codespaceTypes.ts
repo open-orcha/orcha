@@ -132,6 +132,17 @@ export function kindGlyph(kind: ThreadKind): string {
   }
 }
 
+// V2: stroke-icon name (components/ui Icon) per kind — replaces the tiny
+// glyph/emoji markers in rows (screen review: "stroke icons for kinds").
+export function kindIcon(kind: ThreadKind): string {
+  switch (kind) {
+    case "question": return "help";
+    case "why": return "info";
+    case "teach": return "spark";
+    default: return "pencil";
+  }
+}
+
 // "outdated — pinned to <sha7>" honesty chip text (blob_match === false).
 export function shortSha(sha: string | null | undefined): string {
   return sha ? sha.slice(0, 7) : "";

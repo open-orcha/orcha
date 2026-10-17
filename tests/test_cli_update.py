@@ -127,6 +127,24 @@ def test_self_update_skipped_for_packaged_install(tmp_path, monkeypatch, restart
     assert restarts["upgrade"] == 1 and restarts["daemon"] == [True]
 
 
+def test_self_update_skipped_inside_the_app_sidecar(tmp_path, monkeypatch, restarts, capsys):
+    """GH #258 D3: the CLI bundled in the desktop app (ORCHA_SIDECAR=1) never self-updates —
+    not even when a source root or a brew keg would be detected — and says to update the
+    app; phases 1-3 still run in-process."""
+    monkeypatch.chdir(tmp_path)
+    _make_project(tmp_path)
+    monkeypatch.setenv("ORCHA_SIDECAR", "1")
+    monkeypatch.setattr(cli, "_cli_source_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_brew_keg", lambda: "orcha")
+    monkeypatch.setattr(cli, "_reinstall_cli", lambda root: pytest.fail("must not reinstall the sidecar"))
+    monkeypatch.setattr(cli, "_brew_upgrade", lambda keg: pytest.fail("must not brew-upgrade the sidecar"))
+
+    cli.cmd_update(_ns(no_self=False))
+
+    assert "update the app" in capsys.readouterr().out
+    assert restarts["upgrade"] == 1 and restarts["daemon"] == [True]
+
+
 def test_update_refuses_outside_a_project(tmp_path, monkeypatch, restarts):
     monkeypatch.chdir(tmp_path)        # no .orcha / .claude laid down
     with pytest.raises(SystemExit):

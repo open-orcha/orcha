@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -33,7 +34,8 @@ def set_task_reviewer(tid: str, body: TaskReviewerUpdate, request: Request):
             if not valid_uuid(body.reviewer_agent_id):
                 raise HTTPException(400, "reviewer_agent_id is not a valid UUID")
             cur.execute(
-                """SELECT id, alias, github_login, kind, container_id, terminated_at
+                """SELECT id, alias, github_login, kind, container_id, terminated_at,
+                          member_role
                    FROM agents WHERE id=%s""",
                 (body.reviewer_agent_id,),
             )
@@ -49,10 +51,24 @@ def set_task_reviewer(tid: str, body: TaskReviewerUpdate, request: Request):
                 )
             if reviewer["terminated_at"] is not None:
                 raise HTTPException(400, "reviewer has been removed from the project")
+            if reviewer["member_role"] == "viewer":
+                # A viewer is read-only and can never /verify — routing review to one
+                # would park the task on someone who cannot act on it.
+                raise HTTPException(
+                    400,
+                    "reviewer must be able to verify; a viewer is read-only — "
+                    "give them the member role first",
+                )
 
+        # Mig 057: a human's explicit choice (a person, or "anyone") is stamped 'manual' so
+        # the automatic manager-chain routing on the next /done never overwrites it.
         cur.execute(
-            "UPDATE tasks SET reviewer_agent_id=%s WHERE id=%s",
-            (body.reviewer_agent_id, tid),
+            "UPDATE tasks SET reviewer_agent_id=%s, review_routing=%s WHERE id=%s",
+            (
+                body.reviewer_agent_id,
+                sql.json_param({"routed_via": "manual", "set_by_alias": owner["alias"]}),
+                tid,
+            ),
         )
         log_event(
             cur,

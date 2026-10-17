@@ -103,30 +103,50 @@ def test_react_run_feed_folds_in_the_real_sse_client():
 
 
 def test_shell_brand_and_needs_you():
-    """The shell (frontend/src/shell/Shell.tsx) keeps the D0 action-queue affordances:
-    the 'Needs you' queue renders from the shared attnItems, and no third-party maker
-    attribution block (the old "Developed by" footer + .ql-* mark) is rendered.
-    (Mounted-shell behaviour — acting-as, counts — is covered in
-    frontend/src/state/snapshot.test.ts.)"""
+    """The shell keeps the D0 action-queue affordances and renders no third-party maker
+    attribution (main: the old "Developed by" footer + .ql-* mark are gone), and
+    'Needs you' renders from the SHARED attention selector. V2 (arch §3): the one
+    definition is state/attention.ts selectAttention/useAttention — the shell and the
+    sidebar consume it instead of attnItems (GAP-01/GAP-04)."""
     shell = (FRONTEND / "shell" / "Shell.tsx").read_text()
-    assert 'className="maker"' not in shell, "maker attribution block is back in the shell"
-    assert "ql-" not in shell, "maker mark classes are back in the shell"
-    assert "ef3b43" not in shell.lower(), "old red brand dot is back"
-    assert "Needs you" in shell, "no Needs-you action queue in the shell"
-    assert "attnItems" in shell, "shell doesn't count via the shared attnItems"
-    assert "Dario" not in shell, "shell still references the mock name"
+    sidebar = (FRONTEND / "shell" / "Sidebar.tsx").read_text()
+    both = shell + sidebar
+    assert 'className="maker"' not in both and "v2-sb-maker" not in both, "maker attribution block is back"
+    assert "ql-" not in both, "maker mark classes are back in the shell"
+    assert "ef3b43" not in both.lower(), "old red brand dot is back"
+    assert "Needs you" in both, "no Needs-you action queue in the shell"
+    assert "useAttention" in shell and "useAttention" in sidebar, \
+        "shell/sidebar don't count via the shared attention selector"
+    attention = (FRONTEND / "state" / "attention.ts").read_text()
+    assert "export function selectAttention" in attention
+    selector_body = attention.split("export function selectAttention")[1].split("export function")[0]
+    assert "task_open_total" not in selector_body and "request_open_total" not in selector_body, \
+        "attention must never count open-work totals (GAP-01)"
+    assert "Dario" not in both, "shell still references the mock name"
 
 
 def test_theme_applied_on_load():
-    """Review P2 (React port): the theme must be applied at load from the saved/default
-    value — otherwise CSS's dark :root default wins until the user clicks. main.tsx
-    calls initTheme() before render; initTheme applies localStorage's saved theme or
-    'auto' onto <html data-theme>."""
+    """The theme is applied before the first paint and before React renders, so there is
+    never a flash. V2 now has System / Light / Dark (shell/theme.ts, re-exported from
+    Shell.tsx): skins stay retired (data-skin dropped), the stored orcha:theme preference
+    is READ and never deleted, and index.html paints the right canvas for BOTH themes
+    inline before any stylesheet loads — each matching that theme's --v2-window token."""
+    import re as _re
     shell = (FRONTEND / "shell" / "Shell.tsx").read_text()
-    assert "export function initTheme" in shell, "no load-time theme initializer"
-    assert 'setAttribute("data-theme"' in shell, "theme not applied to <html data-theme>"
-    assert 'localStorage.getItem("orcha:theme") || "auto"' in shell, "saved/default theme not read"
+    theme = (FRONTEND / "shell" / "theme.ts").read_text()
+    assert "export function initTheme" in theme, "no load-time theme initializer"
+    assert "initTheme" in shell, "Shell no longer exposes initTheme"
+    assert 'removeAttribute("data-skin")' in theme, "legacy skins still applied"
+    assert 'THEME_KEY = "orcha:theme"' in theme and "localStorage.getItem(THEME_KEY)" in theme, \
+        "stored preference no longer read"
+    assert "removeItem(" not in theme, "the stored preference must not be deleted"
     main_tsx = (FRONTEND / "main.tsx").read_text()
     assert "initTheme();" in main_tsx, "main.tsx doesn't apply the theme before render"
     assert main_tsx.index("initTheme();") < main_tsx.index("createRoot"), \
         "theme applied only after the app mounts (would flash the wrong theme)"
+    index_html = (PORTAL / "frontend" / "index.html").read_text().replace(" ", "").lower()
+    tokens = (STATIC / "styles" / "v2-tokens.css").read_text()
+    windows = _re.findall(r"--v2-window:\s*(#[0-9A-Fa-f]{6})", tokens)
+    assert len(windows) >= 2, "--v2-window must be defined for dark and light"
+    for w in windows[:2]:
+        assert w.lower() in index_html, f"no pre-paint canvas for {w}"

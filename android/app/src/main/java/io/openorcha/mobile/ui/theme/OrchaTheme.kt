@@ -2,7 +2,11 @@ package io.openorcha.mobile.ui.theme
 
 /** Applies Orcha color, typography, shape, and theme-mode tokens to Compose. */
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalContentColor
@@ -35,24 +39,45 @@ enum class ThemeMode { Auto, Light, Dark }
 
 private fun schemeFor(p: OrchaPalette): ColorScheme {
     val base = if (p.isDark) darkColorScheme() else lightColorScheme()
+    // Linear: filled M3 buttons use the indigo fill (web `--v2-primary-bg`) with a white
+    // label; [OrchaPalette.accent] stays the brighter accent *text* colour.
+    val fill = p.primaryFill ?: p.accent
+    val onFill = if (p.primaryFill != null) Color.White else p.accentInk
     return base.copy(
-        primary = p.accent,
-        onPrimary = p.accentInk,
+        primary = fill,
+        onPrimary = onFill,
         primaryContainer = p.accentSoft,
         onPrimaryContainer = p.accent,
-        secondary = p.info,
+        inversePrimary = p.accent,
+        secondary = p.text2,
+        onSecondary = p.bg,
+        secondaryContainer = p.surface3,
+        onSecondaryContainer = p.text,
+        tertiary = p.info,
         background = p.bg,
         onBackground = p.text,
         surface = p.surface,
         onSurface = p.text,
         surfaceVariant = p.surface2,
         onSurfaceVariant = p.muted,
+        surfaceContainerLowest = p.bg,
+        surfaceContainerLow = p.surface,
         surfaceContainer = p.surface2,
         surfaceContainerHigh = p.surface3,
         surfaceContainerHighest = p.raised,
+        surfaceBright = p.raised,
+        surfaceDim = p.bg,
+        // Flat chrome: no Material elevation tint on cards/sheets/menus.
+        surfaceTint = Color.Transparent,
+        inverseSurface = p.text,
+        inverseOnSurface = p.bg,
         outline = p.border2,
         outlineVariant = p.border,
+        scrim = Color.Black.copy(alpha = if (p.isDark) 0.6f else 0.32f),
         error = p.danger,
+        onError = Color.White,
+        errorContainer = p.dangerSoft,
+        onErrorContainer = p.danger,
     )
 }
 
@@ -60,12 +85,11 @@ private fun schemeFor(p: OrchaPalette): ColorScheme {
  * Token type scale (tokens `typography.scale`; foundations §3). Inter (bundled) is the
  * base face on every skin; JetBrains Mono falls back
  * to the platform mono stack. `displayFamily` swaps in the skin's bundled display font
- * (Space Grotesk for Swiss, Hanken Grotesk for Minimal) — `null` keeps the platform
- * default for Classic, matching iOS's `uiFont` fallback to `.system`.
+ * (Space Grotesk for Swiss, Hanken Grotesk for Minimal) — `null` = Inter (Linear).
  *
- * displaySm 24/800 · titleLg 20/750 · titleMd 17/700 · titleSm 15/650 · body 15 ·
- * bodySm 13 · label 12/650 (+.2) · overline 11/700 (+.8, uppercase at call sites) ·
- * mono 12 · monoSm 10.5
+ * Linear scale: displaySm 26/600 · titleLg 20/600 · titleMd 16/600 · titleSm 15/500 ·
+ * body 15 · bodyMd 13 · label 13/500 · labelSm 11/500 · mono 12 · monoSm 10.5.
+ * New code should prefer `ltype(LType.*)` from `ui/components/Linear.kt`.
  */
 private fun orchaTypography(displayFamily: FontFamily?): Typography {
     // Web parity: a skin's face applies to EVERYTHING, not just headings —
@@ -78,22 +102,24 @@ private fun orchaTypography(displayFamily: FontFamily?): Typography {
     // Every M3 slot is overridden: an unset slot keeps Material's Roboto default,
     // which leaks through components that style themselves (AlertDialog titles use
     // headlineSmall, several widgets use bodySmall) — the "wrong font" bug class.
+    // Linear scale (web v2 tokens / iOS `LType`): calm weights — nothing heavier than
+    // SemiBold — and slightly tight tracking at display sizes.
     return Typography(
-        displayLarge = TextStyle(fontFamily = display, fontSize = 34.sp, lineHeight = 40.sp, fontWeight = FontWeight.W800, letterSpacing = (-0.5).sp),
-        displayMedium = TextStyle(fontFamily = display, fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.W800, letterSpacing = (-0.4).sp),
-        displaySmall = TextStyle(fontFamily = display, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.W800, letterSpacing = (-0.4).sp),
-        headlineLarge = TextStyle(fontFamily = display, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.W700, letterSpacing = (-0.3).sp),
-        headlineMedium = TextStyle(fontFamily = display, fontSize = 23.sp, lineHeight = 29.sp, fontWeight = FontWeight.W700, letterSpacing = (-0.3).sp),
-        headlineSmall = TextStyle(fontFamily = display, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.W700, letterSpacing = (-0.3).sp),
-        titleLarge = TextStyle(fontFamily = display, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.W700, letterSpacing = (-0.3).sp),
-        titleMedium = TextStyle(fontFamily = display, fontSize = 17.sp, lineHeight = 23.sp, fontWeight = FontWeight.W700, letterSpacing = (-0.2).sp),
-        titleSmall = TextStyle(fontFamily = display, fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.W600),
-        bodyLarge = TextStyle(fontFamily = body, fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.W400),
+        displayLarge = TextStyle(fontFamily = display, fontSize = 32.sp, lineHeight = 38.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.6).sp),
+        displayMedium = TextStyle(fontFamily = display, fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.5).sp),
+        displaySmall = TextStyle(fontFamily = display, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.5).sp),
+        headlineLarge = TextStyle(fontFamily = display, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.4).sp),
+        headlineMedium = TextStyle(fontFamily = display, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.3).sp),
+        headlineSmall = TextStyle(fontFamily = display, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.3).sp),
+        titleLarge = TextStyle(fontFamily = display, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.3).sp),
+        titleMedium = TextStyle(fontFamily = display, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.W600, letterSpacing = (-0.1).sp),
+        titleSmall = TextStyle(fontFamily = display, fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.W500, letterSpacing = (-0.1).sp),
+        bodyLarge = TextStyle(fontFamily = body, fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.W400, letterSpacing = (-0.1).sp),
         bodyMedium = TextStyle(fontFamily = body, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.W400),
         bodySmall = TextStyle(fontFamily = body, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.W400),
-        labelLarge = TextStyle(fontFamily = body, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.W600, letterSpacing = 0.2.sp),
-        labelMedium = TextStyle(fontFamily = body, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.W700, letterSpacing = 0.8.sp),
-        labelSmall = TextStyle(fontFamily = body, fontSize = 10.5.sp, lineHeight = 14.sp, fontWeight = FontWeight.W700, letterSpacing = 0.5.sp),
+        labelLarge = TextStyle(fontFamily = body, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.W500),
+        labelMedium = TextStyle(fontFamily = body, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.W500),
+        labelSmall = TextStyle(fontFamily = body, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.W500, letterSpacing = 0.1.sp),
     )
 }
 
@@ -107,11 +133,12 @@ private fun orchaTypography(displayFamily: FontFamily?): Typography {
  * `radiusCard`/`radiusButton`/`radiusTag`, not a full alternate scale).
  */
 private fun orchaShapes(palette: OrchaPalette): Shapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(8.dp),
+    extraSmall = RoundedCornerShape(minOf(6f, palette.radiusCard).dp),
+    small = RoundedCornerShape(minOf(8f, palette.radiusCard).dp),
     medium = RoundedCornerShape(palette.radiusCard.dp),
-    large = RoundedCornerShape(16.dp),
-    extraLarge = RoundedCornerShape(22.dp),
+    // Linear keeps sheets/dialogs modest (12/14) rather than Material's 16/28.
+    large = RoundedCornerShape(maxOf(12f, palette.radiusCard).dp),
+    extraLarge = RoundedCornerShape(maxOf(14f, palette.radiusCard).dp),
 )
 
 val MonoFontFamily: FontFamily = FontFamily.Monospace
@@ -128,6 +155,7 @@ fun OrchaTheme(mode: ThemeMode = ThemeMode.Auto, skin: SkinMode = SkinMode.Class
         ThemeMode.Light -> false
     }
     val palette = paletteFor(skin, dark)
+    SystemBarAppearance(lightBars = !palette.isDark)
     CompositionLocalProvider(LocalOrchaPalette provides palette) {
         MaterialTheme(
             colorScheme = schemeFor(palette),
@@ -140,6 +168,24 @@ fun OrchaTheme(mode: ThemeMode = ThemeMode.Auto, skin: SkinMode = SkinMode.Class
             // Anchor it to the palette's text color; M3 components that manage
             // their own content colors are unaffected.
             CompositionLocalProvider(LocalContentColor provides palette.text, content = content)
+        }
+    }
+}
+
+/**
+ * Status / navigation bar icon colour follows the *resolved* theme (not the system
+ * setting), so a Light override on a dark device still gets dark icons. Bars stay
+ * transparent (edge-to-edge); screens paint `p.bg` behind them.
+ */
+@Composable
+private fun SystemBarAppearance(lightBars: Boolean) {
+    val view = LocalView.current
+    if (view.isInEditMode) return
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = lightBars
+            isAppearanceLightNavigationBars = lightBars
         }
     }
 }

@@ -48,6 +48,15 @@ object RequestsView {
     fun kindFor(agents: List<AgentDto>, agentId: String?): String? =
         agentId?.let { id -> agents.firstOrNull { it.id == id }?.kind }
 
+    /** "From → to" with the paired human shown as "You"/"you" (same wording as the Requests tab). */
+    fun directionLabel(request: RequestDto, agents: List<AgentDto>, humanId: String?): String {
+        val from = if (humanId != null && request.requesterId == humanId) "You"
+        else aliasFor(agents, request.requesterId) ?: request.requesterAlias ?: "agent"
+        val to = if (request.targetId == null || request.targetId == humanId) "you"
+        else aliasFor(agents, request.targetId) ?: request.targetAlias ?: "agent"
+        return "$from → $to"
+    }
+
     /** Web isToHuman (app.js:247-256): null target → the picked human; else target kind == human. */
     fun isToHuman(request: RequestDto, agents: List<AgentDto>): Boolean {
         val targetId = request.targetId ?: return true

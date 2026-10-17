@@ -130,3 +130,37 @@ def tasks_page():
     surface — everything derives from tasks[] joined to agents[] by alias/id.
     """
     return serve_page("dist/index.html")  # React SPA shell (open-orcha base; cloud pages via src/extensions.ts)
+
+
+# ---- Orcha V2 addressable views (docs/orcha-v2-architecture.md §2.1) --------
+# Additive page routes only: each serves the same SPA shell so a hard reload /
+# direct entry of the URL renders the right view (the SPA registers the page).
+# No new API surface and no data here — pages read the existing APIs.
+
+
+@app.get("/needs", response_class=HTMLResponse)
+def needs_page():
+    """V2 "Needs you" queue — plan decisions, verifications and human-facing /
+    escalated requests for the acting human (arch §3). SPA shell."""
+    return serve_page("dist/index.html")  # React SPA shell
+
+
+@app.get("/activity", response_class=HTMLResponse)
+def activity_page():
+    """V2 Activity — addressable runs/events view (replaces the old "Run feed"
+    link to /agents). SPA shell."""
+    return serve_page("dist/index.html")  # React SPA shell
+
+
+@app.get("/org", response_class=HTMLResponse)
+def org_page():
+    """Org chart — reporting lines (mig 052): who each agent reports to, which is
+    what escalations follow. SPA shell; data from the snapshot + /api/agents/{aid}/reports-to."""
+    return serve_page("dist/index.html")  # React SPA shell
+
+
+@app.get("/routines", response_class=HTMLResponse)
+def routines_page():
+    """Routines — recurring scheduled work (mig 054): each due slot creates a normal task
+    through the task-creation path. SPA shell; data from /api/containers/{cid}/routines."""
+    return serve_page("dist/index.html")  # React SPA shell

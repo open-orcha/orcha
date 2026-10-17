@@ -1,96 +1,226 @@
-/* Projects landing (/projects) — the above-project hub. House tokens only. */
+/* /projects — "All projects" as a Linear Initiatives table (D5/D10/D12).
+   Inset panel header + filter-pill row (frame classes from v2-shell.css),
+   muted column headers, calm 44px rows with hover background, no card boxes,
+   no coloured stripes. Tokens only (no hex). Owner: projects screen. */
 
-.proj-app { min-height: 100vh; display: flex; flex-direction: column; }
-
-/* light chrome: brand · spacer · account chip · theme toggle */
-.proj-top {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 26px; border-bottom: 1px solid var(--border);
-}
-.proj-top .brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
-.proj-top .brand .mark { width: 30px; height: 30px; display: inline-flex; }
-.proj-top .brand .word { font-family: "Space Grotesk", Inter, sans-serif; font-weight: 700; font-size: 16px; }
-.proj-top .grow { flex: 1; }
-.proj-top .acct { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
-
-.proj-main { width: 100%; max-width: 1060px; margin: 0 auto; padding: 30px 26px 60px; }
-.proj-head h1 { font-family: "Space Grotesk", Inter, sans-serif; font-size: 24px; font-weight: 700; }
-.proj-head .sub { color: var(--muted); font-size: 13.5px; margin-top: 4px; }
-
-.proj-grid {
-  margin-top: 22px;
-  display: grid; gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-}
-
-/* one project card */
-.pcard {
-  display: flex; flex-direction: column; gap: 10px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 15px;
-  padding: 16px 18px; min-height: 168px;
-}
-.pcard .ph { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.pcard .ph .pdot { flex: none; }
-.pcard .pname {
-  font-family: "Space Grotesk", Inter, sans-serif; font-weight: 650; font-size: 15.5px;
+/* ---- header ---------------------------------------------------------------- */
+.proj-head .proj-title {
+  display: inline-flex; align-items: center; gap: 8px; margin: 0; min-width: 0;
+  font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); color: var(--v2-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.proj-head .proj-title-ico { width: 16px; height: 16px; flex: none; color: var(--v2-text-3); }
+
+/* ---- toolbar end: filtered count + circular filter button that expands ------- */
+.proj-count { color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.proj-count:empty { display: none; }
+.proj-search {
+  position: relative; display: inline-flex; align-items: center; flex: none;
+}
+.proj-search-ico { position: absolute; left: 9px; width: 14px; height: 14px; color: var(--v2-text-3); pointer-events: none; }
+.proj-filter {
+  width: 220px; height: var(--v2-pill-h, 28px); min-width: 0; padding: 0 28px 0 28px;
+  background: transparent; color: var(--v2-text); font: inherit; font-size: var(--v2-fs-meta);
+  border: 1px solid var(--v2-border-strong, var(--v2-border)); border-radius: var(--v2-radius-full, 999px);
+}
+.proj-filter::-webkit-search-cancel-button { display: none; }
+.proj-filter::placeholder { color: var(--v2-text-3); }
+/* calm focus: 1px border step, no 2px accent ring */
+.proj-filter:focus, .proj-filter:focus-visible { outline: none; box-shadow: none; border-color: var(--v2-text-3); }
+.proj-search-x {
+  position: absolute; right: 4px; width: 20px; height: 20px; padding: 0; border: 0; display: grid; place-items: center;
+  background: transparent; color: var(--v2-text-3); border-radius: var(--v2-radius-full, 999px); cursor: pointer;
+}
+.proj-search-x:hover { color: var(--v2-text); background: var(--v2-hover); }
+.proj-search-x:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.proj-search-x .v2-ico { width: 12px; height: 12px; }
+
+/* ---- table ------------------------------------------------------------------- */
+.proj-main { --proj-px: var(--v2-panel-px, 20px); }
+.proj-table { --proj-acts: 28px; padding-bottom: var(--v2-space-6); }
+.proj-table.has-stars { --proj-acts: 54px; }
+.proj-cols, .proj-row {
+  display: grid; align-items: center; column-gap: var(--v2-space-4);
+  /*            name            repo  wakes needs agents tasks members ⋯ */
+  grid-template-columns: minmax(0, 1fr) 180px 116px 112px 56px 72px 104px var(--proj-acts);
+  padding: 0 var(--proj-px);
+}
+.proj-cols {
+  position: sticky; top: 0; z-index: 2; height: 36px;
+  background: var(--v2-panel, var(--v2-surface)); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border));
+  color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-regular); white-space: nowrap;
+}
+.proj-cols .pcell-name { padding-left: 30px; }
+.proj-col-help { display: inline-flex; align-items: center; gap: 4px; cursor: help; }
+/* sortable headers: muted text buttons; the arrows show on hover / when sorted */
+.proj-sort {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 24px; padding: 0 4px; margin: 0 -4px;
+  border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; border-radius: var(--v2-radius-control, 6px);
+  white-space: nowrap;
+}
+.proj-sort:hover { color: var(--v2-text-2); background: var(--v2-hover); }
+.proj-sort.is-on { color: var(--v2-text-2); }
+.proj-sort:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.proj-sort .proj-col-help { cursor: inherit; }
+.proj-sort-ico { width: 12px; height: 12px; flex: none; opacity: 0; transition: opacity .12s; }
+.proj-sort:hover .proj-sort-ico, .proj-sort:focus-visible .proj-sort-ico, .proj-sort.is-on .proj-sort-ico { opacity: 1; }
+.pcell-num .proj-sort { flex-direction: row-reverse; }
+.proj-col-help .v2-ico { width: 12px; height: 12px; opacity: .8; }
+.pcell { min-width: 0; }
+/* chip / link / dot cells centre on the row's single line (no baseline drift) */
+/* :where() keeps this at zero-ish specificity so the breakpoint hides below always win (R3 blocker) */
+:where(.proj-row) :where(.pcell-repo, .pcell-wake, .pcell-needs) { display: flex; align-items: center; min-height: 24px; }
+.pcell-num { text-align: right; font-variant-numeric: tabular-nums; }
+.proj-cols .pcell-num { text-align: right; }
+
+.proj-list { list-style: none; margin: 0; padding: 0; }
+/* one fixed 44px line per project (D12) — rows never change height with or without an objective */
+.proj-row {
+  position: relative; height: 44px;
+  color: var(--v2-text-2); font-size: var(--v2-fs-body);
+}
+/* Initiatives: no rule between rows — the hover background carries the row */
+.proj-row:hover, .proj-row:focus-within { background: var(--v2-hover); }
+.proj-row:has(.pname:focus-visible) { box-shadow: var(--v2-focus-ring-inset); }
+
+/* the whole row opens the project; ONLY interactive controls (repo link, ⋯ / star)
+   sit above the link layer — read-only cells (wakes, needs, numbers, members)
+   stay under it so a click anywhere on them opens the project. */
+.proj-row .pname::after { content: ""; position: absolute; inset: 0; }
+.proj-row .prepo, .prow-acts { position: relative; z-index: 1; }
+
+.pcell-name { display: flex; align-items: center; gap: 12px; }
+.prow-av { flex: none; }
+.proj-row.is-inactive .prow-av { opacity: .55; }
+.prow-main { min-width: 0; flex: 1; }
+.prow-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.proj-row .pname {
+  flex: 0 1 auto; color: var(--v2-text); font-weight: var(--v2-fw-medium); text-decoration: none; min-width: 0; max-width: 60%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.proj-row.is-inactive .pname { color: var(--v2-text-2); }
+.proj-row .pname:focus-visible { outline: none; }
+.proj-row .pstatus { flex: none; }
+.proj-row .pdesc {
+  flex: 1 1 0; min-width: 0; color: var(--v2-text-3); font-size: var(--v2-fs-meta);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.proj-row .prow-meta { display: none; }
+
+/* repository — UI font (not mono), GitHub mark for a GitHub binding */
+.proj-row .prepo {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0;
+  font-family: var(--v2-font-sans); font-size: var(--v2-fs-meta); color: var(--v2-text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.proj-row .prepo .ico, .proj-row .prepo svg { width: 14px; height: 14px; flex: none; color: var(--v2-text-3); }
+.proj-row a.prepo { text-decoration: none; border-radius: var(--v2-radius-control, 6px); padding: 2px 4px; margin: -2px -4px; }
+.proj-row a.prepo:hover { color: var(--v2-text); background: var(--v2-hover); }
+.proj-row a.prepo:hover svg { color: var(--v2-text-2); }
+.proj-row a.prepo:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.proj-row .prepo .prepo-name, .proj-row .prepo .repo-badge-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pcell-none { color: var(--v2-text-3); }
+
+/* awaiting human — neutral number, the small dot carries the colour */
+.proj-row .pneeds {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--v2-text); font-variant-numeric: tabular-nums;
+}
+.pneeds-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-warn); flex: none; }
+.proj-row .pneeds.zero, .proj-row .pneeds.unknown { color: var(--v2-text-3); padding-left: 12px; }
+
+.pcell-members .pmembers-n { color: var(--v2-text-3); font-size: var(--v2-fs-meta); white-space: nowrap; }
+
+/* tasks "done / total" (only when the server sends tasks_done) */
+.pcell-tasks { display: flex; align-items: center; justify-content: flex-end; gap: 0; white-space: nowrap; }
+.pcell-tasks .ptasks-sep { color: var(--v2-text-3); white-space: pre; }
+.pcell-tasks .ptasks-ring { width: 14px; height: 14px; flex: none; margin-right: 6px; color: var(--v2-accent); }
+
+/* wake-service health chip (HealthChip) — Linear Initiatives "On track" style */
+.proj-row .pwake { display: inline-flex; align-items: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.proj-row .pwake .v2-health { font-size: var(--v2-fs-meta); }
+.proj-row .pwake.is-none { color: var(--v2-text-3); padding-left: 2px; }
+
+.prow-acts { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.proj-row .pmore { opacity: 0; }
+.proj-row:hover .pmore, .proj-row:focus-within .pmore, .proj-row .pmore[aria-expanded="true"] { opacity: 1; }
+
 /* per-user default star — subtle; rendered only when server prefs are active */
-.pcard .ph .defstar {
-  margin-left: auto; flex: none; width: 26px; height: 26px; padding: 0;
-  display: grid; place-items: center; border: 0; background: transparent;
-  color: var(--faint); cursor: pointer; border-radius: 7px;
-  transition: color .14s, background .14s;
+.proj-row .defstar {
+  width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0;
+  background: transparent; color: var(--v2-text-3); cursor: pointer; border-radius: var(--v2-radius-full, 999px);
+  opacity: 0;
 }
-.pcard .ph .defstar:hover { color: var(--text-2); background: var(--hover); }
-.pcard .ph .defstar.on { color: var(--warn); }
-.pcard .ph .defstar svg { width: 15px; height: 15px; }
-/* when the star is present it owns the right-push; the needs badge follows it */
-.pcard .ph .defstar + .needs { margin-left: 8px; }
-.pcard .needs {
-  margin-left: auto; flex: none;
-  font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px;
-  background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line);
-}
-.pcard .pdesc {
-  color: var(--muted); font-size: 12.5px; line-height: 1.5; min-height: 2.9em;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.pcard .prepo {
-  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
-  font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--text-2);
-  border: 1px solid var(--border); border-radius: 999px; padding: 2.5px 10px;
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.pcard .pstats { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
-.pcard .pstats b { color: var(--text); font-weight: 650; }
-.pcard .pmembers { display: flex; align-items: center; }
-.pcard .pmembers .av { margin-right: -6px; box-shadow: 0 0 0 2px var(--surface); }
-.pcard .pmembers .more { margin-left: 12px; font-size: 11.5px; color: var(--muted); }
-.pcard .pfoot { margin-top: auto; display: flex; align-items: center; gap: 8px; }
-.pcard .pfoot .grow { flex: 1; }
+.proj-row:hover .defstar, .proj-row:focus-within .defstar, .proj-row .defstar.on { opacity: 1; }
+.proj-row .defstar:hover { color: var(--v2-text); background: var(--v2-hover); }
+.proj-row .defstar.on { color: var(--v2-warn); }
+.proj-row .defstar svg { width: 14px; height: 14px; }
+.proj-row .defstar:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
 
-/* the "+ New project" card */
-.pcard.new {
-  align-items: center; justify-content: center; gap: 8px; cursor: pointer;
-  border-style: dashed; color: var(--muted); background: transparent;
-}
-.pcard.new:hover { color: var(--text); border-color: var(--accent-line); }
-.pcard.new .plus { font-size: 26px; line-height: 1; }
+/* group bands (Favorites / Projects) use the ListGroup primitive; keep gutters aligned */
+.proj-table .v2-listgroup .v2-group { padding-inline: calc(var(--proj-px) - 8px); }
 
-/* empty state */
-.proj-empty {
-  grid-column: 1 / -1; text-align: center; padding: 46px 20px; color: var(--muted);
-  border: 1px dashed var(--border); border-radius: 15px;
+.proj-stale { color: var(--v2-warn); font-size: var(--v2-fs-meta); margin: var(--v2-space-3) var(--proj-px); }
+.proj-none {
+  display: flex; align-items: center; gap: var(--v2-space-3); flex-wrap: wrap;
+  color: var(--v2-text-2); font-size: var(--v2-fs-body); margin: var(--v2-space-6) var(--proj-px);
 }
-.proj-empty .t1 { color: var(--text); font-weight: 650; font-size: 15px; margin-bottom: 6px; }
+.proj-none-clear {
+  height: 24px; padding: 0 8px; border: 0; background: transparent; color: var(--v2-text-2); font: inherit;
+  font-size: var(--v2-fs-meta); border-radius: var(--v2-radius-control, 6px); cursor: pointer;
+}
+.proj-none-clear:hover { color: var(--v2-text); background: var(--v2-hover); }
+.proj-none-clear:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
 
+/* ---- responsive ---------------------------------------------------------------- */
+@media (max-width: 1280px) {
+  .proj-cols, .proj-row { grid-template-columns: minmax(0, 1fr) 160px 108px 112px 56px 64px var(--proj-acts); }
+  .proj-cols .pcell-members, .proj-row .pcell-members { display: none; }
+}
+@media (max-width: 1060px) {
+  .proj-cols, .proj-row { grid-template-columns: minmax(0, 1fr) 108px 112px 56px 64px var(--proj-acts); }
+  .proj-cols .pcell-repo, .proj-row .pcell-repo { display: none; }
+}
+/* phone / narrow: a two-line list item — name (+status) · needs · ⋯, then one meta line */
+@media (max-width: 760px) {
+  .proj-cols { display: none; }
+  .proj-row { grid-template-columns: minmax(0, 1fr) auto auto; column-gap: var(--v2-space-2); height: 56px; }
+  .prow-top { flex-wrap: nowrap; }
+  .proj-row .pname { max-width: none; }
+  .proj-row .pcell-repo, .proj-row .pcell-num, .proj-row .pcell-members, .proj-row .pcell-wake { display: none; }
+  .proj-row .pdesc { display: none; }
+  .proj-row .prow-meta {
+    display: block; margin-top: 2px; color: var(--v2-text-3); font-size: var(--v2-fs-meta);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+  }
+  .proj-row .pneeds.zero, .proj-row .pneeds.unknown { display: none; }
+  .proj-row .pmore, .proj-row .defstar.on { opacity: 1; }
+  /* phone: a star per row is noise — only the set default shows; the ⋯ menu sets it */
+  .proj-row .defstar:not(.on) { display: none; }
+}
+/* phone: the open filter field covers the pill row (full width) instead of clipping "Inactive" */
 @media (max-width: 640px) {
-  .proj-main { padding: 22px 16px 44px; }
-  .proj-grid { grid-template-columns: 1fr; }
+  .proj-app .v2-toolbar-slot > .v2-filterbar { position: relative; }
+  .proj-search.is-open {
+    position: absolute; inset: 0; z-index: 3; background: var(--v2-panel, var(--v2-surface));
+    display: flex;
+  }
+  .proj-search.is-open .proj-filter { width: 100%; flex: 1; }
+  .proj-count { display: none; }
+}
+@media (pointer: coarse) {
+  .prow-acts .v2-iconbtn, .proj-row .defstar { width: 44px; height: 44px; }
+  .proj-row .pmore, .proj-row .defstar { opacity: 1; }
+  .proj-row { height: 56px; }
 }
 
-/* Favorites split on the hub grid: full-width section labels. */
-.proj-grid .proj-sect { grid-column: 1 / -1; font-size: 11.5px; letter-spacing: .09em;
-  text-transform: uppercase; font-weight: 700; color: var(--faint); margin: 6px 2px -4px; }
-.proj-grid .proj-sect:first-child { margin-top: 0; }
+/* ProjectAvatar (avatars.tsx) — a CIRCLE everywhere (D7). The base size sits
+   at zero specificity (:where) so the header crumb (.v2-header-pav) and the
+   ⌘K palette (.v2-palette-pav) size it without an override war; the radius is
+   pinned at the source AND for those two consumers, whichever sheet loads last. */
+:where(.proj-av) {
+  width: 28px; height: 28px; display: grid; place-items: center; flex: none;
+  font-size: 11px; font-weight: var(--v2-fw-semibold); letter-spacing: .02em; line-height: 1;
+}
+.proj-av { border-radius: 50%; }
+.proj-av.v2-header-pav, .proj-av.v2-palette-pav { width: 18px; height: 18px; border-radius: 50%; font-size: 8px; }

@@ -1,0 +1,1475 @@
+/* ---------------------------------------------------------------------------------------
+ * Desktop onboarding — V2 "Linear" styling (docs/orcha-v2-design-system.md; directives
+ * D2 compact controls, D3 no colored stripes, D5 inset raised panel, D6 Display type,
+ * D7 circular avatars, D8 status glyphs). Scoped to the wizard with the `ob-` prefix so it
+ * never collides with the shared stylesheet. Consumes the shared @theme tokens only.
+ * ------------------------------------------------------------------------------------- */
+
+/* D5 frame: the wizard sits in an inset raised panel on the darkest canvas. */
+.ob-window {
+  height: 100%;
+  padding: 8px;
+  background: var(--color-bg);
+  box-sizing: border-box;
+}
+.ob-panel {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-card) 55%, var(--color-bg));
+}
+.ob-panel-head {
+  display: flex;
+  height: 44px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+.ob-panel-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+.ob-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+.ob-col {
+  display: flex;
+  width: 100%;
+  max-width: 600px;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0 auto;
+  padding: clamp(28px, 8vh, 88px) 24px 56px;
+  box-sizing: border-box;
+}
+
+/* D6 typography. Inter's optical-size axis turns on automatically at Display sizes. */
+.ob-display {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  color: var(--color-text);
+  font-optical-sizing: auto;
+  font-feature-settings: 'cv01', 'ss03';
+}
+.ob-display[data-size='xl'] {
+  font-size: 32px;
+}
+.ob-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-text-2);
+}
+.ob-meta {
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+.ob-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-2);
+}
+.ob-section-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-3);
+}
+.ob-code {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+/* Step indicator — dots joined by connectors that fill as the flow advances. Everything that
+ * moves is a transform or an opacity: the connector fill scales in on X, the current dot's
+ * accent fill grows in with a soft halo, a finished dot's number crossfades into a check. */
+.ob-stepper-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  view-transition-name: ob-stepper;
+}
+.ob-steps {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ob-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-text-3);
+  transition: color var(--duration-base) ease-out;
+}
+.ob-step[data-state='done'] {
+  color: var(--color-text-2);
+}
+.ob-step[data-state='current'] {
+  color: var(--color-text);
+  font-weight: 500;
+}
+button.ob-step:not(:disabled) {
+  cursor: pointer;
+}
+button.ob-step:not(:disabled):hover {
+  background: var(--color-hover);
+}
+.ob-step-dot {
+  position: relative;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.ob-step-dot-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transform: scale(0);
+  opacity: 0;
+  transition:
+    transform 420ms var(--ob-spring),
+    opacity 200ms ease-out;
+}
+/* Halo: a ring that breathes outward around the current dot. */
+.ob-step-dot::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  opacity: 0;
+  transform: scale(0.7);
+  pointer-events: none;
+}
+.ob-step-dot-num,
+.ob-step-dot-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    transform 360ms var(--ob-spring),
+    opacity 180ms ease-out;
+}
+.ob-step-dot-icon {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(0.4);
+}
+.ob-step[data-state='current'] .ob-step-dot-fill {
+  transform: scale(1);
+  opacity: 1;
+}
+.ob-step[data-state='current'] .ob-step-dot-num {
+  color: var(--color-bg);
+}
+.ob-step[data-state='current'] .ob-step-dot::after {
+  animation: ob-halo 2.4s ease-out 400ms infinite;
+}
+.ob-step[data-state='done'] .ob-step-dot {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ok) 55%, transparent);
+  color: var(--color-ok);
+}
+.ob-step[data-state='done'] .ob-step-dot-fill {
+  background: color-mix(in srgb, var(--color-ok) 16%, transparent);
+  transform: scale(1);
+  opacity: 1;
+}
+.ob-step[data-state='done'] .ob-step-dot-num,
+.ob-step[data-state='skipped'] .ob-step-dot-num {
+  opacity: 0;
+  transform: scale(0.4);
+}
+.ob-step[data-state='done'] .ob-step-dot-icon,
+.ob-step[data-state='skipped'] .ob-step-dot-icon {
+  opacity: 1;
+  transform: scale(1);
+}
+.ob-step[data-state='skipped'] {
+  color: var(--color-text-3);
+  opacity: 0.7;
+}
+.ob-step[data-state='skipped'] .ob-step-dot {
+  box-shadow: none;
+  outline: 1px dashed var(--color-border-strong);
+  outline-offset: -1px;
+}
+.ob-step-sep {
+  position: relative;
+  width: 22px;
+  height: 1.5px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--color-border-strong);
+}
+.ob-step-sep-fill {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-ok) 70%, var(--color-accent));
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 520ms cubic-bezier(0.65, 0, 0.35, 1) var(--d, 0ms);
+}
+.ob-step-sep[data-filled='true'] .ob-step-sep-fill {
+  transform: scaleX(1);
+}
+
+/* Header icon tile — the step's quiet illustration. */
+.ob-icon-tile {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 6px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-text) 6%, transparent), transparent),
+    var(--color-card);
+  color: var(--color-text-2);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--color-text) 6%, transparent) inset;
+}
+
+/* One bordered list; rows separated by hairlines (no cards inside cards). */
+.ob-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-card);
+}
+.ob-row {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  font-size: 13px;
+  color: var(--color-text);
+}
+.ob-list > * + * {
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+.ob-row[data-align='start'] {
+  align-items: flex-start;
+}
+button.ob-row,
+label.ob-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease-out;
+}
+button.ob-row:hover,
+label.ob-row:hover {
+  background: var(--color-hover);
+}
+.ob-row[data-selected='true'] {
+  background: var(--color-selected);
+}
+.ob-row-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+.ob-row-title {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ob-row-sub {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-3);
+}
+.ob-row-aside {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+.ob-row-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px 38px;
+}
+
+/* Quiet notice rows: icon carries the tone; text stays muted (D3: no colored boxes). */
+.ob-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-2);
+}
+.ob-notice > svg {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.ob-notice-title {
+  color: var(--color-text);
+  font-weight: 500;
+}
+.ob-notice-cause {
+  color: var(--color-text-2);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* Metadata chips (D8): rounded-full, 1px border, optional dot. */
+.ob-chip {
+  display: inline-flex;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text-2);
+  white-space: nowrap;
+}
+.ob-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* D7 avatars: circles only. */
+.ob-avatar {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--color-text);
+}
+.ob-avatar-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--color-accent);
+}
+
+/* Footer: Back on the left, the single primary on the right. */
+/* Sticky: on a short window the step's actions stay reachable while the content scrolls. */
+.ob-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: -24px;
+  padding: 16px 0 24px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  background: color-mix(in srgb, var(--color-card) 55%, var(--color-bg));
+}
+.ob-footer-right {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Provisioning log. */
+.ob-log {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--color-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ob-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-text-3);
+  cursor: pointer;
+}
+.ob-disclosure:hover {
+  color: var(--color-text-2);
+}
+.ob-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-accent);
+  cursor: pointer;
+}
+.ob-link:hover {
+  text-decoration: underline;
+}
+
+/* Keyboard hint chip (↵). */
+.ob-kbd {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--color-text-3);
+}
+
+/* Confirm dialog (plain dim scrim — V2 prohibits blur). */
+.ob-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+}
+.ob-dialog {
+  display: flex;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-raised);
+  padding: 16px;
+  box-shadow: var(--shadow-dialog);
+}
+
+/* =======================================================================================
+ * Motion system. Rules: only transform + opacity animate (60 fps, compositor-only); every
+ * animation is one-shot except spinners/halos; everything freezes under reduced motion
+ * (bottom of file) and the JS side (motion.ts) skips view transitions + the Create hold.
+ * ===================================================================================== */
+.ob-window {
+  --ob-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ob-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ob-stagger: 55ms;
+}
+
+@keyframes ob-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes ob-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ob-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes ob-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.14);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes ob-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ob-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ob-halo {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.75);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+@keyframes ob-drift-a {
+  0%,
+  100% {
+    transform: translate3d(-8%, -4%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(10%, 6%, 0) scale(1.12);
+  }
+}
+@keyframes ob-drift-b {
+  0%,
+  100% {
+    transform: translate3d(6%, 8%, 0) scale(1.08);
+  }
+  50% {
+    transform: translate3d(-10%, -6%, 0) scale(0.94);
+  }
+}
+@keyframes ob-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(1deg);
+  }
+}
+@keyframes ob-ripple {
+  from {
+    opacity: 0.55;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.1);
+  }
+}
+@keyframes ob-spark {
+  0% {
+    opacity: 0;
+    transform: translateX(10px) scaleX(0.3);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(34px) scaleX(1);
+  }
+}
+@keyframes ob-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.ob-enter {
+  animation: ob-enter 260ms var(--ob-ease, ease-out) both;
+}
+.ob-rotate {
+  animation: ob-rotate 900ms linear infinite;
+  transform-origin: 50% 50%;
+}
+.ob-breathe {
+  animation: ob-breathe 1.8s ease-in-out infinite;
+}
+.ob-pop {
+  transform-origin: 50% 50%;
+  animation: ob-pop 460ms var(--ob-spring) both;
+}
+.ob-reveal {
+  animation: ob-rise 360ms var(--ob-ease) both;
+}
+.ob-swap {
+  animation: ob-rise 320ms var(--ob-ease) both;
+}
+
+/* Staggered reveal: each direct child of a freshly mounted step rises in, one after another
+ * (header, content, footer). The step div is keyed by phase so this replays per step. */
+.ob-stage {
+  view-transition-name: ob-stage;
+}
+.ob-stage > *,
+.ob-stage > form > * {
+  animation: ob-rise 460ms var(--ob-ease) both;
+}
+.ob-stage > :nth-child(2),
+.ob-stage > form > :nth-child(1) {
+  animation-delay: calc(var(--ob-stagger) * 1);
+}
+.ob-stage > :nth-child(3),
+.ob-stage > form > :nth-child(2) {
+  animation-delay: calc(var(--ob-stagger) * 2);
+}
+.ob-stage > :nth-child(4),
+.ob-stage > form > :nth-child(3) {
+  animation-delay: calc(var(--ob-stagger) * 3);
+}
+.ob-stage > :nth-child(n + 5) {
+  animation-delay: calc(var(--ob-stagger) * 4);
+}
+/* The sticky footer arrives last and without the lift (it's pinned). */
+.ob-stage > .ob-footer,
+.ob-stage > form > .ob-footer {
+  animation: ob-fade 380ms ease-out 200ms both;
+}
+/* The header's pieces cascade too. */
+.ob-header > * {
+  animation: ob-rise 520ms var(--ob-ease) both;
+}
+.ob-header > :nth-child(2) {
+  animation-delay: 40ms;
+}
+.ob-header > :nth-child(3) {
+  animation-delay: 90ms;
+}
+
+/* ---- Step-to-step transitions (View Transitions API; motion.ts sets data-ob-dir) ------ */
+html[data-ob-dir]::view-transition-old(root),
+html[data-ob-dir]::view-transition-new(root) {
+  animation: none;
+}
+html[data-ob-dir]::view-transition-group(ob-stage) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-ob-dir]::view-transition-old(ob-stepper) {
+  animation: none;
+  opacity: 0;
+}
+html[data-ob-dir]::view-transition-new(ob-stepper) {
+  animation: none;
+}
+@keyframes ob-vt-out-fwd {
+  to {
+    opacity: 0;
+    transform: translateX(-36px) scale(0.975);
+  }
+}
+@keyframes ob-vt-in-fwd {
+  from {
+    opacity: 0;
+    transform: translateX(48px) scale(1.015);
+  }
+}
+@keyframes ob-vt-out-back {
+  to {
+    opacity: 0;
+    transform: translateX(36px) scale(0.975);
+  }
+}
+@keyframes ob-vt-in-back {
+  from {
+    opacity: 0;
+    transform: translateX(-48px) scale(1.015);
+  }
+}
+html[data-ob-dir='forward']::view-transition-old(ob-stage) {
+  animation: ob-vt-out-fwd 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+html[data-ob-dir='forward']::view-transition-new(ob-stage) {
+  animation: ob-vt-in-fwd 460ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both;
+}
+html[data-ob-dir='back']::view-transition-old(ob-stage) {
+  animation: ob-vt-out-back 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+html[data-ob-dir='back']::view-transition-new(ob-stage) {
+  animation: ob-vt-in-back 460ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both;
+}
+
+/* ---- Welcome hero ---------------------------------------------------------------------- */
+.ob-hero {
+  position: relative;
+  display: flex;
+  height: 132px;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+  isolation: isolate;
+}
+.ob-hero-field {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.ob-hero-glow {
+  position: absolute;
+  width: 70%;
+  height: 180%;
+  top: -40%;
+  border-radius: 999px;
+  opacity: 0.55;
+  will-change: transform;
+}
+.ob-hero-glow[data-n='1'] {
+  left: -12%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-accent) 30%, transparent), transparent);
+  animation: ob-drift-a 14s ease-in-out infinite;
+}
+.ob-hero-glow[data-n='2'] {
+  right: -18%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-info) 22%, transparent), transparent);
+  animation: ob-drift-b 17s ease-in-out infinite;
+}
+/* The orca's wake: three soft horizontal lines drifting past. */
+.ob-hero-wake {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 40px;
+  transform: translateY(-50%);
+  background:
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-text) 10%, transparent) 40%, transparent) 0 6px / 100% 1px no-repeat,
+    linear-gradient(90deg, transparent 20%, color-mix(in srgb, var(--color-text) 7%, transparent) 60%, transparent) 0 20px / 100% 1px no-repeat,
+    linear-gradient(90deg, transparent 10%, color-mix(in srgb, var(--color-text) 5%, transparent) 50%, transparent 90%) 0 34px / 100% 1px no-repeat;
+  opacity: 0.8;
+}
+.ob-hero-mark {
+  position: relative;
+  margin-left: 32px;
+  display: inline-flex;
+  filter: drop-shadow(0 8px 18px var(--scrim-soft));
+  animation:
+    ob-pop 700ms var(--ob-spring) 80ms both,
+    ob-float 6s ease-in-out 900ms infinite;
+}
+.ob-features {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ob-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  animation: ob-rise 480ms var(--ob-ease) both;
+  animation-delay: calc(160ms + var(--i, 0) * 70ms);
+}
+.ob-feature-icon {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-card);
+  color: var(--color-text-2);
+}
+
+/* ---- Setup checks ------------------------------------------------------------------------ */
+.ob-meter {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+.ob-meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--color-ok);
+  transform-origin: left center;
+  transition: transform 600ms var(--ob-ease);
+}
+.ob-check {
+  animation: ob-rise 420ms var(--ob-ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+.ob-check-glyph {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+/* Resolved rows land one after another, not all in the same frame. */
+.ob-check .ob-pop {
+  animation-delay: calc(var(--i, 0) * 110ms);
+}
+.ob-check .ob-row-aside {
+  transition: color var(--duration-base) ease-out;
+}
+.ob-check[data-glyph-state='done'] .ob-row-aside {
+  color: var(--color-text-2);
+}
+
+/* ---- Source cards ------------------------------------------------------------------------ */
+.ob-source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.ob-source-card {
+  position: relative;
+  display: flex;
+  min-height: 176px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+  padding: 16px;
+  text-align: left;
+  font: inherit;
+  color: var(--color-text);
+  cursor: pointer;
+  isolation: isolate;
+  transition:
+    transform 260ms var(--ob-ease),
+    border-color var(--duration-base) ease-out;
+  animation: ob-rise 480ms var(--ob-ease) both;
+  animation-delay: calc(120ms + var(--i, 0) * 80ms);
+}
+/* Lift shadow and selected glow live on pseudo-elements so only their opacity animates. */
+.ob-source-card::before,
+.ob-source-card::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms var(--ob-ease);
+}
+.ob-source-card::before {
+  box-shadow: var(--shadow-pop);
+}
+.ob-source-card::after {
+  box-shadow:
+    0 0 0 1px var(--color-accent),
+    0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent),
+    0 10px 32px -8px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.ob-source-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--color-border-strong);
+}
+.ob-source-card:hover::before {
+  opacity: 1;
+}
+.ob-source-card:active {
+  transform: translateY(-1px) scale(0.99);
+}
+.ob-source-card[data-selected='true']::after {
+  opacity: 1;
+}
+.ob-source-card:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.ob-source-art {
+  display: inline-flex;
+  color: var(--color-text-2);
+  transition: transform 360ms var(--ob-spring);
+}
+.ob-source-card:hover .ob-source-art {
+  transform: translateY(-2px) scale(1.04);
+}
+.ob-source-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.ob-source-body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-3);
+}
+.ob-source-foot {
+  display: flex;
+  width: 100%;
+  margin-top: auto;
+  align-items: center;
+  justify-content: space-between;
+}
+.ob-source-arrow {
+  color: var(--color-text-3);
+  opacity: 0.6;
+  transition:
+    transform 260ms var(--ob-ease),
+    opacity 200ms ease-out;
+}
+.ob-source-card:hover .ob-source-arrow {
+  opacity: 1;
+  transform: translateX(3px);
+}
+
+/* ---- Folder picker empty state ---------------------------------------------------------- */
+.ob-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ob-picker[data-empty='true'] {
+  align-items: center;
+  gap: 12px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 12px;
+  padding: 28px 16px;
+  text-align: center;
+}
+.ob-picker-art {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+  color: var(--color-text-2);
+  animation: ob-pop 520ms var(--ob-spring) 140ms both;
+}
+
+/* ---- Create: the live launch view -------------------------------------------------------- */
+.ob-launch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+  padding: 16px 16px 18px;
+  isolation: isolate;
+}
+.ob-launch-field {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.ob-launch-glow {
+  position: absolute;
+  width: 60%;
+  height: 260%;
+  top: -80%;
+  border-radius: 999px;
+  opacity: 0.5;
+  will-change: transform;
+  transition: opacity 600ms ease-out;
+}
+.ob-launch-glow[data-n='1'] {
+  left: -10%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-accent) 26%, transparent), transparent);
+  animation: ob-drift-a 11s ease-in-out infinite;
+}
+.ob-launch-glow[data-n='2'] {
+  right: -14%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-info) 18%, transparent), transparent);
+  animation: ob-drift-b 13s ease-in-out infinite;
+}
+.ob-launch[data-status='done'] .ob-launch-glow[data-n='1'] {
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-ok) 28%, transparent), transparent);
+}
+.ob-launch[data-status='failed'] .ob-launch-glow {
+  opacity: 0.12;
+}
+.ob-launch-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ob-launch-stage {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.ob-launch-time {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-2);
+}
+.ob-launch-bar {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text) 9%, transparent);
+}
+.ob-launch-bar-fill {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transform-origin: left center;
+  transition: transform 700ms var(--ob-ease);
+}
+.ob-launch-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-card) 55%, transparent), transparent);
+  transform: translateX(-100%);
+}
+.ob-launch[data-status='running'] .ob-launch-bar-fill::after {
+  animation: ob-sheen 1.8s ease-in-out infinite;
+}
+.ob-launch[data-status='done'] .ob-launch-bar-fill {
+  background: var(--color-ok);
+}
+.ob-launch[data-status='failed'] .ob-launch-bar-fill {
+  background: var(--color-danger);
+}
+
+/* Status orb: a spinning arc while running; resolves into a check (with one ripple) or an x. */
+.ob-orb {
+  position: relative;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.ob-orb-ring,
+.ob-orb-arc,
+.ob-orb-ripple {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+}
+.ob-orb-ring {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-text) 10%, transparent);
+}
+.ob-orb-arc {
+  border: 2px solid transparent;
+  border-top-color: var(--color-accent);
+  border-right-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  animation: ob-rotate 1s linear infinite;
+  transition: opacity 240ms ease-out;
+}
+.ob-launch[data-status='done'] .ob-orb-arc,
+.ob-launch[data-status='failed'] .ob-orb-arc,
+.ob-launch[data-status='idle'] .ob-orb-arc {
+  opacity: 0;
+  animation: none;
+}
+.ob-orb-core {
+  position: relative;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-ok);
+  color: var(--color-bg);
+}
+.ob-orb-core[data-tone='danger'] {
+  background: var(--color-danger);
+}
+.ob-orb-ripple {
+  box-shadow: 0 0 0 2px var(--color-ok);
+  animation: ob-ripple 900ms var(--ob-ease) 120ms both;
+}
+
+/* Stepped timeline of the real provisioning stages. */
+.ob-timeline {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+}
+.ob-tl-item {
+  position: relative;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+  font-size: 13px;
+  animation: ob-rise 420ms var(--ob-ease) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+.ob-tl-node {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-card) 55%, var(--color-bg));
+}
+.ob-tl-item[data-state='running'] .ob-tl-node::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  animation: ob-halo 2s ease-out infinite;
+}
+/* The rail between this node and the next; it fills (scaleY) once this stage is done. */
+.ob-tl-rail {
+  position: absolute;
+  left: 13.25px;
+  top: calc(50% + 11px);
+  height: calc(100% - 22px);
+  width: 1.5px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--color-border-strong);
+}
+.ob-tl-rail-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--color-ok);
+  transform: scaleY(0);
+  transform-origin: top center;
+  transition: transform 480ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.ob-tl-rail[data-filled='true'] .ob-tl-rail-fill {
+  transform: scaleY(1);
+}
+.ob-tl-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ob-tl-item[data-state='running'] .ob-tl-label {
+  font-weight: 500;
+}
+
+/* ---- Agents: suggestion cards ----------------------------------------------------------- */
+.ob-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+}
+.ob-agent-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-card);
+  padding: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  isolation: isolate;
+  transition:
+    transform 240ms var(--ob-ease),
+    border-color var(--duration-base) ease-out;
+  animation: ob-rise 480ms var(--ob-ease) both;
+  animation-delay: calc(140ms + var(--i, 0) * 60ms);
+}
+.ob-agent-card::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 70%, transparent),
+    0 6px 20px -8px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms var(--ob-ease);
+}
+.ob-agent-card[data-checked='true']::after {
+  opacity: 1;
+}
+.ob-agent-card:hover {
+  transform: translateY(-2px);
+}
+.ob-agent-card:has(input:disabled) {
+  cursor: default;
+}
+.ob-agent-card:has(input:disabled):hover {
+  transform: none;
+}
+.ob-agent-card:has(input:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.ob-agent-check {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  margin: 0;
+}
+.ob-agent-avatar {
+  display: inline-flex;
+  transition: transform 300ms var(--ob-spring);
+}
+.ob-agent-card[data-checked='false'] .ob-agent-avatar {
+  opacity: 0.55;
+  transform: scale(0.92);
+}
+.ob-agent-ghost {
+  min-height: 72px;
+  cursor: default;
+}
+.ob-ghost-avatar {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+.ob-ghost-line {
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
+/* ---- Finish: one calm celebration --------------------------------------------------------- */
+.ob-burst {
+  position: relative;
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+}
+.ob-burst-core {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-ok);
+  color: var(--color-bg);
+  box-shadow: 0 10px 30px -10px color-mix(in srgb, var(--color-ok) 70%, transparent);
+  animation-duration: 640ms;
+  animation-delay: 120ms;
+}
+.ob-burst-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1.5px var(--color-ok);
+  opacity: 0;
+  animation: ob-ripple 1100ms var(--ob-ease) both;
+}
+.ob-burst-ring[data-n='1'] {
+  animation-delay: 300ms;
+}
+.ob-burst-ring[data-n='2'] {
+  animation-delay: 520ms;
+}
+.ob-spark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: rotate(var(--a));
+}
+.ob-spark > span {
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-ok) 60%, var(--color-accent));
+  opacity: 0;
+  transform-origin: left center;
+  animation: ob-spark 720ms var(--ob-ease) 320ms both;
+}
+.ob-summary > .ob-row {
+  animation: ob-rise 420ms var(--ob-ease) both;
+  animation-delay: calc(360ms + var(--i, 0) * 60ms);
+}
+
+@media (max-width: 720px) {
+  .ob-col {
+    padding: 24px 16px 40px;
+  }
+  .ob-display {
+    font-size: 24px;
+  }
+  .ob-hero {
+    height: 112px;
+  }
+}
+@media (max-width: 560px) {
+  .ob-features {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ob-source-card {
+    min-height: 0;
+  }
+}
+@media (max-height: 560px) {
+  .ob-col {
+    padding-top: 20px;
+  }
+  .ob-hero {
+    height: 96px;
+  }
+}
+
+/* Reduced motion: everything lands instantly and holds still. Covers every class above;
+ * motion.ts additionally skips the view transition and the Create step's completion hold. */
+@media (prefers-reduced-motion: reduce) {
+  .ob-window *,
+  .ob-window *::before,
+  .ob-window *::after,
+  .ob-dialog {
+    animation: none !important;
+    transition: none !important;
+  }
+  .ob-enter,
+  .ob-reveal,
+  .ob-swap,
+  .ob-pop,
+  .ob-stage > *,
+  .ob-header > * {
+    opacity: 1;
+    transform: none;
+  }
+  .ob-rotate {
+    animation: none;
+  }
+  .ob-breathe {
+    opacity: 1;
+  }
+  .ob-source-card:hover,
+  .ob-agent-card:hover,
+  .ob-source-card:hover .ob-source-art {
+    transform: none;
+  }
+  /* One-shot celebration pieces would otherwise sit at their (visible) resting frame. */
+  .ob-burst-ring,
+  .ob-spark,
+  .ob-orb-ripple {
+    display: none;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

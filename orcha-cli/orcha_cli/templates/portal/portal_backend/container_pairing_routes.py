@@ -2,7 +2,11 @@
 
 import json
 import os
+import pathlib
 import secrets
+import signal
+import threading
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -34,15 +38,49 @@ def pairing_warning(reason: str) -> dict:
     return {
         "reachable": False,
         "reason": reason,
-        "title": "Phones can't reach this Orcha yet",
+        "title": "Phones can't reach this Embodent yet",
         "message": (
             "The portal only has a localhost address right now, so a phone on Wi-Fi would not "
             "know how to reach this computer."
         ),
         "remedy": (
             "Connect this Mac to the same Wi-Fi as the phone, run `orcha up` from this workspace, "
-            "and allow the Orcha portal port through macOS Firewall or Local Network prompts."
+            "and allow the Embodent portal port through macOS Firewall or Local Network prompts."
         ),
+    }
+
+
+def loopback_only() -> bool:
+    """A native portal bound to 127.0.0.1 (``bind`` not "lan" in orcha.json).
+
+    Docker published the portal on every interface, so the QR's LAN address always
+    answered; a native portal binds loopback by default (plan R-D3) and a phone on
+    Wi-Fi gets nothing back. ``ORCHA_BIND`` is set by `orcha portal` from orcha.json
+    on every (re)start; unset means a Docker/hosted portal, which is never loopback-only
+    from here."""
+    return (os.environ.get("ORCHA_BIND") or "").strip() == "loopback"
+
+
+def can_allow_lan() -> bool:
+    """The portal can rebind itself: it runs under `orcha serve`, which restarts it."""
+    return bool(os.environ.get("ORCHA_SUPERVISED")) and bool(os.environ.get("ORCHA_LOCAL_REPO_DIR"))
+
+
+def loopback_warning() -> dict:
+    allow = can_allow_lan()
+    return {
+        "reachable": False,
+        "reason": "loopback_only",
+        "title": "Phones can't reach this Embodent yet",
+        "message": (
+            "This project only accepts connections from this computer, so a phone on "
+            "Wi-Fi can't connect to it."
+        ),
+        "remedy": (
+            "Allow phones on this network below, or run `orcha pair --lan` in this project."
+            if allow else "Run `orcha pair --lan` in this project, then try again."
+        ),
+        "canAllowLan": allow,
     }
 
 
@@ -105,13 +143,14 @@ def short_pairing_code() -> str:
 #   - dot-style data modules + rounded finder frames (the modern, branded look);
 #   - a 4-module quiet zone baked into the viewBox over an always-LIGHT tile —
 #     dark modules on light stay fixed in every theme, scanners need the contrast;
-#   - the orca glyph (same artwork as static/favicon.svg) embedded on a rounded
-#     dark tile in the centre. EC=H recovers up to 30% damage; the knockout is
+#   - the Embodent mark (same artwork as static/logo-mark.svg) embedded on a
+#     rounded dark tile in the centre. EC=H recovers up to 30% damage; the knockout is
 #     capped well below that (~8% of the module area, see QR_EMBED_FRACTION).
 # Pure string assembly on qrcode's matrix — no Pillow/StyledPilImage dependency,
 # and SVG stays crisp at any rendered size.
 QR_DARK = "#0b1216"    # module ink — matches the favicon's tile
 QR_LIGHT = "#ffffff"   # the light tile behind the code (never theme-inverted)
+QR_TILE = "#121314"    # the centre logo tile (Embodent brand tile colour)
 QR_QUIET_MODULES = 4   # quiet zone, in modules, on every side
 QR_EMBED_FRACTION = 0.28  # centre knockout side as a fraction of the module count
 
@@ -126,22 +165,17 @@ def _qr_finder_frame(x: float, y: float) -> str:
 
 
 def _qr_orca_tile(x: float, y: float, size: float) -> str:
-    """The favicon orca on its rounded dark tile, scaled into the centre knockout."""
+    """The Embodent mark on its rounded dark tile, scaled into the centre knockout."""
     s = size / 100.0
+    # the mark (1212 units tall, centred on -57,0) fitted to ~60% of the 100-unit tile
     return (
         f'<g transform="translate({x:.2f},{y:.2f}) scale({s:.4f})" aria-hidden="true">'
-        f'<rect width="100" height="100" rx="22" fill="{QR_DARK}"/>'
-        '<path d="M27,83 C28,55 33,32 45.5,22.5 C51.5,18 57.5,19.5 60,27 '
-        'C64.5,46 70.5,67 73,83 Z" fill="#f3fbfb"/>'
-        '<g stroke="#06171c" stroke-width="2.4" stroke-linecap="round">'
-        '<line x1="49" y1="38" x2="40" y2="62"/><line x1="49" y1="38" x2="56" y2="62"/>'
-        '<line x1="49" y1="38" x2="50" y2="74"/></g>'
-        '<g fill="#06171c"><circle cx="39" cy="64" r="4"/><circle cx="57" cy="64" r="4"/>'
-        '<circle cx="50" cy="76" r="4"/></g>'
-        '<circle cx="49" cy="35" r="6" fill="#1fc7cd"/>'
-        '<path d="M13,86 C28,82 38,82 50,82.5 C62,82 72,82 87,86" stroke="#1fc7cd" '
-        'stroke-width="5" stroke-linecap="round" fill="none"/>'
-        "</g>"
+        f'<rect width="100" height="100" rx="22" fill="{QR_TILE}"/>'
+        '<g transform="translate(52.85,50) scale(0.05)" fill="none" stroke="#ECEDF1" '
+        'stroke-width="204" stroke-linecap="round" stroke-linejoin="round">'
+        '<path stroke-opacity="0.5" d="M390 -504 L0 -504 A504 504 0 0 0 0 504 L390 504 M0 0 L330 0"/>'
+        '<path d="M390 -354 L0 -354 A354 354 0 0 0 0 354 L390 354 M0 0 L330 0"/>'
+        "</g></g>"
     )
 
 
@@ -216,6 +250,8 @@ def get_container_pairing(
     if human_agent_id is not None and not valid_uuid(human_agent_id):
         raise HTTPException(400, "human_agent_id is not a valid UUID")
 
+    if loopback_only():
+        raise HTTPException(409, loopback_warning())
     base_url, warning = pairing_base_url(request)
     if warning:
         raise HTTPException(409, warning)
@@ -259,7 +295,7 @@ def get_container_pairing(
                 "reachable": False,
                 "reason": "no_human",
                 "title": "No human can pair this phone",
-                "message": "Add a human operator to this Orcha before pairing a phone.",
+                "message": "Add a human operator to this Embodent before pairing a phone.",
             },
         )
     if human_agent_id:
@@ -320,3 +356,60 @@ def get_container_pairing(
         "qrText": qr_text,
         "qrSvg": svg,
     }
+
+
+# How long the portal waits after answering before it exits for the rebind restart.
+LAN_RESTART_DELAY_SECONDS = 0.5
+
+
+def _is_loopback_origin(origin: Optional[str]) -> bool:
+    """No Origin (curl, the CLI) or this computer's own page. Anything else is a
+    cross-site request, which must never be able to open the portal to the network."""
+    if origin is None:
+        return True
+    host = urlsplit(origin).hostname or ""
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
+def _write_bind_lan(project_root: pathlib.Path) -> None:
+    path = project_root / ".claude" / "orcha.json"
+    cfg = json.loads(path.read_text())
+    cfg["bind"] = "lan"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
+@app.post("/api/containers/{cid}/pairing/lan")
+def allow_container_pairing_lan(cid: str, request: Request):
+    """Let phones on this network reach a native portal (``bind: "lan"``, plan R-D3).
+
+    Writes ``bind: "lan"`` to the project's orcha.json and exits so `orcha serve`
+    restarts the portal on 0.0.0.0 (the supervisor rebuilds the portal's argv from
+    orcha.json on every start). Only this computer may ask: the request must come
+    from loopback, from no page or this computer's own page."""
+    if not valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    if not loopback_only():
+        return {"bind": "lan" if os.environ.get("ORCHA_BIND") == "lan" else "unmanaged", "restarting": False}
+    if not can_allow_lan():
+        raise HTTPException(
+            409,
+            "This portal is not running under `orcha serve`; run `orcha pair --lan` in the project.",
+        )
+    client = request.client.host if request.client else ""
+    if not (client == "::1" or client.startswith("127.")) or not _is_loopback_origin(
+        request.headers.get("origin")
+    ):
+        raise HTTPException(403, "phone access can only be turned on from this computer")
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT id FROM containers WHERE id=%s", (cid,))
+        if not cur.fetchone():
+            raise HTTPException(404, f"container {cid} not found")
+        trusted_actor(cur, request, cid, None, write=True)
+    try:
+        _write_bind_lan(pathlib.Path(os.environ["ORCHA_LOCAL_REPO_DIR"]))
+    except (OSError, ValueError) as e:
+        raise HTTPException(500, "could not update this project's orcha.json") from e
+    threading.Timer(LAN_RESTART_DELAY_SECONDS, os.kill, (os.getpid(), signal.SIGTERM)).start()
+    return {"bind": "lan", "restarting": True}

@@ -247,3 +247,48 @@ describe('resetStack', () => {
     expect(findByCommand).not.toHaveBeenCalled()
   })
 })
+
+describe('resetStack — native project (GH #258 D2)', () => {
+  const ok = () => vi.fn().mockResolvedValue({ stdout: '' })
+
+  it('runs `orcha down -v --yes` then `orcha service uninstall` from the folder, and no docker step', async () => {
+    const execHost = ok()
+    const d = deps({ execHost, pathEnv: '/p', hostEnv: { HOME: '/h' }, processDeps: noopProcessDeps() })
+    await resetStack('orcha-foo', '/proj', d, 'native')
+    expect(execHost.mock.calls.map((c) => [c[0], c[1], c[2].cwd])).toEqual([
+      ['orcha', ['down', '-v', '--yes'], '/proj'],
+      ['orcha', ['service', 'uninstall'], '/proj']
+    ])
+    expect(execHost.mock.calls[0][2].env).toMatchObject({ HOME: '/h', PATH: '/p' })
+    expect(d.exec).not.toHaveBeenCalled()
+  })
+
+  it('then removes the on-disk artifacts (.orcha/ holds orcha.db, state.json, logs/)', async () => {
+    const d = deps({ execHost: ok(), processDeps: noopProcessDeps() })
+    await resetStack('orcha-foo', '/proj', d, 'native')
+    const removed = (d.rmrf as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(removed).toContain('/proj/.orcha')
+    expect((d.rmFile as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toContain('/proj/.claude/orcha.json')
+  })
+
+  it('a failing `orcha down -v --yes` is fatal (ORCHA_FAILED) and deletes nothing', async () => {
+    const execHost = vi.fn().mockRejectedValue(Object.assign(new Error('x'), { stderr: 'serve would not stop' }))
+    const d = deps({ execHost, processDeps: noopProcessDeps() })
+    await expect(resetStack('orcha-foo', '/proj', d, 'native')).rejects.toEqual({
+      code: 'ORCHA_FAILED',
+      stderr: 'serve would not stop'
+    })
+    expect(d.rmrf).not.toHaveBeenCalled()
+  })
+
+  it('a missing service (uninstall fails) is fine', async () => {
+    const execHost = vi.fn().mockResolvedValueOnce({ stdout: '' }).mockRejectedValueOnce(new Error('no service'))
+    const d = deps({ execHost, processDeps: noopProcessDeps() })
+    await expect(resetStack('orcha-foo', '/proj', d, 'native')).resolves.toBeUndefined()
+    expect(d.rmrf).toHaveBeenCalled()
+  })
+
+  it('needs the folder', async () => {
+    await expect(resetStack('orcha-foo', null, deps({ execHost: ok() }), 'native')).rejects.toEqual({ code: 'UNKNOWN_STACK' })
+  })
+})

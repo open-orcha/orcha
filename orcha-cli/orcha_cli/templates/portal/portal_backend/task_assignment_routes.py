@@ -147,12 +147,16 @@ def assign_task(tid: str, body: AssignTask, request: Request):
                     },
                 )
             released_prior = prior
+            # Mig 068: reassigning ends a running Verdikt auto-fix loop
+            from portal_backend.verdikt_autofix import end_for_person as _end_autofix
+
+            _end_autofix(cur, t, body.actor_agent_id, "reassigned", actor_kind=actor["kind"])
 
         # Ready vs pending is a function of dependency satisfaction (mirror the verify-unblock check).
         cur.execute(
             """SELECT 1 FROM task_dependencies td
                JOIN tasks dep ON dep.id = td.depends_on_id
-               WHERE td.task_id=%s AND dep.status <> 'completed' LIMIT 1""",
+               WHERE td.task_id=%s AND dep.status NOT IN ('completed','cancelled') LIMIT 1""",
             (tid,),
         )
         new_status = "pending" if cur.fetchone() else "ready"

@@ -35,10 +35,21 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import io.openorcha.mobile.ui.components.LocalPortalLinkHandler
+import io.openorcha.mobile.ui.components.PortalLinkHandler
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +81,11 @@ import io.openorcha.mobile.ui.components.TonalButton
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LEmptyState
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 
 /* =============================================================================
    Flow 07 — Request detail: flow header, chain context, payload, response quote,
@@ -91,9 +107,37 @@ fun RequestDetailScreen(
     onRejectTask: (String) -> Unit,
     onConvert: (String, String, String?, Int) -> Unit,
     onOpenTask: (String) -> Unit,
+    // Portal link chips + post-resolve refresh (optional; MainActivity may wire them).
+    onOpenRequest: ((String) -> Unit)? = null,
+    onOpenAgent: ((String) -> Unit)? = null,
+    onResolved: () -> Unit = {},
 ) {
     val p = Orcha.palette
     val req = state.selectedRequest
+    val baseUrl = state.selectedContainer?.baseUrl
+    val portalHandler = LocalPortalLinkHandler.current ?: PortalLinkHandler(baseUrl, onOpenTask, onOpenRequest, onOpenAgent)
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    // A refreshed snapshot that shows the close lets the optimistic "resolved" go.
+    LaunchedEffect(state.snapshot) { ResolveUndoStore.reconcile(state.snapshot?.requests.orEmpty()) }
+    val resolve: () -> Unit = resolve@{
+        val r = req ?: return@resolve
+        val actor = humanIdOf(state) ?: return@resolve
+        val base = baseUrl ?: return@resolve
+        ResolveUndoStore.schedule(base, r.id, actor, onDone = onResolved)
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val shown = launch {
+                val result = snackbar.showSnackbar("Resolved", actionLabel = "Undo", duration = SnackbarDuration.Indefinite)
+                if (result == SnackbarResult.ActionPerformed && ResolveUndoStore.undo(r.id)) {
+                    snackbar.showSnackbar("Kept open", duration = SnackbarDuration.Short)
+                }
+            }
+            delay(RESOLVE_UNDO_MS)
+            if (snackbar.currentSnackbarData?.visuals?.message == "Resolved") snackbar.currentSnackbarData?.dismiss()
+            shown.join()
+        }
+    }
     val humanId = state.selectedContainer?.humanAgentId
     // server rows never carry aliases — resolve from snapshot.agents (web data.js:118-119)
     val agents = state.snapshot?.agents.orEmpty()
@@ -103,32 +147,41 @@ fun RequestDetailScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var confirmOwnerClose by remember { mutableStateOf(false) }
 
+    CompositionLocalProvider(LocalPortalLinkHandler provides portalHandler) {
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = p.bg,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                title = { Text("Request") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back") } },
-                actions = {
-                    if (req != null) {
-                        // Escalate is the only overflow action left — Nudge + Close now live in
-                        // the universal operator tier below (flow 07a). The daemon-only
-                        // "Triage-close" is retired; a stale request is closed with a reason.
-                        val isRequester = req.requesterId == humanId
-                        if (req.status in setOf("open", "answered") && isRequester) {
-                            IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More") }
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(text = { Text("Escalate") }, onClick = { menuOpen = false; onEscalate(null) })
+            Column {
+                CenterAlignedTopAppBar(
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = p.bg, titleContentColor = p.text),
+                    title = { Text("Request", style = ltype(LType.Headline)) },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(OrchaIcons.ArrowBack, "Back", tint = p.text2) } },
+                    actions = {
+                        if (req != null) {
+                            // Escalate is the only overflow action left — Nudge + Close live in the
+                            // universal operator tier (flow 07a).
+                            val isRequester = req.requesterId == humanId
+                            if (req.status in setOf("open", "answered") && isRequester) {
+                                IconButton(onClick = { menuOpen = true }) { Icon(OrchaIcons.MoreVert, "More actions", tint = p.text2) }
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text = { Text("Escalate to a human") }, onClick = { menuOpen = false; onEscalate(null) })
+                                }
                             }
                         }
-                    }
-                },
-            )
+                    },
+                )
+                LDivider()
+            }
         },
     ) { padding ->
         if (req == null) {
-            OrchaCard(Modifier.padding(padding).padding(16.dp)) { Text("Request not found — refresh the workspace.", color = p.muted) }
+            LEmptyState(
+                icon = OrchaIcons.Inbox,
+                title = "Request not found",
+                message = "Refresh the workspace.",
+                modifier = Modifier.padding(padding).padding(16.dp),
+            )
             return@Scaffold
         }
         val isRequester = req.requesterId == humanId
@@ -136,8 +189,8 @@ fun RequestDetailScreen(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = LSpace.l, vertical = LSpace.l),
+            verticalArrangement = Arrangement.spacedBy(LSpace.l),
         ) {
             RequestDetailContent(
                 state = state, req = req, agents = agents, humanId = humanId,
@@ -146,6 +199,8 @@ fun RequestDetailScreen(
                 isRequester = isRequester, isTarget = isTarget,
                 onSheet = { sheet = it },
                 onConfirmOwnerClose = { confirmOwnerClose = true },
+                onResolve = resolve,
+                onUndoResolve = { ResolveUndoStore.undo(req.id); snackbar.currentSnackbarData?.dismiss() },
                 onAcceptTask = onAcceptTask, onOpenTask = onOpenTask,
             )
         }
@@ -192,24 +247,36 @@ fun RequestDetailScreen(
         if (confirmOwnerClose) {
             AlertDialog(
                 onDismissRequest = { confirmOwnerClose = false },
-                title = { Text("Close this request?") },
+                title = { Text(if (req.status == "answered") "Resolve this request?" else "Close this request?") },
                 text = { Text("${toAlias ?: "The other party"} sees it closed on the next sync.") },
-                confirmButton = { TextButton(onClick = { confirmOwnerClose = false; onClose(null) }) { Text("Close") } },
-                dismissButton = { TextButton(onClick = { confirmOwnerClose = false }) { Text("Cancel") } },
+                confirmButton = {
+                    TextButton(onClick = { confirmOwnerClose = false; onClose(null) }) {
+                        Text(if (req.status == "answered") "Resolve" else "Close", color = p.accent)
+                    }
+                },
+                dismissButton = { TextButton(onClick = { confirmOwnerClose = false }) { Text("Cancel", color = p.muted) } },
+                containerColor = p.raised,
             )
         }
     }
+}
 }
 
 @Composable
 internal fun TimelineDot(label: String, at: String?, reached: Boolean) {
     val p = Orcha.palette
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 3.dp)) {
-        Box(Modifier.size(9.dp).background(if (reached) p.accent else p.border2, CircleShape))
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = if (reached) p.text else p.faint)
-        Spacer(Modifier.weight(1f))
-        Text(MobileUx.agoLabel(at) ?: "", style = MonoSmStyle, color = p.faint)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(LSpace.m),
+        modifier = Modifier.padding(vertical = 6.dp),
+    ) {
+        Box(Modifier.size(7.dp).background(if (reached) p.muted else p.border2, CircleShape))
+        Text(label, style = ltype(LType.Body), color = if (reached) p.text2 else p.faint, modifier = Modifier.weight(1f))
+        Text(MobileUx.agoLabel(at) ?: "", style = ltype(LType.Meta), color = p.faint)
     }
 }
 
 /** Shared one-field bottom sheet (respond / reject / nudge / close-with-reason). */
+
+/** The paired human acting on requests (the requester for a Resolve). */
+internal fun humanIdOf(state: OrchaUiState): String? = state.selectedContainer?.humanAgentId

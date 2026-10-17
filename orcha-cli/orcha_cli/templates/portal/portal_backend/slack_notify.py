@@ -39,6 +39,7 @@ import os
 import urllib.error
 import urllib.request
 
+from portal_backend import notification_prefs as _np
 from portal_backend.database import db_cursor
 
 SLACK_POST_TIMEOUT_SECONDS = 5
@@ -629,6 +630,10 @@ def notify_task_needs_verification(container_id, task_id) -> None:
             )
             trow = cur.fetchone()
             if not trow:
+                return
+            # mig 063: the webhook posts into ONE shared channel, so it posts when at
+            # least one member's settings let this through Slack (should_notify).
+            if not _np.container_wants(cur, container_id, "task_verify", task_id, "slack"):
                 return
             webhook = crow["slack_webhook_url"].strip()
             container_name = crow["name"] or "Orcha"

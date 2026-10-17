@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import pathlib
 import sys
 
@@ -22,7 +23,7 @@ def _project_bridge_config(cwd: pathlib.Path) -> tuple[object, object]:
 
 def terminal_bridge_command(args) -> None:
     """Ensure the singleton bridge or serve it in the foreground."""
-    from orcha_cli import terminal_bridge
+    from orcha_cli import terminal_bridge, terminal_bridge_daemon
 
     cwd = pathlib.Path.cwd()
     if getattr(args, "ensure", False):
@@ -37,6 +38,10 @@ def terminal_bridge_command(args) -> None:
         )
     host = args.host or terminal_bridge.BRIDGE_HOST
     port = args.port or configured_port or terminal_bridge.BRIDGE_PORT
+    # GH #258 R2: under `orcha serve` nobody else records this pid, and the SessionStart
+    # hook's `terminal-bridge --ensure` would start a second bridge on the busy port.
+    if (cwd / ".claude").is_dir():
+        terminal_bridge_daemon.bridge_pid_path(cwd).write_text(str(os.getpid()))
     try:
         asyncio.run(
             terminal_bridge.serve_bridge(

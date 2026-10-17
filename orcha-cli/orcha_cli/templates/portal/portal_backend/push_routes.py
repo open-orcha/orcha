@@ -27,10 +27,12 @@ import re
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import valid_uuid
 from portal_backend.identity_routes import proxy_login
+from portal_backend.push_outbox import push_logins_allowed
 
 # APNs device tokens are hex blobs (64 hex chars today; Apple says treat length
 # as opaque). Accept 16..200 hex chars, store lowercased — reject anything else
@@ -217,7 +219,7 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
     _forbid_browser_identity(request)
     with db_cursor() as (conn, cur):
         cur.execute(
-            "DELETE FROM push_outbox WHERE created_at < now() - interval '48 hours'"
+            "DELETE FROM push_outbox WHERE created_at < %s", (sql.ago(48 * 3600),)
         )
         cur.execute(
             """SELECT id, container_id, kind, ref_id, title, body, created_at
@@ -228,10 +230,10 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
             (body.limit,),
         )
         rows = cur.fetchall()
-        events, empty_ids = [], []
+        events, empty_ids, muted_ids = [], [], []
         for row in rows:
             cur.execute(
-                """SELECT pd.apns_token FROM push_devices pd
+                """SELECT pd.apns_token, pd.github_login FROM push_devices pd
                    WHERE pd.revoked_at IS NULL
                      AND EXISTS (SELECT 1 FROM agents a
                                   WHERE a.container_id=%s AND a.kind='human'
@@ -240,9 +242,18 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
                    ORDER BY pd.created_at ASC""",
                 (row["container_id"],),
             )
-            devices = [d["apns_token"] for d in cur.fetchall()]
-            if not devices:
+            device_rows = cur.fetchall()
+            if not device_rows:
                 empty_ids.append(row["id"])
+                continue
+            # mig 063: each member's notification settings are re-checked AT SEND
+            # TIME (a pause or quiet hours that began after enqueue holds the push).
+            allowed = push_logins_allowed(
+                cur, row["container_id"], row["kind"], row["ref_id"]
+            )
+            devices = [d["apns_token"] for d in device_rows if d["github_login"] in allowed]
+            if not devices:
+                muted_ids.append(row["id"])
                 continue
             events.append(
                 {
@@ -263,8 +274,14 @@ def claim_push_outbox(request: Request, body: OutboxClaim):
         if empty_ids:
             cur.execute(
                 "UPDATE push_outbox SET failed='no live devices at claim' "
-                "WHERE id = ANY(%s)",
-                (empty_ids,),
+                f"WHERE {sql.in_list('id')}",
+                (sql.list_param(empty_ids),),
+            )
+        if muted_ids:
+            cur.execute(
+                "UPDATE push_outbox SET failed='muted by notification settings' "
+                f"WHERE {sql.in_list('id')}",
+                (sql.list_param(muted_ids),),
             )
         conn.commit()
     return {"events": events}
@@ -282,8 +299,8 @@ def mark_push_outbox(request: Request, body: OutboxMark):
         if delivered_ids:
             cur.execute(
                 "UPDATE push_outbox SET delivered_at=now() "
-                "WHERE id = ANY(%s) AND delivered_at IS NULL",
-                (delivered_ids,),
+                f"WHERE {sql.in_list('id')} AND delivered_at IS NULL",
+                (sql.list_param(delivered_ids),),
             )
             delivered = cur.rowcount
         for oid, reason in failed_items.items():
@@ -309,8 +326,8 @@ def revoke_unregistered_devices(request: Request, body: RevokeUnregistered):
     with db_cursor() as (conn, cur):
         cur.execute(
             "UPDATE push_devices SET revoked_at=now() "
-            "WHERE apns_token = ANY(%s) AND revoked_at IS NULL",
-            (tokens,),
+            f"WHERE {sql.in_list('apns_token')} AND revoked_at IS NULL",
+            (sql.list_param(tokens),),
         )
         revoked = cur.rowcount
         conn.commit()

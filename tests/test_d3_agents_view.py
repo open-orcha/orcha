@@ -48,15 +48,16 @@ async def test_agents_serves_the_spa_shell(client):
 # ---------- static guards (React source) ----------
 
 def test_agents_roster_role_on_its_own_line_max_two():
-    """The roster row stacks the name over the role (role on the 2nd line), the role
-    wraps to AT MOST 2 lines then ellipsis, and the row top-aligns so its height grows
-    with the wrapped role."""
+    """V2 screen-quality round 1: the roster row is ONE compact 40px row — the name
+    stacks over a single meta line (activity, else role) that truncates with an
+    ellipsis; the full role lives in the row tooltip."""
     css = (AGENTS_DIR / "agents.css").read_text()
-    rrow = css[css.index(".rrow {"):]
-    assert "flex-direction: column" in rrow, "name/role not stacked (role not on its own line)"
-    assert "-webkit-line-clamp: 2" in rrow, "role not clamped to 2 lines"
-    assert "align-items: flex-start" in rrow, \
-        "row doesn't top-align for a wrapping role (height won't grow cleanly)"
+    grow = css[css.index(".rrow .grow {"):]
+    grow = grow[: grow.index("}")]
+    assert "flex-direction: column" in grow, "name/role not stacked (role not on its own line)"
+    rl = css[css.index(".rrow .rl {"):]
+    rl = rl[: rl.index("}")]
+    assert "text-overflow: ellipsis" in rl, "role/meta line doesn't truncate"
 
 
 def test_agents_uses_served_route_deeplinks():
@@ -125,15 +126,17 @@ def test_agents_model_control_posts_ids_not_labels():
 
 
 def test_agents_model_control_filters_by_provider_runtime():
-    """The Controls card shows Claude/Codex first, then filters the model buttons below."""
+    """The Controls card shows the provider (Claude/Codex) first, then the model picker
+    below it, opened on that provider's group. Since the v2 picker (bab575ba) lists ALL
+    supported models grouped by runtime, the filter is the picker's `runtime` prop, and a
+    provider with no models is disabled via modelsForRuntime()."""
     html = _page()
     css = (AGENTS_DIR / "agents.css").read_text()
     assert 'id="modelRuntimeSeg"' in html, "no provider selector above the model selector"
-    assert "modelsForRuntime(selectedRuntime)" in html, "model selector is not filtered by provider"
+    assert "runtime={selectedRuntime}" in html, "model picker is not keyed to the selected provider"
+    assert "modelsForRuntime(r.id)" in html, "provider buttons don't reflect which runtimes have models"
     assert 'id="modelSeg"' in html
     assert ".ctrl.model-ctrl { flex-direction: column;" in css, "model row can't squeeze its label column"
-    assert "grid-template-columns: repeat(auto-fit, minmax(142px, 1fr))" in css, \
-        "model buttons don't use a responsive grid"
 
 
 def test_agents_gate_decoupled_from_status_and_gated_on_plan_decision():
@@ -142,7 +145,7 @@ def test_agents_gate_decoupled_from_status_and_gated_on_plan_decision():
     already-decided plan shows a quiet decided-note, never a live re-approve."""
     html = _page()
     # the gate is computed from owned tasks (mine), not gated on the agent status field
-    block = re.search(r"function GateCallout\(\{ a, mine \}.*?\n\}", html, re.S)
+    block = re.search(r"function GateCallout\(\{ a, mine(?:, \w+)* \}.*?\n\}", html, re.S)
     assert block, "no decoupled gate callout"
     assert "regardless of" in html, "gate doesn't advertise being decoupled from agent status (ISS-36)"
     # ISS-41: undecided -> approve action; decided -> note (both branches read plan_decision)

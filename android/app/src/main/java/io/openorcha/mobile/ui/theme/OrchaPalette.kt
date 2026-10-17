@@ -17,14 +17,14 @@ enum class SkinMode {
 
     val label: String
         get() = when (this) {
-            Classic -> "Classic"
+            Classic -> "Linear"
             Swiss -> "Swiss"
             Minimal -> "Minimalist"
         }
 
     val blurb: String
         get() = when (this) {
-            Classic -> "Teal accent, rounded corners — the original Orcha look."
+            Classic -> "Calm near-black and paper surfaces, indigo accent, Inter — matches the web portal."
             Swiss -> "Electric indigo, sharp corners, mono status chips."
             Minimal -> "Champagne gold accent, generous whitespace, quieter chrome."
         }
@@ -117,7 +117,10 @@ data class OrchaPalette(
     val radiusTag: Float = 5f,
     val pillMono: Boolean = false,
     val flatChrome: Boolean = false,   // Swiss + Minimal: no brand radial glow behind content
-    val displayFontFamily: FontFamily? = null,   // Swiss: Space Grotesk; Minimal: Hanken Grotesk; null = system default
+    val displayFontFamily: FontFamily? = null,   // Swiss: Space Grotesk; Minimal: Hanken Grotesk; null = Inter
+    // Linear: primary buttons fill with this (web `--v2-primary-bg`) while [accent] stays the
+    // brighter accent *text* colour. null = fill with [accent] and label with [accentInk].
+    val primaryFill: Color? = null,
 )
 
 val OrchaDarkPalette = OrchaPalette(
@@ -439,9 +442,123 @@ val OrchaMinimalLightPalette = OrchaPalette(
     displayFontFamily = HankenGroteskFontFamily,
 )
 
-/** Resolve the token palette for a (skin, dark) combination — see [OrchaTheme]. */
+/**
+ * Linear skin (web portal v2 `v2-tokens.css`, iOS `Palette.linearDark` parity) — the
+ * default look. Calm near-black, hairline borders, indigo accent; flat chrome (no
+ * gradients/glows). [accent] is the accent *text* colour; [OrchaPalette.primaryFill] is the
+ * button fill.
+ */
+val OrchaLinearDarkPalette = OrchaPalette(
+    bg = Color(0xFF0E0F10),
+    bgGrad1 = Color.Transparent,
+    bgGrad2 = Color.Transparent,
+    surface = Color(0xFF151618),
+    surface2 = Color(0xFF1C1D21),
+    surface3 = Color(0xFF232427),
+    raised = Color(0xFF1E1F23),
+    border = Color(0xFF25262A),
+    border2 = Color(0xFF33353A),
+    text = Color(0xFFEEEFF1),
+    text2 = Color(0xFFB4B7BE),
+    muted = Color(0xFF8A8F98),
+    faint = Color(0xFF82868D),
+    accent = Color(0xFF8D93F7),
+    accentInk = Color(0xFF0E0F10),
+    accentSoft = Color(0x248D93F7),       // .14
+    accentLine = Color(0x578D93F7),       // .34
+    accentGlow = Color(0x2E8D93F7),       // .18
+    ok = Color(0xFF4CB782),
+    okSoft = Color(0x244CB782),
+    okLine = Color(0x524CB782),
+    info = Color(0xFF4EA7FC),
+    infoSoft = Color(0x244EA7FC),
+    infoLine = Color(0x524EA7FC),
+    warn = Color(0xFFE2A336),
+    warnSoft = Color(0x24E2A336),
+    warnLine = Color(0x57E2A336),
+    danger = Color(0xFFEE7070),
+    dangerSoft = Color(0x24EE7070),
+    dangerLine = Color(0x52EE7070),
+    violet = Color(0xFFA78BFA),
+    violetSoft = Color(0x24A78BFA),
+    violetLine = Color(0x52A78BFA),
+    idle = Color(0xFF8A8F98),
+    idleSoft = Color(0x248A8F98),
+    idleLine = Color(0x4D8A8F98),
+    diffAdd = OrchaDarkPalette.diffAdd,
+    diffAddBg = Color(0x1A4CB782),
+    diffDel = OrchaDarkPalette.diffDel,
+    diffDelBg = Color(0x1AEE7070),
+    diffHunk = Color(0xFF8D93F7),
+    diffHunkBg = Color(0x128D93F7),
+    isDark = true,
+    radiusCard = 10f,
+    radiusButton = 7f,
+    radiusTag = 5f,
+    pillMono = false,
+    flatChrome = true,
+    displayFontFamily = null,
+    primaryFill = Color(0xFF5E6AD2),
+)
+
+/** Linear light (`v2-tokens.css` light block, iOS `Palette.linearLight`). */
+val OrchaLinearLightPalette = OrchaPalette(
+    bg = Color(0xFFF4F4F5),
+    bgGrad1 = Color.Transparent,
+    bgGrad2 = Color.Transparent,
+    surface = Color(0xFFFFFFFF),
+    surface2 = Color(0xFFF7F7F8),
+    surface3 = Color(0xFFEDEDEF),
+    raised = Color(0xFFFFFFFF),
+    border = Color(0xFFE6E6E9),
+    border2 = Color(0xFFD5D6DA),
+    text = Color(0xFF1C1D1F),
+    text2 = Color(0xFF4E525A),
+    muted = Color(0xFF62666E),
+    faint = Color(0xFF6D7077),
+    accent = Color(0xFF505AC9),
+    accentInk = Color(0xFFFFFFFF),
+    accentSoft = Color(0x1A505AC9),       // .10
+    accentLine = Color(0x4D505AC9),       // .30
+    accentGlow = Color(0x2E505AC9),       // .18
+    ok = Color(0xFF187A4C),
+    okSoft = Color(0x1A187A4C),
+    okLine = Color(0x47187A4C),
+    info = Color(0xFF1A68BA),
+    infoSoft = Color(0x1A1A68BA),
+    infoLine = Color(0x421A68BA),
+    warn = Color(0xFF955500),
+    warnSoft = Color(0x1A955500),
+    warnLine = Color(0x4D955500),
+    danger = Color(0xFFC23434),
+    dangerSoft = Color(0x17C23434),
+    dangerLine = Color(0x4DC23434),
+    violet = Color(0xFF6E56CF),
+    violetSoft = Color(0x1A6E56CF),
+    violetLine = Color(0x426E56CF),
+    idle = Color(0xFF62666E),
+    idleSoft = Color(0x1A62666E),
+    idleLine = Color(0x4262666E),
+    diffAdd = OrchaLightPalette.diffAdd,
+    diffAddBg = Color(0x1F187A4C),
+    diffDel = OrchaLightPalette.diffDel,
+    diffDelBg = Color(0x1AC23434),
+    diffHunk = Color(0xFF505AC9),
+    diffHunkBg = Color(0x14505AC9),
+    isDark = false,
+    radiusCard = 10f,
+    radiusButton = 7f,
+    radiusTag = 5f,
+    pillMono = false,
+    flatChrome = true,
+    displayFontFamily = null,
+    primaryFill = Color(0xFF5E6AD2),
+)
+
+/** Resolve the token palette for a (skin, dark) combination — see [OrchaTheme].
+ * Classic resolves to the Linear palettes (iOS parity: the classic slot is "Linear"). */
 fun paletteFor(skin: SkinMode, dark: Boolean): OrchaPalette = when (skin) {
-    SkinMode.Classic -> if (dark) OrchaDarkPalette else OrchaLightPalette
+    SkinMode.Classic -> if (dark) OrchaLinearDarkPalette else OrchaLinearLightPalette
     SkinMode.Swiss -> if (dark) OrchaSwissDarkPalette else OrchaSwissLightPalette
     SkinMode.Minimal -> if (dark) OrchaMinimalDarkPalette else OrchaMinimalLightPalette
 }

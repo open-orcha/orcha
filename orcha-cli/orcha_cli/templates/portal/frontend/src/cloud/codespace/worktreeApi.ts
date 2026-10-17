@@ -24,6 +24,8 @@ export interface WorktreeChangedFile {
   additions: number | null;
   deletions: number | null;
   orig_path?: string | null;
+  /** set by servers that flag binary files explicitly */
+  binary?: boolean;
 }
 
 export interface WorktreeChangesSummary {
@@ -76,13 +78,56 @@ async function getJson<T>(url: string): Promise<T> {
   return (await r.json()) as T;
 }
 
-async function sendJson<T>(url: string, method: string, body: unknown): Promise<T> {
-  const r = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return (await r.json()) as T;
+/** A write that failed at the HTTP layer (403/404/500, a proxy's non-JSON
+ *  502, or the network itself) — distinct from the route's own honest
+ *  {ok:false, reason:"nothing_committed" | "drift" | …} payloads, which only
+ *  ever come back as 200s. `status` is 0 for a network failure. */
+export interface HttpFailure {
+  ok: false;
+  reason: "http";
+  status: number;
+  detail: string;
+}
+
+/** FastAPI error bodies are {detail: string | [{msg}]}; anything else (an
+ *  HTML 502 page, an empty body) falls back to the status line. */
+function errorDetail(body: unknown, status: number, statusText: string): string {
+  const d = (body as { detail?: unknown } | null)?.detail;
+  if (typeof d === "string" && d.trim()) return d.trim();
+  if (Array.isArray(d)) {
+    const msgs = d.map((x) => (x && typeof x === "object" && "msg" in x ? String((x as { msg: unknown }).msg) : "")).filter(Boolean);
+    if (msgs.length) return msgs.join("; ");
+  }
+  return ("HTTP " + status + (statusText ? " " + statusText : "")).trim();
+}
+
+/** Never rejects: a non-ok response or a non-JSON body resolves to an
+ *  HttpFailure so callers can always clear their busy state and say what
+ *  went wrong (screen review r3: a 403/500 commit used to read as
+ *  "Nothing to commit", and a non-JSON 502 left the button stuck). */
+async function sendJson<T>(url: string, method: string, body: unknown): Promise<T | HttpFailure> {
+  let r: Response;
+  try {
+    r = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, reason: "http", status: 0, detail: e instanceof Error && e.message ? e.message : "Network error" };
+  }
+  let parsed: unknown = null;
+  let parsedOk = false;
+  try {
+    parsed = await r.json();
+    parsedOk = true;
+  } catch {
+    parsedOk = false;
+  }
+  if (!r.ok || !parsedOk || parsed == null || typeof parsed !== "object") {
+    return { ok: false, reason: "http", status: r.status, detail: errorDetail(parsed, r.status, r.statusText) };
+  }
+  return parsed as T;
 }
 
 /* ---- editor read/write ----------------------------------------------------
@@ -111,7 +156,8 @@ export function fetchWorktreeFile(cid: string, path: string): Promise<WorktreeFi
 
 export type SaveFileResult =
   | { ok: true; content_hash: string }
-  | { ok: false; reason: "drift" | "exists" | "too_large"; current_hash?: string };
+  | { ok: false; reason: "drift" | "exists" | "too_large" | "write_failed"; current_hash?: string }
+  | HttpFailure;
 
 export function saveWorktreeFile(
   cid: string,
@@ -129,7 +175,8 @@ export function saveWorktreeFile(
 /* ---- commit / push --------------------------------------------------------- */
 export type CommitResult =
   | { ok: true; sha: string; short: string }
-  | { ok: false; reason: "nothing_committed" };
+  | { ok: false; reason: "nothing_committed" }
+  | HttpFailure;
 
 export function commitWorktree(
   cid: string,
@@ -149,8 +196,10 @@ export interface PushResult {
   detail?: string;
 }
 
-export function pushWorktree(cid: string): Promise<PushResult> {
-  return sendJson<PushResult>("/api/containers/" + encodeURIComponent(cid) + "/code/worktree/push", "POST", {});
+export async function pushWorktree(cid: string): Promise<PushResult> {
+  const res = await sendJson<PushResult>("/api/containers/" + encodeURIComponent(cid) + "/code/worktree/push", "POST", {});
+  if ("reason" in res && res.reason === "http") return { ok: false, detail: "Couldn't push: " + res.detail };
+  return res as PushResult;
 }
 
 export interface WorktreeBranchPayload {

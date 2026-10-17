@@ -10,7 +10,51 @@ missing.
 
 ## [Unreleased]
 
+### Added
+- **Bring agent changes into main / update a worktree from main** (GH #288).
+  A human-triggered action per task worktree — in Settings › Agent worktrees,
+  Code Space › Changes, the per-agent menu and `orcha worktrees bring-in |
+  update-from-main` — that always shows a dry run first (files, conflicts,
+  base-commit check, main's dirty files) and then lands the agent's delta in
+  main's working tree as uncommitted changes (or merges its branch), with a
+  named stash for your own uncommitted files, an explicit confirmation when
+  main is on another branch, conflicts reported (and handed to the agent to
+  resolve in its worktree) rather than applied, incremental repeat bring-ins,
+  and the reverse direction. See `docs/agent-worktrees-bring-in.md`.
+- `orcha portal` runs a project's portal as a plain host process from the
+  installed CLI, with no portal container (first step of running Orcha without
+  Docker, GH #258). Postgres still comes from the project's Docker `db` service
+  for now, so on an existing project `docker compose -f .orcha/docker-compose.yml
+  stop portal && orcha portal` serves the same UI on the same port. It binds
+  127.0.0.1 unless `.claude/orcha.json` has `"bind": "lan"` (needed for phone
+  pairing); `--host`/`--port` override. The CLI now depends on the portal's
+  Python packages (FastAPI, uvicorn, psycopg, python-multipart, qrcode), and
+  the Homebrew formula installs them as pinned source resources generated from
+  `packaging/homebrew/resources.json` (`render_formula.py lock` refreshes it).
+
 ### Changed
+- **Agents always work in their own worktree** (GH #288). The "Disable
+  worktrees" project setting and the checkout carry it put on every worker,
+  resident and live-terminal start are gone: a start is never paused on a
+  refused carry any more (the "no runtime attached" failure class). Instead the
+  worker starts in its destination and the task thread gets one notice naming
+  the previous checkout that still holds uncommitted work. Migration 072 forces
+  the setting off for existing projects.
+- **Orcha runs without Docker or Postgres** (GH #258). A project's portal,
+  wake daemon and terminal bridge run as ordinary background processes under
+  `orcha serve`, kept alive by a login service (launchd on macOS, systemd on
+  Linux), and all of its data lives in one SQLite file,
+  `<project>/.orcha/orcha.db`. The recommended install is now the Mac app or
+  `uv tool install orcha-cli`; Homebrew still works. Docker-era instructions
+  moved to `docs/legacy-docker-runtime.md`.
+  <!-- TODO(#258): `orcha serve`/`logs` confirmed (plan PR 6); the login service (`orcha service`, plan PR 10), `doctor`, `backup` and `migrate-runtime` are still unconfirmed. -->
+- The product is now called **Embodent** (formerly Quorate). The portal's
+  title, sidebar, pairing dialog, device page and every user-facing message
+  say Embodent, and the portal carries the new Embodent mark (a figure split
+  light | grey; near-black | grey in light mode) — in the sidebar, the pairing
+  QR code's centre tile, favicons, the apple-touch icon and a new PWA manifest.
+  The `orcha` CLI command, `ORCHA_*` env vars, API paths and the `orcha://`
+  URL scheme are unchanged.
 - Claude model catalog refreshed to the current generation. The per-agent
   model picker now offers Opus 5.5 and Sonnet 5.5 next to Fable 5.1, and
   Opus 5.5 is the default for agents that never picked a model; Fable 5,
@@ -21,6 +65,12 @@ missing.
   forced-tool request shape they accept (`tool_choice: auto` plus a
   system-prompt instruction) instead of the forced `tool_choice` they reject
   with a 400.
+
+### Deprecated
+- The Docker-local runtime. Existing Docker projects keep running untouched;
+  move each one with `orcha migrate-runtime` (your old Docker data is kept
+  until you run `orcha migrate-runtime --purge-docker`). Docker support and
+  `docs/legacy-docker-runtime.md` are removed one release later.
 
 ### Fixed
 - Workers stopped waking on task-thread and conversation posts once a run's

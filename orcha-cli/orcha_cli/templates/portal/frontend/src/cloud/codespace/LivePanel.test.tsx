@@ -117,7 +117,7 @@ describe("LivePanel", () => {
     FakeEventSource.instances[0].emit({ seq: 1, line: toolLine });
 
     await screen.findByText("b.ts");
-    const raiseBtn = screen.getAllByText("raise hand")[0];
+    const raiseBtn = screen.getAllByText("Raise hand")[0];
     fireEvent.click(raiseBtn);
     expect(onRaiseHand).toHaveBeenCalledWith("a1", 1);
   });

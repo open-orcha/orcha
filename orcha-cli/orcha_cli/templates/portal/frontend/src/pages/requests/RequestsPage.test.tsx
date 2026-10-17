@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
-import { RequestsPage } from "./RequestsPage";
+import { RequestsPage, _resetPendingAnswers } from "./RequestsPage";
 
 /* ---- raw backend snapshot (mapSnapshot input shape) ---------------------- */
 const rawSnapshot = {
@@ -29,6 +29,11 @@ const rawSnapshot = {
       response: "Looks good", created_at: "2026-08-02T00:00:00Z",
       responded_at: "2026-08-02T01:00:00Z",
     },
+    {
+      id: "r3", type: "question", status: "open", priority: 40,
+      requester_id: "h1", target_id: "a1", payload: "Is the build green?",
+      created_at: "2026-08-03T00:00:00Z",
+    },
   ],
 };
 
@@ -47,7 +52,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
 });
 
-afterEach(() => {
+afterEach(() => { _resetPendingAnswers();
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -69,10 +74,11 @@ describe("RequestsPage", () => {
   it("renders the request list from the snapshot", async () => {
     const { container } = mount();
     await waitFor(() => {
-      expect(container.querySelectorAll(".qrow").length).toBe(2);
+      expect(container.querySelectorAll(".qrow").length).toBe(3);
     });
-    // header count + previews
-    expect(screen.getByText("Requests · 1 open")).toBeInTheDocument();
+    // D12: no "N open · M total" header fragment — the pills carry the counts
+    expect(screen.queryByText("2 open · 3 total")).toBeNull();
+    expect(screen.getByRole("radio", { name: /^Open\s*2/ })).toBeInTheDocument();
     expect(screen.getAllByText("Need a decision on X").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Second request payload").length).toBeGreaterThan(0);
     // first open request auto-selected → its detail (actions) is shown
@@ -84,13 +90,14 @@ describe("RequestsPage", () => {
   it("honors the ?req= deep link and selects that request", async () => {
     const { container } = mount("/requests?req=r2");
     await waitFor(() => {
-      const sel = container.querySelector(".qrow.sel");
+      const sel = container.querySelector(".qrow.is-selected");
       expect(sel).not.toBeNull();
       expect(sel!.textContent).toContain("Second request payload");
     });
-    // detail shows r2's payload and its answer block
+    // detail shows r2's payload as the title (not repeated below) and its answer block
     const detail = container.querySelector("#detailMain")!;
-    expect(detail.querySelector(".payload")!.textContent).toContain("Second request payload");
+    expect(detail.querySelector(".wk-dtitle")!.textContent).toBe("Second request payload");
+    expect(detail.querySelector(".payload")).toBeNull();
     expect(detail.querySelector(".answer")!.textContent).toContain("Looks good");
   });
 
@@ -120,21 +127,21 @@ describe("RequestsPage", () => {
       const url = String(input);
       if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
       if (url.startsWith("/api/containers/c1")) return jsonRes(rawSnapshot);
-      if (url === "/api/requests/r1/nudge" && init?.method === "POST") {
-        return jsonRes({ request_id: "r1", status: "open", nudged: true, nudged_role: "target", nudged_agent_id: "a1" });
+      if (url === "/api/requests/r3/nudge" && init?.method === "POST") {
+        return jsonRes({ request_id: "r3", status: "open", nudged: true, nudged_role: "target", nudged_agent_id: "a1" });
       }
       return jsonRes({});
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    mount();
+    mount("/requests?req=r3");
     const nudgeBtn = await screen.findByRole("button", { name: /Nudge/ });
     fireEvent.click(nudgeBtn);
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([u]) => String(u).includes("/nudge"));
       expect(call).toBeTruthy();
       const [url, init] = call as [string, RequestInit];
-      expect(url).toBe("/api/requests/r1/nudge");
+      expect(url).toBe("/api/requests/r3/nudge");
       expect(init.method).toBe("POST");
       expect(JSON.parse(String(init.body))).toEqual({ actor_agent_id: "h1" });
     });
@@ -146,19 +153,20 @@ describe("RequestsPage", () => {
       const url = String(input);
       if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
       if (url.startsWith("/api/containers/c1")) return jsonRes(rawSnapshot);
-      if (url === "/api/requests/r1/nudge" && init?.method === "POST") {
-        return jsonRes({ request_id: "r1", status: "open", nudged: false, nudged_role: "target", nudged_agent_id: null, reason: "a human owns the next action — nothing to wake" });
+      if (url === "/api/requests/r3/nudge" && init?.method === "POST") {
+        return jsonRes({ request_id: "r3", status: "open", nudged: false, nudged_role: "target", nudged_agent_id: null, reason: "a human owns the next action — nothing to wake" });
       }
       return jsonRes({});
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    mount();
+    mount("/requests?req=r3");
     const nudgeBtn = await screen.findByRole("button", { name: /Nudge/ });
     fireEvent.click(nudgeBtn);
     expect(await screen.findByText(/Nothing to wake/)).toBeInTheDocument();
-    // no state mutation happened client-side: the Answer action (open-only) is still offered
-    expect(screen.getByRole("button", { name: /^Answer$/ })).toBeInTheDocument();
+    // no state mutation happened client-side: the open-only Escalate action is still offered (in ⋯)
+    fireEvent.click(screen.getByRole("button", { name: "More request actions" }));
+    expect(await screen.findByRole("menuitem", { name: /Escalate to human/ })).toBeInTheDocument();
   });
 
   it("nudge 409 surfaces the not-actionable detail from the server", async () => {
@@ -166,7 +174,7 @@ describe("RequestsPage", () => {
       const url = String(input);
       if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
       if (url.startsWith("/api/containers/c1")) return jsonRes(rawSnapshot);
-      if (url === "/api/requests/r1/nudge" && init?.method === "POST") {
+      if (url === "/api/requests/r3/nudge" && init?.method === "POST") {
         return {
           ok: false,
           status: 409,
@@ -177,9 +185,15 @@ describe("RequestsPage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    mount();
+    mount("/requests?req=r3");
     const nudgeBtn = await screen.findByRole("button", { name: /Nudge/ });
     fireEvent.click(nudgeBtn);
     expect(await screen.findByText(/nothing to nudge: request is 'closed'/)).toBeInTheDocument();
+  });
+
+  it("does not offer Nudge when the next action is yours (request addressed to you)", async () => {
+    mount("/requests?req=r1");
+    await screen.findByRole("button", { name: /^Answer$/ });
+    expect(screen.queryByRole("button", { name: /Nudge/ })).toBeNull();
   });
 });

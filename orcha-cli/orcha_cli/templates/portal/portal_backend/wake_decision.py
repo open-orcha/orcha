@@ -1,5 +1,21 @@
 """Compute wake eligibility, explanation, and narrow triage eligibility."""
 
+from portal_backend.stranded_runs import STRANDED_RUN_SECS
+
+
+def _stranded_reason(silent_seconds) -> str:
+    """Explain a running row with no live lease, and when it self-heals."""
+    base = "an embodiment is still running (single-embodiment) — lapsed-lease orphan"
+    if silent_seconds is None:
+        return base
+    silent = max(0.0, float(silent_seconds))
+    remaining = STRANDED_RUN_SECS - silent
+    if remaining <= 0:
+        when = "due for automatic reconciliation on the next orphan sweep"
+    else:
+        when = f"reconciled automatically in ~{max(1, round(remaining / 60))}m if it stays silent"
+    return f"{base}: no activity for {round(silent / 60)}m, {when}"
+
 
 def decide_wake(
     *,
@@ -20,6 +36,7 @@ def decide_wake(
     lease_active: bool,
     lease_kind,
     embodiment_running: bool,
+    embodiment_silent_seconds=None,
 ):
     """Return scheduled-wake state, final verdict, and a human-readable reason."""
     auto_wake_due = bool(
@@ -53,9 +70,7 @@ def decide_wake(
             "live": "a live terminal session is held (single-embodiment) — events queue",
         }.get(lease_kind, "a worker is already live (single-flight lease held)")
     elif embodiment_running:
-        reason = (
-            "an embodiment is still running (single-embodiment) — lapsed-lease orphan"
-        )
+        reason = _stranded_reason(embodiment_silent_seconds)
     elif not has_work:
         reason = "no pending events or ready tasks"
     elif not is_idle:

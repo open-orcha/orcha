@@ -7,6 +7,7 @@
  * unchosen key is the tiebreaker.
  */
 import { useState } from "react";
+import { MenuButton } from "../components/primitives/Menu";
 
 export interface SortState {
   key: "time" | "priority";
@@ -55,37 +56,48 @@ export function sortComparator<T>(name: string, acc: SortAcc<T>): (a: T, b: T) =
   };
 }
 
-/** The control itself — same .sortctl markup/class names as sortControlHtml. */
-export function SortCtl({ name, onChange }: { name: string; onChange: () => void }) {
+/** The four sort choices, in menu order (key + its natural direction first). */
+export const SORT_OPTIONS: { st: SortState; label: string; short: string }[] = [
+  { st: { key: "time", dir: "desc" }, label: "Newest first", short: "Newest" },
+  { st: { key: "time", dir: "asc" }, label: "Oldest first", short: "Oldest" },
+  { st: { key: "priority", dir: "asc" }, label: "Highest priority first", short: "Priority" },
+  { st: { key: "priority", dir: "desc" }, label: "Lowest priority first", short: "Lowest priority" },
+];
+
+/** Persist a sort choice for `name` (the same orcha:sort:<name> key SortCtl reads). */
+export function pickSort(name: string, st: SortState): void {
+  setSortState(name, st);
+}
+
+/**
+ * The control itself. V2 (screen review, D2): one compact ghost menu button
+ * ("Sort: Newest ▾") instead of the old filled-accent Time/Priority/↑↓
+ * segment, so it matches every other toolbar control, sizes to its content
+ * and never stretches at narrow widths. Same persisted state + semantics as
+ * the vanilla sortControlHtml (`data-sort` kept on the wrapper).
+ */
+export function SortCtl({ name, onChange, menuLabel = "Sort order" }: { name: string; onChange: () => void; menuLabel?: string }) {
   const [, tick] = useState(0);
   const st = sortState(name);
-  const arrow = st.dir === "asc" ? "↑" : "↓";
-  const dirLabel =
-    st.key === "time"
-      ? st.dir === "asc" ? "oldest first" : "newest first"
-      : st.dir === "asc" ? "highest priority first" : "lowest priority first";
-  const pickKey = (k: "time" | "priority") => {
-    if (k === st.key) return; // no-op click on the already-active key
-    setSortState(name, { key: k, dir: k === "time" ? "desc" : "asc" }); // reset to the key's natural default
-    tick((n) => n + 1);
-    onChange();
-  };
-  const flip = () => {
-    setSortState(name, { ...st, dir: st.dir === "asc" ? "desc" : "asc" });
+  const cur = SORT_OPTIONS.find((o) => o.st.key === st.key && o.st.dir === st.dir) ?? SORT_OPTIONS[0];
+  const pick = (next: SortState) => {
+    if (next.key === st.key && next.dir === st.dir) return; // no-op on the active choice
+    setSortState(name, next);
     tick((n) => n + 1);
     onChange();
   };
   return (
-    <span className="sortctl" data-sort={name} role="group" aria-label="Sort order">
-      <button type="button" className={st.key === "time" ? "on" : ""} aria-pressed={st.key === "time"} onClick={() => pickKey("time")}>
-        Time
-      </button>
-      <button type="button" className={st.key === "priority" ? "on" : ""} aria-pressed={st.key === "priority"} onClick={() => pickKey("priority")}>
-        Priority
-      </button>
-      <button type="button" className="sortdir" aria-label={`Toggle direction — ${dirLabel}`} title={dirLabel} onClick={flip}>
-        {arrow}
-      </button>
+    <span className="sortctl-v2" data-sort={name}>
+      <MenuButton
+        variant="ghost"
+        size="sm"
+        label="Sort"
+        value={cur.short}
+        title={"Sort: " + cur.label}
+        menuLabel={menuLabel}
+        placement="bottom-end"
+        items={SORT_OPTIONS.map((o) => ({ label: o.label, checked: o === cur, onSelect: () => pick(o.st) }))}
+      />
     </span>
   );
 }

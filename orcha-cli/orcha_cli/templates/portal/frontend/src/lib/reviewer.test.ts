@@ -72,8 +72,8 @@ describe("reviewerSupported (graceful absence on open backends)", () => {
 describe("reviewFor (home-state.js verify-card de-emphasis rule)", () => {
   const t = { reviewer: { alias: "sam", github_login: "sam-gh" }, reviewer_agent_id: "h2" };
 
-  it("someone else's review + non-owner actor -> the 'review: <login>' label", () => {
-    expect(reviewFor(t, human({ member_role: "member" }))).toBe("sam-gh");
+  it("someone else's review + non-owner actor -> the 'review: <alias>' label", () => {
+    expect(reviewFor(t, human({ member_role: "member" }))).toBe("sam");
   });
   it("falls back to alias when the reviewer has no github_login", () => {
     expect(reviewFor({ reviewer: { alias: "sam" }, reviewer_agent_id: "h2" }, human({ member_role: "member" }))).toBe("sam");
@@ -91,5 +91,17 @@ describe("reviewFor (home-state.js verify-card de-emphasis rule)", () => {
     expect(reviewFor({ reviewer: null, reviewer_agent_id: null }, human({ member_role: "member" }))).toBe(null);
     expect(reviewFor(t, null)).toBe(null);
     expect(reviewFor({ reviewer: { alias: "sam" }, reviewer_agent_id: null }, human({ member_role: "member" }))).toBe(null);
+  });
+});
+
+describe("reviewerTitle (wave-4: alias on the chip, login in the tooltip)", () => {
+  it("names the alias and the login once", async () => {
+    const { reviewerTitle, reviewerName } = await import("./reviewer");
+    expect(reviewerName({ alias: "amina", github_login: "amina-yusuf-abdirahman" })).toBe("amina");
+    expect(reviewerName({ github_login: "sam-gh" })).toBe("sam-gh");
+    expect(reviewerTitle({ alias: "amina", github_login: "amina-yusuf-abdirahman" })).toBe("Reviewer: amina (@amina-yusuf-abdirahman)");
+    expect(reviewerTitle({ alias: "sam" })).toBe("Reviewer: sam");
+    expect(reviewerTitle({ github_login: "sam-gh" })).toBe("Reviewer: sam-gh");
+    expect(reviewerTitle(null)).toBe("");
   });
 });

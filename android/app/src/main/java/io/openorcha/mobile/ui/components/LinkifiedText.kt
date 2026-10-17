@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalTextStyle
@@ -50,16 +49,65 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.openorcha.mobile.data.TaskDto
+import io.openorcha.mobile.domain.PortalLinkMatch
+import io.openorcha.mobile.domain.PortalLinks
+import io.openorcha.mobile.domain.PortalTarget
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
 import io.openorcha.mobile.domain.OrchaSelectors
 import io.openorcha.mobile.ui.theme.MonoFontFamily
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.Orcha
 
-private const val TASK_REF_ANNOTATION_TAG = "task-ref"
+
+/**
+ * In-app destinations for portal link chips (`/tasks?task=…`, `/requests?req=…`,
+ * `/agents?agent=…`, or full URLs on the paired base URL). Provided once near the root;
+ * a chip whose destination has no handler opens the portal page in the browser.
+ */
+data class PortalLinkHandler(
+    val baseUrl: String?,
+    val onTask: ((String) -> Unit)? = null,
+    val onRequest: ((String) -> Unit)? = null,
+    val onAgent: ((String) -> Unit)? = null,
+)
+
+val LocalPortalLinkHandler = staticCompositionLocalOf<PortalLinkHandler?> { null }
+
+/** Routes a portal chip tap: native screen when one is wired, else the portal in the browser. */
+internal fun openPortalTarget(
+    target: PortalTarget,
+    path: String,
+    handler: PortalLinkHandler?,
+    onOpenTask: ((String) -> Unit)?,
+    uri: UriHandler,
+) {
+    val handled = when (target) {
+        is PortalTarget.Task -> (handler?.onTask ?: onOpenTask)?.let { it(target.id); true } ?: false
+        is PortalTarget.Request -> handler?.onRequest?.let { it(target.id); true } ?: false
+        is PortalTarget.Agent -> handler?.onAgent?.let { it(target.alias); true } ?: false
+        is PortalTarget.Page -> false
+    }
+    if (!handled) {
+        val base = handler?.baseUrl?.trimEnd('/') ?: return
+        runCatching { uri.openUri(base + path) }
+    }
+}
+
+/** Chip styling for a portal link inside running text: "↗ Open task · Title". */
+internal fun portalChipStyles(accent: Color, fill: Color): TextLinkStyles =
+    TextLinkStyles(SpanStyle(color = accent, fontWeight = FontWeight.Medium, background = fill))
+
+internal const val PORTAL_CHIP_PREFIX = "↗ "
 
 /** GH #140: renders [body] as plain text, except any substring resolving to a known task
- *  (see [OrchaSelectors.taskRefMatches]) becomes an underlined, tappable span that invokes
- *  [onOpenTask] with that task's id — the same bare-token contract the portal parses. */
+ *  (see [OrchaSelectors.taskRefMatches]) becomes a tappable span that invokes [onOpenTask],
+ *  and any portal path (or URL on the paired server) becomes a labelled link chip that
+ *  navigates in-app (web `lib/format.ts` portal chips). */
 @Composable
 fun LinkifiedText(
     body: String,
@@ -72,35 +120,42 @@ fun LinkifiedText(
     overflow: TextOverflow = TextOverflow.Clip,
 ) {
     val effectiveStyle = if (color != Color.Unspecified) style.copy(color = color) else style
-    val matches = if (onOpenTask == null) emptyList() else remember(body, tasks) { OrchaSelectors.taskRefMatches(body, tasks) }
-    if (matches.isEmpty()) {
+    val handler = LocalPortalLinkHandler.current
+    val portal = remember(body, tasks, handler?.baseUrl) { PortalLinks.find(body, handler?.baseUrl, tasks) }
+    val taskMatches = if (onOpenTask == null) emptyList() else remember(body, tasks, portal) {
+        OrchaSelectors.taskRefMatches(body, tasks).filter { m ->
+            portal.none { it.range.first <= m.range.last && m.range.first <= it.range.last }
+        }
+    }
+    if (taskMatches.isEmpty() && portal.isEmpty()) {
         Text(body, modifier = modifier, style = effectiveStyle, maxLines = maxLines, overflow = overflow)
         return
     }
-    val annotated = remember(body, matches) {
-        buildAnnotatedString {
-            append(body)
-            matches.forEach { m ->
-                addStyle(
-                    SpanStyle(textDecoration = TextDecoration.Underline, fontWeight = FontWeight.SemiBold),
-                    m.range.first, m.range.last + 1,
-                )
-                addStringAnnotation(TASK_REF_ANNOTATION_TAG, m.task.id, m.range.first, m.range.last + 1)
+    val p = Orcha.palette
+    val uri = LocalUriHandler.current
+    val linkStyle = TextLinkStyles(SpanStyle(color = p.accent, fontWeight = FontWeight.Medium))
+    val chipStyle = portalChipStyles(p.accent, p.surface2)
+    val annotated = buildAnnotatedString {
+        var cursor = 0
+        val all = (taskMatches.map { it.range to it } + portal.map { it.range to it }).sortedBy { it.first.first }
+        all.forEach { (range, m) ->
+            if (range.first < cursor) return@forEach
+            append(body.substring(cursor, range.first))
+            when (m) {
+                is PortalLinkMatch -> withLink(
+                    LinkAnnotation.Clickable("portal-${range.first}", chipStyle) {
+                        openPortalTarget(m.target, m.path, handler, onOpenTask, uri)
+                    },
+                ) { append(PORTAL_CHIP_PREFIX + m.label) }
+                is io.openorcha.mobile.domain.TaskRefMatch -> withLink(
+                    LinkAnnotation.Clickable("task-${m.task.id}-${range.first}", linkStyle) { onOpenTask?.invoke(m.task.id) },
+                ) { append(body.substring(range.first, range.last + 1)) }
             }
+            cursor = range.last + 1
         }
+        if (cursor < body.length) append(body.substring(cursor))
     }
-    ClickableText(
-        text = annotated,
-        modifier = modifier,
-        style = effectiveStyle,
-        maxLines = maxLines,
-        overflow = overflow,
-        onClick = { offset ->
-            annotated.getStringAnnotations(TASK_REF_ANNOTATION_TAG, offset, offset).firstOrNull()?.let {
-                onOpenTask?.invoke(it.item)
-            }
-        },
-    )
+    Text(annotated, modifier = modifier, style = effectiveStyle, maxLines = maxLines, overflow = overflow)
 }
 
 /* =============================================================================

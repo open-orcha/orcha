@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException, Request
 
+from portal_backend.agent_config_history_routes import config_before, record_config_change
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -37,12 +38,16 @@ def update_agent_auto_wake(aid: str, body: AutoWakeUpdate, request: Request):
             raise HTTPException(
                 400, "humans are not woken — auto-wake applies to kind='ai' agents"
             )
+        before = config_before(cur, aid)  # config history: pre-change state (row-locked)
         cur.execute(
             "UPDATE agents SET auto_wake_interval_secs=%s WHERE id=%s "
             "RETURNING id, alias, auto_wake_interval_secs",
             (body.interval_secs, aid),
         )
         updated = cur.fetchone()
+        record_config_change(
+            cur, aid, before, source="auto_wake", actor_agent_id=body.actor_agent_id
+        )
         log_event(
             cur,
             str(row["container_id"]),

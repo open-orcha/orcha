@@ -46,7 +46,13 @@ fun showContainers() {
 }
 
 fun showSettings() {
-    _uiState.update { it.copy(route = AppRoute.Settings, error = null) }
+    _uiState.update { it.copy(route = AppRoute.Settings, settingsFrom = it.route, error = null) }
+}
+
+/** Leaves Settings back to where it was opened: the open workspace, else the projects list. */
+fun closeSettings() {
+    val s = _uiState.value
+    if (s.settingsFrom == AppRoute.Workspace && s.selectedContainer != null) showWorkspace() else showContainers()
 }
 
 fun setThemeMode(mode: io.openorcha.mobile.ui.theme.ThemeMode) {
@@ -97,12 +103,16 @@ fun probeContainers() {
                         "polling", snap.agents.size, snap.taskOpenTotal,
                         needsYou = plans + verifs + reqs,
                         githubRepo = snap.container.githubRepo,
+                        icon = snap.container.projectIcon,
                     )
                 }
                 .getOrElse { err ->
                     // An auth bounce is not "unreachable" — the box answered; the phone's
                     // token is missing/stale. Rendered as its own chip + card copy.
-                    ContainerHealth(if (isAuthRequired(err)) "signin" else "unreachable")
+                    ContainerHealth(
+                        if (isAuthRequired(err)) "signin" else "unreachable",
+                        icon = _uiState.value.containerHealth[stored.id]?.icon, // keep the last known icon
+                    )
                 }
             _uiState.update { it.copy(containerHealth = it.containerHealth + (stored.id to health)) }
         }
@@ -212,7 +222,7 @@ override suspend fun connectWithToken(rawBaseUrl: String, accessToken: String?):
         } else {
             api.listContainers(baseUrl).containers
         }
-        if (listed.isEmpty()) error("No Orcha container was found at this address.")
+        if (listed.isEmpty()) error("No Embodent container was found at this address.")
         // The QR is a capability for ONE project (iOS `payload.containerId` parity):
         // select it as primary; manual entry has no id and takes the first. Taking
         // `first()` unconditionally made scanning a second project on the same box
@@ -241,7 +251,7 @@ override suspend fun connectWithToken(rawBaseUrl: String, accessToken: String?):
             val humans = snapshot.agents.filter { it.kind == "human" }
             val human = humans.firstOrNull { it.id == pairedHumanId } ?: humans.singleOrNull()
             // One pairing stores EVERY project the portal lists (iOS `for dto in listed`
-            // parity — "Every project on a paired Orcha appears here automatically"),
+            // parity — "Every project on a paired Embodent appears here automatically"),
             // preserving local edits (rename, remote, resolved human) on re-pair.
             // Primary upserts last so it sorts to the top of the containers list.
             val existingById = _uiState.value.containers.associateBy { it.id }
@@ -288,7 +298,7 @@ override suspend fun connectWithToken(rawBaseUrl: String, accessToken: String?):
                         connectNeedsToken = true,
                         connectDraft = rawBaseUrl,
                         error = if (trimmedToken == null) {
-                            "This Orcha is protected — sign in with GitHub or enter its access token to connect."
+                            "This Embodent is protected — sign in with GitHub or enter its access token to connect."
                         } else {
                             "That access token wasn't accepted. Check it and try again."
                         },

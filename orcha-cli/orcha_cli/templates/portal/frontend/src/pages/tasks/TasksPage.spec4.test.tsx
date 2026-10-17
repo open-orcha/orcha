@@ -119,15 +119,18 @@ describe("SPEC-4 protocol panel (protoEmpty truth table, behaviorally)", () => {
     renderPage("/tasks?task=p1");
     await waitFor(() => expect(document.querySelector("#proto-p1")).toBeTruthy());
     const panel = document.querySelector("#proto-p1")!;
-    expect(panel.textContent).toContain("No protocol set — using container defaults.");
-    expect(panel.querySelector('[data-pact="set"]')).toBeTruthy(); // acting human present
+    // D12: one short value; the sentence lives in the tooltip
+    expect(panel.textContent).toContain("Project defaults");
+    expect(panel.querySelector(".td-rail-note")?.getAttribute("title")).toContain("No protocol set");
+    // acting human present — identity settles after the snapshot (/api/me), so await it
+    await waitFor(() => expect(document.querySelector('#proto-p1 [data-pact="set"]')).toBeTruthy());
   });
 
   it("a PARTIAL protocol (any key carrying text) renders the panel rows, not the empty note", async () => {
     renderPage("/tasks?task=p2");
     await waitFor(() => expect(document.querySelector("#proto-p2")).toBeTruthy());
     const panel = document.querySelector("#proto-p2")!;
-    expect(panel.textContent).not.toContain("No protocol set");
+    expect(panel.textContent).not.toContain("Project defaults");
     expect(panel.textContent).toContain("Review chain");
     expect(panel.textContent).toContain("dev -> Helm");
     expect(panel.textContent).toContain("check the runbook"); // notes row
@@ -195,14 +198,16 @@ describe("SPEC-4 create-task form (human-gated, real route)", () => {
     fireEvent.click(document.querySelector("[data-newtask]")!);
     const dialog = await screen.findByRole("dialog");
 
-    // collapsed-by-default: the native <details> starts closed (fields are present in the DOM
-    // per HTML semantics, but not visible/expanded until the summary is toggled open).
-    const details = dialog.querySelector("details");
-    expect(details).toBeTruthy();
-    expect(details!.open).toBe(false);
+    // collapsed-by-default: the Protocol property chip starts closed (fields stay in the DOM
+    // but hidden until the chip is toggled open).
+    const toggle = dialog.querySelector("[data-proto-toggle]") as HTMLElement;
+    const fields = dialog.querySelector("#nt_proto") as HTMLElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(fields.hidden).toBe(true);
 
-    fireEvent.click(dialog.querySelector("summary")!);
-    expect(details!.open).toBe(true);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(fields.hidden).toBe(false);
 
     fireEvent.change(document.querySelector("#nt_title")!, { target: { value: "Ship it" } });
     fireEvent.change(document.querySelector("#nt_dod")!, { target: { value: "It ships" } });

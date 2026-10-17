@@ -9,7 +9,17 @@ authors = [{ name = "Orcha contributors" }]
 requires-python = ">=3.10"
 # S3 §3b: the host-side live-terminal PTY/websocket bridge (`orcha terminal-bridge`) needs a
 # websocket server. Imported lazily, so the rest of the CLI still runs if it's not yet installed.
-dependencies = ["websockets>=12"]
+# GH #258: `orcha portal` runs the packaged portal in this interpreter, so the portal's own
+# requirements (templates/portal/requirements.txt) are CLI dependencies too. psycopg goes
+# away with the SQLite cutover.
+dependencies = [
+  "websockets>=12",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",
+  "qrcode>=8",
+  "psycopg[binary]>=3.1",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",

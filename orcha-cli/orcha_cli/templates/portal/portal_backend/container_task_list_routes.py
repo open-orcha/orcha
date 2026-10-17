@@ -47,7 +47,7 @@ def list_container_tasks(
     validate_sort(sort, sort_dir)
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
-    with db_cursor() as (_, cur):
+    with db_cursor(readonly=True) as (_, cur):
         require_container(cur, cid)
         # Access model: reads are project-isolated (trusted non-member 403).
         require_member_read(cur, request, cid)

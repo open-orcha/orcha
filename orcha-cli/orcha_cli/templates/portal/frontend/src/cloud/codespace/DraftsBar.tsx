@@ -15,6 +15,8 @@
  * action; on github_error it keeps the drafts and shows the detail.
  */
 import { useCallback, useState } from "react";
+import { Button, IconButton } from "../../components/primitives";
+import { Icon } from "../../components/ui";
 import { deleteDraft, putDraft, type DraftListEntry } from "./draftStore";
 import {
   initialProposeState,
@@ -25,6 +27,8 @@ import {
 } from "./draftPropose";
 import { fetchFile } from "../github/browse/browseApi";
 import { proposeChanges } from "./githubEditApi";
+import { useCodeWriteBlock } from "./writeAccess";
+import { withCid } from "../../lib/scope";
 
 export interface DraftsBarProps {
   cid: string;
@@ -39,6 +43,8 @@ export function DraftsBar({ cid, gitRef, drafts, onOpenDraft, onDraftsChanged }:
   const [message, setMessage] = useState("");
   const [state, setState] = useState(initialProposeState());
   const [reloading, setReloading] = useState<string | null>(null);
+  // viewer / non-member: propose is refused server-side (trusted_actor)
+  const writeBlock = useCodeWriteBlock();
 
   const discard = useCallback(async (path: string) => {
     await deleteDraft(cid, gitRef, path);
@@ -51,11 +57,13 @@ export function DraftsBar({ cid, gitRef, drafts, onOpenDraft, onDraftsChanged }:
   }, [state]);
 
   const send = useCallback(async () => {
-    if (!message.trim() || drafts.length === 0) return;
+    if (writeBlock || !message.trim() || drafts.length === 0) return;
     setState((s) => onSend(s));
     try {
       const result = await proposeChanges(cid, {
-        base_ref: gitRef,
+        // C21: "HEAD" is the viewer's symbolic ref, not a GitHub ref — send ""
+        // so the server resolves the repo's default branch (a real PR base).
+        base_ref: gitRef === "HEAD" ? "" : gitRef,
         message,
         files: drafts.map((d) => ({ path: d.path, content: d.content, base_hash: d.baseHash })),
       });
@@ -87,64 +95,116 @@ export function DraftsBar({ cid, gitRef, drafts, onOpenDraft, onDraftsChanged }:
     }
   }, [cid, gitRef, drafts, onDraftsChanged]);
 
-  if (drafts.length === 0) return null;
+  const fileName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
+  // CODE-062: a successful propose CLEARS the drafts it sent — the success
+  // notice (PR link + Open in hub) must outlive them, so the bar stays
+  // mounted with just the notice until the human closes it.
+  const okNotice = state.status === "ok" ? (
+    <div className="cs-propose-notice cs-propose-notice-ok" role="status">
+      <Icon name="check" cls="v2-ico" />
+      <span>
+        {/* never "PR #undefined" / "?pr=undefined" if a response lacks the number */}
+        Opened {state.prNumber != null
+          ? <a href={state.prUrl ?? "#"} target="_blank" rel="noopener noreferrer">PR #{state.prNumber}</a>
+          : state.prUrl ? <a href={state.prUrl} target="_blank" rel="noopener noreferrer">a pull request</a> : "a pull request"}
+        {state.branch ? <> on branch <span className="mono">{state.branch}</span></> : null}.
+      </span>
+      {state.prNumber != null ? <a className="cs-propose-hub-link" href={withCid("/github?pr=" + state.prNumber, cid)}>Open in hub</a> : null}
+      <Button size="sm" variant="ghost" className="cs-propose-cancel-btn" onClick={closePanel}>Close</Button>
+    </div>
+  ) : null;
+
+  if (drafts.length === 0) {
+    return okNotice ? <div className="cs-drafts-bar cs-drafts-bar-done">{okNotice}</div> : null;
+  }
+
+  // V2 (screen review S2): ONE neutral line — count + a single-line summary of
+  // the drafted names + the primary Propose action. The per-file controls
+  // (open / reload base / discard) live in the propose panel, which is where a
+  // human reviews what's about to become a pull request.
   return (
     <div className="cs-drafts-bar">
       <div className="cs-drafts-row">
-        <span className="cs-drafts-count">{drafts.length} drafted file{drafts.length === 1 ? "" : "s"}</span>
-        <div className="cs-drafts-paths">
-          {drafts.map((d) => {
-            const stale = state.status === "drift" && state.stalePaths.includes(d.path);
-            return (
-              <span key={d.path} className={"cs-drafts-chip" + (stale ? " stale" : "")}>
-                <button type="button" className="cs-drafts-chip-path" onClick={() => onOpenDraft(d.path)} title={d.path}>
-                  {d.path}
-                </button>
-                {stale ? (
-                  <button
-                    type="button"
-                    className="cs-drafts-reload-btn"
-                    onClick={() => reloadBase(d.path)}
-                    disabled={reloading === d.path}
-                    title={state.staleReason === "exists" ? "A file now exists at this path — reload and re-propose" : "This file changed upstream — reload and re-propose"}
-                  >
-                    {reloading === d.path ? "Reloading…" : "Reload base"}
-                  </button>
-                ) : null}
-                <button type="button" className="cs-drafts-discard-btn" onClick={() => discard(d.path)} aria-label={"Discard draft for " + d.path} title="Discard this draft">
-                  ✕
-                </button>
-              </span>
-            );
-          })}
-        </div>
-        <button type="button" className="cs-propose-open-btn" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen}>
+        <span className="cs-drafts-dot" aria-hidden="true" />
+        <span className="cs-drafts-count" title="Drafts are stored in this browser only until you propose them">
+          {drafts.length} drafted file{drafts.length === 1 ? "" : "s"} · this browser
+        </span>
+        <span className="cs-drafts-names mono" title={drafts.length > 1 ? drafts.map((d) => d.path).join("\n") : undefined} aria-hidden="true">
+          {drafts.map((d) => fileName(d.path)).join(", ")}
+        </span>
+        <Button
+          size="sm"
+          variant={panelOpen ? "secondary" : "primary"}
+          icon="git"
+          className="cs-propose-open-btn"
+          onClick={() => setPanelOpen((v) => !v)}
+          aria-expanded={panelOpen}
+        >
           Propose changes…
-        </button>
+        </Button>
       </div>
 
       {panelOpen ? (
-        <div className="cs-propose-panel" role="dialog" aria-label="Propose changes">
-          {state.status === "ok" ? (
-            <div className="cs-propose-notice cs-propose-notice-ok">
-              <span>
-                Opened <a href={state.prUrl ?? "#"} target="_blank" rel="noopener noreferrer">PR #{state.prNumber}</a> on branch {state.branch}.
-              </span>
-              <a className="cs-propose-hub-link" href={"/github?pr=" + state.prNumber}>Open in hub</a>
-              <button type="button" className="cs-propose-cancel-btn" onClick={closePanel}>Close</button>
-            </div>
+        <div className="cs-propose-panel" role="region" aria-label="Propose changes">
+          <div className="cs-drafts-list">
+            {drafts.map((d) => {
+              const stale = state.status === "drift" && state.stalePaths.includes(d.path);
+              return (
+                <div key={d.path} className={"cs-drafts-item" + (stale ? " stale" : "")}>
+                  <Icon name={stale ? "alert" : "pencil"} cls={"v2-ico cs-drafts-item-ico" + (stale ? " warn" : "")} />
+                  <button type="button" className="cs-drafts-chip-path mono" onClick={() => onOpenDraft(d.path)} title={d.path}>
+                    {d.path}
+                  </button>
+                  {stale ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="refresh"
+                      className="cs-drafts-reload-btn"
+                      onClick={() => reloadBase(d.path)}
+                      busy={reloading === d.path}
+                      title={state.staleReason === "exists" ? "A file now exists at this path — reload and re-propose" : "This file changed upstream — reload and re-propose"}
+                    >
+                      {reloading === d.path ? "Reloading…" : "Reload base"}
+                    </Button>
+                  ) : null}
+                  <IconButton
+                    size="sm"
+                    icon="trash"
+                    variant="danger"
+                    className="cs-drafts-discard-btn"
+                    onClick={() => discard(d.path)}
+                    label={"Discard draft for " + d.path}
+                    title="Discard this draft"
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {okNotice ? (
+            okNotice
           ) : (
             <>
               {state.status === "drift" ? (
-                <div className="cs-propose-notice cs-propose-notice-warn">
-                  {state.staleReason === "exists" ? "Some files already exist at their target path — use Reload base above, then propose again." : "Some drafts are stale against the latest default branch — use Reload base above, then propose again."}
+                <div className="cs-propose-notice cs-propose-notice-warn" role="alert">
+                  <Icon name="alert" cls="v2-ico" />
+                  <span>{state.staleReason === "exists" ? "Some files already exist at their target path — use Reload base above, then propose again." : "Some drafts are stale against the latest default branch — use Reload base above, then propose again."}</span>
                 </div>
               ) : null}
               {state.status === "error" ? (
-                <div className="cs-propose-notice cs-propose-notice-error">{state.errorDetail}</div>
+                <div className="cs-propose-notice cs-propose-notice-error" role="alert">
+                  <Icon name="alert" cls="v2-ico" />
+                  <span>{state.errorDetail}</span>
+                </div>
               ) : null}
+              <p className="cs-propose-dest">
+                Opens a <strong>new branch and pull request</strong> against the default branch with{" "}
+                {drafts.length === 1 ? "this drafted file" : "these " + drafts.length + " drafted files"}.
+                The default branch is never written directly, and merging stays a separate step.
+              </p>
               <textarea
+                aria-label="Pull request message"
                 className="cs-propose-message"
                 placeholder={"Short summary (PR title)\n\nOptional details…"}
                 value={message}
@@ -152,15 +212,18 @@ export function DraftsBar({ cid, gitRef, drafts, onOpenDraft, onDraftsChanged }:
                 rows={4}
               />
               <div className="cs-propose-actions">
-                <button
-                  type="button"
+                <Button size="sm" variant="ghost" className="cs-propose-cancel-btn" onClick={closePanel}>Cancel</Button>
+                <Button
+                  size="sm"
+                  variant="primary"
                   className="cs-propose-send-btn"
                   onClick={send}
-                  disabled={state.status === "sending" || !message.trim()}
+                  busy={state.status === "sending"}
+                  disabled={!!writeBlock || !message.trim()}
+                  title={writeBlock || undefined}
                 >
                   {state.status === "sending" ? "Proposing…" : "Propose"}
-                </button>
-                <button type="button" className="cs-propose-cancel-btn" onClick={closePanel}>Cancel</button>
+                </Button>
               </div>
             </>
           )}

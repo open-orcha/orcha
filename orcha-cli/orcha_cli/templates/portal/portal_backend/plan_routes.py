@@ -16,7 +16,7 @@ from portal_backend.application import app
 
 PLAN_ENV = "ORCHA_PLAN"
 UPGRADE_URL_ENV = "ORCHA_UPGRADE_URL"
-DEFAULT_UPGRADE_URL = "https://orcha.nursoftai.com/#pricing"
+DEFAULT_UPGRADE_URL = "https://orcha.quantallabs.ai"
 VALID_PLANS = ("solo", "team")
 
 _LOG = logging.getLogger("orcha.plan")
@@ -83,7 +83,7 @@ def require_feature(feature: str) -> None:
         {
             "premium": feature,
             "message": f"{label.capitalize()} is a Team plan feature — "
-            "upgrade to Orcha Cloud Team to use it.",
+            "upgrade to Embodent Cloud Team to use it.",
             "upgrade_url": resolve_upgrade_url(),
         },
     )

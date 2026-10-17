@@ -53,9 +53,11 @@ struct ContainerDto: Decodable {
     /// The GitHub repo bound to this workspace as "owner/name" (portal Connect-repo
     /// parity, `home-github.js`). Nil = unbound, or a pre-binding server.
     var githubRepo: String?
+    /// D14 project icon (nil = unset → neutral cube glyph). Tolerant: unknown kinds decode as `.unknown`.
+    var icon: ProjectIcon?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, status
+        case id, name, description, status, icon
         case autonomyLevel = "autonomy_level"
         case wakesEnabled = "wakes_enabled"
         case githubRepo = "github_repo"

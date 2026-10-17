@@ -797,7 +797,7 @@ def test_daemon_tick_invokes_reaper_before_tick(monkeypatch, tmp_path):
     seen = {}
 
     def _fake_reap(api_base, cid, live_pids=frozenset(), live_sandbox=frozenset(),
-                   quiet=True):
+                   quiet=True, sandbox_enabled=None):
         order.append("reap")
         seen["args"] = (api_base, cid, live_pids)
         seen["live_sandbox"] = live_sandbox

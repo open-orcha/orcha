@@ -11,7 +11,7 @@ enum SkinMode: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .classic: "Classic"
+        case .classic: "Linear"
         case .swiss: "Swiss"
         case .minimal: "Minimalist"
         }
@@ -19,7 +19,7 @@ enum SkinMode: String, CaseIterable {
 
     var blurb: String {
         switch self {
-        case .classic: "Teal accent, rounded corners — the original Orcha look."
+        case .classic: "Calm near-black and paper surfaces, indigo accent, Inter — matches the web portal."
         case .swiss: "Electric indigo, sharp corners, mono status chips."
         case .minimal: "Champagne gold accent, generous whitespace, quieter chrome."
         }

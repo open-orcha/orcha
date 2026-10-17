@@ -25,7 +25,11 @@
  * per the resolution order in section 1).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Icon, Modal, useToast } from "../../components/ui";
+import { Modal, useToast } from "../../components/ui";
+import { Button } from "../../components/primitives";
+import { GroupHead, SecretInput, StatusLine, TestResult, settingsErrText } from "../../pages/settings/settingsUi";
+import { useGrantAuthority } from "../../pages/settings/grantAuthority";
+import { errorDetailText } from "../../api/client";
 import { relTime } from "../../lib/format";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import { fetchMe, memActor, type Me } from "../identity";
@@ -41,11 +45,20 @@ interface PatStatus {
 interface ReposProbe {
   available?: boolean;
   source?: "pat" | "app" | null;
+  detail?: unknown;
 }
 interface TestResult {
   ok: boolean;
   login?: string | null;
   detail?: string | null;
+}
+
+/** A failed call in words: the server's detail (e.g. GitHub's rate-limit
+ * message), else the status meaning — never a bare "(403)". Pure, tested. */
+export function gaErrText(res: { status: number; body: Record<string, unknown> | null }): string {
+  const d = res.body && res.body.detail;
+  const t = d != null ? errorDetailText(d) : "";
+  return t || settingsErrText({ status: res.status });
 }
 
 /* raw fetch with status passthrough — matches ProviderKeysSection's pkApi. */
@@ -65,8 +78,11 @@ export function GitHubAccessSection() {
   const { cid, snap } = useSnapshot();
   const toast = useToast();
   const [status, setStatus] = useState<PatStatus | null>(null); // null until loaded
-  const [statusErr, setStatusErr] = useState(false);
+  // "forbidden": a 403 on the read (not a member) — Retry can't help (S1)
+  const [statusErr, setStatusErr] = useState<false | "error" | "forbidden">(false);
   const [appManaged, setAppManaged] = useState(false);
+  // INT-RATELIMIT: an installed App that failed (error / rate limit) — its detail
+  const [appDown, setAppDown] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
   const [draft, setDraft] = useState("");
@@ -91,7 +107,7 @@ export function GitHubAccessSection() {
       setStatus(res.body as PatStatus);
     } else {
       setStatus(null);
-      setStatusErr(true);
+      setStatusErr(res.status === 403 ? "forbidden" : "error");
     }
   }, [cid]);
 
@@ -106,8 +122,12 @@ export function GitHubAccessSection() {
     if (res.ok && res.body) {
       const body = res.body as ReposProbe;
       setAppManaged(!!body.available && body.source === "app");
+      setAppDown(!body.available && body.source === "app"
+        ? errorDetailText(body.detail) || "no answer"
+        : null);
     } else {
       setAppManaged(false);
+      setAppDown(null);
     }
   }, []);
 
@@ -116,9 +136,14 @@ export function GitHubAccessSection() {
 
   // PR #315 human gate — vanilla requireHuman() wording, actor via the shared
   // cloud acting helpers (trusted lane: the resolved member or nothing).
-  const who = memActor(me, snap);
+  // INT-PERM: the PAT routes enforce manage_keys (github_pat_routes.py); the
+  // controls lock with the reason instead of offering a write that 403s.
+  const auth = useGrantAuthority("manage_keys");
+  const locked = !auth.can;
+  const who = locked ? null : memActor(me, snap);
   const requireHuman = (verb: string): boolean => {
     if (who) return true;
+    if (locked && auth.reason) { toast(auth.reason, "warn"); return false; }
     toast("Pick an acting human to " + verb + " GitHub access", "warn");
     return false;
   };
@@ -142,7 +167,7 @@ export function GitHubAccessSection() {
       void probeApp();
     } else {
       // keep the typed value — a transient failure never loses it
-      toast("Couldn't save the token (" + res.status + "). Your input is preserved.", "danger");
+      toast("Couldn't save the token — " + gaErrText(res) + ". Your input is preserved.", "danger");
     }
   };
 
@@ -164,8 +189,8 @@ export function GitHubAccessSection() {
       setTest({ ok: !!body.ok, login: body.login, detail: body.detail });
       toast(body.ok ? "Token is valid" + (body.login ? " — signed in as " + body.login + "." : ".") : body.detail || "Token was rejected.", body.ok ? "ok" : "danger");
     } else {
-      setTest({ ok: false, detail: "Test failed (" + res.status + ")." });
-      toast("Test failed (" + res.status + ").", "danger");
+      setTest({ ok: false, detail: "Test failed — " + gaErrText(res) + "." });
+      toast("Test failed — " + gaErrText(res) + ".", "danger");
     }
   };
 
@@ -186,7 +211,7 @@ export function GitHubAccessSection() {
       void load();
       void probeApp();
     } else {
-      toast("Couldn't remove the token (" + res.status + ").", "danger");
+      toast("Couldn't remove the token — " + gaErrText(res) + ".", "danger");
     }
   };
 
@@ -194,74 +219,75 @@ export function GitHubAccessSection() {
   const mode: "db" | "env" | "none" = status?.source === "env" ? "env" : status?.source === "db" ? "db" : configured ? "db" : "none";
 
   const patBody = () => {
+    if (statusErr === "forbidden") {
+      return <StatusLine tone="warn" id="gaForbidden">You&#39;re not a member of this project.</StatusLine>;
+    }
     if (statusErr) {
       return (
-        <div className="sc-banner err">
-          <div className="bt">
-            <Icon name="x" cls="" />
-            <span>Couldn&#39;t load GitHub access settings.</span>
-          </div>
-          <button className="btn sm ghost" id="gaRetry" onClick={() => void load()}>Retry</button>
-        </div>
+        <StatusLine
+          tone="err"
+          action={<Button size="sm" variant="ghost" icon="refresh" id="gaRetry" onClick={() => void load()}>Retry</Button>}
+        >
+          Couldn&#39;t load GitHub access settings.
+        </StatusLine>
       );
     }
     if (!status) {
-      return (
-        <div className="sc-banner muted">
-          <div className="bt">
-            <Icon name="clock" cls="" />
-            <span>Checking GitHub access…</span>
-          </div>
-        </div>
+      return <StatusLine tone="muted">Checking GitHub access…</StatusLine>;
+    }
+    // I6: someone who can't manage keys (viewer / member without manage_keys)
+    // sees the status only — never an editable secret field or dead buttons
+    // (same as the Models KeyBody when locked).
+    if (locked && !auth.pending) {
+      return configured ? (
+        <StatusLine tone={mode === "env" ? "env" : "ok"} masked={status.masked || "ghp_…"} id="ga-status">
+          <b>Personal access token configured</b>
+          {mode === "env" ? " · from the environment (ORCHA_GITHUB_PAT)." : " · stored encrypted on this workspace."}
+          {status.set_at && <> Set {relTime(status.set_at)}.</>}
+        </StatusLine>
+      ) : (
+        <StatusLine tone="warn" id="ga-status"><b>No personal access token configured.</b></StatusLine>
       );
     }
     if (mode === "env" || mode === "db") {
       return (
         <>
-          <div className="sc-banner ok">
-            <div className="bt">
-              <Icon name="check" cls="" />
-              <span>
-                <b>Personal access token configured</b>
-                {mode === "env"
-                  ? " — using ORCHA_GITHUB_PAT from the environment; it takes precedence, read-only here."
-                  : " — stored encrypted on this workspace."}
-                {status.set_at && <> Set {relTime(status.set_at)}.</>}
-              </span>
-            </div>
-            <code className="masked">{status.masked || "ghp_…"}</code>
-          </div>
+          <StatusLine
+            tone={mode === "env" ? "env" : "ok"}
+            masked={status.masked || "ghp_…"}
+            action={mode === "db" ? (
+              <Button size="sm" variant="ghost" className="sc-remove" icon="trash" id="ga-remove" disabled={busy || locked} title={locked ? auth.reason || undefined : undefined} onClick={doRemove}>
+                Remove
+              </Button>
+            ) : null}
+          >
+            <b>Personal access token configured</b>
+            {mode === "env"
+              ? " · using ORCHA_GITHUB_PAT from the environment; it takes precedence, read-only here."
+              : " · stored encrypted on this workspace."}
+            {status.set_at && <> Set {relTime(status.set_at)}.</>}
+          </StatusLine>
           {mode === "db" && (
-            <div className="sc-row">
-              <input
-                id="ga-input"
-                className="sc-inp"
-                type={reveal ? "text" : "password"}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder="Paste a new token to replace…"
-                value={draft}
-                onChange={(e) => { setDraft(e.target.value); setTest(null); }}
-              />
-              <button className="iconbtn" id="ga-reveal" type="button" title="Show / hide" onClick={() => setReveal((r) => !r)}>
-                <Icon name="search" cls="" />
-              </button>
-            </div>
+            <SecretInput
+              id="ga-input"
+              revealId="ga-reveal"
+              label="Replace the GitHub personal access token"
+              placeholder="Paste a new token to replace…"
+              value={draft}
+              onChange={(v) => { setDraft(v); setTest(null); }}
+              reveal={reveal}
+              onToggleReveal={() => setReveal((r) => !r)}
+            />
           )}
           <div className="sc-acts">
             {mode === "db" && (
-              <button className="btn sm" id="ga-save" disabled={busy || !draft.trim()} onClick={() => void doSave()}>
-                <Icon name="check" cls="" />Replace token
-              </button>
+              <Button size="sm" variant={draft.trim() ? "primary" : "secondary"} icon="check" id="ga-save" disabled={busy || locked || !draft.trim()} title={locked ? auth.reason || undefined : undefined} onClick={() => void doSave()}>
+                Replace token
+              </Button>
             )}
-            <button className="btn sm ghost" id="ga-test" disabled={busy} onClick={() => void doTest()}>
-              <Icon name="spark" cls="" />Test
-            </button>
-            {mode === "db" && (
-              <button className="btn sm danger" id="ga-remove" onClick={doRemove}>
-                <Icon name="x" cls="" />Remove
-              </button>
-            )}
+            <Button size="sm" variant={mode === "db" ? "ghost" : "secondary"} icon="spark" id="ga-test" disabled={busy || locked} title={locked ? auth.reason || undefined : undefined} onClick={() => void doTest()}>
+              Test
+            </Button>
           </div>
           {mode === "env" && (
             <div className="sc-hint">
@@ -274,27 +300,19 @@ export function GitHubAccessSection() {
     // not configured
     return (
       <>
-        <div className="sc-banner warn">
-          <div className="bt">
-            <Icon name="bell" cls="" />
-            <span><b>No personal access token configured.</b> Add one so GitHub features work without the App installation.</span>
-          </div>
-        </div>
-        <div className="sc-row">
-          <input
-            id="ga-input"
-            className="sc-inp"
-            type={reveal ? "text" : "password"}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder="Paste a GitHub personal access token…"
-            value={draft}
-            onChange={(e) => { setDraft(e.target.value); setTest(null); }}
-          />
-          <button className="iconbtn" id="ga-reveal" type="button" title="Show / hide" onClick={() => setReveal((r) => !r)}>
-            <Icon name="search" cls="" />
-          </button>
-        </div>
+        <StatusLine tone="warn">
+          <b>No personal access token configured.</b> Add one so GitHub features work without the App installation.
+        </StatusLine>
+        <SecretInput
+          id="ga-input"
+          revealId="ga-reveal"
+          label="GitHub personal access token"
+          placeholder="Paste a GitHub personal access token…"
+          value={draft}
+          onChange={(v) => { setDraft(v); setTest(null); }}
+          reveal={reveal}
+          onToggleReveal={() => setReveal((r) => !r)}
+        />
         <div className="sc-hint">
           Already use the GitHub CLI? Run <code>gh auth token | pbcopy</code> in a terminal
           and paste here — no new token needed. (Restarting with <code>orcha up</code> picks
@@ -306,12 +324,12 @@ export function GitHubAccessSection() {
           <b>Contents</b> + <b>Metadata</b> read access on the repos you want to use.
         </div>
         <div className="sc-acts">
-          <button className="btn sm" id="ga-save" disabled={busy || !draft.trim()} onClick={() => void doSave()}>
-            <Icon name="check" cls="" />Save token
-          </button>
-          <button className="btn sm ghost" id="ga-test" disabled={busy || !draft.trim()} onClick={() => void doTest()}>
-            <Icon name="spark" cls="" />Test
-          </button>
+          <Button size="sm" variant={draft.trim() ? "primary" : "secondary"} icon="check" id="ga-save" disabled={busy || locked || !draft.trim()} title={locked ? auth.reason || undefined : undefined} onClick={() => void doSave()}>
+            Save token
+          </Button>
+          <Button size="sm" variant="ghost" icon="spark" id="ga-test" disabled={busy || locked || !draft.trim()} title={locked ? auth.reason || undefined : undefined} onClick={() => void doTest()}>
+            Test
+          </Button>
         </div>
       </>
     );
@@ -319,26 +337,32 @@ export function GitHubAccessSection() {
 
   return (
     <div className="card set-card">
-      <div className="card-h"><h2>GitHub access</h2></div>
+      <GroupHead
+        title="GitHub access"
+        lead="How Embodent signs in to GitHub for issues, pull requests and checks."
+        help="A GitHub App installation always takes precedence when present; a personal access token is used only when no App token is present."
+      />
       <div className="card-b">
-        <div className="lead">
-          Controls how Orcha authenticates to GitHub for issues, pull requests, checks, and repo browsing.
-          A GitHub App installation always takes precedence when present; a personal access token is used
-          only when no App token is present.
-        </div>
+
+        {locked && auth.reason && !auth.pending && (
+          <div className="sc-hint" id="ga-locked">View-only — {auth.reason}</div>
+        )}
+
+        {appDown && (
+          <StatusLine tone="warn" id="ga-app-down">
+            <b>GitHub App installed, but GitHub didn&#39;t answer:</b> {appDown}
+          </StatusLine>
+        )}
 
         {appManaged && (
-          <div className="sc-banner ok" id="ga-app-managed">
-            <div className="bt">
-              <Icon name="shield" cls="" />
-              <span><b>GitHub App installation (managed)</b> — repo access is provided by the installed App.</span>
-            </div>
-          </div>
+          <StatusLine tone="env" id="ga-app-managed">
+            <b>GitHub App installation (managed)</b> · repo access is provided by the installed App.
+          </StatusLine>
         )}
 
         {appManaged ? (
           <details id="ga-pat-details">
-            <summary className="sc-hint" style={{ cursor: "pointer" }}>
+            <summary className="sc-hint sc-summary">
               Personal access token settings (used only when no App token is present)
             </summary>
             <div style={{ marginTop: 12 }}>{patBody()}</div>
@@ -348,10 +372,9 @@ export function GitHubAccessSection() {
         )}
 
         {test && (
-          <div className={"sc-result " + (test.ok ? "ok" : "err")}>
-            <Icon name={test.ok ? "check" : "x"} cls="" />
-            <span>{test.ok ? "Token is valid" + (test.login ? " — signed in as " + test.login + "." : ".") : test.detail || "Token was rejected."}</span>
-          </div>
+          <TestResult ok={test.ok}>
+            {test.ok ? "Token is valid" + (test.login ? " — signed in as " + test.login + "." : ".") : test.detail || "Token was rejected."}
+          </TestResult>
         )}
       </div>
 

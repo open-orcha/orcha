@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/tester</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+		<key>PATH</key>
+		<string>/Users/tester/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>Label</key>
+	<string>io.openorcha.demo</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/orcha/venv/bin/python</string>
+		<string>-m</string>
+		<string>orcha_cli</string>
+		<string>serve</string>
+		<string>--project-dir</string>
+		<string>/Users/tester/demo</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/tester/demo/.orcha/logs/launchd.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/tester/demo/.orcha/logs/launchd.log</string>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/tester/demo</string>
+</dict>
+</plist>

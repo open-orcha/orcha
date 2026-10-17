@@ -3,7 +3,7 @@
 import json
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
@@ -18,6 +18,9 @@ from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
 from portal_backend.push_outbox import push_task_verify as _push_task_verify
+from portal_backend.verdikt_autofix import is_running as _autofix_running
+from portal_backend.evidence_pack import on_task_needs_verification as _evidence_on_needs_verification
+from portal_backend.review_routing import route_finished_work as _route_finished_work
 from portal_backend.schemas.task_operations import TaskDone
 from portal_backend.slack_notify import (
     notify_task_needs_verification as _slack_notify_needs_verification,
@@ -47,6 +50,7 @@ def configure_compatibility(
 def mark_done(
     tid: str,
     body: TaskDone,
+    request: Request,
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
 ):
     if not _valid_uuid(tid):
@@ -57,7 +61,7 @@ def mark_done(
         t = _require_task(cur, tid)
         # GH #91/#90: completing a task is WORK-lane only — gate on the ACTING agent (body.agent_id).
         # A conversation-lane embodiment cannot mark a task done (403).
-        _require_work_lane(cur, body.agent_id, x_orcha_run_token)
+        _require_work_lane(cur, body.agent_id, x_orcha_run_token, request)
         _reject_if_retired(cur, body.agent_id)  # ISS-51 [P1]
         _require_container_active(cur, str(t["container_id"]), body.agent_id)  # GH #24
         # Issue #11: root task is a sentinel for container completion — only
@@ -128,7 +132,7 @@ def mark_done(
         _ack_events_handled(cur, body.agent_id, "task_verified", "task_id", tid)
         if level == "full":
             cur.execute(
-                "UPDATE tasks SET result=%s::jsonb WHERE id=%s", (result_json, tid)
+                "UPDATE tasks SET result=%s WHERE id=%s", (result_json, tid)
             )
             unblocked = _complete_and_unblock_getter()(cur, t["container_id"], tid)
             bump_agent(cur, body.agent_id)
@@ -156,7 +160,7 @@ def mark_done(
                 "unblocked": unblocked,
             }
         cur.execute(
-            "UPDATE tasks SET status='needs_verification', result=%s::jsonb WHERE id=%s",
+            "UPDATE tasks SET status='needs_verification', result=%s WHERE id=%s",
             (result_json, tid),
         )
         cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
@@ -188,12 +192,22 @@ def mark_done(
             "status_changed",
             {"to": "needs_verification", "autonomy_level": level},
         )
+        # Mig 057: finished work follows the org chart — route the review to the finisher's
+        # human manager (or the owner / anyone, per the project setting) and, when an AI
+        # manager sits in between, ask it to pre-review. Same txn as the transition.
+        review = _route_finished_work(cur, t["container_id"], tid, body.agent_id, body.result)
         conn.commit()
-    # Push pipeline (mig 041): the task just became a needs-you item. AFTER the
-    # commit, best-effort — the hook never raises and never touches this txn.
-    _push_task_verify(str(t["container_id"]), tid)
-    # Slack seam (mig 044): if this container has a slack_webhook_url, ping it with a
-    # compact Block Kit "Verify in Orcha" message. Same after-commit, non-fatal contract
-    # as the push hook — a POST failure (or no webhook) never breaks the transition.
-    _slack_notify_needs_verification(str(t["container_id"]), tid)
-    return {"task_id": tid, "status": "needs_verification"}
+    # Mig 068: while a Verdikt auto-fix loop runs, the hand-back goes straight to Verdikt —
+    # the human is told once, when the loop stops (pass / limit / no progress …).
+    if not _autofix_running(tid):
+        # Push pipeline (mig 041): the task just became a needs-you item. AFTER the
+        # commit, best-effort — the hook never raises and never touches this txn.
+        _push_task_verify(str(t["container_id"]), tid)
+        # Slack seam (mig 044): if this container has a slack_webhook_url, ping it with a
+        # compact Block Kit "Verify in Orcha" message. Same after-commit, non-fatal contract
+        # as the push hook — a POST failure (or no webhook) never breaks the transition.
+        _slack_notify_needs_verification(str(t["container_id"]), tid)
+    # Proof-of-work (mig 058): build the evidence pack and apply the project's Verdikt
+    # auto-trigger policy — in a background thread, after the commit, never raising.
+    _evidence_on_needs_verification(tid)
+    return {"task_id": tid, "status": "needs_verification", "review": review}

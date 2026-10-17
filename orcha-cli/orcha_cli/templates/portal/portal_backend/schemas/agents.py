@@ -38,6 +38,13 @@ class AgentCreate(BaseModel):
     kind: str = Field(default="ai", pattern="^(ai|human)$")
     model: Optional[str] = Field(default=None, max_length=64)
     initial_task: Optional[InitialTask] = None
+    # P-10 (onboarding "Pick a task"): claim an EXISTING ready, unassigned task in this
+    # project as the new agent's first task instead of inserting a duplicate. Mutually
+    # exclusive with `initial_task`; AI agents only.
+    initial_task_id: Optional[str] = Field(
+        default=None,
+        description="id of an existing ready, unassigned task to assign as the first task",
+    )
     # PR attribution (docs/agent-prs.md): a human's GitHub handle + preferred git
     # author email, so agent-opened PRs on tasks they trigger can @mention them
     # and carry a Co-authored-by trailer. Meaningful for kind='human' only; both

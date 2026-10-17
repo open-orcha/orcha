@@ -67,7 +67,7 @@ describe("CodeSpacePage — ErrorBoundary is genuinely wired around the rail pan
     expect(document.querySelector(".sidebar")).not.toBeNull();
 
     // the rail itself shows the compact fallback, not a blank/crashed page.
-    expect(screen.getByText(/something broke here — reload pane/i)).toBeInTheDocument();
+    expect(screen.getByText(/something broke in this pane/i)).toBeInTheDocument();
     expect(screen.getByText(/reload rail pane/i)).toBeInTheDocument();
   });
 

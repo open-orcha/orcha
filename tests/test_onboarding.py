@@ -91,12 +91,21 @@ def test_onboarding_has_concierge_template_for_first_agent():
 
 def test_onboarding_o4_is_a_held_stub_no_assign_wired():
     js = _page() + _logic()
-    # O4 held: a coming-soon stub note, NOT a wired assign/wake step
-    assert "coming soon" in js.lower(), "no held coming-soon stub for the assign step"
-    assert "B5 assign endpoint" in js, "the held stub doesn't name the missing B5 assign endpoint"
+    # O4 held: onboarding itself never wires an assign/wake step. Assignment now
+    # exists in the Tasks detail (B5 POST /api/tasks/{tid}/assign, O4 there), so
+    # the old "coming soon" copy was stale (Orcha V2, G): the held note must point
+    # the operator to Tasks for assignment instead of promising a future step.
+    assert "assign it from the task" in js, "held note doesn't route assignment to the Tasks detail"
+    assert 'href="/tasks"' in js, "held note has no link to Tasks"
+    assert "coming soon" not in js.lower(), "stale 'coming soon' copy for an assign step that already exists"
     # no invented assign/wake endpoint CALLS (prose like "the assign/wake step" is fine —
     # what's forbidden is actually fetching one of these paths)
-    for bad in ('"/assign', "'/assign", '/api/wakes', "/wakes", "/wake-scan"):
+    # P-10c: picking an EXISTING ready task rides the agent-create call as
+    # initial_task_id (register_agent validates it and starts it in one transaction),
+    # so onboarding makes NO separate assign call at all.
+    assert "body.initial_task_id = picked.id" in js, "picked task must ride register_agent (P-10c)"
+    assert js.count("/assign\"") == 0, "onboarding must not assign via a follow-up /assign call (P-10c)"
+    for bad in ("'/assign", '/api/wakes', "/wakes", "/wake-scan"):
         assert bad not in js, f"O4 must stay held — wired a forbidden endpoint: {bad}"
     # and there must be NO fetch to a per-agent /wake* mutation
     assert '/wake"' not in js and "/wake'" not in js, "must not wire a wake endpoint while O4 is held"
@@ -191,10 +200,13 @@ async def test_onboarding_can_register_human_and_create_agent(client, container)
 def test_onboarding_boots_once_no_per_tick_rebuild():
     """Bug (vanilla): the wizard jumped on the 3s repaint because the poll re-rendered the
     whole form every tick. React port: boot() runs ONCE on the first snapshot (guarded),
-    and all form state lives in component state, which the poll never clobbers."""
+    and all form state lives in component state, which the poll never clobbers.
+    V2 QA 11: the boot-once flag is per project (cid) — it runs once per cid, so a
+    project switch while mounted re-boots from THAT project's draft."""
     js = _page()
     assert "if (booted || !snap) return;" in js, "boot isn't guarded to run once"
-    assert "setBooted(true)" in js, "boot-once flag never set"
+    assert "setBootedCid(cid)" in js, "boot-once (per project) flag never set"
+    assert "bootedCid === cid" in js, "boot-once flag is not scoped to the current project"
 
 
 def test_add_another_agent_affordance_and_deeplink():
@@ -223,12 +235,14 @@ def test_onboarding_refreshes_snapshot_after_writes():
 
 def test_onboarding_no_jump_on_any_screen():
     """Finding 3: scroll-to-top belongs to an explicit step change (go), never a re-render
-    of the current step — the React port keeps window.scrollTo scoped to go() alone."""
+    of the current step — the React port keeps the scroll-to-top scoped to go() alone.
+    (D5 frame: content scrolls inside the inset panel, so it is scrollMainTo, not window.scrollTo.)"""
     js = _page()
-    assert js.count("window.scrollTo") == 1, "scrollTo fires outside the explicit step change"
+    assert js.count("scrollMainTo(0)") == 1, "scroll-to-top fires outside the explicit step change"
+    assert "window.scrollTo" not in js, "window.scrollTo misses the panel scroller on wide layouts"
     go_block = js[js.index("const go = "):]
     go_block = go_block[: go_block.index("}, [")]
-    assert "window.scrollTo({ top: 0 })" in go_block, "scrollTo not scoped to go() (step change)"
+    assert "scrollMainTo(0)" in go_block, "scroll-to-top not scoped to go() (step change)"
 
 
 def test_onboarding_reconciles_ghost_against_live_snapshot():

@@ -199,14 +199,14 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized else {
-            return "iOS has notifications blocked for Orcha — allow them in Settings → Apps → Orcha → Notifications, then retry."
+            return "iOS has notifications blocked for Embodent — allow them in Settings → Apps → Embodent → Notifications, then retry."
         }
         var target: Item?
         if let sel = model.selectedContainer, let snap = model.snapshot {
             target = Self.needsYou(snap, container: sel).first
         }
         let content = UNMutableNotificationContent()
-        content.title = target?.title ?? "Orcha — test"
+        content.title = target?.title ?? "Embodent — test"
         content.body = target?.body ?? "Notifications are working. Nothing needs you right now."
         content.sound = .default
         if let target {

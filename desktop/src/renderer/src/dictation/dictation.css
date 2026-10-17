@@ -1,0 +1,97 @@
+/* Dictation UI (src/dictation/DictationHost.tsx) — Linear-calm, token-driven,
+   dark + light via --v2-* tokens, reduced-motion aware. Everything is
+   position:fixed and portaled to <body>, so no page layout changes. */
+.dict-ui { font-family: var(--v2-font-sans); font-feature-settings: var(--v2-font-features); z-index: 2147483000; }
+
+.dict-mic {
+  position: fixed; width: 24px; height: 24px; padding: 0;
+  display: inline-grid; place-items: center;
+  border-radius: var(--v2-radius-full);
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-raised); color: var(--v2-text-3);
+  cursor: pointer; opacity: 0.92;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+.dict-mic:hover { color: var(--v2-text); background: var(--v2-hover-solid); opacity: 1; }
+.dict-mic:focus-visible { outline: 2px solid var(--v2-focus-color); outline-offset: 1px; }
+.dict-mic.is-rec { color: var(--v2-primary-text); background: var(--v2-danger); border-color: transparent; opacity: 1; }
+.dict-mic.is-rec::after {
+  content: ""; position: absolute; inset: -4px; border-radius: inherit;
+  border: 2px solid var(--v2-danger); opacity: 0.35; animation: dict-pulse 1.4s ease-out infinite;
+}
+.dict-mic.is-busy { color: var(--v2-accent); border-color: var(--v2-accent); }
+
+.dict-hud {
+  position: fixed; box-sizing: border-box;
+  background: var(--v2-raised); color: var(--v2-text);
+  border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-card);
+  box-shadow: var(--v2-shadow-palette);
+  padding: 8px 10px; font-size: 13px; line-height: 18px;
+  animation: dict-in 120ms ease-out;
+}
+.dict-hud-row { display: flex; align-items: center; gap: 10px; min-height: 26px; }
+.dict-status { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dict-muted { color: var(--v2-text-2); }
+.dict-err { color: var(--v2-text); white-space: normal; }
+.dict-hud.is-error .dict-status { white-space: normal; }
+.dict-done-t { color: var(--v2-text); }
+.dict-time { color: var(--v2-text-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+.dict-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.dict-btn {
+  height: 24px; padding: 0 9px; display: inline-flex; align-items: center;
+  border-radius: var(--v2-radius-control); border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface); color: var(--v2-text); font: inherit; font-size: 12px; font-weight: 500;
+  cursor: pointer; text-decoration: none; white-space: nowrap;
+}
+.dict-btn:hover { background: var(--v2-hover-solid); }
+.dict-btn.ghost { background: transparent; border-color: transparent; color: var(--v2-text-2); }
+.dict-btn.ghost:hover { background: var(--v2-hover); color: var(--v2-text); }
+.dict-btn:focus-visible { outline: 2px solid var(--v2-focus-color); outline-offset: 1px; }
+.dict-kbd {
+  font-family: var(--v2-font-sans); font-size: 11px; color: var(--v2-text-3);
+  border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); padding: 0 5px; line-height: 18px;
+}
+.dict-ico-ok, .dict-ico-err {
+  width: 18px; height: 18px; flex: none; display: inline-grid; place-items: center;
+  border-radius: var(--v2-radius-full); font-size: 11px; font-weight: 700;
+}
+.dict-ico-ok { background: var(--v2-ok-soft); color: var(--v2-ok); }
+.dict-ico-err { background: var(--v2-danger-soft); color: var(--v2-danger); }
+
+.dict-wave { display: inline-flex; align-items: center; gap: 2px; height: 18px; flex: none; width: calc(28 * 3px + 27 * 2px); }
+.dict-bar {
+  width: 3px; height: 18px; border-radius: 2px; background: var(--v2-text-3);
+  transform-origin: center; transition: transform 90ms linear;
+}
+.dict-wave.is-live .dict-bar { background: var(--v2-accent); }
+
+.dict-text {
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--v2-border-subtle);
+  max-height: 96px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-size: 13px; line-height: 19px;
+}
+.dict-final { color: var(--v2-text); }
+.dict-interim { color: var(--v2-text-3); }
+.dict-caret {
+  display: inline-block; width: 2px; height: 14px; margin-left: 2px; vertical-align: -2px;
+  background: var(--v2-accent); animation: dict-blink 1s steps(2, start) infinite;
+}
+.dict-note { margin-top: 4px; color: var(--v2-text-3); font-size: 12px; }
+
+.dict-hint {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: var(--v2-raised); color: var(--v2-text); border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius-card); padding: 6px 12px; font-size: 13px; box-shadow: var(--v2-shadow-palette);
+}
+
+/* inline composer button (Composer / MessageComposer toolbars) */
+.dict-inline.is-rec { color: var(--v2-danger); }
+
+@keyframes dict-pulse { from { transform: scale(1); opacity: 0.45; } to { transform: scale(1.5); opacity: 0; } }
+@keyframes dict-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+@keyframes dict-blink { to { visibility: hidden; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dict-mic, .dict-bar, .dict-hud { transition: none; animation: none; }
+  .dict-mic.is-rec::after, .dict-caret { animation: none; }
+}

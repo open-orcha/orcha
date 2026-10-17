@@ -11,23 +11,31 @@ import sys
 from typing import Optional
 
 
-# (event, command, matcher[, timeout_secs]). The file-guard PreToolUse entry may
-# block while another agent holds a file lock, so it carries an explicit timeout
-# above the guard's own wait budget (cli_file_lock.DEFAULT_WAIT_SECS).
+# (event, command, matcher, timeout_secs). EVERY Orcha hook carries an explicit
+# timeout so a hung API / wedged daemon can never stall a Claude session at start,
+# on a tool call, or at exit. `orcha upgrade` rewrites these on already-registered
+# Orcha hooks (see _ensure_hooks), so existing projects pick them up too.
+#   * SessionStart daemons / --ensure / reachability / rehydrate: 10s — each is a
+#     quick spawn-and-return or a single bounded HTTP call.
+#   * poll-inbox / conv-guard: 5s — a local file read / env check on every tool call.
+#   * The file-guard PreToolUse entry may BLOCK while another agent holds a file
+#     lock, so its cap sits above the guard's own wait budget
+#     (cli_file_lock.DEFAULT_WAIT_SECS = 600s); its release events are just unlinks.
+#   * SessionEnd snapshot / task-claim-guard make a few HTTP calls: 30s.
 HOOKS = (
-    ("PostToolUse", "orcha poll-inbox", "*"),
-    ("PreToolUse", "orcha conv-guard", "*"),
+    ("PostToolUse", "orcha poll-inbox", "*", 5),
+    ("PreToolUse", "orcha conv-guard", "*", 5),
     ("PreToolUse", "orcha file-guard", "*", 660),
-    ("PostToolUse", "orcha file-guard", "Edit|Write|MultiEdit|NotebookEdit"),
-    ("SessionEnd", "orcha file-guard", None),
-    ("SessionStart", "orcha watch --detach", None),
-    ("SessionStart", "orcha rehydrate", None),
-    ("SessionEnd", "orcha unwatch", None),
-    ("SessionEnd", "orcha snapshot", None),
-    ("SessionEnd", "orcha task-claim-guard", None),
-    ("SessionStart", "orcha notifier --ensure", None),
-    ("SessionStart", "orcha terminal-bridge --ensure", None),
-    ("SessionStart", "orcha reachability --quiet", None),
+    ("PostToolUse", "orcha file-guard", "Edit|Write|MultiEdit|NotebookEdit", 10),
+    ("SessionEnd", "orcha file-guard", None, 10),
+    ("SessionStart", "orcha watch --detach", None, 10),
+    ("SessionStart", "orcha rehydrate", None, 10),
+    ("SessionEnd", "orcha unwatch", None, 10),
+    ("SessionEnd", "orcha snapshot", None, 30),
+    ("SessionEnd", "orcha task-claim-guard", None, 30),
+    ("SessionStart", "orcha notifier --ensure", None, 10),
+    ("SessionStart", "orcha terminal-bridge --ensure", None, 10),
+    ("SessionStart", "orcha reachability --quiet", None, 10),
 )
 
 
@@ -96,41 +104,46 @@ def record_reachability(args, services) -> None:
 # Claude-session bookkeeping.
 CODEX_HOOKS = (
     ("PreToolUse", "orcha file-guard", "*", 660),
-    ("PostToolUse", "orcha file-guard", "apply_patch|Edit|Write"),
-    ("SessionEnd", "orcha file-guard", None),
+    ("PostToolUse", "orcha file-guard", "apply_patch|Edit|Write", 10),
+    ("SessionEnd", "orcha file-guard", None, 10),
 )
 
 
 def _ensure_hooks(settings: dict, specs) -> Optional[bool]:
-    """Merge ``specs`` into ``settings['hooks']``; None means the file is unusable."""
+    """Merge ``specs`` into ``settings['hooks']``; None means the file is unusable.
+
+    Additive for missing Orcha hooks, and idempotently brings the ``timeout`` of an
+    already-registered Orcha hook (same event + exact command) to the template value.
+    Hooks whose command is not an Orcha template command are never touched.
+    Returns whether anything changed."""
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         return None
-    added = False
-    for spec in specs:
-        event, command, matcher = spec[:3]
-        timeout = spec[3] if len(spec) > 3 else None
+    changed = False
+    for event, command, matcher, timeout in specs:
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
             return None
-        if any(
-            isinstance(entry, dict)
-            and any(
-                isinstance(hook, dict) and hook.get("command") == command
-                for hook in entry.get("hooks", []) or []
-            )
-            for entry in entries
-        ):
+        found = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for hook in entry.get("hooks", []) or []:
+                if isinstance(hook, dict) and hook.get("command") == command:
+                    found = True
+                    if hook.get("timeout") != timeout:
+                        hook["timeout"] = timeout
+                        changed = True
+        if found:
             continue
-        hook: dict = {"type": "command", "command": command}
-        if timeout is not None:
-            hook["timeout"] = timeout
-        new_entry: dict = {"hooks": [hook]}
+        new_entry: dict = {
+            "hooks": [{"type": "command", "command": command, "timeout": timeout}]
+        }
         if matcher is not None:
             new_entry["matcher"] = matcher
         entries.append(new_entry)
-        added = True
-    return added
+        changed = True
+    return changed
 
 
 def write_codex_hook_config(project_dir: pathlib.Path) -> bool:
@@ -156,7 +169,8 @@ def write_codex_hook_config(project_dir: pathlib.Path) -> bool:
 
 
 def write_hook_config(claude_dir: pathlib.Path) -> bool:
-    """Add every managed hook without replacing user-defined hook entries."""
+    """Add every managed hook (and refresh Orcha hooks' timeouts) without touching
+    user-defined hook entries."""
     settings_path = claude_dir / "settings.json"
     settings: dict = {}
     if settings_path.exists():
@@ -166,41 +180,9 @@ def write_hook_config(claude_dir: pathlib.Path) -> bool:
                 settings = {}
         except Exception:
             return False
-    hooks = settings.setdefault("hooks", {})
-    if not isinstance(hooks, dict):
+    added = _ensure_hooks(settings, HOOKS)
+    if added is None:
         return False
-
-    def ensure(
-        event: str,
-        command: str,
-        matcher: Optional[str],
-        timeout: Optional[int] = None,
-    ) -> bool:
-        entries = hooks.setdefault(event, [])
-        if not isinstance(entries, list):
-            return False
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            if any(
-                isinstance(hook, dict) and hook.get("command") == command
-                for hook in entry.get("hooks", []) or []
-            ):
-                return False
-        hook: dict = {"type": "command", "command": command}
-        if timeout is not None:
-            hook["timeout"] = timeout
-        new_entry: dict = {"hooks": [hook]}
-        if matcher is not None:
-            new_entry["matcher"] = matcher
-        entries.append(new_entry)
-        return True
-
-    added = False
-    for spec in HOOKS:
-        event, command, matcher = spec[:3]
-        timeout = spec[3] if len(spec) > 3 else None
-        added |= ensure(event, command, matcher, timeout)
     if added:
         claude_dir.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")

@@ -5,7 +5,7 @@
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Breadcrumbs, breadcrumbSegments } from "./Breadcrumbs";
+import { Breadcrumbs, breadcrumbSegments, collapseSegments } from "./Breadcrumbs";
 
 describe("breadcrumbSegments", () => {
   it("returns [] for an empty path", () => {
@@ -36,7 +36,7 @@ describe("Breadcrumbs", () => {
   it("root crumb click opens the repo root (dirPath '')", () => {
     const onOpenDir = vi.fn();
     render(<Breadcrumbs path="src/util.ts" onOpenDir={onOpenDir} />);
-    fireEvent.click(screen.getByText("root"));
+    fireEvent.click(screen.getByRole("button", { name: "Repository root" }));
     expect(onOpenDir).toHaveBeenCalledWith("");
   });
 
@@ -58,7 +58,28 @@ describe("Breadcrumbs", () => {
 
   it("a root-level file still renders the root crumb plus the (non-interactive) file segment", () => {
     render(<Breadcrumbs path="a.ts" onOpenDir={vi.fn()} />);
-    expect(screen.getByText("root")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repository root" })).toBeInTheDocument();
+    // never the literal word "root" (wave4 review)
+    expect(screen.queryByText("root")).toBeNull();
     expect(screen.getByText("a.ts").tagName).toBe("SPAN");
+  });
+});
+
+describe("Breadcrumbs — one-line middle collapse", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it("keeps short paths intact", () => {
+    expect(collapseSegments(breadcrumbSegments("a/b/c/d.ts"))).toHaveLength(4);
+  });
+
+  it("folds the middle of a deep path into a '…' crumb that opens the deepest folded dir", () => {
+    const onOpenDir = vi.fn();
+    render(<Breadcrumbs path="a/b/c/d/e/f.ts" onOpenDir={onOpenDir} />);
+    expect(screen.getByText("a", { selector: "button" })).toBeInTheDocument();
+    expect(screen.queryByText("b", { selector: "button" })).not.toBeInTheDocument();
+    expect(screen.getByText("d", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("e", { selector: "button" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open a/b/c" }));
+    expect(onOpenDir).toHaveBeenCalledWith("a/b/c");
   });
 });

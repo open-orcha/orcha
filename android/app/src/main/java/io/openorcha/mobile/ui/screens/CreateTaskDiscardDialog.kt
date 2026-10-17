@@ -2,9 +2,11 @@ package io.openorcha.mobile.ui.screens
 
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.text.font.FontWeight
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.theme.Orcha
 
 /** Owns confirmation for abandoning a dirty create-task draft. */
@@ -18,16 +20,10 @@ internal fun CreateTaskDiscardDialog(
     val p = Orcha.palette
     AlertDialog(
         onDismissRequest = onKeep,
-        title = { Text("Discard draft?") },
-        text = { Text("Your task draft will be lost.") },
-        confirmButton = {
-            TextButton(onClick = onDiscard) {
-                Text("Discard draft", color = p.danger, fontWeight = FontWeight.W700)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onKeep) { Text("Keep editing", color = p.accent) }
-        },
-        containerColor = p.raised,
+        title = { Text("Discard draft?", style = ltype(LType.Headline), color = p.text) },
+        text = { Text("Your task draft will be lost.", style = ltype(LType.Body), color = p.text2) },
+        confirmButton = { LButton("Discard draft", onDiscard, kind = LButtonKind.Danger) },
+        dismissButton = { LButton("Keep editing", onKeep, kind = LButtonKind.Ghost) },
+        containerColor = p.surface,
     )
 }

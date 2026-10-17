@@ -248,18 +248,24 @@ def test_non_git_folder_still_starts_in_the_folder(monkeypatch, tmp_path, runtim
 
 
 @RUNTIMES
-def test_worktrees_disabled_runs_uncommitted_repo_in_place_but_never_a_parent(
+def test_legacy_worktrees_disabled_flag_never_runs_an_uncommitted_repo_in_place(
     monkeypatch, tmp_path, runtime
 ):
+    # Worktrees are always on now (migration 072); a stale flag from an older server must
+    # not reopen editing a repository in place.
     monkeypatch.setitem(CONV_EXTRA, "worktrees_disabled", True)
     project = tmp_path / "in-place"
     project.mkdir()
     _git(project, "init", "-q")
+    before = _snapshot(project)
     posts, spawns = _wire(monkeypatch, runtime)
     _tick(project, {})
-    assert spawns == [str(project)], "no checkout is needed, so no first commit is needed"
-    assert not [ack for ack in _acks(posts) if ack.get("detail")]
+    assert spawns == [] and _claims(posts) == []
+    (ack,) = _acks(posts)
+    assert "first commit" in ack["detail"]
+    assert _snapshot(project) == before
 
+    preflight._BACKOFF.clear()  # same conversation id: skip the retry wait for part two
     documents, learnchat = _empty_parent_with_project(tmp_path / "second")
     before = _snapshot(documents)
     posts, spawns = _wire(monkeypatch, runtime)

@@ -75,7 +75,10 @@ def test_only_running_runs_stream():
     """Only RUNNING runs stream (live); finished ones paint from their stored output —
     so a finished run never holds an EventSource open."""
     runlog = RUNLOG.read_text()
-    assert 'if (run.status === "running" && streamAgent) return startRunStream(logEl, streamAgent, rid);' in runlog, \
+    # parity r1: the Runs tab renders through activity/RunLogView (useRunStream,
+    # checked below); runlog's conversation work log streams only a non-finished run.
+    assert 'const finished = !!run && run.status !== "running";' in runlog \
+        and "return startRunStream(logEl, agentId, runId," in runlog, \
         "runlog: running runs don't stream"
     assert "paintFinished(logEl, run)" in runlog, "runlog: finished runs not painted from stored output"
     hook = HOOK.read_text()

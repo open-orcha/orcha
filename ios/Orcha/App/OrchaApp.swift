@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UserNotifications
 
 @main
@@ -10,18 +11,40 @@ struct OrchaApp: App {
         // BGTaskScheduler registration must land before launch finishes.
         NotificationCoordinator.registerBackgroundTask()
         UNUserNotificationCenter.current().delegate = NotificationCoordinator.shared
+        // Linear chrome: window-coloured bars, hairline separators, Inter titles.
+        ChromeAppearance.apply(skin: ContainerStore().loadSkinMode())
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
-                .preferredColorScheme(model.themeMode.colorScheme)
-                .tint(Palette.current(model.themeMode, skin: model.skinMode).accent)
+                // Window-level override, not `.preferredColorScheme`: switching back to
+                // System (nil) leaves already-presented sheets stuck on the old scheme,
+                // so a sheet rendered light tokens on dark chrome. UIKit propagates a
+                // window's style to every presented controller.
+                .onAppear { ChromeAppearance.applyInterfaceStyle(model.themeMode) }
+                .onChange(of: model.themeMode) { _, mode in ChromeAppearance.applyInterfaceStyle(mode) }
+                .tint(ChromeAppearance.accent(skin: model.skinMode))
+                .onChange(of: model.skinMode) { _, skin in ChromeAppearance.apply(skin: skin) }
                 .task { NotificationCoordinator.shared.model = model }
                 .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        // Plan usage + its display setting may have changed on another device.
+                        let bases = model.containers.map(\.baseUrl)
+                        Task { await model.planUsage.refresh(bases: bases) }
+                    }
                     if phase == .background, model.notificationsEnabled {
                         NotificationCoordinator.scheduleAppRefresh()
+                    }
+                    if phase == .background {
+                        // Resolves still inside their undo window go out now, with a little
+                        // background time so the request isn't cut off mid-flight.
+                        let bg = UIApplication.shared.beginBackgroundTask(withName: "resolve-flush")
+                        Task {
+                            await ResolveUndoQueue.shared.flushAll()
+                            UIApplication.shared.endBackgroundTask(bg)
+                        }
                     }
                 }
                 .onOpenURL { url in

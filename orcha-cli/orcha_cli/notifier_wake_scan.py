@@ -94,6 +94,12 @@ def tick(
                 file=sys.stderr,
             )
         return {"ok": False, "woke": [], "error": "scan_unreachable"}
+    # Agent runs on an API key (migration 071): remember the sealed per-runtime keys for this
+    # container's spawns — ciphertext only, opened at spawn time. Refreshed every scan, so
+    # turning the toggle off stops injection from the next spawn on.
+    remember = getattr(services, "_remember_agent_keys", None)
+    if remember is not None:
+        remember(container_id, scan)
     if not scan.get("active"):
         if not quiet:
             print(

@@ -62,7 +62,13 @@ data class ContainerDto(
     /** The container's currently-bound repo ("owner/name"), or null. GitHub hub entry
      *  point parity (iOS `ContainerDto.githubRepo`). */
     @SerialName("github_repo") val githubRepo: String? = null,
-)
+    /** D14 project icon, kept raw (any shape decodes) and read via [projectIcon]. */
+    val icon: kotlinx.serialization.json.JsonElement? = null,
+) {
+    /** The validated icon, or null (unset / malformed → the neutral default glyph). */
+    val projectIcon: io.openorcha.mobile.domain.ProjectIconValue?
+        get() = io.openorcha.mobile.domain.ProjectIcons.parse(icon)
+}
 
 @Serializable
 data class AgentDto(
@@ -83,6 +89,8 @@ data class AgentDto(
     /** The signed-in GitHub login for a human agent, or null (self-host / unmapped).
      *  Drives the GitHub hub's "Mine" filter (iOS `AgentDto.githubLogin`). */
     @SerialName("github_login") val githubLogin: String? = null,
+    /** Owner / member / viewer for a human on this project (iOS `memberRole`). */
+    @SerialName("member_role") val memberRole: String? = null,
 )
 
 @Serializable
@@ -126,6 +134,12 @@ data class TaskDto(
     @Serializable(with = FlexiblePlanDecisionSerializer::class)
     val planDecision: String? = null,
     @SerialName("depends_on") val dependsOn: List<String> = emptyList(),
+    /** Collab v1: the assigned human reviewer (null = anyone). Shapes in DtosTask.kt. */
+    @SerialName("reviewer_agent_id") val reviewerAgentId: String? = null,
+    /** mig 057: how the reviewer was chosen (manager chain / owner / fallback). */
+    @SerialName("review_routing") val reviewRouting: ReviewRoutingDto? = null,
+    /** mig 057: the AI manager's advisory pre-review (a human still verifies). */
+    @SerialName("manager_review") val managerReview: ManagerReviewDto? = null,
 )
 
 @Serializable

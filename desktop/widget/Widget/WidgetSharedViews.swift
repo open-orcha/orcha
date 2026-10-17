@@ -77,7 +77,7 @@ struct MediumView: View {
           }
         }
         if entry.status?.stacks.isEmpty != false {
-          Text(entry.stale ? "Orcha app not running" : "No stacks yet")
+          Text(entry.stale ? "Embodent app not running" : "No stacks yet")
             .font(.system(size: 11)).foregroundStyle(.gray)
         }
       }
@@ -91,7 +91,7 @@ struct OfflineView: View {
   let stale: Bool
 
   var body: some View {
-    Text(stale ? "Orcha app not running" : "No stacks yet")
+    Text(stale ? "Embodent app not running" : "No stacks yet")
       .font(.system(size: 11)).foregroundStyle(.gray)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
   }

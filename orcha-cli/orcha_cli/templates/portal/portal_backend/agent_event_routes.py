@@ -4,14 +4,15 @@ import json
 import time
 from typing import Optional
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from portal_backend.agent_status import log_event, touch_heartbeat
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend.events import wait_for_event
+from portal_backend.events import shutting_down, wait_for_event
 from portal_backend.guards import require_agent, valid_uuid
+from portal_backend.identity_routes import trusted_actor
 from portal_backend.schemas.wakes import PromptEvent
 
 _publish_prompt = None
@@ -24,7 +25,7 @@ def configure_compatibility(publish_prompt):
 
 
 @app.post("/api/agents/{aid}/prompt", status_code=201)
-def prompt_agent(aid: str, body: PromptEvent):
+def prompt_agent(aid: str, body: PromptEvent, request: Request):
     """A3: wake an agent with a directed message.
 
     Publishes a `prompt` agent_event carrying `message` on the agent's key (so wake-scan counts
@@ -39,6 +40,11 @@ def prompt_agent(aid: str, body: PromptEvent):
         raise HTTPException(400, "from_agent_id is not a valid UUID")
     with db_cursor() as (connection, cur):
         agent = require_agent(cur, aid)
+        # PS-06: a signed-in human must be a non-viewer member of the agent's project; the
+        # sender is stamped as that member. Header-less agent/daemon lane unchanged.
+        body.from_agent_id = trusted_actor(
+            cur, request, str(agent["container_id"]), body.from_agent_id
+        )
         payload = {"message": body.message, "from_agent_id": body.from_agent_id}
         _publish_prompt(cur, str(agent["container_id"]), aid, payload)
         log_event(
@@ -160,7 +166,7 @@ async def agent_events(aid: str, since_ts: float = Query(default=0.0)):
 
     async def event_stream():
         cursor_ts = since_ts
-        while True:
+        while not shutting_down():  # parity r2: end on SIGTERM (events.py)
             event = await wait_for_event(aid, cursor_ts, 15.0)
             if event is None:
                 yield f": heartbeat {int(time.time())}\n\n"

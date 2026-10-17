@@ -12,6 +12,14 @@ import { ToastProvider } from "../../components/ui";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
 import { HomePage } from "./HomePage";
 
+// These suites exercise the INLINE gate cards, which render only when the
+// dedicated /needs page is absent (with it, the Overview shows preview rows).
+vi.mock("../../shell/optionalPages", async (orig) => ({
+  ...(await orig<typeof import("../../shell/optionalPages")>()),
+  HAS_NEEDS_PAGE: false,
+  NEEDS_HREF: "/",
+}));
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function rawSnap(opts: {
   actorRole?: string | null; // h1 (kedar, the acting human) member_role; undefined = omit (open)
@@ -79,7 +87,7 @@ describe("HomePage verify-card de-emphasis (collab v1)", () => {
   it("someone else's review + member actor -> de-emphasized with a review chip", async () => {
     stubFetch(rawSnap({ actorRole: "member", reviewerId: "h2" }));
     mount();
-    await screen.findByText("review: sam-gh");
+    await screen.findByText("review: sam");
     await waitFor(() => expect(card()!.classList.contains("other-review")).toBe(true));
     expect(document.querySelector(".tag.review-for")).toBeTruthy();
   });

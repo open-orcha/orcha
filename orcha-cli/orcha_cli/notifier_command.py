@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from . import notifier_fast_lane as _fast_lane
+from . import notifier_preview as _preview
+from . import notifier_request_sweep as _request_sweep
+from . import notifier_routines as _routines
+from . import notifier_verdikt_sweep as _verdikt_sweep
+from . import notifier_worktree_gc as _worktree_gc
+from . import sandbox as _sandbox
+
 
 def cmd_notifier(args, *, services) -> None:
     """Run one notifier tick or the managed long-running daemon loop."""
@@ -94,6 +102,11 @@ def cmd_notifier(args, *, services) -> None:
         # wake-suppression window. Cap --once at a short lease so the stopgap stays responsive
         # (honors an explicitly-lower --lease-ttl).
         once_ttl = min(getattr(args, "lease_ttl", 1200.0), 300.0)
+        # Routines: fire due recurring tasks first (never raises; skipped in --dry-run).
+        _routines.maybe_fire_routines(api_base, cid, services, quiet=args.quiet, dry_run=args.dry_run)
+        # EX-01: escalate expired AI-held asks to a human (never raises; skipped in --dry-run).
+        _request_sweep.maybe_sweep_expired(api_base, cid, services, quiet=args.quiet,
+                                           dry_run=args.dry_run)
         tick(api_base, cid, dry_run=args.dry_run, cooldown=args.cooldown,
              min_idle=args.min_idle, quiet=args.quiet, lease_ttl=once_ttl, base_cwd=project_cwd)
         return
@@ -158,6 +171,9 @@ def cmd_notifier(args, *, services) -> None:
     # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
     # re-check fires ~_DAEMON_LIVENESS_INTERVAL later, not redundantly on iteration one.
     last_liveness = time.monotonic()
+    turn_watcher = None if args.dry_run else _fast_lane.TurnEventWatcher(api_base, cid).start()
+    idle_wait = _fast_lane.idle_wait
+    previews = _preview.PreviewState()
     try:
         while not stop["flag"]:
             # ISS-22 round 3: proof-of-life FIRST, every pass — --ensure's self-heal
@@ -211,7 +227,8 @@ def cmd_notifier(args, *, services) -> None:
                 # this shield the orphan pass would stop either mid-flight (M7).
                 live_sandbox = live_sandbox_shield(live_workers, live_residents)
                 reap_orphaned_runs(api_base, cid, live_pids,
-                                   live_sandbox=live_sandbox, quiet=args.quiet)
+                                   live_sandbox=live_sandbox, quiet=args.quiet,
+                                   sandbox_enabled=_sandbox.SandboxConfig.load(cwd).enabled)
                 # GH#110 §2c: reclaim durable per-(agent+task) worktrees whose task went terminal
                 # (completed/cancelled) so orcha/task-* trees don't accumulate forever — conservative
                 # (never touches a live worktree, preserves any dirty tree, keeps committed/PR
@@ -223,6 +240,27 @@ def cmd_notifier(args, *, services) -> None:
                 # ephemeral scan correctly suppresses a double-spawn for the same agent.
                 service_residents(api_base, cid, live_residents, quiet=args.quiet,
                                   dry_run=args.dry_run, base_cwd=str(cwd))
+                # Routines: fire due recurring tasks (throttled ~30s, never raises) BEFORE the
+                # wake scan, so a task a routine just created/assigned wakes like any other.
+                _routines.maybe_fire_routines(api_base, cid, services, quiet=args.quiet,
+                                              dry_run=args.dry_run)
+                # EX-01: expiry is not display-only — escalate expired AI-held asks up the
+                # chain to a human (throttled ~60s, never raises), like /orcha-sweep by hand.
+                _request_sweep.maybe_sweep_expired(api_base, cid, services, quiet=args.quiet,
+                                                   dry_run=args.dry_run)
+                # Verdikt preview environments (mig 064): build + serve a task's worktree for
+                # a Verdikt run, report it ready, stop it after the run / TTL (never raises).
+                _preview.service_previews(api_base, cid, previews, project_cwd, quiet=args.quiet,
+                                          dry_run=args.dry_run)
+                # Verdikt background check (mig 068): refresh in-flight runs + apply the auto-fix
+                # loop (every ~12s while runs are in flight, else once a minute; never raises).
+                _verdikt_sweep.maybe_sweep(api_base, cid, quiet=args.quiet, dry_run=args.dry_run)
+                # Agent worktrees (mig 067): run Settings › Agent worktrees requests, sweep
+                # clean / past-grace worktrees (pre-existing ones too), report the inventory.
+                _worktree_gc.service_worktrees(api_base, cid, _worktree_gc.STATE, project_cwd,
+                                               live_workers=live_workers,
+                                               live_residents=live_residents, previews=previews,
+                                               quiet=args.quiet, dry_run=args.dry_run)
                 tick(api_base, cid, dry_run=args.dry_run, cooldown=args.cooldown,
                      min_idle=args.min_idle, quiet=args.quiet,
                      lease_ttl=getattr(args, "lease_ttl", 1200.0),
@@ -231,11 +269,21 @@ def cmd_notifier(args, *, services) -> None:
             except Exception as e:  # a daemon must not die on a transient error
                 if not args.quiet:
                     print(f"[notifier] tick error (continuing): {e}", file=sys.stderr)
-            slept = 0.0
-            while slept < args.interval and not stop["flag"]:
-                time.sleep(min(0.25, args.interval - slept))
-                slept += 0.25
+            # Live chat: stream live logs during the idle gap and end it early on a human
+            # turn or a finished reply (notifier_fast_lane) instead of a blind sleep.
+            idle_wait(
+                args.interval,
+                stop,
+                live_workers=live_workers,
+                live_residents=live_residents,
+                pump=lambda w: services._pump_one(api_base, w.get("agent_id") or "", w),
+                wake=turn_watcher.wake if turn_watcher else None,
+                sleep=time.sleep,
+            )
     finally:
+        if turn_watcher:
+            turn_watcher.stop()
+        _preview.stop_all(api_base, previews)
         try:
             if pid_file.read_text().strip() == str(os.getpid()):
                 pid_file.unlink()

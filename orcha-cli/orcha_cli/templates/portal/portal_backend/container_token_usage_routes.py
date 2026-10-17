@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
@@ -72,6 +73,8 @@ def container_token_usage(cid: str, request: Request):
         require_container(cur, cid)
         # Access model: reads are project-isolated (trusted non-member 403).
         require_member_read(cur, request, cid)
+        since_5h = sql.ago(5 * 3600)
+        since_7d = sql.ago(7 * 86400)
         cur.execute(
             f"""WITH r AS (
                    SELECT wr.ended_at,
@@ -85,28 +88,28 @@ def container_token_usage(cid: str, request: Request):
                       AND {MEASURED_USAGE}
                )
                SELECT %s AS win,
-                      count(*) FILTER (WHERE ended_at >= now() - interval '5 hours')  AS runs,
-                      COALESCE(sum(it)  FILTER (WHERE ended_at >= now() - interval '5 hours'),0) AS it,
-                      COALESCE(sum(ot)  FILTER (WHERE ended_at >= now() - interval '5 hours'),0) AS ot,
-                      COALESCE(sum(crt) FILTER (WHERE ended_at >= now() - interval '5 hours'),0) AS crt,
-                      COALESCE(sum(cct) FILTER (WHERE ended_at >= now() - interval '5 hours'),0) AS cct,
-                      COALESCE(sum(cost) FILTER (WHERE ended_at >= now() - interval '5 hours'),0) AS cost
+                      count(*) FILTER (WHERE ended_at >= %s)  AS runs,
+                      COALESCE(sum(it)  FILTER (WHERE ended_at >= %s),0) AS it,
+                      COALESCE(sum(ot)  FILTER (WHERE ended_at >= %s),0) AS ot,
+                      COALESCE(sum(crt) FILTER (WHERE ended_at >= %s),0) AS crt,
+                      COALESCE(sum(cct) FILTER (WHERE ended_at >= %s),0) AS cct,
+                      COALESCE(sum(cost) FILTER (WHERE ended_at >= %s),0) AS cost
                  FROM r
                UNION ALL
                SELECT '7d',
-                      count(*) FILTER (WHERE ended_at >= now() - interval '7 days'),
-                      COALESCE(sum(it)  FILTER (WHERE ended_at >= now() - interval '7 days'),0),
-                      COALESCE(sum(ot)  FILTER (WHERE ended_at >= now() - interval '7 days'),0),
-                      COALESCE(sum(crt) FILTER (WHERE ended_at >= now() - interval '7 days'),0),
-                      COALESCE(sum(cct) FILTER (WHERE ended_at >= now() - interval '7 days'),0),
-                      COALESCE(sum(cost) FILTER (WHERE ended_at >= now() - interval '7 days'),0)
+                      count(*) FILTER (WHERE ended_at >= %s),
+                      COALESCE(sum(it)  FILTER (WHERE ended_at >= %s),0),
+                      COALESCE(sum(ot)  FILTER (WHERE ended_at >= %s),0),
+                      COALESCE(sum(crt) FILTER (WHERE ended_at >= %s),0),
+                      COALESCE(sum(cct) FILTER (WHERE ended_at >= %s),0),
+                      COALESCE(sum(cost) FILTER (WHERE ended_at >= %s),0)
                  FROM r
                UNION ALL
                SELECT 'all', count(*),
                       COALESCE(sum(it),0), COALESCE(sum(ot),0), COALESCE(sum(crt),0),
                       COALESCE(sum(cct),0), COALESCE(sum(cost),0)
                  FROM r""",
-            (cid, "5h"),
+            (cid, "5h", *([since_5h] * 6), *([since_7d] * 6)),
         )
         rows = {row["win"]: row for row in cur.fetchall()}
         windows = {
@@ -117,7 +120,7 @@ def container_token_usage(cid: str, request: Request):
 
         cur.execute(
             f"""SELECT a.id AS agent_id, a.alias,
-                      count(wr.*) AS runs,
+                      count(wr.run_id) AS runs,
                       COALESCE(sum(COALESCE(wr.input_tokens,0)+COALESCE(wr.output_tokens,0)
                                +COALESCE(wr.cache_read_input_tokens,0)
                                +COALESCE(wr.cache_creation_input_tokens,0)),0) AS total_tokens,

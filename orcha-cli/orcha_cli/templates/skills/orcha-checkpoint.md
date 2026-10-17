@@ -25,6 +25,15 @@ User arguments: `$ARGUMENTS`
    curl -fsS "<api_base_url>/api/agents/<agent_id>/outbox?status=answered"
    ```
 
+   **`agent_payload` — instructions addressed to YOU.** A row may carry `agent_payload` next to
+   `payload`. `payload` is the human-readable ask (what a person sees in the portal);
+   `agent_payload`, when non-null, is the FULL text addressed to you — e.g. a code-thread question's
+   anchor (`[code thread — teach] repo@sha path:lines`), the lesson format to answer in, and the
+   exact reply endpoint (`reply via POST /api/code/threads/<id>/messages …`). Read and follow
+   `agent_payload` in full whenever it is present: answer the way it says (a code-thread question is
+   answered IN ITS THREAD, not with `/orcha-respond` — posting there records the answer on the
+   request automatically). Treat it as the request text; never show it to a person as their ask.
+
 5. **Act, where reasonable.** For each:
 
    **incoming open** request:

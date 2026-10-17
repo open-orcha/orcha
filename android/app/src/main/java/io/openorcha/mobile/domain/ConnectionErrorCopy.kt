@@ -21,18 +21,18 @@ object ConnectionErrorCopy {
         // app-side problem. Keep the word "reach" out of this copy so the connect
         // screen shows a plain banner, not the unreachable checklist.
         if (isDataShapeError(err)) {
-            return "This app version couldn't read part of Orcha's reply. Your Orcha and network are fine — update the app to the latest version."
+            return "This app version couldn't read part of Embodent's reply. Your Embodent and network are fine — update the app to the latest version."
         }
         val message = err?.message.orEmpty()
         return when {
             message.contains("403") -> "This action is not allowed for the paired human."
-            message.contains("409") -> "Orcha rejected this action because the item changed. Refresh and try again."
-            message.contains("422") -> "Orcha needs more information for this action."
+            message.contains("409") -> "Embodent rejected this action because the item changed. Refresh and try again."
+            message.contains("422") -> "Embodent needs more information for this action."
             message.isNotBlank() && message.length < 140 -> message
             // Address-neutral, iOS `AppModel.friendly(_:)` parity: this fires for both a
             // local self-host address and a cloud/remote one, so it names neither Wi-Fi
             // nor a laptop specifically.
-            else -> "Could not reach Orcha at this address. Check the address and that your Orcha is up."
+            else -> "Could not reach Embodent at this address. Check the address and that your Embodent is up."
         }
     }
 

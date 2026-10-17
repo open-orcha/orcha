@@ -87,6 +87,9 @@ export interface GhPullDetail extends GhPullRow {
   files?: GhFiles;
   comments_count?: number;
   review_comments_count?: number;
+  /** optional: conversation comments when the backend includes them (the
+   *  hub route currently sends counts only — the UI links out then). */
+  comments?: GhComment[];
 }
 export interface GhIssueDetail extends GhIssueRow {
   state?: string | null;
@@ -127,7 +130,10 @@ export interface GhError {
   // "local_source" — Orcha Cloud local run, Addendum 2: the bound repo is
   // the local git working tree, not GitHub, so issues/PRs/checks degrade
   // honestly (browse + Code Space keep working; only the hub is affected).
-  kind: "not_connected" | "rate_limited" | "not_found" | "error" | "local_source";
+  // "no_access" — V2: an HTTP 403 that is NOT a rate limit (token missing
+  // the repo scope / not granted this repo). Its recovery is "Check GitHub
+  // access", never "wait a minute".
+  kind: "not_connected" | "rate_limited" | "no_access" | "not_found" | "error" | "local_source";
   status?: number;
   detail?: string | null;
   // local-binding + GitHub-origin fall-through — see GhListPayload's docstring.
@@ -143,6 +149,20 @@ export type GhItem = GhIssueRow | GhPullRow;
 
 /* ---- error classifiers (github-render.js verbatim) ------------------------ */
 type GhErrorBody = { reason?: string; detail?: string; origin_detected?: string | null };
+
+/** V2: a 403 is only a rate limit when the body says so (reason or wording);
+ *  otherwise it's a permissions problem ("repo scope missing", "Resource not
+ *  accessible by personal access token"), which needs a different recovery. */
+export function isRateLimitBody(body: GhErrorBody | null): boolean {
+  if (!body) return false;
+  if (body.reason === "rate_limited") return true;
+  return /rate.?limit|secondary limit|abuse/i.test(body.detail || "");
+}
+function forbidden(status: number, body: GhErrorBody | null): GhError {
+  const detail = (body && body.detail) || null;
+  if (status === 429 || isRateLimitBody(body)) return { kind: "rate_limited", status, detail };
+  return { kind: "no_access", status, detail };
+}
 export function classifyError(status: number, body: GhErrorBody | null): GhError {
   // Orcha Cloud local run, Addendum 2: a local-bound repo answers the hub
   // endpoints with reason:"local_source" (HTTP 200, available:false) — this
@@ -153,7 +173,7 @@ export function classifyError(status: number, body: GhErrorBody | null): GhError
              originDetected: (body && body.origin_detected) ?? null };
   }
   if (status === 404) return { kind: "not_connected", status, detail: (body && body.detail) || null };
-  if (status === 403 || status === 429) return { kind: "rate_limited", status, detail: (body && body.detail) || null };
+  if (status === 403 || status === 429) return forbidden(status, body);
   return { kind: "error", status, detail: (body && body.detail) || null };
 }
 // Detail 404s are number-scoped (`reason:"not_found"`), distinct from the list
@@ -166,9 +186,10 @@ export function classifyDetailError(status: number, body: GhErrorBody | null): G
   }
   if (reason === "not_found") return { kind: "not_found", status, detail: (body && body.detail) || null };
   if (reason === "repo_not_connected") return { kind: "not_connected", status, detail: (body && body.detail) || null };
+  if (reason === "no_token") return { kind: "no_access", status, detail: (body && body.detail) || "No GitHub token is set for this project — add one in Settings › Integrations." };
   if (reason === "rate_limited") return { kind: "rate_limited", status, detail: (body && body.detail) || null };
   if (status === 404) return { kind: "not_found", status, detail: (body && body.detail) || null };
-  if (status === 403 || status === 429) return { kind: "rate_limited", status, detail: (body && body.detail) || null };
+  if (status === 403 || status === 429) return forbidden(status, body);
   return { kind: "error", status, detail: (body && body.detail) || null };
 }
 
@@ -180,8 +201,89 @@ export function isLocalSourcePayload(body: { available?: boolean; reason?: strin
   return !!body && body.available === false && body.reason === "local_source";
 }
 
+/** D4: a bare backend reason code ("unreachable", "github_error") is never
+ *  shown raw — it becomes a plain sentence; unknown codes fall back to null
+ *  so the caller's generic copy renders instead. */
+function reasonCopy(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "unreachable": return "GitHub didn't respond. Check the connection and try again.";
+    case "github_error": return "GitHub returned an error. Try again in a moment.";
+    default: return null;
+  }
+}
+
+/** V2 (G-08): the hub/browse endpoints answer HTTP 200 with
+ * `{available:false, reason, detail, repo?}` for EVERY graceful off-state
+ * (github_hub_routes `_error_payload` / `_not_connected`), not only
+ * local_source. Before V2 a rate-limited or unreachable list rendered as an
+ * empty "No open issues." — unknown shown as zero. This maps the body-level
+ * reason onto the same GhError ladder the status-code classifiers use, so the
+ * caller renders the real state (with a recovery action) instead.
+ *
+ * Returns null for an available payload (or a non-object body), so callers can
+ * write `const err = unavailableError(body); if (err) …`. `scope: "item"` reads
+ * a 404-ish `not_found` as the item being gone (detail routes, file reads);
+ * `"repo"` never produces not_found. */
+export function unavailableError(
+  body: { available?: boolean; reason?: string | null; detail?: string | null; origin_detected?: string | null } | null | undefined,
+  httpStatus = 200,
+  scope: "repo" | "item" = "repo",
+): GhError | null {
+  if (!body || typeof body !== "object" || body.available !== false) return null;
+  const detail = body.detail || null;
+  // A body-level {available:false} rides on an HTTP 200 — that status is not
+  // an error code, so it is never carried (the UI used to print "Couldn't
+  // load from GitHub (200)"). Real non-2xx statuses still pass through.
+  const status = httpStatus >= 400 ? httpStatus : undefined;
+  switch (body.reason) {
+    case "local_source":
+      return { kind: "local_source", status, detail, originDetected: body.origin_detected ?? null };
+    case "repo_not_connected":
+      return { kind: "not_connected", status, detail };
+    case "no_token":
+      // G13/C18: a bound repo with no usable token — an access problem with a
+      // Settings fix, never "no repo connected"
+      return { kind: "no_access", status, detail: detail || "No GitHub token is set for this project — add one in Settings › Integrations." };
+    case "rate_limited":
+      return { kind: "rate_limited", status, detail };
+    case "not_found":
+      // C18: at repo scope a not_found is the REPOSITORY (or ref) missing — the
+      // server's generic "issue or pull request not found" wording is wrong here
+      return scope === "item"
+        ? { kind: "not_found", status, detail }
+        : { kind: "error", status, detail: "Repository or ref not found — it may have been renamed, deleted, or made private." };
+    default:
+      // github_error / unreachable / anything newer: a real, retryable error.
+      return { kind: "error", status, detail: detail || reasonCopy(body.reason) };
+  }
+}
+
 /* ---- merge chip states / dispatch labels ---------------------------------- */
 export const CLEAN_STATES: Record<string, 1> = { clean: 1, has_hooks: 1 };
+
+export type MergeTone = "ok" | "warn" | "danger" | "neutral";
+/** V2: GitHub's `mergeable_state` in its own terms. It describes whether the
+ *  branch CAN merge — never whether checks passed (a "clean" PR can still
+ *  show a pending check next to it), so the label never says "Checks passed". */
+export function mergeStateLabel(state: string | null | undefined, draft?: boolean): { label: string; tone: MergeTone; hint: string } {
+  if (draft || state === "draft") return { label: "Draft", tone: "neutral", hint: "Draft pull request — not ready to merge" };
+  switch (state) {
+    case "clean":
+    case "has_hooks":
+      return { label: "Mergeable", tone: "ok", hint: "No conflicts; required reviews and checks are satisfied" };
+    case "blocked":
+      // D8: blocked is red (the task "blocked" colour), never the amber of a warning
+      return { label: "Blocked", tone: "danger", hint: "Blocked by a required review or required check" };
+    case "dirty":
+      return { label: "Conflicts", tone: "danger", hint: "Merge conflicts with the base branch" };
+    case "unstable":
+      return { label: "Unstable", tone: "warn", hint: "Mergeable, but a non-required check is failing or pending" };
+    case "behind":
+      return { label: "Behind", tone: "neutral", hint: "The head branch is behind the base branch" };
+    default:
+      return { label: "Unknown", tone: "neutral", hint: "GitHub hasn't computed mergeability yet" };
+  }
+}
 
 // Founder decision: a PR's dispatch button reads "Fix ->", an issue's "Start ->".
 export function dispatchLabel(kind: GhKind): { label: string; tooltip: string } {
@@ -229,6 +331,33 @@ export function labelColors(label: GhLabel | string | null | undefined, theme: s
   const isLight = theme === "light";
   const textColor = isLight && hexLuminance(color) > 0.65 ? darkenHex(color, 0.45) : color;
   return { name, bg: `#${color}2e`, fg: `#${textColor}`, border: `#${color}55` };
+}
+
+/** V2: label chips are neutral with a small color dot (no saturated pills) —
+ *  the dot color is the repo's own sanitized label color, or the fallback. */
+export function labelDot(label: GhLabel | string | null | undefined): { name: string; color: string } {
+  const name = (label && typeof label === "object" && label.name) || (typeof label === "string" ? label : "") || "";
+  const color = sanitizeHexColor(label && typeof label === "object" ? label.color : null) || LABEL_FALLBACK_PALETTE[hueForLabel(name)];
+  return { name, color: "#" + color };
+}
+
+/** V2: the tracked-task chip shows the task's TITLE, never its raw id. */
+export function trackedTaskLabel(taskId: string, tasks: { id: string; title?: string | null }[] | null | undefined): string {
+  const t = (tasks || []).find((x) => x.id === taskId);
+  return (t && t.title && t.title.trim()) || "Tracked task";
+}
+
+/** V2: after a checks batch answers, numbers it omitted resolve to an empty
+ *  rollup ("No checks") instead of an endless "checks…" placeholder. */
+export function fillMissingChecks(
+  requested: number[],
+  incoming: Record<string, ChecksRollup> | null | undefined,
+): Record<number, ChecksRollup> {
+  const out: Record<number, ChecksRollup> = {};
+  const src = incoming || {};
+  Object.keys(src).forEach((k) => { out[Number(k)] = src[k]; });
+  requested.forEach((n) => { if (out[n] == null) out[n] = { passed: 0, failing: 0, pending: 0, total: 0, runs: [] }; });
+  return out;
 }
 
 /* ---- expertise-based "Assign to" suggestions (github-state.js verbatim) ---- */
@@ -280,11 +409,17 @@ const SUGGEST_WEIGHT_BODY = 1;
 const SUGGEST_ORCHESTRATOR_PENALTY = 0.4;
 const ORCHESTRATOR_ROLE_RE = /\borchestrat|\barchitect/i;
 
+// function words carry no role signal — without this an agent whose role is
+// "infrastructure and deployment" was "Suggested" because the PR said "and".
+const SUGGEST_STOPWORDS = new Set([
+  "and", "the", "for", "with", "of", "to", "in", "on", "an", "is", "it", "be", "as", "at", "by", "or",
+  "from", "this", "that", "are", "was", "not", "but", "into", "when", "per", "via", "all", "any",
+]);
 export function suggestTokenize(text: unknown): string[] {
   return String(text || "")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 1);
+    .filter((t) => t.length > 1 && !SUGGEST_STOPWORDS.has(t));
 }
 
 export function expandRoleVocabulary(role: string | null | undefined): Set<string> {
@@ -452,6 +587,40 @@ export function authorsFromRows(rows: GhPullRow[]): string[] {
   const seen = new Set<string>();
   rows.forEach((r) => { if (r.author_login) seen.add(r.author_login); });
   return Array.from(seen).sort((a, b) => a.localeCompare(b));
+}
+
+/* ---- Issues list: client-side label / assignee filter ---------------------
+   The issues endpoint returns every open issue in one payload, so these two
+   facets filter the loaded rows locally (no server round-trip). `assignee`
+   "__none" means "no assignee". */
+export interface IssuesFilter { label: string | null; assignee: string | null }
+export const EMPTY_ISSUES_FILTER: IssuesFilter = { label: null, assignee: null };
+export const UNASSIGNED = "__none";
+export function issueFacets(rows: GhIssueRow[]): { labels: { name: string; color: string; count: number }[]; assignees: { login: string; count: number }[]; unassigned: number } {
+  const labels = new Map<string, { name: string; color: string; count: number }>();
+  const people = new Map<string, number>();
+  let unassigned = 0;
+  rows.forEach((r) => {
+    (r.labels || []).forEach((l) => {
+      const d = labelDot(l);
+      if (!d.name) return;
+      const cur = labels.get(d.name);
+      if (cur) cur.count += 1; else labels.set(d.name, { ...d, count: 1 });
+    });
+    if (r.assignee) people.set(r.assignee, (people.get(r.assignee) || 0) + 1);
+    else unassigned += 1;
+  });
+  return {
+    labels: Array.from(labels.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+    assignees: Array.from(people.entries()).map(([login, count]) => ({ login, count })).sort((a, b) => b.count - a.count || a.login.localeCompare(b.login)),
+    unassigned,
+  };
+}
+export function matchesIssuesFilter(row: GhIssueRow, f: IssuesFilter): boolean {
+  if (f.label && !(row.labels || []).some((l) => labelDot(l).name === f.label)) return false;
+  if (f.assignee === UNASSIGNED) return !row.assignee;
+  if (f.assignee && row.assignee !== f.assignee) return false;
+  return true;
 }
 
 /* ---- misc constants ------------------------------------------------------- */

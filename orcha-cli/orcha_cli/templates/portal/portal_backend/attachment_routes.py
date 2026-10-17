@@ -3,7 +3,7 @@
 import asyncio
 import uuid
 
-from fastapi import File, HTTPException, UploadFile
+from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from portal_backend.application import app
@@ -29,7 +29,18 @@ from portal_backend.guards import (
     require_task as _require_task,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import require_member_read, trusted_actor
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
+
+
+def _member_read_for(cur, request: Request, table: str, row_id: str) -> None:
+    """TG-32 / C11b: an attachment download is a project-scoped read — resolve the
+    owning project and refuse a signed-in non-member (403). No header ⇒ unchanged."""
+    cur.execute(f"SELECT container_id FROM {table} WHERE id=%s", (row_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "attachment not found")
+    require_member_read(cur, request, str(row["container_id"]))
 
 
 def _default_max_attachment_bytes():
@@ -46,7 +57,7 @@ def configure_compatibility(max_attachment_bytes):
 
 
 @app.post("/api/tasks/{tid}/attachments", status_code=201)
-async def upload_attachment(tid: str, file: UploadFile = File(...)):
+async def upload_attachment(tid: str, request: Request, file: UploadFile = File(...)):
     """#301: upload ONE file to a task's local attachment store and return its ref.
 
     Two-step, mirroring Claude-Code/Codex pasted-image handling: the client uploads each
@@ -62,6 +73,9 @@ async def upload_attachment(tid: str, file: UploadFile = File(...)):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor() as (_, cur):
         t = _require_task(cur, tid)
+        # TG-32: uploading is a write — a signed-in viewer or non-member gets 403 (the
+        # same rule as posting the message the file rides on). Header-less lane unchanged.
+        trusted_actor(cur, request, str(t["container_id"]))
         _require_container_active(cur, str(t["container_id"]), None)
         llm_key = _container_llm_key(cur, str(t["container_id"]))
     display = _sanitize_attachment_name(file.filename or "file")
@@ -112,7 +126,7 @@ async def upload_attachment(tid: str, file: UploadFile = File(...)):
 
 
 @app.get("/api/tasks/{tid}/attachments/{stored_name}")
-def serve_attachment(tid: str, stored_name: str):
+def serve_attachment(tid: str, stored_name: str, request: Request):
     """#301: stream a stored attachment from disk. Path-traversal-safe (see
     _resolve_stored_attachment: the name is regex-gated and the resolved parent must equal the
     task's dir). ONLY raster images are served inline; every other allowed type is forced to
@@ -121,6 +135,8 @@ def serve_attachment(tid: str, stored_name: str):
     something executable."""
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        _member_read_for(cur, request, "tasks", tid)  # TG-32
     p = _resolve_stored_attachment(tid, stored_name)
     if p is None:
         raise HTTPException(404, "attachment not found")
@@ -141,7 +157,9 @@ def serve_attachment(tid: str, stored_name: str):
 
 
 @app.post("/api/conversations/{conv_id}/attachments", status_code=201)
-async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(...)):
+async def upload_conversation_attachment(
+    conv_id: str, request: Request, file: UploadFile = File(...)
+):
     """#338: upload ONE file to a conversation's local attachment store and return its ref.
 
     Exact mirror of the task-message upload (#301/#330) with a conversation-scoped dir: the client
@@ -157,6 +175,8 @@ async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(.
         conv = cur.fetchone()
         if not conv:
             raise HTTPException(404, f"conversation {conv_id} not found")
+        # C11b: write — viewer / non-member 403, header-less lane unchanged.
+        trusted_actor(cur, request, str(conv["container_id"]))
         _require_container_active(cur, str(conv["container_id"]), None)
         llm_key = _container_llm_key(cur, str(conv["container_id"]))
     display = _sanitize_attachment_name(file.filename or "file")
@@ -206,12 +226,14 @@ async def upload_conversation_attachment(conv_id: str, file: UploadFile = File(.
 
 
 @app.get("/api/conversations/{conv_id}/attachments/{stored_name}")
-def serve_conversation_attachment(conv_id: str, stored_name: str):
+def serve_conversation_attachment(conv_id: str, stored_name: str, request: Request):
     """#338: stream a stored conversation attachment from disk. Path-traversal-safe (see
     _resolve_stored_conv_attachment: the name is regex-gated and the resolved parent must equal
     the conversation's dir). Disposition + nosniff identical to the task serve route."""
     if not _valid_uuid(conv_id):
         raise HTTPException(400, "conversation_id is not a valid UUID")
+    with db_cursor() as (_, cur):
+        _member_read_for(cur, request, "conversations", conv_id)  # C11b
     p = _resolve_stored_conv_attachment(conv_id, stored_name)
     if p is None:
         raise HTTPException(404, "attachment not found")

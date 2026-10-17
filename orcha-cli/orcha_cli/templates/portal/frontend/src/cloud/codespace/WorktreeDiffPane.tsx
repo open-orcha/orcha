@@ -8,8 +8,11 @@
  * banner plus a "view file at HEAD" link back to the normal committed-file
  * viewer for the same path.
  */
+import { Button } from "../../components/primitives";
 import { useEffect, useRef, useState } from "react";
-import { FilesChanged } from "../../components/FilesChanged";
+import { FilesChanged, parseDiffFiles } from "../../components/FilesChanged";
+import { BinaryDiffView } from "../../components/filePreview/BinaryDiff";
+import { worktreeBlobSource } from "../../components/filePreview/sources";
 import { fetchWorktreeDiff, type WorktreeDiffPayload } from "./worktreeApi";
 
 export interface WorktreeDiffPaneProps {
@@ -35,24 +38,28 @@ export function WorktreeDiffPane({ cid, path, onViewAtHead }: WorktreeDiffPanePr
     <div className="cs-worktree-diff">
       <div className="cs-worktree-banner">
         <span className="cs-worktree-banner-label">Uncommitted changes</span>
-        <span className="cs-worktree-path mono">{path}</span>
+        <span className="cs-worktree-path mono" title={path}>{path}</span>
         <span className="grow" />
-        <button type="button" className="cs-worktree-head-link" onClick={onViewAtHead}>
-          view file at HEAD
-        </button>
+        <Button size="sm" variant="ghost" iconRight="arrow" className="cs-worktree-head-link" onClick={onViewAtHead}>
+          View file at HEAD
+        </Button>
       </div>
       {!payload ? (
-        <div className="none" style={{ padding: 10 }}>Loading diff…</div>
+        <div className="cs-empty-line" role="status">Loading diff…</div>
       ) : !payload.available ? (
-        <div className="none" style={{ padding: 10 }}>{payload.detail || "This diff is unavailable."}</div>
+        <div className="cs-empty-line">{payload.detail || "This diff is unavailable."}</div>
       ) : payload.binary ? (
-        <div className="muted" style={{ padding: 10, fontSize: 13 }}>Binary file not shown.</div>
+        // HEAD vs the working tree, previewed (images compare before/after)
+        <BinaryDiffView
+          file={{ path, status: parseDiffFiles(payload.diff || "")[0]?.status || "M" }}
+          source={worktreeBlobSource(cid)}
+        />
       ) : (
         <>
           {payload.truncated ? (
             <div className="rb-truncated-note muted">Diff truncated — showing a partial view.</div>
           ) : null}
-          <FilesChanged diff={payload.diff} />
+          <FilesChanged diff={payload.diff} blobSource={worktreeBlobSource(cid)} />
         </>
       )}
     </div>

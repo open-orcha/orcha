@@ -7,6 +7,8 @@ import os
 import pathlib
 import re
 
+from . import personal_session
+
 
 CONV_BLOCKED_SLASH = (
     "orcha-next",
@@ -29,6 +31,8 @@ def is_memory_write(tool_input: dict) -> bool:
 
 def poll_inbox(args, services) -> None:
     """Drain watcher-queued inbox and answered-outbox summaries."""
+    if personal_session.active():  # an agent's inbox is not the user's tab's business
+        return
     cwd = pathlib.Path.cwd()
     if not (cwd / ".claude" / "orcha.json").exists():
         return

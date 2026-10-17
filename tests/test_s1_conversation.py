@@ -161,17 +161,21 @@ def test_slash_shortcut_guarded_when_an_input_is_focused():
     """The global '/' search shortcut must NOT fire while the user is typing in a field
     (composer, reason box, any input/textarea/select/contenteditable) — else typing '/'
     steals the keystroke + focus into the search bar (#118 S4 follow-up)."""
-    shell = (FRONTEND / "shell" / "Shell.tsx").read_text()
-    assert "isContentEditable" in shell and "INPUT|TEXTAREA|SELECT" in shell, \
+    # V2: the shortcut lives in the persistent frame (shell/chrome.tsx) and the guard is
+    # the shared isEditingTarget helper (components/primitives/focus.ts), which also
+    # covers CodeMirror/xterm. Behaviour is covered in Vitest (shell/search/palette.test.tsx).
+    focus = (FRONTEND / "components" / "primitives" / "focus.ts").read_text()
+    assert "isContentEditable" in focus and "INPUT|TEXTAREA|SELECT" in focus, \
         "no editable-target guard helper"
-    assert 'e.key === "/" && !editing' in shell, \
+    chrome = (FRONTEND / "shell" / "chrome.tsx").read_text()
+    assert 'e.key === "/"' in chrome and "!isEditingTarget(" in chrome, \
         "the '/' shortcut isn't guarded against a focused input"
 
 
 def test_run_card_relabels_tmux_as_live_tab():
     """Feed display polish: the run-card wake_kind label shows 'live tab' for a tmux run
     (display-only — the stored wake_kind value is unchanged). Both run-card surfaces."""
-    for page in ("pages/agents/runlog.tsx", "pages/tasks/TasksPage.tsx"):
+    for page in ("pages/agents/runlog.tsx", "pages/tasks/TaskDetail.tsx"):
         src = (FRONTEND / page).read_text()
         assert 'run.wake_kind === "tmux" ? "live tab"' in src, \
             f"{page}: tmux not relabeled 'live tab' in the run card"

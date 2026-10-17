@@ -34,7 +34,7 @@ describe("ErrorBoundary", () => {
         </ErrorBoundary>
       </div>,
     );
-    expect(screen.getByText(/something broke here — reload pane/i)).toBeInTheDocument();
+    expect(screen.getByText(/something broke in this pane/i)).toBeInTheDocument();
     expect(screen.getByText(/reload content pane/i)).toBeInTheDocument();
     // the crash is CONTAINED — the sibling outside the boundary is untouched.
     expect(screen.getByTestId("sibling")).toBeInTheDocument();

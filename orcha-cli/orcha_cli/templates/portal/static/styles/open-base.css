@@ -196,13 +196,13 @@ svg.gl  { width: 13px; height: 13px; flex: none; }
 .brand .mark {
   width: 38px; height: 38px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
-  background: radial-gradient(120% 120% at 50% 30%, #0e2d33, #06171c);
+  background: #141516;
   border: 1px solid var(--border-2);
   box-shadow: var(--shadow-sm);
 }
 [data-theme="light"] .brand .mark,
-[data-theme="auto"] .brand .mark { background: radial-gradient(120% 120% at 50% 30%, #0c2c31, #0a2227); }
-.brand .mark svg { width: 27px; height: 27px; display: block; }
+[data-theme="auto"] .brand .mark { background: #141516; }
+.brand .mark svg { width: 24px; height: 24px; display: block; }
 .brand .word { font-size: 18px; font-weight: 720; letter-spacing: -.02em; line-height: 1; }
 .brand .word small { display: block; font-weight: 550; font-size: 10.5px; letter-spacing: .14em;
   text-transform: uppercase; color: var(--muted); margin-top: 4px; }
@@ -459,7 +459,7 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 .av { width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center;
   font-weight: 750; font-size: 13px; color: #07141a; letter-spacing: -.02em;
   box-shadow: var(--shadow-sm); position: relative; }
-.av.human { border-radius: 50%; box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--amber); }
+.av.human { border-radius: 50%; box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border-2); }
 .av.lg { width: 48px; height: 48px; border-radius: 14px; font-size: 19px; }
 .av.lg.human { border-radius: 50%; box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 4.5px var(--amber); }
 .av.sm { width: 24px; height: 24px; border-radius: 8px; font-size: 11px; }
@@ -491,9 +491,9 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 
 /* generic dense table */
 .tbl { width: 100%; border-collapse: collapse; }
-.tbl thead th { text-align: left; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+:where(.tbl thead th) { text-align: left; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
   color: var(--faint); font-weight: 650; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.tbl tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+:where(.tbl tbody td) { padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .tbl tbody tr { transition: background .1s; }
 .tbl tbody tr:hover { background: var(--hover); }
 .tbl tbody tr:last-child td { border-bottom: 0; }
@@ -525,7 +525,7 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
   color: var(--text-2); }
 .dlink:hover { color: var(--accent); }
 .dlink .av { width: 19px; height: 19px; border-radius: 6px; font-size: 9.5px; }
-.dlink .av.human { border-radius: 50%; box-shadow: 0 0 0 1px var(--bg), 0 0 0 2px var(--amber); }
+.dlink .av.human { border-radius: 50%; box-shadow: 0 0 0 1px var(--bg), 0 0 0 2px var(--border-2); }
 /* ISS-44: clickable URLs inside authored text (linkify) — accent, underlined, wrap long links */
 .lnk { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; word-break: break-word; }
 /* ISS-82: inline [task name] chip rendered in place of a bare task-id in authored text.
@@ -708,11 +708,11 @@ html[data-sidebar="collapsed"] .content { max-width: none; }
 .log .ln.t-subagent  { border-left-color: var(--violet); }  .log .ln.t-subagent .ty { color: var(--violet); }
 .log .ln.t-decision  { border-left-color: var(--amber); }   .log .ln.t-decision .ty { color: var(--amber); }
 .log .ln.t-error     { border-left-color: var(--danger); }  .log .ln.t-error  .ty { color: var(--danger); }  .log .ln.t-error .tx { color: var(--danger); }
-.log .ln.t-done      { border-left-color: var(--ok); }      .log .ln.t-done   .ty { color: var(--ok); }      .log .ln.t-done .tx { color: var(--ok); font-weight: 600; }
+.log .ln.t-done      { border-left-color: var(--border-2); } .log .ln.t-done   .ty { color: var(--text-2); }  .log .ln.t-done .tx { color: var(--text); font-weight: 600; }
 
 /* collapsible section divider in the stream */
 .log .sec { display: flex; align-items: center; gap: 8px; padding: 6px 15px; cursor: pointer;
-  color: var(--muted); font-family: "Inter", sans-serif; font-size: 11.5px; font-weight: 650;
+  color: var(--muted); font-family: var(--v2-font-sans); font-size: 11.5px; font-weight: 650;
   letter-spacing: .03em; text-transform: uppercase; background: var(--surface-2); border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; }
 .log .sec:hover { color: var(--text); }

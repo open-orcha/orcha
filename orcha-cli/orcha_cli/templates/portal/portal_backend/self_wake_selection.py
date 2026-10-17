@@ -14,7 +14,7 @@ def select_due_self_wake(
 ):
     """Return due flag, context, task id, and the resulting wake task id."""
     cur.execute(
-        """DELETE FROM agent_self_wake sw
+        """DELETE FROM agent_self_wake AS sw
            WHERE sw.agent_id=%s
              AND NOT EXISTS (
                SELECT 1

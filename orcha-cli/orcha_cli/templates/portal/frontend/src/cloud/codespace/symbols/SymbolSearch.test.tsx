@@ -57,6 +57,35 @@ describe("SymbolSearch", () => {
     expect(onNavigate).toHaveBeenCalledWith("b.ts", 7);
   });
 
+  it("C11: Enter opens the first result; ArrowDown+Enter the next (aria-activedescendant follows)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetch({
+      available: true, ref: "HEAD",
+      results: [
+        { name: "helper", kind: "function", path: "src/server.py", line: 5 },
+        { name: "helper2", kind: "function", path: "src/server.py", line: 9 },
+      ],
+    });
+    const onNavigate = vi.fn();
+    render(<SymbolSearch cid="c1" gitRef="HEAD" onNavigate={onNavigate} />);
+    const input = screen.getByRole("combobox", { name: "Search symbols" });
+    fireEvent.change(input, { target: { value: "helper" } });
+    await act(async () => { vi.advanceTimersByTime(300); });
+    await screen.findByText("helper2");
+    const opts = screen.getAllByRole("option");
+    expect(opts).toHaveLength(2);
+    expect(input.getAttribute("aria-activedescendant")).toBe(opts[0].id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onNavigate).toHaveBeenLastCalledWith("src/server.py", 5);
+    // reopen and move down
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBe(screen.getAllByRole("option")[1].id);
+    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onNavigate).toHaveBeenLastCalledWith("src/server.py", 9);
+  });
+
   it("shows an empty state when the query has no matches", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     stubFetch({ available: true, ref: "HEAD", results: [] });

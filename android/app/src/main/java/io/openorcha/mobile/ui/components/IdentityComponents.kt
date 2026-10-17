@@ -34,6 +34,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -59,93 +64,100 @@ enum class AvatarSize(val dp: Dp, val fontSp: Int, val radius: Dp) {
     Sm(30.dp, 12, 9.dp), Md(40.dp, 15, 12.dp), Lg(52.dp, 19, 15.dp)
 }
 
+/**
+ * Linear avatar: round for everyone, deterministic hue from the alias (same djb2 hue as
+ * iOS / [LAvatar]), ✦ badge for AI agents. Delegates to [LAvatar].
+ */
 @Composable
 fun Avatar(alias: String, human: Boolean, size: AvatarSize = AvatarSize.Md, modifier: Modifier = Modifier) {
-    val p = Orcha.palette
-    val shape = if (human) CircleShape else RoundedCornerShape(size.radius)
-    Box(
-        modifier
-            .size(size.dp)
-            .background(if (human) p.violetSoft else p.accentSoft, shape)
-            .border(BorderStroke(1.dp, if (human) p.violetLine else p.accentLine), shape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            alias.take(1).uppercase(),
-            color = if (human) p.violet else p.accent,
-            fontWeight = FontWeight.W800,
-            fontSize = size.fontSp.sp,
-        )
-    }
+    LAvatar(name = alias, modifier = modifier, isAI = !human, size = size.dp)
 }
 
-/** `.brandmark` — the real orca glyph on the radial brand tile (foundations §5). */
+/**
+ * Brand tile — the Embodent mark (light | grey halves) on its near-black #121314 rounded
+ * tile in both themes, so the light half never disappears on a light background.
+ */
 @Composable
 fun BrandMark(size: Dp = 34.dp, modifier: Modifier = Modifier) {
+    val p = Orcha.palette
+    val shape = RoundedCornerShape(size * 9f / 34f)
     Box(
         modifier
             .size(size)
-            .background(
-                Brush.radialGradient(listOf(Color(0xFF0E2D33), Color(0xFF06171C))),
-                RoundedCornerShape(size * 10f / 34f),
-            ),
+            .background(Color(0xFF121314), shape)
+            .border(BorderStroke(1.dp, p.border), shape),
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.foundation.Image(
-            painter = androidx.compose.ui.res.painterResource(io.openorcha.mobile.R.drawable.orca_glyph),
-            contentDescription = "Orcha",
-            modifier = Modifier.size(size * 24f / 34f),
+            painter = androidx.compose.ui.res.painterResource(io.openorcha.mobile.R.drawable.embodent_mark),
+            contentDescription = "Embodent",
+            modifier = Modifier.size(size * 0.9f),
         )
     }
 }
 
-/* ---------- stat tiles (`.stat`: 20/800 value + 10.5/700 uppercase key) ---------- */
+/* ---------- stat tiles (Linear: 20/600 value + 13 muted label, hairline card) ---------- */
 
 @Composable
 fun StatTile(value: String, label: String, tint: Color, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+    val p = Orcha.palette
+    val shape = RoundedCornerShape(p.radiusCard.dp)
     val base = modifier
-        .background(Orcha.palette.surface, RoundedCornerShape(12.dp))
-        .border(BorderStroke(1.dp, Orcha.palette.border), RoundedCornerShape(12.dp))
+        .clip(shape)
+        .background(p.surface, shape)
+        .border(BorderStroke(1.dp, p.border), shape)
         .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-    Column(base.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(value, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.W800, letterSpacing = (-0.4).sp), color = tint)
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = Orcha.palette.muted, maxLines = 1)
+    Column(
+        base.padding(horizontal = 12.dp, vertical = 10.dp).semantics(mergeDescendants = true) {},
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(value, style = ltype(LType.Title), color = tint)
+        Text(label, style = ltype(LType.Meta), color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
-/* ---------- banners (`.banner.warn/.danger/.info`) ---------- */
+/* ---------- banners (Linear: calm surface card, tinted leading dot, accent action) ---------- */
 
 enum class BannerKind { Warn, Danger, Info }
 
 @Composable
 fun Banner(kind: BannerKind, text: String, modifier: Modifier = Modifier, action: String? = null, onAction: (() -> Unit)? = null) {
+    val p = Orcha.palette
     val tint = when (kind) {
-        BannerKind.Warn -> Orcha.palette.tint("warn")
-        BannerKind.Danger -> Orcha.palette.tint("danger")
-        BannerKind.Info -> Orcha.palette.tint("info")
+        BannerKind.Warn -> p.tint("warn")
+        BannerKind.Danger -> p.tint("danger")
+        BannerKind.Info -> p.tint("info")
     }
+    val shape = RoundedCornerShape(p.radiusCard.dp)
     Row(
         modifier
             .fillMaxWidth()
-            .background(tint.soft, RoundedCornerShape(12.dp))
-            .border(BorderStroke(1.dp, tint.line), RoundedCornerShape(12.dp))
-            .padding(horizontal = 13.dp, vertical = 10.dp),
+            .background(p.surface, shape)
+            .border(BorderStroke(1.dp, p.border), shape)
+            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+            .heightIn(min = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Box(Modifier.size(8.dp).background(tint.color, CircleShape))
         Text(
             text,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W600),
-            color = tint.color,
-            modifier = Modifier.weight(1f),
+            style = ltype(LType.Meta).copy(fontWeight = FontWeight.Medium),
+            color = p.text,
+            modifier = Modifier.weight(1f).padding(vertical = 6.dp),
         )
         if (action != null && onAction != null) {
-            Text(
-                action,
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.W700),
-                color = tint.color,
-                modifier = Modifier.clickable(onClick = onAction),
-            )
+            Box(
+                Modifier
+                    .defaultMinSize(minHeight = 48.dp)
+                    .clickable(role = Role.Button, onClick = onAction)
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(action, style = ltype(LType.Meta).copy(fontWeight = FontWeight.SemiBold), color = p.accent)
+            }
+        } else {
+            Spacer(Modifier.width(8.dp))
         }
     }
 }
@@ -168,7 +180,7 @@ fun ConnChip(state: String, modifier: Modifier = Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         val alpha = if (state.lowercase() in setOf("live", "active", "polling")) pulseAlpha() else 1f
         Box(Modifier.size(7.dp).alpha(alpha).background(color, CircleShape))
-        Text(word, style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 0.2.sp), color = color)
+        Text(word, style = ltype(LType.Meta).copy(fontWeight = FontWeight.Medium), color = p.text2)
     }
 }
 
@@ -181,8 +193,7 @@ fun Skeleton(height: Dp, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .height(height)
             .alpha(pulseAlpha())
-            .background(Orcha.palette.surface2, RoundedCornerShape(12.dp))
-            .border(BorderStroke(1.dp, Orcha.palette.border), RoundedCornerShape(12.dp)),
+            .background(Orcha.palette.surface2, RoundedCornerShape(Orcha.palette.radiusCard.dp)),
     )
 }
 

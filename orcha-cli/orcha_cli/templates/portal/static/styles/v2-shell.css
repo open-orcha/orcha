@@ -1,0 +1,926 @@
+/* ============================================================================
+   Orcha V2 — shell: persistent project sidebar, compact header, execution
+   controls, connection state, command palette, narrow-width drawer and the
+   desktop embedded mode (<html data-embed="desktop">).
+   ========================================================================== */
+
+/* no document-level horizontal overflow at phone widths (a 2 px bleed came
+   from badge/fade pseudo-elements); clip, not hidden, so sticky still works */
+html, .v2-app { overflow-x: clip; }
+:root { --v2-sidebar-w: var(--v2-sidebar-user-w, var(--v2-sidebar-w-default)); --v2-ptabs-h: 0px; /* D5: the project tabs live INSIDE the header block now */ }
+/* the user's dragged width lives in --v2-sidebar-user-w (inline on <html>), so
+   the rail rule below always wins while collapsed (QA blocker: 248 px "rail") */
+html[data-sidebar="collapsed"] { --v2-sidebar-w: var(--v2-sidebar-rail) !important; }
+
+/* ---- frame (D5): sidebar on the window tone + an INSET RAISED PANEL ------------
+   Wide (> 900 px): the panel is inset --v2-frame-gap from the window's top/
+   right/bottom and from the sidebar, 1 px hairline, --v2-panel-radius, clipped;
+   the header block stays put and ONLY #main (.v2-content) scrolls.
+   Narrow (<= 900 px, drawer): full-bleed panel, the document scrolls and the
+   header block is sticky (see the responsive block below).
+   Page CSS hooks (set here / by Shell.tsx):
+     --v2-chrome-h   measured height of the header block (header + bars + toolbar slot)
+     --v2-content-h  visible height of the content viewport (fill-height regions)
+     --v2-sticky-top offset for position:sticky inside page content (0 when the panel scrolls) */
+:root {
+  --v2-panel-h: calc(100dvh - 2 * var(--v2-frame-gap));
+  --v2-content-h: calc(var(--v2-panel-h) - 2px - var(--v2-chrome-h, var(--v2-header-h)));
+  --v2-sticky-top: 0px;
+}
+.v2-app {
+  display: grid; grid-template-columns: var(--v2-sidebar-w) minmax(0, 1fr);
+  min-height: 100vh; background: var(--v2-window, var(--v2-canvas));
+}
+.v2-frame-main { min-width: 0; display: flex; flex-direction: column; }
+.v2-main {
+  position: relative; display: flex; flex-direction: column; min-width: 0; flex: none; min-height: 0;
+  height: var(--v2-panel-h); margin: var(--v2-frame-gap) var(--v2-frame-gap) var(--v2-frame-gap) 0;
+  background: var(--v2-panel, var(--v2-surface)); border: 1px solid var(--v2-panel-border, var(--v2-border));
+  border-radius: var(--v2-panel-radius, var(--v2-radius-panel)); overflow: hidden;
+}
+.v2-panel-top { flex: none; position: relative; z-index: var(--v2-z-header); background: var(--v2-panel, var(--v2-surface)); }
+.v2-content {
+  --v2-content-px: var(--v2-space-6); --v2-content-pt: var(--v2-space-5);
+  padding: var(--v2-content-pt) var(--v2-content-px) var(--v2-space-8); width: 100%; max-width: none;
+  flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--v2-border-strong) transparent;
+}
+.v2-content.is-flush { --v2-content-px: 0px; --v2-content-pt: 0px; padding: 0; }
+.v2-content:focus { outline: none; }
+.v2-content:focus-visible { box-shadow: var(--v2-focus-ring-inset); }
+/* the filter-pill row slot (<Shell toolbar>) — same gutters as the header */
+.v2-toolbar-slot { padding: 8px var(--v2-panel-px, var(--v2-space-4)); }
+.v2-toolbar-slot > .v2-filterbar { padding: 0; border: 0; min-height: var(--v2-pill-h, 28px); }
+
+/* embedded in the desktop host: the HOST owns the sidebar → header + content only */
+html[data-embed="desktop"] .v2-app { grid-template-columns: minmax(0, 1fr); }
+html[data-embed="desktop"] .v2-main { margin-left: var(--v2-frame-gap); }
+html[data-embed="desktop"] .v2-sidebar,
+html[data-embed="desktop"] .v2-hamburger { display: none !important; }
+
+/* ---- sidebar ------------------------------------------------------------- */
+/* Linear layout (D1/D3/D5/D7): workspace switcher + circular Search/Compose ·
+   Needs you / All projects / Settings · Favorites ▾ · Projects ▾ + · Live
+   agents ▾ · identity/help/rail footer. Sits directly on the window tone with
+   no divider (D5). Rows are neutral: hover/selected backgrounds only, no
+   accent stripes (D3). Owned by the "sidebar" foundation agent. */
+.v2-sidebar {
+  position: sticky; top: 0; z-index: var(--v2-z-sidebar); height: 100vh; align-self: start;
+  display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  padding: 10px 8px 8px 10px;
+  background: var(--v2-sidebar); border-right: 0;
+  --v2-av-ring: var(--v2-sidebar);
+  --v2-sb-row-h: 28px;
+  font-size: 13px;
+}
+.v2-sidebar a { color: inherit; text-decoration: none; }
+
+/* 1 · workspace row: switcher · search ○ · compose ○ */
+.v2-sb-top { display: flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 0 8px; }
+.v2-sb-switch {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; height: 30px; padding: 0 8px 0 5px;
+  border: 0; border-radius: var(--v2-radius-control); background: transparent; color: var(--v2-text); cursor: pointer; font: inherit;
+}
+.v2-sb-switch:hover, .v2-sb-switch[aria-expanded="true"] { background: var(--v2-hover); }
+.v2-sb-mark { width: 20px; height: 20px; display: grid; place-items: center; flex: none; }
+.v2-sb-mark svg { width: 18px !important; height: 18px !important; }
+.v2-sb-word { font-weight: var(--v2-fw-semibold); font-size: 14px; letter-spacing: -0.01em; white-space: nowrap; }
+.v2-sb-switch .v2-chev { width: 12px; height: 12px; color: var(--v2-text-3); flex: none; }
+
+/* circular 28 px icon buttons (search, compose, help, rail toggle) */
+.v2-sb-circle {
+  position: relative; display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0;
+  border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--v2-text-2); cursor: pointer;
+  transition: background var(--v2-dur-fast) var(--v2-ease), color var(--v2-dur-fast) var(--v2-ease);
+}
+.v2-sb-circle .v2-ico { width: 15px; height: 15px; }
+.v2-sb-circle.is-bordered { border-color: var(--v2-border-strong); background: var(--v2-surface); color: var(--v2-text); }
+.v2-sb-circle:hover { background: var(--v2-hover); color: var(--v2-text); }
+.v2-sb-circle.is-bordered:hover { background: var(--v2-raised); }
+.v2-sb-circle[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.v2-sb-circle[aria-disabled="true"]:hover { background: var(--v2-surface); color: var(--v2-text); }
+
+.v2-sb-drawer-close, .v2-sb-add, .v2-sb-more {
+  display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: var(--v2-radius-control); background: transparent; color: var(--v2-text-3); cursor: pointer;
+}
+.v2-sb-drawer-close { width: 28px; height: 28px; border-radius: 50%; }
+.v2-sb-drawer-close:hover, .v2-sb-add:hover, .v2-sb-more:hover { background: var(--v2-hover); color: var(--v2-text); }
+.v2-sb-drawer-close { display: none; }
+.v2-sb-add .v2-ico, .v2-sb-more .v2-ico { width: 14px; height: 14px; }
+
+/* 2 · inbox-style top items */
+.v2-sb-nav { display: flex; flex-direction: column; gap: 1px; }
+.v2-sb-link {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--v2-sb-row-h); padding: 0 8px;
+  border: 0; border-radius: var(--v2-radius-control); background: transparent; color: var(--v2-text-2);
+  font: inherit; font-size: 13px; font-weight: var(--v2-fw-medium); text-align: left; cursor: pointer;
+}
+.v2-sb-link:hover { background: var(--v2-hover); color: var(--v2-text); }
+.v2-sb-link .v2-ico { width: 16px; height: 16px; color: var(--v2-text-3); flex: none; }
+.v2-sb-needs-n {
+  flex: none; min-width: 18px; padding: 0 2px; text-align: right;
+  font-size: 12px; line-height: 18px; font-weight: var(--v2-fw-medium); font-variant-numeric: tabular-nums;
+  color: var(--v2-text-3); /* counts are neutral (Linear); the number is the signal */
+}
+/* selected = background only; the focus ring (box-shadow) stays free for :focus-visible */
+.v2-sb-link.is-current { background: var(--v2-selected); color: var(--v2-text); }
+.v2-sb-link.is-current .v2-ico { color: var(--v2-text); }
+
+/* scroll area + section heads ("Favorites ▾", "Projects ▾ +", "Live agents ▾") */
+.v2-sb-scroll {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; margin: 10px -4px 0; padding: 0 4px 16px;
+  /* bottom fade: rows cut by the footer read as "more below" */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  scrollbar-width: none;
+}
+.v2-sb-scroll:hover { scrollbar-width: thin; }
+.v2-sb-sec + .v2-sb-sec { margin-top: 14px; }
+.v2-sb-h { display: flex; align-items: center; gap: 2px; height: 26px; padding: 0 2px 0 0; font-size: 12px; color: var(--v2-text-3); font-weight: var(--v2-fw-medium); }
+.v2-sb-h-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px 0 8px; margin-left: 0;
+  border: 0; border-radius: var(--v2-radius-control); background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.v2-sb-h-btn:hover { background: var(--v2-hover); color: var(--v2-text-2); }
+.v2-sb-caret { flex: none; opacity: 0.8; transition: transform var(--v2-dur-fast) var(--v2-ease); }
+.v2-sb-caret.is-closed { transform: rotate(-90deg); }
+.v2-sb-h-meta { font-variant-numeric: tabular-nums; padding-right: 8px; }
+.v2-sb-h .v2-sb-add { opacity: 0; }
+.v2-sb-h:hover .v2-sb-add, .v2-sb-h .v2-sb-add:focus-visible { opacity: 1; }
+@media (hover: none) { .v2-sb-h .v2-sb-add { opacity: 1; } }
+.v2-sb-projects, .v2-sb-proj-agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+/* D14: ONE rhythm between project groups, open tree or not (wave-4 review:
+   collapsed rows sat 1 px apart while an open group got 6 / 12 px) */
+.v2-sb-projects { gap: 6px; }
+
+/* 3/4 · D14 project tree (Orca, images/22): [caret gutter] icon · name (14 px,
+   semibold) · attention count · ⋯ — the caret shows whenever the row has
+   children, the ⋯ on hover / focus (a fixed slot: nothing jumps). Indent steps
+   are 16 px per level; project groups with an open tree get 12 px of air. */
+.v2-sb-proj { --sb-gutter: 18px; }
+.v2-sb-proj.has-tree { margin: 0; }
+.v2-sb-proj-row { position: relative; display: flex; align-items: center; gap: 0; min-height: var(--v2-tree-row-h, 32px); padding-right: 2px; border-radius: var(--v2-radius-control); }
+.v2-sb-proj-row:hover { background: var(--v2-hover); }
+/* current project: bright text everywhere; the selected background only
+   while its Overview is the page (one "you are here" highlight at a time) */
+.v2-sb-proj.is-selected > .v2-sb-proj-row:has(.v2-sb-proj-link[aria-current="page"]) { background: var(--v2-selected); }
+html[data-sidebar="collapsed"] .v2-sb-proj.is-selected > .v2-sb-proj-row { background: var(--v2-hover); }
+html[data-sidebar="collapsed"] .v2-sb-proj.is-selected > .v2-sb-proj-row:has(.v2-sb-proj-link[aria-current="page"]) { background: var(--v2-selected); }
+.v2-sb-gutter { flex: none; width: var(--sb-gutter); height: var(--v2-tree-row-h, 32px); display: grid; place-items: center; }
+.v2-sb-proj-link {
+  display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; min-height: var(--v2-tree-row-h, 32px); padding: 0 6px 0 2px;
+  border-radius: var(--v2-radius-control); color: var(--v2-text-2); font-size: 14px; font-weight: var(--v2-fw-semibold); letter-spacing: -0.005em;
+}
+.v2-sb-proj-row:hover .v2-sb-proj-link { color: var(--v2-text); }
+.v2-sb-proj.is-selected > .v2-sb-proj-row .v2-sb-proj-link { color: var(--v2-text); }
+.v2-sb-proj-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-sb-picon { --v2-av-ring: var(--v2-sidebar); }
+.v2-sb-attn { flex: none; min-width: 20px; padding: 0 4px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--v2-text-3); }
+.v2-sb-attn.is-unknown { min-width: 0; padding: 0; }
+/* ⋯: a fixed 22 px slot, invisible until the row is hovered / focused (Linear) */
+.v2-sb-more { flex: none; width: 22px; height: 22px; opacity: 0; }
+.v2-sb-proj-row:hover .v2-sb-more, .v2-sb-proj-row:focus-within .v2-sb-more, .v2-sb-more[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .v2-sb-more { opacity: 1; } }
+
+.v2-sb-proj-caret {
+  flex: none; display: inline-grid; place-items: center; width: 18px; height: 22px; padding: 0;
+  border: 0; border-radius: 4px; background: transparent; color: var(--v2-text-3); cursor: pointer;
+}
+.v2-sb-proj-caret .v2-sb-caret { opacity: 1; }
+.v2-sb-proj-caret:hover, .v2-sb-proj-caret:focus-visible { color: var(--v2-text); background: var(--v2-hover); }
+
+/* tree children: 16 px per level from the project icon column */
+.v2-sb-tree, .v2-sb-tree-agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.v2-sb-tree { margin-top: 2px; }
+.v2-sb-br { display: flex; flex-direction: column; gap: 1px; }
+.v2-sb-br-row { display: flex; align-items: center; min-width: 0; border-radius: var(--v2-radius-control); }
+.v2-sb-br-row:hover { background: var(--v2-hover); }
+.v2-sb-br-main {
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; padding: 6px 6px 6px calc(var(--sb-gutter) + 18px);
+  border-radius: var(--v2-radius-control); color: var(--v2-text-2);
+}
+.v2-sb-br-ico { flex: none; margin-top: 2px; color: var(--v2-text-3); }
+.v2-sb-br-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v2-sb-br-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.v2-sb-br-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: var(--v2-fw-medium); color: var(--v2-text); }
+/* middle ellipsis: the head yields, the tail (last segment) always shows */
+.v2-sb-br-name { display: flex; min-width: 0; }
+.v2-sb-br-head { flex: 0 1000 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-sb-br-tail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-sb-br-name:not(:has(.v2-sb-br-tail)) .v2-sb-br-head { min-width: 0; }
+.v2-sb-br-badge { flex: none; height: 17px; padding: 0 6px; display: inline-grid; place-items: center; border: 1px solid var(--v2-border-strong); border-radius: 5px; font-size: 11px; line-height: 1; color: var(--v2-text-2); }
+.v2-sb-br-repo { font-size: 12px; color: var(--v2-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-sb-br-pr { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 4px; border-radius: 6px; color: var(--v2-pr-color); }
+.v2-sb-br-pr:hover { background: var(--v2-hover); }
+
+/* agent sessions (D11 + D14): glyph · round 16 px avatar · alias – fragment · age
+   (4 px gaps: the fixed parts leave the name + fragment ~16 px more) */
+.v2-sb-proj-agents .v2-sb-agent { min-height: var(--v2-tree-row-h, 32px); gap: 4px; padding: 0 6px 0 calc(var(--sb-gutter) + 18px); }
+.v2-sb-proj-agents .v2-sb-agent-av { margin-right: 2px; }
+/* one more tree level (--v2-indent) under a branch row */
+.v2-sb-tree-agents .v2-sb-agent { padding-left: calc(var(--sb-gutter) + 18px + var(--v2-indent, 16px)); }
+.v2-sb-agent-glyph { flex: none; }
+/* the alias is capped at 88 px and the fragment keeps a 56 px floor, so a long
+   alias never squeezes the fragment to "Inv…" (review r3 sidebar minor) */
+/* the alias yields first (≤ 45 % of the row, ≤ 96 px) so the fragment keeps
+   a readable ~10 characters instead of "Add d…" (wave-4 review) */
+/* parity r2: the alias takes its natural width (≤ 58 % / 112 px) first and the
+   fragment the rest with a 48 px floor, so "frontend-dev" reads whole instead
+   of "frontend-…" beside an equally clipped fragment */
+.v2-sb-proj-agents .v2-sb-agent-name { flex: 0 1 auto; min-width: 32px; max-width: min(112px, 58%); font-size: 13px; }
+.v2-sb-proj-agents .v2-sb-agent-task { flex: 1 1 0; min-width: 48px; }
+.v2-sb-proj-agents .v2-sb-agent-task::before { content: "– "; }
+/* a long alias in a narrow row: drop the fragment instead of cutting both to
+   "infr… – Harde…" (the tooltip + accessible name carry it) */
+.v2-sb-proj-agents .v2-sb-agent { container-type: inline-size; }
+@container (max-width: 160px) { .v2-sb-agent.has-long-name .v2-sb-agent-task { display: none; } .v2-sb-agent.has-long-name .v2-sb-agent-name { max-width: none; flex: 1 1 auto; } }
+.v2-sb-proj-agents .v2-sb-agent-age { flex: none; min-width: 0; font-size: 11.5px; }
+.v2-sb-proj-agents .v2-sb-viewall { min-height: 28px; padding-left: calc(var(--sb-gutter) + 18px); }
+.v2-sb-note { font-size: 12px; color: var(--v2-text-3); padding: 3px 8px; }
+.v2-sb-note.is-error { color: var(--v2-text-2); }
+.v2-sb-agent {
+  display: flex; align-items: center; gap: 10px; min-height: var(--v2-sb-row-h); padding: 0 8px 0 6px; min-width: 0;
+  border-radius: var(--v2-radius-control); color: var(--v2-text-2); font-weight: var(--v2-fw-medium);
+}
+.v2-sb-agent:hover { background: var(--v2-hover); color: var(--v2-text); }
+.v2-sb-agent .v2-sb-agent-av { flex: none; }
+.v2-sb-agent-name { flex: 0 1 auto; min-width: 24px; max-width: 60%; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-sb-agent.is-working .v2-sb-agent-name { color: var(--v2-text); }
+.v2-sb-agent-task, .v2-sb-agent-state, .v2-sb-agent-age {
+  flex: 1 1 0; min-width: 0; font-size: 12px; font-weight: var(--v2-fw-regular); color: var(--v2-text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.v2-sb-agent-age { text-align: right; font-variant-numeric: tabular-nums; }
+.v2-sb-viewall { display: flex; align-items: center; min-height: 26px; font-size: 12px; color: var(--v2-text-3) !important; padding: 0 8px 0 36px; border-radius: var(--v2-radius-control); }
+.v2-sb-viewall:hover { color: var(--v2-text) !important; background: var(--v2-hover); }
+
+/* 6 · footer: identity · help ○ · rail toggle ○ */
+.v2-sb-foot { display: flex; align-items: center; gap: 2px; padding-top: 6px; }
+.v2-sb-acct {
+  display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; min-height: 30px; padding: 0 8px 0 6px;
+  border: 0; border-radius: 15px; background: transparent; color: var(--v2-text); font: inherit; text-align: left;
+}
+.v2-sb-acct.is-button { cursor: pointer; }
+.v2-sb-acct.is-button:hover { background: var(--v2-hover); }
+.v2-sb-acct-text { display: flex; align-items: baseline; gap: 5px; min-width: 0; line-height: 1.2; }
+.v2-sb-acct-who { font-size: 13px; font-weight: var(--v2-fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2-sb-acct-lbl { font-size: 12px; color: var(--v2-text-3); white-space: nowrap; flex: none; }
+.v2-av-empty { width: 20px; height: 20px; border-radius: 50%; border: 1px dashed var(--v2-border-strong); flex: none; }
+.v2-chev { width: 12px; height: 12px; color: var(--v2-text-3); }
+
+/* tooltip content (components/primitives/Tooltip) */
+.v2-sb-tip { display: flex; flex-direction: column; gap: 2px; }
+.v2-sb-tip strong { font-weight: var(--v2-fw-semibold); }
+.v2-sb-tip-meta { color: var(--v2-text-2); font-weight: var(--v2-fw-regular); }
+.v2-sb-tip-row { display: inline-flex; align-items: center; gap: 8px; }
+.v2-sb-tip-kbd, .v2-tooltip-kbd { font: 500 11px var(--v2-font-sans); color: var(--v2-text-2); background: var(--v2-hover); border: 1px solid var(--v2-border); border-radius: 4px; padding: 0 5px; min-width: 18px; text-align: center; }
+
+/* resize: an 8 px hit zone straddling the edge; the line shows on hover/drag/focus */
+.v2-sb-resize { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 2; touch-action: none; -webkit-user-drag: none; }
+.v2-sb-resize::after { content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background var(--v2-dur-fast) var(--v2-ease) 120ms; }
+.v2-sb-resize:hover::after, .v2-sb-resize:focus-visible::after, .v2-sidebar.is-resizing .v2-sb-resize::after { background: var(--v2-border-strong); }
+.v2-sb-resize:focus-visible { box-shadow: none; }
+.v2-sb-resize:focus-visible::after { background: var(--v2-accent); }
+
+/* collapsed rail (56 px): switcher mark, circular actions, icons, round project avatars */
+html[data-sidebar="collapsed"] .v2-sidebar { align-items: center; padding: 10px 0 8px; gap: 2px; }
+html[data-sidebar="collapsed"] .v2-sb-top { flex-direction: column; gap: 4px; padding: 0 0 8px; }
+html[data-sidebar="collapsed"] .v2-sb-switch { width: 36px; height: 32px; justify-content: center; padding: 0; }
+html[data-sidebar="collapsed"] .v2-sb-nav { align-items: center; }
+html[data-sidebar="collapsed"] .v2-sb-link { width: 36px; min-height: 32px; justify-content: center; padding: 0; }
+/* rail: the count becomes a 6 px dot (the number stays in the tooltip) */
+html[data-sidebar="collapsed"] .v2-sb-needs-n {
+  position: absolute; top: 7px; right: 7px; width: 6px; min-width: 0; height: 6px; padding: 0; font-size: 0; line-height: 0; color: transparent;
+  overflow: hidden; border-radius: 50%; background: var(--v2-accent); box-shadow: 0 0 0 2px var(--v2-sidebar);
+}
+html[data-sidebar="collapsed"] .v2-sb-scroll { width: 100%; margin: 6px 0 0; padding: 0 0 16px; display: flex; flex-direction: column; align-items: center; }
+html[data-sidebar="collapsed"] .v2-sb-sec { display: flex; flex-direction: column; align-items: center; width: 100%; }
+html[data-sidebar="collapsed"] .v2-sb-sec + .v2-sb-sec { margin-top: 4px; }
+html[data-sidebar="collapsed"] .v2-sb-h { width: 36px; height: 30px; justify-content: center; padding: 0; border-top: 1px solid var(--v2-border); margin-top: 2px; padding-top: 4px; box-sizing: content-box; }
+html[data-sidebar="collapsed"] .v2-sb-h .v2-sb-add { opacity: 1; width: 28px; height: 28px; border-radius: 50%; }
+html[data-sidebar="collapsed"] .v2-sb-projects { align-items: center; gap: 2px; }
+html[data-sidebar="collapsed"] .v2-sb-proj-row { width: 36px; justify-content: center; padding: 0; }
+html[data-sidebar="collapsed"] .v2-sb-proj-link { width: 36px; height: 32px; min-height: 32px; justify-content: center; padding: 0; }
+html[data-sidebar="collapsed"] .v2-sb-proj-link { gap: 0; }
+html[data-sidebar="collapsed"] .v2-sb-foot { flex-direction: column; gap: 4px; padding-top: 6px; }
+html[data-sidebar="collapsed"] .v2-sb-acct { width: 36px; justify-content: center; padding: 0; }
+
+/* ---- header (D5/D12): ONE panel header row that NEVER wraps ---------------------
+   [☰] project avatar + name · project tabs (D1, scroll + edge fade) · ……… ·
+   primary · secondary · Live dot · Execution chip · [⋯] · bell.
+   Shell.tsx headerDensity() sets .is-d-{full|compact|tight|overflow} from the
+   measured panel width; each step sheds weight instead of stacking a row. */
+.v2-header {
+  position: relative; z-index: var(--v2-z-header);
+  display: flex; align-items: center; gap: var(--v2-space-2); flex-wrap: nowrap;
+  --v2-hdr-pl: var(--v2-panel-px, var(--v2-space-4)); --v2-hdr-pr: 12px;
+  height: var(--v2-header-h); min-height: var(--v2-header-h); padding: 0 var(--v2-hdr-pr) 0 var(--v2-hdr-pl);
+  background: transparent; border-bottom: 1px solid var(--v2-border); overflow: hidden;
+}
+.v2-header-crumbs { display: flex; align-items: center; gap: var(--v2-space-3); min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.v2-header-ctx { display: inline-flex; align-items: center; gap: var(--v2-space-3); min-width: 0; flex: 0 1000 auto; font-size: var(--v2-fs-meta); color: var(--v2-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.v2-header-ctx-sep { flex: none; width: 1px; height: 14px; background: var(--v2-border-strong); align-self: center; }
+.v2-header .v2-crumbs { font-size: 13px; min-width: 0; }
+.v2-header .v2-crumbs ol { min-width: 0; flex-wrap: nowrap; }
+.v2-header .v2-crumbs li { min-width: 0; white-space: nowrap; }
+.v2-header .v2-crumbs li.is-current { min-width: 72px; }
+.v2-header .v2-crumbs li.is-current > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* project crumb = round avatar (same seeded circle as the sidebar, D7/D13) +
+   name capped at 180 px with an ellipsis; the full name is its tooltip */
+.v2-header .v2-crumbs li:first-child { flex-shrink: 0; }
+.v2-header .v2-crumbs li:first-child > a { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 212px; overflow: hidden; white-space: nowrap; }
+.v2-header-pname { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-header .v2-crumbs a { color: var(--v2-text-2); border-radius: var(--v2-radius-control); padding: 3px 4px; margin: -3px -4px; }
+.v2-header .v2-crumbs a:hover { color: var(--v2-text); background: var(--v2-hover); }
+.v2-header .v2-crumbs [aria-current="page"] { color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.v2-header-pav {
+  width: 18px !important; height: 18px !important; flex: none; display: inline-grid !important; place-items: center;
+  border-radius: 50%; font-size: 8px !important; font-weight: 650; letter-spacing: 0.02em; line-height: 1;
+}
+.v2-header-pav.is-pending { display: inline-block !important; background: var(--v2-selected); }
+.v2-header-tools { display: flex; align-items: center; gap: 6px; flex: none; }
+.v2-header-primary, .v2-header-secondary { display: flex; align-items: center; gap: 6px; flex: none; }
+.v2-header-secondary + .v2-header-primary, .v2-header-primary + .v2-header-secondary { margin-left: 2px; }
+.v2-hamburger, .v2-header-search { display: none; }
+/* the hamburger is the header's fixed first item: never shrunk or pushed off-screen by the crumbs */
+.v2-hamburger { flex: none; order: -1; margin-left: -6px; }
+html[data-embed="desktop"] .v2-header-search { display: inline-grid; }
+
+/* tabbed pages: the current TAB names the section, so the trail's section and
+   object crumbs are visually hidden (kept for AT in the Breadcrumb nav); the
+   open object's title lives in the page / inspector, never the header (D12). */
+.v2-header.has-tabs .v2-crumbs li:not(:first-child) {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.v2-header.has-tabs .v2-crumbs li:first-child .v2-crumb-sep { display: none; }
+.v2-header.has-tabs .v2-crumbs li:first-child { display: inline-flex; align-items: center; }
+.v2-header.has-tabs .v2-crumbs li:first-child::after {
+  content: ""; flex: none; width: 1px; height: 16px; margin: 0 2px 0 12px; background: var(--v2-border-strong); align-self: center;
+}
+.v2-header.has-tabs > .v2-header-crumbs { flex: 0 0 auto; }
+.v2-header.has-tabs > .v2-ptabs { flex: 0 1 auto; min-width: 96px; }
+.v2-header.has-tabs > .v2-grow { flex: 1 1 0; min-width: 4px; }
+
+/* density: compact → the ONE primary becomes a 28 px circular icon (label kept for AT) */
+.v2-header:is(.is-d-compact, .is-d-tight) .v2-header-primary .v2-btn:is(:has(> .v2-btn-ico), :has(> .v2-ico)) {
+  width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 50%;
+}
+.v2-header:is(.is-d-compact, .is-d-tight) .v2-header-primary .v2-btn:is(:has(> .v2-btn-ico), :has(> .v2-ico)) > .v2-btn-label {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+/* tight → the Execution chip is a dot-only circle (state + level in its tooltip) */
+.v2-header:is(.is-d-tight, .is-d-overflow) .v2-exec-btn { position: relative; width: 28px; padding: 0; justify-content: center; gap: 0; }
+.v2-header:is(.is-d-tight, .is-d-overflow) .v2-exec-btn :is(.v2-exec-state, .v2-chev) { display: none; }
+/* …as a CONTROL, not a status LED: a power glyph with the state dot as a
+   corner badge (ringed in the panel colour), the Live glyph can't be confused */
+.v2-exec-btn .v2-exec-glyph { display: none; }
+.v2-header:is(.is-d-tight, .is-d-overflow) .v2-exec-glyph { display: block; width: 15px; height: 15px; color: var(--v2-text-2); }
+.v2-header:is(.is-d-tight, .is-d-overflow) .v2-exec-dot {
+  position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; box-shadow: 0 0 0 2px var(--v2-panel, var(--v2-surface));
+}
+.v2-header:is(.is-d-tight, .is-d-overflow) .v2-exec-btn.is-paused .v2-exec-glyph { color: var(--v2-danger); }
+/* overflow → avatar-only project crumb on tabbed pages; current crumb only elsewhere */
+.v2-header.is-d-overflow { gap: 4px; }
+/* D12: the project NAME stays on the left at every width (review: 390 / 901
+   showed a bare cube glyph) — truncated to ~88 px so the tabs keep the room */
+.v2-header.is-d-overflow.has-tabs .v2-crumbs li:first-child > a { max-width: 116px; }
+.v2-header.is-d-overflow.has-tabs .v2-header-pname { max-width: 88px; }
+@media (max-width: 480px) { .v2-header.is-d-overflow.has-tabs .v2-header-pname { max-width: 72px; } }
+/* phone: the avatar alone, no divider fragment next to the faded tab edge */
+.v2-header.is-d-overflow.has-tabs .v2-crumbs li:first-child::after { display: none; }
+.v2-header.is-d-overflow.has-tabs > .v2-header-crumbs { margin-right: 4px; }
+.v2-header.is-d-overflow:not(.has-tabs) .v2-crumbs li:not(.is-current) { display: none; }
+/* …but the project icon + name stay in front of it ("🚀 orcha-web / Settings", as on the
+   desktop); the name gives way first (ellipsis) so the section never truncates */
+.v2-header.is-d-overflow:not(.has-tabs) .v2-crumbs li:first-child:not(.is-current):has(.v2-header-pav) { display: inline-flex; align-items: center; flex-shrink: 1; min-width: 0; }
+.v2-header.is-d-overflow:not(.has-tabs) .v2-crumbs li:first-child > a { max-width: 150px; }
+.v2-header.is-d-overflow:not(.has-tabs) .v2-header-pname { max-width: 120px; }
+.v2-header.is-d-overflow:not(.has-tabs) > .v2-header-crumbs { flex: 1 1 0; }
+/* the crumbs take the free space (the spacer would halve it and squeeze the name) */
+.v2-header.is-d-overflow:not(.has-tabs) > .v2-grow { flex: 0 0 0; }
+.v2-header.is-d-overflow .v2-header-tools { gap: 4px; }
+
+/* ⋯ overflow menu (overflow density) */
+.v2-hdr-more-pop { min-width: 232px; max-width: calc(100vw - 16px); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
+/* EVERY entry is a menu row (icon · label · hint), incl. the page's primary
+   action: no filled accent block inside the menu (the button is re-skinned) */
+.v2-hdr-more-primary, .v2-hdr-more-secondary { display: flex; flex-direction: column; gap: 1px; }
+.v2-hdr-more-primary + .v2-hdr-more-secondary { margin-top: 0; }
+:is(.v2-hdr-more-primary, .v2-hdr-more-secondary) :is(.v2-btn, .v2-iconbtn),
+.v2-hdr-more-row {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; height: auto; min-height: 32px; padding: 0 8px;
+  border: 0; border-radius: var(--v2-radius-control); background: transparent; box-shadow: none;
+  color: var(--v2-text); font: inherit; font-size: 13px; font-weight: var(--v2-fw-regular); text-align: left; white-space: nowrap; cursor: pointer;
+}
+:is(.v2-hdr-more-primary, .v2-hdr-more-secondary) :is(.v2-btn, .v2-iconbtn):hover,
+:is(.v2-hdr-more-primary, .v2-hdr-more-secondary) :is(.v2-btn, .v2-iconbtn):focus-visible,
+.v2-hdr-more-row:hover, .v2-hdr-more-row:focus-visible { background: var(--v2-hover); color: var(--v2-text); }
+:is(.v2-hdr-more-primary, .v2-hdr-more-secondary) :is(.v2-btn, .v2-iconbtn):disabled { color: var(--v2-text-3); background: transparent; cursor: not-allowed; }
+:is(.v2-hdr-more-primary, .v2-hdr-more-secondary) :is(.v2-btn, .v2-iconbtn) :is(.v2-ico, .v2-btn-ico),
+.v2-hdr-more-row .v2-ico { width: 15px; height: 15px; flex: none; color: var(--v2-text-3); }
+/* the action's single-key hotkey (aria-keyshortcuts) as the row hint */
+:is(.v2-hdr-more-primary, .v2-hdr-more-secondary) [aria-keyshortcuts]::after {
+  content: attr(aria-keyshortcuts); margin-left: auto; font-size: 11.5px; color: var(--v2-text-3); text-transform: uppercase;
+}
+.v2-hdr-more-sep { height: 1px; margin: 3px -4px; background: var(--v2-border); flex: none; }
+.v2-hdr-more-row > span:not(.v2-hdr-more-kbd):not(.v2-conn-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.v2-hdr-more-conn { cursor: pointer; }
+.v2-hdr-more-row .v2-conn-dot { margin: 0 4.5px; }
+.v2-hdr-more-kbd { margin-left: auto; padding-left: 12px; flex: none; font-size: 11.5px; color: var(--v2-text-3); white-space: nowrap; }
+
+/* ---- header controls: compact Live · Execution chip · circular icons ---- */
+.v2-conn {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none;
+  border-radius: 50%; color: var(--v2-text-3); cursor: default;
+}
+.v2-conn:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.v2-conn-ico { width: 15px; height: 15px; display: block; }
+.v2-conn.is-reconnecting { color: var(--v2-warn); }
+.v2-conn.is-reconnecting .v2-conn-ico { animation: v2-conn-blink 1.4s ease-in-out infinite; }
+.v2-conn.is-offline { color: var(--v2-danger); }
+@keyframes v2-conn-blink { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .v2-conn.is-reconnecting .v2-conn-ico { animation: none; } }
+/* the ⋯ menu row keeps a small round dot next to its words */
+.v2-conn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-neutral); flex: none; }
+.v2-hdr-more-conn.is-live .v2-conn-dot { background: var(--v2-ok); }
+.v2-hdr-more-conn.is-reconnecting .v2-conn-dot { background: var(--v2-warn); }
+.v2-hdr-more-conn.is-offline .v2-conn-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--v2-danger); }
+
+/* Execution: a compact rounded-full outline chip "● Running ⌄" — ONE state
+   word (the autonomy level and the word "Execution" live in its tooltip and
+   the popover). Paused = danger dot + danger word: the only paused marker. */
+.v2-exec-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 10px;
+  border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-full, 999px); background: transparent;
+  color: var(--v2-text-2); font: inherit; font-size: var(--v2-fs-meta); cursor: pointer; white-space: nowrap;
+}
+.v2-exec-btn[aria-expanded="true"] { background: var(--v2-hover); color: var(--v2-text); }
+@media (hover: hover) { .v2-exec-btn:hover { background: var(--v2-hover); color: var(--v2-text); } }
+/* one crisp 2 px ring (was a thick two-tone ring after Esc returned focus) */
+.v2-exec-btn:focus-visible { outline: 2px solid var(--v2-accent); outline-offset: 1px; box-shadow: none; }
+.v2-exec-btn.is-paused { border-color: color-mix(in srgb, var(--v2-danger) 45%, var(--v2-border-strong)); }
+.v2-exec-btn .v2-chev { width: 12px; height: 12px; }
+.v2-exec-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-ok); flex: none; }
+.v2-exec-dot.is-paused { background: var(--v2-danger); border-radius: 1px; }
+.v2-exec-dot.is-idle { background: var(--v2-warn); }
+
+/* bell + search: 28 px circles with a 1 px border (D5) */
+.v2-bell, .v2-header .v2-circbtn, .v2-header-secondary .v2-iconbtn {
+  position: relative; display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0;
+  border: 1px solid var(--v2-border-strong); border-radius: 50%; color: var(--v2-text-2); background: transparent;
+}
+@media (hover: hover) { .v2-bell:hover, .v2-header .v2-circbtn:hover, .v2-header-secondary .v2-iconbtn:hover { background: var(--v2-hover); color: var(--v2-text); } }
+.v2-bell .v2-ico, .v2-header .v2-circbtn .v2-ico { width: 14px; height: 14px; }
+.v2-header .v2-header-search { display: none; } /* the sidebar owns Search on wide layouts */
+html[data-embed="desktop"] .v2-header .v2-header-search { display: inline-grid; }
+.v2-bell[aria-expanded="true"] { background: var(--v2-selected); color: var(--v2-text); }
+/* unread notifications = a small accent dot (the count is in the tooltip);
+   Needs-you counts live on the sidebar, not here */
+.v2-bell.attn-pill .n {
+  position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; min-width: 0; padding: 0; margin: 0; border-radius: 50%;
+  font-size: 0; line-height: 0; background: var(--v2-accent); display: block; box-shadow: 0 0 0 2px var(--v2-panel, var(--v2-canvas));
+}
+.v2-bell.attn-pill .bell { width: 14px; height: 14px; color: currentColor; }
+.v2-bell.attn-pill:hover { filter: none; }
+.v2-bell.attn-pill:active { transform: none; }
+.v2-acting.acting { background: transparent; border: 0; padding: 0 0 0 var(--v2-space-2); }
+/* VD-15: embedded identity is avatar-only (tooltip carries the name); no uppercase label */
+.v2-acting.acting { flex-shrink: 0; gap: 6px; }
+.v2-acting.acting .who { gap: 6px; font-size: var(--v2-fs-12, 12px); font-weight: 500; }
+.v2-acting .v2-acting-ro { font-weight: 400; white-space: nowrap; }
+.v2-acting .v2-acting-dot { display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: var(--v2-raised); border: 1px dashed var(--v2-border-strong); }
+
+/* the ONE primary action stays compact in the panel header (D2) */
+.v2-header-primary .v2-btn { height: 28px; }
+/* quieter than a saturated block (Linear headers carry no loud fills) */
+.v2-header-primary .v2-btn-primary { background: var(--v2-raised); color: var(--v2-text); border: 1px solid var(--v2-border-strong); box-shadow: none; }
+.v2-header-primary .v2-btn-primary:hover { background: var(--v2-selected); }
+/* VD-05: the calm style above sets box-shadow:none, which would also erase the
+   focus ring — keyboard focus on New task / New agent / New routine stays visible. */
+.v2-header-primary .v2-btn-primary:focus-visible { box-shadow: var(--v2-focus-ring); }
+.v2-header-primary .v2-btn-primary .v2-ico, .v2-header-primary .v2-btn-primary .v2-btn-ico { color: var(--v2-accent); }
+
+.v2-stalebar {
+  display: flex; align-items: center; gap: var(--v2-space-3); padding: 6px var(--v2-space-4); font-size: var(--v2-fs-meta);
+  color: var(--v2-warn); background: var(--v2-warn-soft); border-bottom: 1px solid var(--v2-border);
+}
+.v2-stalebar-err { color: var(--v2-text-3); }
+
+/* notification center (legacy markup, V2 surface) */
+.ncenter.float { background: var(--v2-raised); border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-panel); box-shadow: var(--v2-shadow-pop); z-index: var(--v2-z-popover); }
+
+/* ---- command palette ----------------------------------------------------- */
+.v2-palette-overlay { z-index: var(--v2-z-palette); align-items: start; padding-top: min(14vh, 120px); background: var(--v2-scrim); }
+/* Linear-like command menu: one raised sheet, big quiet input, grouped rows,
+   selected row = subtle fill (no accent stripe, D3), kbd hints in the footer */
+.v2-palette {
+  width: min(640px, 100%); max-width: 640px; max-height: min(520px, calc(100vh - 32px)); display: flex; flex-direction: column;
+  background: var(--v2-raised); border: 1px solid var(--v2-border-strong); border-radius: 12px;
+  box-shadow: var(--v2-shadow-palette); overflow: hidden;
+}
+.v2-palette-input { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--v2-border); }
+.v2-palette-input > .v2-ico { color: var(--v2-text-3); width: 16px; height: 16px; flex: none; }
+.v2-palette-input input {
+  flex: 1; min-width: 0; height: 52px; border: 0; outline: none; background: transparent; color: var(--v2-text);
+  font: inherit; font-size: 15px; letter-spacing: -0.005em;
+}
+.v2-palette-input input::placeholder { color: var(--v2-text-3); }
+.v2-palette-input input:focus-visible { box-shadow: none; }
+.v2-scope-chip {
+  flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  height: 22px; line-height: 20px; padding: 0 8px; border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-full, 999px);
+  font-size: var(--v2-fs-meta); color: var(--v2-text-2); background: transparent;
+}
+.v2-palette-notice { padding: 6px 18px; font-size: var(--v2-fs-meta); color: var(--v2-warn); background: var(--v2-warn-soft); }
+.v2-palette-list { overflow-y: auto; padding: 6px; flex: 1; scrollbar-width: thin; }
+.v2-palette-group + .v2-palette-group { margin-top: 4px; }
+.v2-palette-gh { font-size: 12px; font-weight: var(--v2-fw-medium); color: var(--v2-text-3); padding: 8px 12px 4px; }
+.v2-palette-row {
+  display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 0 12px;
+  border-radius: 8px; cursor: pointer; color: var(--v2-text); font-size: 13px;
+}
+.v2-palette-row.is-active { background: var(--v2-selected); box-shadow: none; }
+.v2-palette-row.is-disabled { color: var(--v2-text-3); }
+.v2-palette-row .v2-ico { color: var(--v2-text-3); width: 16px; height: 16px; flex: none; }
+.v2-palette-row.is-active .v2-ico { color: var(--v2-text-2); }
+.v2-palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-palette-kbd { flex: none; margin-left: 8px; min-width: 18px; padding: 0 5px; border: 1px solid var(--v2-border); border-radius: 4px; background: var(--v2-hover); color: var(--v2-text-2); font: 500 11px/16px var(--v2-font-sans); text-align: center; }
+.v2-palette-detail { flex: none; max-width: 45%; font-size: var(--v2-fs-meta); color: var(--v2-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-palette-empty, .v2-palette-error { padding: 14px 18px; color: var(--v2-text-2); font-size: 13px; }
+.v2-palette-error { color: var(--v2-warn); }
+.v2-palette-foot {
+  display: flex; align-items: center; gap: 16px; padding: 8px 18px; border-top: 1px solid var(--v2-border);
+  font-size: 11.5px; color: var(--v2-text-3);
+}
+.v2-palette-foot kbd {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; margin-right: 3px;
+  border: 1px solid var(--v2-border-strong); border-radius: 4px; background: transparent;
+  font: 500 10.5px var(--v2-font-sans); color: var(--v2-text-2);
+}
+
+/* ---- responsive: drawer below 900 px, single pane on phones --------------- */
+@media (max-width: 900px) {
+  .v2-app { grid-template-columns: minmax(0, 1fr); }
+  .v2-sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 86vw) !important; height: 100vh;
+    z-index: var(--v2-z-dialog); transform: translateX(-102%); transition: transform var(--v2-dur-base) var(--v2-ease);
+    box-shadow: var(--v2-shadow-pop);
+  }
+  html[data-drawer="open"] .v2-sidebar { transform: none; }
+  /* menus / the icon picker opened from a drawer row sit above the drawer */
+  html[data-drawer="open"] body > .v2-popover { z-index: calc(var(--v2-z-dialog) + 2); }
+  html[data-drawer="open"] body::after {
+    content: ""; position: fixed; inset: 0; z-index: calc(var(--v2-z-dialog) - 1); background: var(--v2-scrim);
+  }
+  .v2-sb-drawer-close { display: inline-grid; }
+  .v2-sb-toggle, .v2-sb-resize { display: none; }
+  .v2-sidebar { background: var(--v2-panel, var(--v2-sidebar)); --v2-av-ring: var(--v2-panel, var(--v2-sidebar)); }
+  .v2-hamburger, .v2-header-search { display: inline-grid; }
+  /* the rail preference never applies to the drawer */
+  html[data-sidebar="collapsed"] .v2-app { grid-template-columns: minmax(0, 1fr); }
+  .v2-content { padding: var(--v2-space-4); }
+}
+@media (max-width: 560px) {
+  .v2-header { gap: 4px; padding: 0 var(--v2-space-2); }
+  .v2-content { padding: var(--v2-space-3); }
+  .v2-palette-overlay { padding: var(--v2-space-2); }
+  .v2-palette-detail { display: none; }
+}
+@media (pointer: coarse) {
+  .v2-sb-link, .v2-sb-proj-row, .v2-sb-proj-link, .v2-sb-agent, .v2-sb-viewall { min-height: 44px; }
+  .v2-sb-more, .v2-sb-add, .v2-sb-drawer-close { width: 44px; height: 44px; }
+  /* circular buttons keep their 28 px look; a transparent ::after gives the 44 px hit area */
+  .v2-sb-circle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+  /* VD-06: the header's 28 px circles ("More header actions", search) and the
+     toolbar row's 28 px controls get the same transparent 44 px hit area. The
+     toolbar row grows to 48 px so a control's hit area never reaches under
+     the header (which paints above it). */
+  .v2-header .v2-circbtn::after, .v2-header-secondary .v2-iconbtn::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%);
+  }
+  /* the toolbar row's 48 px height (padding-block: 10px) lives at the end of
+     this file (VD-06 r2): the ≤560 px `.v2-toolbar-slot { padding: 6px … }` beat it */
+  .v2-sb-top { gap: 10px; }
+  .v2-kbd { display: none; } /* keyboard hints are noise on touch */
+  .v2-palette-kbd, .v2-hdr-more-kbd.is-key { display: none; }
+  :is(.v2-hdr-more-primary, .v2-hdr-more-secondary) [aria-keyshortcuts]::after { content: none; }
+  .v2-sb-foot { gap: 10px; }
+  /* >= 44 px HIT area without visual bloat (D2): a transparent ::after */
+  .v2-bell, .v2-exec-btn, .v2-conn, .v2-ptab { position: relative; }
+  .v2-bell::after, .v2-exec-btn::after, .v2-conn::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%);
+  }
+  .v2-ptab { min-height: 44px; }
+  .v2-exec-pop .aut .seg { min-height: 36px; }
+}
+
+/* ---- Execution controls: real buttons (QA: keyboard-operable) ------------ */
+.aut button.seg { background: transparent; font-family: inherit; line-height: inherit; margin: 0; }
+.aut button.seg:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.aut.locked button.seg[aria-disabled="true"] { cursor: not-allowed; }
+
+/* ---- narrow drawer: hidden (not just off-screen) while closed ------------ */
+@media (max-width: 900px) {
+  html:not([data-drawer="open"]) .v2-sidebar {
+    visibility: hidden; /* off-screen controls must not take Tab focus */
+    transition: transform var(--v2-dur-base) var(--v2-ease), visibility 0s linear var(--v2-dur-base);
+  }
+}
+
+/* ---- notification center controls are real buttons (QA) ----------------- */
+button.v2-bell { font: inherit; cursor: pointer; }
+.nc-h button.mark { background: none; border: 0; padding: 0; font-family: inherit; text-decoration: none; }
+button.nc-foot { display: block; width: 100%; background: none; border: 0; border-top: 1px solid var(--border);
+  font-family: inherit; text-decoration: none; }
+
+/* ==== header / overlays (fix round 1: header-overlays) ===================== */
+
+/* ---- project section tabs (D1) — merged INTO the panel header (D5) ---------
+   Navigation links (not a tablist). Inline: they fill the header row height
+   and the current tab's 2 px underline sits on the header hairline. Stacked:
+   the same strip on the header's second row. Counts are plain muted numbers. */
+.v2-ptabs { position: relative; align-self: stretch; display: flex; min-width: 0; flex: 0 1 auto; isolation: isolate; }
+.v2-ptabs-scroll {
+  display: flex; align-items: stretch; gap: 2px; padding: 0; min-width: 0;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+}
+.v2-ptabs-scroll::-webkit-scrollbar { display: none; }
+.v2-ptab {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; flex: none;
+  min-height: 38px; padding: 0 8px; color: var(--v2-text-3); text-decoration: none;
+  font-size: 13px; font-weight: var(--v2-fw-medium); white-space: nowrap; border-radius: 0;
+  transition: color var(--v2-dur-fast) var(--v2-ease);
+}
+@media (hover: hover) { .v2-ptab:hover { color: var(--v2-text); } }
+.v2-ptab::before { /* hover wash, inset so the underline stays crisp */
+  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 26px; transform: translateY(-50%);
+  border-radius: var(--v2-radius-control); background: transparent; z-index: -1;
+  transition: background var(--v2-dur-fast) var(--v2-ease);
+}
+/* hover-capable pointers only: a tapped tab kept a sticky grey pill on touch */
+@media (hover: hover) { .v2-ptab:hover::before { background: var(--v2-hover); } }
+.v2-ptab.is-current { color: var(--v2-text); }
+.v2-ptab.is-current::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
+  border-radius: 2px 2px 0 0; background: var(--v2-text);
+}
+.v2-ptab:focus-visible { box-shadow: var(--v2-focus-ring-inset); border-radius: var(--v2-radius-control); outline: none; }
+.v2-ptab-count { font-size: 12px; font-weight: var(--v2-fw-medium); color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+.v2-ptab.is-current .v2-ptab-count { color: var(--v2-text-2); }
+/* section icons: muted at rest, each tab's own hue when hovered or current (pops without stripes) */
+.v2-ptab { gap: 4px; padding: 0 6px; }
+.v2-ptab-ico { width: 13px; height: 13px; flex: none; color: var(--v2-text-3); opacity: .8;
+  transition: color var(--v2-dur-fast) var(--v2-ease), opacity var(--v2-dur-fast) var(--v2-ease), transform var(--v2-dur-fast) var(--v2-ease); }
+.v2-ptab[data-section="home"]     { --ptab-hue: var(--v2-hue-home); }
+.v2-ptab[data-section="tasks"]    { --ptab-hue: var(--v2-hue-tasks); }
+.v2-ptab[data-section="routines"] { --ptab-hue: var(--v2-hue-routines); }
+.v2-ptab[data-section="agents"]   { --ptab-hue: var(--v2-hue-agents); }
+.v2-ptab[data-section="org"]      { --ptab-hue: var(--v2-hue-org); }
+.v2-ptab[data-section="requests"] { --ptab-hue: var(--v2-hue-requests); }
+.v2-ptab[data-section="code"]     { --ptab-hue: var(--v2-hue-code); }
+.v2-ptab[data-section="github"]   { --ptab-hue: var(--v2-hue-github); }
+.v2-ptab[data-section="activity"] { --ptab-hue: var(--v2-hue-activity); }
+.v2-ptab[data-section="metrics"]  { --ptab-hue: var(--v2-hue-metrics); }
+@media (hover: hover) { .v2-ptab:hover .v2-ptab-ico { color: var(--ptab-hue, var(--v2-text)); opacity: 1; } }
+.v2-ptab.is-current .v2-ptab-ico { color: var(--ptab-hue, var(--v2-text)); opacity: 1; }
+@media (prefers-reduced-motion: no-preference) { .v2-ptab.is-current .v2-ptab-ico { transform: scale(1.06); } }
+/* tight headers: only the current tab keeps its icon, so every section stays reachable without scrolling */
+@media (max-width: 1400px) { .v2-ptab:not(.is-current) .v2-ptab-ico { display: none; } }
+/* edge fades on BOTH ends while the strip scrolls (useTabStripOverflow toggles
+   has-more-start / has-more-end); the current tab is centred by ProjectTabs */
+.v2-ptabs-scroll {
+  --v2-fade-l: 0px; --v2-fade-l0: 0px; --v2-fade-r: 0px; --v2-fade-r0: 0px;
+  /* start fade: fully clear for the first 20 px, so a scrolled-away tab's
+     tail never reads as a fragment beside the avatar ("OW ew"); ProjectTabs
+     parks a tab edge at 28 px (scroll-padding + snap do the same on swipe) */
+  -webkit-mask-image: linear-gradient(to right, transparent 0, transparent var(--v2-fade-l0), #000 var(--v2-fade-l), #000 calc(100% - var(--v2-fade-r)), transparent calc(100% - var(--v2-fade-r0)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, transparent var(--v2-fade-l0), #000 var(--v2-fade-l), #000 calc(100% - var(--v2-fade-r)), transparent calc(100% - var(--v2-fade-r0)), transparent 100%);
+  scroll-padding-inline: 28px 24px; scroll-snap-type: x proximity;
+}
+.v2-ptab { scroll-snap-align: start; } /* the first tab snaps to 0 (its start minus the padding clamps there) */
+.v2-ptabs-scroll.has-more-start { --v2-fade-l0: 20px; --v2-fade-l: 28px; }
+/* end fade: a smooth 28 px ramp (= the end inset centerCurrentTab keeps clear) to the edge, so the cut tab reads as a FADING
+   word ("Metr…") — a scroll cue — instead of vanishing into a blank gap
+   (review: 901 / 390 looked clipped, no affordance). No hard edge, so it never
+   reads as a lone letter ("R|"). */
+.v2-ptabs-scroll.has-more-end { --v2-fade-r: 28px; --v2-fade-r0: 0px; }
+
+/* ---- header controls --------------------------------------------------------- */
+.v2-exec-state { color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.v2-exec-btn.is-paused .v2-exec-state { color: var(--v2-danger); }
+.v2-exec-btn.is-stale .v2-exec-dot { background: var(--v2-neutral); }
+
+/* ---- execution popover: flat rows, no nested bordered boxes --------------------- */
+.v2-exec-pop { width: 360px; padding: 12px 14px 14px; }
+.v2-exec-h { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; font-size: 13px; font-weight: var(--v2-fw-semibold); color: var(--v2-text); }
+.v2-exec-info { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--v2-text-3); cursor: help; }
+.v2-exec-info:hover { color: var(--v2-text-2); }
+.v2-exec-info:focus-visible { outline: 2px solid var(--v2-accent); outline-offset: 1px; }
+.v2-exec-info .v2-ico { width: 14px; height: 14px; }
+.v2-exec-pop .ctl-wrap { display: flex; flex-direction: column; align-items: stretch; }
+.v2-exec-pop .ctl-div { display: block; align-self: stretch; width: auto; height: 1px; min-height: 0; background: var(--v2-border); margin: 0 -14px; }
+.v2-exec-pop .ctl-group { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.v2-exec-pop .aut-lab { letter-spacing: 0; text-transform: none; font-weight: var(--v2-fw-medium); }
+.v2-exec-pop .aut { border-radius: var(--v2-radius-control); gap: 2px; flex-wrap: wrap; }
+.v2-exec-pop .aut .seg { border-radius: 5px; padding: 5px 10px; font-weight: var(--v2-fw-medium); }
+.v2-exec-pop .aut .seg.paused.on .d { animation: none; }
+.v2-exec-pop .ctl-wrap { gap: var(--v2-space-3); }
+.v2-exec-pop .aut-lab { color: var(--v2-text); font-size: 13px; }
+.v2-exec-pop .aut { border: 0; background: transparent; padding: 0; }
+.v2-exec-pop .v2-exec-row { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--v2-space-3); width: 100%; }
+.v2-exec-pop #notifTop { flex: none; }
+.v2-exec-row-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v2-exec-row-d, .v2-exec-lvl-d { font-size: var(--v2-fs-meta); color: var(--v2-text-3); line-height: 1.4; margin: 0; }
+.v2-exec-offline { margin: 0 0 var(--v2-space-3); font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
+/* Notifier = a real switch (label + track), not a static badge */
+.v2-exec-pop .aut .seg.v2-switch {
+  display: inline-flex; flex-wrap: nowrap; white-space: nowrap; align-items: center; gap: var(--v2-space-2); padding: 4px 4px 4px 8px; border: 0; border-radius: var(--v2-radius-control);
+  background: transparent; color: var(--v2-text-2); font-size: 12.5px; font-weight: var(--v2-fw-medium);
+}
+.v2-exec-pop .aut .seg.v2-switch:hover { background: var(--v2-hover); }
+.v2-exec-pop .aut .seg.run.on.v2-switch { color: var(--v2-text-2); background: transparent; }
+.v2-exec-pop .aut .seg.paused.on.v2-switch { color: var(--v2-danger); background: transparent; }
+.v2-switch-track {
+  position: relative; width: 30px; height: 18px; border-radius: 9px; flex: none;
+  background: var(--v2-border-strong); transition: background var(--v2-dur-fast) var(--v2-ease);
+}
+.v2-switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--v2-text);
+  transition: transform var(--v2-dur-fast) var(--v2-ease);
+}
+.v2-switch[aria-checked="true"] .v2-switch-track { background: var(--v2-ok); }
+.v2-switch[aria-checked="true"] .v2-switch-thumb { transform: translateX(12px); }
+.aut.locked .v2-switch { opacity: .6; }
+/* Autonomy: one flat segmented control; the selected level is a raised segment */
+.v2-exec-pop #autTop { display: flex; width: 100%; background: var(--v2-surface); padding: 2px; border-radius: var(--v2-radius-control); gap: 2px; }
+.v2-exec-pop #autTop .seg { flex: 1; justify-content: center; border: 0; color: var(--v2-text-3); font-size: 12.5px; padding: 5px 8px; }
+.v2-exec-pop #autTop .seg:hover { color: var(--v2-text); background: var(--v2-hover); }
+.v2-exec-pop #autTop .seg.custom { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
+.v2-exec-pop #autTop .seg.custom:hover { background: var(--v2-selected); color: var(--v2-text-2); }
+.v2-exec-pop #autTop .seg.custom.on { color: var(--v2-text-2); }
+.v2-exec-pop #autTop .seg.lvl.on { background: var(--v2-selected); color: var(--v2-text); box-shadow: var(--v2-shadow-seg); }
+.v2-exec-pop #autTop .seg.lvl.on.warn .d { color: var(--v2-warn); }
+.v2-exec-pop #autTop .seg.lvl.on.info .d { color: var(--v2-info); }
+.v2-exec-pop #autTop .seg.lvl.on.accent .d { color: var(--v2-accent); }
+.v2-exec-pop #autTop.dimmed { opacity: .7; }
+.v2-exec-pop #autTop .seg:focus-visible { box-shadow: var(--v2-focus-ring); }
+@media (max-width: 560px) {
+  .v2-exec-pop { width: calc(100vw - 16px); }
+}
+
+/* ---- notification center: Linear rows (no stripes, no boxed icons) ------------- */
+.ncenter.float {
+  position: fixed; top: calc(var(--v2-frame-gap) + var(--v2-header-h) + 2px); right: calc(var(--v2-frame-gap) + 8px);
+  width: 400px; max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - var(--v2-header-h) - 2 * var(--v2-frame-gap) - 16px); flex-direction: column; overflow: hidden;
+}
+.ncenter.float.show { display: flex; }
+.ncenter .nc-h { padding: 8px 8px 8px 16px; flex: none; }
+.ncenter .nc-h h3 { font-size: 14px; font-weight: var(--v2-fw-semibold); }
+.ncenter .nc-h .mark { margin-left: auto; }
+.ncenter .nc-h .nc-more { flex: none; margin-left: 2px; }
+.ncenter .nc-h h3 + .nc-more { margin-left: auto; }
+/* mig 063: paused / muted state line under the header — calm, glyph-coloured only */
+.ncenter .nc-paused {
+  display: flex; align-items: center; gap: 8px; flex: none; min-height: 36px; padding: 4px 8px 4px 16px;
+  border-bottom: 1px solid var(--v2-border); color: var(--v2-text-2); font-size: 12px;
+}
+.ncenter .nc-paused .v2-ico { width: 14px; height: 14px; color: var(--v2-warn); flex: none; }
+.ncenter .nc-paused span { flex: 1; min-width: 0; }
+.ncenter .nc-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 4px; }
+.ncenter .nc-list { max-height: none; overflow: visible; }
+.ncenter .nc-zlbl { padding: 12px 16px 4px; font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: var(--v2-fw-medium); color: var(--v2-text-3); }
+.ncenter .nc-zlbl.needs { color: var(--v2-text-2); }
+.ncenter .nc-zlbl .ct { color: var(--v2-text-3); font-weight: var(--v2-fw-medium); }
+/* Linear Inbox rows: round actor avatar (24) + type badge · bold one-line
+   title · muted one-line "what happened" · age (+ unread dot) on the right */
+.ncenter .nrow {
+  display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 7px 12px 7px 14px; margin: 0 6px;
+  border: 0 !important; border-radius: 8px; color: var(--v2-text); text-decoration: none;
+}
+.ncenter .nrow + .nrow { border-top: 0; }
+.ncenter .nrow:hover { background: var(--v2-hover); }
+.ncenter .nc-av { position: relative; flex: none; width: 24px; height: 24px; display: inline-grid; place-items: center; --v2-av-ring: var(--v2-raised); }
+.ncenter .nc-sys { width: 24px; height: 24px; border-radius: 50%; display: inline-grid; place-items: center; background: var(--v2-selected); color: var(--v2-text-2); }
+.ncenter .nc-sys svg { width: 13px; height: 13px; }
+.ncenter .nc-badge {
+  position: absolute; right: -4px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--v2-raised); color: var(--v2-text-2); box-shadow: 0 0 0 1.5px var(--v2-raised);
+}
+.ncenter .nc-badge svg { width: 9px; height: 9px; stroke-width: 2.4; }
+.ncenter .nc-badge.c-warn { color: var(--v2-warn); }
+.ncenter .nc-badge.c-danger { color: var(--v2-danger); }
+.ncenter .nc-badge.c-violet { color: var(--v2-accent); }
+.ncenter .nc-badge.c-info { color: var(--v2-info); }
+.ncenter .nrow .b { flex: 1; min-width: 0; }
+.ncenter .nrow .ti { font-size: 13px; font-weight: var(--v2-fw-medium); line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ncenter .nrow .me { display: block; font-size: 12px; line-height: 17px; color: var(--v2-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.ncenter .nc-r { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; min-width: 24px; }
+.ncenter .nrow .when { font-size: 12px; color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+.ncenter .nrow .ti { display: flex; align-items: center; gap: 6px; }
+.ncenter .nrow .ti-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ncenter .nc-unread { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--v2-accent); }
+.ncenter .nrow:not(.unread) .ti { color: var(--v2-text-2); }
+.ncenter:focus { outline: none; }
+.ncenter .nc-empty { padding: 16px; text-align: left; color: var(--v2-text-3); font-size: 13px; }
+.ncenter .v2-btn.nc-foot {
+  display: flex; width: calc(100% - 16px); margin: 4px 8px 0; height: 32px; border-top: 0; justify-content: center;
+}
+
+/* ---- offline bar ----------------------------------------------------------------- */
+.v2-stalebar { flex-wrap: wrap; row-gap: 4px; color: var(--v2-text); background: var(--v2-warn-soft); }
+.v2-stalebar-ico { width: 14px; height: 14px; color: var(--v2-warn); flex: none; }
+.v2-stalebar-msg { min-width: 0; flex: 1 1 auto; }
+.v2-stalebar-det { font-size: var(--v2-fs-meta); color: var(--v2-text-3); }
+.v2-stalebar-det summary { cursor: pointer; }
+.v2-stalebar-det[open] { flex-basis: 100%; order: 3; }
+.v2-stalebar-err { font-family: var(--v2-font-mono, ui-monospace, monospace); font-size: 11.5px; color: var(--v2-text-3); overflow-wrap: anywhere; }
+.v2-stalebar-retry { flex: none; }
+/* while offline every live marker is static "as of" state, not a live pulse */
+html[data-conn="offline"] .v2-status .v2-glyph { filter: grayscale(1); opacity: .75; }
+html[data-conn="offline"] .v2-status *, html[data-conn="offline"] .v2-sb-agent * { animation: none !important; }
+
+/* ---- command palette: project tiles; touch-friendly sheet --------------------------- */
+/* the same seeded round ProjectAvatar the sidebar uses (D7/D13) */
+.v2-palette-pav {
+  width: 18px; height: 18px; border-radius: 50%; flex: none; display: inline-grid; place-items: center;
+  font-size: 8px; font-weight: 650; letter-spacing: 0.02em; line-height: 1;
+}
+.v2-palette-close { display: none; }
+@media (pointer: coarse) { .v2-palette-foot { display: none; } }
+@media (max-width: 600px) {
+  .v2-palette-overlay { padding: 0; padding-top: 0; align-items: stretch; }
+  .v2-palette { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; border: 0; }
+  .v2-palette-foot { display: none; }
+  .v2-palette-close { display: inline-grid; flex: none; }
+}
+
+/* ==== D5 app frame: narrow layouts (drawer, <= 900 px) ============================
+   No inset: the panel fills the viewport, the DOCUMENT scrolls (so narrow full-
+   view flows keep window scroll restore) and the header block is sticky. */
+@media (max-width: 900px) {
+  :root { --v2-sticky-top: var(--v2-chrome-h, var(--v2-header-h)); --v2-content-h: calc(100dvh - var(--v2-chrome-h, var(--v2-header-h))); }
+  .v2-main { flex: 1 0 auto; height: auto; min-height: 100dvh; margin: 0; border: 0; border-radius: 0; overflow: visible; }
+  html[data-embed="desktop"] .v2-main { margin-left: 0; }
+  .v2-panel-top { position: sticky; top: 0; }
+  .v2-content { overflow: visible; min-height: 0; }
+  .v2-header { --v2-hdr-pl: 12px; --v2-hdr-pr: 8px; }
+  .v2-hamburger { margin-left: -4px; }
+  .v2-header .v2-header-search { display: inline-grid; }
+  .ncenter.float { top: calc(var(--v2-chrome-h, var(--v2-header-h)) + 4px); right: 8px; max-height: calc(100dvh - var(--v2-chrome-h, var(--v2-header-h)) - 16px); }
+}
+@media (max-width: 560px) {
+  .v2-header { --v2-hdr-pl: 8px; --v2-hdr-pr: 6px; padding: 0 var(--v2-hdr-pr) 0 var(--v2-hdr-pl); }
+  .v2-header-tools { gap: 4px; }
+  .v2-toolbar-slot { padding: 6px var(--v2-space-3); }
+}
+
+/* ==== page chrome (shell/PageChrome): PageHeader + Pager ======================
+ * Shared inner layout of the Linear detail header row ("glyph · ID · title ·
+ * ⋯ … actions · 1 / N ↑ ↓"). The CONTAINER (sticky, 44 px, hairline, gutters)
+ * belongs to the page that places it; these rules only lay out the row. */
+.v2-pagehead { display: flex; align-items: center; gap: var(--v2-space-2); min-width: 0; }
+.v2-pagehead-glyph { display: inline-flex; align-items: center; flex: none; }
+.v2-pagehead-id { display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap;
+  color: var(--v2-text-3); font-size: var(--v2-fs-body); font-variant-numeric: tabular-nums; }
+.v2-pagehead-title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); line-height: 20px; letter-spacing: 0; color: var(--v2-text); }
+.v2-pagehead-trail { display: inline-flex; align-items: center; flex: none; min-width: 0; }
+.v2-pagehead-actions { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.v2-pager { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.v2-pager-pos { white-space: nowrap; margin-right: 4px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .v2-pager-pos { display: none; } }
+
+/* VD-10: project budget stop chip in the header (only while the project cap pauses new runs) */
+.v2-budget-chip { display: inline-flex; align-items: center; flex-shrink: 0; text-decoration: none; color: inherit; border-radius: var(--v2-radius-sm, 6px); }
+.v2-budget-chip:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+.v2-budget-chip .v2-health, .v2-budget-chip > * { white-space: nowrap; }
+/* VD-40: phone (overflow density) — the budget chip is a glyph-only 28 px
+   control (label kept for AT + tooltip), and the hamburger / project crumb
+   never shrink; the tab strip gives way first. */
+.v2-budget-chip.is-icon { position: relative; width: 28px; height: 28px; justify-content: center; }
+.v2-budget-chip.is-icon .v2-health { padding: 0; gap: 0; background: transparent; border: 0; }
+.v2-budget-chip.is-icon .v2-health-text {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.v2-header.is-d-overflow > .v2-hamburger { flex-shrink: 0; }
+.v2-header.is-d-overflow > .v2-header-crumbs { flex-shrink: 0; }
+.v2-header.is-d-overflow.has-tabs > .v2-ptabs { min-width: 0; }
+
+/* ==== VD-06 (r2): touch — MUST stay after the ≤560 px block above ============
+   The toolbar row grows to 48 px so a 28 px control's 44 px ::after hit area
+   never reaches under the header (which paints above it). */
+@media (pointer: coarse) {
+  .v2-toolbar-slot { padding-block: 10px; }
+  .v2-budget-chip.is-icon::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+}
+
+/* "Embodent was updated · Reload" (shell/UpdateNotice.tsx) — one calm line under the header */
+.v2-update-notice { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12.5px;
+  color: var(--v2-text-2); border-bottom: 1px solid var(--v2-border); background: var(--v2-panel, transparent); }
+.v2-update-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-accent); flex: none; }
+.v2-update-btn { margin-left: auto; height: 24px; padding: 0 10px; border-radius: var(--v2-radius-control);
+  border: 1px solid var(--v2-border); background: var(--v2-surface); color: var(--v2-text); font: inherit; font-size: 12px; cursor: pointer; }
+.v2-update-btn:hover { background: var(--v2-hover); }
+.v2-update-btn:focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }

@@ -44,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +77,18 @@ import androidx.compose.ui.unit.sp
 import io.openorcha.mobile.ui.theme.MonoSmStyle
 import io.openorcha.mobile.ui.theme.MonoStyle
 import io.openorcha.mobile.ui.theme.Orcha
+import io.openorcha.mobile.ui.components.LButton
+import io.openorcha.mobile.ui.components.LButtonKind
+import io.openorcha.mobile.ui.components.LCard
+import io.openorcha.mobile.ui.components.LDivider
+import io.openorcha.mobile.ui.components.LSegmented
+import io.openorcha.mobile.ui.components.LSpace
+import io.openorcha.mobile.ui.components.LTag
+import io.openorcha.mobile.ui.components.LType
+import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.icons.OrchaIcons
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 
 /* =============================================================================
    Flow 09 — Agent detail (header, Now, Controls, persona, runs) + pickers.
@@ -93,18 +106,20 @@ fun AutoWakeSheet(
     val p = Orcha.palette
     val presets = listOf<Pair<String, Int?>>("Off" to null, "5m" to 300, "15m" to 900, "1h" to 3600)
     var picked by remember { mutableStateOf(current) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.raised) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.statusBarsPadding(), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = p.surface) {
         Column(Modifier.padding(horizontal = 18.dp).padding(bottom = 30.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("AUTO-WAKE", style = MaterialTheme.typography.labelMedium, color = p.accent)
-            Text("Wakes the agent on a clock while idle. Off relies on events only.", style = MaterialTheme.typography.bodyMedium, color = p.muted)
-            SegControl(
-                options = presets.map { it.first } + (
-                    if (current != null && presets.none { it.second == current }) listOf(formatCadence(current)) else emptyList()
-                    ),
-                selected = presets.indexOfFirst { it.second == picked }.let { if (it >= 0) it else presets.size },
+            Text("Auto-wake", style = ltype(LType.Headline), color = p.text, modifier = Modifier.semantics { heading() })
+            Text("Wakes the agent on a clock while idle. Off relies on events only.", style = ltype(LType.Meta), color = p.muted)
+            // A non-preset server cadence shows as its own (read-only) option, index = presets.size.
+            val options = presets.mapIndexed { i, (label, _) -> i to label } + (
+                if (current != null && presets.none { it.second == current }) listOf(presets.size to formatCadence(current)) else emptyList()
+                )
+            LSegmented(
+                options = options,
+                selection = presets.indexOfFirst { it.second == picked }.let { if (it >= 0) it else presets.size },
                 onSelect = { i -> if (i < presets.size) picked = presets[i].second },
             )
-            PrimaryButton("Apply", { onConfirm(picked) }, Modifier.fillMaxWidth(), enabled = picked != current && !busy)
+            LButton("Apply", { onConfirm(picked) }, Modifier.fillMaxWidth(), kind = LButtonKind.Primary, enabled = picked != current && !busy)
         }
     }
 }

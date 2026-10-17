@@ -3,6 +3,8 @@
 from collections.abc import Callable, Collection
 from typing import Any
 
+from portal_backend import sql
+
 
 def resolve_context_task_id(
     cur,
@@ -22,15 +24,15 @@ def resolve_context_task_id(
     if initial_task_id is not None or not pending:
         return initial_task_id
     cur.execute(
-        """SELECT e.event_name, e.payload, e.target_id FROM agent_events e
+        f"""SELECT e.event_name, e.payload, e.target_id FROM agent_events e
            WHERE e.event_key=%s AND e.ts > %s AND e.ts <= %s
-             AND e.event_name <> ALL(%s)
+             AND {sql.not_in_list('e.event_name')}
              AND NOT EXISTS (
                SELECT 1 FROM agent_event_acks a
                WHERE a.agent_id=%s AND a.event_id=e.id
              )
            ORDER BY e.ts DESC, e.id DESC""",
-        (aid, delivered_ts, ack_through_ts, list(non_waking_events), aid),
+        (aid, delivered_ts, ack_through_ts, sql.list_param(non_waking_events), aid),
     )
     for row in cur.fetchall():
         classification = drain_class(
@@ -97,16 +99,16 @@ def handled_event_id_sets(
     if not pending:
         return [], []
     cur.execute(
-        """SELECT e.id, e.event_name, e.payload, e.target_id
+        f"""SELECT e.id, e.event_name, e.payload, e.target_id
            FROM agent_events e
            WHERE e.event_key=%s AND e.ts > %s AND e.ts <= %s
-             AND e.event_name <> ALL(%s)
+             AND {sql.not_in_list('e.event_name')}
              AND NOT EXISTS (
                SELECT 1 FROM agent_event_acks a
                WHERE a.agent_id=%s AND a.event_id=e.id
              )
            ORDER BY e.ts, e.id""",
-        (aid, delivered_ts, ack_through_ts, list(non_waking_events), aid),
+        (aid, delivered_ts, ack_through_ts, sql.list_param(non_waking_events), aid),
     )
     handled = []
     delivery_handled = []

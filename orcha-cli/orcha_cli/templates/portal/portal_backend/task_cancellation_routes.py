@@ -18,8 +18,14 @@ from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
 from portal_backend.identity_routes import trusted_actor as _trusted_actor
+from portal_backend.review_routing import (
+    supersede_pending_prereview as _supersede_pending_prereview,
+)
 from portal_backend.schemas.task_operations import TaskCancel
-from portal_backend.task_completion_support import _recalibrate_task_owners
+from portal_backend.task_completion_support import (
+    _recalibrate_task_owners,
+    unblock_downstream,
+)
 
 
 @app.post("/api/tasks/{tid}/cancel", status_code=200)
@@ -91,6 +97,12 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
             (tid,),
         )
         cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
+        # Mig 068: cancelling ends a running Verdikt auto-fix loop
+        from portal_backend.verdikt_autofix import end_for_person as _end_autofix
+
+        _end_autofix(cur, t, body.actor_agent_id, "cancelled", actor_kind="human" if is_human else "ai")
+        # Mig 057: a cancelled task needs no AI manager pre-review — close it.
+        _supersede_pending_prereview(cur, t["container_id"], tid, reason="task_cancelled")
         # Review P2: clear the now-stale assignments so assignees don't stay 'working'.
         # recompute_agent_status counts assigned|accepted|working rows regardless of the
         # task's status, so a cancelled task would otherwise pin its assignee 'working'.
@@ -110,6 +122,10 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
             "cancelled",
             {"by_human": is_human, "forced": forced},
         )
+        # TG-25: a cancelled upstream counts as a satisfied dependency — promote any pending
+        # dependent whose other deps are done, exactly as completion would (the cancel
+        # dialog promises they unblock; before this they stayed 'pending' forever).
+        unblocked = unblock_downstream(cur, str(t["container_id"]), tid)
         for aid in assignees:
             bump_agent(cur, aid)
             recompute_agent_status(cur, aid)
@@ -162,4 +178,5 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
         "forced_by_human": forced
         and is_human,  # back-compat: precise "a human forced this"
         "owners_poked": len(others) if forced else 0,
+        "unblocked": unblocked,
     }

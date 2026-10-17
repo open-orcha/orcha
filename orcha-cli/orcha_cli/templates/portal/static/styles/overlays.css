@@ -95,11 +95,12 @@
 .log .ln.t-subagent  { border-left-color: var(--violet); }  .log .ln.t-subagent .ty { color: var(--violet); }
 .log .ln.t-decision  { border-left-color: var(--amber); }   .log .ln.t-decision .ty { color: var(--amber); }
 .log .ln.t-error     { border-left-color: var(--danger); }  .log .ln.t-error  .ty { color: var(--danger); }  .log .ln.t-error .tx { color: var(--danger); }
-.log .ln.t-done      { border-left-color: var(--ok); }      .log .ln.t-done   .ty { color: var(--ok); }      .log .ln.t-done .tx { color: var(--ok); font-weight: 600; }
+/* run end: neutral — the line cannot know the run's outcome (a killed run must never read green) */
+.log .ln.t-done      { border-left-color: var(--border-2); } .log .ln.t-done   .ty { color: var(--text-2); }  .log .ln.t-done .tx { color: var(--text); font-weight: 600; }
 
 /* collapsible section divider in the stream */
 .log .sec { display: flex; align-items: center; gap: 8px; padding: 6px 15px; cursor: pointer;
-  color: var(--muted); font-family: "Inter", sans-serif; font-size: 11.5px; font-weight: 650;
+  color: var(--muted); font-family: var(--v2-font-sans); font-size: 11.5px; font-weight: 650;
   letter-spacing: .03em; text-transform: uppercase; background: var(--surface-2); border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; }
 .log .sec:hover { color: var(--text); }
@@ -138,8 +139,10 @@
 .pair-head h3 { font-size: 17px; font-weight: 730; letter-spacing: -.02em; }
 .pair-head p { margin: 3px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .pair-mark { width: 42px; height: 42px; border-radius: 12px; flex: none; display: grid; place-items: center;
-  background: radial-gradient(120% 120% at 50% 30%, #0e2d33, #06171c); border: 1px solid var(--border-2); }
-.pair-mark svg { width: 30px; height: 30px; display: block; }
+  background: #121314; border: 1px solid var(--border-2);
+  /* the Embodent mark on its dark brand tile in every theme */
+  --v2-logo-ink: #ECEDF1; --v2-logo-accent: #7C808A; }
+.pair-mark svg { width: 26px; height: 26px; display: block; }
 .pair-content { padding: 18px 22px 22px; }
 .pair-select { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px;
   padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
@@ -209,7 +212,5 @@
 .gh-repo-row .gh-ck { color: var(--accent); flex: none; }
 .tag.gh-private { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
   color: var(--warn); border-color: var(--warn-line); background: var(--warn-soft); }
-.gh-detail { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
-  color: var(--muted); }
 .gh-unbind { display: flex; justify-content: flex-end; padding-top: 12px; margin-top: 12px;
   border-top: 1px solid var(--border); }

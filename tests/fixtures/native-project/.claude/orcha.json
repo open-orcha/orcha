@@ -1,0 +1,6 @@
+{
+  "project_name": "native-smoke",
+  "api_port": 8123,
+  "db_port": 5432,
+  "bridge_port": 8799
+}

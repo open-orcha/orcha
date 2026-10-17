@@ -11,6 +11,7 @@ import hashlib
 import uuid
 
 import pytest
+from conftest import ts_ago
 
 
 @pytest.fixture(autouse=True)
@@ -234,7 +235,7 @@ async def test_check_touch_throttled(client, container, make_agent, trust_proxy,
     assert t2 == t1                                    # inside the window: no write
 
     db.execute(
-        "UPDATE device_tokens SET last_used_at = now() - interval '2 minutes'"
+        f"UPDATE device_tokens SET last_used_at = {ts_ago(120)}"
     )
     assert (await client.get("/api/auth/check", headers=hdr)).status_code == 202
     t3 = db.execute("SELECT last_used_at FROM device_tokens")[0]["last_used_at"]
@@ -343,5 +344,6 @@ async def test_device_page_serves_redirect_js_and_fallback(client):
     # manual fallback: visible token + copy button + "app should have opened" copy
     assert "should have opened automatically" in src
     assert "Copy token" in src
-    # mint failure (non-member) renders an actionable message
-    assert "must be a member" in src
+    # mint failure (non-member) renders an actionable message (parity DEV-004:
+    # a fixed headline per case, raw server text only under Details)
+    assert "isn't a member of this Embodent yet" in src

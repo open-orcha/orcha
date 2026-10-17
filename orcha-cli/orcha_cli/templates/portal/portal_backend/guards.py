@@ -4,6 +4,8 @@ import uuid
 
 from fastapi import HTTPException
 
+from portal_backend import sql
+
 
 def valid_uuid(value: str) -> bool:
     """Return whether a value is a UUID string."""
@@ -96,25 +98,162 @@ def resolve_alias(cur, container_id, alias):
     return str(row["id"])
 
 
-def pick_human(cur, container_id):
-    """Select the most recently active non-retired human agent."""
+def find_actionable_human(cur, container_id, exclude_id=None, also_exclude=None, grant=None):
+    """The human an agent's "ask the human" request should route to, or None.
+
+    Routing must land on someone who can ACT on the request (answer / reject /
+    decide), not merely see it:
+
+    * viewers are excluded outright — the viewer role is read-only (mig 039;
+      identity_routes._forbid_viewer_write refuses every write), so a request
+      routed to one could never be answered;
+    * under proxy trust (ORCHA_TRUST_PROXY_USER=1), humans carrying a
+      github_login (members who can sign in and act through the portal) rank
+      ahead of login-less rows, which are reachable only via the headerless
+      CLI / team-token lane. A login-less human is a last resort, never a
+      preference. In a still-unmapped bootstrap container every human is
+      login-less, so the ordering degrades to plain recency;
+    * PS-33: under proxy trust a member who has NEVER signed in (no heartbeat — a
+      pending invite) ranks after everyone who has, so a fresh invite can't outrank
+      the people actually using the project just by being newer;
+    * within a tier, the most recently active human wins (freshest heartbeat,
+      then earliest-created) — the pre-existing behavior.
+
+    `exclude_id` (parity r2) drops one human from the pool — escalate passes the
+    requester so a human's own escalation never routes straight back to them.
+    `also_exclude` drops a second one (a role demotion re-routing an ask away from
+    the demoted member prefers anyone but the ask's own requester).
+
+    `grant` (RT-19): only humans who hold this grant qualify (owners hold every
+    grant) — e.g. an agent suggestion must land on someone who can approve it.
+
+    Trust off (self-host) with no viewers is byte-for-byte the old query.
+    Returns None when no live non-viewer human exists (callers decide whether
+    that is an error — see pick_human)."""
+    from portal_backend.identity_routes import _proxy_trusted  # avoid import cycle
+
     cur.execute(
-        """SELECT id FROM agents
+        f"""SELECT id FROM agents
            WHERE container_id=%s AND kind='human' AND terminated_at IS NULL
-           ORDER BY COALESCE(last_heartbeat_at, created_at) DESC,
+             AND member_role <> 'viewer'
+             AND ({sql.uuid_param()} IS NULL OR id <> {sql.uuid_param()})
+             AND ({sql.uuid_param()} IS NULL OR id <> {sql.uuid_param()})
+             AND (CAST(%s AS TEXT) IS NULL OR member_role = 'owner' OR {sql.json_array_has('grants')})
+           ORDER BY CASE WHEN %s AND github_login IS NULL THEN 1 ELSE 0 END,
+                    CASE WHEN %s AND last_heartbeat_at IS NULL THEN 1 ELSE 0 END,
+                    COALESCE(last_heartbeat_at, created_at) DESC,
                     created_at ASC
+           LIMIT 1""",
+        (container_id, exclude_id, exclude_id, also_exclude, also_exclude,
+         grant, grant, _proxy_trusted(), _proxy_trusted()),
+    )
+    row = cur.fetchone()
+    return str(row["id"]) if row else None
+
+
+def pick_human(cur, container_id, exclude_id=None):
+    """Select the human who can act on an escalated / untargeted request.
+
+    See find_actionable_human for the ranking. Never returns a viewer: when the
+    only live humans are viewers, this is a 409 (the request is refused rather
+    than parked on someone who cannot answer it) — an owner must give a
+    viewer the member role, or invite a member.
+
+    `exclude_id` (parity r2): never route back to this human. When they are the
+    only one who could act, 409 — escalating your own request to yourself is a
+    no-op that would only park it in your own inbox."""
+    human_id = find_actionable_human(cur, container_id, exclude_id)
+    if human_id is not None:
+        return human_id
+    if exclude_id is not None and find_actionable_human(cur, container_id) is not None:
+        raise HTTPException(
+            409,
+            "no other human in this project can act on this request — you are the "
+            "only member who can answer it. Invite a member (or give a viewer the "
+            "member role) to hand it off.",
+        )
+    cur.execute(
+        """SELECT 1 FROM agents
+           WHERE container_id=%s AND kind='human' AND terminated_at IS NULL
            LIMIT 1""",
         (container_id,),
     )
-    row = cur.fetchone()
-    if not row:
+    if cur.fetchone() is not None:
         raise HTTPException(
             409,
-            "no human agent is registered in this container. "
-            "Run `orcha init --as <name>` (if this is a fresh container) "
-            "or `/orcha-register-human <name>` to add one.",
+            "no human in this container can act on requests — every live human "
+            "is a read-only viewer. Ask an owner to give someone the member role "
+            "(or invite a member).",
         )
-    return str(row["id"])
+    raise HTTPException(
+        409,
+        "no human agent is registered in this container. "
+        "Run `orcha init --as <name>` (if this is a fresh container) "
+        "or `/orcha-register-human <name>` to add one.",
+    )
+
+
+def reroute_open_requests(cur, container_id, from_id):
+    """Move every OPEN request parked on `from_id` to a human who can act on it.
+
+    Parity r3 (e2e-permissions-24): demoting a member to the read-only viewer role
+    must not leave their open asks on someone who can never answer them (every
+    viewer write 403s). Each ask goes to the find_actionable_human pick — never
+    `from_id`, and preferably not the ask's own requester (a human's ask routed
+    back to themselves would read "you -> you") — and is stamped
+    `detail.rerouted_from_alias` so read-models can say who it was meant for.
+
+    Non-raising: when nobody else can act the ask stays where it is and is
+    reported in `unrouted` (a demotion is never refused over it).
+    Returns {"rerouted": [{"request_id", "to_agent_id", "to_alias"}], "unrouted": [ids]}."""
+    from portal_backend.org_chart import route_via_manager, stamp_routing  # import cycle
+
+    cur.execute("SELECT alias FROM agents WHERE id=%s", (from_id,))
+    frm = cur.fetchone()
+    from_alias = frm["alias"] if frm else None
+    cur.execute(
+        """SELECT id, requester_id FROM requests
+           WHERE container_id=%s AND target_id=%s AND status IN ('open', 'escalated')
+           ORDER BY created_at ASC
+           """ + sql.for_update(),
+        (container_id, from_id),
+    )
+    rows = cur.fetchall()
+    rerouted, unrouted = [], []
+    for row in rows:
+        rid = str(row["id"])
+        requester = str(row["requester_id"]) if row["requester_id"] else None
+        # RT-17: the org chart comes first, exactly like a NEW ask at this moment — the
+        # nearest actionable manager above the requester (the demoted member is a viewer
+        # now, so the walk passes over them). Only then the recency fallback.
+        to, routing = route_via_manager(
+            cur, container_id, requester, exclude_ids=(requester, from_id)
+        )
+        if to is None:
+            to = find_actionable_human(cur, container_id, from_id, also_exclude=requester)
+        if to is None:
+            to = find_actionable_human(cur, container_id, from_id)
+        if to is None:
+            unrouted.append(rid)
+            continue
+        rerouted_obj = sql.json_cast(
+            sql.json_object("'rerouted_from_alias'", "CAST(%s AS TEXT)"))
+        cur.execute(
+            f"""UPDATE requests
+                  SET target_id=%s,
+                      detail = {sql.json_merge("COALESCE(detail, '{}')", rerouted_obj)}
+                WHERE id=%s""",
+            (to, from_alias, rid),
+        )
+        # RT-13: replace the routing record — a stale routed_to_alias naming the demoted
+        # member would contradict the new target (None drops it; a fallback record says
+        # why the chain was not used).
+        stamp_routing(cur, rid, routing)
+        cur.execute("SELECT alias FROM agents WHERE id=%s", (to,))
+        to_row = cur.fetchone()
+        rerouted.append({"request_id": rid, "to_agent_id": to,
+                         "to_alias": to_row["alias"] if to_row else None})
+    return {"rerouted": rerouted, "unrouted": unrouted}
 
 
 def require_kind(cur, agent_id, allowed):

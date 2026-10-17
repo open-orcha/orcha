@@ -184,7 +184,7 @@ async def test_work_ack_floor_skips_conversation_turn(
     # an old unanswered chat turn, then a prompt (the reviewer's repro ordering)
     db.execute(
         """INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload)
-           VALUES (%s, %s, %s, 'conversation_turn', 1000.0, %s::jsonb)""",
+           VALUES (%s, %s, %s, 'conversation_turn', 1000.0, %s)""",
         (container["id"], aid, aid, json.dumps({"conversation_id": "c1",
                                                 "content": "are you still there?"})))
     await client.post(f"/api/agents/{aid}/prompt", json={"message": "first prompt"})
@@ -607,7 +607,7 @@ async def test_active_conversations_excludes_acked_rows_above_pinned_floor(
     def _ins(ts, name, payload):
         return db.execute(
             "INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload) "
-            "VALUES (%s, %s, %s, %s, %s, %s::jsonb) RETURNING id",
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (cid, aid, aid, name, ts, json.dumps(payload)))[0]["id"]
 
     # t=10 request_closed: excluded from the drain count, but WAKING → pins the floor here

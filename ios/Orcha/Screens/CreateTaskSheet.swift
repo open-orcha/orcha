@@ -39,7 +39,7 @@ struct CreateTaskSheet: View {
         NavigationStack {
             OrchaThemed(mode: model.themeMode, skin: model.skinMode) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: LSpace.l) {
                         // Collab v1: honest gating — a viewer / trusted non-member
                         // sees WHY Create is off (the server 403s the write anyway).
                         if let denial = model.access.writeDenialReason {
@@ -48,26 +48,32 @@ struct CreateTaskSheet: View {
                         titleField
                         descriptionField
                         dodField
-                        assignSection
-                        prioritySection
-                        advancedSection
+                        propertyChips
+                        if !dependsOn.isEmpty || advanced {
+                            dependsOnList
+                        }
                         if let error = model.error {
                             Banner(kind: .danger, text: "Couldn't create the task — nothing was lost. \(error)")
                         }
                     }
-                    .padding(16)
+                    .padding(.horizontal, LSpace.l)
+                    .padding(.vertical, LSpace.m)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .background(p.surface)
             }
-            .navigationTitle("Create task")
+            .navigationTitle("New task")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(p.surface, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { requestClose() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Create") { submit() }
-                        .font(p.uiFont(16, .heavy))
-                        .disabled(!valid || !model.access.canWrite)
+                    Button("Create task") { submit() }
+                        .fontWeight(.semibold)
+                        .tint(p.accent)
+                        .disabled(!valid || !model.access.canWrite || model.actionInFlight)
                 }
             }
             .confirmationDialog(
@@ -81,14 +87,20 @@ struct CreateTaskSheet: View {
                 Text("Your task draft will be lost.")
             }
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(dirty)
     }
 
     // MARK: fields
 
     private var titleField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionH(title: "Title")
-            OrchaTextField(text: $title, prompt: "Short, plain-language ask", lines: 1...2)
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("", text: $title, prompt: Text("Task title").foregroundStyle(p.faint), axis: .vertical)
+                .lineLimit(1...3)
+                .ltype(.title)
+                .foregroundStyle(p.text)
+                .accessibilityLabel("Title")
             if triedSubmit && title.isBlank {
                 helper("A title is required.", danger: true)
             }
@@ -96,138 +108,147 @@ struct CreateTaskSheet: View {
     }
 
     private var descriptionField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionH(title: "Description")
-            OrchaTextField(text: $description, prompt: "Context the agent will read", lines: 3...8)
-            helper("Context the agent will read.")
-        }
+        TextField("", text: $description, prompt: Text("Add description… (markdown)").foregroundStyle(p.faint), axis: .vertical)
+            .lineLimit(2...10)
+            .ltype(.body)
+            .foregroundStyle(p.text2)
+            .accessibilityLabel("Description")
+            .accessibilityHint("Context the agent will read. Markdown is supported.")
     }
 
     private var dodField: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SectionH(title: "Definition of done")
-            OrchaTextField(text: $dod, prompt: "How will you know it's done?", lines: 3...8)
+            HStack(alignment: .firstTextBaseline, spacing: LSpace.s) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(p.ok)
+                    .accessibilityHidden(true)
+                TextField("", text: $dod, prompt: Text("Done when…").foregroundStyle(p.faint), axis: .vertical)
+                    .lineLimit(1...6)
+                    .ltype(.body)
+                    .foregroundStyle(p.text)
+                    .accessibilityLabel("Done when")
+            }
+            .padding(LSpace.m)
+            .background(p.surface2, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(p.border, lineWidth: 1))
             if triedSubmit && dod.isBlank {
-                helper("Required — the agent stops at needs-verification and you check against this.", danger: true)
+                helper("Required — the agent stops at needs verification and you check against this.", danger: true)
             } else {
-                helper("How will you know it's done? The agent stops at needs-verification and you check against this.")
+                helper("The agent stops at needs verification; you check against this.")
             }
         }
     }
 
-    // MARK: assign to
+    // MARK: property chips (Priority · Assignee · Depends on · Park)
 
-    private var assignSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionH(title: "Assign to", count: assignee ?? "unassigned")
-            if agents.isEmpty {
-                OrchaCard {
-                    Text("No agents registered yet — the task will start unassigned.")
-                        .font(p.uiFont(13))
-                        .foregroundStyle(p.muted)
-                }
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        AssigneeChip(alias: "Unassigned", selected: assignee == nil) {
-                            assignee = nil
-                        }
-                        ForEach(agents) { agent in
-                            AssigneeChip(
-                                alias: agent.alias,
-                                status: agent.status,
-                                selected: assignee == agent.alias
-                            ) {
-                                assignee = agent.alias
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: priority
-
-    private var prioritySection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionH(title: "Priority", count: "P\(MobileUx.priorityFor(band))")
-            Picker("Priority", selection: $band) {
-                Text("Low").tag(PriorityBand.low)
-                Text("Normal").tag(PriorityBand.normal)
-                Text("High").tag(PriorityBand.high)
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
-    // MARK: advanced
-
-    private var advancedSection: some View {
-        DisclosureGroup(isExpanded: $advanced) {
-            VStack(alignment: .leading, spacing: 12) {
-                dependsOnCard
-                parkCard
-            }
-            .padding(.top, 4)
-        } label: {
-            Text("ADVANCED")
-                .font(p.uiFont(11, .bold))
-                .tracking(0.8)
-                .foregroundStyle(p.muted)
-        }
-        .tint(p.accent)
-    }
-
-    private var dependsOnCard: some View {
-        OrchaCard {
-            Text("Depends on").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
-            Text("This task won't become ready until these complete.")
-                .font(p.uiFont(13)).foregroundStyle(p.muted)
-            ForEach(openTasks.prefix(12)) { task in
-                Button {
-                    if dependsOn.contains(task.id) {
-                        dependsOn.remove(task.id)
-                    } else {
-                        dependsOn.insert(task.id)
+    private var propertyChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: LSpace.s) {
+                Menu {
+                    Picker("Priority", selection: $band) {
+                        Text("High").tag(PriorityBand.high)
+                        Text("Normal").tag(PriorityBand.normal)
+                        Text("Low").tag(PriorityBand.low)
                     }
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: dependsOn.contains(task.id) ? "checkmark.square.fill" : "square")
-                            .foregroundStyle(dependsOn.contains(task.id) ? p.accent : p.faint)
-                        Text(task.title)
-                            .font(p.uiFont(13))
-                            .foregroundStyle(p.text)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        StatusPill(status: task.status, domain: .task)
+                    HStack(spacing: 6) {
+                        LPriorityGlyph(priority: MobileUx.priorityFor(band), size: 12)
+                        Text(bandLabel)
                     }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
+                    .chipLook(p, selected: band != .normal)
                 }
-                .buttonStyle(.plain)
+                .accessibilityLabel("Priority, \(bandLabel)")
+
+                Menu {
+                    Picker("Assignee", selection: $assignee) {
+                        Text("Unassigned").tag(String?.none)
+                        ForEach(agents) { agent in
+                            Text(agent.status == "working" ? "\(agent.alias) · working" : agent.alias)
+                                .tag(Optional(agent.alias))
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if let assignee {
+                            LAvatar(name: assignee, isAI: true, size: 16)
+                        } else {
+                            Image(systemName: "person.crop.circle.dashed")
+                        }
+                        Text(assignee ?? "Assignee")
+                    }
+                    .chipLook(p, selected: assignee != nil)
+                }
+                .accessibilityLabel("Assignee, \(assignee ?? "unassigned")")
+
+                LChip(
+                    dependsOn.isEmpty ? "Depends on" : "Depends on \(dependsOn.count)",
+                    icon: "arrow.triangle.branch",
+                    selected: !dependsOn.isEmpty || advanced
+                ) {
+                    withAnimation(.lQuick) { advanced.toggle() }
+                }
+
+                LChip(parked ? "Parked" : "Park it", icon: "moon.zzz", selected: parked) {
+                    parked.toggle()
+                }
+                .accessibilityValue(parked ? "On — created pending" : "Off")
+            }
+            .ltype(.meta)
+        }
+    }
+
+    private var bandLabel: String {
+        switch band {
+        case .high, .elevated: "High"
+        case .normal: "Priority"
+        case .low: "Low"
+        }
+    }
+
+    private var dependsOnList: some View {
+        LSection("Depends on", count: dependsOn.count) {
+            LCard(padding: 0) {
+                VStack(spacing: 0) {
+                    if openTasks.isEmpty {
+                        Text("No open tasks to wait on.")
+                            .ltype(.meta)
+                            .foregroundStyle(p.faint)
+                            .padding(LSpace.m)
+                    }
+                    ForEach(Array(openTasks.prefix(12).enumerated()), id: \.element.id) { index, task in
+                        if index > 0 { LDivider() }
+                        Button { toggleDependency(task.id) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: dependsOn.contains(task.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(dependsOn.contains(task.id) ? p.accent : p.faint)
+                                LStatusGlyph(status: task.status, size: 13)
+                                Text(task.title)
+                                    .ltype(.body)
+                                    .foregroundStyle(p.text)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(.horizontal, LSpace.m)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(dependsOn.contains(task.id) ? .isSelected : [])
+                    }
+                }
             }
         }
     }
 
-    private var parkCard: some View {
-        OrchaCard {
-            Toggle(isOn: $parked) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Park it").font(p.uiFont(14, .bold)).foregroundStyle(p.text)
-                    Text("The agent won't start yet — task is created pending.")
-                        .font(p.uiFont(13)).foregroundStyle(p.muted)
-                }
-            }
-            .tint(p.accent)
-        }
+    private func toggleDependency(_ id: String) {
+        if dependsOn.contains(id) { dependsOn.remove(id) } else { dependsOn.insert(id) }
     }
 
     // MARK: helpers
 
     private func helper(_ text: String, danger: Bool = false) -> some View {
         Text(text)
-            .font(p.uiFont(12))
+            .ltype(.micro)
             .foregroundStyle(danger ? p.danger : p.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -258,57 +279,17 @@ struct CreateTaskSheet: View {
     }
 }
 
-/// Rounded field matching `ManualConnectSheet` — surface2 fill, hairline border,
-/// vertical-growth `TextField`.
-private struct OrchaTextField: View {
-    @Environment(\.palette) private var p
-    @Binding var text: String
-    let prompt: String
-    let lines: ClosedRange<Int>
-
-    var body: some View {
-        TextField("", text: $text, prompt: Text(prompt), axis: .vertical)
-            .lineLimit(lines)
-            .padding(12)
-            .background(p.surface2, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border2, lineWidth: 1))
-    }
-}
-
-/// Assignee chip — tinted when selected. "working" agents get a hint line.
-private struct AssigneeChip: View {
-    @Environment(\.palette) private var p
-    let alias: String
-    var status: String?
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            OrchaCard(
-                borderColor: selected ? p.accentLine : p.border,
-                container: selected ? p.accentSoft : p.surface
-            ) {
-                HStack(spacing: 8) {
-                    AgentAvatar(alias: alias, size: 30)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(alias)
-                            .font(p.uiFont(14, .semibold))
-                            .foregroundStyle(p.text)
-                        if let status {
-                            StatusPill(status: status, domain: .agent)
-                        }
-                    }
-                    if status == "working" {
-                        Text("working — will pick this up next")
-                            .font(p.uiFont(11))
-                            .foregroundStyle(p.muted)
-                    }
-                }
-            }
-            .frame(minWidth: 140)
-        }
-        .buttonStyle(.plain)
+private extension View {
+    /// Menu-label chip matching `LChip`'s look (a Menu can't host LChip's own button).
+    func chipLook(_ p: Palette, selected: Bool) -> some View {
+        self
+            .foregroundStyle(selected ? p.text : p.text2)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 30)
+            .background(selected ? p.surface3 : p.surface2, in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? p.border2 : p.border, lineWidth: 1))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
     }
 }
 

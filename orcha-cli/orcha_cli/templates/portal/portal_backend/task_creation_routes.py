@@ -4,6 +4,7 @@ import json
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -16,6 +17,7 @@ from portal_backend.guards import (
 )
 from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.schemas import TaskCreateBody
+from portal_backend.task_completion_support import DEP_SATISFIED_STATUSES
 
 
 @app.post("/api/containers/{cid}/tasks", status_code=201)
@@ -37,6 +39,33 @@ def create_task(cid: str, body: TaskCreateBody, request: Request):
         for dep in body.depends_on:
             if not _valid_uuid(dep):
                 raise HTTPException(400, f"depends_on contains invalid UUID: {dep}")
+        # TG-46: dependencies are project-scoped — every dep must be a real, non-root task
+        # of THIS project (a cross-project edge would couple two projects' queues, and the
+        # root is the human's container sentinel, never a work prerequisite).
+        deps_unmet = False
+        if body.depends_on:
+            cur.execute(
+                f"SELECT id, container_id, is_root, status FROM tasks WHERE {sql.in_list('id')}",
+                (sql.list_param(body.depends_on),),
+            )
+            found = {str(r["id"]): r for r in cur.fetchall()}
+            for dep in body.depends_on:
+                row = found.get(str(dep))
+                if row is None or str(row["container_id"]) != cid:
+                    raise HTTPException(
+                        400, f"depends_on task {dep} is not a task in this project"
+                    )
+                if row["is_root"]:
+                    raise HTTPException(
+                        400, "the root task cannot be a dependency"
+                    )
+            # TG-45: 'pending' only while some dependency is still unsatisfied; a task
+            # whose deps are all completed (or cancelled) is ready on arrival — nothing
+            # would ever promote it later.
+            deps_unmet = any(
+                found[str(d)]["status"] not in DEP_SATISFIED_STATUSES
+                for d in body.depends_on
+            )
 
         assignee_id = None
         if body.assignee_alias:
@@ -44,7 +73,7 @@ def create_task(cid: str, body: TaskCreateBody, request: Request):
 
         initial_status = (
             "pending"
-            if body.depends_on
+            if deps_unmet
             else ("in_progress" if assignee_id else "ready")
         )
         # #326 (B3): a HELD task is created 'not_ready' regardless of deps — it leaves the
@@ -67,7 +96,7 @@ def create_task(cid: str, body: TaskCreateBody, request: Request):
             f"""INSERT INTO tasks
                   (container_id, title, description, definition_of_done,
                    status, priority, created_by_agent_id, protocol, started_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, {started_clause})
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, {started_clause})
                 RETURNING id""",
             (
                 cid,
@@ -82,7 +111,7 @@ def create_task(cid: str, body: TaskCreateBody, request: Request):
         )
         tid = str(cur.fetchone()["id"])
 
-        for dep in body.depends_on:
+        for dep in dict.fromkeys(body.depends_on):
             cur.execute(
                 "INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (%s, %s)",
                 (tid, dep),
@@ -125,6 +154,17 @@ def create_task(cid: str, body: TaskCreateBody, request: Request):
                 "depends_on": body.depends_on,
             },
         )
+        if not assignee_id:
+            # Parity r2: an UNASSIGNED task published nothing, so open portals only saw it
+            # on their next 3 s poll. A container-only event (no agent target → no wake)
+            # pushes it over the /events SSE like every assigned task already is.
+            _publish_event(
+                cur,
+                cid,
+                None,
+                "task_created",
+                {"task_id": tid, "title": body.title},
+            )
         conn.commit()
 
     return {

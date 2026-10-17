@@ -53,7 +53,10 @@ describe("DraftsBar", () => {
         onOpenDraft={vi.fn()} onDraftsChanged={vi.fn()}
       />,
     );
-    expect(screen.getByText("2 drafted files")).toBeInTheDocument();
+    expect(screen.getByText(/^2 drafted files · this browser$/)).toBeInTheDocument();
+    // one-line strip: names summarized; per-file controls live in the panel
+    expect(screen.getByText("a.ts, b.ts")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Propose changes…"));
     expect(screen.getByTitle("a.ts")).toBeInTheDocument();
     expect(screen.getByTitle("b.ts")).toBeInTheDocument();
   });
@@ -64,6 +67,7 @@ describe("DraftsBar", () => {
       <DraftsBar cid="c1" gitRef="HEAD" drafts={[{ path: "a.ts", content: "x", baseHash: null, savedAt: 1 }]}
         onOpenDraft={onOpenDraft} onDraftsChanged={vi.fn()} />,
     );
+    fireEvent.click(screen.getByText("Propose changes…"));
     fireEvent.click(screen.getByTitle("a.ts"));
     expect(onOpenDraft).toHaveBeenCalledWith("a.ts");
   });
@@ -76,6 +80,7 @@ describe("DraftsBar", () => {
       <DraftsBar cid="c1" gitRef="HEAD" drafts={[{ path: "a.ts", content: "x", baseHash: null, savedAt: 1 }]}
         onOpenDraft={vi.fn()} onDraftsChanged={onDraftsChanged} />,
     );
+    fireEvent.click(screen.getByText("Propose changes…"));
     fireEvent.click(screen.getByLabelText("Discard draft for a.ts"));
     await waitFor(() => expect(onDraftsChanged).toHaveBeenCalled());
     expect(await listDrafts("c1", "HEAD")).toEqual([]);
@@ -91,6 +96,28 @@ describe("DraftsBar", () => {
     expect(sendBtn).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(/Short summary/), { target: { value: "Fix the bug" } });
     expect(sendBtn).not.toBeDisabled();
+  });
+
+  it("CODE-062: the success notice survives the drafts being cleared (parent re-lists to [])", async () => {
+    __setDraftDbForTests(makeInMemoryDb());
+    await putDraft("c1", "HEAD", "a.ts", { content: "fixed", baseHash: "h1" });
+    stubFetch((url) => (url.includes("/code/github/propose")
+      ? { ok: true, pr_number: 240, pr_url: "https://github.com/o/r/pull/240", branch: "orcha/edits", commit_sha: "s" }
+      : {}));
+    const drafts = [{ path: "a.ts", content: "fixed", baseHash: "h1", savedAt: 1 }];
+    const view = render(<DraftsBar cid="c1" gitRef="HEAD" drafts={drafts} onOpenDraft={vi.fn()} onDraftsChanged={vi.fn()} />);
+    fireEvent.click(screen.getByText("Propose changes…"));
+    fireEvent.change(screen.getByPlaceholderText(/Short summary/), { target: { value: "Fix" } });
+    fireEvent.click(screen.getByRole("button", { name: "Propose" }));
+    await screen.findByText(/PR #240/);
+    // what CodeSpacePage does after onDraftsChanged: the list is now empty
+    view.rerender(<DraftsBar cid="c1" gitRef="HEAD" drafts={[]} onOpenDraft={vi.fn()} onDraftsChanged={vi.fn()} />);
+    expect(screen.getByText(/Opened/)).toHaveTextContent("Opened PR #240 on branch orcha/edits.");
+    expect(screen.getByText("Open in hub")).toBeInTheDocument();
+    expect(screen.queryByText(/drafted file/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByText(/PR #240/)).toBeNull();
+    expect(view.container.firstChild).toBeNull();
   });
 
   it("on ok: posts the drafts, clears them, and shows the PR link + hub link", async () => {
@@ -115,13 +142,15 @@ describe("DraftsBar", () => {
     expect(screen.getByRole("link", { name: /PR #9/ })).toHaveAttribute("href", "https://github.com/o/r/pull/9");
     expect(screen.getByRole("link", { name: /PR #9/ })).toHaveAttribute("target", "_blank");
     expect(screen.getByRole("link", { name: /PR #9/ })).toHaveAttribute("rel", "noopener noreferrer");
-    expect(screen.getByText("Open in hub")).toHaveAttribute("href", "/github?pr=9");
+    // scoped to the project (multi-project stacks would otherwise open the default one)
+    expect(screen.getByText("Open in hub")).toHaveAttribute("href", "/github?pr=9&cid=c1");
     expect(onDraftsChanged).toHaveBeenCalled();
     expect(await listDrafts("c1", "HEAD")).toEqual([]);
 
     const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(([u]) => String(u).includes("propose"))!;
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body).toEqual({ base_ref: "HEAD", message: "Fix the bug", files: [{ path: "a.ts", content: "fixed", base_hash: "h1" }] });
+    // C21: the symbolic "HEAD" is never sent to GitHub; "" = the default branch
+    expect(body).toEqual({ base_ref: "", message: "Fix the bug", files: [{ path: "a.ts", content: "fixed", base_hash: "h1" }] });
   });
 
   it("on drift: keeps the drafts and offers a per-file Reload base action", async () => {

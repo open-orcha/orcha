@@ -1,0 +1,13 @@
+/* "Use for agent runs" row inside an Anthropic / OpenAI key panel (AgentKeyToggle.tsx).
+   The switch itself is the shared .set-switch (cloud/settings/settings-cards.css). */
+.ak-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--v2-space-4);
+  margin-top: var(--v2-space-3); padding-top: var(--v2-space-3);
+  border-top: 1px solid var(--v2-border);
+}
+.ak-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.ak-title { font-size: var(--v2-fs-body); font-weight: var(--v2-fw-medium); color: var(--v2-text); line-height: 1.4; }
+.ak-desc { font-size: var(--v2-fs-meta); color: var(--v2-text-2); line-height: 1.45; max-width: 60ch; }
+.ak-state { margin-top: 2px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); line-height: 1.45; }
+.ak-state.is-on { color: var(--v2-ok); font-weight: var(--v2-fw-medium); }
+.ak-row .set-switch { flex: 0 0 auto; margin-top: 2px; }

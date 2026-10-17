@@ -73,8 +73,50 @@ def _render_task_body(protocol: Optional[dict]) -> Optional[str]:
             who += f" <{req['git_email']}>"
         lines.append(f"- Requested by: {who} — attribute any PR/commit for this task "
                      "to them per the repository workflow rules.")
+    # Goal ancestry: WHY this task exists — project objective -> parent task(s) -> this task.
+    why = _render_goal_chain(p.get("goal_chain"))
+    if why:
+        lines.append(why)
     # Title alone (no description/DoD) adds nothing over what the worker already knows — skip.
     return "\n".join(lines) if len(lines) > 2 else None
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _render_goal_chain(chain) -> Optional[str]:
+    """Goal ancestry: render the server's goal_chain (objective -> parent(s) -> this task,
+    top-down) as ONE line so the worker knows the WHY behind its task and can judge scope
+    against the parent and the project objective. Pure; None when there is nothing beyond
+    the task itself (no stated objective and no parent)."""
+    if not isinstance(chain, list) or not chain:
+        return None
+    hops = []
+    informative = False
+    for node in chain:
+        if not isinstance(node, dict):
+            continue
+        kind = node.get("kind")
+        if kind == "objective":
+            if node.get("text"):
+                informative = True
+                hops.append(f'Project objective "{_clip(node["text"], 280)}"'
+                            + (f' ({_clip(node["title"], 60)})' if node.get("title") else ""))
+            elif node.get("title"):
+                hops.append(f'Project "{_clip(node["title"], 60)}" (no objective set)')
+        elif kind == "parent":
+            informative = True
+            status = f' [{node["status"]}]' if node.get("status") else ""
+            hops.append(f'Parent task "{_clip(node.get("title") or "", 120)}"{status} '
+                        f'(id {node.get("id")})')
+        elif kind == "task":
+            hops.append(f'This task "{_clip(node.get("title") or "", 120)}"')
+    if not informative:
+        return None
+    return ("- Why this task exists (goal chain, project objective → parent task(s) → this "
+            "task — keep your work in service of it): " + " → ".join(hops))
 
 
 def _render_resume_context(protocol: Optional[dict]) -> Optional[str]:

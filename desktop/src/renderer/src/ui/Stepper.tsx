@@ -25,12 +25,12 @@ export function Stepper({ steps, current }: StepperProps) {
                   'flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold transition-colors duration-[var(--duration-base)]',
                   state === 'done' && 'border-accent bg-accent text-bg',
                   state === 'current' && 'border-accent text-accent',
-                  state === 'upcoming' && 'border-border text-text/40'
+                  state === 'upcoming' && 'border-border text-text-3'
                 )}
               >
                 {state === 'done' ? <Check className="h-4 w-4" /> : i + 1}
               </span>
-              <span className={cn('text-sm', state === 'current' ? 'text-text' : 'text-text/50')}>
+              <span className={cn('text-sm', state === 'current' ? 'text-text' : 'text-text-3')}>
                 {label}
               </span>
             </li>

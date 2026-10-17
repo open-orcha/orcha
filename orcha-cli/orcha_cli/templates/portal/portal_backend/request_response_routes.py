@@ -11,13 +11,19 @@ from portal_backend.guards import (
     require_container_active as _require_container_active,
     valid_uuid as _valid_uuid,
 )
+from portal_backend.identity_routes import require_member_read
 from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.request_lookup import require_request
+from portal_backend.review_routing import (
+    apply_manager_review as _apply_manager_review,
+    parse_manager_response as _parse_manager_response,
+    pending_prereview_for_request as _pending_prereview_for_request,
+)
 from portal_backend.schemas.requests import RequestRespond
 
 
 @app.get("/api/requests/{rid}")
-def get_request(rid: str):
+def get_request(rid: str, request: Request):
     """Read a single request by id. Read-only, localhost posture like wake-scan/wake-ack.
 
     GH#36: the notifier daemon calls this to decide whether a graded `ack_close` wake is still
@@ -29,6 +35,7 @@ def get_request(rid: str):
         raise HTTPException(400, "request_id is not a valid UUID")
     with db_cursor() as (_, cur):
         r = require_request(cur, rid)  # 404 if missing
+        require_member_read(cur, request, str(r["container_id"]))  # PS-08
         return {
             "request_id": str(r["id"]),
             "type": r["type"],
@@ -82,6 +89,17 @@ def respond_request(rid: str, body: RequestRespond, request: Request):
                 409,
                 f"request is '{r['status']}', not 'open'/'accepted' — cannot respond",
             )
+        # Mig 057: an AI manager answering its PRE-REVIEW request records a recommendation
+        # ("APPROVE: …" / "SEND BACK: …") on the task instead of a plain answer — it never
+        # verifies, and it does not wake the finisher unless the work is sent back.
+        pre = _pending_prereview_for_request(cur, r)
+        if pre is not None:
+            decision, reasons = _parse_manager_response(body.response)
+            out = _apply_manager_review(cur, pre, body.responder_agent_id, decision, reasons)
+            bump_agent(cur, body.responder_agent_id)
+            conn.commit()
+            return {"request_id": rid, "status": "closed", "unblocks_parent": None,
+                    "manager_review": out["manager_review"], "task_status": out["status"]}
         cur.execute(
             "UPDATE requests SET status='answered', response=%s, responded_at=now() WHERE id=%s",
             (body.response, rid),

@@ -37,30 +37,48 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.platform.LocalUriHandler
+import io.openorcha.mobile.domain.PortalLinks
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.domain.MarkdownLite
+import io.openorcha.mobile.domain.OrchaSelectors
 import io.openorcha.mobile.domain.MdBlock
 import io.openorcha.mobile.domain.MdSpan
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.MonoFontFamily
 import io.openorcha.mobile.ui.theme.Orcha
 
+/**
+ * Linear-skinned markdown: Inter body at 15sp in the primary text colour, muted list
+ * markers, mono code on surface2. When [tasks] + [onOpenTask] are given, bare task refs
+ * (the portal's GH #140 contract, [OrchaSelectors.taskRefMatches]) become tappable links.
+ */
 @Composable
-fun MarkdownText(body: String, modifier: Modifier = Modifier) {
+fun MarkdownText(
+    body: String,
+    modifier: Modifier = Modifier,
+    tasks: List<TaskDto> = emptyList(),
+    onOpenTask: ((String) -> Unit)? = null,
+) {
     val blocks = remember(body) { MarkdownLite.parse(body) }
+    val linker = if (onOpenTask != null && tasks.isNotEmpty()) TaskLinker(tasks, onOpenTask) else null
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEach { block -> MdBlockView(block) }
+        blocks.forEach { block -> MdBlockView(block, linker) }
     }
 }
 
+/** Turns bare task refs inside rendered inline text into tappable links. */
+private class TaskLinker(val tasks: List<TaskDto>, val onOpenTask: (String) -> Unit)
+
 @Composable
-private fun MdBlockView(block: MdBlock) {
+private fun MdBlockView(block: MdBlock, linker: TaskLinker? = null) {
     val p = Orcha.palette
     when (block) {
         is MdBlock.Code -> Text(
             block.text,
-            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily, fontSize = 11.5.sp, lineHeight = 17.sp),
+            style = ltype(LType.Mono).copy(lineHeight = 17.sp),
             color = p.text2,
             modifier = Modifier
                 .fillMaxWidth()
@@ -70,8 +88,8 @@ private fun MdBlockView(block: MdBlock) {
                 .padding(10.dp),
         )
         is MdBlock.Heading -> Text(
-            annotate(block.spans),
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.W700),
+            annotate(block.spans, linker),
+            style = ltype(LType.Headline),
             color = p.text,
             modifier = Modifier.padding(top = 4.dp),
         )
@@ -83,44 +101,56 @@ private fun MdBlockView(block: MdBlock) {
                     Modifier.size(12.dp).border(BorderStroke(1.5.dp, p.border2), RoundedCornerShape(3.dp)),
                 )
             }
-            InlineText(block.spans, color = if (block.checked) p.muted else p.text2)
+            InlineText(block.spans, color = if (block.checked) p.muted else p.text, linker = linker)
         }
         is MdBlock.Bullet -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("•", color = p.accent, style = MaterialTheme.typography.bodyMedium)
-            InlineText(block.spans, color = p.text2)
+            Text("•", color = p.muted, style = ltype(LType.Body))
+            InlineText(block.spans, color = p.text, linker = linker)
         }
         is MdBlock.Ordered -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 "${block.num}.",
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily, fontSize = 12.sp),
-                color = p.accent,
+                style = ltype(LType.Body),
+                color = p.muted,
             )
-            InlineText(block.spans, color = p.text2)
+            InlineText(block.spans, color = p.text, linker = linker)
         }
         is MdBlock.Table -> MdTable(block)
-        is MdBlock.Para -> InlineText(block.spans, color = p.text2)
+        is MdBlock.Para -> InlineText(block.spans, color = p.text, linker = linker)
     }
 }
 
 @Composable
-private fun InlineText(spans: List<MdSpan>, color: androidx.compose.ui.graphics.Color) {
-    Text(annotate(spans), style = MaterialTheme.typography.bodyMedium, color = color)
+private fun InlineText(spans: List<MdSpan>, color: androidx.compose.ui.graphics.Color, linker: TaskLinker? = null) {
+    Text(annotate(spans, linker), style = ltype(LType.Body), color = color)
 }
 
 @Composable
-private fun annotate(spans: List<MdSpan>): AnnotatedString {
+private fun annotate(spans: List<MdSpan>, linker: TaskLinker? = null): AnnotatedString {
     val p = Orcha.palette
+    val handler = LocalPortalLinkHandler.current
+    val uri = LocalUriHandler.current
+    val onOpenTask = linker?.onOpenTask
+    val tasks = linker?.tasks.orEmpty()
+    val chipStyle = portalChipStyles(p.accent, p.surface2)
     return buildAnnotatedString {
+        // Task refs are matched against the text as rendered (chips replace portal paths).
         spans.forEach { s ->
+            val portalLink = s.link?.let { PortalLinks.find(it, handler?.baseUrl, tasks).singleOrNull()?.takeIf { m -> m.range.first == 0 && m.range.last == it.length - 1 } }
             when {
+                portalLink != null -> withLink(
+                    LinkAnnotation.Clickable("md-portal-$length", TextLinkStyles(SpanStyle(color = p.accent))) {
+                        openPortalTarget(portalLink.target, portalLink.path, handler, onOpenTask, uri)
+                    },
+                ) { append(s.text) }
                 s.link != null -> withLink(
                     LinkAnnotation.Url(
                         s.link,
-                        TextLinkStyles(style = SpanStyle(color = p.accent, textDecoration = TextDecoration.Underline)),
+                        TextLinkStyles(style = SpanStyle(color = p.accent)),
                     ),
                 ) { append(s.text) }
                 s.code -> withStyle(
-                    SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.sp, color = p.text, background = p.surface3),
+                    SpanStyle(fontFamily = MonoFontFamily, fontSize = 13.sp, color = p.text, background = p.surface2),
                 ) { append(s.text) }
                 else -> withStyle(
                     SpanStyle(
@@ -128,7 +158,32 @@ private fun annotate(spans: List<MdSpan>): AnnotatedString {
                         fontStyle = if (s.italic) FontStyle.Italic else null,
                         color = if (s.bold) p.text else androidx.compose.ui.graphics.Color.Unspecified,
                     ),
-                ) { append(s.text) }
+                ) {
+                    // Portal paths in prose become labelled link chips (web lib/format.ts).
+                    var cursor = 0
+                    PortalLinks.find(s.text, handler?.baseUrl, tasks).forEach { m ->
+                        append(s.text.substring(cursor, m.range.first))
+                        withLink(
+                            LinkAnnotation.Clickable("md-portal-$length", chipStyle) {
+                                openPortalTarget(m.target, m.path, handler, onOpenTask, uri)
+                            },
+                        ) { append(PORTAL_CHIP_PREFIX + m.label) }
+                        cursor = m.range.last + 1
+                    }
+                    append(s.text.substring(cursor))
+                }
+            }
+        }
+        val plain = toAnnotatedString().text
+        linker?.let { l ->
+            OrchaSelectors.taskRefMatches(plain, l.tasks).forEach { m ->
+                addLink(
+                    LinkAnnotation.Clickable(
+                        "task-${m.task.id}",
+                        TextLinkStyles(SpanStyle(color = p.accent, fontWeight = FontWeight.Medium)),
+                    ) { l.onOpenTask(m.task.id) },
+                    m.range.first, m.range.last + 1,
+                )
             }
         }
     }
@@ -137,30 +192,38 @@ private fun annotate(spans: List<MdSpan>): AnnotatedString {
 @Composable
 private fun MdTable(table: MdBlock.Table) {
     val p = Orcha.palette
+    // Size each column to its own content (clamped), not equal shares of the widest cell —
+    // equal weights made a 5-column table several screens wide with the extra columns
+    // hidden off to the right. Long cells wrap inside their column; wide tables still scroll.
+    val columns = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    val widths = (0 until columns).map { c ->
+        val longest = (listOf(table.header.getOrNull(c).orEmpty()) + table.rows.map { it.getOrNull(c).orEmpty() })
+            .maxOf { cell -> MarkdownLite.inline(cell).sumOf { it.text.length } }
+        (longest * 7 + 20).coerceIn(36, 220).dp
+    }
     Column(
         Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .border(BorderStroke(1.dp, p.border), RoundedCornerShape(8.dp))
-            .padding(1.dp)
-            .width(IntrinsicSize.Max),
+            .horizontalScroll(rememberScrollState())
+            .padding(1.dp),
     ) {
         Row(Modifier.background(p.surface2)) {
-            table.header.forEach { cell ->
+            widths.forEachIndexed { c, w ->
                 Text(
-                    cell, style = MaterialTheme.typography.labelMedium, color = p.text,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 6.dp),
+                    table.header.getOrNull(c).orEmpty(), style = ltype(LType.Meta).copy(fontWeight = FontWeight.Medium), color = p.text,
+                    modifier = Modifier.width(w).padding(horizontal = 8.dp, vertical = 6.dp),
                 )
             }
         }
         table.rows.forEach { row ->
             Row {
-                row.forEach { cell ->
+                widths.forEachIndexed { c, w ->
                     Text(
-                        annotate(MarkdownLite.inline(cell)),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                        annotate(MarkdownLite.inline(row.getOrNull(c).orEmpty())),
+                        style = ltype(LType.Meta),
                         color = p.text2,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 5.dp),
+                        modifier = Modifier.width(w).padding(horizontal = 8.dp, vertical = 5.dp),
                     )
                 }
             }

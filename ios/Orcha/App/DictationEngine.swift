@@ -48,7 +48,7 @@ final class DictationEngine {
         volatile = ""
 
         guard await AVAudioApplication.requestRecordPermission() else {
-            state = .failed("Microphone access is off for Orcha — enable it in iOS Settings.")
+            state = .failed("Microphone access is off for Embodent — enable it in iOS Settings.")
             return
         }
         do {

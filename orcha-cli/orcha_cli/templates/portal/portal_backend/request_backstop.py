@@ -1,5 +1,6 @@
 """Close accepted requests stranded by terminal task transitions."""
 
+from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.events import publish_event as _publish_event
 
@@ -19,7 +20,7 @@ def backstop_stranded_request(cur, container_id, tid):
     Returns the list of request ids it auto-answered (usually empty)."""
     cur.execute(
         """SELECT id, requester_id, originating_task_id, type FROM requests
-           WHERE spawned_task_id=%s AND status='accepted' FOR UPDATE""",
+           WHERE spawned_task_id=%s AND status='accepted' """ + sql.for_update(),
         (tid,),
     )
     stranded = cur.fetchall()
