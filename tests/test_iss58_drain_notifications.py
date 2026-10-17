@@ -434,6 +434,97 @@ async def test_request_created_acked_when_closed_before_accept(
     assert b_created in acked
 
 
+async def test_sweep_escalation_acks_expired_targets_request_created(
+        client, container, make_agent, make_request, db):
+    """The expiry sweep re-targets an expired TASK request at a human. The expired AI target can no
+    longer accept/reject it, so the sweep must resolve the target's request_created (as the manual
+    escalate route does). Before this, the requester's later close only acked the HUMAN's copy and
+    the AI's copy re-woke it every minute (2026-10-06: ~50 no-op wakes/hour on one agent)."""
+    from conftest import ts_ago
+    human = await make_agent("kedar", "lead", kind="human")
+    a = await make_agent("areq", "eng")
+    b = await make_agent("bb", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task={"title": "t", "definition_of_done": "d"})
+    rid = req["request_id"]
+    b_created = _event_id(db, b["agent_id"], "request_created")
+    db.execute(f"UPDATE requests SET expires_at={ts_ago(60)} WHERE id=%s", (rid,))
+    s = await client.post(f"/api/containers/{container['id']}/sweep?actor_agent_id={human['agent_id']}")
+    assert s.status_code == 200, s.text
+    assert rid in s.json()["request_ids"]
+    acked = {row["event_id"] for row in db.execute(
+        "SELECT event_id FROM agent_event_acks WHERE agent_id=%s", (b["agent_id"],))}
+    assert b_created in acked
+    # ...and the human it was escalated to still has its own copy pending.
+    h_created = _event_id(db, human["agent_id"], "request_created")
+    assert h_created not in {row["event_id"] for row in db.execute(
+        "SELECT event_id FROM agent_event_acks WHERE agent_id=%s", (human["agent_id"],))}
+
+
+async def test_stale_task_request_created_is_fyi_and_drained(
+        client, container, make_agent, make_request, db):
+    """A TASK request_created whose request is no longer open to the agent (closed / rejected /
+    answered, or re-targeted elsewhere) has no accept/reject seam left. It must classify as FYI so
+    the next clean run acks it, instead of NEW_WORK that re-wakes the agent forever. This also
+    self-heals rows stranded before the sweep fix."""
+    human = await make_agent("kedar", "lead", kind="human")
+    a = await make_agent("areq", "eng")
+    b = await make_agent("bb", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task={"title": "t", "definition_of_done": "d"})
+    rid = req["request_id"]
+    payload = {"type": "task", "request_id": rid}
+    b_created = _event_id(db, b["agent_id"], "request_created")
+
+    with main.db_cursor() as (conn, cur):
+        dc = lambda **kw: main._drain_class(cur, "request_created", payload, **kw)["bucket"]
+        assert dc(target_id=b["agent_id"]) == main._DRAIN_NEW_WORK   # still open to bb
+    cand = _cand(await _scan(client, container["id"]), b["agent_id"])
+    assert b_created not in set(cand["handled_event_ids"])           # a drain never acks open work
+
+    # Re-targeted away (still open, but now the human's to act on) -> FYI for bb.
+    db.execute("UPDATE requests SET target_id=%s WHERE id=%s", (human["agent_id"], rid))
+    with main.db_cursor() as (conn, cur):
+        assert main._drain_class(cur, "request_created", payload,
+                                 target_id=b["agent_id"])["bucket"] == main._DRAIN_FYI
+
+    # Terminal (the stranded 2026-10-06 shape: closed while bb's copy was never acked) -> FYI.
+    for status in ("closed", "rejected", "answered"):
+        db.execute("UPDATE requests SET status=%s, target_id=%s WHERE id=%s",
+                   (status, b["agent_id"], rid))
+        with main.db_cursor() as (conn, cur):
+            assert main._drain_class(cur, "request_created", payload,
+                                     target_id=b["agent_id"])["bucket"] == main._DRAIN_FYI
+            assert main._drain_class(cur, "request_created", payload)["bucket"] == main._DRAIN_FYI
+
+    cand = _cand(await _scan(client, container["id"]), b["agent_id"])
+    assert b_created in set(cand["handled_event_ids"])               # the next clean run clears it
+
+
+async def test_swept_then_closed_task_request_stops_waking_target(
+        client, container, make_agent, make_request, db):
+    """End to end, the exact 2026-10-06 sequence: AI->AI task request expires, the sweep hands it to
+    a human, the human answers, the requester closes it. The original AI target must end with no
+    pending request_created (no wake), not a NEW_WORK row nothing can ever consume."""
+    from conftest import ts_ago
+    human = await make_agent("kedar", "lead", kind="human")
+    a = await make_agent("areq", "eng")
+    b = await make_agent("bb", "eng")
+    req = await make_request(a["agent_id"], "build X", target_alias="bb",
+                             type="task", task={"title": "t", "definition_of_done": "d"})
+    rid = req["request_id"]
+    db.execute(f"UPDATE requests SET expires_at={ts_ago(60)} WHERE id=%s", (rid,))
+    s = await client.post(f"/api/containers/{container['id']}/sweep?actor_agent_id={human['agent_id']}")
+    assert s.status_code == 200, s.text
+    db.execute("UPDATE requests SET status='answered', response='do it later' WHERE id=%s", (rid,))
+    r = await client.post(f"/api/requests/{rid}/close", json={"requester_agent_id": a["agent_id"]})
+    assert r.status_code == 200, r.text
+
+    cand = _cand(await _scan(client, container["id"]), b["agent_id"])
+    assert cand["pending_events"] == 0, cand["notifications"]
+    assert cand["should_wake"] is False
+
+
 # ===================== R5 cross-run: REJECTED verify is never FYI-acked =====================
 
 async def test_rejected_verify_left_unhandled_by_other_task_then_consumed_by_own_run(
