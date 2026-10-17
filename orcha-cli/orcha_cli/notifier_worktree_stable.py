@@ -22,11 +22,27 @@ def _stable_worktree(base_cwd, key, kind: str, services: Any):
         services._overlay_runtime_config(base, worktree)
         return str(worktree), branch
     services._run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
-    return_code, _ = services._run_git(
-        ["worktree", "add", "-b", branch, str(worktree), "origin/main"],
-        cwd=base_cwd,
-        timeout=60,
+    # GH #301: a local-only repository (commits, no origin/main) starts from its own HEAD
+    # instead of failing every retry; a repository with no commit has no base at all.
+    base_ref = next(
+        (
+            ref
+            for ref in ("origin/main", "HEAD")
+            if services._run_git(
+                ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                cwd=base_cwd,
+            )[0]
+            == 0
+        ),
+        None,
     )
+    return_code = 1
+    if base_ref is not None:
+        return_code, _ = services._run_git(
+            ["worktree", "add", "-b", branch, str(worktree), base_ref],
+            cwd=base_cwd,
+            timeout=60,
+        )
     if return_code != 0:
         return_code, _ = services._run_git(
             ["worktree", "add", str(worktree), branch],
