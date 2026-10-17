@@ -16,6 +16,8 @@ import sys
 import time
 from typing import Any
 
+from . import notifier_worktree_base as _worktree_base
+
 BACKOFF_FIRST_SECS = 5.0
 BACKOFF_MAX_SECS = 120.0
 
@@ -47,14 +49,14 @@ def repository_state(base_cwd, services: Any) -> dict[str, Any]:
     # Same detection the starters use to decide on isolation, so both agree on "no Git".
     if not base_cwd or not services._is_git_repo(base_cwd):
         return {"state": "no_git", "toplevel": None, "detail": None}
-    code, out = services._run_git(["rev-parse", "--show-toplevel"], cwd=base_cwd)
+    # Prefer the daemon's seam; minimal service stand-ins fall back to plain Git.
+    run_git = getattr(services, "_run_git", None) or _worktree_base.run_git
+    code, out = run_git(["rev-parse", "--show-toplevel"], cwd=base_cwd)
     if code != 0 or not out.strip():
         return {"state": "no_git", "toplevel": None, "detail": None}
     toplevel = out.strip()
     has_commit = (
-        services._run_git(
-            ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], cwd=base_cwd
-        )[0]
+        run_git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], cwd=base_cwd)[0]
         == 0
     )
     if _real(toplevel) != _real(base_cwd):
@@ -102,7 +104,9 @@ def record_failure(conv_id, reason, now: float | None = None) -> tuple[float, bo
     """Push the next attempt out (5s doubling to 2 min). Returns (delay, reason_changed)."""
     entry = _BACKOFF.get(conv_id)
     failures = (entry["failures"] if entry else 0) + 1
-    delay = min(BACKOFF_FIRST_SECS * (2 ** (failures - 1)), BACKOFF_MAX_SECS)
+    # Cap the exponent: an unbounded 2**n overflows float after ~1024 failures (~34h at
+    # the 2-minute ceiling) and would turn every later tick into an exception.
+    delay = min(BACKOFF_FIRST_SECS * (2 ** min(failures - 1, 16)), BACKOFF_MAX_SECS)
     changed = entry is None or entry.get("reason") != reason
     _BACKOFF[conv_id] = {
         "failures": failures,
