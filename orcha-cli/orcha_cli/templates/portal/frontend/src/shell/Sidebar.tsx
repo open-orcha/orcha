@@ -256,17 +256,15 @@ export function buildProjectTree(opts: {
   branchOf: Map<string, string | null | undefined>;
   repo: string | null;
   prs?: Map<string, { number: number; url: string }>;
-  /** the project runs every agent in the main checkout (container.worktrees_disabled) */
-  mainCheckoutOnly?: boolean;
 }): ProjectTree {
-  const { primary, agents, more, branchOf, repo, prs, mainCheckoutOnly } = opts;
+  const { primary, agents, more, branchOf, repo, prs } = opts;
   const pr = (b: string) => prs?.get(b) ?? null;
   const nodes = new Map<string, CheckoutNode>();
   if (primary) nodes.set(primary.branch, { checkout: { branch: primary.branch, primary: true, repo: primary.repo ?? repo, pr: pr(primary.branch) }, agents: [] });
   const loose: ProjectAgentRow[] = [];
   for (const a of agents) {
     const b = branchOf.get(a.alias);
-    const branch = b || (mainCheckoutOnly && primary ? primary.branch : null);
+    const branch = b || null;
     if (!branch) { loose.push(a); continue; }
     let n = nodes.get(branch);
     if (!n) { n = { checkout: { branch, primary: false, repo, pr: pr(branch) }, agents: [] }; nodes.set(branch, n); }
@@ -612,7 +610,7 @@ function ProjectItem({ row, rows, selected, fetchedAt, collapsed, attention, off
   const t = live || tree.primary
     ? buildProjectTree({
       primary: tree.primary, agents: live?.rows ?? [], more: live?.more ?? 0, branchOf: tree.branchOf,
-      repo: tree.repo, prs: tree.prs, mainCheckoutOnly: !!snap?.container?.worktrees_disabled,
+      repo: tree.repo, prs: tree.prs,
     })
     : null;
   const hasChildren = !!t?.hasChildren;

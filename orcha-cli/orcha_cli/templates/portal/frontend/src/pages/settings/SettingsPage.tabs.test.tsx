@@ -109,7 +109,7 @@ describe("SettingsPage V2 sections (open Orcha, no extension sections)", () => {
     expect(window.location.hash).toBe("#tab=provider-keys");
 
     fireEvent.click(screen.getByRole("tab", { name: "Execution" }));
-    expect(await screen.findByRole("switch", { name: "Isolated worktrees" })).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector("#execLimits")).not.toBeNull());
     // notifier and autonomy are shown as independent facts, not merged
     // (worded like the header chip: execChipState; the config line under it)
     expect(document.querySelector("#setNotifierState")).toHaveTextContent("Paused");

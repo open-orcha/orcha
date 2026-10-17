@@ -281,6 +281,7 @@ def test_baseline_stamps_every_folded_postgres_migration(fresh_db):
         raw.close()
     versions = {v for v, _ in rows}
     pg_dir = pathlib.Path(database.__file__).resolve().parents[2] / "migrations"
-    assert versions == {p.name for p in pg_dir.glob("*.sql")} | {"001_baseline.sql"}
+    sqlite_dir = pathlib.Path(database.__file__).resolve().parents[2] / "migrations" / "sqlite"
+    assert versions == {p.name for p in pg_dir.glob("*.sql")} | {p.name for p in sqlite_dir.glob("*.sql")}
     assert all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}\+00:00", a) for _, a in rows)
     assert cli_project_setup.migration_tip_of(versions) == cli_project_setup.migration_tip(pg_dir)

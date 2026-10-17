@@ -317,7 +317,7 @@ interface ContainerListRow {
   name?: unknown
 }
 interface SnapshotResponse {
-  container?: { autonomy_level?: unknown; github_repo?: unknown; worktrees_disabled?: unknown } | null
+  container?: { autonomy_level?: unknown; github_repo?: unknown } | null
   agents?: AgentRow[]
   tasks?: TaskRow[]
   requests?: RequestRow[]
@@ -377,7 +377,6 @@ export async function fetchStackAttention(
       worktrees,
       folder: stack.folder,
       githubRepo: typeof snap.container?.github_repo === 'string' ? snap.container.github_repo : null,
-      worktreesDisabled: snap.container?.worktrees_disabled === true,
       live: liveFound.live,
       taskIds: liveTaskIds(liveFound.live, agents, tasks)
     })

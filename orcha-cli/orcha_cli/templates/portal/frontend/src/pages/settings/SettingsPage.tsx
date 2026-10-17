@@ -13,7 +13,6 @@
  *  - Per-use-case universal-model selection (SPEC-SETTINGS §2):
  *    GET .../settings/models + GET .../settings/providers, explicit Save via one
  *    PUT .../settings/models writing only the overridden rows.
- *  - Worktree routing: POST …/worktrees (human-gated) — now under Execution.
  *  - Phone pairing: GET …/pairing — under Devices & pairing.
  *  - Downstream sections registered on extensions.settingsSections (cloud:
  *    provider keys, GitHub access, members, pairing, appearance) are slotted
@@ -1269,110 +1268,6 @@ export function PairingCard({ cid }: { cid: string | null }) {
     </div>
   );
 }
-
-/* ====================================================================== *
- *  Project execution routing                                              *
- * ====================================================================== */
-export function WorktreeRoutingCard({ cid }: { cid: string | null }) {
-  const { snap, refresh } = useSnapshot();
-  const toast = useToast();
-  const [busy, setBusy] = useState(false);
-  const persisted = !!snap?.container?.worktrees_disabled;
-  const [disabled, setDisabled] = useState(persisted);
-  const [confirmOff, setConfirmOff] = useState(false);
-  // EX-12: POST …/worktrees is owner-or-manage_autonomy (container_control_routes.py);
-  // without it the switch is disabled with the reason, and never POSTs.
-  const auth = useGrantAuthority("manage_autonomy");
-  const who = auth.human;
-  const locked = !auth.can;
-
-  useEffect(() => setDisabled(persisted), [persisted]);
-
-  const toggle = async () => {
-    if (!cid || busy || locked) return;
-    if (!who) {
-      toast(auth.reason || "Pick an acting human to change worktree routing", "warn");
-      return;
-    }
-    const next = !disabled;
-    setBusy(true);
-    try {
-      await sendJSON("POST", "/api/containers/" + encodeURIComponent(cid) + "/worktrees", {
-        disabled: next,
-        actor_agent_id: who.id,
-      });
-      setDisabled(next);
-      await refresh();
-      toast(
-        next
-          ? "Worktrees disabled — future agent runs use the main checkout."
-          : "Worktrees enabled — future agent runs use normal isolation.",
-        "ok",
-      );
-    } catch (e) {
-      toast("Couldn't change worktree routing — " + settingsErrText(e) + ".", "danger");
-    }
-    setBusy(false);
-  };
-
-  const isolated = !disabled;
-  const onSwitch = () => {
-    if (!cid || busy || locked) return;
-    // turning isolation OFF is the risky direction — confirm with the warning
-    if (isolated) setConfirmOff(true);
-    else void toggle();
-  };
-
-  return (
-    <div className="wt-setting set-rowi">
-      <div className="wt-setting-main">
-        <div className="wt-setting-title set-rowi-l" id="wtTitle">Isolated worktrees</div>
-        <div className="wt-setting-desc set-rowi-d" id="wtDesc">
-          {isolated
-            ? "Each task or agent runs in its own Git worktree, so concurrent agents never share a checkout."
-            : "Off — every agent runs in this project’s main checkout. Concurrent agents may edit the same checkout and can overwrite or conflict with each other’s changes."}
-        </div>
-      </div>
-      {(() => {
-        const sw = (
-          <button
-            type="button"
-            className={"set-switch" + (isolated ? " on" : "") + (locked ? " is-locked" : "")}
-            role="switch"
-            id="wtSwitch"
-            aria-checked={isolated}
-            aria-labelledby="wtTitle"
-            aria-describedby="wtDesc"
-            aria-busy={busy || undefined}
-            aria-disabled={locked || undefined}
-            disabled={busy}
-            onClick={onSwitch}
-          >
-            <span className="set-switch-knob" />
-          </button>
-        );
-        // aria-disabled (not disabled) keeps the switch focusable so the
-        // reason tooltip is reachable by keyboard too
-        return locked && auth.reason ? <Tooltip label={auth.reason} placement="left">{sw}</Tooltip> : sw;
-      })()}
-      {confirmOff && (
-        <Modal
-          title="Turn off isolated worktrees?"
-          danger
-          primary="Turn off"
-          desc="Every agent will run in this project's main checkout instead of an isolated task or agent worktree. Concurrent agents may edit the same checkout and can overwrite or conflict with each other's changes. Existing worktrees are not removed."
-          onPrimary={() => { setConfirmOff(false); void toggle(); }}
-          onClose={() => setConfirmOff(false)}
-        />
-      )}
-    </div>
-  );
-}
-
-/* ====================================================================== *
- *  V2 sections                                                            *
- * ====================================================================== */
-
 /**
  * What to say while a section has no project data (pure, tested; SG-12 /
  * EX-14): the snapshot failure named for what it is — an HTTP answer is not
@@ -1539,7 +1434,6 @@ function ExecutionSection() {
       <SettingsGroup
         settab="execution" title="Agent workspace" flush
       >
-        <WorktreeRoutingCard cid={cid} />
         {/* mig 056: the agent limit (PUT …/limits, owner-or-manage_agents) */}
         <SettingRows id="execLimits">
           <AgentLimitRow cid={cid} />

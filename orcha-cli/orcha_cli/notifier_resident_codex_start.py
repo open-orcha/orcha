@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 import time
 
-from . import notifier_checkout_consent as _consent
 from .notifier_routing_handoff import carry_previous_checkout
+
+
+def _answered_through(turns) -> int:
+    """Newest agent turn seq that answered the human (the cold-boot history cursor)."""
+    return max(
+        [turn.get("seq", 0) for turn in turns if turn.get("role") == "agent"],
+        default=0,
+    )
 
 
 def start_candidate(
@@ -30,7 +38,7 @@ def start_candidate(
         )
         or {}
     ).get("turns", [])
-    resolved_through = _consent.resolved_through(turns)
+    resolved_through = _answered_through(turns)
     pending = [
         turn
         for turn in turns
@@ -64,14 +72,13 @@ def start_candidate(
             )
         return
 
-    worktrees_disabled = bool(candidate.get("worktrees_disabled"))
     in_git = services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)
-        if in_git and not worktrees_disabled
+        if in_git
         else (None, None)
     )
-    if in_git and not worktrees_disabled and worktree is None:
+    if in_git and worktree is None:
         _fail(
             services,
             api_base,
@@ -82,34 +89,19 @@ def start_candidate(
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
 
-    def _carry():
-        return carry_previous_checkout(
-            api_base,
-            candidate["agent_id"],
-            run_cwd,
-            services,
-            conversation_id=conv_id,
+    if not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        conversation_id=conv_id,
+    ) and not quiet:
+        # #288: never block a resident boot on a carry; the previous checkout is preserved as-is.
+        print(
+            f"[notifier] Codex conversation {candidate.get('agent_alias')} — starting without "
+            "the uncommitted files of its previous checkout (preserved; use Bring-in to collect)",
+            file=sys.stderr,
         )
-
-    if not _carry():
-        consented = _consent.handle_carry_failure(
-            services,
-            api_base,
-            conv_id,
-            candidate,
-            turns,
-            base_cwd=base_cwd,
-            quiet=quiet,
-        )
-        if not (consented and _carry()):
-            _fail(
-                services,
-                api_base,
-                candidate,
-                quiet,
-                "saved files could not be carried into the selected checkout",
-            )
-            return
     log_path = services._conversation_log_path(base_cwd, conv_id)
     reply_path = services._conversation_reply_path(log_path)
     session_id = candidate.get("session_id")
@@ -222,7 +214,6 @@ def start_candidate(
         "conversation_ack_ts": candidate.get("conversation_ack_ts"),
         "resume_session_id": session_id if use_resume else None,
         "run_token": token,
-        "worktrees_disabled": worktrees_disabled,
         "hard_deadline": time.time() + services.HARD_CAP_MIN_SECS,
         "last_size": 0,
         "last_progress_ts": time.time(),

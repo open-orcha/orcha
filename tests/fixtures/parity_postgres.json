@@ -200,9 +200,7 @@
       }
     },
     "GET /api/agents/{dev}/persona": {
-      "booleans": {
-        "$.worktrees_disabled": false
-      },
+      "booleans": {},
       "datetime_formats": {},
       "types": {
         "agent_id": "str",
@@ -211,8 +209,7 @@
         "model": "str",
         "model_runtime": "str",
         "role": "str",
-        "system_prompt": "str",
-        "worktrees_disabled": "bool"
+        "system_prompt": "str"
       }
     },
     "GET /api/agents/{dev}/protocol?task_id={t1}": {
@@ -496,7 +493,6 @@
         "$.container.autonomy_enforced": false,
         "$.container.runtime_served": true,
         "$.container.wakes_enabled": true,
-        "$.container.worktrees_disabled": false,
         "$.requests[*].escalated": [
           false,
           false
@@ -651,8 +647,7 @@
           "runtime_served": "bool",
           "status": "str",
           "wake_scan_age_secs": "float",
-          "wakes_enabled": "bool",
-          "worktrees_disabled": "bool"
+          "wakes_enabled": "bool"
         },
         "request_open_total": "int",
         "request_total": "int",
@@ -779,11 +774,7 @@
         ],
         "$.conversations[*].pending_human": [
           false
-        ],
-        "$.conversations[*].worktrees_disabled": [
-          false
-        ],
-        "$.worktrees_disabled": false
+        ]
       },
       "datetime_formats": {
         "$.conversations[*].last_turn_at": [
@@ -820,11 +811,9 @@
             "pending_inbox": "int",
             "reasoning_effort": "null",
             "session_id": "null",
-            "status": "str",
-            "worktrees_disabled": "bool"
+            "status": "str"
           }
-        ],
-        "worktrees_disabled": "bool"
+        ]
       }
     },
     "GET /api/containers/{cid}/members": {
@@ -1297,12 +1286,7 @@
           true,
           true
         ],
-        "$.candidates[*].worktrees_disabled": [
-          false,
-          false
-        ],
-        "$.wakes_enabled": true,
-        "$.worktrees_disabled": false
+        "$.wakes_enabled": true
       },
       "datetime_formats": {},
       "types": {
@@ -1388,16 +1372,14 @@
             "triage_hint": "null",
             "wake_enabled": "bool",
             "wake_task_id": "str",
-            "work_idle_seconds": "null",
-            "worktrees_disabled": "bool"
+            "work_idle_seconds": "null"
           }
         ],
         "container_id": "str",
         "container_status": "str",
         "triage_key_enc": "null",
         "triage_model": "null",
-        "wakes_enabled": "bool",
-        "worktrees_disabled": "bool"
+        "wakes_enabled": "bool"
       }
     },
     "GET /api/conversations/{conv}": {
@@ -1501,7 +1483,6 @@
         "$.container.autonomy_enforced": false,
         "$.container.runtime_served": true,
         "$.container.wakes_enabled": true,
-        "$.container.worktrees_disabled": false,
         "$.requests[*].escalated": [
           false,
           false
@@ -1656,8 +1637,7 @@
           "runtime_served": "bool",
           "status": "str",
           "wake_scan_age_secs": "float",
-          "wakes_enabled": "bool",
-          "worktrees_disabled": "bool"
+          "wakes_enabled": "bool"
         },
         "request_open_total": "int",
         "request_total": "int",

@@ -191,7 +191,6 @@ export interface Container {
   status?: string;
   autonomy_level?: string; // plan | pr | full
   autonomy_enforced?: boolean; // #64 mig-043: container level governs everyone (overrides ignored)
-  worktrees_disabled?: boolean; // project routes every agent run through the main checkout
   autonomy_paused?: boolean;
   wakes_enabled?: boolean; // notifier kill-switch (POST /api/containers/{cid}/wakes); absent on old backends
   /** mig 056 agent limit: how many agents created from suggestions the project may hold (PUT …/limits) */

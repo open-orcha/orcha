@@ -72,7 +72,7 @@ def get_container(
                       (SELECT COUNT(*) FROM agents ag
                         WHERE ag.container_id = containers.id AND ag.terminated_at IS NULL
                           AND ag.kind = 'ai' AND ag.is_auto_created) AS auto_agents_in_use,
-                      autonomy_level, autonomy_enforced, worktrees_disabled, github_repo,
+                      autonomy_level, autonomy_enforced, github_repo,
                       -- mig 050 (D14): the project's cosmetic icon (NULL = default glyph)
                       icon,
                       -- mig 057: where finished work goes for verification + AI pre-review

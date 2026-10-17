@@ -4,7 +4,7 @@
  * navigate('/settings?cid=…#tab=pairing')) must switch the section. pushState
  * never fires `hashchange`, so the page follows the router location.
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useNavigate, type NavigateFunction } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
@@ -55,7 +55,7 @@ describe("SettingsPage follows router hash navigations", () => {
     expect(screen.getByRole("tab", { name: "Devices & pairing" })).toHaveAttribute("aria-selected", "true");
     // and back via an alias
     act(() => { nav!("/settings#tab=execution"); });
-    expect(await screen.findByRole("switch", { name: "Isolated worktrees" })).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector("#execLimits")).not.toBeNull());
   });
 
   it("re-navigating to the router's last hash after a local tab click still switches back", async () => {

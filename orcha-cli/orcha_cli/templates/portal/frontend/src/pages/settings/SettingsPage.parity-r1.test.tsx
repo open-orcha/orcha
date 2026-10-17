@@ -179,40 +179,11 @@ describe("Models & providers: manage_keys gate", () => {
 });
 
 describe("Execution", () => {
-  it("EX-12: a member without manage_autonomy gets a locked switch with the reason and no POST", async () => {
-    install();
-    asIdentity({ agent_id: "h1", alias: "kedar", member_role: "member", grants: ["manage_keys"] });
-    renderAt("execution");
-    const sw = await screen.findByRole("switch", { name: "Isolated worktrees" });
-    await waitFor(() => expect(sw).toHaveAttribute("aria-disabled", "true"));
-    fireEvent.click(sw);
-    expect(screen.queryByText("Turn off isolated worktrees?")).toBeNull();
-    fireEvent.pointerEnter(sw);
-    fireEvent.focus(sw);
-    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(SETTINGS_GRANT_REASON.manage_autonomy));
-    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/worktrees"))).toBe(false);
-  });
-
-  it("EX-12: a refused toggle toasts the server detail", async () => {
-    install({
-      container: { worktrees_disabled: true },
-      route: (url, method) => (url.endsWith("/worktrees") && method === "POST"
-        ? { status: 403, data: { detail: "this action requires the owner role or the 'manage_autonomy' permission" } } : null),
-    });
-    renderAt("execution");
-    const sw = await screen.findByRole("switch", { name: "Isolated worktrees" });
-    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
-    await waitFor(() => expect(sw).not.toHaveAttribute("aria-disabled"));
-    fireEvent.click(sw);
-    expect(await screen.findByText("Couldn't change worktree routing — this action requires the owner role or the 'manage_autonomy' permission.")).toBeInTheDocument();
-  });
-
   it("EX-14: an unreachable project shows the failure + Retry, and no worktree switch", async () => {
     install({ snapStatus: 503 });
     renderAt("execution");
     await waitFor(() => expect(document.querySelector("#execLoad")).toHaveTextContent("Couldn't load this project."));
     expect(document.querySelector("#execLoad button")).toHaveTextContent("Retry");
-    expect(screen.queryByRole("switch", { name: "Isolated worktrees" })).toBeNull();
     expect(document.querySelector("#setOpenExec")).toBeNull();
   });
 });

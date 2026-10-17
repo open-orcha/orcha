@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .notifier_routing_handoff import checkout_owner_key
 
 
 def checkpoint_and_respawn(
@@ -41,38 +40,10 @@ def checkpoint_and_respawn(
         if current_run is not None
         else context.get("task_id")
     )
-    source_owner_verified = _run_records_checkout(current_run, source_cwd, services)
-    worktree, branch, task_worktree, worktrees_disabled = _respawn_routing(
-        api_base,
-        agent_id,
-        worker,
-        context,
-        task_id,
-        services,
-    )
+    # #288: a checkpoint continuation always resumes in the worker's own checkout
+    # (worktrees are never switched off), so no carry between checkouts happens here.
+    task_worktree = bool(worker.get("task_worktree"))
     destination_cwd = worktree or base_cwd
-    if not services._handoff_worktree_changes(
-        source_cwd,
-        destination_cwd,
-        owner_key=checkout_owner_key(
-            agent_id,
-            task_id=task_id,
-            lane="work",
-        ),
-        source_owner_verified=source_owner_verified,
-    ):
-        _handle_handoff_failure(
-            api_base,
-            agent_id,
-            worker,
-            live_workers,
-            task_id,
-            diff,
-            quiet,
-            services,
-        )
-        return
-
     services._revoke_or_defer(api_base, worker.get("run_token"))
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
@@ -153,7 +124,6 @@ def checkpoint_and_respawn(
         "respawns": respawns,
         "respawn_ctx": context,
         "lane": worker.get("lane", "work"),
-        "worktrees_disabled": worktrees_disabled,
         # I4: the NEW wake's sandbox container rides the record so every
         # Popen-completion path can reap it (container + api-config) after stamping.
         "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
@@ -176,43 +146,6 @@ def checkpoint_and_respawn(
         )
 
 
-def _respawn_routing(api_base, agent_id, worker, context, task_id, services):
-    """Apply the latest project routing preference to a checkpoint continuation.
-
-    A checkpoint replacement is a new worker run, so a setting changed while the old process was
-    alive must take effect here too.  The previous checkout is only detached from the new worker;
-    it is never removed or reset as a side effect of routing changes.
-    """
-    previous_disabled = bool(
-        worker.get("worktrees_disabled", context.get("worktrees_disabled", False))
-    )
-    desired_disabled = previous_disabled
-    project = services._get_json(f"{api_base}/api/agents/{agent_id}/persona")
-    if isinstance(project, dict) and "worktrees_disabled" in project:
-        desired_disabled = bool(project["worktrees_disabled"])
-
-    if desired_disabled:
-        return None, None, False, True
-
-    worktree = worker.get("worktree")
-    branch = worker.get("branch")
-    task_worktree = bool(worker.get("task_worktree"))
-    if previous_disabled:
-        worktree = branch = None
-        task_worktree = False
-        base_cwd = worker.get("base_cwd")
-        if task_id:
-            worktree, branch = services._provision_task_worktree(
-                base_cwd, context.get("alias"), task_id
-            )
-            task_worktree = worktree is not None
-        if worktree is None:
-            worktree, branch = services._provision_worktree(
-                base_cwd, context.get("alias")
-            )
-    return worktree, branch, task_worktree, False
-
-
 def _current_run(api_base, agent_id, worker, services):
     """Return the persisted run record for the worker being checkpointed."""
     run_id = worker.get("run_id")
@@ -222,22 +155,6 @@ def _current_run(api_base, agent_id, worker, services):
             if run.get("run_id") == run_id:
                 return run
     return None
-
-
-def _run_records_checkout(run, source_cwd, services):
-    """Prove the stopped run owned the exact checkout being handed off."""
-    if not run or not source_cwd:
-        return False
-    recorded_cwd = run.get("worktree") or run.get("base_cwd")
-    if not recorded_cwd:
-        return False
-    try:
-        return (
-            services.pathlib.Path(recorded_cwd).resolve()
-            == services.pathlib.Path(source_cwd).resolve()
-        )
-    except OSError:
-        return False
 
 
 def _next_log_path(base_cwd, context, services):
@@ -312,65 +229,4 @@ def _handle_spawn_failure(
         print(
             f"[notifier] checkpoint-respawn for {agent_id} FAILED to spawn "
             f"a fresh worker — {outcome} + lease released"
-        )
-
-
-def _handle_handoff_failure(
-    api_base,
-    agent_id,
-    worker,
-    live_workers,
-    task_id,
-    diff,
-    quiet,
-    services,
-) -> None:
-    """Stop visibly when a checkout switch cannot preserve the worker's file view."""
-    if worker.get("task_worktree"):
-        sha = services._checkpoint_task_worktree(
-            worker.get("base_cwd"),
-            worker.get("worktree"),
-            worker.get("branch"),
-            task_id,
-            worker.get("run_id"),
-        )
-        saved = services._saved_ref(worker, sha, diff)
-        human = services._saved_human_line(
-            worker.get("base_cwd"), worker.get("branch"), sha
-        )
-        services._record_task_saved_ref(api_base, worker, saved, human)
-        services._synthesize_task_digest(
-            api_base,
-            agent_id,
-            task_id,
-            saved,
-            worker.get("started_ts"),
-            human,
-        )
-
-    if task_id:
-        services._post_json(
-            f"{api_base}/api/tasks/{task_id}/messages",
-            {
-                "author_agent_id": worker.get("agent_id") or agent_id,
-                "body": (
-                    "Checkpoint replacement paused because Orcha could not safely carry "
-                    "the in-progress files into the checkout selected by the project setting. "
-                    "The existing files remain preserved, and no replacement worker was started."
-                ),
-            },
-        )
-    services._post_json(
-        f"{api_base}/api/agents/{agent_id}/wake-ack",
-        {
-            "kind": "worker_checkpoint_handoff_failed",
-            "release_lease": True,
-            "lane": worker.get("lane", "work"),
-        },
-    )
-    services._retire_headless(api_base, live_workers, agent_id)
-    if not quiet:
-        print(
-            f"[notifier] checkpoint-respawn for {agent_id} paused: in-progress files "
-            "could not be carried into the selected checkout; source preserved"
         )

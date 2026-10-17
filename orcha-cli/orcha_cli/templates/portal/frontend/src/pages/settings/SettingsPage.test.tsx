@@ -31,7 +31,6 @@ interface Call {
 let calls: Call[] = [];
 let keyStatus: Record<string, unknown> = { configured: true, masked: "sk-...abcd", source: "db" };
 let rawAgents: unknown[] = [];
-let worktreesDisabled = false;
 
 function installFetch() {
   calls = [];
@@ -50,16 +49,11 @@ function installFetch() {
           id: "c1",
           name: "Orcha",
           autonomy_level: "plan",
-          worktrees_disabled: worktreesDisabled,
         },
         agents: rawAgents,
         tasks: [],
         requests: [],
       });
-    if (url === "/api/containers/c1/worktrees" && method === "POST") {
-      worktreesDisabled = !!(body as { disabled?: boolean } | undefined)?.disabled;
-      return json({ container_id: "c1", worktrees_disabled: worktreesDisabled });
-    }
     if (url.endsWith("/settings/llm-key") && method === "GET") return json(keyStatus);
     if (url.endsWith("/settings/llm-key") && method === "PUT")
       return json({ configured: true, masked: "sk-...9999" });
@@ -90,60 +84,9 @@ beforeEach(() => {
   delete extensions.settingsSections;
   delete extensions.settingsGeneral;
   localStorage.clear();
-  worktreesDisabled = false;
   installFetch();
 });
 
-describe("SettingsPage worktree routing", () => {
-  it("defaults to isolated worktrees and warns about a shared checkout only when turning isolation off", async () => {
-    rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
-    renderPage("execution");
-    const toggle = await screen.findByRole("switch", { name: "Isolated worktrees" });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    // the conflict warning is not shown permanently…
-    expect(screen.queryByText(/Existing worktrees are not removed/)).not.toBeInTheDocument();
-    await waitFor(() => expect(document.querySelector("#execFacts")).not.toBeNull()); // snapshot (and so the acting human) loaded
-    fireEvent.click(toggle);
-    // …only in the confirm step, and nothing is posted until confirmed
-    expect(await screen.findByText(/Concurrent agents may edit the same checkout/)).toBeInTheDocument();
-    expect(screen.getByText(/Existing worktrees are not removed/)).toBeInTheDocument();
-    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/worktrees"))).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
-    await waitFor(() => {
-      const post = calls.find((c) => c.method === "POST" && c.url === "/api/containers/c1/worktrees");
-      expect(post!.body).toEqual({ disabled: true, actor_agent_id: "h1" });
-    });
-  });
-
-  it("persists toggles with the acting human and renders an enabled project", async () => {
-    worktreesDisabled = true;
-    rawAgents = [{ id: "h1", alias: "kedar", kind: "human", status: "active" }];
-    renderPage("execution");
-    const toggle = await screen.findByRole("switch", { name: "Isolated worktrees" });
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
-
-    // turning isolation back ON needs no confirmation
-    fireEvent.click(toggle);
-    await waitFor(() => {
-      const post = calls.find((c) => c.method === "POST" && c.url === "/api/containers/c1/worktrees");
-      expect(post).toBeTruthy();
-      expect(post!.body).toEqual({ disabled: false, actor_agent_id: "h1" });
-    });
-  });
-
-  it("requires an acting human before changing the project setting (switch locked with the reason)", async () => {
-    rawAgents = [{ id: "a1", alias: "forge", kind: "ai", status: "active" }];
-    renderPage("execution");
-    const sw = await screen.findByRole("switch", { name: "Isolated worktrees" });
-    await waitFor(() => expect(sw).toHaveAttribute("aria-disabled", "true"));
-    fireEvent.click(sw);
-    expect(screen.queryByText(/Concurrent agents may edit the same checkout/)).toBeNull();
-    fireEvent.pointerEnter(sw);
-    fireEvent.focus(sw);
-    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/Pick an acting human first/));
-    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/worktrees"))).toBe(false);
-  });
-});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
