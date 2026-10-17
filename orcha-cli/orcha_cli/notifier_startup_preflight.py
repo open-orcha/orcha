@@ -40,8 +40,9 @@ def repository_state(base_cwd, services: Any) -> dict[str, Any]:
     Returns ``{"state": ..., "toplevel": ..., "detail": ...}`` where state is one of:
     ``no_git`` (run in the folder, as non-Git projects always have), ``ready`` (a
     checkout can be provisioned), ``ancestor_repo`` (Git found a repository in a parent
-    folder that has no usable commit), or ``no_commit`` (the project's own repository has
-    no commit yet). Read-only: only ``rev-parse`` is run.
+    folder — empty or not — rather than one rooted at the project folder), or
+    ``no_commit`` (the project's own repository has no commit yet). Read-only: only
+    ``rev-parse`` is run.
     """
     # Same detection the starters use to decide on isolation, so both agree on "no Git".
     if not base_cwd or not services._is_git_repo(base_cwd):
@@ -56,24 +57,29 @@ def repository_state(base_cwd, services: Any) -> dict[str, Any]:
         )[0]
         == 0
     )
-    is_own = _real(toplevel) == _real(base_cwd)
-    if has_commit:
-        # A project inside a parent repository that HAS commits keeps its existing
-        # behaviour (isolated checkout of that repository); only unusable parents block.
-        return {"state": "ready", "toplevel": toplevel, "detail": None}
-    if not is_own:
+    if _real(toplevel) != _real(base_cwd):
+        # Any repository ABOVE the project folder belongs to someone else. Making a
+        # resident checkout there would add a branch and a worktree entry to that
+        # parent's .git, so it blocks whether or not the parent has commits.
+        found = (
+            "a Git repository with saved history"
+            if has_commit
+            else "an empty Git repository with no commits"
+        )
         return {
             "state": "ancestor_repo",
             "toplevel": toplevel,
             "detail": (
                 f"The project folder {base_cwd} is not its own Git repository, and Git "
-                f"found an empty repository in a parent folder ({toplevel}) with no "
-                "commits. Orcha will not create checkouts in that parent repository. "
-                "To fix: run `git init` in the project folder and make a first commit "
-                "there (or point the project at a folder outside that parent "
-                "repository). Pending messages stay queued and are answered once fixed."
+                f"found {found} in a parent folder ({toplevel}). Orcha will not create "
+                "branches or checkouts in that parent repository. To fix: run "
+                "`git init` in the project folder and make a first commit there (or "
+                "point the project at a folder outside that parent repository). "
+                "Pending messages stay queued and are answered once fixed."
             ),
         }
+    if has_commit:
+        return {"state": "ready", "toplevel": toplevel, "detail": None}
     return {
         "state": "no_commit",
         "toplevel": toplevel,
