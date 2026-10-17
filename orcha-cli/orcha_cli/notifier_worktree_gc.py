@@ -38,6 +38,7 @@ import time
 from typing import Callable, Optional
 
 from . import notifier_deliverables
+from . import worktree_bringin as bringin
 from . import worktree_gc as gc
 
 CLAIM_EVERY_S = 10.0
@@ -322,6 +323,34 @@ def _still_running(worker) -> bool:
 
 # ------------------------------------------------------------------ requests from the portal
 
+def run_bring_in(project_cwd, action: dict, busy) -> dict:
+    """#288: bring a task worktree's changes into main, or update it from main — the dry run
+    (``options.dry_run``) only reports the plan; the real run applies the human's choices."""
+    opts = action.get("options") or {}
+    path = action.get("path") or ""
+    try:
+        if action.get("action") == "bring_in":
+            if opts.get("dry_run", True):
+                plan = bringin.plan_bring_in(project_cwd, path, mode=opts.get("mode") or "apply",
+                                             busy=busy)
+            else:
+                plan = bringin.bring_in(project_cwd, path, mode=opts.get("mode") or "apply",
+                                        stash=bool(opts.get("stash")),
+                                        stash_message=opts.get("stash_message"),
+                                        allow_other_branch=bool(opts.get("allow_other_branch")),
+                                        busy=busy)
+        else:
+            if opts.get("dry_run", True):
+                plan = bringin.plan_update(project_cwd, path, busy=busy)
+            else:
+                plan = bringin.update_from_main(project_cwd, path, stash=bool(opts.get("stash")),
+                                                stash_message=opts.get("stash_message"), busy=busy)
+    except bringin.BringInError as exc:
+        return {"status": "failed", "error": str(exc)[:2000]}
+    # a dry run that found conflicts is a successful REPORT (the UI shows them), not a failure
+    return {"status": "done", "result": plan}
+
+
 def run_action(api_base, cid, project_cwd, action: dict, busy: set[str], *, quiet=True,
                post=_default_post, upload=None, state: Optional[GcState] = None) -> dict:
     """Carry out one claimed request; returns the result body reported back."""
@@ -329,6 +358,8 @@ def run_action(api_base, cid, project_cwd, action: dict, busy: set[str], *, quie
     upload = upload or upload_deliverable(api_base)
     if kind == "refresh":
         return {"status": "done", "result": {"refreshed": True}}
+    if kind in ("bring_in", "update_from_main"):
+        return run_bring_in(project_cwd, action, busy)
     rows = gc.inventory(project_cwd, busy=busy, measure=True,
                         size_cache=(state.size_cache if state else None)) or []
     contexts = fetch_context(api_base, cid, rows, post=post)

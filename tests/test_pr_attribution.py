@@ -52,7 +52,7 @@ def test_migration_042_exists_and_is_next_sequential():
     # (plan_usage_snapshots); 070 the plan-usage display setting (plan_usage_display); 071 opt-in
     # agent-run API keys (container_provider_keys.use_for_agents).
     # Keep this pin moving with the chain tip so gaps/dupes still fail loudly.
-    assert numbers[-1] == 71, f"071 must be the latest migration, saw {numbers[-1]:03d}"
+    assert numbers[-1] == 73, f"073 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):

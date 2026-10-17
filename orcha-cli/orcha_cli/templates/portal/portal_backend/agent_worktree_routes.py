@@ -61,12 +61,35 @@ class WorktreeSettingsUpdate(BaseModel):
     actor_agent_id: Optional[str] = Field(default=None, description="The human making the change")
 
 
+BRING_IN_ACTIONS = ("bring_in", "update_from_main")
+PER_WORKTREE_ACTIONS = ("remove", "save_output", *BRING_IN_ACTIONS)
+
+
+class BringInOptions(BaseModel):
+    """GH #288: the human's choices for bring_in / update_from_main (dry run first, always)."""
+    dry_run: bool = Field(default=True, description="Only report the plan (files, conflicts, "
+                                                    "stash needed, base-commit check); change nothing")
+    mode: Literal["apply", "merge"] = Field(
+        default="apply", description="bring_in: land the delta as uncommitted changes in main's "
+                                     "working tree (apply) or merge the agent branch (merge)")
+    stash: bool = Field(default=False, description="Confirmed: stash the target checkout's own "
+                                                   "uncommitted changes first (restored afterwards)")
+    stash_message: Optional[str] = Field(default=None, max_length=200,
+                                         description="The stash entry's name (default: orcha-bring-in/…)")
+    allow_other_branch: bool = Field(default=False, description="bring_in: confirmed even though main "
+                                                                "is checked out on another branch")
+
+
 class WorktreeActionCreate(BaseModel):
-    action: Literal["remove", "save_output", "clean_up", "refresh"] = Field(
+    action: Literal["remove", "save_output", "clean_up", "refresh", "bring_in", "update_from_main"] = Field(
         description="remove one worktree, save one worktree's output to its task, clean up every "
-                    "eligible worktree, or ask the host for a fresh inventory")
+                    "eligible worktree, ask the host for a fresh inventory, bring one task worktree's "
+                    "changes into the main checkout (#288), or update one from main")
     path: Optional[str] = Field(default=None, max_length=4096,
-                                description="The worktree (remove / save_output) — from the inventory")
+                                description="The worktree (remove / save_output / bring_in / "
+                                            "update_from_main) — from the inventory")
+    options: BringInOptions = Field(default_factory=BringInOptions,
+                                    description="bring_in / update_from_main choices")
     keep_branch: bool = Field(default=False, description="remove: keep the git branch")
     confirm_branch: Optional[str] = Field(
         default=None, max_length=300,
@@ -139,7 +162,7 @@ def _action_out(row) -> dict:
     return {"id": str(r["id"]), "action": r["action"], "path": r.get("path"), "branch": r.get("branch"),
             "keep_branch": r["keep_branch"], "confirm_unmerged": r["confirm_unmerged"],
             "include_output": r["include_output"], "unmerged_paths": r.get("unmerged_paths") or [],
-            "status": r["status"], "result": r.get("result"), "error": r.get("error"),
+            "options": r.get("options") or {}, "status": r["status"], "result": r.get("result"), "error": r.get("error"),
             "requested_by": str(r["requested_by"]) if r.get("requested_by") else None,
             "claimed_by": r.get("claimed_by"), "created_at": _iso(r["created_at"]),
             "claimed_at": _iso(r.get("claimed_at")), "finished_at": _iso(r.get("finished_at"))}
@@ -209,8 +232,10 @@ def put_agent_worktree_settings(cid: str, body: WorktreeSettingsUpdate, request:
 @app.post("/api/containers/{cid}/agent-worktrees/actions", status_code=201)
 def create_agent_worktree_action(cid: str, body: WorktreeActionCreate, request: Request):
     """Ask the host notifier to remove a worktree, save its output to its task, clean up every
-    eligible worktree, or refresh the inventory. A worktree with unmerged commits is only
-    removed when its branch name is typed into ``confirm_branch``; one in use never is."""
+    eligible worktree, refresh the inventory, bring a task worktree's changes into the main
+    checkout or update it from main (#288: ``options.dry_run`` first, then the real run with the
+    human's choices). A worktree with unmerged commits is only removed when its branch name is
+    typed into ``confirm_branch``; one in use (a live run) is never changed."""
     _cid(cid)
     with db_cursor() as (conn, cur):
         require_container(cur, cid)
@@ -219,13 +244,23 @@ def create_agent_worktree_action(cid: str, body: WorktreeActionCreate, request: 
         by_path = {it.get("path"): it for it in inv["items"]}
         branch = None
         confirm_unmerged = False
-        if body.action in ("remove", "save_output"):
+        if body.action in PER_WORKTREE_ACTIONS:
             item = by_path.get(body.path or "")
             if not item:
                 raise HTTPException(404, "that worktree isn't in the latest inventory — refresh first")
             branch = item.get("branch")
             state = item.get("state")
-            if state in ("in-use", "not-quorate"):
+            if state == "not-quorate":
+                raise HTTPException(409, "that worktree is not-quorate — it can't be changed from here")
+            if body.action in BRING_IN_ACTIONS:
+                # #288 Q8: never while the agent runs there — checked LIVE (worker_runs), not
+                # against the inventory's possibly 10-minute-old state.
+                if item.get("kind") != "task":
+                    raise HTTPException(409, "only a task worktree can be brought in or updated")
+                if body.path in _busy_worktrees(cur, cid):
+                    raise HTTPException(409, "the agent is running in that worktree — "
+                                             "available again when its run finishes")
+            elif state == "in-use":
                 raise HTTPException(409, f"that worktree is {state} — it can't be changed from here")
             if body.action == "remove" and state == "unmerged":
                 if (body.confirm_branch or "").strip() != (branch or ""):
@@ -241,22 +276,25 @@ def create_agent_worktree_action(cid: str, body: WorktreeActionCreate, request: 
                 if not it or it.get("state") != "unmerged":
                     raise HTTPException(400, f"{p} isn't an unmerged worktree in the inventory")
                 unmerged.append(p)
+        path = body.path if body.action in PER_WORKTREE_ACTIONS else None
         cur.execute("SELECT 1 FROM agent_worktree_actions WHERE container_id=%s AND status IN "
                     "('requested','claimed') AND action=%s AND path IS NOT DISTINCT FROM %s",
-                    (cid, body.action, body.path if body.action in ("remove", "save_output") else None))
+                    (cid, body.action, path))
         if cur.fetchone():
             raise HTTPException(409, "the same request is already waiting for the notifier")
+        options = body.options.model_dump() if body.action in BRING_IN_ACTIONS else {}
         cur.execute(
             """INSERT INTO agent_worktree_actions
                  (container_id, action, path, branch, keep_branch, confirm_unmerged, include_output,
-                  unmerged_paths, requested_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
-            (cid, body.action, body.path if body.action in ("remove", "save_output") else None, branch,
-             body.keep_branch, confirm_unmerged, body.include_output, sql.json_param(unmerged), actor))
+                  unmerged_paths, requested_by, options)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (cid, body.action, path, branch, body.keep_branch, confirm_unmerged, body.include_output,
+             sql.json_param(unmerged), actor, sql.json_param(options)))
         row = cur.fetchone()
         log_event(cur, cid, "human", actor, "container", cid, "agent_worktree_action_requested",
                   {"action": body.action, "path": body.path, "branch": branch,
-                   "keep_branch": body.keep_branch, "unmerged_paths": unmerged})
+                   "keep_branch": body.keep_branch, "unmerged_paths": unmerged,
+                   **({"options": options} if options else {})})
         conn.commit()
     return _action_out(row)
 
