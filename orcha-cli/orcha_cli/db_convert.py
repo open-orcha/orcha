@@ -252,7 +252,10 @@ def _check_schema(pg, lite: sqlite3.Connection, tables: list[str]) -> None:
             "the Postgres database has migrations this CLI's SQLite schema does not include: "
             f"{sorted(pg_versions - lite_versions)}. Update the orcha CLI, then retry."
         )
-    missing = sorted(v for v in lite_versions - pg_versions if not v.startswith("001_baseline"))
+    # The SQLite files stamp their own names next to their Postgres twins' (the baseline:
+    # every migration it folds in; later twins: one each), and Postgres never has those.
+    sqlite_only = {f.name for f in sqlite_migrations_dir().glob("*.sql")}
+    missing = sorted(lite_versions - pg_versions - sqlite_only)
     if missing:
         raise ConvertError(
             f"the Postgres database is missing migrations {missing[:5]}"

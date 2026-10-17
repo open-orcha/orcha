@@ -37,6 +37,14 @@ conftest creates/drops only the separate test DB; it never mutates `orcha`.
 > Note: the self-hosted CI runner uses its own docker-run Postgres on `:55432` — that's a
 > CI-only port, not something you set locally.
 
+**Adding a migration while both dialects ship:** write the Postgres file
+`templates/migrations/NNN_x.sql` and its SQLite twin `templates/migrations/sqlite/00M_x.sql`.
+The twin must end by stamping both names
+(`INSERT OR IGNORE INTO schema_migrations (version) VALUES ('00M_x.sql'), ('NNN_x.sql');`):
+`test_schema_parity.py` applies the files directly and expects every file's own row, and
+`pg_to_sqlite` excuses the SQLite file names when it compares a Postgres DB's history to the
+CLI's. The three failures that teach this are all Postgres-leg only, so run that leg.
+
 ---
 
 ## 2. Build `.venv-test`

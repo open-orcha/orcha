@@ -39,4 +39,6 @@ CREATE INDEX idx_agent_worktree_actions_open ON agent_worktree_actions (containe
 
 CREATE INDEX idx_agent_worktree_actions_recent ON agent_worktree_actions (container_id, created_at DESC);
 
-INSERT OR IGNORE INTO schema_migrations (version) VALUES ('073_worktree_bring_in.sql');
+-- This file's own row plus its Postgres twin's, so a fresh SQLite DB, one the runner
+-- migrated, and one converted from Postgres all report the same history.
+INSERT OR IGNORE INTO schema_migrations (version) VALUES ('003_worktree_bring_in.sql'), ('073_worktree_bring_in.sql');
