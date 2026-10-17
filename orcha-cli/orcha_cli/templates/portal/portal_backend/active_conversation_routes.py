@@ -84,8 +84,6 @@ def active_conversations(cid: str, request: Request):
     with db_cursor() as (_, cur):
         _require_container(cur, cid)
         require_member_read(cur, request, cid)  # PS-08
-        cur.execute("SELECT worktrees_disabled FROM containers WHERE id=%s", (cid,))
-        worktrees_disabled = bool(cur.fetchone()["worktrees_disabled"])
         cur.execute(
             f"""SELECT cv.id AS conversation_id, cv.agent_id, a.alias AS agent_alias, a.model,
                       a.reasoning_effort,
@@ -151,9 +149,6 @@ def active_conversations(cid: str, request: Request):
         )
         convs = cur.fetchall()
         for r in convs:
-            # The resident manager chooses its cwd from this candidate on every pending turn.
-            # Keeping the flag beside the trigger makes toggles apply to fresh and resumed chats.
-            r["worktrees_disabled"] = worktrees_disabled
             # last_turn_role is NULL only for a brand-new conversation with no turns yet.
             r["last_turn_seq"] = r["last_turn_seq"] or 0
             r["pending_human"] = r["last_turn_role"] == "human"
@@ -246,6 +241,5 @@ def active_conversations(cid: str, request: Request):
             r.pop("_inbox_max_ts", None)
     return {
         "container_id": cid,
-        "worktrees_disabled": worktrees_disabled,
         "conversations": convs,
     }

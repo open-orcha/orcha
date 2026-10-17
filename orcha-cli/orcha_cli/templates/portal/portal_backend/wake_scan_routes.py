@@ -76,7 +76,7 @@ def wake_scan(
             if cur.rowcount:
                 conn.commit()
         cur.execute(
-            "SELECT wakes_enabled, autonomy_level, autonomy_enforced, worktrees_disabled "
+            "SELECT wakes_enabled, autonomy_level, autonomy_enforced "
             "FROM containers WHERE id=%s",
             (cid,),
         )
@@ -113,7 +113,6 @@ def wake_scan(
                 resolve_model_runtime=_compatibility["resolve_model_runtime"],
                 container_autonomy_level=settings["autonomy_level"],
                 container_autonomy_enforced=autonomy_enforced,
-                worktrees_disabled=settings["worktrees_disabled"],
             )
             for agent in list_wake_agents(cur, cid, cooldown)
         ]
@@ -138,7 +137,6 @@ def wake_scan(
         "wakes_enabled": wakes_enabled,
         "autonomy_level": settings["autonomy_level"],
         "autonomy_enforced": autonomy_enforced,
-        "worktrees_disabled": bool(settings["worktrees_disabled"]),
         "triage_model": triage_model,
         # PS-08: the sealed provider keys are for the host daemon (header-less lane) only;
         # never hand ciphertext to a browser session, member or not.

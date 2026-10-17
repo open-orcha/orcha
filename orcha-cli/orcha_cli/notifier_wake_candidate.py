@@ -231,12 +231,6 @@ def process_candidate(
         )
         if spawned is None:
             return None
-        if spawned.get("handoff_failed"):
-            # Hold the candidate down instead of re-attempting (and re-posting)
-            # the same failed checkout handoff on every scan tick.
-            context["agent_hold_until"][candidate["agent_id"]] = (
-                context["hold_now"] + notifier_wake_worker.HANDOFF_FAILURE_HOLD_SECS
-            )
         sent = spawned["sent"]
         command = spawned["command"]
         resume_rendered = spawned["resume_rendered"]

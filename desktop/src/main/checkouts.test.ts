@@ -53,7 +53,7 @@ describe('git worktree porcelain', () => {
 
 describe('attributeCheckouts (D14 — real data only)', () => {
   const trees = parseWorktreePorcelain(PORCELAIN)
-  const base = { folder: '/Users/me/acme', githubRepo: 'acme/web', worktreesDisabled: false }
+  const base = { folder: '/Users/me/acme', githubRepo: 'acme/web' }
 
   it('no git data → no checkouts, agents untouched (they nest under the project)', () => {
     const live = [agent('lead')]
@@ -79,11 +79,6 @@ describe('attributeCheckouts (D14 — real data only)', () => {
       ['qa', null],
       ['docs', null]
     ])
-  })
-
-  it('worktrees disabled → unattributed agents work in the primary checkout', () => {
-    const out = attributeCheckouts({ ...base, worktreesDisabled: true, worktrees: trees.slice(0, 1), live: [agent('qa')], taskIds: new Map() })
-    expect(out.live[0].branch).toBe('main')
   })
 
   it('local binding → the folder name is the muted repo line; detached primary is labelled', () => {
@@ -128,7 +123,7 @@ describe('fetchStackAttention carries checkouts on the existing poll', () => {
     const fetchJson = vi.fn(async (url: string) => {
       if (url.endsWith('/api/containers')) return { containers: [{ id: 'c1', name: 'Acme' }] }
       return {
-        container: { autonomy_level: 'plan', github_repo: 'acme/web', worktrees_disabled: false },
+        container: { autonomy_level: 'plan', github_repo: 'acme/web' },
         agents: [
           {
             id: 'a1',

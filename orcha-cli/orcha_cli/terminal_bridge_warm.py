@@ -20,7 +20,6 @@ class WarmSession:
         run_id,
         rec,
         run_token=None,
-        worktrees_disabled=False,
     ):
         self.aid = aid
         self.alias = alias
@@ -33,7 +32,6 @@ class WarmSession:
         self.run_id = run_id
         self.rec = rec
         self.run_token = run_token
-        self.worktrees_disabled = bool(worktrees_disabled)
         self._expiry_task = None
 
     def pty_alive(self):

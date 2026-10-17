@@ -9,8 +9,6 @@
  *    (`orcha_cli/notifier_worktree_stable.provision_task`:
  *    branch `orcha/task-<safe_ref(alias)>-<safe_ref(task_id)[:12]>`) actually EXISTS in that
  *    list, for the task id the portal snapshot reports (active_run.task_id / current_task).
- *  - When the project runs with worktrees disabled (snapshot `container.worktrees_disabled`),
- *    every agent works in the primary checkout, so live agents sit under it.
  *  Anything else (resident / live-terminal / disposable worktrees, no task id) stays
  *  unattributed: the agent renders directly under its project, never under a guessed branch. */
 import { execFile } from 'node:child_process'
@@ -106,7 +104,6 @@ export function attributeCheckouts(input: {
   worktrees: GitWorktree[] | null
   folder: string | null
   githubRepo: string | null
-  worktreesDisabled: boolean
   live: HostLiveAgent[]
   taskIds: Map<string, string>
 }): { checkouts: HostCheckout[] | null; live: HostLiveAgent[] } {
@@ -133,7 +130,6 @@ export function attributeCheckouts(input: {
         return { ...a, branch: b }
       }
     }
-    if (input.worktreesDisabled) return { ...a, branch: primary.branch }
     return { ...a, branch: null }
   })
   return { checkouts: [primary, ...extra.values()], live: attributed }

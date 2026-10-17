@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 import time
 
-from . import notifier_checkout_consent as _consent
 from . import notifier_resident_claude_feed as _feed_service
 from .notifier_routing_handoff import carry_previous_checkout
+
+
+def _answered_through(turns) -> int:
+    """Newest agent turn seq that answered the human (the cold-boot history cursor)."""
+    return max(
+        [turn.get("seq", 0) for turn in turns if turn.get("role") == "agent"],
+        default=0,
+    )
 
 
 def start_or_feed_candidate(
@@ -26,25 +34,6 @@ def start_or_feed_candidate(
     resident = live_residents.get(conv_id)
     if resident is not None and resident.get("awaiting_result"):
         return
-    desired_worktree_routing = bool(candidate.get("worktrees_disabled"))
-    routing_source_cwd = None
-    if (
-        resident is not None
-        and bool(resident.get("worktrees_disabled", False)) != desired_worktree_routing
-    ):
-        # A project toggle applies to the next turn even when a warm resident exists.  Retire the
-        # process/lease but preserve its old worktree exactly as-is; the replacement boots with the
-        # newly selected routing below.
-        routing_source_cwd = resident.get("worktree") or resident.get("base_cwd")
-        services._close_resident(
-            api_base,
-            resident,
-            reason="worktree_routing_changed",
-            teardown_worktree=False,
-            stamp_woken=False,
-        )
-        live_residents.pop(conv_id, None)
-        resident = None
     serviced = resident.get("serviced_seq", 0) if resident else 0
     if candidate.get("last_turn_seq", 0) <= serviced:
         return
@@ -80,7 +69,6 @@ def start_or_feed_candidate(
             base_cwd=base_cwd,
             quiet=quiet,
             dry_run=dry_run,
-            routing_source_cwd=routing_source_cwd,
         )
     if resident is not None:
         _feed_service.feed(
@@ -104,7 +92,6 @@ def _boot(
     base_cwd,
     quiet,
     dry_run,
-    routing_source_cwd=None,
 ):
     if not dry_run:
         services._reap_dead_pid_resident_runs(
@@ -145,7 +132,7 @@ def _boot(
         )
         or {}
     ).get("turns", [])
-    resolved_through = _consent.resolved_through(turns)
+    resolved_through = _answered_through(turns)
     serviced = max(serviced, resolved_through)
     persona = (
         services._build_persona(
@@ -175,14 +162,13 @@ def _boot(
         if log_path and log_path.exists()
         else 0
     )
-    worktrees_disabled = bool(candidate.get("worktrees_disabled"))
     in_git = not dry_run and services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)
-        if in_git and not worktrees_disabled
+        if in_git
         else (None, None)
     )
-    if in_git and not worktrees_disabled and worktree is None:
+    if in_git and worktree is None:
         if not quiet:
             print(
                 f"[notifier] resident skip {candidate.get('agent_alias')} — "
@@ -192,36 +178,19 @@ def _boot(
         return None
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
 
-    def _carry():
-        return carry_previous_checkout(
-            api_base,
-            candidate["agent_id"],
-            run_cwd,
-            services,
-            source_cwd=routing_source_cwd,
-            conversation_id=conv_id,
+    if not dry_run and not carry_previous_checkout(
+        api_base,
+        candidate["agent_id"],
+        run_cwd,
+        services,
+        conversation_id=conv_id,
+    ) and not quiet:
+        # #288: never block a resident boot on a carry; the previous checkout is preserved as-is.
+        print(
+            f"[notifier] resident {candidate.get('agent_alias')} — starting without the "
+            "uncommitted files of its previous checkout (preserved; use Bring-in to collect)",
+            file=sys.stderr,
         )
-
-    if not dry_run and not _carry():
-        # Ask the human (discard the old worktree, or re-enable worktrees) instead of
-        # silently retrying every tick; retry the carry right away on consent.
-        consented = _consent.handle_carry_failure(
-            services,
-            api_base,
-            conv_id,
-            candidate,
-            turns,
-            base_cwd=base_cwd,
-            quiet=quiet,
-        )
-        if not (consented and _carry()):
-            _release_failed(services, api_base, candidate)
-            if not quiet:
-                print(
-                    f"[notifier] resident skip {candidate.get('agent_alias')} — "
-                    "saved files could not be carried into the selected checkout"
-                )
-            return None
     token = (
         None
         if dry_run
@@ -287,7 +256,6 @@ def _boot(
         "worktree": worktree,
         "branch": branch,
         "base_cwd": base_cwd,
-        "worktrees_disabled": worktrees_disabled,
         "session_id": session_id,
         "session_pinned": not cold,
         "cold": cold,

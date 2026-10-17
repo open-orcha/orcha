@@ -44,7 +44,7 @@ def get_persona(aid: str, request: Request):
     with db_cursor() as (_, cur):
         cur.execute(
             """SELECT a.alias, a.role, a.kind, a.model, a.system_prompt,
-                      c.worktrees_disabled, a.container_id
+                      a.container_id
                  FROM agents a JOIN containers c ON c.id = a.container_id
                 WHERE a.id=%s""",
             (aid,),
@@ -64,9 +64,6 @@ def get_persona(aid: str, request: Request):
         "model": model,
         "model_runtime": model_runtime,
         "system_prompt": row["system_prompt"],
-        # The live-terminal bridge reads persona before it chooses a cwd, so it shares the same
-        # persisted project routing preference as notifier-managed wakes and conversations.
-        "worktrees_disabled": bool(row["worktrees_disabled"]),
     }
 
 

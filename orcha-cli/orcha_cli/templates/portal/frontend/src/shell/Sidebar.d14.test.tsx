@@ -101,11 +101,6 @@ describe("D14 tree model (pure)", () => {
     expect(t.more).toBe(2);
     expect(t.hasChildren).toBe(true);
   });
-  it("worktrees disabled: branch-less agents work in the primary checkout", () => {
-    const t = buildProjectTree({ primary: { branch: "main", repo: null }, agents: [row("nova", "b")], more: 0, branchOf: new Map(), repo: null, mainCheckoutOnly: true });
-    expect(t.checkouts[0].agents.map((a) => a.alias)).toEqual(["nova"]);
-    expect(t.loose).toHaveLength(0);
-  });
   it("no data → no children (never fabricated)", () => {
     expect(buildProjectTree({ primary: null, agents: [], more: 0, branchOf: new Map(), repo: "acme/web" }).hasChildren).toBe(false);
   });
