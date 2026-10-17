@@ -1,0 +1,395 @@
+"""GH #301: conversation startup in empty or inherited Git repositories.
+
+LearnChat's project folder had no Git metadata of its own but sat inside an empty
+repository in ~/Documents. Both Claude and Codex conversation starts then claimed the
+lease, failed to create a resident checkout, released the lease and retried every few
+seconds — silently under --quiet, with the agent flickering Busy and the human never
+answered. These tests drive the real ``service_residents`` tick against real Git
+fixtures in disposable folders; only the HTTP helpers and the provider spawns are faked.
+"""
+
+from __future__ import annotations
+
+import io
+import pathlib
+import re
+import subprocess
+
+import pytest
+
+from orcha_cli import notifier
+from orcha_cli import notifier_startup_preflight as preflight
+
+
+def _git(cwd, *args) -> str:
+    return subprocess.run(
+        [
+            "git",
+            "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid",
+            "-c", "init.defaultBranch=main",
+            "-c", "commit.gpgsign=false",
+            *args,
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+@pytest.fixture(autouse=True)
+def _git_ceiling(monkeypatch, tmp_path):
+    # Git discovery must stop at the fixture root, whatever repository the test host is in.
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+
+
+class Proc:
+    def __init__(self, pid=4301):
+        self.pid = pid
+        self.returncode = None
+        self.stdin = io.BytesIO()
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+TURNS = [
+    {"seq": 1, "role": "human", "content": "first question"},
+    {"seq": 2, "role": "human", "content": "are you there?"},
+]
+
+
+def _conv(runtime):
+    return {
+        "conversation_id": "C301",
+        "agent_id": "A301",
+        "agent_alias": "Atlas",
+        "model_runtime": runtime,
+        "model": "gpt-5.5" if runtime == "codex" else "claude-opus-5-5",
+        "session_id": None,
+        "pending_human": True,
+        "last_turn_seq": 2,
+        "conversation_ack_ts": 7.0,
+    }
+
+
+def _wire(monkeypatch, runtime):
+    """Fake the portal API for one pending conversation; record posts and spawns."""
+    posts, spawns = [], []
+
+    def _get(url, **_):
+        if "active-conversations" in url:
+            return {"conversations": [_conv(runtime)]}
+        if "/turns" in url:
+            match = re.search(r"after_seq=(\d+)", url)
+            after = int(match.group(1)) if match else 0
+            return {"turns": [t for t in TURNS if t["seq"] > after]}
+        if "/conversation" in url:
+            return {"conversation": {"id": "C301"}, "turns": TURNS}
+        return None
+
+    def _post(url, body, **_):
+        posts.append((url, body))
+        if "wake-claim" in url:
+            return {"claimed": True, "lease_kind": body.get("lease_kind")}
+        if "embodiment-tokens" in url:
+            return {"run_token": "TOK-301"}
+        if url.endswith("/runs"):
+            return {"run_id": "RUN-301", "status": "running"}
+        return {}
+
+    def _spawn(cwd, *args, **kwargs):
+        spawns.append(cwd)
+        return True, "repr", Proc()
+
+    monkeypatch.setattr(notifier, "_get_json", _get)
+    monkeypatch.setattr(notifier, "_post_json", _post)
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA")
+    monkeypatch.setattr(notifier, "_pump_one", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_reap_dead_pid_resident_runs", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "spawn_headless", _spawn)
+    monkeypatch.setattr(notifier, "spawn_resident", _spawn)
+    return posts, spawns
+
+
+def _tick(base_cwd, live, quiet=True):
+    notifier.service_residents(
+        "http://x", "cid", live, quiet=quiet, base_cwd=str(base_cwd)
+    )
+
+
+def _claims(posts):
+    return [body for url, body in posts if url.endswith("/wake-claim")]
+
+
+def _acks(posts):
+    return [body for url, body in posts if url.endswith("/wake-ack")]
+
+
+def _snapshot(root: pathlib.Path) -> dict:
+    """Every file under root (including .git) with its bytes — proves nothing was touched."""
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _empty_parent_with_project(tmp_path):
+    documents = tmp_path / "Documents"
+    documents.mkdir()
+    _git(documents, "init", "-q")
+    (documents / "taxes.txt").write_text("parent file\n")
+    project = documents / "Research" / "LearnChat"
+    project.mkdir(parents=True)
+    (project / "notes.md").write_text("project file\n")
+    return documents, project
+
+
+RUNTIMES = pytest.mark.parametrize("runtime", ["codex", "claude"])
+
+
+@RUNTIMES
+def test_empty_ancestor_repo_blocks_before_lease_and_names_it(
+    monkeypatch, tmp_path, capsys, runtime
+):
+    documents, project = _empty_parent_with_project(tmp_path)
+    before = _snapshot(documents)
+    posts, spawns = _wire(monkeypatch, runtime)
+    live = {}
+
+    _tick(project, live, quiet=True)
+
+    assert spawns == [] and live == {}
+    assert _claims(posts) == [], "a blocked repository must not take the chat lease (no Busy)"
+    (ack,) = _acks(posts)
+    assert ack["release_lease"] is False
+    assert ack["lane"] == "conversation"
+    assert "delivered_ts" not in ack, "pending human turns must stay pending"
+    assert str(documents) in ack["detail"] and "no commits" in ack["detail"]
+    assert "git init" in ack["detail"]
+    # Quiet mode still surfaces the reason once on stderr.
+    assert "conversation startup blocked for Atlas" in capsys.readouterr().err
+    # The parent repository and every parent/project file are byte-for-byte unchanged.
+    assert _snapshot(documents) == before
+    assert not (project / ".orcha-worktrees").exists()
+    assert not (documents / ".orcha-worktrees").exists()
+
+
+@RUNTIMES
+def test_committed_ancestor_repo_also_blocks_and_parent_git_is_untouched(
+    monkeypatch, tmp_path, runtime
+):
+    # A parent WITH history must not get a branch or worktree entry either.
+    documents, project = _empty_parent_with_project(tmp_path)
+    _git(documents, "add", "taxes.txt")
+    _git(documents, "commit", "-q", "-m", "parent history")
+    before = _snapshot(documents)
+    refs_before = _git(documents, "for-each-ref")
+    worktrees_before = _git(documents, "worktree", "list", "--porcelain")
+    posts, spawns = _wire(monkeypatch, runtime)
+    live = {}
+
+    _tick(project, live, quiet=True)
+
+    assert spawns == [] and live == {}
+    assert _claims(posts) == []
+    (ack,) = _acks(posts)
+    assert ack["release_lease"] is False and "delivered_ts" not in ack
+    assert str(documents) in ack["detail"] and "saved history" in ack["detail"]
+    assert _git(documents, "for-each-ref") == refs_before
+    assert _git(documents, "worktree", "list", "--porcelain") == worktrees_before
+    assert _snapshot(documents) == before
+    assert not (documents / ".orcha-worktrees").exists()
+
+
+@RUNTIMES
+def test_empty_project_repo_reports_missing_first_commit(monkeypatch, tmp_path, runtime):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _git(project, "init", "-q")
+    (project / "app.py").write_text("print(1)\n")
+    _git(project, "add", "app.py")  # staged, never committed — the InfraAgent case
+    before = _snapshot(project)
+    posts, spawns = _wire(monkeypatch, runtime)
+
+    _tick(project, {})
+
+    assert spawns == [] and _claims(posts) == []
+    (ack,) = _acks(posts)
+    assert "no commits yet" in ack["detail"] and "first commit" in ack["detail"]
+    assert _snapshot(project) == before, "staged files and the index stay exactly as they were"
+
+
+@RUNTIMES
+def test_non_git_folder_still_starts_in_the_folder(monkeypatch, tmp_path, runtime):
+    project = tmp_path / "plain"
+    project.mkdir()
+    posts, spawns = _wire(monkeypatch, runtime)
+    live = {}
+
+    _tick(project, live)
+
+    assert spawns == [str(project)]
+    assert len(_claims(posts)) == 1
+    assert live["C301"]["worktree"] is None
+    assert not [ack for ack in _acks(posts) if ack.get("detail")]
+
+
+@RUNTIMES
+def test_local_repo_without_origin_main_starts_from_head(monkeypatch, tmp_path, runtime):
+    project = tmp_path / "local-only"
+    project.mkdir()
+    _git(project, "init", "-q")
+    (project / "README.md").write_text("hi\n")
+    _git(project, "add", "README.md")
+    _git(project, "commit", "-q", "-m", "first")
+    head = _git(project, "rev-parse", "HEAD").strip()
+    posts, spawns = _wire(monkeypatch, runtime)
+    live = {}
+
+    _tick(project, live)
+
+    (worktree,) = spawns
+    assert worktree != str(project)
+    assert pathlib.Path(worktree, "README.md").read_text() == "hi\n"
+    assert _git(worktree, "rev-parse", "HEAD").strip() == head
+    assert live["C301"]["branch"] == "orcha/resident-C301"
+    assert not [ack for ack in _acks(posts) if ack.get("detail")]
+
+
+def test_repo_with_origin_main_still_prefers_origin_main(monkeypatch, tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    project = tmp_path / "cloned"
+    project.mkdir()
+    _git(project, "init", "-q")
+    _git(project, "symbolic-ref", "HEAD", "refs/heads/main")  # older Git ignores init.defaultBranch
+    (project / "a.txt").write_text("main\n")
+    _git(project, "add", "a.txt")
+    _git(project, "commit", "-q", "-m", "on main")
+    _git(project, "remote", "add", "origin", str(remote))
+    _git(project, "push", "-q", "origin", "main")
+    origin_main = _git(project, "rev-parse", "main").strip()
+    _git(project, "checkout", "-q", "-b", "local-side")
+    (project / "a.txt").write_text("side\n")
+    _git(project, "commit", "-q", "-am", "local only")
+    posts, spawns = _wire(monkeypatch, "codex")
+
+    _tick(project, {})
+
+    (worktree,) = spawns
+    assert _git(worktree, "rev-parse", "HEAD").strip() == origin_main
+
+
+def test_failures_back_off_and_reason_prints_once(monkeypatch, tmp_path, capsys):
+    _documents, project = _empty_parent_with_project(tmp_path)
+    posts, spawns = _wire(monkeypatch, "codex")
+    clock = [1000.0]
+    monkeypatch.setattr(preflight.time, "time", lambda: clock[0])
+
+    _tick(project, {})
+    _tick(project, {})  # immediately again: inside the 5s backoff → nothing at all
+    assert len(_acks(posts)) == 1
+
+    clock[0] += 5.1
+    _tick(project, {})
+    assert len(_acks(posts)) == 2
+    clock[0] += 5.1  # second backoff is 10s → still waiting
+    _tick(project, {})
+    assert len(_acks(posts)) == 2
+    clock[0] += 5.0
+    _tick(project, {})
+    assert len(_acks(posts)) == 3
+
+    for _ in range(20):
+        clock[0] += preflight.BACKOFF_MAX_SECS + 1
+        _tick(project, {})
+    assert preflight._BACKOFF["C301"]["next_attempt"] - clock[0] == pytest.approx(
+        preflight.BACKOFF_MAX_SECS
+    )
+    err = capsys.readouterr().err
+    assert err.count("conversation startup blocked for Atlas") == 1
+    assert spawns == [] and _claims(posts) == []
+
+
+@RUNTIMES
+def test_recovers_after_first_commit_without_duplicate_start(
+    monkeypatch, tmp_path, runtime
+):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _git(project, "init", "-q")
+    (project / "app.py").write_text("print(1)\n")
+    posts, spawns = _wire(monkeypatch, runtime)
+    clock = [1000.0]
+    monkeypatch.setattr(preflight.time, "time", lambda: clock[0])
+    live = {}
+
+    _tick(project, live)
+    assert spawns == []
+
+    _git(project, "add", "app.py")
+    _git(project, "commit", "-q", "-m", "first commit")
+    clock[0] += preflight.BACKOFF_FIRST_SECS + 0.1
+    _tick(project, live)
+    assert len(spawns) == 1 and "C301" in live
+    assert "C301" not in preflight._BACKOFF
+
+    if runtime == "codex":
+        # A live worker for this conversation means the next tick never starts another.
+        _tick(project, live)
+        assert len(spawns) == 1
+
+
+def test_isolation_failure_after_claim_releases_lease_with_reason(monkeypatch, tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _git(project, "init", "-q")
+    (project / "x").write_text("x\n")
+    _git(project, "add", "x")
+    _git(project, "commit", "-q", "-m", "c")
+    posts, spawns = _wire(monkeypatch, "codex")
+    monkeypatch.setattr(notifier, "_provision_resident_worktree", lambda *a: (None, None))
+
+    _tick(project, {})
+
+    assert spawns == [] and len(_claims(posts)) == 1
+    (ack,) = _acks(posts)
+    assert ack["kind"] == "codex_conversation_failed"
+    assert ack["release_lease"] is True
+    assert "will not run in the shared folder" in ack["detail"]
+    assert "delivered_ts" not in ack
+
+
+async def test_wake_ack_detail_is_stored_on_the_woken_audit_row(client, make_agent, db):
+    agent = await make_agent("Atlas")
+    reason = "Git found an empty repository in a parent folder"
+    response = await client.post(
+        f"/api/agents/{agent['agent_id']}/wake-ack",
+        json={
+            "kind": "codex_conversation_failed",
+            "event": "conversation_turn",
+            "lane": "conversation",
+            "release_lease": False,
+            "detail": reason,
+        },
+    )
+    assert response.status_code == 200, response.text
+    rows = db.execute(
+        "SELECT detail FROM events WHERE entity_id=%s AND event_type='woken'",
+        (agent["agent_id"],),
+    )
+    assert rows and rows[-1]["detail"]["detail"] == reason
+    too_long = await client.post(
+        f"/api/agents/{agent['agent_id']}/wake-ack",
+        json={"kind": "x", "lane": "conversation", "detail": "y" * 1001},
+    )
+    assert too_long.status_code in (413, 422)  # oversized fields are refused, never truncated

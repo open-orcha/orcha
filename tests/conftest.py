@@ -185,6 +185,20 @@ def _isolate_persona_cache():
         notifier._clear_persona_cache()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_startup_backoff():
+    """GH #301: the conversation-startup backoff is a process-global dict keyed by
+    conversation id; most resident tests reuse "C1"/"c1", so one test's recorded startup
+    failure must not hold the next test in backoff. No-op unless the module is imported."""
+    preflight = sys.modules.get("orcha_cli.notifier_startup_preflight")
+    if preflight is not None:
+        preflight._BACKOFF.clear()
+    yield
+    preflight = sys.modules.get("orcha_cli.notifier_startup_preflight")
+    if preflight is not None:
+        preflight._BACKOFF.clear()
+
+
 def ts_ago(seconds):
     """A quoted timestamp literal `seconds` before sql.utcnow(), for raw test SQL on either
     backend: replaces `now() - interval '...'` (Postgres casts the text; SQLite stores it)."""

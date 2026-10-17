@@ -169,6 +169,7 @@ def wake_ack(aid: str, body: WakeAck):
             {
                 "kind": body.kind,
                 "event": body.event,
+                "detail": body.detail,
                 "delivered_ts": body.delivered_ts,
                 "release_lease": body.release_lease,
                 "lane": lane,

@@ -7,6 +7,7 @@ import sys
 import time
 
 from . import notifier_resident_claude_feed as _feed_service
+from . import notifier_startup_preflight as _preflight
 from .notifier_routing_handoff import carry_previous_checkout
 
 
@@ -100,6 +101,16 @@ def _boot(
             live_pids,
             quiet=quiet,
         )
+        if not _preflight.preflight(
+            services,
+            api_base,
+            conv_id,
+            candidate,
+            base_cwd=base_cwd,
+            quiet=quiet,
+            kind="resident_failed",
+        ):
+            return None
     claim = (
         None
         if dry_run
@@ -169,12 +180,16 @@ def _boot(
         else (None, None)
     )
     if in_git and worktree is None:
-        if not quiet:
-            print(
-                f"[notifier] resident skip {candidate.get('agent_alias')} — "
-                "worktree isolation failed (won't run in shared checkout)"
-            )
-        _release_failed(services, api_base, candidate)
+        _preflight.report_failure(
+            services,
+            api_base,
+            candidate,
+            conv_id,
+            kind="resident_failed",
+            reason=_preflight.ISOLATION_FAILED.format(base_cwd=base_cwd),
+            release_lease=True,
+            quiet=quiet,
+        )
         return None
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
 
@@ -276,6 +291,7 @@ def _boot(
         "last_activity_ts": time.time(),
     }
     live_residents[conv_id] = resident
+    _preflight.record_success(conv_id)
     if cold:
         services._RESIDENT_RESUME_FAILED.discard(conv_id)
     return resident
