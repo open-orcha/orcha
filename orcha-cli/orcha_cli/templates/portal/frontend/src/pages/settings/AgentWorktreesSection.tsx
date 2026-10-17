@@ -16,6 +16,7 @@ import { formatSize, relTime } from "../../lib/format";
 import { getHost, sendToHost } from "../../state/host";
 import { useGrantAuthority } from "./grantAuthority";
 import { SettingRow, SettingRows, SettingsGroup, StatusLine, settingsErrText } from "./settingsUi";
+import { BringInDialog, type BringInDirection } from "./BringInDialog";
 
 export type WorktreeState = "clean" | "has-output" | "unmerged" | "in-use" | "not-quorate";
 
@@ -41,7 +42,7 @@ export interface WorktreeItem {
 
 export interface WorktreeAction {
   id: string;
-  action: "remove" | "save_output" | "clean_up" | "refresh";
+  action: "remove" | "save_output" | "clean_up" | "refresh" | "bring_in" | "update_from_main";
   path: string | null;
   status: "requested" | "claimed" | "done" | "failed";
   result: Record<string, unknown> | null;
@@ -109,6 +110,7 @@ export function AgentWorktreesSection({ cid }: { cid: string | null }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [grace, setGrace] = useState("7");
   const [removing, setRemoving] = useState<WorktreeItem | null>(null);
+  const [bringIn, setBringIn] = useState<{ item: WorktreeItem; direction: BringInDirection } | null>(null);
   const [preview, setPreview] = useState<"all" | "clean" | null>(null);
   const [report, setReport] = useState<string | null>(null);
   const alive = useRef(true);
@@ -217,7 +219,7 @@ export function AgentWorktreesSection({ cid }: { cid: string | null }) {
   return (
     <SettingsGroup
       settab="execution" title="Agent worktrees" flush
-      help="Agents work in their own git worktrees under .orcha-worktrees. Clean ones are removed automatically; output is attached to its task (or kept in .orcha/saved-output) before a worktree with output is removed; unmerged commits are never removed automatically."
+      help="Agents always work in their own git worktrees under .orcha-worktrees. Bring in moves a task worktree's changes into the main checkout (a dry run first; as uncommitted changes you review, or a branch merge); Update brings main's changes into the worktree. Clean ones are removed automatically; output is attached to its task (or kept in .orcha/saved-output) before a worktree with output is removed; unmerged commits are never removed automatically."
       action={inv ? (
         <Button size="sm" variant="ghost" id="wtgRefresh" disabled={locked || !!busy} busy={busy === "refresh"}
           onClick={() => void request({ action: "refresh" }, "refresh")}>Refresh</Button>
@@ -302,6 +304,22 @@ export function AgentWorktreesSection({ cid }: { cid: string | null }) {
                           if (a?.status === "done") toast("Output saved" + (it.task_title ? " to the task" : "") + ".", "ok");
                         })}>Save output</Button>,
                     ) : null}
+                    {it.kind === "task" && it.state !== "not-quorate" ? (
+                      <>
+                        {lockTip(
+                          <Tooltip label={it.state === "in-use" ? "Available when the agent's run finishes" : "Bring this worktree's changes into the main checkout (dry run first)"} placement="top">
+                            <Button size="sm" variant="ghost" aria-label={"Bring in " + it.name} disabled={locked || !!busy || it.state === "in-use"}
+                              onClick={() => setBringIn({ item: it, direction: "bring_in" })}>Bring in</Button>
+                          </Tooltip>,
+                        )}
+                        {lockTip(
+                          <Tooltip label={it.state === "in-use" ? "Available when the agent's run finishes" : "Bring main's commits and uncommitted changes into this worktree (dry run first)"} placement="top">
+                            <Button size="sm" variant="ghost" aria-label={"Update " + it.name + " from main"} disabled={locked || !!busy || it.state === "in-use"}
+                              onClick={() => setBringIn({ item: it, direction: "update_from_main" })}>Update</Button>
+                          </Tooltip>,
+                        )}
+                      </>
+                    ) : null}
                     {it.state !== "in-use" && it.state !== "not-quorate" ? lockTip(
                       <Button size="sm" variant="ghost" disabled={locked || !!busy} busy={busy === "remove:" + it.path}
                         onClick={() => setRemoving(it)}>Remove</Button>,
@@ -322,6 +340,10 @@ export function AgentWorktreesSection({ cid }: { cid: string | null }) {
             void request({ action: "remove", path: it.path, keep_branch: keepBranch, confirm_branch: confirmBranch }, "remove:" + it.path)
               .then((a) => { if (a?.status === "done") toast(`Removed ${it.name}.`, "ok"); });
           }} />
+      ) : null}
+      {bringIn && cid ? (
+        <BringInDialog cid={cid} item={bringIn.item} direction={bringIn.direction}
+          onClose={() => setBringIn(null)} onDone={() => void load()} />
       ) : null}
       {preview ? (
         <CleanupPreview items={preview === "clean" ? items.filter((i) => i.state === "clean") : items} scope={preview}

@@ -275,6 +275,10 @@ Lifecycle (host shell):
   into Claude's next-turn context (cheap file read, no API call).
 - `orcha enable-hook` — idempotently registers all the session hooks in THIS
   folder's `.claude/settings.json`. For folders that pre-date Orcha#33
+- `orcha worktrees [list|clean|remove|save-output|bring-in|update-from-main] …` —
+  the agent worktrees under `.orcha-worktrees`: list / clean them up, and (GH #288)
+  bring a task worktree's changes into the main checkout or update it from main,
+  always with `--dry-run` first. See `docs/agent-worktrees-bring-in.md`.
 - `orcha notifier [--once|--ensure|--dry-run] [--interval N]` — **Epic A wake
   daemon**. Wakes IDLE agents out-of-band (tmux `send-keys`, or `claude -p` for
   headless workers) when they have pending events or an assigned ready task, so

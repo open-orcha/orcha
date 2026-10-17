@@ -11,6 +11,16 @@ missing.
 ## [Unreleased]
 
 ### Added
+- **Bring agent changes into main / update a worktree from main** (GH #288).
+  A human-triggered action per task worktree — in Settings › Agent worktrees,
+  Code Space › Changes, the per-agent menu and `orcha worktrees bring-in |
+  update-from-main` — that always shows a dry run first (files, conflicts,
+  base-commit check, main's dirty files) and then lands the agent's delta in
+  main's working tree as uncommitted changes (or merges its branch), with a
+  named stash for your own uncommitted files, an explicit confirmation when
+  main is on another branch, conflicts reported (and handed to the agent to
+  resolve in its worktree) rather than applied, incremental repeat bring-ins,
+  and the reverse direction. See `docs/agent-worktrees-bring-in.md`.
 - `orcha portal` runs a project's portal as a plain host process from the
   installed CLI, with no portal container (first step of running Orcha without
   Docker, GH #258). Postgres still comes from the project's Docker `db` service
@@ -23,6 +33,13 @@ missing.
   `packaging/homebrew/resources.json` (`render_formula.py lock` refreshes it).
 
 ### Changed
+- **Agents always work in their own worktree** (GH #288). The "Disable
+  worktrees" project setting and the checkout carry it put on every worker,
+  resident and live-terminal start are gone: a start is never paused on a
+  refused carry any more (the "no runtime attached" failure class). Instead the
+  worker starts in its destination and the task thread gets one notice naming
+  the previous checkout that still holds uncommitted work. Migration 072 forces
+  the setting off for existing projects.
 - **Orcha runs without Docker or Postgres** (GH #258). A project's portal,
   wake daemon and terminal bridge run as ordinary background processes under
   `orcha serve`, kept alive by a login service (launchd on macOS, systemd on

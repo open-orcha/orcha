@@ -231,3 +231,21 @@ describe("Settings → Execution › Agent worktrees", () => {
     expect(screen.queryByText("Agent worktrees")).toBeNull();
   });
 });
+
+describe("GH #288 bring in / update (task worktrees)", () => {
+  it("task worktrees get Bring in + Update; wake worktrees don't; the dialog rehearses on open", async () => {
+    install();
+    asIdentity({ agent_id: "h1", alias: "kedar", kind: "human", member_role: "owner" } as never);
+    renderExecution();
+    const row = (await screen.findByText("Prod QA run")).closest("li")!;
+    expect(within(row).getByRole("button", { name: "Bring in task-Atlas-eecc" })).not.toBeDisabled();
+    expect(within(row).getByRole("button", { name: "Update task-Atlas-eecc from main" })).not.toBeDisabled();
+    const wake = screen.getByText("orcha/wk-Atlas-1").closest("li")!;
+    expect(within(wake).queryByRole("button", { name: /Bring in/ })).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: "Bring in task-Atlas-eecc" }));
+    expect(await screen.findByRole("dialog", { name: "Bring changes into main" })).toBeInTheDocument();
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/actions")
+      && c.body?.action === "bring_in" && (c.body?.options as { dry_run: boolean }).dry_run === true)).toBe(true));
+  });
+});
+

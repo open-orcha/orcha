@@ -37,6 +37,7 @@ import {
   type WorktreeChangesPayload,
 } from "./worktreeApi";
 import { useCodeWriteBlock } from "./writeAccess";
+import { AgentWorktreesPanel } from "./AgentWorktreesPanel";
 
 // 15s, not 5s: each poll is a real `git status` + numstat on the server —
 // seconds on a big repo over a Docker-for-Mac bind mount (the server also
@@ -274,6 +275,7 @@ export function ChangesTab({ cid, selectedPath, onOpenChange, onDirtyCountChange
   return (
     <div className="cs-changes">
       <BranchBar cid={cid} writeBlock={writeBlock} />
+      <AgentWorktreesPanel cid={cid} writeBlock={writeBlock} onChanged={poll} />
       {!files.length ? (
         payload.scanning ? (
           <div className="cs-empty-line" role="status">Scanning the working tree…</div>

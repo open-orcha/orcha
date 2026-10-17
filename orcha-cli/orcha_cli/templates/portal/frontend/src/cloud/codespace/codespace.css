@@ -965,3 +965,15 @@ html[data-lesson-present] .v2-main { margin-left: var(--v2-frame-gap); }
 @keyframes csExitTree { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
 @keyframes csExitRail { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 @keyframes csExitCode { from { opacity: .55; } to { opacity: 1; } }
+
+/* GH #288: Code Space › Changes › Agent worktrees (bring in / update) */
+.cs-agent-wts { display: grid; gap: 4px; margin: 6px 0 8px; font-size: 12px; }
+.cs-agent-wts-h { color: var(--v2-text-3); font-size: var(--v2-fs-meta); text-transform: uppercase; letter-spacing: 0.04em; }
+.cs-agent-wts-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.cs-agent-wt { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.cs-agent-wt-main { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.cs-agent-wt-who { font-weight: 600; flex: none; }
+.cs-agent-wt-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cs-agent-wt-meta { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.cs-agent-wt-age { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.cs-agent-wt-acts { display: inline-flex; gap: 4px; flex: none; }

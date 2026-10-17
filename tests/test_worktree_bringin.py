@@ -212,3 +212,56 @@ def test_daemon_runs_the_request_and_reports_the_plan_or_the_refusal(repo):
     out = ngc.run_action("http://p", "c1", str(main), {"action": "update_from_main", "path": str(wt),
                                                      "options": {}}, set(), post=lambda *a, **k: {})
     assert out["status"] == "done" and out["result"]["direction"] == "update"
+
+
+# ---------------------------------------------------------------- the CLI
+
+def _cli(argv, capsys):
+    from orcha_cli.__main__ import build_parser
+
+    args = build_parser().parse_args(argv)
+    try:
+        args.func(args)
+        code = 0
+    except SystemExit as exc:
+        code = exc.code
+    return code, capsys.readouterr().out
+
+
+def test_resolve_task_worktree_by_path_name_task_or_agent():
+    from orcha_cli.cli_worktrees import resolve_task_worktree
+
+    rows = [
+        {"path": "/p/.orcha-worktrees/task-bob-deadbeef-1", "name": "task-bob-deadbeef-1", "kind": "task",
+         "agent": "bob", "task_id": "deadbeef-1111", "task_ref": "deadbeef-1"},
+        {"path": "/p/.orcha-worktrees/task-bob-cafe0000-1", "name": "task-bob-cafe0000-1", "kind": "task",
+         "agent": "bob", "task_id": "cafe0000-2222", "task_ref": "cafe0000-1"},
+        {"path": "/p/.orcha-worktrees/bob-123", "name": "bob-123", "kind": "wake", "agent": "bob"},
+    ]
+    assert resolve_task_worktree(rows, "task-bob-cafe0000-1")[0]["task_ref"] == "cafe0000-1"
+    assert resolve_task_worktree(rows, "deadbeef")[0]["task_ref"] == "deadbeef-1"
+    row, why = resolve_task_worktree(rows, "bob")
+    assert row is None and "matches 2 task worktrees" in why
+    assert resolve_task_worktree(rows, "nope")[1].startswith("nope is not a task worktree")
+
+
+def test_cli_bring_in_dry_run_then_apply_and_update(repo, capsys, monkeypatch):
+    main, wt = repo
+    (main / ".claude").mkdir(exist_ok=True)
+    monkeypatch.chdir(main)
+    code, out = _cli(["worktrees", "bring-in", "deadbeef", "--offline", "--dry-run"], capsys)
+    assert code == 0 and "Would change 3 file(s) in main (dry run" in out and "A new.txt" in out
+    assert _git(["status", "--porcelain"], main).strip() == ""
+    code, out = _cli(["worktree", "bring-in", str(wt), "--offline", "--json"], capsys)
+    assert code == 0
+    res = json.loads(out)
+    assert res["ok"] is True and res["outcome"] == "done" and (main / "new.txt").exists()
+    (main / "d.txt").write_text("uncommitted in main\n")
+    code, out = _cli(["worktrees", "update-from-main", "bob", "--offline", "--dry-run"], capsys)
+    assert code == 0 and "Would bring" not in out and "d.txt" in out and "--stash" in out
+    code, out = _cli(["worktrees", "update-from-main", "bob", "--offline"], capsys)
+    assert code == 1 and "confirm stashing" in out
+    code, out = _cli(["worktrees", "update-from-main", "bob", "--offline", "--stash", "--stash-message", "agent wip"], capsys)
+    assert code == 0 and "stash 'agent wip' restored" in out and (wt / "d.txt").exists()
+    code, out = _cli(["worktrees", "bring-in", "nope", "--offline"], capsys)
+    assert code == 1 and "not a task worktree" in out
