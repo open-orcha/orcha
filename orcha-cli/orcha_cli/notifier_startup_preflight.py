@@ -160,7 +160,12 @@ def preflight(services, api_base, conv_id, candidate, *, base_cwd, quiet, kind) 
     if in_backoff(conv_id):
         return False
     state = repository_state(base_cwd, services)
-    if state["state"] in ("ancestor_repo", "no_commit"):
+    # With worktrees disabled the worker runs in the project folder itself, so a missing
+    # first commit is no obstacle; a parent repository still is (project boundary).
+    blocked = state["state"] == "ancestor_repo" or (
+        state["state"] == "no_commit" and not candidate.get("worktrees_disabled")
+    )
+    if blocked:
         report_failure(
             services,
             api_base,

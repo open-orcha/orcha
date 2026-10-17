@@ -66,8 +66,12 @@ TURNS = [
 ]
 
 
+CONV_EXTRA: dict = {}
+
+
 def _conv(runtime):
     return {
+        **CONV_EXTRA,
         "conversation_id": "C301",
         "agent_id": "A301",
         "agent_alias": "Atlas",
@@ -144,7 +148,7 @@ def _snapshot(root: pathlib.Path) -> dict:
 
 def _empty_parent_with_project(tmp_path):
     documents = tmp_path / "Documents"
-    documents.mkdir()
+    documents.mkdir(parents=True)
     _git(documents, "init", "-q")
     (documents / "taxes.txt").write_text("parent file\n")
     project = documents / "Research" / "LearnChat"
@@ -241,6 +245,29 @@ def test_non_git_folder_still_starts_in_the_folder(monkeypatch, tmp_path, runtim
     assert len(_claims(posts)) == 1
     assert live["C301"]["worktree"] is None
     assert not [ack for ack in _acks(posts) if ack.get("detail")]
+
+
+@RUNTIMES
+def test_worktrees_disabled_runs_uncommitted_repo_in_place_but_never_a_parent(
+    monkeypatch, tmp_path, runtime
+):
+    monkeypatch.setitem(CONV_EXTRA, "worktrees_disabled", True)
+    project = tmp_path / "in-place"
+    project.mkdir()
+    _git(project, "init", "-q")
+    posts, spawns = _wire(monkeypatch, runtime)
+    _tick(project, {})
+    assert spawns == [str(project)], "no checkout is needed, so no first commit is needed"
+    assert not [ack for ack in _acks(posts) if ack.get("detail")]
+
+    documents, learnchat = _empty_parent_with_project(tmp_path / "second")
+    before = _snapshot(documents)
+    posts, spawns = _wire(monkeypatch, runtime)
+    _tick(learnchat, {})
+    assert spawns == [] and _claims(posts) == []
+    (ack,) = _acks(posts)
+    assert str(documents) in ack["detail"]
+    assert _snapshot(documents) == before
 
 
 @RUNTIMES
