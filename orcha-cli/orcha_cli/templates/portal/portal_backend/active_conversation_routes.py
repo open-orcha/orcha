@@ -237,8 +237,13 @@ def active_conversations(cid: str, request: Request):
                     elif _b in (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE):
                         drain_taskbound += 1
             # GH #301: a human asked for project-local Git setup that the notifier has
-            # not reported on yet (epoch of the request, else None).
-            r["setup_requested_at"] = pending_setup_request(cur, str(r["agent_id"]))
+            # not reported on yet (epoch of the request, else None). Only a chat with a
+            # waiting human turn reaches the notifier's preflight, which is the only place
+            # setup runs, so the events lookup is skipped for every other chat on this
+            # per-tick route.
+            r["setup_requested_at"] = (
+                pending_setup_request(cur, str(r["agent_id"])) if r["pending_human"] else None
+            )
             r["drain_taskbound"] = drain_taskbound
             r["drain_ackable_ids"] = drain_ackable_ids
             r.pop("_delivered_ts", None)
