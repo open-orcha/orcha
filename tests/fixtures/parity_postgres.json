@@ -32,6 +32,7 @@
           "status": "str",
           "title": "null"
         },
+        "startup_blocked": "null",
         "turns": [
           {
             "attachments": [],
@@ -811,6 +812,7 @@
             "pending_inbox": "int",
             "reasoning_effort": "null",
             "session_id": "null",
+            "setup_requested_at": "null",
             "status": "str"
           }
         ]
@@ -1405,7 +1407,8 @@
           "started_by": "str",
           "status": "str",
           "title": "null"
-        }
+        },
+        "startup_blocked": "null"
       }
     },
     "GET /api/conversations/{conv}/turns": {
