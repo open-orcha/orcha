@@ -103,8 +103,7 @@ def test_inherited_empty_parent_offers_setup_and_setup_starts_one_worker(
     assert _snapshot(documents / ".git") == parent_git
     assert _outside(documents, project) == outside
 
-    # Same request again (still listed until the server records the result): no rerun,
-    # and with the worker live, no duplicate launch.
+    # With the worker live, the next tick launches nothing new.
     _tick(project, live)
     assert len(_setup_results(posts)) == 1 and len(spawns) == 1
 
@@ -160,6 +159,13 @@ def test_parent_tracking_the_project_folder_refuses_setup(monkeypatch, tmp_path,
     assert "already tracks files inside the project folder" in result["detail"]
     assert spawns == [] and _claims(posts) == []
     assert not (project / ".git").exists()
+    assert _snapshot(documents) == before
+
+    # The same request is still listed until the server records the result, and no worker
+    # is live, so this tick reaches preflight again: setup must not run a second time.
+    _tick(project, live)
+    assert len(_setup_results(posts)) == 1
+    assert spawns == [] and _claims(posts) == []
     assert _snapshot(documents) == before
 
 
@@ -339,6 +345,35 @@ async def test_setup_request_flows_to_the_notifier_and_back(client, container, m
     block = (await client.get(f"/api/agents/{aid}/conversation")).json()["startup_blocked"]
     assert block["setup"]["state"] == "done"
     assert block["setup"]["detail"] == "Created an empty first commit."
+
+
+async def test_poll_skips_the_setup_lookup_when_no_human_turn_is_waiting(
+    client, container, make_agent, db
+):
+    """The notifier polls active-conversations every tick; only a waiting chat can run setup."""
+    human, aid, conv_id = await _blocked_chat(client, make_agent)
+    url = f"/api/agents/{aid}/conversation/repository-setup"
+    assert (await client.post(url, json={"actor_agent_id": human})).status_code == 202
+
+    async def candidate():
+        active = (
+            await client.get(f"/api/containers/{container['id']}/active-conversations")
+        ).json()
+        return next(c for c in active["conversations"] if c["conversation_id"] == conv_id)
+
+    assert (await candidate())["setup_requested_at"] is not None
+    # The agent answers (say the folder was fixed outside Orcha) with the request unresolved.
+    run = db.execute(
+        "INSERT INTO worker_runs (agent_id, status) VALUES (%s,'exited') RETURNING run_id",
+        (aid,),
+    )[0]["run_id"]
+    reply = await client.post(
+        f"/api/conversations/{conv_id}/turns",
+        json={"role": "agent", "author_agent_id": aid, "content": "hi", "run_id": str(run)},
+    )
+    assert reply.status_code == 201, reply.text
+    row = await candidate()
+    assert row["pending_human"] is False and row["setup_requested_at"] is None
 
 
 async def test_setup_request_is_refused_when_it_cannot_help(client, make_agent):
