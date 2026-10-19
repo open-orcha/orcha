@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 
 from portal_backend import sql
 from portal_backend.application import app
+from portal_backend.conversation_startup_routes import pending_setup_request
 from portal_backend.attachment_references import (
     render_attachment_feed_line as _render_attachment_feed_line,
 )
@@ -235,6 +236,9 @@ def active_conversations(cid: str, request: Request):
                         drain_ackable_ids.append(_row["id"])
                     elif _b in (_DRAIN_TASK_BOUND, _DRAIN_NEW_WORK, _DRAIN_DIRECTIVE):
                         drain_taskbound += 1
+            # GH #301: a human asked for project-local Git setup that the notifier has
+            # not reported on yet (epoch of the request, else None).
+            r["setup_requested_at"] = pending_setup_request(cur, str(r["agent_id"]))
             r["drain_taskbound"] = drain_taskbound
             r["drain_ackable_ids"] = drain_ackable_ids
             r.pop("_delivered_ts", None)

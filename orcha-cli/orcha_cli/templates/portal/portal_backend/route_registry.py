@@ -35,6 +35,7 @@ from portal_backend import (
     container_task_list_routes,
     container_token_usage_routes,
     conversation_read_routes,
+    conversation_startup_routes,  # GH #301 startup-blocked + repo setup
     conversation_write_routes,
     dashboard_routes,
     deliverables_routes,  # non-code task deliverables (mig 061)
@@ -134,6 +135,7 @@ ROUTE_MODULES = (
     container_task_list_routes,
     container_token_usage_routes,
     conversation_read_routes,
+    conversation_startup_routes,  # GH #301 startup-blocked + repo setup
     conversation_write_routes,
     dashboard_routes,
     deliverables_routes,  # non-code task deliverables (mig 061)
