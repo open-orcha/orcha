@@ -415,6 +415,11 @@
 /* honest "your message is queued" notice shown instead of fake thinking dots when busy */
 .conv-queued { display: inline-flex; gap: 8px; align-items: flex-start; font-size: var(--v2-fs-body); line-height: 1.5; color: var(--v2-text-2); }
 .conv-queued svg { flex: 0 0 auto; color: var(--v2-warn); width: 14px; height: 14px; margin-top: 3px; }
+/* GH #301: startup blocked by the project's Git setup — reason, outcome, one deliberate fix */
+.conv-blocked-setup { margin-top: 8px; font-size: var(--v2-fs-body); line-height: 1.5; color: var(--v2-text-2); }
+.conv-blocked-failed { color: var(--v2-danger, var(--v2-warn)); }
+.conv-blocked-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.conv-blocked-note { font-size: var(--v2-fs-small, 12px); line-height: 1.4; color: var(--v2-text-3, var(--v2-text-2)); flex: 1 1 220px; }
 .conv-unknown svg { color: var(--v2-text-3); }
 @keyframes convblink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .conv-thinking span { animation: none; opacity: .7; } }
