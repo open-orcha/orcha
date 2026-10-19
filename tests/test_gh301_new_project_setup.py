@@ -11,7 +11,10 @@ tests run against the real server and database.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import pathlib
+import subprocess
 
 import pytest
 
@@ -354,3 +357,165 @@ async def test_isolation_failure_is_shown_without_a_setup_offer(client, make_age
     assert block["blocker"] == "isolation_failed" and block["setup_available"] is False
     url = f"/api/agents/{aid}/conversation/repository-setup"
     assert (await client.post(url, json={"actor_agent_id": human})).status_code == 409
+
+
+@RUNTIMES
+async def test_setup_click_recovers_through_the_real_path_with_one_reply(
+    client, container, make_agent, db, monkeypatch, tmp_path, runtime
+):
+    """The first-use path end to end: every notifier GET/POST goes to the real server and
+    only the provider is a stand-in (a real child process plus its reply output). The chat
+    read names the block and offers setup; the human's click (a real API call) is carried
+    out by the next tick without waiting out the backoff; one worker answers the waiting
+    turn once, retires normally, releases the lease and nothing starts again. The parent
+    repository's .git and every file outside the project folder stay byte-identical."""
+    human = await make_agent("KedarSetupE2E", "human", kind="human")
+    ai = await make_agent("AtlasSetupE2E")
+    aid = ai["agent_id"]
+    started = await client.post(
+        f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]}
+    )
+    conv_id = started.json()["conversation"]["id"]
+    turn = await client.post(
+        f"/api/conversations/{conv_id}/turns",
+        json={"role": "human", "author_agent_id": human["agent_id"], "content": "hello?"},
+    )
+    assert turn.status_code == 201, turn.text
+
+    loop = asyncio.get_running_loop()
+    calls: list = []
+
+    def _call(method, url, body=None):
+        path = url.split("://", 1)[-1]
+        path = path[path.index("/"):]
+        coro = client.post(path, json=body) if method == "POST" else client.get(path)
+        resp = asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
+        calls.append((method, path.split("?")[0], resp.status_code))
+        if resp.status_code >= 400:
+            return None  # the real helper returns None on HTTP errors
+        data = resp.json()
+        if "active-conversations" in path and isinstance(data, dict):
+            # The fixture agent has no provider configured; pick this run's provider.
+            for c in data.get("conversations", []):
+                c["model_runtime"] = runtime
+        return data
+
+    procs: list = []
+
+    def _spawn(cwd, *args, **kwargs):
+        proc = subprocess.Popen(["sleep", "120"], stdin=subprocess.PIPE)
+        procs.append(proc)
+        return True, "sleep-stand-in", proc
+
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **_: _call("GET", url))
+    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **_: _call("POST", url, body))
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "PERSONA")
+    monkeypatch.setattr(notifier, "spawn_headless", _spawn)
+    monkeypatch.setattr(notifier, "spawn_resident", _spawn)
+    clock = [1000.0]
+    monkeypatch.setattr(preflight.time, "time", lambda: clock[0])
+    documents, project = _empty_parent_with_project(tmp_path)
+    parent_before = _snapshot(documents / ".git")
+    outside_before = _outside(documents, project)
+    live: dict = {}
+
+    async def tick():
+        await asyncio.to_thread(
+            notifier.service_residents,
+            "http://test", container["id"], live, quiet=True, base_cwd=str(project),
+        )
+
+    async def pending():
+        active = (await client.get(f"/api/containers/{container['id']}/active-conversations")).json()
+        return next(c for c in active["conversations"] if c["conversation_id"] == conv_id)
+
+    def conv_lease():
+        rows = db.execute(
+            "SELECT conv_lease_until FROM agent_wake_state WHERE agent_id=%s", (aid,)
+        )
+        return rows[0]["conv_lease_until"] if rows else None
+
+    def agent_turns():
+        return db.execute(
+            "SELECT role, content FROM conversation_turns WHERE conversation_id=%s ORDER BY seq",
+            (conv_id,),
+        )
+
+    try:
+        # Blocked: the real tick stores its reason, claims nothing, the turn stays pending.
+        await tick()
+        assert procs == [] and not [c for c in calls if c[1].endswith("/wake-claim")]
+        assert (await pending())["pending_human"] is True
+        woken = db.execute(
+            "SELECT detail FROM events WHERE entity_id=%s AND event_type='woken'", (aid,)
+        )
+        assert "parent folder" in json.dumps(woken[-1]["detail"])
+
+        # The chat read explains it and offers the project-local setup.
+        block = (await client.get(f"/api/agents/{aid}/conversation")).json()["startup_blocked"]
+        assert block["blocker"] == "ancestor_repo" and block["setup_available"] is True
+        assert str(documents) in block["reason"]
+        assert not (project / ".git").exists()
+
+        # The human clicks "Set up Git for this project"; the next tick (still inside
+        # the backoff window — no clock change) does it and starts one worker.
+        click = await client.post(
+            f"/api/agents/{aid}/conversation/repository-setup",
+            json={"actor_agent_id": human["agent_id"]},
+        )
+        assert click.status_code == 202, click.text
+        await tick()
+        results = [c for c in calls if c[1].endswith("/repository-setup/result")]
+        assert results == [("POST", f"/api/agents/{aid}/conversation/repository-setup/result", 201)]
+        assert (project / ".git").is_dir()
+        assert len(procs) == 1 and conv_id in live
+        assert (await client.get(f"/api/agents/{aid}/conversation")).json()["startup_blocked"] is None
+        assert (await pending())["setup_requested_at"] is None
+        resident = live[conv_id]
+        assert resident.get("current_run_id")
+        assert conv_lease() is not None  # the real claim holds the conversation lease
+
+        # The provider produces its reply; the real tick reads and posts it.
+        if runtime == "codex":
+            reply = pathlib.Path(resident["last_message_path"])
+            reply.parent.mkdir(parents=True, exist_ok=True)  # the real spawn opens this folder
+            reply.write_text("hi from codex")
+            procs[0].terminate()
+            procs[0].wait(timeout=10)
+        else:
+            log = pathlib.Path(resident["log_path"])
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a") as fh:
+                fh.write(json.dumps({"type": "result", "subtype": "success",
+                                     "result": "hi from claude", "session_id": "S301",
+                                     "num_turns": 1}) + "\n")
+        await tick()
+        if runtime == "claude":
+            # The resident stays up after replying; then its process exits.
+            procs[0].terminate()
+            procs[0].wait(timeout=10)
+        for _ in range(3):
+            clock[0] += preflight.BACKOFF_MAX_SECS + 1
+            await tick()
+
+        rows = agent_turns()
+        assert [r["role"] for r in rows] == ["human", "agent"], rows
+        assert rows[1]["content"].startswith("hi from ")
+        assert (await pending())["pending_human"] is False
+        assert len(procs) == 1, "a finished conversation must not restart a worker"
+        assert conv_id not in live
+        posted = [c for c in calls if c[0] == "POST" and c[1].endswith("/turns")]
+        assert len(posted) == 1 and posted[0][2] == 201
+        claims = [c for c in calls if c[1].endswith("/wake-claim")]
+        assert len(claims) == 1 and claims[0][2] == 200
+        assert conv_lease() is None, "the finished worker must release the lease"
+        runs = db.execute("SELECT status FROM worker_runs WHERE agent_id=%s", (aid,))
+        assert runs and all(r["status"] != "running" for r in runs), runs
+        assert _snapshot(documents / ".git") == parent_before
+        assert _outside(documents, project) == outside_before
+        assert len([c for c in calls if c[1].endswith("/repository-setup/result")]) == 1
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)
