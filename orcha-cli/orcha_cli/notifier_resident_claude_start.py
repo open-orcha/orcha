@@ -189,6 +189,7 @@ def _boot(
             reason=_preflight.ISOLATION_FAILED.format(base_cwd=base_cwd),
             release_lease=True,
             quiet=quiet,
+            blocker="isolation_failed",
         )
         return None
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())
