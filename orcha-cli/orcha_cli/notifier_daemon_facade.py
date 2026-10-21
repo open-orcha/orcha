@@ -41,6 +41,34 @@ def _hb_path(cwd: pathlib.Path) -> pathlib.Path:
     return _registry.hb_path(cwd)
 
 
+def _hb_dir(cwd: pathlib.Path) -> pathlib.Path:
+    return _registry.hb_dir(cwd)
+
+
+def _pid_hb_path(cwd: pathlib.Path, pid: int) -> pathlib.Path:
+    return _registry.pid_hb_path(cwd, pid)
+
+
+def _owns_pid_file(cwd: pathlib.Path) -> bool:
+    return _registry.owns_pid_file(cwd, services=_compat())
+
+
+def _read_pid_stamp(cwd: pathlib.Path, pid: int) -> Optional[float]:
+    return _registry.read_pid_stamp(cwd, pid, services=_compat())
+
+
+def _is_container_daemon_command(command: str, cid: str) -> bool:
+    return _registry.is_container_daemon_command(command, cid)
+
+
+def _ps_table() -> Optional[list]:
+    return _registry.ps_table(services=_compat())
+
+
+def _container_daemons(cid: str) -> Optional[dict]:
+    return _registry.container_daemons(cid, services=_compat())
+
+
 def _write_heartbeat(cwd: pathlib.Path) -> None:
     _registry.write_heartbeat(cwd, services=_compat())
 
@@ -98,6 +126,23 @@ def _terminate_and_wait(
     _control.terminate_and_wait(
         pid, cid, grace, services=_compat()
     )
+
+
+def _terminate_all_and_wait(pids, cid: Optional[str], grace: float = 8.0) -> None:
+    _control.terminate_all_and_wait(pids, cid, grace, services=_compat())
+
+
+def _reap_strays(cid: Optional[str], keep: Optional[int], cwd: Optional[pathlib.Path] = None) -> list:
+    """Stop every daemon of `cid` except `keep`'s family (GH #313)."""
+    return _control.reap_strays(cid, keep, cwd, services=_compat())
+
+
+def _superseded_by(cwd: pathlib.Path, cid: Optional[str]) -> Optional[int]:
+    return _control.superseded_by(cwd, cid, services=_compat())
+
+
+def _lifecycle_log(message: str) -> None:
+    _control.lifecycle_log(message, services=_compat())
 
 
 def stop_daemon(cwd: pathlib.Path, quiet: bool = False) -> bool:

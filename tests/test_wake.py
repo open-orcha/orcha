@@ -1464,6 +1464,9 @@ def _patch_global_pid_dir(monkeypatch, tmp_path):
 
 def test_ensure_daemon_refuses_cross_worktree_duplicate(monkeypatch, tmp_path):
     """A daemon started from worktree A must block --ensure from worktree B (same container)."""
+    # GH #313: --ensure now scans `ps` for stray daemons; stub the scan so it neither
+    # trips the Popen spy below nor sees real daemons on the test host.
+    monkeypatch.setattr(notifier, "_container_daemons", lambda cid: {})
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt_a, wt_b = _worktree(tmp_path, "Orcha"), _worktree(tmp_path, "Orcha-agent")
     gdir.mkdir()
@@ -1487,6 +1490,9 @@ def test_ensure_daemon_refuses_cross_worktree_duplicate(monkeypatch, tmp_path):
 def test_ensure_daemon_spawn_claims_container(monkeypatch, tmp_path):
     """A fresh spawn writes the container-keyed claim so other worktrees see it, and the
     spawned argv carries --container so `ps` is self-explanatory (#218 hardening)."""
+    # GH #313: --ensure now scans `ps` for stray daemons; stub the scan so it neither
+    # trips the Popen spy below nor sees real daemons on the test host.
+    monkeypatch.setattr(notifier, "_container_daemons", lambda cid: {})
     _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: False)
@@ -1551,6 +1557,9 @@ def test_ensure_daemon_restart_kills_cross_worktree_daemon(monkeypatch, tmp_path
 def test_ensure_daemon_yields_to_inflight_concurrent_claim(monkeypatch, tmp_path):
     """[P1] An EMPTY fresh claim = another --ensure between its O_EXCL create and pid
     write — yield (no spawn), don't treat it as stale and steal it."""
+    # GH #313: --ensure now scans `ps` for stray daemons; stub the scan so it neither
+    # trips the Popen spy below nor sees real daemons on the test host.
+    monkeypatch.setattr(notifier, "_container_daemons", lambda cid: {})
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     gdir.mkdir()
@@ -1652,6 +1661,9 @@ def test_ensure_daemon_refuses_missing_container_before_claiming(monkeypatch, tm
     """[P2 #224 review] the MANAGED path (--ensure) must refuse a definitively-missing
     container BEFORE writing any pidfile/claim — not return success with a pidfile + claim
     pointing at a child that immediately refused, burying the error in the daemon log."""
+    # GH #313: --ensure now scans `ps` for stray daemons; stub the scan so it neither
+    # trips the Popen spy below nor sees real daemons on the test host.
+    monkeypatch.setattr(notifier, "_container_daemons", lambda cid: {})
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "missing")

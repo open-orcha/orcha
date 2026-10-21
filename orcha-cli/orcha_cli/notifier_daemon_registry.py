@@ -30,26 +30,82 @@ def hb_path(cwd: pathlib.Path) -> pathlib.Path:
     return cwd / ".claude" / ".orcha-notifier.hb"
 
 
-def write_heartbeat(cwd: pathlib.Path, *, services) -> None:
-    """Stamp `<pid> <epoch>` — the daemon's own proof-of-life, once per loop pass."""
+def hb_dir(cwd: pathlib.Path) -> pathlib.Path:
+    """Per-daemon heartbeats (GH #313): one `<pid>` file per daemon, so a duplicate
+    daemon can no longer overwrite the pid-file owner's proof-of-life."""
+    return cwd / ".claude" / ".orcha-notifier.hb.d"
+
+
+def pid_hb_path(cwd: pathlib.Path, pid: int) -> pathlib.Path:
+    return hb_dir(cwd) / str(int(pid))
+
+
+def owns_pid_file(cwd: pathlib.Path, *, services) -> bool:
+    """True when the local pid file names this process (or the launcher that
+    spawned it), or when there is no readable pid file to defer to."""
     try:
-        services._hb_path(cwd).write_text(
-            f"{services.os.getpid()} {services.time.time()}"
-        )
+        owner = int(services._pid_path(cwd).read_text().strip())
+    except (OSError, ValueError):
+        return True
+    return owner in (services.os.getpid(), services.os.getppid())
+
+
+def write_heartbeat(cwd: pathlib.Path, *, services) -> None:
+    """Stamp `<pid> <epoch>` — the daemon's own proof-of-life, once per loop pass.
+
+    Always into this daemon's per-pid file; into the shared file (read by older
+    tools and `orcha serve`) only while it owns the pid file, so a stray
+    duplicate stops overwriting the owner's stamp (GH #313)."""
+    stamp = f"{services.os.getpid()} {services.time.time()}"
+    try:
+        own = services._pid_hb_path(cwd, services.os.getpid())
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text(stamp)
+    except OSError:
+        pass
+    if not services._owns_pid_file(cwd):
+        return
+    try:
+        services._hb_path(cwd).write_text(stamp)
     except OSError:
         pass
 
 
-def heartbeat_verdict(cwd: pathlib.Path, pid: int, *, services):
-    """True = fresh + same pid; False = stale or another pid's; None = no file."""
+def _read_stamp(path: pathlib.Path) -> Optional[tuple]:
     try:
-        raw = services._hb_path(cwd).read_text().split()
-        hb_pid, hb_ts = int(raw[0]), float(raw[1])
+        raw = path.read_text().split()
+        return int(raw[0]), float(raw[1])
     except (OSError, ValueError, IndexError):
         return None
-    if hb_pid != pid:
-        return False
-    return (services.time.time() - hb_ts) < HEARTBEAT_STALE_SECS
+
+
+def read_pid_stamp(cwd: pathlib.Path, pid: int, *, services) -> Optional[float]:
+    """Epoch of `pid`'s own per-pid heartbeat, or None when it has none."""
+    stamp = _read_stamp(services._pid_hb_path(cwd, pid))
+    return stamp[1] if stamp is not None and stamp[0] == pid else None
+
+
+def heartbeat_verdict(cwd: pathlib.Path, pid: int, *, services):
+    """True = fresh; False = stale; None = no proof about this pid either way.
+
+    The pid's own per-pid stamp is authoritative. Without one (a daemon from an
+    older build, or one still in its first pass) the shared file is consulted:
+    its own stamp counts as before, but a FRESH stamp from another pid says
+    nothing about this one — that was a live duplicate overwriting it, and the
+    old `False` got a healthy owner killed and replaced (GH #313). A STALE
+    foreign stamp still means nobody, this pid included, has stamped for
+    HEARTBEAT_STALE_SECS, so it stays False."""
+    now = services.time.time()
+    own = _read_stamp(services._pid_hb_path(cwd, pid))
+    if own is not None and own[0] == pid:
+        return (now - own[1]) < HEARTBEAT_STALE_SECS
+    shared = _read_stamp(services._hb_path(cwd))
+    if shared is None:
+        return None
+    fresh = (now - shared[1]) < HEARTBEAT_STALE_SECS
+    if shared[0] == pid:
+        return fresh
+    return None if fresh else False
 
 
 def pid_alive(pid: int, *, services) -> bool:
@@ -129,6 +185,86 @@ def daemon_pid_healthy(
     if "notifier" not in command:
         return False
     return not (cid and "--container" in command and cid not in command)
+
+
+# GH #313: the pid file only ever names ONE daemon, so daemons it does not name
+# (orphans of a sleep/wake or session restart, a supervisor's respawn beside an
+# --ensure'd one) were invisible to --ensure/--restart and piled up. Discovery is
+# a process scan for the daemon LOOP of this exact container.
+_ONE_SHOT_FLAGS = frozenset({"--ensure", "--stop", "--restart", "--once", "-h", "--help"})
+_INTERPRETERS = ("sh", "bash", "zsh", "env")
+
+
+def is_container_daemon_command(command: str, cid: str) -> bool:
+    """Is this ps command line the long-running notifier loop for `cid`?
+
+    Matches `orcha notifier ...` and `python -m orcha_cli notifier ...`. Only an
+    interpreter or flags may precede the `orcha` token, so a worker whose prompt
+    text merely quotes the command never matches; the exact `--container <cid>`
+    pair is required (never another container's daemon); one-shot verbs
+    (--ensure/--stop/--restart/--once) are not daemons."""
+    if not cid:
+        return False
+    tokens = command.split()
+    try:
+        at = tokens.index("notifier")
+    except ValueError:
+        return False
+    if at == 0 or at > 5:
+        return False
+    if pathlib.PurePath(tokens[at - 1]).name not in ("orcha", "orcha_cli"):
+        return False
+    for token in tokens[: at - 1]:
+        name = pathlib.PurePath(token).name
+        if not (token.startswith("-") or name.startswith("python") or name in _INTERPRETERS):
+            return False
+    args = tokens[at + 1:]
+    if _ONE_SHOT_FLAGS.intersection(args):
+        return False
+    if f"--container={cid}" in args:
+        return True
+    return any(
+        arg == "--container" and i + 1 < len(args) and args[i + 1] == cid
+        for i, arg in enumerate(args)
+    )
+
+
+def ps_table(*, services) -> Optional[list]:
+    """`(pid, ppid, state, command)` for every process; None when ps is unusable."""
+    try:
+        result = services.subprocess.run(
+            ["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "state=", "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    rows = []
+    for line in (result.stdout or "").splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
+        except ValueError:
+            continue
+    return rows
+
+
+def container_daemons(cid: str, *, services) -> Optional[dict]:
+    """`{pid: ppid}` of every live notifier daemon loop for `cid`, zombies
+    excluded; None when ps is unusable (callers then reap nothing)."""
+    rows = services._ps_table()
+    if rows is None:
+        return None
+    return {
+        pid: ppid
+        for pid, ppid, state, command in rows
+        if not state.startswith("Z") and is_container_daemon_command(command, cid)
+    }
 
 
 def container_id_for(cwd: pathlib.Path) -> Optional[str]:

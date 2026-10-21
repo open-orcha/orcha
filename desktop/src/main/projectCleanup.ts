@@ -288,7 +288,7 @@ export function stripManagedHooks(text: string): HookEditResult {
 /** Embodent's own files inside a project folder (relative paths). Directories are removed
  *  recursively, files singly. The user's code, their own `.claude` content and `.git` are
  *  never listed. `.orcha-worktrees/` is handled separately (git worktree remove). */
-export const ORCHA_DIRS = ['.orcha', '.claude/orcha-tabs', '.claude/.orcha-wakes', '.claude/.orcha-attachments', '.claude/.orcha-file-locks']
+export const ORCHA_DIRS = ['.orcha', '.claude/orcha-tabs', '.claude/.orcha-wakes', '.claude/.orcha-attachments', '.claude/.orcha-file-locks', '.claude/.orcha-notifier.hb.d']
 export const ORCHA_FILES = [
   '.claude/orcha.json',
   '.claude/.orcha-notifier.pid',

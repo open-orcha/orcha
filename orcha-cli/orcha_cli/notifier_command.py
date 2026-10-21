@@ -143,6 +143,8 @@ def cmd_notifier(args, *, services) -> None:
     # own the container-keyed file too (cid resolved above) — a directly-started daemon
     # (not via --ensure) must still be visible to --ensure from OTHER worktrees
     _write_global_pid(cid, os.getpid(), cwd)
+    services._lifecycle_log(f"daemon up: pid {os.getpid()} (parent {os.getppid()}), "
+                            f"container {cid}, workspace {cwd}")
     if not args.quiet:
         print(f"[notifier] daemon up (pid {os.getpid()}) — scanning {api_base} every {args.interval}s "
               f"(cooldown={args.cooldown}s, min-idle={args.min_idle}s). Ctrl-C to stop.")
@@ -171,6 +173,10 @@ def cmd_notifier(args, *, services) -> None:
     # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
     # re-check fires ~_DAEMON_LIVENESS_INTERVAL later, not redundantly on iteration one.
     last_liveness = time.monotonic()
+    # GH #313: re-read the pid file on a slow cadence; a daemon it no longer names
+    # retires once the owner proves life, so duplicates cannot accumulate.
+    last_owner_check = time.monotonic()
+    last_error_log = float("-inf")
     turn_watcher = None if args.dry_run else _fast_lane.TurnEventWatcher(api_base, cid).start()
     idle_wait = _fast_lane.idle_wait
     previews = _preview.PreviewState()
@@ -196,6 +202,13 @@ def cmd_notifier(args, *, services) -> None:
                               f"404) — self-terminating this orphaned daemon (issue #36). The "
                               f"container was likely replaced (orcha up / init) or "
                               f".claude/orcha.json points at a previous stack.", file=sys.stderr)
+                    break
+            if now - last_owner_check >= services._OWNER_CHECK_INTERVAL:
+                last_owner_check = now
+                owner = services._superseded_by(cwd, cid)
+                if owner:
+                    services._lifecycle_log(f"pid {os.getpid()} is a duplicate: daemon pid {owner} owns "
+                                            f"{pid_file} and is heartbeating — retiring this one")
                     break
             try:
                 # Release leases of workers that finished since the last tick, BEFORE
@@ -269,6 +282,9 @@ def cmd_notifier(args, *, services) -> None:
             except Exception as e:  # a daemon must not die on a transient error
                 if not args.quiet:
                     print(f"[notifier] tick error (continuing): {e}", file=sys.stderr)
+                elif time.monotonic() - last_error_log >= 300.0:
+                    last_error_log = time.monotonic()
+                    services._lifecycle_log(f"tick error (continuing; next one logged in 5 min): {e}")
             # Live chat: stream live logs during the idle gap and end it early on a human
             # turn or a finished reply (notifier_fast_lane) instead of a blind sleep.
             idle_wait(
@@ -304,5 +320,10 @@ def cmd_notifier(args, *, services) -> None:
                 hb.unlink()
         except (FileNotFoundError, ValueError, IndexError, OSError):
             pass
+        try:
+            services._pid_hb_path(cwd, os.getpid()).unlink()
+        except (FileNotFoundError, OSError):
+            pass
+        services._lifecycle_log(f"daemon pid {os.getpid()} stopped")
     if not args.quiet:
         print("[notifier] stopped.")

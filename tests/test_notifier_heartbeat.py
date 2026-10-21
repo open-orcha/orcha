@@ -59,7 +59,11 @@ def test_write_heartbeat_stamps_own_pid_and_now(tmp_path, monkeypatch):
 
 
 def test_heartbeat_verdict_fresh_stale_foreign_missing(tmp_path):
-    """Mutation: drop the `hb_pid != pid` guard or the staleness compare → RED."""
+    """Mutation: drop the `hb_pid != pid` guard or the staleness compare → RED.
+
+    GH #313 changed the foreign case: a FRESH stamp from another pid is a live
+    duplicate's and proves nothing about this pid (None, not False — False got a
+    healthy owner killed); a STALE foreign stamp still means nobody stamped (False)."""
     ws = _ws(tmp_path)
     assert notifier._heartbeat_verdict(ws, _PID) is None          # no file
     _stamp(ws, _PID, age_secs=1.0)
@@ -67,7 +71,9 @@ def test_heartbeat_verdict_fresh_stale_foreign_missing(tmp_path):
     _stamp(ws, _PID, age_secs=notifier.HEARTBEAT_STALE_SECS + 5)
     assert notifier._heartbeat_verdict(ws, _PID) is False         # stale
     _stamp(ws, _PID + 1, age_secs=1.0)
-    assert notifier._heartbeat_verdict(ws, _PID) is False         # another pid's
+    assert notifier._heartbeat_verdict(ws, _PID) is None          # a live duplicate's
+    _stamp(ws, _PID + 1, age_secs=notifier.HEARTBEAT_STALE_SECS + 5)
+    assert notifier._heartbeat_verdict(ws, _PID) is False         # nobody stamped
 
 
 # ---------- H2: serving-lane health ----------

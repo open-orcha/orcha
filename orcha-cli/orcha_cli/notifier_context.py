@@ -136,6 +136,8 @@ except ImportError:
 
 
 _DAEMON_LIVENESS_INTERVAL = 60.0
+# GH #313: how often a running daemon re-reads the pid file to notice it is a duplicate
+_OWNER_CHECK_INTERVAL = 30.0
 _PERSONA_CACHE_TTL_SECS = float(
     os.environ.get("ORCHA_PERSONA_CACHE_TTL_SECS") or 90.0
 )
