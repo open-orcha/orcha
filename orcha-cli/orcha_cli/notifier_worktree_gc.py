@@ -2,8 +2,9 @@
 migration 067; the classification and every git operation live in ``worktree_gc``).
 
 Worktrees live on the HOST, so — like Verdikt previews — the portal only records settings and
-requests and this daemon does the git work and reports back. Each daemon tick
-(``service_worktrees``, never raises):
+requests and this daemon does the git work and reports back. Each housekeeping pass
+(``service_worktrees``, never raises — run on the daemon's own housekeeping thread, never inline
+before the wake scan; GH #315, ``notifier_housekeeper``):
 
   1. every ~10 s claims pending requests from the portal
      (``POST /api/containers/{cid}/agent-worktrees/claim``) — the answer also carries the
@@ -466,8 +467,13 @@ def report_inventory(api_base, cid, project_cwd, state: GcState, busy: set[str],
 def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Optional[str], *,
                       live_workers=None, live_residents=None, previews=None, quiet: bool = True,
                       dry_run: bool = False, post=_default_post, upload=None,
-                      clock=time.monotonic) -> None:
-    """The per-tick entry point (see the module docstring). Never raises."""
+                      clock=time.monotonic, timer=None, busy=None) -> None:
+    """The per-pass entry point (see the module docstring). Never raises.
+
+    GH #315: the daemon runs this on its housekeeping thread (``notifier_housekeeper``), so
+    ``busy`` carries the loop's own busy worktrees as a snapshot taken on the loop thread, and
+    ``timer`` (a ``StageTimer``) records claim / actions / sweep / inventory seconds."""
+    lap = timer.lap if timer is not None else (lambda name: None)
     if dry_run or not project_cwd:
         return
     try:
@@ -485,7 +491,9 @@ def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Opti
                                       "grace_days": int(settings.get("grace_days", 7))}
                 state.remote_busy = {p for p in (res.get("busy_worktrees") or []) if p}
                 actions = [a for a in (res.get("actions") or []) if isinstance(a, dict)]
-        busy = local_busy(live_workers, live_residents, previews) | state.remote_busy
+        lap("claim")
+        own = local_busy(live_workers, live_residents, previews) if busy is None else set(busy)
+        busy = own | state.remote_busy
         for action in actions:
             try:
                 body = run_action(api_base, cid, project_cwd, action, busy, quiet=quiet,
@@ -494,13 +502,18 @@ def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Opti
                 body = {"status": "failed", "error": f"{exc}"[:500]}
             post(f"{api_base}/api/agent-worktrees/actions/{action.get('id')}/result", body)
             state.report_due = True
+        lap("actions")
         if state.settings and state.settings.get("auto_cleanup"):
             due = (state.last_sweep is None and now - state.started >= FIRST_SWEEP_DELAY_S) or \
                   (state.last_sweep is not None and now - state.last_sweep >= SWEEP_EVERY_S)
             if due:
                 state.last_sweep = now
                 sweep(api_base, cid, project_cwd, state, busy, quiet=quiet, post=post, upload=upload)
+        lap("sweep")
         if state.settings is not None and (state.report_due or now - state.last_report >= REPORT_EVERY_S):
-            report_inventory(api_base, cid, project_cwd, state, busy, post=post)
+            rows = report_inventory(api_base, cid, project_cwd, state, busy, post=post)
+            if timer is not None and rows is not None:
+                timer.note("worktrees", len(rows))
+        lap("inventory")
     except Exception as exc:  # noqa: BLE001 - a daemon must not die on housekeeping
         _log(quiet, f"housekeeping error (continuing): {exc}")

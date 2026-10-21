@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import notifier_fast_lane as _fast_lane
+from . import notifier_housekeeper as _housekeeper
 from . import notifier_preview as _preview
 from . import notifier_request_sweep as _request_sweep
 from . import notifier_routines as _routines
@@ -180,8 +181,18 @@ def cmd_notifier(args, *, services) -> None:
     turn_watcher = None if args.dry_run else _fast_lane.TurnEventWatcher(api_base, cid).start()
     idle_wait = _fast_lane.idle_wait
     previews = _preview.PreviewState()
+    # GH #315: agent-worktree housekeeping (inventory + sweep: git and du per worktree, 20+ min
+    # with thousands of worktrees) runs on its own thread, one pass at a time, so it never holds
+    # up the heartbeat or the wake scan (the portal chip reads "Not running" after 120 s
+    # without a scan). The loop only pokes it with a snapshot of its own busy worktrees.
+    housekeeper = _housekeeper.Housekeeper(
+        lambda busy, timer: _worktree_gc.service_worktrees(
+            api_base, cid, _worktree_gc.STATE, project_cwd, busy=busy, timer=timer,
+            quiet=args.quiet, dry_run=args.dry_run),
+        log=services._lifecycle_log, clock=time.monotonic).start()
     try:
         while not stop["flag"]:
+            loop_timer = _housekeeper.StageTimer(time.monotonic)
             # ISS-22 round 3: proof-of-life FIRST, every pass — --ensure's self-heal
             # treats a stale stamp as dead-or-wedged and replaces this daemon, so the
             # stamp must land even when a tick below runs long or throws.
@@ -210,6 +221,7 @@ def cmd_notifier(args, *, services) -> None:
                     services._lifecycle_log(f"pid {os.getpid()} is a duplicate: daemon pid {owner} owns "
                                             f"{pid_file} and is heartbeating — retiring this one")
                     break
+            loop_timer.lap("checks")
             try:
                 # Release leases of workers that finished since the last tick, BEFORE
                 # scanning, so a just-finished agent with fresh work is wakeable now.
@@ -248,43 +260,53 @@ def cmd_notifier(args, *, services) -> None:
                 # branches). Daemon-scope swept_tasks bounds it to one pass per terminal task.
                 reap_terminal_task_worktrees(api_base, cid, project_cwd, live_workers,
                                              swept_tasks, args.quiet, failed_drains=failed_drains)
+                loop_timer.lap("reaps")
                 # E3: drive warm resident conversation sessions (capture replies, feed new turns,
                 # idle-reap) BEFORE tick() — a live resident holds the embodiment lease, so the
                 # ephemeral scan correctly suppresses a double-spawn for the same agent.
                 service_residents(api_base, cid, live_residents, quiet=args.quiet,
                                   dry_run=args.dry_run, base_cwd=str(cwd))
+                loop_timer.lap("residents")
                 # Routines: fire due recurring tasks (throttled ~30s, never raises) BEFORE the
                 # wake scan, so a task a routine just created/assigned wakes like any other.
                 _routines.maybe_fire_routines(api_base, cid, services, quiet=args.quiet,
                                               dry_run=args.dry_run)
+                loop_timer.lap("routines")
                 # EX-01: expiry is not display-only — escalate expired AI-held asks up the
                 # chain to a human (throttled ~60s, never raises), like /orcha-sweep by hand.
                 _request_sweep.maybe_sweep_expired(api_base, cid, services, quiet=args.quiet,
                                                    dry_run=args.dry_run)
+                loop_timer.lap("requests")
                 # Verdikt preview environments (mig 064): build + serve a task's worktree for
                 # a Verdikt run, report it ready, stop it after the run / TTL (never raises).
                 _preview.service_previews(api_base, cid, previews, project_cwd, quiet=args.quiet,
                                           dry_run=args.dry_run)
+                loop_timer.lap("previews")
                 # Verdikt background check (mig 068): refresh in-flight runs + apply the auto-fix
                 # loop (every ~12s while runs are in flight, else once a minute; never raises).
                 _verdikt_sweep.maybe_sweep(api_base, cid, quiet=args.quiet, dry_run=args.dry_run)
+                loop_timer.lap("verdikt")
                 # Agent worktrees (mig 067): run Settings › Agent worktrees requests, sweep
-                # clean / past-grace worktrees (pre-existing ones too), report the inventory.
-                _worktree_gc.service_worktrees(api_base, cid, _worktree_gc.STATE, project_cwd,
-                                               live_workers=live_workers,
-                                               live_residents=live_residents, previews=previews,
-                                               quiet=args.quiet, dry_run=args.dry_run)
+                # clean / past-grace worktrees (pre-existing ones too), report the inventory —
+                # on the housekeeping thread (GH #315); a poke while a pass runs coalesces.
+                housekeeper.poke(_worktree_gc.local_busy(live_workers, live_residents, previews))
+                loop_timer.lap("worktrees")
                 tick(api_base, cid, dry_run=args.dry_run, cooldown=args.cooldown,
                      min_idle=args.min_idle, quiet=args.quiet,
                      lease_ttl=getattr(args, "lease_ttl", 1200.0),
                      live_workers=live_workers, base_cwd=project_cwd,
                      agent_hold_until=agent_hold_until)
+                loop_timer.lap("scan")
             except Exception as e:  # a daemon must not die on a transient error
                 if not args.quiet:
                     print(f"[notifier] tick error (continuing): {e}", file=sys.stderr)
                 elif time.monotonic() - last_error_log >= 300.0:
                     last_error_log = time.monotonic()
                     services._lifecycle_log(f"tick error (continuing; next one logged in 5 min): {e}")
+            # GH #315: one timestamped line for a pass over ~60 s, with the stage breakdown.
+            slow = _housekeeper.slow_loop_line(loop_timer, housekeeper)
+            if slow:
+                services._lifecycle_log(slow)
             # Live chat: stream live logs during the idle gap and end it early on a human
             # turn or a finished reply (notifier_fast_lane) instead of a blind sleep.
             idle_wait(
@@ -297,6 +319,7 @@ def cmd_notifier(args, *, services) -> None:
                 sleep=time.sleep,
             )
     finally:
+        housekeeper.stop()
         if turn_watcher:
             turn_watcher.stop()
         _preview.stop_all(api_base, previews)
