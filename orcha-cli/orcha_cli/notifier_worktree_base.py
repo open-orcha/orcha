@@ -74,6 +74,13 @@ def overlay_runtime_config(base: pathlib.Path, worktree: pathlib.Path) -> None:
     """Copy ignored connection, binding, hook, and Orcha skill files into a worktree."""
     destination = worktree / ".claude"
     destination.mkdir(parents=True, exist_ok=True)
+    # Every provisioning path (new or reused worktree) runs this right before a worker or chat
+    # starts in the folder. copy2 keeps the source mtimes, so stamp the folder itself: worktree
+    # housekeeping never removes a worktree used in the last few minutes (GH #315).
+    try:
+        os.utime(worktree)
+    except OSError:
+        pass
     for name in ("orcha.json", "settings.json"):
         source = base / ".claude" / name
         if source.exists():

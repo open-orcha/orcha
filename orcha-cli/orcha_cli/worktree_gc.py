@@ -459,6 +459,22 @@ def last_activity(worktree) -> Optional[float]:
     return max(stamps) if stamps else None
 
 
+def recent_use(base_cwd, path: str, *, quiet_for: float = 0.0,
+               include_process_cwds: bool = True, now: Optional[float] = None) -> Optional[str]:
+    """Why ``path`` must be kept right now (a process runs in it, or it was active within
+    ``quiet_for`` seconds), or None. Read fresh, so call it just before removing."""
+    if include_process_cwds:
+        root = worktrees_root(base_cwd)
+        if path_in_use(path, {c for c in process_cwds() if c.startswith(root)}):
+            return "a run, session, terminal or preview started using it — kept"
+    if quiet_for > 0:
+        act = last_activity(path)
+        now = time.time() if now is None else now
+        if act is None or now - act < quiet_for:
+            return f"used in the last {int(quiet_for // 60)} minutes — kept"
+    return None
+
+
 def _iso(ts: Optional[float]) -> Optional[str]:
     if ts is None:
         return None
@@ -741,13 +757,18 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
                     allow_unmerged: bool = False, keep_branch: bool = False,
                     allow_output: bool = True, task_id: Optional[str] = None,
                     run_id: Optional[str] = None, upload=None, dry_run: bool = False,
-                    include_process_cwds: bool = True, run=git) -> dict:
+                    include_process_cwds: bool = True, quiet_for: float = 0.0, run=git) -> dict:
     """Safely remove ONE agent worktree. Returns {ok, outcome, path, branch, state, freed_bytes,
     branch_deleted, branch_note, preserved: {...}|None, reason}.
 
     ``allow_unmerged`` = a human explicitly confirmed removing a worktree whose branch has
     unmerged commits; the branch is then still kept unless ``keep_branch`` is False.
-    ``allow_output`` = False refuses has-output (the automatic path before the grace period)."""
+    ``allow_output`` = False refuses has-output (the automatic path before the grace period).
+    ``quiet_for`` = refuse a worktree that was active within this many seconds (the notifier's
+    housekeeping thread runs beside the loop that starts workers; GH #315).
+
+    The process check and ``quiet_for`` are taken again right before ``git worktree remove``,
+    after the classification, ``du`` and saving output, which can take minutes."""
     out = {"ok": False, "outcome": "refused", "path": path, "branch": None, "state": None,
            "freed_bytes": 0, "branch_deleted": False, "branch_note": None, "preserved": None,
            "reason": ""}
@@ -793,6 +814,11 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
         ahead = unmerged_commits(base_cwd, row["branch"], refs, run=run)
         if ahead is None or ahead > 0:
             return dict(out, state=STATE_UNMERGED, reason="it now has unmerged commits — kept")
+    # Last look before the removal (GH #315): a worker may have started in the folder, or a
+    # chat reused it, while it was being classified and measured.
+    late = recent_use(base_cwd, path, quiet_for=quiet_for, include_process_cwds=include_process_cwds)
+    if late:
+        return dict(out, state=STATE_IN_USE, reason=late)
     # Everything left is scaffolding, preserved output or ignored build/dependency folders,
     # which is the only case --force is used for.
     code, msg = run(["worktree", "remove", "--force", path], base_cwd, 300)
