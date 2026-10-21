@@ -690,6 +690,11 @@ def test_sweep_keeps_a_fresh_worker_worktree_that_has_no_process_yet(project, gc
                         upload=Uploads())
     assert pathlib.Path(wt).exists() and summary["removed"] == []
     assert branch in _branches(project)
+    # kept by the plan itself (no removal attempted, so no "kept" event), not only by the last look
+    assert portal.events() == []
+    row = _row(project, wt)
+    action, why = ngc.plan_row(row, None, gc_state.settings, time.time(), time.time())
+    assert action == "keep" and "used in the last 15 minutes" in why
     _age(pathlib.Path(wt), secs=ngc.RECENT_ACTIVITY_S + 60)
     summary = ngc.sweep("http://p", "c1", str(project), gc_state, set(), post=portal,
                         upload=Uploads())
@@ -756,7 +761,11 @@ def test_portal_clean_up_keeps_recently_used_worktrees_but_the_cli_does_not(proj
     assert [e["name"] for e in result["kept"]] == ["Atlas-32"]
     assert "used in the last 15 minutes" in result["kept"][0]["reason"]
     assert fresh.exists() and not old.exists()
+    assert [e["path"] for e in portal.events()] == [str(old)]  # kept up front: no removal tried
     rows = gc.inventory(str(project), include_process_cwds=False)
+    preview = ngc.bulk_clean(str(project), rows, {}, set(), dry_run=True,
+                             quiet_for=ngc.RECENT_ACTIVITY_S)
+    assert preview["removed"] == [] and [e["name"] for e in preview["kept"]] == ["Atlas-32"]
     assert [e["name"] for e in ngc.bulk_clean(str(project), rows, {}, set(), dry_run=True)["removed"]] \
         == ["Atlas-32"]
 
