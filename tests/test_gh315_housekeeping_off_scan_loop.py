@@ -15,6 +15,8 @@ import threading
 import time
 import types
 
+import pytest
+
 from orcha_cli import notifier  # noqa: E402 (conftest puts orcha-cli on sys.path)
 from orcha_cli import notifier_preview
 from orcha_cli import notifier_request_sweep
@@ -27,6 +29,9 @@ try:  # new in the fix; the repro test above does not need it, so it still runs 
     from orcha_cli import notifier_housekeeper as hkmod
 except ImportError:  # pragma: no cover - main e5f9add7
     hkmod = None
+
+# On main e5f9add7 only the repro test (and the daemon-level ones) run; these skip there.
+needs_fix = pytest.mark.skipif(hkmod is None, reason="notifier_housekeeper is new in the fix")
 
 CID = "c315"
 CHIP_WINDOW_S = 120.0  # RUNTIME_SERVED_WINDOW_SECS
@@ -216,6 +221,31 @@ def test_a_blocked_housekeeping_pass_does_not_hold_up_daemon_exit(monkeypatch, t
     assert hk["calls"] == 1, "a new housekeeping pass started after the daemon stopped"
 
 
+def test_the_daemon_hands_housekeeping_its_live_busy_worktrees_and_flags(monkeypatch, tmp_path):
+    """The housekeeping thread cannot read the loop's dicts, so each poke carries a snapshot of
+    the worktrees the loop's own workers use. Pin the wiring end to end through cmd_notifier: a
+    worker the scan started shows up in the next pass's ``busy``, and dry_run / quiet pass through.
+    Mutations: poke(()) / drop busy=busy / force dry_run=False in the lambda → RED."""
+    seen = []
+    worker_wt = str(tmp_path / ".orcha-worktrees" / "wk-Atlas-1790000000319")
+
+    def _tick(*a, **k):  # the scan spawns a worker into the loop's live_workers dict
+        k["live_workers"].setdefault("w1", {"worktree": worker_wt})
+
+    d = _Daemon(monkeypatch, tmp_path, tick=_tick,
+                housekeeping=lambda *a, **k: seen.append((a, dict(k))))
+    d.start()
+    try:
+        assert _wait_for(lambda: any(worker_wt in (k.get("busy") or ()) for _, k in seen), 5.0), \
+            f"the live worker's worktree never reached housekeeping: {seen[-1:] or 'no pass'}"
+    finally:
+        assert d.stop()
+    a, k = next((a, k) for a, k in seen if worker_wt in (k.get("busy") or ()))
+    assert a[:2] == ("http://x", CID) and a[2] is notifier_worktree_gc.STATE
+    assert k["dry_run"] is d.args.dry_run is True and k["quiet"] is True
+    assert "timer" in k and "live_workers" not in k  # never the loop's live dicts
+
+
 # ---------- DoD 3: one lifecycle line for a slow loop pass ----------
 
 def test_slow_loop_pass_logs_one_timestamped_line_with_stage_times(monkeypatch, tmp_path, capsys):
@@ -252,6 +282,7 @@ class _FakeClock:
         return self.t
 
 
+@needs_fix
 def test_housekeeper_never_runs_two_passes_at_once_and_coalesces_pokes():
     """Pokes during a running pass never start a second one; they coalesce into ONE follow-up.
     Mutation: start a thread per poke → RED (max concurrency 2+ / extra passes)."""
@@ -287,6 +318,7 @@ def test_housekeeper_never_runs_two_passes_at_once_and_coalesces_pokes():
         assert h.stop()
 
 
+@needs_fix
 def test_housekeeper_passes_the_latest_busy_snapshot():
     seen = []
     h = hkmod.Housekeeper(lambda busy, timer: seen.append(busy), log=lambda m: None).start()
@@ -298,6 +330,7 @@ def test_housekeeper_passes_the_latest_busy_snapshot():
         assert h.stop()
 
 
+@needs_fix
 def test_housekeeper_survives_a_failing_pass():
     calls = []
 
@@ -316,6 +349,7 @@ def test_housekeeper_survives_a_failing_pass():
         assert h.stop()
 
 
+@needs_fix
 def test_housekeeper_stop_is_clean_and_starts_no_new_pass():
     calls = []
     h = hkmod.Housekeeper(lambda busy, timer: calls.append(1), log=lambda m: None).start()
@@ -325,6 +359,7 @@ def test_housekeeper_stop_is_clean_and_starts_no_new_pass():
     assert calls == [] and not _hk_threads()
 
 
+@needs_fix
 def test_slow_housekeeping_pass_logs_one_line_with_inventory_and_sweep_times():
     """DoD 3 for the housekeeping side: >60 s → one line naming claim/actions/sweep/inventory
     seconds and the worktree count; a fast pass → no line. Mutation: drop the log → RED."""
@@ -358,6 +393,7 @@ def test_slow_housekeeping_pass_logs_one_line_with_inventory_and_sweep_times():
     assert len(lines) == 1, "a fast pass must not log"
 
 
+@needs_fix
 def test_stage_timer_breakdown():
     clock = _FakeClock()
     t = hkmod.StageTimer(clock)
@@ -371,6 +407,7 @@ def test_stage_timer_breakdown():
 
 # ---------- service_worktrees records its stages and honours the busy snapshot ----------
 
+@needs_fix
 def test_service_worktrees_laps_claim_actions_sweep_inventory(monkeypatch, tmp_path):
     clock = _FakeClock()
     state = notifier_worktree_gc.GcState()
