@@ -11,6 +11,13 @@ Multiple Claude Code sessions collaborate on a high-level objective through a
 shared SQLite database; the human holds standing authority (approve,
 reprioritise, reassign, arbitrate) over every subtask.
 
+![Embodent in 15 seconds: agents ask, you decide](docs/media/embodent-reel.gif)
+
+Watch in full quality: [15-second reel](docs/media/embodent-reel-1080p.mp4)
+(1080p, 7 MB) · [70-second feature demo](docs/media/embodent-demo-1080p.mp4)
+(1080p, 14 MB). Both were made from the real Embodent UI on seeded demo
+projects.
+
 > **Product name: Embodent** (formerly Quorate). The portal, desktop and mobile
 > apps are branded Embodent; the `orcha` CLI command, the `ORCHA_*` env vars,
 > API paths, the `orcha://` URL scheme and the `open-orcha/orcha` repo keep
@@ -21,27 +28,40 @@ backing service (FastAPI + SQLite), and the slash-command skill templates
 that ship with it. End users don't read this repo; they install it once and run
 `orcha init` in their own projects.
 
-## Status (last updated 2026-08-26)
+## Status (last updated 2026-10-17)
 
-- **The hosted dogfood deployment (orcha.nursoftai.com) is decommissioned** —
-  its DB and secrets were backed up offline; rebuilding it (or any new box) is
-  fully documented in [`docs/deploy-new-box-runbook.md`](docs/deploy-new-box-runbook.md).
-- **Local-first is the primary mode**: the free solo tier runs the complete
-  cloud portal on a laptop — local git code source, PAT/`gh` GitHub access,
-  Code Space (line threads, worktree Changes, file history, symbol index with
-  background warmer), roster suggestions, Gold skin. See
-  [`deploy/local/README.md`](deploy/local/README.md) and the desktop app.
-- **Plan gating**: `ORCHA_PLAN` — `solo` (default, free) vs `team` (hosted/paid:
-  members, invites, roles). Migration chain tip: **048** (wake circuit breaker).
-- **Reliability**: no-progress wake circuit breaker (server-side, DB-backed,
-  3/6/10-strike ladder) + the ported open-orcha directive-consumption fixes —
-  see `docs/` and the 048 migration header for the incident that motivated them.
-- **Metrics**: per-agent spend drilldown (in/out/cached tokens, per-task, $) and
-  rule-based reduce-spending insights, including subscription-billed loop
-  detection (runs with ~$0 recorded).
+- **No Docker, no Postgres.** Each project runs as background processes under
+  `orcha serve` and keeps all of its data in one SQLite file,
+  `.orcha/orcha.db`. On macOS a login service (`orcha service`) keeps it
+  running after you close the terminal and after a reboot. Projects created
+  in Docker move over with `orcha migrate-runtime`.
+- **Health and data:** `orcha doctor` checks a project; `orcha backup` and
+  `orcha restore` snapshot and restore its database.
+- **Database migrations:** Postgres migrations end at **073** (worktree
+  bring-in). SQLite starts from a baseline that covers 001–071, then applies
+  its own 002 and 003 (the SQLite versions of 072 and 073).
+- **Plans:** `ORCHA_PLAN` is `solo` (default, free) or `team` (members,
+  invites, roles).
+- **New since 2026-08-26:**
+  - The Embodent name and a redesigned portal, with light mode.
+  - Verdikt proof of work, with an auto-fix loop: a failed check sends the
+    task back to the agent with the evidence.
+  - Agent worktrees are always on. Bring an agent's changes into main, or
+    update its worktree from main, with `orcha worktrees bring-in` /
+    `update-from-main` (#288).
+  - Notification settings.
+  - Claude and Codex plan-usage tracking.
+  - Org chart, budgets and routines.
+  - iOS and Android apps, with phone pairing (`orcha pair --lan`).
+  - Chat startup now checks the project's Git repository first and says
+    plainly what is wrong (#301, #303).
+- **The hosted dogfood deployment is gone.** Local-first is the main mode:
+  the free solo tier runs the full portal on your laptop (see
+  [`deploy/local/README.md`](deploy/local/README.md) and the desktop app).
 
 > **Deploying Orcha Cloud on your own VM (BYOC)?** Start with
-> [`docs/byoc-guide.md`](docs/byoc-guide.md) — the complete guide: tiers,
+> [`docs/byoc-guide.md`](docs/byoc-guide.md). It describes the Docker-based
+> team deployment: the complete guide: tiers,
 > architecture, the automated-vs-manual matrix, the full setup walkthrough,
 > operations, and the honest security posture.
 
@@ -51,14 +71,16 @@ that ship with it. End users don't read this repo; they install it once and run
 
 | Layer | Built with |
 |---|---|
-| **CLI** (`orcha`) | Python ≥ 3.10 |
+| **CLI** (`orcha`) | Python ≥ 3.10 (the Mac app bundles Python 3.12) |
 | **Backing service / API** | FastAPI + Uvicorn (Python), Pydantic |
-| **Database** | SQLite (Python's built-in `sqlite3`) — one file per project |
-| **Runtime** | Host processes supervised by `orcha serve`, kept alive by launchd (macOS) / systemd (Linux) — no Docker |
-| **Web dashboard** | React + TypeScript (Vite), with xterm.js for the live terminal |
-| **Desktop app** (optional) | Electron + React 19 + TypeScript (Vite) |
+| **Database** | SQLite (Python's built-in `sqlite3`), one file per project; Postgres only for older Docker projects |
+| **Runtime** | Host processes supervised by `orcha serve`, kept running by a launchd login service on macOS. No Docker |
+| **Agents** | Claude Code or Codex, driven by slash-command skills and hooks |
+| **Web portal** | React 18 + TypeScript (Vite), CodeMirror 6, xterm.js for the live terminal |
+| **Desktop app** (optional) | Embodent: Electron + React 19 + TypeScript (electron-vite), Apple Silicon, signed and notarized |
 | **macOS widget** (optional) | Swift (WidgetKit) |
-| **Agent layer** | Claude Code slash-command skills |
+| **iOS app** (optional) | SwiftUI (iOS 17+), with home-screen widgets |
+| **Android app** (optional) | Kotlin + Jetpack Compose |
 
 ---
 
@@ -84,41 +106,38 @@ Python (≥ 3.10).
 
 ### Option 1 — the Mac app (recommended)
 
-<!-- TODO(#258): the bundled runtime ships with the desktop sidecar (plan PR 16); until then the app installs the CLI with uv on first run (plan PR 14). -->
+**Embodent.app** (macOS, Apple Silicon) carries its own Python and `orcha`
+command, so it needs nothing else installed. Open it, pick a project folder,
+and sign in to Claude Code. The app is signed and notarized, so macOS asks only
+once, on first open. It links the `orcha` command at `~/.local/bin/orcha`
+unless you already have one.
 
-Download **Orcha.app** (macOS, Apple Silicon):
+> **Not on the Releases page yet.** The newest app there is Orcha 1.1.1 (June
+> 2026), which predates the no-Docker runtime. Until Embodent 1.2.0 is
+> published, use Option 2, or build the app from `desktop/`
+> (`npm run dist:mac:arm64`).
 
-- **GitHub Releases** — latest `.dmg`:
-  <https://github.com/open-orcha/orcha/releases/latest>
-- The **Download** button on the Orcha website (same build)
+### Option 2 — the command line, with uv (macOS)
 
-Open it, pick a project folder, and sign in to Claude Code. The app is signed
-and notarized, so macOS asks only once, on first open. It installs the `orcha`
-command for you at `~/.local/bin/orcha`.
-
-### Option 2 — the command line, with uv (macOS or Linux)
-
-<!-- TODO(#258): needs `orcha-cli` published to PyPI (plan PR 13; owner question Q-H — who owns the PyPI name). -->
+`orcha-cli` is not on PyPI; install it straight from this repository:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # once, if you don't have uv
-uv tool install orcha-cli
+uv tool install "git+https://github.com/open-orcha/orcha@main#subdirectory=orcha-cli"
 orcha --version
 ```
 
-Upgrade later with `orcha update` inside a project (it updates the CLI, then
-restarts Orcha on the new version).
+To upgrade, run the same `uv tool install` command again with `--force --reinstall --no-cache`
+(uv otherwise reuses its cached build), then run `orcha upgrade` in each
+project. Running projects restart on the new code by themselves; `orcha
+upgrade` also refreshes the project's skills and hooks. The login service
+that keeps Orcha running after a reboot is macOS-only for now.
 
-### Option 3 — Homebrew (still supported)
+### Homebrew (older releases only)
 
-```bash
-brew install open-orcha/orcha/orcha
-orcha --version
-```
-
-Upgrade with `brew upgrade orcha`. Downgrade via the frozen per-release
-formulae (`brew install open-orcha/orcha/orcha@<version>`); details in the
-[tap README](https://github.com/open-orcha/homebrew-orcha).
+The [Homebrew tap](https://github.com/open-orcha/homebrew-orcha) is frozen at
+CLI 0.5.0 (July 2026), which predates the no-Docker runtime. Don't use it for
+new projects.
 
 **From source** (for hacking on Orcha itself):
 
@@ -131,27 +150,23 @@ orcha --version
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contributor loop.
 
-### Add your Anthropic API key
+### Sign in to Claude Code (or Codex)
 
-Orcha's agents run on Claude, so they need an Anthropic API key. The lowest-lift
-way to get going — and the one we recommend for onboarding and handoffs — is to
-create a key, **load $20 of credit**, and drop it in your environment:
+Agents run on your Claude Code or Codex sign-in, so a subscription is enough
+to start. An API key is optional. Orcha uses one for its own features that
+call a model, and you can also choose to bill a project's agent runs to a key
+instead of a subscription (desktop app: Settings › API keys).
 
-1. Go to [console.anthropic.com](https://console.anthropic.com/), create an API
-   key, and add **$20** of credit under **Billing**.
-2. Set it in your shell (add to `~/.zshrc` or `~/.bashrc` to make it stick):
+To give Orcha a key, put it in the project's `.orcha/.env`:
 
-   ```bash
-   export ORCHA_LLM_API_KEY="sk-ant-..."   # or: ANTHROPIC_API_KEY
-   ```
+```bash
+ORCHA_LLM_API_KEY=sk-ant-...   # or: ANTHROPIC_API_KEY
+```
 
-> **Trust me — $20 will go a long way, easily a couple of months** of normal
-> use, **and it'll save you a ton of tokens.** You can top up later if you ever
-> run low; there's no subscription to manage.
+A key exported only in `~/.zshrc` does not reach Orcha: the login service
+starts it without your shell profile.
 
 ### First run
-
-<!-- TODO(#258): `orcha init` defaulting to native + installing the login service lands in plan PR 10. Until then init defaults to Docker; `orcha init --runtime native` opts in (plan PR 6). -->
 
 In any project you want to orchestrate:
 
@@ -195,7 +210,7 @@ machine:
 ```
 $ orcha ls
 PROJECT                API                          DB     CONTAINER                    STATUS
-todo-app               http://localhost:8001/       5433   Build a CLI todo app         active
+todo-app               http://localhost:8001/       -      Build a CLI todo app         active
 
 $ cd ~/some/other/folder
 $ orcha connect todo-app --as Priya   # registers Priya as a 2nd human
@@ -235,19 +250,19 @@ share the same container scope via that `.claude/orcha.json`.
   by `kind='human'` (returns 403 otherwise). The first human is registered
   automatically by `orcha init --as <name>`; add more with
   `/orcha-register-human`. Escalations target a specific human row, not a
-  `NULL` target — see the `_pick_human()` resolver in the portal API.
+  `NULL` target — see the `pick_human()` resolver in the portal API.
 
 ---
 
 ## Status
 
-**Shipped today** — containers, agents (AI + human), the work loop, the
+**Shipped:** containers, agents (AI and human), the work loop, the
 verification gate, container lifecycle, the agent-to-agent **info + task**
-request bus (Phase 3), server-sent-event push (`/wait` + SSE), the **Epic A
-wake daemon** (`orcha notifier` wakes idle agents out-of-band), and **Epic C**
-per-agent continuity (`orcha rehydrate`/`snapshot`, `/orcha-snapshot`). See
-"What's next" below for the remaining roadmap (portal write-actions, tighter
-guardrails, remote).
+request bus, server-sent-event push (`/wait` + SSE), the wake daemon
+(`orcha notifier`), per-agent continuity (`orcha rehydrate`/`snapshot`,
+`/orcha-snapshot`), Verdikt checks, agent worktrees, and the web, desktop and
+mobile apps. Open work is tracked in
+[GitHub issues](https://github.com/open-orcha/orcha/issues).
 
 Lifecycle (host shell):
 - `orcha init [--objective "..." --as <YourName>]` — bootstrap a project with
@@ -256,10 +271,19 @@ Lifecycle (host shell):
 - `orcha migrate` — apply any pending `migrations/*.sql` to the live DB now,
   without a wipe (the portal also runs them on startup, so `orcha up` migrates
   automatically; use this for an explicit on-demand apply)
-- `orcha upgrade` — re-render an existing project to the installed CLI's
-  templates (compose + portal + migrations + skills, rebuild portal) **without**
-  a data wipe. Use after a CLI reinstall so an existing project picks up new
-  portal code + compose; then `orcha up` migrates the live volume
+- `orcha upgrade` — bring an existing project up to the installed CLI
+  **without** a data wipe: refreshes its skills and hooks and restarts Orcha on
+  the new code (pending migrations apply on startup). Refuses to downgrade a
+  project whose database is newer than the CLI, unless `--allow-downgrade`
+- `orcha update` — update the CLI itself (an editable or Homebrew install);
+  inside the Mac app it tells you to update the app instead
+- `orcha backup` / `orcha restore <file>` — snapshot the project's database
+  (safe while running) / put a snapshot back
+- `orcha service install|uninstall|status` — the macOS login service that keeps
+  Orcha running after logout and reboot
+- `orcha migrate-runtime` — move a project created in Docker onto the native
+  runtime (`--rollback` undoes it)
+- `orcha pair [--lan]` — pair the iOS or Android app with this project
 - `orcha ls` — list every Orcha project on this machine (native and, if
   `docker` is installed, legacy Docker ones) with its container
 - `orcha connect <project-name> [--as <YourName>]` — point THIS folder at an
@@ -312,7 +336,8 @@ there is no undo unless you made a backup with `orcha backup`.
   (`orcha down` without `-v` keeps the file; data survives a plain `orcha up`.)
 - **`orcha init --force`** does **NOT** wipe data. It only rewrites `.orcha/`
   config and `.claude/` skills; the existing `orcha.db` is reused.
-  <!-- TODO(#258): confirm whether `orcha init --force --reset-data` survives on the native runtime. -->
+- **`orcha init --force --reset-data`** — rewrites the config **and deletes
+  the database**.
 
 **Tip:** to test a *first-run / empty* experience, don't wipe an existing project —
 just `orcha init` in a **brand-new empty directory**, and `orcha down -v` that
@@ -339,7 +364,7 @@ Slash skills in Claude Code (after `orcha init`):
 | `/orcha-ask` | agent | ask another agent for info OR work — `--task --task-dod "..."` makes it a Phase-3 task request; `--in-service-of <parent_rid>` chains |
 | `/orcha-respond` | agent | answer an info request addressed to me |
 | `/orcha-close` | agent | close an answered request when satisfied |
-| `/orcha-escalate` | agent | push a stuck/poorly-answered request to a human (target is the human's agent row, picked by `_pick_human()`) |
+| `/orcha-escalate` | agent | push a stuck/poorly-answered request to a human (target is the human's agent row, picked by `pick_human()`) |
 | `/orcha-convert` | agent | turn an answered-but-insufficient info request into a real task (optional `--assign <alias>`) |
 | `/orcha-accept-task` | agent | accept a task request — spawns + claims the task |
 | `/orcha-reject-task` | agent | reject a task request with `--reason "..."` |
@@ -349,13 +374,16 @@ Slash skills in Claude Code (after `orcha init`):
 | `/orcha-checkpoint` | agent | one-shot inbox + outbox poll (legacy; `/orcha-listen` is cheaper) |
 | `/orcha-snapshot` | agent | snapshot my memory digest (focus/decisions/learnings/open-threads) to the DB so a future re-binding tab can rehydrate (Epic C) |
 | `/orcha-sweep` | human | escalate any open requests past their `expires_at` |
+| `/orcha-nudge` | both | wake whoever owns a request's next action, without changing its state |
+| `/orcha-thread` | both | read a task's collaboration thread, oldest first (read-only partner of `/orcha-post`) |
+| `/orcha-self-wake` | agent | schedule or cancel a one-shot wake for the task I'm working on |
 | `/orcha-pause` / `/orcha-resume` | human | flip container status |
 | `/orcha-stop` | human | mark container `completed` (or `--cancel`) |
 
 Each work or request skill bumps `agents.last_heartbeat_at` and
 `agents.turns_used` so the portal shows live activity. Tab→agent binding is
-automatic on `/orcha-register-agent` via a per-tty file under
-`.claude/orcha-tabs/`.
+automatic on `/orcha-register-agent` via a per-agent file,
+`.claude/orcha-tabs/<alias>.json`.
 
 ### Agent status auto-flip
 
@@ -416,7 +444,9 @@ The `/loop /orcha-listen` and `/loop /orcha-checkpoint` patterns work great when
 agent has yielded back to Claude Code, but a deeply working agent (mid-`/orcha-next`
 → code → `/orcha-done`) can go minutes without checking the inbox — and
 `/loop` itself sometimes drifts. To close that gap, `orcha init` and
-`orcha connect` register three hooks in `.claude/settings.json`:
+`orcha connect` register Orcha's session hooks in `.claude/settings.json`
+(13 in all, via `orcha enable-hook`; Codex projects get the same set in
+`.codex/hooks.json`). These three are the watcher and its drain:
 
 ```jsonc
 // .claude/settings.json
@@ -482,7 +512,7 @@ boundary that drains a queue populated on a reliable 10s server-side cadence.
        │ (no answer or                                       │
        │  poor answer)                                       │
        │       ┌──────────────────────────────────────┐      │
-       └──────▶│ target_id ◀── _pick_human()           │◀─────┘
+       └──────▶│ target_id ◀── pick_human()           │◀─────┘
                │ (re-targeted at the human's row)     │
                └──────────────────────────────────────┘
                           ▲
@@ -606,8 +636,12 @@ your-project/
 ├── .orcha/
 │   ├── orcha.db                         # the whole project's data (SQLite; back up with `orcha backup`)
 │   ├── .env                             # secret key + local settings (DO NOT commit)
-│   ├── logs/                            # portal / notifier / bridge / serve logs (5 × 10 MB each)
+│   ├── logs/                            # portal / notifier / bridge / serve / launchd logs (5 × 10 MB each)
+│   ├── backups/                         # `orcha backup` snapshots (the last 10 are kept)
 │   └── state.json                       # what `orcha serve` is running right now
+├── .orcha-worktrees/                    # one git worktree per agent task or chat (git projects only)
+├── .agents/skills/                      # the same skills for Codex agents
+├── .codex/hooks.json                    # session hooks for Codex agents
 └── .claude/
     ├── commands/                        # all /orcha-* slash command skills (commit these)
     │   ├── orcha-container.md
@@ -617,17 +651,16 @@ your-project/
     ├── settings.json                    # SessionStart/SessionEnd/PostToolUse hooks (orcha enable-hook)
     ├── orcha.json                       # project-shared: api_base_url, ports, runtime, current_container_id
     └── orcha-tabs/                      # per-tab agent binding (DO NOT commit — per-developer)
-        └── <tty>.json                   # {alias, agent_id, container_id}
+        └── <alias>.json                 # {alias, agent_id, container_id}
 ```
 
 The portal code itself is not copied into your project — `orcha serve` runs
 it straight from the installed CLI, so updating the CLI updates every project.
 
 `.claude/commands/`, `.claude/settings.json` and `.claude/orcha.json` are safe
-to commit. Keep `.orcha/` and `.claude/orcha-tabs/` out of git: they hold your
-data, secrets and per-terminal state.
+to commit. Keep `.orcha/`, `.orcha-worktrees/` and `.claude/orcha-tabs/` out of
+git: they hold your data, secrets, agent checkouts and per-terminal state.
 
-<!-- TODO(#258): confirmed by the orcha serve author (plan PR 6): up, down, down -v, status, logs, ls, serve. Still unconfirmed: doctor (R4), backup/restore (S7), service + --no-service (plan PR 10), migrate-runtime (plan PR 8). -->
 ### Lifecycle
 
 Two distinct concepts share the word "container," so the verbs are split:
@@ -649,13 +682,11 @@ orcha restore <file>      # put a backup back (stop with `orcha down` first)
 orcha ls                  # list every Orcha project on this machine, with ports
 ```
 
-`orcha init` also installs a small **login service** (a launchd user agent on
-macOS, label `io.openorcha.<project>`; a systemd user unit
-`orcha-<project>` on Linux) so Orcha keeps running after you close the
-terminal and comes back after a reboot. Manage it with
+On macOS, `orcha init` also installs a small **login service** (a launchd
+user agent, label `io.openorcha.<project>`) so Orcha keeps running after you
+close the terminal and comes back after a reboot. Manage it with
 `orcha service install|uninstall|status`; skip it at init with
-`--no-service`. On Linux, run `loginctl enable-linger $USER` once if you want
-it to keep running while you're logged out.
+`--no-service`. There is no Linux service yet.
 
 Projects created before the no-Docker release still run in Docker until you
 move them with `orcha migrate-runtime` — see
@@ -686,10 +717,15 @@ orcha/                                   # this repo
 │       ├── __init__.py
 │       ├── __main__.py                  # the `orcha` CLI
 │       └── templates/                   # rendered into a user's project by `orcha init`
-│           ├── portal/{main.py, portal_backend/, static/}   # run in place by `orcha serve` (no per-project copy)
-│           ├── migrations/              # schema migrations
-│           ├── docker-compose.yml.j2    # legacy Docker runtime only (one release)
+│           ├── portal/{main.py, portal_backend/, frontend/, static/}   # run in place by `orcha serve` (no per-project copy)
+│           ├── migrations/              # Postgres migrations; migrations/sqlite/ holds the SQLite chain
+│           ├── docker-compose.yml.j2    # legacy Docker runtime only
 │           └── skills/                  # all orcha-*.md slash-command templates
+├── desktop/                             # the Embodent desktop app (Electron) and the macOS widget
+├── ios/  android/                       # the mobile apps
+├── tests/                               # pytest suite (SQLite by default, Postgres leg in CI)
+├── docs/                                # runbooks, plans and the README media (docs/media/)
+├── deploy/  packaging/  tools/          # hosted deploys, release packaging, DB tools
 └── README.md                            # you are here
 ```
 
@@ -701,7 +737,6 @@ a clone, the uv wheel-cache footgun, and the release runbook all live there.
 
 ## Troubleshooting cheatsheet
 
-<!-- TODO(#258): `orcha doctor` (R4) and `orcha service` (plan PR 10) are not built yet; the other commands below are confirmed. -->
 | Symptom | Cause | Fix |
 |---|---|---|
 | Anything odd, and you want to file a bug | — | run `orcha doctor` and paste its output into the issue |
@@ -710,12 +745,12 @@ a clone, the uv wheel-cache footgun, and the release runbook all live there.
 | A project still runs in Docker | it was created before the switch | see [docs/legacy-docker-runtime.md](docs/legacy-docker-runtime.md) |
 | Skill prints "Orcha isn't initialized" | no `.claude/orcha.json` in CWD | run `orcha init` in this project root |
 | `/orcha-register-agent` says "Run /orcha-container first" | no `current_container_id` in `.claude/orcha.json` | run `/orcha-container "..."` once |
-| `/orcha-next` / `/orcha-done` says "tab isn't bound to an agent" | no `.claude/orcha-tabs/<tty>.json` in this terminal | re-run `/orcha-register-agent` in this tab |
+| `/orcha-next` / `/orcha-done` says "tab isn't bound to an agent" | no `.claude/orcha-tabs/<alias>.json` for this tab | re-run `/orcha-register-agent` in this tab |
 | `/orcha-done` returns 409 "task is 'ready', not 'in_progress'" | task hasn't been claimed yet | `/orcha-next` first, or only `done` your own claimed task |
 | `/orcha-verify` returns 409 "task is 'in_progress', not 'needs_verification'" | task hasn't been marked done yet | wait for `/orcha-done` from the assignee |
 | Portal returns 404 on a UUID | DB was reset, container id is stale | `/orcha-container` to make a new one |
 | Portal page won't load | the portal process stopped or is restarting | `orcha status`; `orcha logs portal`; `orcha up` |
-| Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then `rm -rf .orcha .claude && orcha init` in the target project. |
+| Templates edited in source repo not picked up by `orcha init` | **uv caches the built wheel by version** — `--force` alone doesn't rebuild | See [CONTRIBUTING.md](./CONTRIBUTING.md) ("uv wheel-cache footgun"), then run `orcha upgrade` in the target project. Don't delete `.orcha/`: it holds the project's database. |
 | Agent hallucinated an endpoint that doesn't exist | skill briefing didn't enumerate capabilities clearly | tell the agent which Phase the system is at; the register-agent briefing now lists "NOT IN PHASE 1" — direct the agent back to it |
 
 
