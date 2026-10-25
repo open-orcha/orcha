@@ -41,7 +41,7 @@ import { Link } from "react-router-dom";
 import { getJSON, sendJSON } from "../../api/client";
 import { relTime, shortId, trunc } from "../../lib/format";
 import { reviewFor } from "../../lib/reviewer";
-import { actingHuman, agentByAlias, useSnapshot } from "../../state/SnapshotProvider";
+import { actingHuman, agentByAlias, planMessageOf, useSnapshot } from "../../state/SnapshotProvider";
 import { openWorkCounts, useAttention, type AttentionItem } from "../../state/attention";
 import { Icon, Linkified, useToast } from "../../components/ui";
 import {
@@ -100,18 +100,6 @@ function AgentLink({ snap, alias }: { snap: Snapshot | null; alias: string | nul
 
 /** `/agents?agent=<alias>` — the agent deep link (only for an agent that exists). */
 export const agentHref = (alias: string) => "/agents?agent=" + encodeURIComponent(alias);
-
-/* ---- ISS-68 plan text/author (thread-free via plan_message) -------------- */
-function planText(t: Task): string {
-  if (t.plan_message) return t.plan_message.body || "";
-  const m = (t.thread || []).filter((x) => !x.is_human);
-  return m.length ? m[0].body : "";
-}
-function planAuthor(t: Task): string | null | undefined {
-  if (t.plan_message) return t.plan_message.author_alias || (t.assignees || [])[0];
-  const m = (t.thread || []).filter((x) => !x.is_human);
-  return m.length ? m[0].from || (t.assignees || [])[0] : (t.assignees || [])[0];
-}
 
 /* ---- #340 friendly labels for task-less live worker runs ----------------- */
 const RUN_LABELS: Record<string, string> = {
@@ -475,7 +463,8 @@ export function HomePage() {
   );
 
   const planCard = (t: Task, it: AttentionItem) => {
-    const who = planAuthor(t);
+    const plan = planMessageOf(t);
+    const who = plan?.from || (t.assignees || [])[0];
     const a = agentByAlias(snap, who);
     const authorId = a?.id || "";
     const href = "/tasks?task=" + encodeURIComponent(t.id);
@@ -485,7 +474,7 @@ export function HomePage() {
         {/* P1: FULL plan body in a bounded scroll box — review the whole proposal */}
         <div className="aq-ctx aq-plan" tabIndex={0} aria-label={"Proposed plan for " + t.title}>
           <span className="lbl">Proposed plan</span>
-          <Linkified text={planText(t)} tasks={tasks} />
+          <Linkified text={plan?.body || ""} tasks={tasks} />
         </div>
         <div className="aq-acts" data-kind="plan" data-task={t.id} data-author={authorId}>
           <ButtonLink variant="ghost" size="sm" to={href}>Open task</ButtonLink>

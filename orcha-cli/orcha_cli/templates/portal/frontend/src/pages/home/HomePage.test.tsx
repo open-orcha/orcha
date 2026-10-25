@@ -3,7 +3,7 @@
  * verify endpoint contract. fetch is stubbed; snapshot flows through the real
  * SnapshotProvider + mapSnapshot, matching foundation.test.ts style.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { HashRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui";
@@ -97,6 +97,36 @@ describe("HomePage action queue (#367 autonomy gating)", () => {
 describe("HomePage gate actions (human-gated verify contract)", () => {
   beforeEach(() => { localStorage.clear(); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it("shows and approves the assignee's plan in a legacy snapshot with a coordinator brief", async () => {
+    const calls = stubFetch("plan");
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/containers/c1")) {
+        const snapshot = rawSnap("plan");
+        snapshot.agents.push({ id: "a2", alias: "coordinator", kind: "ai", status: "working", model: "claude" });
+        return { ok: true, status: 200, json: async () => ({
+          ...snapshot,
+          tasks: [{ ...snapshot.tasks[0], status: "in_progress", messages: [
+            { author_id: "a2", author_alias: "coordinator", is_human: false, body: "Opening brief from the coordinator" },
+            { author_id: "a1", author_alias: "forge", is_human: false, body: "Plan from forge: implement and test" },
+          ] }],
+        }) } as unknown as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    mount();
+    const plan = await screen.findByLabelText("Proposed plan for Ship the feature");
+    expect(within(plan).getByText("Plan from forge: implement and test")).toBeInTheDocument();
+    expect(within(plan).queryByText("Opening brief from the coordinator")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Approve/ }));
+    await waitFor(() => {
+      expect(calls.find((c) => c.url === "/api/decisions")?.body).toMatchObject({
+        subject_type: "plan_approval", subject_id: "t1", decision: "approve", target_agent_id: "a1",
+      });
+    });
+  });
 
   it("Accept posts approve:true with the acting human's id", async () => {
     const calls = stubFetch("plan");
