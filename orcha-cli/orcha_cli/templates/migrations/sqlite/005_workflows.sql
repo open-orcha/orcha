@@ -94,7 +94,7 @@ CREATE TABLE workflow_executions (
     release_reason TEXT,
     CONSTRAINT workflow_executions_task_fkey FOREIGN KEY (task_id, workflow_id) REFERENCES tasks(id, workflow_id),
     CONSTRAINT workflow_executions_state_check CHECK (state IN ('reserved','running','awaiting_review','stopping','recovery_needed','released','released_lost','aborted')),
-    CONSTRAINT workflow_executions_source_check CHECK (source_kind IN ('worker','evidence_review')),
+    CONSTRAINT workflow_executions_source_check CHECK (source_kind IN ('worker','evidence_review','import_review')),
     CONSTRAINT workflow_executions_evidence_check CHECK (evidence_state IN ('pending','saved','missing','superseded')),
     CONSTRAINT workflow_executions_generation_check CHECK (generation > 0 AND work_revision > 0),
     UNIQUE (task_id, generation)
