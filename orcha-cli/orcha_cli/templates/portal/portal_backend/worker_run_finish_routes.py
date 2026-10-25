@@ -19,6 +19,7 @@ from portal_backend.schemas.worker_runs import (
 from portal_backend.worker_run_support import (
     infer_agent_active_task,
     is_non_task_work,
+    prune_old_run_detail,
     revoke_tokens_for_runs,
 )
 
@@ -118,6 +119,7 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
         )
         row = cur.fetchone()
         revoke_tokens_for_runs(cur, [run_id])
+        prune_old_run_detail(cur, row["agent_id"])
         # Live chat: a container-wide (never agent-targeted — it must not wake anyone)
         # event so open portals re-read runs/turns now instead of on their next poll.
         cur.execute("SELECT container_id FROM agents WHERE id=%s", (row["agent_id"],))

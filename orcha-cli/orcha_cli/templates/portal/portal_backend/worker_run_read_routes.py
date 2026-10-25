@@ -16,6 +16,16 @@ from portal_backend.guards import require_agent, require_task, valid_uuid
 from portal_backend.identity_routes import require_member_read
 from portal_backend.worker_run_support import run_row
 
+# Every worker_runs column except the heavy output and diff (view=summary).
+RUN_SUMMARY_COLUMNS = ", ".join(
+    f"wr.{col}" for col in (
+        "run_id", "agent_id", "task_id", "wake_kind", "wake_event", "lane", "status",
+        "exit_code", "log_path", "pid", "runtime", "conversation_id", "conversation_ack_ts",
+        "last_message_path", "worktree", "branch", "base_cwd", "sandbox_container_id",
+        "kill_reason", "started_at", "ended_at",
+    )
+)
+
 
 def fetch_run_lines(run_id, after_seq, limit=500):
     """Fetch one ordered batch of persisted worker output."""
@@ -68,19 +78,28 @@ def list_agent_runs(
 
 
 @app.get("/api/tasks/{tid}/runs")
-def list_task_runs(tid: str, request: Request, limit: int = Query(default=20, ge=1, le=200)):
+def list_task_runs(
+    tid: str,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=200),
+    view: str = Query(default="full", pattern="^(full|summary)$"),
+):
     """A2: worker runs for a task, newest first (per-task progress view for B1).
 
     GH #144: joins worker_run_tasks (every task a run touched) rather than the single
     worker_runs.task_id pin, so a run from a session that spanned this AND another task narrates
-    here too — not only under whichever task ended up as its pin."""
+    here too — not only under whichever task ended up as its pin.
+
+    ?view=summary returns output and diff as null (often megabytes per run) — for callers that
+    only need status, worktree and branch, like the notifier's terminal-worktree sweep."""
     if not valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor(readonly=True) as (_, cur):
         task = require_task(cur, tid)
         require_member_read(cur, request, str(task["container_id"]))
+        columns = RUN_SUMMARY_COLUMNS if view == "summary" else "wr.*"
         cur.execute(
-            """SELECT wr.* FROM worker_runs wr
+            f"""SELECT {columns} FROM worker_runs wr
                        JOIN worker_run_tasks wrt ON wrt.run_id = wr.run_id
                        WHERE wrt.task_id=%s
                        ORDER BY wr.started_at DESC LIMIT %s""",
