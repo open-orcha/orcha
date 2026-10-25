@@ -74,12 +74,15 @@ async def test_success_resets_failure_streak_and_other_agent_keeps_working(clien
     other = (await make_agent("Other"))["agent_id"]
     await make_task("Build", "Done", assignee_alias="Builder")
     await make_task("Other work", "Done", assignee_alias="Other")
-    await finish(client, aid)
+    await finish(client, aid, event="task_assigned")
     assert (await scan(client, container["id"], other))["should_wake"]
-    await finish(client, aid, code=0)
+    await finish(client, aid, code=0, event="task_assigned")
     assert not db.execute("SELECT * FROM wake_backoff WHERE agent_id=%s AND wake_key='run_failure'", (aid,))
-    await finish(client, aid)
+    await finish(client, aid, event="task_assigned")
     assert db.execute("SELECT strikes FROM wake_backoff WHERE agent_id=%s AND wake_key='run_failure'", (aid,))[0]["strikes"] == 1
+    db.execute("UPDATE wake_backoff SET suppressed_until=%s WHERE agent_id=%s", (sql.ago(1), aid))
+    for _ in range(4):
+        assert (await scan(client, container["id"], aid))["should_wake"]
 
 
 @pytest.mark.parametrize("output", [OUTPUT, json.dumps({"type": "turn.failed", "error": {"message": ERROR}}), ERROR])

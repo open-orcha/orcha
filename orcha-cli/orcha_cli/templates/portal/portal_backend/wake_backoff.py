@@ -111,15 +111,17 @@ def recent_same_trigger_run(cur, agent_id: str, wake_key: str):
     Only clean exits count here. Failed runs have a separate per-agent circuit in
     run_failure_backoff; a kill cannot be judged as successful work without progress."""
     cur.execute(
-        """SELECT run_id, ended_at FROM worker_runs
-             WHERE agent_id=%s AND wake_event=%s AND status='exited'
-               AND (exit_code=0 OR exit_code IS NULL)
+        """SELECT run_id, ended_at, status, exit_code FROM worker_runs
+             WHERE agent_id=%s AND wake_event=%s AND status <> 'running'
                AND ended_at IS NOT NULL
                AND ended_at >= %s
              ORDER BY ended_at DESC LIMIT 1""",
         (agent_id, wake_key, sql.ago(RECENT_RUN_WINDOW_SECS)),
     )
-    return cur.fetchone()
+    row = cur.fetchone()
+    if row and row["status"] == "exited" and row["exit_code"] in (None, 0):
+        return row
+    return None  # do not reach past a newer failure to count an older clean run
 
 
 def record_strike(cur, container_id: str, agent_id: str, wake_key: str) -> dict:
