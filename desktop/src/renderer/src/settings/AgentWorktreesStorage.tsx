@@ -53,6 +53,8 @@ export function notEmbodentWhy(items: readonly AgentWorktree[]): string {
   return [...counts].sort((a, b) => b[1] - a[1]).map(([why, n]) => `${n} ${why}`).join(' · ')
 }
 
+const OUTPUT_PRESERVATION = 'Before removal, output is attached to its task when possible, otherwise saved in the project’s .orcha/saved-output folder.'
+
 const size = (n: number | null | undefined): string => formatBytes(n ?? null) ?? '—'
 
 interface Preview {
@@ -129,8 +131,8 @@ export default function AgentWorktreesStorage({ projectNames }: {
         </Button>
       </div>
       <p className="mb-2 text-[12px] text-text-3">
-        Agents work in git worktrees inside each project’s .orcha-worktrees folder. Clean ones hold only Embodent’s own files; output is saved to its task before a worktree with output goes; unmerged commits are kept.
-        Automatic clean-up, on in every project unless you turn it off in its Settings, removes finished clean worktrees and, after their grace period, ones with output (their new files are saved to the task first); it never removes unmerged commits or a worktree in use.
+        Agents work in git worktrees inside each project’s .orcha-worktrees folder. Clean ones hold only Embodent’s own files; unmerged commits are kept. {OUTPUT_PRESERVATION}{' '}
+        Automatic clean-up, on in every project unless you turn it off in its Settings, removes finished clean worktrees and, after their grace period, ones with output using the same preservation steps; it never removes unmerged commits or a worktree in use.
       </p>
       {error != null && (
         <div className="mb-2 rounded-md border border-border px-3 py-2">
@@ -270,7 +272,7 @@ function PreviewPanel({ preview, busy, onToggle, onCancel, onRun }: {
     <div className="mt-2 rounded-md border border-border bg-bg/40 px-3 py-2.5" role="group" aria-label="Clean-up preview" data-testid="storage-wt-preview">
       <div className="text-[12.5px] text-text">Here’s exactly what will happen — nothing changes until you confirm.</div>
       <Group title="Clean" verb="remove" rows={clean} />
-      <Group title="Has output" verb="save output to the task, then remove" rows={output}>
+      <Group title="Has output" verb="preserve output, then remove" rows={output}>
         {(r) => (
           <>
             <span className="font-mono text-text-2">{r.branch ?? r.name}</span>
@@ -281,6 +283,7 @@ function PreviewPanel({ preview, busy, onToggle, onCancel, onRun }: {
           </>
         )}
       </Group>
+      {output.length > 0 && <p className="mt-1 text-[12px] text-text-3">{OUTPUT_PRESERVATION}</p>}
       <Group title="Unmerged commits" verb="kept unless ticked (the branch is always kept)" rows={unmerged}>
         {(r) => (
           <label className="flex items-center gap-2">

@@ -50,10 +50,15 @@ export function useWorktreeScan(timeoutMs = SCAN_TIMEOUT_MS, slowMs = SCAN_SLOW_
     try {
       if (!api.storageWorktreeProjects || !api.storageProjectWorktrees) {
         if (!api.storageWorktrees) return
-        const all = await bounded(api.storageWorktrees(), timeoutMs)
-        if (!current()) return
-        setProjects(all.map(({ project, projectShort, folder }) => ({ project, projectShort, folder })))
-        setResults(Object.fromEntries(all.map((p) => [p.folder, p])))
+        // Keep the success handler on the original answer so a current late result
+        // still replaces its timeout error, just like the per-project path.
+        const answer = api.storageWorktrees().then((all) => {
+          if (!current()) return
+          setProjects(all.map(({ project, projectShort, folder }) => ({ project, projectShort, folder })))
+          setResults(Object.fromEntries(all.map((p) => [p.folder, p])))
+          setError(null)
+        })
+        await bounded(answer, timeoutMs)
         return
       }
       const list = await bounded(api.storageWorktreeProjects(), timeoutMs)

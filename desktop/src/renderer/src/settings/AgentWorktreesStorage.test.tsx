@@ -71,6 +71,47 @@ describe('Settings › Storage › Agent worktrees', () => {
     expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
   })
 
+  it('a late legacy scan replaces its timeout error without another scan', async () => {
+    vi.useFakeTimers()
+    const answer = deferred<ProjectWorktrees[]>()
+    api.storageWorktrees.mockReturnValueOnce(answer.promise)
+    render(<StorageSettings />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(SCAN_TIMEOUT_MS) })
+    expect(screen.getByText(/Couldn’t check agent worktrees: No answer after 60 seconds/)).toBeInTheDocument()
+    await act(async () => answer.resolve(PROJECTS))
+    expect(screen.getByTestId('storage-wt-fleet-mate')).toHaveTextContent('5 worktrees')
+    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('2.3 GB reclaimable')
+    expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Looking at agent worktrees…')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan worktrees again' })).toBeEnabled()
+    expect(api.storageWorktrees).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['running', 'finished'] as const)('an older late legacy answer cannot overwrite a newer %s scan', async (newer) => {
+    vi.useFakeTimers()
+    const oldAnswer = deferred<ProjectWorktrees[]>()
+    const newAnswer = deferred<ProjectWorktrees[]>()
+    const refreshed = [{ ...PROJECTS[0], items: [], reclaimable_bytes: 0 }]
+    api.storageWorktrees.mockReturnValueOnce(oldAnswer.promise).mockReturnValueOnce(newAnswer.promise)
+    render(<StorageSettings />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(SCAN_TIMEOUT_MS) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Scan worktrees again' })) })
+    if (newer === 'finished') await act(async () => newAnswer.resolve(refreshed))
+    await act(async () => oldAnswer.resolve(PROJECTS))
+    if (newer === 'running') {
+      expect(screen.queryByTestId('storage-wt-fleet-mate')).not.toBeInTheDocument()
+      expect(screen.getByText('Looking at agent worktrees…')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Scan worktrees again' })).toBeDisabled()
+      await act(async () => newAnswer.resolve(refreshed))
+    }
+    expect(screen.getByTestId('storage-wt-fleet-mate')).toHaveTextContent('0 worktrees')
+    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('0 B reclaimable')
+    expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Looking at agent worktrees…')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan worktrees again' })).toBeEnabled()
+    expect(api.storageWorktrees).toHaveBeenCalledTimes(2)
+  })
+
   it('a failed clean-up shows its error; a successful retry clears it (review: error stuck after retry)', async () => {
     api.storageCleanWorktrees.mockImplementation(async (req: { dryRun: boolean }) => (req.dryRun ? DRY : { ...DRY, dryRun: false }))
     api.storageCleanWorktrees.mockImplementationOnce(async () => DRY).mockImplementationOnce(async () => { throw { code: 'WORKTREE_CLI', message: 'disk busy' } })
@@ -120,7 +161,8 @@ describe('Settings › Storage › Agent worktrees', () => {
     expect(api.storageCleanWorktrees).toHaveBeenCalledWith({ folder: F, dryRun: true, onlyClean: false, unmerged: [] })
     expect(within(preview).getByRole('region', { name: 'Clean' })).toHaveTextContent('2 · 2.3 GB · remove')
     const out = within(preview).getByRole('region', { name: 'Has output' })
-    expect(out).toHaveTextContent('save output to the task, then remove')
+    expect(out).toHaveTextContent('preserve output, then remove')
+    expect(preview).toHaveTextContent('Before removal, output is attached to its task when possible, otherwise saved in the project’s .orcha/saved-output folder.')
     expect(out).toHaveTextContent('qa-runs/report.md')
     expect(within(preview).getByRole('region', { name: 'Unmerged commits' })).toHaveTextContent('kept unless ticked')
     expect(within(preview).getByRole('region', { name: 'In use / not Embodent' })).toHaveTextContent('skipped')
@@ -318,7 +360,10 @@ describe('Settings › Storage › Agent worktrees, project by project (Verdikt:
       'Not Embodent, so never removed: 2 on a branch Orcha didn’t create · 1 detached HEAD'
     )
     expect(screen.queryByTestId('storage-wt-why-fleet-mate')).toBeNull()
-    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('it never removes unmerged commits or a worktree in use')
+    const explanation = within(screen.getByTestId('storage-worktrees')).getByText(/Agents work in git worktrees/)
+    expect(explanation).toHaveTextContent('Before removal, output is attached to its task when possible, otherwise saved in the project’s .orcha/saved-output folder.')
+    expect(explanation).toHaveTextContent('ones with output using the same preservation steps')
+    expect(explanation).toHaveTextContent('it never removes unmerged commits or a worktree in use')
   })
 
   it('groups the "Not Embodent" reasons (pure)', () => {
