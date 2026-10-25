@@ -24,4 +24,21 @@ describe('singleFlight (Settings › Storage scans)', () => {
     await expect(scan()).rejects.toThrow('busy')
     expect(await scan()).toBe('ok')
   })
+
+  it('invalidation starts fresh, and an older completion cannot release the replacement', async () => {
+    const finish: Array<(value: string) => void> = []
+    const fn = vi.fn(() => new Promise<string>((resolve) => { finish.push(resolve) }))
+    const scan = singleFlight(fn)
+    const old = scan()
+    scan.invalidate()
+    const fresh = scan()
+    expect(fresh).not.toBe(old)
+    expect(fn).toHaveBeenCalledTimes(2)
+    finish[0]('before cleanup')
+    await old
+    expect(scan()).toBe(fresh)
+    expect(fn).toHaveBeenCalledTimes(2)
+    finish[1]('after cleanup')
+    expect(await fresh).toBe('after cleanup')
+  })
 })
