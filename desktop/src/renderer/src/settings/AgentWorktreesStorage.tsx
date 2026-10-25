@@ -130,7 +130,7 @@ export default function AgentWorktreesStorage({ projectNames }: {
       </div>
       <p className="mb-2 text-[12px] text-text-3">
         Agents work in git worktrees inside each project’s .orcha-worktrees folder. Clean ones hold only Embodent’s own files; output is saved to its task before a worktree with output goes; unmerged commits are kept.
-        Automatic clean-up, on in every project unless you turn it off in its Settings, removes finished clean worktrees and, after their grace period, ones with output; it never removes unmerged or uncommitted work.
+        Automatic clean-up, on in every project unless you turn it off in its Settings, removes finished clean worktrees and, after their grace period, ones with output (their new files are saved to the task first); it never removes unmerged commits or a worktree in use.
       </p>
       {error != null && (
         <div className="mb-2 rounded-md border border-border px-3 py-2">

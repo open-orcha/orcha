@@ -223,7 +223,7 @@ describe('Settings › Storage › Agent worktrees, project by project (Verdikt:
       'Not Embodent, so never removed: 2 on a branch Orcha didn’t create · 1 detached HEAD'
     )
     expect(screen.queryByTestId('storage-wt-why-fleet-mate')).toBeNull()
-    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('it never removes unmerged or uncommitted work')
+    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('it never removes unmerged commits or a worktree in use')
   })
 
   it('groups the "Not Embodent" reasons (pure)', () => {
