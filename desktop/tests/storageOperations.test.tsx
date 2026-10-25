@@ -6,7 +6,7 @@ import { storageOperations, worktreeOperations } from '../src/main/storageOperat
 import type { Run } from '../src/main/agentWorktrees'
 import type { AgentWorktree, WorktreeCleanRequest } from '../src/shared/types'
 
-it('refresh after cleanup must not reuse the inventory captured before cleanup', async () => {
+it.each([false, true])('refresh after cleanup must not reuse the inventory captured before cleanup (per project: %s)', async (perProject) => {
   const folder = '/projects/small'
   const projects = [
     { project: 'orcha-small', projectShort: 'small', folder },
@@ -30,7 +30,8 @@ it('refresh after cleanup must not reuse the inventory captured before cleanup',
   window.orchaDesktop = {
     storageScan: vi.fn().mockResolvedValue({ items: [], inUse: [] }),
     storageWorktrees: vi.fn(operations.scan),
-    storageCleanWorktrees: vi.fn((req: WorktreeCleanRequest) => operations.clean(req))
+    storageCleanWorktrees: vi.fn((req: WorktreeCleanRequest) => operations.clean(req)),
+    ...(perProject ? { storageWorktreeProjects: operations.projects, storageProjectWorktrees: operations.project } : {})
   } as unknown as typeof window.orchaDesktop
   render(<StorageSettings />)
   const row = await screen.findByTestId('storage-wt-small')

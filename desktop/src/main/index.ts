@@ -36,8 +36,7 @@ import { resetStack } from './resetEngine'
 import { planRemoval, removeProject, type RemoveDeps } from './removeEngine'
 import { storageDocker } from './storageScan'
 import { storageOperations, worktreeOperations } from './storageOperations'
-import { singleFlightBy } from './singleFlight'
-import { isAgentWorktreePath, knownFolder, scanProjectWorktrees, worktreeProjects } from './agentWorktrees'
+import { isAgentWorktreePath, knownFolder } from './agentWorktrees'
 import { dropKept, keptStatus, nodeDocker, nodeRemoveFs, nodeRun, recordKept } from './removeHost'
 import { buildAppMenuTemplate } from './appMenu'
 import { pinnedUserDataPath } from './userDataPath'
@@ -1349,7 +1348,6 @@ app.whenReady().then(() => {
   const hasWorktreesDir = (f: string): boolean => isDirectory(path.join(f, '.orcha-worktrees'))
   const worktreeRun = () => nodeRun({ ...scrubWorkerEnv(process.env), PATH: nodeHostWorkerDeps.pathEnv ?? hostToolPath() })
   const worktrees = worktreeOperations(listKnownProjects, worktreeRun, hasWorktreesDir)
-  const scanProjectOnce = singleFlightBy((p: KnownProject & { folder: string }) => p.folder, (p) => scanProjectWorktrees(p, worktreeRun()))
   ipcMain.handle('orcha:storage:worktrees', (event) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
@@ -1360,17 +1358,13 @@ app.whenReady().then(() => {
   ipcMain.handle('orcha:storage:worktreeProjects', (event) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
-      return worktreeProjects(await listKnownProjects(), hasWorktreesDir).map(({ project, projectShort, folder }) => ({ project, projectShort, folder }))
+      return worktrees.projects()
     })
   )
   ipcMain.handle('orcha:storage:projectWorktrees', (event, raw: unknown) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
-      const projects = await listKnownProjects()
-      const folder = knownFolder(projects, raw)
-      const p = worktreeProjects(projects, hasWorktreesDir).find((x) => x.folder === folder)
-      if (!p) throw { code: 'INVALID_WORKTREE' } as const
-      return scanProjectOnce(p)
+      return worktrees.project(raw)
     })
   )
   ipcMain.handle('orcha:storage:worktreesClean', (event, raw: unknown) =>

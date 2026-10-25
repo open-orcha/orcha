@@ -53,4 +53,23 @@ describe('singleFlightBy (one scan per project folder)', () => {
     await scan('/a')
     expect(fn).toHaveBeenCalledTimes(3)
   })
+
+  it('invalidates only the changed folder, and an older answer cannot release its replacement', async () => {
+    const finish: Array<() => void> = []
+    const fn = vi.fn(() => new Promise<void>((resolve) => { finish.push(resolve) }))
+    const scan = singleFlightBy((folder: string) => folder, fn)
+    const old = scan('/a')
+    const other = scan('/b')
+    scan.invalidate('/a')
+    const fresh = scan('/a')
+    expect(fresh).not.toBe(old)
+    expect(scan('/b')).toBe(other)
+    finish[0]()
+    await old
+    expect(scan('/a')).toBe(fresh)
+    expect(fn).toHaveBeenCalledTimes(3)
+    finish[1]()
+    finish[2]()
+    await Promise.all([other, fresh])
+  })
 })
