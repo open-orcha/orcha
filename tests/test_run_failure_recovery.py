@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import main
 from orcha_cli.notifier_worker_results import drain_task_failure
-from portal_backend import sql
+from portal_backend import sql, worker_run_support
 
 ERROR = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
 OUTPUT = "\n".join([
@@ -97,6 +97,29 @@ async def test_run_feed_exposes_real_error_for_existing_history(client, make_age
     # Read-time derivation also repairs old rows without rewriting their history.
     rows = (await client.get(f"/api/agents/{aid}/runs")).json()["runs"]
     assert next(r for r in rows if r["run_id"] == rid)["failure_reason"] == ERROR
+
+
+async def test_failure_reason_survives_run_detail_pruning_and_summary_view(client, make_agent, make_task, db, monkeypatch):
+    # Main's retention cuts older runs to their output tail; the provider error is in that tail.
+    monkeypatch.setattr(worker_run_support, "RUN_DETAIL_KEEP_PER_AGENT", 1)
+    aid = (await make_agent("Builder"))["agent_id"]
+    task = await make_task("do it", "done when X", assignee_alias="Builder")
+    started = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral", "wake_event": "task_assigned", "task_id": task["id"]})
+    rid = started.json()["run_id"]
+    noisy = "\n".join(["tool output " + "x" * 200] * 40 + [OUTPUT])
+    assert (await client.post(f"/api/runs/{rid}/finish", json={"status": "exited", "exit_code": 1, "output": noisy})).status_code == 200
+    await finish(client, aid, code=0, output="ok")  # a newer finish prunes the failed run
+    assert len(db.execute("SELECT output FROM worker_runs WHERE run_id=%s", (rid,))[0]["output"]) < len(noisy)
+
+    def failed(path):
+        return next(r for r in client_rows[path] if r["run_id"] == rid)
+
+    client_rows = {path: (await client.get(path)).json()["runs"] for path in (
+        f"/api/agents/{aid}/runs", f"/api/tasks/{task['id']}/runs", f"/api/tasks/{task['id']}/runs?view=summary")}
+    assert failed(f"/api/agents/{aid}/runs")["failure_reason"] == ERROR
+    assert failed(f"/api/tasks/{task['id']}/runs")["failure_reason"] == ERROR
+    summary = failed(f"/api/tasks/{task['id']}/runs?view=summary")
+    assert summary["output"] is None and summary["failure_reason"] is None
 
 
 @pytest.mark.parametrize("terminal,assigned,stop", [(False, True, False), (True, True, False), (False, False, False), (False, True, True)])
