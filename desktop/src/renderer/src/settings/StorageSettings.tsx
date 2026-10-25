@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Box, Database, Loader2, Network, Package, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import ErrorNotice from '../components/ErrorNotice'
 import AgentWorktreesStorage from './AgentWorktreesStorage'
+import { STILL_LOOKING, useBoundedScan } from './useBoundedScan'
 import { formatBytes } from '../host/removeProject'
 import type { StorageItem, StorageItemKind, StorageReport } from '../../../shared/types'
 
@@ -26,29 +27,11 @@ export function totalSize(items: readonly StorageItem[]): number | null {
  *  needs its own explicit confirmation. */
 export default function StorageSettings() {
   const api = window.orchaDesktop
-  const [report, setReport] = useState<StorageReport | null>(null)
-  const [scanError, setScanError] = useState<unknown>(null)
-  const [scanning, setScanning] = useState(false)
+  const { data: report, error: scanError, scanning, slow, scan } = useBoundedScan<StorageReport>(api.storageScan)
   const [working, setWorking] = useState<Set<string>>(new Set())
   const [failed, setFailed] = useState<Record<string, unknown>>({})
   const [confirming, setConfirming] = useState<string | null>(null)
   const [bulk, setBulk] = useState(false)
-
-  const scan = useCallback(async () => {
-    if (!api.storageScan) return
-    setScanning(true)
-    setScanError(null)
-    try {
-      setReport(await api.storageScan())
-    } catch (err) {
-      setScanError(err)
-    } finally {
-      setScanning(false)
-    }
-  }, [api])
-  useEffect(() => {
-    void scan()
-  }, [scan])
 
   const removeOne = async (item: StorageItem): Promise<boolean> => {
     if (!api.storageRemove) return false
@@ -98,7 +81,7 @@ export default function StorageSettings() {
         >
           {bulk ? 'Removing…' : `Remove all${bulkSize ? ` · ${bulkSize}` : ''}`}
         </Button>
-        <Button variant="ghost" onClick={() => void scan()} disabled={scanning || bulk} aria-label="Scan again">
+        <Button variant="ghost" onClick={() => void scan()} disabled={(scanning && !slow) || bulk} aria-label="Scan again">
           <RefreshCw className={scanning ? 'animate-spin' : ''} /> Scan again
         </Button>
         {items.some((i) => i.kind === 'volume') && (
@@ -113,7 +96,7 @@ export default function StorageSettings() {
       )}
       {!report && scanning && (
         <p className="flex items-center gap-2 text-[13px] text-text-3" role="status">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Looking for leftovers…
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Looking for leftovers…{slow ? ` ${STILL_LOOKING}` : ''}
         </p>
       )}
       {report && items.length === 0 && (
