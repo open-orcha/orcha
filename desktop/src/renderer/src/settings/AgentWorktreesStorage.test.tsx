@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import StorageSettings from './StorageSettings'
 import { stateSummary } from './AgentWorktreesStorage'
+import { SCAN_TIMEOUT_MS } from './useBoundedScan'
 import type { AgentWorktree, AgentWorktreeCleanResult, ProjectWorktrees } from '../../../shared/types'
 
 const F = '/Users/me/fleet-mate'
@@ -42,7 +43,28 @@ beforeEach(() => {
   window.orchaDesktop = api as unknown as typeof window.orchaDesktop
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('Settings › Storage › Agent worktrees', () => {
+  it('a worktree scan that never answers stops spinning, says so, and Scan retries (Verdikt: scans never finish)', async () => {
+    vi.useFakeTimers()
+    api.storageWorktrees.mockReturnValueOnce(new Promise(() => {})).mockResolvedValueOnce(PROJECTS)
+    render(<StorageSettings />)
+    expect(screen.getByText('Looking at agent worktrees…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan worktrees again' })).toBeDisabled()
+    await act(async () => {
+      vi.advanceTimersByTime(SCAN_TIMEOUT_MS)
+    })
+    vi.useRealTimers()
+    expect(screen.queryByText('Looking at agent worktrees…')).not.toBeInTheDocument()
+    expect(screen.getByText(/Couldn’t check agent worktrees: No answer after 10 seconds/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Scan worktrees again' }))
+    expect(await screen.findByTestId('storage-wt-fleet-mate')).toBeInTheDocument()
+    expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+  })
+
   it('summarises states (pure)', () => {
     expect(stateSummary(ITEMS)).toBe('2 clean · 1 has output · 1 unmerged commits · 1 in use')
   })
