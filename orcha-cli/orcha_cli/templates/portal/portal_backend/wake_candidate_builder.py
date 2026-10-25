@@ -158,7 +158,18 @@ def build_wake_candidate(
         )
 
     resolved_model = resolve_model(agent["model"])
+    launch_task_id = context_task_id or (auto_tasks[0] if auto_tasks else wake_task_id)
+    workflow_launch = {}
+    if launch_task_id:
+        cur.execute("""SELECT t.workflow_id,t.work_revision,w.revision AS workflow_revision
+                       FROM tasks t LEFT JOIN workflows w ON w.id=t.workflow_id WHERE t.id=%s""", (launch_task_id,))
+        launch_task = cur.fetchone()
+        if launch_task and launch_task["workflow_id"]:
+            workflow_launch = {"workflow_id": str(launch_task["workflow_id"]),
+                               "workflow_revision": launch_task["workflow_revision"],
+                               "workflow_work_revision": launch_task["work_revision"]}
     return {
+        **workflow_launch,
         "agent_id": aid,
         "alias": agent["alias"],
         "should_wake": should_wake,
