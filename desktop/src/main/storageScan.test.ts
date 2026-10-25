@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { findLeftovers, removalArgs, removeLeftover, scanStorage, SIZES_TIMEOUT_MS, type StorageDeps } from './storageScan'
+import { DOCKER_TIMEOUT_MS, findLeftovers, removalArgs, removeLeftover, scanStorage, SIZES_TIMEOUT_MS, storageDocker, type StorageDeps } from './storageScan'
 import { parseContainers, parseDiskSizes, parseImages, parseLabeled } from './projectCleanup'
 
 // Live stacks: orcha-acme-web (running) and orcha-helpdesk (stopped — still has containers).
@@ -150,5 +150,16 @@ describe('removeLeftover', () => {
   it('scan: Docker down → DOCKER_UNAVAILABLE', async () => {
     const docker = vi.fn().mockRejectedValue({ stderr: 'Cannot connect to the Docker daemon' })
     await expect(scanStorage({ docker, kept: () => ({}) })).rejects.toEqual({ code: 'DOCKER_UNAVAILABLE' })
+  })
+})
+
+describe('storageDocker (the docker index.ts gives Settings › Storage)', () => {
+  it('uses the 60 s budget unless a call asks for its own (df: 5 s)', async () => {
+    const node = vi.fn(async () => ({ stdout: '' }))
+    const docker = storageDocker(node)
+    await docker(['ps'])
+    await docker(['system', 'df'], SIZES_TIMEOUT_MS)
+    expect(node.mock.calls).toEqual([[['ps'], DOCKER_TIMEOUT_MS], [['system', 'df'], SIZES_TIMEOUT_MS]])
+    expect(DOCKER_TIMEOUT_MS).toBe(60_000)
   })
 })
