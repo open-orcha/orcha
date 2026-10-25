@@ -21,6 +21,7 @@ from portal_backend.review_routing import (
 )
 from portal_backend.schemas.requests import RequestRespond
 from portal_backend.run_failure_backoff import failure_pause_status
+from portal_backend.result_notifications import coalesce_result_messages
 
 
 @app.get("/api/requests/{rid}")
@@ -165,6 +166,7 @@ def respond_request(rid: str, body: RequestRespond, request: Request):
         )
         # An answer never resumes a failure pause; say so instead of implying a wake.
         paused = failure_pause_status(cur, str(r["requester_id"]) if r["requester_id"] else None)
+        coalesce_result_messages(cur, r, body.response)
         conn.commit()
     result = {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
     return {**result, "automatic_work": paused} if paused else result

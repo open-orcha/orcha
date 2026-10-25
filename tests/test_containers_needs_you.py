@@ -268,10 +268,10 @@ async def test_needs_you_follows_effective_autonomy(
     assert row["needs_you"] == select_attention_count(await _snapshot(client, cid), ids["root"])
 
 
-async def test_needs_you_plan_author_falls_back_to_assignee(
+async def test_needs_you_waits_for_current_assignees_plan(
     client, db, container, make_agent, make_task, monkeypatch
 ):
-    """A terminated plan author is not in the snapshot: the ASSIGNEE's autonomy decides."""
+    """A previous participant's post is not the current assignee's plan."""
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
     cid = container["id"]
     await make_agent("root", "operator", kind="human")
@@ -286,6 +286,9 @@ async def test_needs_you_plan_author_falls_back_to_assignee(
     row = _row((await client.get("/api/containers")).json(), cid)
     assert row["needs_you_breakdown"]["plan"] == 0  # fast runs at pr
     db.execute("UPDATE agents SET autonomy_override=NULL WHERE id=%s", (fast["agent_id"],))
+    row = _row((await client.get("/api/containers")).json(), cid)
+    assert row["needs_you_breakdown"]["plan"] == 0  # still waiting for fast's own plan
+    _plan_msg(db, t["id"], fast["agent_id"])
     row = _row((await client.get("/api/containers")).json(), cid)
     assert row["needs_you_breakdown"]["plan"] == 1
     snap = await _snapshot(client, cid)

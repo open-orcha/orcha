@@ -20,7 +20,9 @@ def _task_payload(title="do work", dod="done"):
 
 def _poke_messages(db, agent_id):
     rows = db.execute(
-        "SELECT payload FROM agent_events WHERE event_key=%s AND event_name='prompt' ORDER BY ts",
+        "SELECT payload FROM agent_events WHERE event_key=%s "
+        "AND (event_name='prompt' OR (event_name='decision_made' "
+        "AND payload->>'subject_type'='task_close')) ORDER BY ts",
         (agent_id,))
     return [(r["payload"] or {}).get("message") or "" for r in rows]
 

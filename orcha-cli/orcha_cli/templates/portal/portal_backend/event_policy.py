@@ -6,7 +6,7 @@
 # it was delivered to the agent's OWN key it self-woke the agent in a ~60s loop (the wake spawns a
 # worker → SessionEnd snapshots → republishes → re-wakes). The publish is now container-scoped
 # (target=NULL), and wake-scan also excludes these names from its should_wake count as a backstop.
-_NON_WAKING_EVENTS = ("digest_snapshotted",)
+_NON_WAKING_EVENTS = ("digest_snapshotted", "task_result_mirrored")
 # GH #91/#90: the WORK lane must NOT wake on a bare `conversation_turn`. A conversation_turn is the
 # conversation lane's own actionable surface (the resident chat responds to it); after the lane
 # split it must not by itself count as work-lane pending, or every human chat message would boot a

@@ -112,6 +112,22 @@ describe("acting-as is data-driven (D0 — never a hardcoded name)", () => {
 });
 
 describe("planMessageOf / pendingPlan (B10 — the agent's OPENING plan)", () => {
+  it("uses the assigned child's plan after a coordinator's opening brief", () => {
+    const t = { assignees: ["Child"], thread: [
+      { from: "Coordinator", body: "Opening brief", is_human: false },
+      { from: "Child", body: "Plan: reproduce and fix", is_human: false },
+    ] } as unknown as Task;
+    expect(planMessageOf(t)?.from).toBe("Child");
+    expect(planMessageOf(t)?.body).toBe("Plan: reproduce and fix");
+  });
+
+  it("respects a server-confirmed missing plan even after loading the thread", () => {
+    const t = { plan_message: null, assignees: ["Child"], thread: [
+      { from: "Coordinator", body: "Opening brief", is_human: false },
+    ] } as unknown as Task;
+    expect(planMessageOf(t)).toBeNull();
+  });
+
   it("picks the earliest non-human message, preserving author identity for routing", () => {
     const t = {
       thread: [

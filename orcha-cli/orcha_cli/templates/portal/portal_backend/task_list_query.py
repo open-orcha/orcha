@@ -3,11 +3,25 @@
 from portal_backend import sql
 
 
+def plan_author_sql(message: str) -> str:
+    """A task's assignees own its plan; other participants' briefs are context.
+
+    Keep the legacy agent-post fallback for tasks with no assigned agent.
+    `t` is the task alias shared by the list, attention and push queries.
+    """
+    return (
+        f"(EXISTS (SELECT 1 FROM agent_tasks pa WHERE pa.task_id=t.id "
+        f"AND pa.agent_id={message}.author_id) OR NOT EXISTS "
+        "(SELECT 1 FROM agent_tasks pa WHERE pa.task_id=t.id))"
+    )
+
+
 # An agent-authored post on task `t` made after decision `d` (the revised plan).
 _REVISED_AFTER_D = (
     "(d.decision = 'reject' AND EXISTS (SELECT 1 FROM task_messages rm "
     "JOIN agents ra2 ON ra2.id = rm.author_id WHERE rm.task_id = t.id "
-    "AND ra2.kind <> 'human' AND rm.created_at > d.created_at))"
+    f"AND ra2.kind <> 'human' AND {plan_author_sql('rm')} "
+    "AND rm.created_at > d.created_at))"
 )
 
 # TG-13: the start of the CURRENT plan round for task `t` — the latest plan REJECT that
@@ -18,7 +32,8 @@ PLAN_CUTOFF_SQL = (
     "WHERE pd.subject_type = 'plan_approval' AND pd.subject_id = CAST(t.id AS TEXT) "
     "AND pd.decision = 'reject' AND EXISTS (SELECT 1 FROM task_messages pm "
     "JOIN agents pa ON pa.id = pm.author_id WHERE pm.task_id = t.id "
-    f"AND pa.kind <> 'human' AND pm.created_at > pd.created_at)), {sql.ts_neg_infinity()})"
+    f"AND pa.kind <> 'human' AND {plan_author_sql('pm')} "
+    f"AND pm.created_at > pd.created_at)), {sql.ts_neg_infinity()})"
 )
 
 # TG-13b: order agent posts inside the current plan round (`pc.c` = PLAN_CUTOFF_SQL):
@@ -26,7 +41,7 @@ PLAN_CUTOFF_SQL = (
 # LATEST (an ack like "revising now" usually precedes the real revision).
 PLAN_ROUND_ORDER_SQL = (
     f"CASE WHEN pc.c = {sql.ts_neg_infinity()} THEN m.created_at END ASC, "
-    "m.created_at DESC"
+    "m.created_at DESC, m.id ASC"
 )
 
 # TG-13: an in-progress task's plan gate is OPEN when no plan decision exists, or the
@@ -38,7 +53,8 @@ PLAN_GATE_OPEN_SQL = (
     "AND gd.subject_id = CAST(t.id AS TEXT) ORDER BY gd.created_at DESC LIMIT 1) lg "
     "WHERE lg.decision = 'reject' AND EXISTS (SELECT 1 FROM task_messages gm "
     "JOIN agents ga ON ga.id = gm.author_id WHERE gm.task_id = t.id "
-    "AND ga.kind <> 'human' AND gm.created_at > lg.created_at)))"
+    f"AND ga.kind <> 'human' AND {plan_author_sql('gm')} "
+    "AND gm.created_at > lg.created_at)))"
 )
 
 
@@ -124,6 +140,7 @@ def _task_list_sql(where: str, order: str) -> str:
                          FROM (SELECT {PLAN_CUTOFF_SQL} AS c) pc
                          CROSS JOIN task_messages m LEFT JOIN agents ma ON ma.id = m.author_id
                         WHERE m.task_id = t.id AND m.author_id IS NOT NULL AND ma.kind <> 'human'
+                          AND {plan_author_sql('m')}
                           AND m.created_at > pc.c
                         ORDER BY {PLAN_ROUND_ORDER_SQL} LIMIT 1) AS plan_message,
                       -- GH #144: the per-task runs summary counts/reads FEED membership
